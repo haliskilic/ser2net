@@ -1,11 +1,11 @@
 # Third-Party Notices
 
-pyser2net bundles the following third-party components (Python wheels in
+ser2net bundles the following third-party components (Python wheels in
 `vendor/wheels/` and vendored browser assets in `app/web/static/`). Each remains
 governed by its own license. All are **permissive** open-source licenses that allow
 commercial redistribution provided their copyright/license notices are preserved.
 
-These notices satisfy clause 5 of the pyser2net LICENSE.
+These notices satisfy clause 5 of the ser2net LICENSE.
 
 ## Python dependencies (vendor/wheels/)
 
@@ -41,4 +41,4 @@ its public API on Linux), `pywin32` (PSF-style, Windows).
 ---
 
 Full license texts are available from each project's distribution and homepage.
-Preserve this file when redistributing pyser2net.
+Preserve this file when redistributing ser2net.

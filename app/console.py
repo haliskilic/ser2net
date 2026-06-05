@@ -28,7 +28,7 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
               f"--reconfigure to expose it on the network.", flush=True)
         return default_ip, default_port
 
-    print("\n=== pyser2net — configuration interface setup ===")
+    print("\n=== ser2net — configuration interface setup ===")
     print("Choose which local IP address the web config UI should listen on:\n")
     for i, c in enumerate(candidates, 1):
         print(f"  {i}) {c['label']}")

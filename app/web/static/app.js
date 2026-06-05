@@ -1,4 +1,4 @@
-// pyser2net admin UI — minimal vanilla JS (no framework, CSP-friendly).
+// ser2net admin UI — minimal vanilla JS (no framework, CSP-friendly).
 
 // 1) Send the CSRF token on every htmx request (double-submit cookie pattern).
 document.addEventListener("htmx:configRequest", function (e) {

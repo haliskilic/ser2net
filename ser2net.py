@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pyser2net — expose local serial ports over the network, managed from a web UI.
+"""ser2net — expose local serial ports over the network, managed from a web UI.
 
 Entry point. Responsibilities kept deliberately thin:
   1. Make bundled dependencies importable (offline bootstrap into ./lib).
