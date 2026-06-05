@@ -10,7 +10,8 @@ of serial ports to IP:port endpoints, bidirectionally, from one screen.
 - **Protocols:** `raw`, `telnet` (RFC 854, 8-bit clean), `rfc2217` (remote clients can
   change baud/parity/etc. live, via pyserial's `PortManager`).
 - **Observability:** per-mapping traffic trace (hex/timestamp), Prometheus `/metrics`,
-  config-change audit log, and a per-mapping live log viewer.
+  config-change audit log, a per-mapping live log viewer, and an in-browser **serial
+  console** (xterm.js over an authenticated WebSocket — read traffic, or type to the device).
 - **Full serial config:** baud (incl. custom), data bits, parity, stop bits, flow control
   (none / RTS-CTS / XON-XOFF / DSR-DTR), RTS/DTR on open, exclusive open.
 - **Live, refreshable port list** — polling baseline (no privileges to *list*) plus optional

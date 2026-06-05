@@ -104,6 +104,9 @@ class Supervisor:
                 await runner.stop()
 
     # ---------------- status ----------------
+    def get_runner(self, mapping_id: str):
+        return self._runners.get(mapping_id)
+
     def status(self, mapping_id: str) -> Optional[dict]:
         r = self._runners.get(mapping_id)
         return r.status.as_dict() if r else None

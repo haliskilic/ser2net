@@ -28,6 +28,7 @@ REQUIRED = [
     ("serial_asyncio_fast", "pyserial-asyncio-fast"),
     ("starlette", "starlette"),
     ("uvicorn", "uvicorn"),
+    ("websockets", "websockets"),
     ("multipart", "python-multipart"),
     ("jinja2", "jinja2"),
     ("psutil", "psutil"),

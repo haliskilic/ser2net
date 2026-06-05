@@ -50,6 +50,7 @@
         {% endif %}
         <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/form" hx-target="#form-panel" hx-swap="innerHTML">Edit</button>
         <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">Log</button>
+        <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">Monitor</button>
         <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none">Copy</button>
         <button class="btn sm danger" hx-delete="/api/mappings/{{ m.id }}"
                 hx-confirm="Delete mapping “{{ m.name }}”?" hx-swap="none">Delete</button>

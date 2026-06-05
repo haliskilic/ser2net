@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ request.state.csrf_token }}">
   <title>{% block title %}pyser2net{% endblock %}</title>
+  <link rel="stylesheet" href="/static/xterm.css">
   <link rel="stylesheet" href="/static/app.css">
   <link rel="icon" href="data:,">
   <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/xterm.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
