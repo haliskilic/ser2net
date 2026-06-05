@@ -45,7 +45,7 @@ async def _serve(store: ConfigStore, config) -> int:
     state = AppState(store, config)
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
-    state.log(f"pyser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
+    state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
     if not config.password_set:
         state.log("no admin password set yet — open the UI to complete first-run setup")
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:

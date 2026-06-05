@@ -1,4 +1,4 @@
-"""Configuration data model + atomic JSON persistence for pyser2net.
+"""Configuration data model + atomic JSON persistence for ser2net.
 
 The model is deliberately split into explicit typed fields (borrowed from
 ser2net's connection model) rather than gensio stack-strings, so the web UI can
