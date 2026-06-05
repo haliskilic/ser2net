@@ -1,0 +1,27 @@
+[Unit]
+Description=pyser2net — serial-to-network bridge with web config UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated unprivileged user that is a member of the 'dialout' group
+# so it can open serial devices (NEVER run this as root).
+User=ser2net
+SupplementaryGroups=dialout
+WorkingDirectory=/opt/ser2net
+# On a headless first boot the console picker is non-interactive and defaults the
+# admin UI to 127.0.0.1:8080 (loopback, never network-exposed without an explicit
+# choice). To expose it on the LAN, run once interactively (or with --reconfigure)
+# to pick the bind IP and set a password, or pre-create /opt/ser2net/data/config.json.
+ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data
+Restart=on-failure
+RestartSec=3
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
