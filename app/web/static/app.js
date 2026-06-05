@@ -56,6 +56,7 @@ document.addEventListener("change", function (e) {
 document.addEventListener("htmx:afterSwap", function (e) {
   syncCustomInputs(e.target);
   applyShowWhen(e.target);
+  initTerm(e.target);
 });
 document.addEventListener("DOMContentLoaded", function () {
   syncCustomInputs(document);
@@ -68,7 +69,46 @@ document.addEventListener("click", function (e) {
   var btn = e.target.closest("[data-cancel]");
   if (btn) {
     e.preventDefault();
+    closeTerm();
     var panel = document.getElementById("form-panel");
     if (panel) panel.innerHTML = "";
   }
+});
+
+// 4) Console (xterm) over WebSocket. Initialized when a #term element is swapped
+//    into the page; the socket is closed when the panel is replaced/cleared.
+function closeTerm() {
+  var el = document.getElementById("term");
+  if (el && el._ws) {
+    try { el._ws.close(); } catch (e) {}
+    el._ws = null;
+  }
+}
+
+function initTerm(root) {
+  var el = (root && root.querySelector) ? root.querySelector("#term") : null;
+  if (!el && root && root.id === "term") el = root;
+  if (!el) el = document.getElementById("term");
+  if (!el || el._inited || typeof Terminal === "undefined") return;
+  el._inited = true;
+  var term = new Terminal({ convertEol: true, fontSize: 13, scrollback: 5000,
+                            theme: { background: "#0b0f14" } });
+  term.open(el);
+  var scheme = location.protocol === "https:" ? "wss" : "ws";
+  var ws = new WebSocket(scheme + "://" + location.host + el.getAttribute("data-ws"));
+  ws.binaryType = "arraybuffer";
+  el._ws = ws;
+  ws.onmessage = function (ev) {
+    if (typeof ev.data === "string") term.write(ev.data);
+    else term.write(new Uint8Array(ev.data));
+  };
+  ws.onclose = function () { term.write("\r\n\x1b[33m[console disconnected]\x1b[0m\r\n"); };
+  if (el.getAttribute("data-interactive") === "1") {
+    term.onData(function (d) { if (ws.readyState === 1) ws.send(d); });
+  }
+}
+
+// close any open console socket BEFORE the form panel is replaced by a new swap
+document.addEventListener("htmx:beforeSwap", function (e) {
+  if (e.target && e.target.id === "form-panel") closeTerm();
 });

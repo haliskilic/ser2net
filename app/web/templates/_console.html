@@ -1,0 +1,12 @@
+<div class="form-head">
+  <h3>Console — {{ mapping_name }}</h3>
+  <div class="actions">
+    {% if interactive %}<span class="muted">type to send to the device</span>
+    {% else %}<span class="muted">read-only</span>{% endif %}
+    <button type="button" class="btn sm" data-cancel>Close</button>
+  </div>
+</div>
+<p class="muted mb-sm">Live serial traffic. Shows bytes in both directions.</p>
+<div id="term" class="term"
+     data-ws="/api/mappings/{{ mid }}/console"
+     data-interactive="{{ '1' if interactive else '0' }}"></div>

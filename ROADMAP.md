@@ -31,13 +31,19 @@
 
 ---
 
+### v2.1a — in-browser serial console
+- xterm.js terminal over an authenticated WebSocket (`/api/mappings/{id}/console`):
+  read live traffic, or type to the device (net mappings, not read-only)
+- Per-mapping monitor sink in the engine; session-cookie auth + Origin/Host CSWSH guard
+
+---
+
 ## Planned
 
-### v2.1 — UX & access
-- In-browser serial monitor/terminal (xterm.js), read-only or interactive
+### v2.1 (remaining) — UX & access
 - Multi-user / RBAC: accounts + roles (admin / operator / viewer), per-mapping permissions
 - i18n (TR/EN) for the UI
-- `autocomplete`/keyboard polish; dark/light theme toggle
+- keyboard polish; dark/light theme toggle; xterm fit-to-window addon
 
 ### v2.2 — packaging & distribution
 - PyInstaller `--onedir` builds (Windows `.exe`, Linux ELF)
