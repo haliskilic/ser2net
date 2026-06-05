@@ -283,6 +283,7 @@ class MappingRunner:
         self._udp_transport = None
         self._tracer: Optional[Tracer] = None
         self._clients: set = set()
+        self._monitors: set = set()  # browser console observers (read traffic)
         self._serial_ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._allowed_nets = self._parse_allowed(mapping.network.allowed_client_ips)
@@ -306,6 +307,17 @@ class MappingRunner:
         # for the global all.log and also writes to this mapping's own log file.
         if self.log:
             self.log(msg)
+
+    # ---------------- console monitors (browser xterm) ----------------
+    def add_monitor(self, mon) -> None:
+        self._monitors.add(mon)
+
+    def discard_monitor(self, mon) -> None:
+        self._monitors.discard(mon)
+
+    def _feed_monitors(self, data: bytes) -> None:
+        for mon in list(self._monitors):
+            mon.feed(data)
 
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
@@ -354,6 +366,9 @@ class MappingRunner:
             self._udp_transport = None
         for c in list(self._clients):
             c.kick()
+        for mon in list(self._monitors):
+            mon.close()
+        self._monitors.clear()
         for task in (self._serial_task, self._main_task):
             if task:
                 task.cancel()
@@ -459,6 +474,7 @@ class MappingRunner:
                 raise ConnectionError("serial EOF / device removed")
             if self._tracer:
                 self._tracer.write("ser>net", data)
+            self._feed_monitors(data)
             for c in list(self._clients):
                 c.feed_from_serial(data)
             if self._closeon:
@@ -654,6 +670,7 @@ class MappingRunner:
                 raise ConnectionError(f"serial EOF ({tag})")
             if self._tracer:
                 self._tracer.write(tag, data)
+            self._feed_monitors(data)
             writer.write(data)
             await writer.drain()
             self.status.bytes_in += len(data)

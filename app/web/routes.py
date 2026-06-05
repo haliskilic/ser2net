@@ -9,15 +9,17 @@ Interaction model (HTMX, no SPA):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
 import subprocess
+from urllib.parse import urlparse
 
 from starlette.responses import (
     JSONResponse, PlainTextResponse, RedirectResponse, Response,
 )
-from starlette.routing import Mount, Route
+from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
 from ..config import ConfigError, MappingConfig
@@ -239,6 +241,68 @@ def build_routes(templates, state, static_dir):
         state.audit(client_ip(request), "mapping_duplicate", dup.name)
         return Response("", headers=_TRIGGER)
 
+    # ---------------- console (xterm over WebSocket) ----------------
+    async def console_ws(websocket):
+        cfg = state.config
+        # BaseHTTPMiddleware does NOT run for WebSocket scope, so authenticate here.
+        token = websocket.cookies.get(auth.SESSION_COOKIE)
+        if not (cfg.password_set and auth.check_session(cfg.secret_key, token, cfg.pwd_version)):
+            await websocket.close(code=1008)
+            return
+        # CSWSH guard: cross-origin WebSocket is rejected.
+        origin = websocket.headers.get("origin")
+        if origin and urlparse(origin).netloc != websocket.headers.get("host"):
+            await websocket.close(code=1008)
+            return
+        mid = websocket.path_params["mid"]
+        runner = state.supervisor.get_runner(mid)
+        mapping = cfg.get_mapping(mid)
+        if runner is None or mapping is None:
+            await websocket.close(code=1011)
+            return
+
+        await websocket.accept()
+        mon = _Monitor()
+        runner.add_monitor(mon)
+        interactive = (mapping.kind == "net" and not mapping.network.read_only)
+        peer = websocket.client.host if websocket.client else "?"
+        state.log(f"[{mapping.name}] console opened by {peer}")
+
+        async def sender():
+            while True:
+                data = await mon.queue.get()
+                if data is None:  # mapping stopped
+                    with contextlib.suppress(Exception):
+                        await websocket.close()
+                    return
+                await websocket.send_bytes(data)
+
+        async def receiver():
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    return
+                data = msg.get("bytes")
+                if data is None and msg.get("text") is not None:
+                    data = msg["text"].encode("utf-8", "replace")
+                if data and interactive:
+                    await runner.serial_write(data)
+
+        st = asyncio.create_task(sender())
+        rt = asyncio.create_task(receiver())
+        try:
+            await asyncio.wait({st, rt}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in (st, rt):
+                t.cancel()
+            for t in (st, rt):
+                with contextlib.suppress(BaseException):
+                    await t
+            runner.discard_monitor(mon)
+            with contextlib.suppress(Exception):
+                await websocket.close()
+            state.log(f"[{mapping.name}] console closed ({peer})")
+
     # ---------------- status / ports / ips ----------------
     async def metrics(request):
         statuses = state.supervisor.all_status()
@@ -303,6 +367,15 @@ def build_routes(templates, state, static_dir):
             return PlainTextResponse("Mapping not found", status_code=404)
         return render(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
                       lines=state.read_mapping_log(mid, limit=1000))
+
+    async def console_view(request):
+        mid = request.path_params["mid"]
+        m = state.config.get_mapping(mid)
+        if not m:
+            return PlainTextResponse("Mapping not found", status_code=404)
+        interactive = (m.kind == "net" and not m.network.read_only)
+        return render(request, "_console.html", mid=mid, mapping_name=m.name,
+                      interactive=interactive)
 
     async def mapping_save(request):
         form = await request.form()
@@ -386,6 +459,7 @@ def build_routes(templates, state, static_dir):
         Route("/settings/config/export", config_export),
         Route("/settings/config/import", config_import, methods=["POST"]),
         Route("/api/mappings/{mid}/duplicate", mapping_duplicate, methods=["POST"]),
+        WebSocketRoute("/api/mappings/{mid}/console", console_ws),
         Route("/api/status", api_status),
         Route("/api/ports.json", api_ports_json),
         Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
@@ -393,6 +467,7 @@ def build_routes(templates, state, static_dir):
         Route("/api/mappings/form", mapping_form_new),
         Route("/api/mappings/{mid}/form", mapping_form_edit),
         Route("/api/mappings/{mid}/log", mapping_log),
+        Route("/api/mappings/{mid}/console-view", console_view),
         Route("/api/mappings/save", mapping_save, methods=["POST"]),
         Route("/api/mappings/{mid}", mapping_delete, methods=["DELETE"]),
         Route("/api/mappings/{mid}/{action}", mapping_action, methods=["POST"]),
@@ -407,6 +482,26 @@ def build_routes(templates, state, static_dir):
 def _metric_label(name: str) -> str:
     """Escape a mapping name for a Prometheus label value."""
     return name.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+class _Monitor:
+    """A browser console observer: serial traffic is pushed here (best-effort —
+    drops oldest on overflow so a slow viewer never stalls the bridge)."""
+
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=2048)
+
+    def feed(self, data: bytes) -> None:
+        try:
+            self.queue.put_nowait(data)
+        except asyncio.QueueFull:
+            with contextlib.suppress(Exception):
+                self.queue.get_nowait()
+                self.queue.put_nowait(data)
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self.queue.put_nowait(None)  # sentinel: tells the sender to close
 
 
 def _password_problem(pw: str, pw2: str) -> str | None:

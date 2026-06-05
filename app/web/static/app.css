@@ -119,6 +119,7 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .chk-pad { margin-top: 24px; }
 .mb-sm { margin: 0 0 8px; }
 .mt-sm { margin-top: 8px; }
+.term { height: 380px; background: #0b0f14; border: 1px solid var(--border); border-radius: 7px; padding: 6px; }
 
 #form-panel:empty { display: none; }
 #form-panel { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 16px; margin-bottom: 16px; }
