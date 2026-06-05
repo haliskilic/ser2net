@@ -135,6 +135,10 @@ class NetworkSettings:
     # first), regardless of kick_old_user.
     priority_client_ips: list[str] = field(default_factory=list)
     read_only: bool = False
+    # Per-client outbound (serial->network) buffer, in chunks. A client slower than
+    # the serial source is dropped once this fills. Worst-case memory per client is
+    # ~client_queue_max * 64KB; raise for bursty high-throughput links.
+    client_queue_max: int = 2048
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "NetworkSettings":
@@ -157,6 +161,8 @@ class NetworkSettings:
             raise ConfigError("TCP port must be between 1 and 65535.")
         if not isinstance(self.max_connections, int) or self.max_connections < 1:
             raise ConfigError("Max connections must be >= 1.")
+        if not isinstance(self.client_queue_max, int) or self.client_queue_max < 16:
+            raise ConfigError("Client queue size must be an integer >= 16.")
         if self.protocol == "rfc2217" and self.max_connections > 1:
             raise ConfigError(
                 "RFC2217 supports a single connection (clients share one serial "

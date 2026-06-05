@@ -63,6 +63,21 @@ listener on the chosen IP:port, keeps the serial port open (auto-reconnecting), 
 bytes both ways with per-client backpressure isolation. On Windows the loop is forced to a
 `SelectorEventLoop` (required by `pyserial-asyncio-fast`); on Linux the default loop is used.
 
+## Scale & platform notes
+
+- **Concurrency:** verified at **24 simultaneous bridges** under realistic request/response
+  load (thousands of byte-exact round-trips, ~3 ms p50, 0 reconnects, flat ~27 MB RSS) and at
+  **24 bridges in simultaneous full-duplex bulk** (512 KB each way, byte-exact). See
+  `tests/stress_24.py` and `tests/test_fullduplex.py`.
+- **Per-client backpressure:** each client has its own bounded outbound queue
+  (`client_queue_max`, default 2048 chunks ≈ up to ~64 KB × that per client); a client slower
+  than the serial source is dropped and counted (`dropped_clients`/`queue_overflows` in status)
+  rather than stalling the others. Raise it per mapping for bursty high-throughput links.
+- **Windows:** the runtime forces a `SelectorEventLoop` (required by `pyserial-asyncio-fast`)
+  and runs uvicorn inside it. That loop is capped at 512 sockets (FD_SETSIZE) — far above
+  24–50 serial bridges + the admin server — so it is not a practical limit here. Serial I/O on
+  Windows is polling-based; benchmark tight-timing links there before committing.
+
 ## Offline installation
 
 `bootstrap.py` installs the bundled wheels into a local `./lib/` directory (added to

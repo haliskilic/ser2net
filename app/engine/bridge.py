@@ -100,7 +100,8 @@ class _ClientConn:
         self.peer = f"{peer_ip}:{peer_port}" if peer_port else peer_ip
         self.priority = priority
         self.connected_at = time.time()
-        self._out: asyncio.Queue[bytes] = asyncio.Queue(maxsize=CLIENT_QUEUE_MAX)
+        self._queue_max = runner.mapping.network.client_queue_max or CLIENT_QUEUE_MAX
+        self._out: asyncio.Queue[bytes] = asyncio.Queue(maxsize=self._queue_max)
         self._session = None
         self._last_activity = time.monotonic()
         self._closing = False
@@ -129,7 +130,7 @@ class _ClientConn:
             self.runner.status.queue_overflows += 1
             self.runner.status.dropped_clients += 1
             self.runner._log(f"dropping slow client {self.peer}: output queue full "
-                             f"({CLIENT_QUEUE_MAX} chunks) — data lost for this client")
+                             f"({self._queue_max} chunks) — data lost for this client")
             with contextlib.suppress(Exception):
                 self.writer.transport.abort()
 

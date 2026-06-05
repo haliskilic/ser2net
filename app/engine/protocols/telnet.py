@@ -40,9 +40,14 @@ class TelnetSession(ProtocolSession):
             self._remote[opt] = True
             self._send(IAC, DO, opt)
 
+    #: cap on buffered negotiation replies — a peer flooding option negotiation
+    #: can't make us grow this unbounded (each reply is 3 bytes).
+    _MAX_NET_OUT = 64 * 1024
+
     # ----- helpers -----
     def _send(self, *bytes_: int) -> None:
-        self._net_out.extend(bytes_)
+        if len(self._net_out) < self._MAX_NET_OUT:
+            self._net_out.extend(bytes_)
 
     def initial_net_bytes(self) -> bytes:
         return self.take_net_out()
