@@ -92,6 +92,21 @@ def main():
         assert len(set(ports)) == len(ports), ports
         print("duplicate: copy created with bumped port  OK")
 
+        # 3b) regression: deleting a mapping that never created a log file must NOT 500
+        #     (the disabled "(copy)" never started, so data/logs/<id>.log doesn't exist)
+        copy_id = next(m["id"] for m in json.load(open(cfg))["mappings"]
+                       if m["name"] == "MX (copy)")
+        dreq = urllib.request.Request(BASE + f"/api/mappings/{copy_id}", method="DELETE")
+        dreq.add_header("X-CSRF-Token", csrf())
+        try:
+            dresp = op.open(dreq, timeout=10)
+            code = dresp.status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        assert code == 200, f"delete of no-log mapping should be 200, got {code}"
+        assert "MX (copy)" not in [m["name"] for m in json.load(open(cfg))["mappings"]]
+        print("delete: mapping with no log file deleted cleanly (no 500)  OK")
+
         # 4) import (multipart) — replace with a single different mapping
         new_doc = {"mappings": [{"name": "IMPORTED", "serial": {"port": "/dev/ttyZ"},
                                  "network": {"mode": "server", "port": 48888}}]}
