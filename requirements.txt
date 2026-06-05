@@ -1,0 +1,22 @@
+# pyser2net — runtime dependencies (pinned). All wheels are bundled in vendor/wheels/
+# for fully offline installation (see bootstrap.py).
+#
+# Pure-Python (work on every OS/Python):
+pyserial==3.5
+pyserial-asyncio-fast==0.16
+starlette==1.2.1
+uvicorn==0.49.0
+python-multipart==0.0.32
+jinja2==3.1.6
+anyio==4.13.0
+click==8.4.1
+h11==0.16.0
+idna==3.18
+typing_extensions==4.15.0
+# Platform-specific (win_amd64 + manylinux wheels bundled for cp311/cp312):
+markupsafe==3.0.3
+psutil==7.2.2
+
+# --- Optional, NOT required (graceful fallback to polling if absent) ---
+# pyudev>=0.24      ; sys_platform == "linux"   # event-driven hotplug on Linux
+# pywin32>=306      ; sys_platform == "win32"    # event-driven hotplug on Windows

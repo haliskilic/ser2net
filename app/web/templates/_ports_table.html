@@ -1,0 +1,19 @@
+{% if ports %}
+<table class="grid">
+  <thead><tr><th>Device</th><th>Description</th><th>VID:PID</th><th>Serial</th><th>Manufacturer</th><th>In use</th></tr></thead>
+  <tbody>
+  {% for p in ports %}
+    <tr>
+      <td class="mono">{{ p.device }}</td>
+      <td>{{ p.description or '—' }}</td>
+      <td class="mono">{% if p.vid %}{{ p.vid }}:{{ p.pid }}{% else %}—{% endif %}</td>
+      <td class="mono">{{ p.serial_number or '—' }}</td>
+      <td>{{ p.manufacturer or '—' }}</td>
+      <td>{% if p.device in in_use %}<span class="dot on"></span>yes{% else %}<span class="dot off"></span>no{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <p class="muted">No serial ports detected. Plug in a device and click Refresh.</p>
+{% endif %}

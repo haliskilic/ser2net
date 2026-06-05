@@ -1,0 +1,16 @@
+<div hx-get="/api/mappings/{{ mid }}/log" hx-trigger="every 5s" hx-target="#form-panel" hx-swap="innerHTML">
+  <div class="form-head">
+    <h3>Log — {{ mapping_name }}</h3>
+    <div class="actions">
+      <button class="btn sm" hx-get="/api/mappings/{{ mid }}/log" hx-target="#form-panel" hx-swap="innerHTML">↻ Refresh</button>
+      <button type="button" class="btn sm" data-cancel>Close</button>
+    </div>
+  </div>
+  <p class="muted" style="margin:0 0 8px">Newest first · auto-refreshes every 5s · persists across restarts.</p>
+  {% if lines %}
+  <pre class="logbox">{% for line in lines %}{{ line }}
+{% endfor %}</pre>
+  {% else %}
+  <p class="muted">No log entries yet for this mapping.</p>
+  {% endif %}
+</div>
