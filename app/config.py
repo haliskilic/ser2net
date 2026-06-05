@@ -249,6 +249,7 @@ class AppConfig:
     version: int = 1
     admin_ui: AdminUI = field(default_factory=AdminUI)
     password_hash: str = ""  # empty => not set yet (first-run setup pending)
+    pwd_version: int = 0      # bumped on every password change to revoke old sessions
     secret_key: str = field(default_factory=lambda: secrets.token_hex(32))
     session_timeout_s: int = 8 * 3600
     defaults: dict[str, Any] = field(default_factory=dict)  # serial defaults
@@ -265,6 +266,7 @@ class AppConfig:
             version=int(d.get("version", 1)),
             admin_ui=admin_ui,
             password_hash=d.get("password_hash", ""),
+            pwd_version=int(d.get("pwd_version", 0)),
             secret_key=d.get("secret_key") or secrets.token_hex(32),
             session_timeout_s=int(d.get("session_timeout_s", 8 * 3600)),
             defaults=d.get("defaults", {}) or {},
@@ -277,6 +279,7 @@ class AppConfig:
             "version": self.version,
             "admin_ui": asdict(self.admin_ui),
             "password_hash": self.password_hash,
+            "pwd_version": self.pwd_version,
             "secret_key": self.secret_key,
             "session_timeout_s": self.session_timeout_s,
             "defaults": self.defaults,
@@ -329,7 +332,15 @@ def _ip_overlaps(a: str, b: str) -> bool:
 class ConfigStore:
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        directory = os.path.dirname(self.path)
+        os.makedirs(directory, exist_ok=True)
+        # config.json holds the password hash + secret_key; keep the dir private.
+        # (config.json itself is written 0600 via tempfile.mkstemp + os.replace.)
+        if os.name == "posix":
+            try:
+                os.chmod(directory, 0o700)
+            except OSError:
+                pass
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)

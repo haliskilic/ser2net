@@ -68,7 +68,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 return RedirectResponse("/", status_code=303)
             if not is_public:
                 token = request.cookies.get(auth.SESSION_COOKIE)
-                if not auth.check_session(cfg.secret_key, token):
+                if not auth.check_session(cfg.secret_key, token, cfg.pwd_version):
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
                     return RedirectResponse("/login", status_code=303)
@@ -89,7 +89,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "default-src 'self'; img-src 'self' data:; style-src 'self'; "
             "script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
         )
         if cfg.admin_ui.tls_enabled:

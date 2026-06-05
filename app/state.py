@@ -95,6 +95,13 @@ class AppState:
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()
         self._maint_task: asyncio.Task | None = None
+        # per-mapping logs can contain traffic; keep the logs dir private too
+        if os.name == "posix":
+            try:
+                os.makedirs(self.logs_dir, exist_ok=True)
+                os.chmod(self.logs_dir, 0o700)
+            except OSError:
+                pass
 
     @staticmethod
     def _setup_logging(log_path: str) -> logging.Logger:

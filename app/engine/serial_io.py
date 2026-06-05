@@ -109,31 +109,39 @@ async def open_serial(settings: SerialSettings):
     if sys.platform != "win32":
         kwargs["exclusive"] = settings.exclusive
 
+    import serial.rs485
+
     reader, writer = await serial_asyncio_fast.open_serial_connection(**kwargs)
     ser = writer.transport.serial
 
-    # apply RTS/DTR start state (only when explicitly on/off)
+    # apply RTS/DTR start state (only when explicitly on/off). Some backends/adapters
+    # don't support explicit line control (ENOTTY etc.) — that's expected; anything
+    # else is surfaced to the caller (logged by the supervisor).
     try:
         if settings.rts_on_open in ("on", "off"):
             ser.rts = settings.rts_on_open == "on"
         if settings.dtr_on_open in ("on", "off"):
             ser.dtr = settings.dtr_on_open == "on"
-    except Exception:
-        pass  # not all backends/adapters support explicit line control
+    except (OSError, ValueError, AttributeError, _serial_exc()):
+        pass
 
     # RS-485 (best-effort; hardware/OS dependent)
     adv = settings.advanced
     if adv.rs485_enabled:
         try:
-            import serial.rs485
-
             ser.rs485_mode = serial.rs485.RS485Settings(
                 rts_level_for_tx=adv.rs485_rts_level_for_tx,
                 rts_level_for_rx=not adv.rs485_rts_level_for_tx,
                 delay_before_tx=(adv.rs485_delay_before_tx_ms / 1000.0) or None,
                 delay_before_rx=(adv.rs485_delay_after_tx_ms / 1000.0) or None,
             )
-        except Exception:
+        except (OSError, ValueError, AttributeError, NotImplementedError, _serial_exc()):
             pass
 
     return reader, writer, ser, device
+
+
+def _serial_exc():
+    """serial.SerialException, resolved lazily so this module imports without pyserial."""
+    import serial
+    return serial.SerialException

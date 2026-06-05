@@ -17,11 +17,32 @@ WorkingDirectory=/opt/ser2net
 ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data
 Restart=on-failure
 RestartSec=3
-# Hardening
+
+# --- Hardening ---
 NoNewPrivileges=true
-ProtectSystem=full
+# Writable config/logs dir (adjust to your --data-dir); rest of FS is read-only.
+ReadWritePaths=/opt/ser2net/data
+ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# MemoryDenyWriteExecute=true   # enable only after verifying ctypes/Python startup
+# UMask=0077
 
 [Install]
 WantedBy=multi-user.target

@@ -109,11 +109,13 @@ class Supervisor:
         return r.status.as_dict() if r else None
 
     def all_status(self) -> dict[str, dict]:
-        return {mid: r.status.as_dict() for mid, r in self._runners.items()}
+        # iterate a snapshot so a concurrent apply/remove can't change the dict
+        # mid-iteration (defensive; also future-proofs against an async as_dict)
+        return {mid: r.status.as_dict() for mid, r in list(self._runners.items())}
 
     def devices_in_use(self) -> set[str]:
         out = set()
-        for r in self._runners.values():
+        for r in list(self._runners.values()):
             if r.status.state == "running" and r.status.device:
                 out.add(r.status.device)
         return out
