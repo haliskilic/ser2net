@@ -128,6 +128,16 @@ class AppState:
         self._logger.info(msg)
         self.logs.append(msg)
 
+    def audit(self, actor_ip: str, action: str, detail: str = "") -> None:
+        """Append a config-change audit record (who/what), separate from all.log."""
+        line = f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{actor_ip}\t{action}\t{detail}"
+        try:
+            with open(os.path.join(self.data_dir, "audit.log"), "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
+        self._logger.info(f"AUDIT {actor_ip} {action} {detail}".rstrip())
+
     # ---------------- per-mapping logs ----------------
     def mapping_log_path(self, mapping_id: str) -> str:
         return os.path.join(self.logs_dir, f"{mapping_id}.log")
