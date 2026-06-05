@@ -65,12 +65,14 @@ def _sign(secret: str, payload: str) -> str:
     return _b64e(hmac.new(secret.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).digest())
 
 
-def issue_session(secret: str, ttl_seconds: int) -> str:
-    payload = _b64e(json.dumps({"exp": int(time.time()) + ttl_seconds}).encode("utf-8"))
+def issue_session(secret: str, ttl_seconds: int, pwd_version: int = 0) -> str:
+    payload = _b64e(json.dumps(
+        {"exp": int(time.time()) + ttl_seconds, "v": int(pwd_version)}
+    ).encode("utf-8"))
     return f"{payload}.{_sign(secret, payload)}"
 
 
-def check_session(secret: str, token: str | None) -> bool:
+def check_session(secret: str, token: str | None, pwd_version: int = 0) -> bool:
     if not token or "." not in token:
         return False
     payload, sig = token.rsplit(".", 1)
@@ -78,9 +80,12 @@ def check_session(secret: str, token: str | None) -> bool:
         return False
     try:
         data = json.loads(_b64d(payload))
-        return int(data.get("exp", 0)) > int(time.time())
     except (ValueError, json.JSONDecodeError):
         return False
+    if int(data.get("exp", 0)) <= int(time.time()):
+        return False
+    # password change bumps pwd_version, invalidating all older sessions
+    return int(data.get("v", 0)) == int(pwd_version)
 
 
 # --------------------------------------------------------------------------

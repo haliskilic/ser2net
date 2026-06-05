@@ -1,20 +1,20 @@
 {% extends "_shell.html" %}
 {% block title %}Settings — pyser2net{% endblock %}
 {% block main %}
-<section class="panel" style="max-width:520px">
+<section class="panel panel-narrow">
   <div class="panel-head"><h2>Change admin password</h2></div>
   {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
   <form method="post" action="/settings/password" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label>Current password <input type="password" name="current" required></label>
-    <label>New password (min 8 chars) <input type="password" name="password" required></label>
-    <label>Confirm new password <input type="password" name="password2" required></label>
+    <label>Current password <input type="password" name="current" autocomplete="current-password" required></label>
+    <label>New password (min 8 chars) <input type="password" name="password" autocomplete="new-password" required></label>
+    <label>Confirm new password <input type="password" name="password2" autocomplete="new-password" required></label>
     <button class="btn primary" type="submit">Update password</button>
   </form>
 </section>
 
-<section class="panel" style="max-width:520px">
+<section class="panel panel-narrow">
   <div class="panel-head"><h2>Admin interface</h2></div>
   <p>Listening on <span class="mono">{{ admin.bind_ip }}:{{ admin.port }}</span>
      {% if admin.tls_enabled %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>

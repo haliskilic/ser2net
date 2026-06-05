@@ -61,7 +61,7 @@
           {% for f in flowcontrols %}<option value="{{ f }}" {% if f == mapping.serial.flowcontrol %}selected{% endif %}>{{ f }}</option>{% endfor %}
         </select>
       </label>
-      <label class="chk" style="margin-top:24px"><input type="checkbox" name="serial_exclusive" {% if mapping.serial.exclusive %}checked{% endif %}> Exclusive open</label>
+      <label class="chk chk-pad"><input type="checkbox" name="serial_exclusive" {% if mapping.serial.exclusive %}checked{% endif %}> Exclusive open</label>
     </div>
     <div class="grid2">
       <label>RTS on open
@@ -98,8 +98,8 @@
     </div>
     <div class="grid3">
       <label>Max connections <input type="number" name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
-      <label class="chk" style="margin-top:24px"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> Kick old client</label>
-      <label class="chk" style="margin-top:24px"><input type="checkbox" name="network_read_only" {% if mapping.network.read_only %}checked{% endif %}> Read-only (no net→serial)</label>
+      <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> Kick old client</label>
+      <label class="chk chk-pad"><input type="checkbox" name="network_read_only" {% if mapping.network.read_only %}checked{% endif %}> Read-only (no net→serial)</label>
     </div>
     <label>Allowed client IPs / CIDRs <span class="muted">(blank = any; space/comma separated)</span>
       <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.0/24 10.0.0.5">

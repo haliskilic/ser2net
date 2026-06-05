@@ -187,6 +187,14 @@ class _ClientConn:
     async def _pump_serial_to_net(self) -> None:
         while True:
             data = await self._out.get()
+            if data is None:
+                # graceful-close sentinel (e.g. closeon): flush queued bytes, then close
+                while not self._out.empty():
+                    d = self._out.get_nowait()
+                    if d:
+                        self.writer.write(d)
+                await self.writer.drain()
+                raise ConnectionError("closed by closeon")
             self.writer.write(data)
             await self.writer.drain()
             self._last_activity = time.monotonic()
@@ -212,6 +220,18 @@ class _ClientConn:
         with contextlib.suppress(Exception):
             self.writer.transport.abort()
 
+    def request_graceful_close(self) -> None:
+        """Stop feeding new serial data, but let already-queued bytes flush to the
+        client before closing (used by closeon so the triggering data is delivered)."""
+        if self._closing:
+            return
+        self._closing = True
+        try:
+            self._out.put_nowait(None)  # sentinel handled by _pump_serial_to_net
+        except asyncio.QueueFull:
+            with contextlib.suppress(Exception):
+                self.writer.transport.abort()
+
 
 class MappingRunner:
     def __init__(self, mapping: MappingConfig, logger=None):
@@ -227,6 +247,9 @@ class MappingRunner:
         self._stop = asyncio.Event()
         self._allowed_nets = self._parse_allowed(mapping.network.allowed_client_ips)
         self._priority_nets = self._parse_allowed(mapping.network.priority_client_ips)
+        co = mapping.options.closeon
+        self._closeon = co.encode("utf-8", "replace") if co else b""
+        self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
 
     @staticmethod
     def _parse_allowed(cidrs: list[str]):
@@ -343,6 +366,18 @@ class MappingRunner:
                 raise ConnectionError("serial EOF / device removed")
             for c in list(self._clients):
                 c.feed_from_serial(data)
+            if self._closeon:
+                self._check_closeon(data)
+
+    def _check_closeon(self, data: bytes) -> None:
+        window = self._closeon_tail + data
+        if self._closeon in window:
+            self._log(f"closeon matched {self._closeon!r} — closing {len(self._clients)} client(s)")
+            for c in list(self._clients):
+                c.request_graceful_close()
+            self._closeon_tail = b""
+        elif len(self._closeon) > 1:
+            self._closeon_tail = window[-(len(self._closeon) - 1):]
 
     # ---------------- network side ----------------
     @staticmethod
@@ -351,6 +386,9 @@ class MappingRunner:
             return False
         with contextlib.suppress(ValueError):
             addr = ipaddress.ip_address(ip)
+            # treat IPv4-mapped IPv6 (::ffff:1.2.3.4) as the underlying IPv4
+            if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+                addr = addr.ipv4_mapped
             return any(addr in net for net in nets)
         return False
 

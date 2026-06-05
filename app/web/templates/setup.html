@@ -11,12 +11,12 @@
     <form method="post" action="/setup" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
       <label>New password (min 8 chars)
-        <input type="password" name="password" autofocus required>
+        <input type="password" name="password" autocomplete="new-password" autofocus required>
       </label>
       <label>Confirm password
-        <input type="password" name="password2" required>
+        <input type="password" name="password2" autocomplete="new-password" required>
       </label>
-      <button class="btn primary" type="submit" style="width:100%">Set password &amp; continue</button>
+      <button class="btn primary w-full" type="submit">Set password &amp; continue</button>
     </form>
   </div>
 </div>
