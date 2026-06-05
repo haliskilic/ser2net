@@ -188,10 +188,10 @@ class AppState:
         lg = self._mapping_loggers.pop(mapping_id, None)
         if lg is not None:
             for h in list(lg.handlers):
-                with _suppress():
+                with _suppress(Exception):
                     h.close()
                 lg.removeHandler(h)
-        with _suppress():
+        with _suppress(OSError):  # log file may never have been created (FileNotFoundError)
             os.remove(self.mapping_log_path(mapping_id))
 
     def prune_mapping_logs(self) -> None:
@@ -205,7 +205,7 @@ class AppState:
             return
         for fn in names:
             if fn.endswith(".log") and fn[:-4] not in valid:
-                with _suppress():
+                with _suppress(OSError):
                     os.remove(os.path.join(self.logs_dir, fn))
 
     async def run_log_maintenance(self) -> None:
@@ -223,7 +223,7 @@ class AppState:
             lg = self._mapping_loggers.get(mid)
             if lg is not None:  # detach so the open handler doesn't fight the rewrite
                 for h in list(lg.handlers):
-                    with _suppress():
+                    with _suppress(Exception):
                         h.close()
                     lg.removeHandler(h)
             try:
