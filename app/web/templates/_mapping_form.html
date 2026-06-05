@@ -1,0 +1,123 @@
+{% set ip_values = ips | map(attribute='value') | list %}
+{% set bind_is_custom = mapping.network.bind_ip not in ip_values %}
+{% set baud_is_custom = mapping.serial.baudrate not in baudrates %}
+<form class="mform" hx-post="/api/mappings/save" hx-target="#form-panel" hx-swap="innerHTML">
+  <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+  {% if not is_new %}<input type="hidden" name="id" value="{{ mapping.id }}">{% endif %}
+
+  <div class="form-head">
+    <h3>{{ 'New mapping' if is_new else 'Edit mapping' }}</h3>
+    <button type="button" class="btn sm" data-cancel>Cancel</button>
+  </div>
+  {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+
+  <div class="grid2">
+    <label>Name <input type="text" name="name" value="{{ mapping.name }}" placeholder="e.g. PLC-1 console" required></label>
+    <label class="chk"><input type="checkbox" name="enabled" {% if mapping.enabled %}checked{% endif %}> Enabled (start now)</label>
+  </div>
+
+  <fieldset>
+    <legend>Serial port</legend>
+    <label>Device
+      <div class="select-with-btn">
+        <div class="portsel-wrap" id="serial-port-wrap">
+          {% set selected = mapping.serial.port %}
+          {% include "_serial_port_select.html" %}
+        </div>
+        <button type="button" class="btn sm"
+                hx-post="/api/ports/refresh?selected={{ mapping.serial.port | urlencode }}"
+                hx-target="#serial-port-wrap" hx-swap="innerHTML">↻ Rescan</button>
+      </div>
+    </label>
+    <div class="grid3">
+      <label>Baud rate
+        <select name="serial_baudrate" data-custom="serial_custom_baud">
+          {% for b in baudrates %}<option value="{{ b }}" {% if b == mapping.serial.baudrate %}selected{% endif %}>{{ b }}</option>{% endfor %}
+          <option value="custom" {% if baud_is_custom %}selected{% endif %}>Custom…</option>
+        </select>
+        <input type="number" name="serial_custom_baud" class="custom-input" min="1"
+               value="{{ mapping.serial.baudrate if baud_is_custom else '' }}"
+               placeholder="e.g. 250000" {% if not baud_is_custom %}hidden disabled{% endif %}>
+      </label>
+      <label>Data bits
+        <select name="serial_bytesize">
+          {% for n in bytesizes %}<option value="{{ n }}" {% if n == mapping.serial.bytesize %}selected{% endif %}>{{ n }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Parity
+        <select name="serial_parity">
+          {% for p in parities %}<option value="{{ p }}" {% if p == mapping.serial.parity %}selected{% endif %}>{{ parity_labels[p] }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="grid3">
+      <label>Stop bits
+        <select name="serial_stopbits">
+          {% for s in stopbits %}<option value="{{ s }}" {% if s == mapping.serial.stopbits %}selected{% endif %}>{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Flow control
+        <select name="serial_flowcontrol">
+          {% for f in flowcontrols %}<option value="{{ f }}" {% if f == mapping.serial.flowcontrol %}selected{% endif %}>{{ f }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="chk" style="margin-top:24px"><input type="checkbox" name="serial_exclusive" {% if mapping.serial.exclusive %}checked{% endif %}> Exclusive open</label>
+    </div>
+    <div class="grid2">
+      <label>RTS on open
+        <select name="serial_rts_on_open">
+          {% for s in line_states %}<option value="{{ s }}" {% if s == mapping.serial.rts_on_open %}selected{% endif %}>{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>DTR on open
+        <select name="serial_dtr_on_open">
+          {% for s in line_states %}<option value="{{ s }}" {% if s == mapping.serial.dtr_on_open %}selected{% endif %}>{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Network</legend>
+    <div class="grid3">
+      <label>Protocol
+        <select name="network_protocol">
+          {% for pr in protocols %}<option value="{{ pr }}" {% if pr == mapping.network.protocol %}selected{% endif %}>{{ pr }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Bind IP
+        <select name="network_bind_ip" data-custom="network_bind_ip_custom">
+          {% for ip in ips %}<option value="{{ ip.value }}" {% if ip.value == mapping.network.bind_ip %}selected{% endif %}>{{ ip.label }}</option>{% endfor %}
+          <option value="custom" {% if bind_is_custom %}selected{% endif %}>Custom…</option>
+        </select>
+        <input type="text" name="network_bind_ip_custom" class="custom-input"
+               value="{{ mapping.network.bind_ip if bind_is_custom else '' }}"
+               placeholder="e.g. 10.0.0.5" {% if not bind_is_custom %}hidden disabled{% endif %}>
+      </label>
+      <label>TCP port <input type="number" name="network_port" min="1" max="65535" value="{{ mapping.network.port }}" required></label>
+    </div>
+    <div class="grid3">
+      <label>Max connections <input type="number" name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
+      <label class="chk" style="margin-top:24px"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> Kick old client</label>
+      <label class="chk" style="margin-top:24px"><input type="checkbox" name="network_read_only" {% if mapping.network.read_only %}checked{% endif %}> Read-only (no net→serial)</label>
+    </div>
+    <label>Allowed client IPs / CIDRs <span class="muted">(blank = any; space/comma separated)</span>
+      <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.0/24 10.0.0.5">
+    </label>
+    <label>High-priority client IPs / CIDRs <span class="muted">(blank = none; these kick an existing client when the port is full)</span>
+      <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.10 10.0.0.0/24">
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Options</legend>
+    <div class="grid2">
+      <label>Connect banner <span class="muted">(\d device, \I client IP, \N name, \p port)</span>
+        <input type="text" name="opt_banner" value="{{ mapping.options.banner }}" placeholder="optional">
+      </label>
+      <label>Idle timeout (seconds, 0 = off) <input type="number" name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
+    </div>
+  </fieldset>
+
+  <button class="btn primary" type="submit">{{ 'Create mapping' if is_new else 'Save changes' }}</button>
+</form>

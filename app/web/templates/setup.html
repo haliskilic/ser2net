@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}First-run setup — pyser2net{% endblock %}
+{% block body %}
+<div class="auth-wrap">
+  <div class="panel">
+    <h1>Welcome to pyser2net</h1>
+    <p class="muted">Set an admin password to protect this interface. The admin UI is reachable
+      at <span class="mono">{{ admin.bind_ip }}:{{ admin.port }}</span> from the network.</p>
+    {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+    <div class="banner warn">This interface is network-exposed. Choose a strong password.</div>
+    <form method="post" action="/setup" class="authform">
+      <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      <label>New password (min 8 chars)
+        <input type="password" name="password" autofocus required>
+      </label>
+      <label>Confirm password
+        <input type="password" name="password2" required>
+      </label>
+      <button class="btn primary" type="submit" style="width:100%">Set password &amp; continue</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "_shell.html" %}
+{% block title %}Mappings — pyser2net{% endblock %}
+{% block main %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Serial → Network mappings</h2>
+    <button class="btn primary" hx-get="/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML">+ Add mapping</button>
+  </div>
+  <div id="form-panel"></div>
+  <div id="mappings"
+       hx-get="/api/status"
+       hx-trigger="load, every 2s, refreshMappings from:body"
+       hx-swap="innerHTML">
+    <p class="muted">Loading…</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Detected serial ports</h2>
+    <button class="btn" hx-get="/api/ports/table" hx-target="#ports-table" hx-swap="innerHTML">↻ Refresh</button>
+  </div>
+  <div id="ports-table" hx-get="/api/ports/table" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    <p class="muted">Scanning…</p>
+  </div>
+</section>
+{% endblock %}

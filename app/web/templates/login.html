@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Sign in — pyser2net{% endblock %}
+{% block body %}
+<div class="auth-wrap">
+  <div class="panel">
+    <h1>⇄ pyser2net</h1>
+    <p class="muted">Sign in to manage serial-to-network mappings.</p>
+    {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+    <form method="post" action="/login" class="authform">
+      <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      <label>Password
+        <input type="password" name="password" autofocus required>
+      </label>
+      <button class="btn primary" type="submit" style="width:100%">Sign in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
