@@ -1,4 +1,4 @@
-"""Offline dependency bootstrapper for pyser2net.
+"""Offline dependency bootstrapper for ser2net.
 
 On first run this installs the bundled wheels from ``vendor/wheels/`` into a
 local ``lib/`` directory (added to ``sys.path`` by ``ser2net.py``), so the app

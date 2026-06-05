@@ -1,4 +1,4 @@
-# pyser2net — runtime dependencies (pinned). All wheels are bundled in vendor/wheels/
+# ser2net — runtime dependencies (pinned). All wheels are bundled in vendor/wheels/
 # for fully offline installation (see bootstrap.py).
 #
 # Pure-Python (work on every OS/Python):

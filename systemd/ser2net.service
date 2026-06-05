@@ -1,5 +1,5 @@
 [Unit]
-Description=pyser2net — serial-to-network bridge with web config UI
+Description=ser2net — serial-to-network bridge with web config UI
 After=network-online.target
 Wants=network-online.target
 

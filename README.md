@@ -1,9 +1,8 @@
-<!--
-  pyser2net — README
-  Türkçe (varsayılan) önce, İngilizce aşağıda. / Turkish first, English below.
--->
+<!-- ser2net — README (Türkçe / varsayılan). English: README.en.md -->
 
-# pyser2net
+**🌐 [Türkçe](README.md) · [English](README.en.md)**
+
+# ser2net
 
 **Seri portları (COM / ttyUSB / ttyACM / ttyS) ağ üzerinden erişilebilir kılan,
 web arayüzünden yönetilen, çapraz-platform (Windows + Linux) saf-Python köprü.**
@@ -18,7 +17,7 @@ web arayüzünden yönetilen, çapraz-platform (Windows + Linux) saf-Python köp
 Endüstriyel cihazlar, PLC'ler, ölçüm aletleri, GPS/modem, mikrodenetleyiciler ve
 konsol portları çoğunlukla **seri (RS-232/485/USB-serial)** haberleşir. Bu cihazlara
 ağdaki herhangi bir bilgisayardan erişmek için her seri portu bir **TCP/UDP uç
-noktasına** köprülemek gerekir. `pyser2net` bunu yapar ve tüm yönetimi **parola
+noktasına** köprülemek gerekir. `ser2net` bunu yapar ve tüm yönetimi **parola
 korumalı bir web arayüzünden** sunar — komut satırı veya elle config dosyası
 düzenlemeye gerek yok.
 
@@ -166,88 +165,4 @@ geçerli bir ticari lisans olmadan kullanım/dağıtım/satış yapılamaz. Birl
 üçüncü-taraf bileşenler kendi (izin-verici) lisanslarını korur — bkz.
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). İletişim: haliskilic90@gmail.com
 
-Yol haritası: [`ROADMAP.md`](ROADMAP.md).
-
----
----
-
-# pyser2net (English)
-
-**A cross-platform (Windows + Linux), pure-Python serial-to-network bridge with a
-web management UI** — a modern, web-managed take on the classic `ser2net`. Map dozens
-of serial ports (COM / ttyUSB / ttyACM / ttyS) to TCP/UDP endpoints, bidirectionally,
-with low latency.
-
-## Purpose
-Industrial devices, PLCs, instruments, GPS/modems, microcontrollers and console ports
-usually speak **serial** (RS-232/485/USB-serial). pyser2net bridges each serial port to
-a **TCP/UDP endpoint** so any computer on the network can reach it, and manages
-everything from a **password-protected web UI** — no CLI or hand-edited config files.
-
-## Features
-- **Transports:** TCP **server**, TCP **client** (connect-out), **UDP**, and
-  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges.
-- **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live baud/parity/etc.).
-- **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control,
-  RTS/DTR on open, exclusive open, RS-485.
-- **Live port list:** privilege-free polling + optional event hotplug (pyudev /
-  WM_DEVICECHANGE) with polling fallback. **IP picker** from the machine's addresses or custom.
-- **Dozens of mappings:** add/edit/delete/start/stop with live status, from one screen.
-- **Per-mapping access control:** allowed + **high-priority** client IPs/CIDRs (a
-  priority client evicts the oldest when full), max connections, kick-old, read-only,
-  idle timeout, banner, open/close strings, `closeon`.
-- **Observability:** traffic trace (hex/timestamp), Prometheus `/metrics`, config audit
-  log, live log viewer, and an in-browser **serial console** (xterm.js over WebSocket).
-- **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
-  login rate-limiting, strict security headers, session revocation on password change.
-- **Fully offline:** all dependencies bundled as wheels; no internet required.
-
-## Requirements
-- **Python 3.11+** installed. Dependencies ship in `vendor/wheels/` and install to
-  `./lib` on first run (offline).
-- Linux: membership in the `dialout` group to **open** serial ports
-  (`sudo usermod -aG dialout "$USER"`, then re-login). Windows: no extra privileges.
-- Optional: `openssl` (self-signed TLS), `pyudev`/`pywin32` (event hotplug).
-
-## Install & run
-```bash
-python3 ser2net.py        # Linux/macOS (or ./start.sh)
-start.bat                 # Windows
-```
-First run: the **console** asks which local IP the admin UI binds to (defaults to
-loopback `127.0.0.1` when non-interactive); then open the URL and **set an admin
-password**; then add mappings. Re-pick the bind IP with `python3 ser2net.py --reconfigure`.
-
-### Offline install
-Bundled wheels in `vendor/wheels/` install to `./lib` via `pip --no-index` on first
-launch. Add wheels for other Python versions/OSes with `pip download -r requirements.txt`.
-
-## Usage
-Add mappings (transport mode, serial params, network/remote, access rules); per-row
-Start/Stop/Restart/Copy/Delete; **Log** (per-mapping history), **Monitor** (live xterm
-console), **Settings** (password, admin TLS, mappings backup/restore), `/metrics`.
-
-## Security
-Always password-protected; binds to `127.0.0.1` by default. Exposing to the network
-requires an explicit IP choice and warns when bound without TLS. For LAN deployments use
-TLS and `allowed_client_ips`. Raw TCP is plaintext. A bare `0.0.0.0`/`::` in an
-allow/priority list means "any client".
-
-## Run as a service
-Linux: `systemd/ser2net.service` (dedicated unprivileged user + `dialout`, hardened,
-never root). Windows: wrap with Shawl.
-
-## State files
-In the data dir (`data/`): `config.json` (admin IP, password hash, mappings; atomic,
-0600), `all.log` / `audit.log`, `logs/<id>.log` (per-mapping, auto-trimmed >15 days /
->100 MB), `tls/`. Deleting `config.json` + `all.log` fully resets.
-
-## Testing
-socat-based virtual serial tests (no hardware) under `tests/`; `stress_24.py` for
-24 concurrent bridges.
-
-## License
-**Commercial / proprietary** — see [`LICENSE`](LICENSE). All rights reserved; no use,
-distribution or resale without a valid commercial license. Bundled third-party
-components keep their own (permissive) licenses — see
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). Contact: haliskilic90@gmail.com
+Yol haritası: [`ROADMAP.md`](ROADMAP.md) · English: [`README.en.md`](README.en.md)

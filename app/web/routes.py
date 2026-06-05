@@ -307,7 +307,7 @@ def build_routes(templates, state, static_dir):
     async def metrics(request):
         statuses = state.supervisor.all_status()
         lines = [
-            "# pyser2net metrics",
+            "# ser2net metrics",
             "ser2net_up 1",
             f"ser2net_mappings_total {len(state.config.mappings)}",
         ]

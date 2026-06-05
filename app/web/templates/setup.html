@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}First-run setup — pyser2net{% endblock %}
+{% block title %}First-run setup — ser2net{% endblock %}
 {% block body %}
 <div class="auth-wrap">
   <div class="panel">
-    <h1>Welcome to pyser2net</h1>
+    <h1>Welcome to ser2net</h1>
     <p class="muted">Set an admin password to protect this interface. The admin UI is reachable
       at <span class="mono">{{ admin.bind_ip }}:{{ admin.port }}</span> from the network.</p>
     {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
