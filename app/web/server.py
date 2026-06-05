@@ -89,7 +89,11 @@ class GuardMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data:; style-src 'self'; "
+            # script-src stays 'self' (no inline JS — the important XSS guard).
+            # style-src allows 'unsafe-inline' because xterm.js injects a <style>
+            # element at runtime for its cell layout; without it the terminal
+            # renders unstyled. Inline-style relaxation is low risk.
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
             "script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
         )
         if cfg.admin_ui.tls_enabled:
