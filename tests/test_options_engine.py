@@ -86,6 +86,31 @@ async def test_closeon():
     w.close(); dev.close(); await sup.stop_all(); p.terminate(); await p.wait()
 
 
+async def test_trace():
+    import serial, tempfile
+    p, a, b = await socat()
+    tf = tempfile.NamedTemporaryFile(prefix="trace_", suffix=".log", delete=False)
+    tf.close()
+    sup, m = await start(a, 47305, options={"trace_both": tf.name, "trace_hexdump": True})
+    dev = serial.Serial(b, 115200, timeout=0)
+    r, w = await asyncio.open_connection("127.0.0.1", 47305)
+    await asyncio.sleep(0.2)
+    w.write(b"hello"); await w.drain()
+    await asyncio.sleep(0.2)
+    await asyncio.to_thread(dev.read, 16)
+    await asyncio.to_thread(dev.write, b"world"); await asyncio.to_thread(dev.flush)
+    await asyncio.sleep(0.3)
+    await asyncio.wait_for(r.read(16), 2)
+    w.close(); dev.close()
+    await sup.stop_all()
+    content = open(tf.name).read()
+    os.remove(tf.name)
+    assert "net>ser" in content and "ser>net" in content, content
+    assert "68 65 6c 6c 6f" in content, content  # 'hello' hex
+    print("trace: hex dump captured both directions  OK")
+    p.terminate(); await p.wait()
+
+
 async def test_reconnect():
     p, a, b = await socat()
     sup, m = await start(a, 47304)
@@ -104,8 +129,9 @@ async def main():
     await test_banner()
     await test_idle_timeout()
     await test_closeon()
+    await test_trace()
     await test_reconnect()
-    print("\nPASS: banner + idle-timeout + closeon + reconnect")
+    print("\nPASS: banner + idle-timeout + closeon + trace + reconnect")
 
 
 if __name__ == "__main__":

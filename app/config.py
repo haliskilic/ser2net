@@ -122,11 +122,18 @@ class SerialSettings:
 # ---------------------------------------------------------------------------
 # Network side
 # ---------------------------------------------------------------------------
+NET_MODES = ("server", "client", "udp")
+
+
 @dataclass
 class NetworkSettings:
+    mode: str = "server"  # server (listen) | client (connect-out) | udp
     protocol: str = "raw"  # raw | telnet | rfc2217
     bind_ip: str = "0.0.0.0"
     port: int = 4001
+    # client/udp connect-out target
+    remote_host: str = ""
+    remote_port: int = 0
     max_connections: int = 1
     kick_old_user: bool = False
     allowed_client_ips: list[str] = field(default_factory=list)
@@ -139,6 +146,14 @@ class NetworkSettings:
     # the serial source is dropped once this fills. Worst-case memory per client is
     # ~client_queue_max * 64KB; raise for bursty high-throughput links.
     client_queue_max: int = 2048
+    # Per-mapping TLS for the data bridge (server/client TCP). Both files required.
+    tls: bool = False
+    tls_cert: str = ""
+    tls_key: str = ""
+
+    @property
+    def listens(self) -> bool:
+        return self.mode in ("server", "udp")
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "NetworkSettings":
@@ -147,27 +162,47 @@ class NetworkSettings:
         return NetworkSettings(**{k: v for k, v in d.items() if k in known})
 
     def validate(self) -> None:
+        if self.mode not in NET_MODES:
+            raise ConfigError(f"Network mode must be one of {NET_MODES}.")
         if self.protocol not in PROTOCOLS:
             raise ConfigError(f"Protocol must be one of {PROTOCOLS}.")
-        try:
-            ip = ipaddress.ip_address(self.bind_ip)
-        except ValueError:
-            raise ConfigError(f"Invalid bind IP: {self.bind_ip!r}.")
-        # 0.0.0.0 and :: are the "all interfaces" wildcards and must be allowed even
-        # though :: reports is_reserved=True.
-        if ip.is_multicast or (ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
-            raise ConfigError("Bind IP cannot be a multicast/reserved address.")
-        if not isinstance(self.port, int) or not (1 <= self.port <= 65535):
-            raise ConfigError("TCP port must be between 1 and 65535.")
+
+        if self.listens:
+            try:
+                ip = ipaddress.ip_address(self.bind_ip)
+            except ValueError:
+                raise ConfigError(f"Invalid bind IP: {self.bind_ip!r}.")
+            # 0.0.0.0 and :: are the "all interfaces" wildcards and must be allowed
+            # even though :: reports is_reserved=True.
+            if ip.is_multicast or (ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
+                raise ConfigError("Bind IP cannot be a multicast/reserved address.")
+            if not isinstance(self.port, int) or not (1 <= self.port <= 65535):
+                raise ConfigError("TCP/UDP port must be between 1 and 65535.")
+        else:  # client (connect-out)
+            if not self.remote_host.strip():
+                raise ConfigError("Connect-out mode requires a remote host.")
+            if not isinstance(self.remote_port, int) or not (1 <= self.remote_port <= 65535):
+                raise ConfigError("Remote port must be between 1 and 65535.")
+
         if not isinstance(self.max_connections, int) or self.max_connections < 1:
             raise ConfigError("Max connections must be >= 1.")
         if not isinstance(self.client_queue_max, int) or self.client_queue_max < 16:
             raise ConfigError("Client queue size must be an integer >= 16.")
+        if self.protocol == "rfc2217" and self.mode == "udp":
+            raise ConfigError("RFC2217 requires a TCP (server/client) connection, not UDP.")
         if self.protocol == "rfc2217" and self.max_connections > 1:
             raise ConfigError(
                 "RFC2217 supports a single connection (clients share one serial "
                 "port's settings). Set Max connections = 1."
             )
+        if self.tls:
+            if self.mode == "udp":
+                raise ConfigError("TLS is not applicable to UDP mappings.")
+            if not (self.tls_cert and self.tls_key):
+                raise ConfigError("Enable TLS requires both a certificate and a key.")
+            for p in (self.tls_cert, self.tls_key):
+                if not os.path.isfile(p):
+                    raise ConfigError(f"TLS file not found: {p}")
         for label, lst in (("allowed", self.allowed_client_ips),
                            ("priority", self.priority_client_ips)):
             for cidr in lst:
@@ -204,12 +239,17 @@ class MappingOptions:
 # ---------------------------------------------------------------------------
 # A single serial<->TCP mapping
 # ---------------------------------------------------------------------------
+MAPPING_KINDS = ("net", "serialbridge")
+
+
 @dataclass
 class MappingConfig:
     id: str = field(default_factory=_new_id)
     name: str = ""
     enabled: bool = True
+    kind: str = "net"  # net (serial<->network) | serialbridge (serial<->serial)
     serial: SerialSettings = field(default_factory=SerialSettings)
+    serial_b: SerialSettings = field(default_factory=SerialSettings)  # serialbridge only
     network: NetworkSettings = field(default_factory=NetworkSettings)
     options: MappingOptions = field(default_factory=MappingOptions)
 
@@ -220,7 +260,9 @@ class MappingConfig:
             id=d.get("id") or _new_id(),
             name=d.get("name", ""),
             enabled=bool(d.get("enabled", True)),
+            kind=d.get("kind", "net"),
             serial=SerialSettings.from_dict(d.get("serial", {})),
+            serial_b=SerialSettings.from_dict(d.get("serial_b", {})),
             network=NetworkSettings.from_dict(d.get("network", {})),
             options=MappingOptions.from_dict(d.get("options", {})),
         )
@@ -231,8 +273,15 @@ class MappingConfig:
     def validate(self) -> None:
         if not self.name.strip():
             raise ConfigError("Mapping name is required.")
+        if self.kind not in MAPPING_KINDS:
+            raise ConfigError(f"Mapping kind must be one of {MAPPING_KINDS}.")
         self.serial.validate()
-        self.network.validate()
+        if self.kind == "serialbridge":
+            self.serial_b.validate()
+            if self.serial_b.port == self.serial.port:
+                raise ConfigError("Serial-to-serial bridge needs two different ports.")
+        else:
+            self.network.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +363,9 @@ class AppConfig:
         seen: dict[tuple[str, int], str] = {}
         for m in self.mappings:
             m.validate()
+            # only listening mappings (server/udp) bind a port; client/serialbridge don't
+            if m.kind != "net" or not m.network.listens:
+                continue
             key = (m.network.bind_ip, m.network.port)
             # 0.0.0.0 collides with everything on that port; treat any overlap as a clash.
             for (bip, bport), other in seen.items():

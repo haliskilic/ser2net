@@ -81,6 +81,11 @@ class PortWatcher:
         self._version = 1
         self._stop.clear()
         self._task = asyncio.create_task(self._run(), name="port-watcher")
+        # optional event-driven layer (just triggers an immediate rescan); polling
+        # above remains the always-correct source of truth if this can't start.
+        self._loop = asyncio.get_running_loop()
+        self._event_thread = None
+        self._start_event_watcher()
 
     async def stop(self) -> None:
         self._stop.set()
@@ -91,6 +96,44 @@ class PortWatcher:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+    def _trigger_rescan(self) -> None:
+        if not self._stop.is_set():
+            asyncio.ensure_future(self.refresh_now())
+
+    def _start_event_watcher(self) -> None:
+        """Best-effort hotplug events; silently no-op (polling continues) if the
+        platform library is missing or the source can't be created."""
+        import sys
+        import threading
+
+        if sys.platform.startswith("linux"):
+            try:
+                import pyudev  # optional
+                ctx = pyudev.Context()
+                mon = pyudev.Monitor.from_netlink(ctx)
+                mon.filter_by("tty")
+
+                def run():
+                    for _dev in iter(lambda: mon.poll(timeout=1.0), False):
+                        if self._stop.is_set():
+                            break
+                        if _dev is not None:
+                            self._loop.call_soon_threadsafe(self._trigger_rescan)
+
+                self._event_thread = threading.Thread(target=run, daemon=True)
+                self._event_thread.start()
+            except Exception:
+                pass  # libudev/pyudev unavailable or blocked -> polling only
+        elif sys.platform == "win32":
+            try:
+                import win32gui  # noqa: F401  (pywin32, optional)
+                from . import _win_hotplug  # optional helper module
+
+                self._event_thread = _win_hotplug.start(self._loop, self._trigger_rescan,
+                                                        self._stop)
+            except Exception:
+                pass  # pywin32 / helper unavailable -> polling only
 
     async def refresh_now(self) -> list[dict[str, Any]]:
         """Force an immediate rescan (used by the UI 'Refresh' button)."""

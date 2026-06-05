@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ipaddress
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -39,6 +40,41 @@ def fmt_duration(secs: float) -> str:
     if m:
         return f"{m}m {s:02d}s"
     return f"{s}s"
+
+
+class Tracer:
+    """Append serial traffic to a per-mapping trace file (optional hex + timestamp)."""
+
+    def __init__(self, options) -> None:
+        self.path = options.trace_both
+        self._hex = options.trace_hexdump
+        self._ts = options.trace_timestamp
+        self._fh = None
+        try:
+            d = os.path.dirname(os.path.abspath(self.path))
+            os.makedirs(d, exist_ok=True)
+            self._fh = open(self.path, "ab")
+        except OSError:
+            self._fh = None
+
+    def write(self, direction: str, data: bytes) -> None:
+        if not self._fh:
+            return
+        prefix = (time.strftime("%Y-%m-%d %H:%M:%S ") if self._ts else "")
+        try:
+            if self._hex:
+                self._fh.write(f"{prefix}{direction} [{len(data)}] {data.hex(' ')}\n".encode())
+            else:
+                self._fh.write(prefix.encode() + direction.encode() + b" " + data + b"\n")
+            self._fh.flush()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        if self._fh:
+            with contextlib.suppress(Exception):
+                self._fh.close()
+            self._fh = None
 
 
 @dataclass
@@ -243,7 +279,10 @@ class MappingRunner:
         self._swriter: Optional[asyncio.StreamWriter] = None
         self._server: Optional[asyncio.base_events.Server] = None
         self._serial_task: Optional[asyncio.Task] = None
-        self._clients: set[_ClientConn] = set()
+        self._main_task: Optional[asyncio.Task] = None       # client/udp/serialbridge driver
+        self._udp_transport = None
+        self._tracer: Optional[Tracer] = None
+        self._clients: set = set()
         self._serial_ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._allowed_nets = self._parse_allowed(mapping.network.allowed_client_ips)
@@ -270,16 +309,37 @@ class MappingRunner:
 
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
-        net = self.mapping.network
         self._stop.clear()
-        self._server = await asyncio.start_server(
-            self._on_client, host=net.bind_ip, port=net.port,
-        )
+        if self.mapping.options.trace_both:
+            self._tracer = Tracer(self.mapping.options)
+
+        if self.mapping.kind == "serialbridge":
+            self._main_task = asyncio.create_task(
+                self._serialbridge_supervisor(), name=f"serbridge:{self.mapping.name}")
+            self.status.state = "running"
+            self._log("serial-to-serial bridge starting")
+            return
+
+        net = self.mapping.network
+        # serial side is shared by server/client/udp
         self._serial_task = asyncio.create_task(
-            self._serial_supervisor(), name=f"serial:{self.mapping.name}"
-        )
+            self._serial_supervisor(), name=f"serial:{self.mapping.name}")
+
+        if net.mode == "server":
+            self._server = await asyncio.start_server(
+                self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
+            self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
+                      f"{', TLS' if net.tls else ''})")
+        elif net.mode == "client":
+            self._main_task = asyncio.create_task(
+                self._client_supervisor(), name=f"connectout:{self.mapping.name}")
+            self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol})")
+        elif net.mode == "udp":
+            loop = asyncio.get_running_loop()
+            self._udp_transport, _ = await loop.create_datagram_endpoint(
+                lambda: _UdpBridge(self), local_addr=(net.bind_ip, net.port))
+            self._log(f"UDP on {net.bind_ip}:{net.port}")
         self.status.state = "running"
-        self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol})")
 
     async def stop(self) -> None:
         self._stop.set()
@@ -288,23 +348,55 @@ class MappingRunner:
             with contextlib.suppress(Exception):
                 await self._server.wait_closed()
             self._server = None
+        if self._udp_transport is not None:
+            with contextlib.suppress(Exception):
+                self._udp_transport.close()
+            self._udp_transport = None
         for c in list(self._clients):
             c.kick()
-        if self._serial_task:
-            self._serial_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._serial_task
-            self._serial_task = None
+        for task in (self._serial_task, self._main_task):
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._serial_task = self._main_task = None
         await self._close_serial()
+        if self._tracer:
+            self._tracer.close()
+            self._tracer = None
         self.status.state = "stopped"
         self.status.client_count = 0
         self.status.clients = []
         self._log("stopped")
 
+    # ssl contexts for per-mapping TLS data bridges
+    def _server_ssl(self):
+        net = self.mapping.network
+        if not net.tls:
+            return None
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(net.tls_cert, net.tls_key)
+        return ctx
+
+    def _client_ssl(self):
+        net = self.mapping.network
+        if not net.tls:
+            return None
+        import ssl
+        ctx = ssl.create_default_context()
+        # data-bridge TLS: encrypt the link; peer cert is typically self-signed, so
+        # don't hard-fail verification (this is opportunistic transport encryption).
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
     # ---------------- serial side ----------------
     async def serial_write(self, data: bytes) -> None:
         if self._swriter is None:
             return  # serial not currently open; drop (status shows reconnecting)
+        if self._tracer:
+            self._tracer.write("net>ser", data)
         self._swriter.write(data)
         await self._swriter.drain()
 
@@ -365,6 +457,8 @@ class MappingRunner:
             data = await reader.read(READ_CHUNK)
             if not data:
                 raise ConnectionError("serial EOF / device removed")
+            if self._tracer:
+                self._tracer.write("ser>net", data)
             for c in list(self._clients):
                 c.feed_from_serial(data)
             if self._closeon:
@@ -474,3 +568,145 @@ class MappingRunner:
                 with contextlib.suppress(Exception):
                     self._swriter.write(self.mapping.options.closestr.encode("utf-8", "replace"))
                     await self._swriter.drain()
+
+    # ---------------- connect-out (TCP client) ----------------
+    async def _client_supervisor(self) -> None:
+        net = self.mapping.network
+        backoff, attempt = 0.5, 0
+        while not self._stop.is_set():
+            try:
+                reader, writer = await asyncio.open_connection(
+                    net.remote_host, net.remote_port, ssl=self._client_ssl())
+                client = _ClientConn(self, reader, writer, net.remote_host, net.remote_port)
+                self._clients.add(client)
+                self._refresh_clients()
+                self._log(f"connected out to {net.remote_host}:{net.remote_port}")
+                backoff, attempt = 0.5, 0
+                try:
+                    await client.run()
+                finally:
+                    self._clients.discard(client)
+                    self._refresh_clients()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.status.last_error = str(e)
+                self._log(f"connect-out failed: {e}")
+            if self._stop.is_set():
+                break
+            attempt += 1
+            delay = min(backoff, 10.0) + (attempt % 5) * 0.1
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                break
+            except asyncio.TimeoutError:
+                pass
+            backoff = min(backoff * 2, 10.0)
+
+    # ---------------- serial <-> serial bridge ----------------
+    async def _serialbridge_supervisor(self) -> None:
+        backoff, attempt = 0.5, 0
+        while not self._stop.is_set():
+            wa = wb = None
+            try:
+                ra, wa, _sa, da = await serial_io.open_serial(self.mapping.serial)
+                rb, wb, _sb, db = await serial_io.open_serial(self.mapping.serial_b)
+                self.status.device = f"{da} <-> {db}"
+                self.status.last_error = ""
+                self.status.state = "running"
+                backoff, attempt = 0.5, 0
+                self._log(f"serial bridge open: {da} <-> {db}")
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(self._pump_serial_pair(ra, wb, "A>B"))
+                    tg.create_task(self._pump_serial_pair(rb, wa, "B>A"))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # TaskGroup raises an ExceptionGroup; flatten its messages
+                inner = getattr(e, "exceptions", None)
+                self.status.last_error = ("; ".join(str(x) for x in inner)
+                                          if inner else str(e))
+                self.status.state = "reconnecting" if attempt else "device-missing"
+                self._log(f"serial bridge error: {self.status.last_error}")
+            finally:
+                for w in (wa, wb):
+                    if w is not None:
+                        with contextlib.suppress(Exception):
+                            w.close()
+                            await w.wait_closed()
+            if self._stop.is_set():
+                break
+            attempt += 1
+            self.status.reconnects += 1
+            self.status.state = "reconnecting"
+            delay = min(backoff, 10.0) + (attempt % 5) * 0.1
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                break
+            except asyncio.TimeoutError:
+                pass
+            backoff = min(backoff * 2, 10.0)
+
+    async def _pump_serial_pair(self, reader, writer, tag: str) -> None:
+        while not self._stop.is_set():
+            data = await reader.read(READ_CHUNK)
+            if not data:
+                raise ConnectionError(f"serial EOF ({tag})")
+            if self._tracer:
+                self._tracer.write(tag, data)
+            writer.write(data)
+            await writer.drain()
+            self.status.bytes_in += len(data)
+
+
+# ---------------------------------------------------------------------------
+# UDP transport (datagram bridge). The serial read loop broadcasts to _clients,
+# so a _UdpPeer sink in _clients carries serial->net; datagram_received carries
+# net->serial. One peer is tracked (the last sender).
+# ---------------------------------------------------------------------------
+class _UdpPeer:
+    def __init__(self, runner: "MappingRunner", addr) -> None:
+        self.runner = runner
+        self.addr = addr
+        self.peer = f"{addr[0]}:{addr[1]}"
+        self.priority = False
+        self.connected_at = time.time()
+
+    def feed_from_serial(self, data: bytes) -> None:
+        t = self.runner._udp_transport
+        if t is not None and self.addr is not None:
+            with contextlib.suppress(Exception):
+                t.sendto(data, self.addr)
+            self.runner.status.bytes_in += len(data)
+
+    def kick(self) -> None:
+        pass
+
+    def request_graceful_close(self) -> None:
+        pass
+
+
+class _UdpBridge(asyncio.DatagramProtocol):
+    def __init__(self, runner: "MappingRunner") -> None:
+        self.runner = runner
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        r = self.runner
+        peer = next((c for c in r._clients if isinstance(c, _UdpPeer)), None)
+        if peer is None:
+            peer = _UdpPeer(r, addr)
+            r._clients.add(peer)
+            r._refresh_clients()
+            r._log(f"udp peer {addr[0]}:{addr[1]}")
+        elif peer.addr != addr:
+            peer.addr = addr
+            peer.peer = f"{addr[0]}:{addr[1]}"
+            r._refresh_clients()
+        if r.mapping.network.read_only:
+            return
+        if r._tracer:
+            r._tracer.write("net>ser", data)
+        if r._swriter is not None:
+            with contextlib.suppress(Exception):
+                r._swriter.write(data)  # datagram_received is sync; transport buffers
+            r.status.bytes_out += len(data)

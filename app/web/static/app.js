@@ -20,18 +20,46 @@ function syncCustomInputs(root) {
   });
 }
 
+// 2b) data-show-when="field=v1,v2": show the element only when the form control
+//     named `field` has one of those values; hidden blocks are also disabled so
+//     their inputs neither submit nor block validation (CSP-safe; no inline JS).
+function applyShowWhen(root) {
+  var form = (root && root.closest) ? root.closest("form") : null;
+  var scope = form || document;
+  scope.querySelectorAll("[data-show-when]").forEach(function (el) {
+    var spec = el.getAttribute("data-show-when");
+    var eq = spec.indexOf("=");
+    var field = spec.slice(0, eq);
+    var vals = spec.slice(eq + 1).split(",");
+    var f = el.closest("form");
+    if (!f) return;
+    var ctrl = f.querySelector('[name="' + field + '"]');
+    if (!ctrl) return;
+    var show = vals.indexOf(ctrl.value) !== -1;
+    el.hidden = !show;
+    el.querySelectorAll("input,select,textarea").forEach(function (inp) {
+      inp.disabled = !show;
+    });
+  });
+}
+
 document.addEventListener("change", function (e) {
   if (e.target.matches && e.target.matches("select[data-custom]")) {
     syncCustomInputs(e.target.parentNode);
+  }
+  if (e.target.matches && e.target.matches("select")) {
+    applyShowWhen(e.target);
   }
 });
 
 // Initialize newly-swapped form fragments (and the first page load).
 document.addEventListener("htmx:afterSwap", function (e) {
   syncCustomInputs(e.target);
+  applyShowWhen(e.target);
 });
 document.addEventListener("DOMContentLoaded", function () {
   syncCustomInputs(document);
+  applyShowWhen(document);
 });
 
 // 3) Cancel/Close buttons clear the form/log panel. Done via a delegated
