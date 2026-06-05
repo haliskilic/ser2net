@@ -30,12 +30,17 @@ def build_routes(templates, state, static_dir):
                                           status_code=status_code, headers=headers)
 
     def client_ip(request) -> str:
-        return request.client.host if request.client else "?"
+        ip = request.client.host if request.client else "?"
+        # normalize IPv4-mapped IPv6 (::ffff:1.2.3.4 -> 1.2.3.4) so the rate-limit
+        # key is consistent on dual-stack listeners
+        if ip.startswith("::ffff:") and "." in ip:
+            ip = ip[len("::ffff:"):]
+        return ip
 
     def set_session(response, request):
         response.set_cookie(
             auth.SESSION_COOKIE,
-            auth.issue_session(state.config.secret_key, SESSION_TTL),
+            auth.issue_session(state.config.secret_key, SESSION_TTL, state.config.pwd_version),
             max_age=SESSION_TTL, httponly=True, samesite="lax",
             secure=state.config.admin_ui.tls_enabled, path="/",
         )
@@ -91,6 +96,7 @@ def build_routes(templates, state, static_dir):
                           ips=netinfo.list_ip_candidates(), admin=state.config.admin_ui)
         async with state.config_lock:
             state.config.password_hash = auth.hash_password(pw)
+            state.config.pwd_version += 1
             state.save()
         state.log("admin password set (first-run setup complete)")
         resp = RedirectResponse("/", status_code=303)
@@ -124,9 +130,13 @@ def build_routes(templates, state, static_dir):
             return await settings_get(request, error=err)
         async with state.config_lock:
             state.config.password_hash = auth.hash_password(new)
+            state.config.pwd_version += 1
             state.save()
-        state.log("admin password changed")
-        return await settings_get(request, ok="Password updated.")
+        state.log("admin password changed; other sessions signed out")
+        # refresh THIS session so the admin isn't logged out by their own change
+        resp = await settings_get(request, ok="Password updated. Other sessions were signed out.")
+        set_session(resp, request)
+        return resp
 
     # ---------------- status / ports / ips ----------------
     async def api_status(request):
@@ -180,6 +190,9 @@ def build_routes(templates, state, static_dir):
         except (ValueError, ConfigError) as e:
             return _form_error(render, request, state, form, str(e))
 
+        # Hold the lock only to mutate + persist config; release it BEFORE the
+        # (potentially slow) supervisor call so other admin requests aren't blocked
+        # while a serial port is being (re)opened.
         async with state.config_lock:
             backup = list(state.config.mappings)
             existing = state.config.get_mapping(mapping.id)
@@ -192,43 +205,42 @@ def build_routes(templates, state, static_dir):
             except ConfigError as e:
                 state.config.mappings = backup
                 return _form_error(render, request, state, form, str(e))
-            await state.supervisor.apply_mapping(mapping)
+        await state.supervisor.apply_mapping(mapping)
         state.log(f"mapping saved: {mapping.name}")
         return Response("", headers=_TRIGGER)
 
     async def mapping_delete(request):
         mid = request.path_params["mid"]
+        removed = None
         async with state.config_lock:
             m = state.config.get_mapping(mid)
             if m:
                 state.config.mappings.remove(m)
                 state.save()
-                await state.supervisor.remove_mapping(mid)
-                state.log(f"mapping deleted: {m.name}")
-                state.delete_mapping_log(mid)
+                removed = m
+        if removed is not None:
+            await state.supervisor.remove_mapping(mid)
+            state.log(f"mapping deleted: {removed.name}")
+            state.delete_mapping_log(mid)
         return Response("", headers=_TRIGGER)
 
     async def mapping_action(request):
         mid = request.path_params["mid"]
         action = request.path_params["action"]
+        if action not in ("start", "stop", "restart"):
+            return PlainTextResponse("Unknown action", status_code=400)
         async with state.config_lock:
             m = state.config.get_mapping(mid)
             if not m:
                 return PlainTextResponse("Mapping not found", status_code=404)
-            if action == "start":
-                m.enabled = True
-                state.save()
-                await state.supervisor.apply_mapping(m)
-            elif action == "stop":
-                m.enabled = False
-                state.save()
-                await state.supervisor.stop_mapping(mid)
-            elif action == "restart":
-                m.enabled = True
-                state.save()
-                await state.supervisor.restart_mapping(m)
-            else:
-                return PlainTextResponse("Unknown action", status_code=400)
+            m.enabled = action != "stop"
+            state.save()
+        if action == "stop":
+            await state.supervisor.stop_mapping(mid)
+        elif action == "restart":
+            await state.supervisor.restart_mapping(m)
+        else:  # start
+            await state.supervisor.apply_mapping(m)
         state.log(f"mapping {action}: {m.name}")
         return Response("", headers=_TRIGGER)
 

@@ -9,9 +9,9 @@
     <form method="post" action="/login" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
       <label>Password
-        <input type="password" name="password" autofocus required>
+        <input type="password" name="password" autocomplete="current-password" autofocus required>
       </label>
-      <button class="btn primary" type="submit" style="width:100%">Sign in</button>
+      <button class="btn primary w-full" type="submit">Sign in</button>
     </form>
   </div>
 </div>

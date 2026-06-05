@@ -15,10 +15,12 @@ of serial ports to IP:port endpoints, bidirectionally, from one screen.
 - **Access control per mapping:** allowed client IPs/CIDRs, **high-priority client IPs/CIDRs**
   (a priority client is admitted by evicting the oldest non-priority client when the port is at
   capacity, even without kick-old-client), max connections, kick-old-client (evicts the oldest),
-  read-only, idle timeout, connect banner.
+  read-only, idle timeout, connect banner, open/close strings, and `closeon` (disconnect
+  clients when the device emits a given string).
 - **Supervised reconnect** with stable-id (VID/PID/serial) device re-resolution.
-- **Password-protected** admin UI (set on first access, changeable later), CSRF, sessions,
-  login rate-limiting, security headers, optional TLS.
+- **Password-protected** admin UI (set on first access, changeable later — a password
+  change revokes all other sessions), CSRF, signed-cookie sessions, login rate-limiting,
+  strict CSP/security headers, optional TLS.
 
 ## Requirements
 
