@@ -8,7 +8,11 @@ Interaction model (HTMX, no SPA):
 """
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 import re
+import subprocess
 
 from starlette.responses import (
     JSONResponse, PlainTextResponse, RedirectResponse, Response,
@@ -99,6 +103,7 @@ def build_routes(templates, state, static_dir):
             state.config.pwd_version += 1
             state.save()
         state.log("admin password set (first-run setup complete)")
+        state.audit(client_ip(request), "first_run_setup", "")
         resp = RedirectResponse("/", status_code=303)
         set_session(resp, request)
         return resp
@@ -133,12 +138,130 @@ def build_routes(templates, state, static_dir):
             state.config.pwd_version += 1
             state.save()
         state.log("admin password changed; other sessions signed out")
+        state.audit(client_ip(request), "password_change", "")
         # refresh THIS session so the admin isn't logged out by their own change
         resp = await settings_get(request, ok="Password updated. Other sessions were signed out.")
         set_session(resp, request)
         return resp
 
+    async def settings_tls_post(request):
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
+        async with state.config_lock:
+            old = (state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key)
+            state.config.admin_ui.tls_cert = cert
+            state.config.admin_ui.tls_key = key
+            try:
+                state.save()
+            except ConfigError as e:
+                state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key = old
+                return await settings_get(request, error=str(e))
+        state.audit(client_ip(request), "admin_tls_set", cert)
+        return await settings_get(request, ok="Admin TLS saved. Restart to apply.")
+
+    async def settings_tls_generate(request):
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        tdir = os.path.join(state.data_dir, "tls")
+        os.makedirs(tdir, exist_ok=True)
+        cert, key = os.path.join(tdir, "cert.pem"), os.path.join(tdir, "key.pem")
+        try:
+            await asyncio.to_thread(subprocess.run, [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "-keyout", key, "-out", cert, "-days", "825", "-subj", "/CN=ser2net",
+            ], check=True, capture_output=True, timeout=30)
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+            return await settings_get(request, error=f"openssl not available or failed: {e}")
+        async with state.config_lock:
+            state.config.admin_ui.tls_cert = cert
+            state.config.admin_ui.tls_key = key
+            state.save()
+        state.audit(client_ip(request), "admin_tls_generate", "")
+        return await settings_get(request, ok="Self-signed certificate generated. Restart to apply TLS.")
+
+    # ---------------- config export / import ----------------
+    async def config_export(request):
+        # mappings only — never export password_hash / secret_key
+        data = {"version": 1, "mappings": [m.to_dict() for m in state.config.mappings]}
+        return Response(
+            json.dumps(data, indent=2), media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=ser2net-mappings.json"})
+
+    async def config_import(request):
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        upload = form.get("file")
+        try:
+            raw = await upload.read() if hasattr(upload, "read") else (upload or "")
+            doc = json.loads(raw)
+            new_maps = [MappingConfig.from_dict(x) for x in doc.get("mappings", [])]
+        except (AttributeError, ValueError, TypeError) as e:
+            return await settings_get(request, error=f"Import failed: invalid file ({e}).")
+        async with state.config_lock:
+            backup = state.config.mappings
+            state.config.mappings = new_maps
+            try:
+                state.save()
+            except ConfigError as e:
+                state.config.mappings = backup
+                return await settings_get(request, error=f"Import rejected: {e}")
+        await state.supervisor.stop_all()
+        await state.supervisor.start_all(state.config)
+        state.audit(client_ip(request), "config_import", f"{len(new_maps)} mappings")
+        return await settings_get(request, ok=f"Imported {len(new_maps)} mappings (replaced existing).")
+
+    async def mapping_duplicate(request):
+        mid = request.path_params["mid"]
+        async with state.config_lock:
+            m = state.config.get_mapping(mid)
+            if not m:
+                return PlainTextResponse("Mapping not found", status_code=404)
+            d = m.to_dict()
+            d.pop("id", None)
+            d["name"] = f"{m.name} (copy)"
+            d["enabled"] = False  # don't auto-start a duplicate (avoids port clash)
+            dup = MappingConfig.from_dict(d)
+            # bump a listening port to the next free one
+            if dup.kind == "net" and dup.network.listens:
+                used = {mm.network.port for mm in state.config.mappings if mm.kind == "net"}
+                while dup.network.port in used and dup.network.port < 65535:
+                    dup.network.port += 1
+            state.config.mappings.append(dup)
+            try:
+                state.save()
+            except ConfigError as e:
+                state.config.mappings.remove(dup)
+                return PlainTextResponse(f"Duplicate failed: {e}", status_code=400)
+        state.audit(client_ip(request), "mapping_duplicate", dup.name)
+        return Response("", headers=_TRIGGER)
+
     # ---------------- status / ports / ips ----------------
+    async def metrics(request):
+        statuses = state.supervisor.all_status()
+        lines = [
+            "# pyser2net metrics",
+            "ser2net_up 1",
+            f"ser2net_mappings_total {len(state.config.mappings)}",
+        ]
+        for m in state.config.mappings:
+            st = statuses.get(m.id) or {}
+            lbl = f'mapping="{_metric_label(m.name)}",id="{m.id}"'
+            running = 1 if st.get("state") == "running" else 0
+            lines += [
+                f"ser2net_mapping_running{{{lbl}}} {running}",
+                f"ser2net_mapping_clients{{{lbl}}} {st.get('client_count', 0)}",
+                f"ser2net_mapping_bytes_in_total{{{lbl}}} {st.get('bytes_in', 0)}",
+                f"ser2net_mapping_bytes_out_total{{{lbl}}} {st.get('bytes_out', 0)}",
+                f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
+                f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
+            ]
+        return PlainTextResponse("\n".join(lines) + "\n",
+                                 media_type="text/plain; version=0.0.4")
+
     async def api_status(request):
         return render(request, "_mappings_body.html",
                       mappings=state.config.mappings,
@@ -207,6 +330,7 @@ def build_routes(templates, state, static_dir):
                 return _form_error(render, request, state, form, str(e))
         await state.supervisor.apply_mapping(mapping)
         state.log(f"mapping saved: {mapping.name}")
+        state.audit(client_ip(request), "mapping_save", mapping.name)
         return Response("", headers=_TRIGGER)
 
     async def mapping_delete(request):
@@ -221,6 +345,7 @@ def build_routes(templates, state, static_dir):
         if removed is not None:
             await state.supervisor.remove_mapping(mid)
             state.log(f"mapping deleted: {removed.name}")
+            state.audit(client_ip(request), "mapping_delete", removed.name)
             state.delete_mapping_log(mid)
         return Response("", headers=_TRIGGER)
 
@@ -242,6 +367,7 @@ def build_routes(templates, state, static_dir):
         else:  # start
             await state.supervisor.apply_mapping(m)
         state.log(f"mapping {action}: {m.name}")
+        state.audit(client_ip(request), f"mapping_{action}", m.name)
         return Response("", headers=_TRIGGER)
 
     routes = [
@@ -253,7 +379,13 @@ def build_routes(templates, state, static_dir):
         Route("/setup", setup_post, methods=["POST"]),
         Route("/settings", settings_get, methods=["GET"]),
         Route("/settings/password", settings_password_post, methods=["POST"]),
+        Route("/settings/tls", settings_tls_post, methods=["POST"]),
+        Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
         Route("/healthz", healthz),
+        Route("/metrics", metrics),
+        Route("/settings/config/export", config_export),
+        Route("/settings/config/import", config_import, methods=["POST"]),
+        Route("/api/mappings/{mid}/duplicate", mapping_duplicate, methods=["POST"]),
         Route("/api/status", api_status),
         Route("/api/ports.json", api_ports_json),
         Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
@@ -272,6 +404,11 @@ def build_routes(templates, state, static_dir):
 # --------------------------------------------------------------------------
 # helpers
 # --------------------------------------------------------------------------
+def _metric_label(name: str) -> str:
+    """Escape a mapping name for a Prometheus label value."""
+    return name.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
 def _password_problem(pw: str, pw2: str) -> str | None:
     if len(pw) < 8:
         return "Password must be at least 8 characters."
@@ -284,54 +421,85 @@ def _checkbox(form, name: str) -> bool:
     return form.get(name) in ("on", "true", "1", "yes")
 
 
-def _mapping_from_form(form) -> dict:
-    baud = form.get("serial_baudrate", "9600")
+def _split(s: str) -> list:
+    return [x for x in re.split(r"[\s,]+", s or "") if x]
+
+
+def _num(form, name, default, *, strict, cast=int):
+    v = form.get(name, default)
+    if strict:
+        return cast(v)
+    try:
+        return cast(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _serial_dict(form, prefix: str, strict: bool) -> dict:
+    baud = form.get(prefix + "baudrate", "9600")
     if baud == "custom":
-        baud = form.get("serial_custom_baud", "").strip()
+        baud = form.get(prefix + "custom_baud", "").strip()
+    return {
+        "port": form.get(prefix + "port", "").strip(),
+        "baudrate": (int(baud) if strict else _num({"b": baud}, "b", 9600, strict=False)),
+        "bytesize": _num(form, prefix + "bytesize", 8, strict=strict),
+        "parity": form.get(prefix + "parity", "N"),
+        "stopbits": _num(form, prefix + "stopbits", 1, strict=strict, cast=float),
+        "flowcontrol": form.get(prefix + "flowcontrol", "none"),
+        "rts_on_open": form.get(prefix + "rts_on_open", "keep"),
+        "dtr_on_open": form.get(prefix + "dtr_on_open", "keep"),
+        "exclusive": _checkbox(form, prefix + "exclusive"),
+    }
+
+
+def _build_mapping_dict(form, strict: bool) -> dict:
     bind = form.get("network_bind_ip", "0.0.0.0")
     if bind == "custom":
         bind = form.get("network_bind_ip_custom", "").strip()
-    allowed = [x for x in re.split(r"[\s,]+", form.get("network_allowed_client_ips", "")) if x]
-    priority = [x for x in re.split(r"[\s,]+", form.get("network_priority_client_ips", "")) if x]
     return {
         "id": form.get("id") or None,
-        "name": form.get("name", "").strip(),
+        "name": (form.get("name", "").strip() if strict else form.get("name", "")),
         "enabled": _checkbox(form, "enabled"),
-        "serial": {
-            "port": form.get("serial_port", "").strip(),
-            "baudrate": int(baud),
-            "bytesize": int(form.get("serial_bytesize", 8)),
-            "parity": form.get("serial_parity", "N"),
-            "stopbits": float(form.get("serial_stopbits", 1)),
-            "flowcontrol": form.get("serial_flowcontrol", "none"),
-            "rts_on_open": form.get("serial_rts_on_open", "keep"),
-            "dtr_on_open": form.get("serial_dtr_on_open", "keep"),
-            "exclusive": _checkbox(form, "serial_exclusive"),
-        },
+        "kind": form.get("kind", "net"),
+        "serial": _serial_dict(form, "serial_", strict),
+        "serial_b": _serial_dict(form, "serial_b_", strict),
         "network": {
+            "mode": form.get("network_mode", "server"),
             "protocol": form.get("network_protocol", "raw"),
-            "bind_ip": bind,
-            "port": int(form.get("network_port", 4001)),
-            "max_connections": int(form.get("network_max_connections", 1)),
+            "bind_ip": bind or "0.0.0.0",
+            "port": _num(form, "network_port", 4001, strict=strict),
+            "remote_host": form.get("network_remote_host", "").strip(),
+            "remote_port": (_num(form, "network_remote_port", 0, strict=strict)
+                            if form.get("network_remote_port") else 0),
+            "max_connections": _num(form, "network_max_connections", 1, strict=strict),
             "kick_old_user": _checkbox(form, "network_kick_old_user"),
             "read_only": _checkbox(form, "network_read_only"),
-            "allowed_client_ips": allowed,
-            "priority_client_ips": priority,
-            "client_queue_max": int(form.get("network_client_queue_max", 2048) or 2048),
+            "allowed_client_ips": _split(form.get("network_allowed_client_ips", "")),
+            "priority_client_ips": _split(form.get("network_priority_client_ips", "")),
+            "client_queue_max": _num(form, "network_client_queue_max", 2048, strict=strict),
+            "tls": _checkbox(form, "network_tls"),
+            "tls_cert": form.get("network_tls_cert", "").strip(),
+            "tls_key": form.get("network_tls_key", "").strip(),
         },
         "options": {
             "banner": form.get("opt_banner", ""),
-            "idle_timeout_s": int(form.get("opt_idle_timeout_s", 0) or 0),
+            "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
+            "closeon": form.get("opt_closeon", ""),
+            "trace_both": form.get("opt_trace_both", "").strip(),
+            "trace_hexdump": _checkbox(form, "opt_trace_hexdump"),
         },
     }
+
+
+def _mapping_from_form(form) -> dict:
+    return _build_mapping_dict(form, strict=True)
 
 
 def _form_error(render, request, state, form, message: str):
     """Re-render the mapping form with the submitted values and an error banner."""
     from ..engine import netinfo
-    # rebuild a MappingConfig-ish view from raw form so fields survive the round-trip
     try:
-        mapping = MappingConfig.from_dict(_safe_form_dict(form))
+        mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
     except Exception:
         mapping = MappingConfig(name=form.get("name", ""))
     is_new = not form.get("id")
@@ -339,50 +507,3 @@ def _form_error(render, request, state, form, message: str):
                   mapping=mapping, is_new=is_new,
                   ports=state.ports.get(), ips=netinfo.list_ip_candidates(),
                   error=message)
-
-
-def _safe_form_dict(form) -> dict:
-    """Best-effort form->dict that won't raise on bad numbers (for error redisplay)."""
-    def _int(v, d):
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return d
-
-    baud = form.get("serial_baudrate", "9600")
-    if baud == "custom":
-        baud = form.get("serial_custom_baud", "").strip()
-    bind = form.get("network_bind_ip", "0.0.0.0")
-    if bind == "custom":
-        bind = form.get("network_bind_ip_custom", "").strip()
-    return {
-        "id": form.get("id") or None,
-        "name": form.get("name", ""),
-        "enabled": _checkbox(form, "enabled"),
-        "serial": {
-            "port": form.get("serial_port", ""),
-            "baudrate": _int(baud, 9600),
-            "bytesize": _int(form.get("serial_bytesize", 8), 8),
-            "parity": form.get("serial_parity", "N"),
-            "stopbits": float(_int(form.get("serial_stopbits", 1), 1)),
-            "flowcontrol": form.get("serial_flowcontrol", "none"),
-            "rts_on_open": form.get("serial_rts_on_open", "keep"),
-            "dtr_on_open": form.get("serial_dtr_on_open", "keep"),
-            "exclusive": _checkbox(form, "serial_exclusive"),
-        },
-        "network": {
-            "protocol": form.get("network_protocol", "raw"),
-            "bind_ip": bind or "0.0.0.0",
-            "port": _int(form.get("network_port", 4001), 4001),
-            "max_connections": _int(form.get("network_max_connections", 1), 1),
-            "kick_old_user": _checkbox(form, "network_kick_old_user"),
-            "read_only": _checkbox(form, "network_read_only"),
-            "allowed_client_ips": [x for x in re.split(r"[\s,]+", form.get("network_allowed_client_ips", "")) if x],
-            "priority_client_ips": [x for x in re.split(r"[\s,]+", form.get("network_priority_client_ips", "")) if x],
-            "client_queue_max": _int(form.get("network_client_queue_max", 2048), 2048),
-        },
-        "options": {
-            "banner": form.get("opt_banner", ""),
-            "idle_timeout_s": _int(form.get("opt_idle_timeout_s", 0), 0),
-        },
-    }

@@ -118,6 +118,7 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .panel-narrow { max-width: 520px; }
 .chk-pad { margin-top: 24px; }
 .mb-sm { margin: 0 0 8px; }
+.mt-sm { margin-top: 8px; }
 
 #form-panel:empty { display: none; }
 #form-panel { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 16px; margin-bottom: 16px; }

@@ -21,4 +21,31 @@
   <p class="muted">To change the admin bind address, restart with
      <span class="mono">python3 ser2net.py --reconfigure</span>.</p>
 </section>
+
+<section class="panel panel-narrow">
+  <div class="panel-head"><h2>Admin TLS (HTTPS)</h2></div>
+  <p class="muted mb-sm">Encrypts this management UI. Changes take effect after a restart.</p>
+  <form method="post" action="/settings/tls" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>Certificate path <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>
+    <label>Key path <input type="text" name="tls_key" value="{{ admin.tls_key }}" placeholder="/path/key.pem"></label>
+    <button class="btn primary" type="submit">Save TLS</button>
+  </form>
+  <form method="post" action="/settings/tls/generate" class="inline mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <button class="btn" type="submit">Generate self-signed (needs openssl)</button>
+  </form>
+</section>
+
+<section class="panel panel-narrow">
+  <div class="panel-head"><h2>Mappings backup</h2></div>
+  <p><a class="btn" href="/settings/config/export">⤓ Export mappings (JSON)</a></p>
+  <form method="post" action="/settings/config/import" enctype="multipart/form-data" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>Import mappings <span class="muted">(replaces all current mappings)</span>
+      <input type="file" name="file" accept="application/json,.json" required>
+    </label>
+    <button class="btn" type="submit">Import</button>
+  </form>
+</section>
 {% endblock %}

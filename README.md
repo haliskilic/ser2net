@@ -5,11 +5,16 @@ over the network (TCP), managed entirely from a web UI. A cross-platform
 (Windows + Linux), pure-Python take on the classic `ser2net` — built to map **dozens**
 of serial ports to IP:port endpoints, bidirectionally, from one screen.
 
+- **Transports:** TCP **server** (listen), TCP **client** (connect-out), **UDP**, and
+  **serial↔serial** bridging. Optional per-mapping **TLS** for TCP data bridges.
 - **Protocols:** `raw`, `telnet` (RFC 854, 8-bit clean), `rfc2217` (remote clients can
   change baud/parity/etc. live, via pyserial's `PortManager`).
+- **Observability:** per-mapping traffic trace (hex/timestamp), Prometheus `/metrics`,
+  config-change audit log, and a per-mapping live log viewer.
 - **Full serial config:** baud (incl. custom), data bits, parity, stop bits, flow control
   (none / RTS-CTS / XON-XOFF / DSR-DTR), RTS/DTR on open, exclusive open.
-- **Live, refreshable port list** (hotplug-aware polling, no privileges needed to *list*).
+- **Live, refreshable port list** — polling baseline (no privileges to *list*) plus optional
+  event-driven hotplug (pyudev / `WM_DEVICECHANGE`) that falls back to polling.
 - **Bind IP picker** from the machine's own addresses (`0.0.0.0` / `127.0.0.1` / each LAN IP)
   or a custom IP — for both each mapping and the admin UI itself.
 - **Access control per mapping:** allowed client IPs/CIDRs, **high-priority client IPs/CIDRs**

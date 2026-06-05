@@ -13,8 +13,18 @@
       <td>{{ m.name }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
       <td class="mono">{{ m.serial.port }}</td>
       <td class="mono">{{ m.serial.compact() }}{% if m.serial.flowcontrol != 'none' %} · {{ m.serial.flowcontrol }}{% endif %}</td>
-      <td class="mono">{{ m.network.bind_ip }}:{{ m.network.port }}</td>
-      <td>{{ m.network.protocol }}{% if m.network.read_only %} <span class="tag">RO</span>{% endif %}</td>
+      <td class="mono">
+        {%- if m.kind == 'serialbridge' -%}{{ m.serial_b.port }}
+        {%- elif m.network.mode == 'client' -%}→ {{ m.network.remote_host }}:{{ m.network.remote_port }}
+        {%- else -%}{{ m.network.bind_ip }}:{{ m.network.port }}{%- endif -%}
+      </td>
+      <td>
+        {%- if m.kind == 'serialbridge' -%}serial↔serial
+        {%- else -%}{{ m.network.mode }}/{{ m.network.protocol }}
+          {%- if m.network.tls %} <span class="tag">TLS</span>{% endif %}
+          {%- if m.network.read_only %} <span class="tag">RO</span>{% endif %}
+        {%- endif -%}
+      </td>
       <td>
         <span class="state state-{{ state }}">{{ state }}</span>
         {% if st and st.last_error and state in ('error','device-missing','reconnecting') %}
@@ -40,6 +50,7 @@
         {% endif %}
         <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/form" hx-target="#form-panel" hx-swap="innerHTML">Edit</button>
         <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">Log</button>
+        <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none">Copy</button>
         <button class="btn sm danger" hx-delete="/api/mappings/{{ m.id }}"
                 hx-confirm="Delete mapping “{{ m.name }}”?" hx-swap="none">Delete</button>
       </td>
