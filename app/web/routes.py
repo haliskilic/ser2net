@@ -317,6 +317,7 @@ def _mapping_from_form(form) -> dict:
             "read_only": _checkbox(form, "network_read_only"),
             "allowed_client_ips": allowed,
             "priority_client_ips": priority,
+            "client_queue_max": int(form.get("network_client_queue_max", 2048) or 2048),
         },
         "options": {
             "banner": form.get("opt_banner", ""),
@@ -378,6 +379,7 @@ def _safe_form_dict(form) -> dict:
             "read_only": _checkbox(form, "network_read_only"),
             "allowed_client_ips": [x for x in re.split(r"[\s,]+", form.get("network_allowed_client_ips", "")) if x],
             "priority_client_ips": [x for x in re.split(r"[\s,]+", form.get("network_priority_client_ips", "")) if x],
+            "client_queue_max": _int(form.get("network_client_queue_max", 2048), 2048),
         },
         "options": {
             "banner": form.get("opt_banner", ""),
