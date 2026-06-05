@@ -11,6 +11,22 @@ with low latency.
 
 ---
 
+## 📸 Screenshots
+
+**Dashboard — dozens of mappings, live status, detected ports:**
+
+![Dashboard](docs/screenshots/02-dashboard.png)
+
+| Add mapping (all serial/network options) | In-browser serial console (xterm.js) |
+|---|---|
+| ![Mapping form](docs/screenshots/03-add-mapping.png) | ![Console](docs/screenshots/05-console.png) |
+
+| Settings (password · TLS · backup) | Login |
+|---|---|
+| ![Settings](docs/screenshots/04-settings.png) | ![Login](docs/screenshots/01-login.png) |
+
+---
+
 ## 📌 Purpose
 
 Industrial devices, PLCs, instruments, GPS/modems, microcontrollers and console ports
