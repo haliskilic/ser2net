@@ -79,10 +79,10 @@ document.addEventListener("click", function (e) {
 //    into the page; the socket is closed when the panel is replaced/cleared.
 function closeTerm() {
   var el = document.getElementById("term");
-  if (el && el._ws) {
-    try { el._ws.close(); } catch (e) {}
-    el._ws = null;
-  }
+  if (!el) return;
+  if (el._ws) { try { el._ws.close(); } catch (e) {} el._ws = null; }
+  if (el._onresize) { window.removeEventListener("resize", el._onresize); el._onresize = null; }
+  if (el._term) { try { el._term.dispose(); } catch (e) {} el._term = null; }
 }
 
 function initTerm(root) {
@@ -93,7 +93,21 @@ function initTerm(root) {
   el._inited = true;
   var term = new Terminal({ convertEol: true, fontSize: 13, scrollback: 5000,
                             theme: { background: "#0b0f14" } });
+  el._term = term;
+
+  // size the terminal to its container (FitAddon); refit after layout settles
+  var fit = null;
+  if (typeof FitAddon !== "undefined") {
+    fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+  }
   term.open(el);
+  function refit() { if (fit) { try { fit.fit(); } catch (e) {} } }
+  refit();
+  setTimeout(refit, 30);          // after the panel finishes laying out
+  el._onresize = refit;
+  window.addEventListener("resize", refit);
+
   var scheme = location.protocol === "https:" ? "wss" : "ws";
   var ws = new WebSocket(scheme + "://" + location.host + el.getAttribute("data-ws"));
   ws.binaryType = "arraybuffer";
@@ -102,9 +116,11 @@ function initTerm(root) {
     if (typeof ev.data === "string") term.write(ev.data);
     else term.write(new Uint8Array(ev.data));
   };
+  ws.onopen = refit;
   ws.onclose = function () { term.write("\r\n\x1b[33m[console disconnected]\x1b[0m\r\n"); };
   if (el.getAttribute("data-interactive") === "1") {
     term.onData(function (d) { if (ws.readyState === 1) ws.send(d); });
+    term.focus();
   }
 }
 
