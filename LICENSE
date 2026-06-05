@@ -1,0 +1,55 @@
+pyser2net — Commercial / Proprietary Software License
+=====================================================
+
+Copyright (c) 2026 Halis KILIÇ. All rights reserved.
+Contact: haliskilic90@gmail.com
+
+This software, including its source code, assets, and documentation
+(collectively, the "Software"), is the proprietary and confidential property of
+Halis KILIÇ (the "Author") and is protected by copyright and other intellectual
+property laws. The Software is licensed, not sold, and only under the terms below.
+
+1. OWNERSHIP
+   The Author retains all right, title, and interest in and to the Software,
+   including all intellectual property rights. No ownership is transferred.
+
+2. LICENSE REQUIRED
+   Use, copying, installation, execution, modification, merging, publication,
+   distribution, sublicensing, renting, leasing, hosting as a service, or sale of
+   the Software — in whole or in part — is permitted ONLY under a valid, written
+   commercial license agreement purchased from the Author. Absent such an
+   agreement, no rights are granted and all of the foregoing are prohibited.
+
+3. EVALUATION
+   The Author may, at its sole discretion and in writing, grant a time-limited,
+   non-transferable evaluation license for internal testing only. Evaluation use
+   confers no right to deploy the Software in production or to redistribute it.
+
+4. RESTRICTIONS
+   You may not remove or alter any copyright, trademark, or proprietary notices.
+   You may not reverse engineer, decompile, or disassemble the Software except to
+   the extent such restriction is expressly prohibited by applicable law.
+
+5. THIRD-PARTY COMPONENTS
+   The Software bundles third-party components that are distributed under their
+   own permissive open-source licenses (see THIRD-PARTY-NOTICES.md). Those
+   components remain governed by their respective licenses; this License governs
+   only the Author's own original code and assets. The bundled components are
+   permissively licensed and do not restrict commercial sale of the Software,
+   provided their notices are preserved.
+
+6. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+7. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+   CONNECTION WITH THE SOFTWARE OR ITS USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+8. TERMINATION
+   Any breach of this License automatically terminates your rights under it, and
+   you must cease all use and destroy all copies of the Software.
+
+To obtain a commercial license, contact: haliskilic90@gmail.com
