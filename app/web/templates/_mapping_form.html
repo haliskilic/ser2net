@@ -101,6 +101,9 @@
       <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> Kick old client</label>
       <label class="chk chk-pad"><input type="checkbox" name="network_read_only" {% if mapping.network.read_only %}checked{% endif %}> Read-only (no net→serial)</label>
     </div>
+    <label>Client buffer (chunks) <span class="muted">(per-client serial→net queue; slow clients dropped when full; ~64KB each)</span>
+      <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}">
+    </label>
     <label>Allowed client IPs / CIDRs <span class="muted">(blank = any; space/comma separated)</span>
       <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.0/24 10.0.0.5">
     </label>

@@ -7,12 +7,18 @@ doesn't break a mapping across reconnects.
 """
 from __future__ import annotations
 
+import contextlib
 import sys
 from typing import Any
 
 from ..config import SerialSettings
 
 _patched = False
+
+# StreamReader high-water for the serial side. The default (64 KB) makes the reader
+# pause/resume frequently under load; we read promptly in the bridge and apply our
+# own per-client backpressure, so a larger buffer keeps the serial read flowing.
+SERIAL_STREAM_LIMIT = 1024 * 1024
 
 
 def _patch_serial_asyncio_fast() -> None:
@@ -111,7 +117,13 @@ async def open_serial(settings: SerialSettings):
 
     import serial.rs485
 
-    reader, writer = await serial_asyncio_fast.open_serial_connection(**kwargs)
+    reader, writer = await serial_asyncio_fast.open_serial_connection(
+        limit=SERIAL_STREAM_LIMIT, **kwargs)
+    # upstream reads only 1024 bytes per readiness event (it even has a TODO to
+    # raise this); a larger read drains the OS buffer faster and lowers CPU/latency
+    # under sustained or full-duplex load.
+    with contextlib.suppress(Exception):
+        writer.transport._max_read_size = 65536
     ser = writer.transport.serial
 
     # apply RTS/DTR start state (only when explicitly on/off). Some backends/adapters
