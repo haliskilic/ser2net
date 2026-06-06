@@ -19,9 +19,20 @@ import asyncio
 import contextlib
 import ipaddress
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+
+# asyncio.TaskGroup and exception groups are native on Python 3.11+. On 3.10 we
+# use the pure-Python backports (bundled in vendor/wheels: taskgroup +
+# exceptiongroup), which preserve TaskGroup semantics exactly. BaseExceptionGroup
+# is a builtin on 3.11+, so it is only imported on the backport path.
+if sys.version_info >= (3, 11):
+    from asyncio import TaskGroup
+else:  # pragma: no cover - exercised only on Python 3.10
+    from taskgroup import TaskGroup
+    from exceptiongroup import BaseExceptionGroup
 
 from ..config import MappingConfig
 from . import serial_io
@@ -29,6 +40,15 @@ from .protocols import make_session
 
 READ_CHUNK = 4096
 CLIENT_QUEUE_MAX = 2048  # outbound chunks buffered per client before it's dropped
+
+
+def _iter_leaf_exceptions(eg: BaseExceptionGroup):
+    """Yield the individual (non-group) exceptions from a possibly-nested group."""
+    for exc in eg.exceptions:
+        if isinstance(exc, BaseExceptionGroup):
+            yield from _iter_leaf_exceptions(exc)
+        else:
+            yield exc
 
 
 def fmt_duration(secs: float) -> str:
@@ -186,18 +206,26 @@ class _ClientConn:
             await self.writer.drain()
 
         try:
-            async with asyncio.TaskGroup() as tg:
+            async with TaskGroup() as tg:
                 tg.create_task(self._pump_net_to_serial())
                 tg.create_task(self._pump_serial_to_net())
                 if self._session.poll_interval:
                     tg.create_task(self._pump_poll())
                 if m.options.idle_timeout_s > 0:
                     tg.create_task(self._idle_guard(m.options.idle_timeout_s))
-        except* (ConnectionError, asyncio.IncompleteReadError, OSError):
-            pass  # normal disconnect paths
-        except* Exception as eg:
-            for exc in eg.exceptions:
-                self._log_unexpected(exc)
+        except BaseExceptionGroup as eg:
+            # Mirror the original `except*` split: connection-reset paths are a
+            # normal disconnect (swallow them); log every other Exception; let
+            # anything that is not an Exception (e.g. CancelledError) propagate.
+            _normal = (ConnectionError, asyncio.IncompleteReadError, OSError)
+            _, rest = eg.split(_normal)
+            if rest is not None:
+                unexpected, base_only = rest.split(Exception)
+                if unexpected is not None:
+                    for exc in _iter_leaf_exceptions(unexpected):
+                        self._log_unexpected(exc)
+                if base_only is not None:
+                    raise base_only
         finally:
             self._closing = True
             with contextlib.suppress(Exception):
@@ -632,7 +660,7 @@ class MappingRunner:
                 self.status.state = "running"
                 backoff, attempt = 0.5, 0
                 self._log(f"serial bridge open: {da} <-> {db}")
-                async with asyncio.TaskGroup() as tg:
+                async with TaskGroup() as tg:
                     tg.create_task(self._pump_serial_pair(ra, wb, "A>B"))
                     tg.create_task(self._pump_serial_pair(rb, wa, "B>A"))
             except asyncio.CancelledError:

@@ -69,7 +69,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 
 ## 🧰 Requirements
 
-- **Python 3.11+** installed. Nothing else — dependencies ship in `vendor/wheels/` and
+- **Python 3.10+** installed. Nothing else — dependencies ship in `vendor/wheels/` and
   install to `./lib` on first run (offline).
 - Linux: membership in the `dialout` group to **open** serial ports (listing ports
   needs no privilege):
