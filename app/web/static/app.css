@@ -95,6 +95,10 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 input[type=checkbox] { width: auto; margin: 0; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
 .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 18px; }
+/* The HTML `hidden` attribute (set by applyShowWhen for data-show-when blocks)
+   must win over the display rules above; otherwise a hidden .grid2/.grid3 block
+   would stay visible (e.g. Remote host/port showing while mode = server). */
+[hidden] { display: none !important; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px 2px; margin: 0 0 16px; }
 legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; padding: 0 6px; }
 .custom-input { margin-top: 6px; }
