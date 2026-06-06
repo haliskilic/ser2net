@@ -34,6 +34,16 @@ REQUIRED = [
     ("psutil", "psutil"),
 ]
 
+# Python 3.10 backports: ser2net uses these as stand-ins for the native 3.11+
+# asyncio.TaskGroup / asyncio.Runner / except* (see app/engine/bridge.py and
+# app/runtime.py). Include them in the self-check so a broken offline install on
+# 3.10 fails here with a clear message instead of an ImportError at startup.
+if sys.version_info < (3, 11):
+    REQUIRED += [
+        ("exceptiongroup", "exceptiongroup"),
+        ("taskgroup", "taskgroup"),
+    ]
+
 
 def _ensure_lib_on_path() -> None:
     if os.path.isdir(LIB_DIR) and LIB_DIR not in sys.path:
