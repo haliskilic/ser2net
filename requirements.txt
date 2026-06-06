@@ -18,6 +18,8 @@ typing_extensions==4.15.0
 # (3.10 etc.). Pure-Python py3-none-any wheel, so it installs offline everywhere;
 # harmless extra on 3.11+ where anyio doesn't pull it in.
 exceptiongroup==1.3.1 ; python_version < "3.11"
+# click pulls in colorama on Windows (for ANSI colors) on every Python version.
+colorama==0.4.6 ; platform_system == "Windows"
 # Platform-specific (win_amd64 + manylinux wheels bundled for cp311/cp312).
 # markupsafe also ships a pure-Python py3-none-any wheel here so it installs
 # offline on ANY Python (e.g. 3.10/3.13/3.14): without a matching _speedups
