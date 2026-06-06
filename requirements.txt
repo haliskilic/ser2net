@@ -14,10 +14,12 @@ click==8.4.1
 h11==0.16.0
 idna==3.18
 typing_extensions==4.15.0
-# Conditional transitive dep: anyio requires exceptiongroup only on Python < 3.11
-# (3.10 etc.). Pure-Python py3-none-any wheel, so it installs offline everywhere;
-# harmless extra on 3.11+ where anyio doesn't pull it in.
+# Python 3.10 backports (pure-Python, only installed on < 3.11). anyio needs
+# exceptiongroup there; ser2net additionally uses exceptiongroup + taskgroup as
+# backports of asyncio.TaskGroup / asyncio.Runner / except* so app/engine/bridge.py
+# and app/runtime.py run on 3.10. On 3.11+ these are native and not installed.
 exceptiongroup==1.3.1 ; python_version < "3.11"
+taskgroup==0.2.2 ; python_version < "3.11"
 # click pulls in colorama on Windows (for ANSI colors) on every Python version.
 colorama==0.4.6 ; platform_system == "Windows"
 # Platform-specific (win_amd64 + manylinux wheels bundled for cp311/cp312).

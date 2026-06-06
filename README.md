@@ -72,7 +72,7 @@ düzenlemeye gerek yok.
 
 ## 🧰 Gereklilikler
 
-- **Python 3.11+** (sistemde kurulu). Başka hiçbir şey gerekmez — bağımlılıklar
+- **Python 3.10+** (sistemde kurulu). Başka hiçbir şey gerekmez — bağımlılıklar
   `vendor/wheels/` içinde gelir ve ilk çalıştırmada `./lib`'e kurulur (offline).
 - Linux'ta seri portu **açmak** için kullanıcının `dialout` grubunda olması gerekir
   (port **listelemek** için ayrıcalık gerekmez):
