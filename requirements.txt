@@ -14,7 +14,11 @@ click==8.4.1
 h11==0.16.0
 idna==3.18
 typing_extensions==4.15.0
-# Platform-specific (win_amd64 + manylinux wheels bundled for cp311/cp312):
+# Platform-specific (win_amd64 + manylinux wheels bundled for cp311/cp312).
+# markupsafe also ships a pure-Python py3-none-any wheel here so it installs
+# offline on ANY Python (e.g. 3.10/3.13/3.14): without a matching _speedups
+# .pyd it falls back to its native Python escaper. psutil's cp3x-abi3 wheel
+# already covers Python 3.7+.
 markupsafe==3.0.3
 psutil==7.2.2
 
