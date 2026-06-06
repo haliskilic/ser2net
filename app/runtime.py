@@ -13,6 +13,13 @@ import contextlib
 import signal
 import sys
 
+# asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
+# (bundled: taskgroup), which accepts the same loop_factory argument.
+if sys.version_info >= (3, 11):
+    from asyncio import Runner
+else:  # pragma: no cover - exercised only on Python 3.10
+    from taskgroup import Runner
+
 from . import console
 from .config import ConfigStore
 from .state import AppState
@@ -33,7 +40,7 @@ def main(config_path: str, reconfigure: bool = False) -> int:
     # Own the loop. Force SelectorEventLoop on Windows for pyserial-asyncio-fast.
     loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
     try:
-        with asyncio.Runner(loop_factory=loop_factory) as runner:
+        with Runner(loop_factory=loop_factory) as runner:
             return runner.run(_serve(store, config))
     except KeyboardInterrupt:
         return 0

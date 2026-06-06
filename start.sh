@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ser2net launcher for Linux/macOS. Requires Python 3.11+.
+# ser2net launcher for Linux/macOS. Requires Python 3.10+.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -8,7 +8,7 @@ if command -v python3 >/dev/null 2>&1; then
 elif command -v python >/dev/null 2>&1; then
     PY=python
 else
-    echo "[ser2net] Python 3.11+ not found (python3/python)." >&2
+    echo "[ser2net] Python 3.10+ not found (python3/python)." >&2
     exit 1
 fi
 
