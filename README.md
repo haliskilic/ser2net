@@ -152,7 +152,8 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 ## 🗂️ Yapılandırma & durum dosyaları
 
 Tüm durum **veri dizininde** (varsayılan `data/`):
-- `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım, 0600).
+- `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım; sahibe özel
+  izinler: POSIX'te 0600, Windows'ta `icacls` ile sahip/SYSTEM/Administrators).
 - `all.log` — global etkinlik/audit; `audit.log` — config değişiklikleri.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `tls/` — self-signed üretilirse sertifika/anahtar.
