@@ -15,6 +15,15 @@ from ..config import AppConfig, MappingConfig
 from .bridge import MappingRunner
 
 
+def make_runner(mapping: MappingConfig, logger):
+    """Pick the runner for a mapping: the Modbus RTU<->TCP gateway when the network
+    protocol is 'modbus', otherwise the transparent serial<->network bridge."""
+    if mapping.kind == "net" and mapping.network.protocol == "modbus":
+        from .modbus_gateway import ModbusGatewayRunner
+        return ModbusGatewayRunner(mapping, logger=logger)
+    return MappingRunner(mapping, logger=logger)
+
+
 class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None):
@@ -48,7 +57,7 @@ class Supervisor:
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:
         """Register a non-running runner so status is queryable for disabled mappings."""
         if mapping.id not in self._runners:
-            r = MappingRunner(mapping, logger=self._logger_factory(mapping))
+            r = make_runner(mapping, self._logger_factory(mapping))
             r.status.state = "stopped"
             self._runners[mapping.id] = r
             if mapping.id not in self._order:
@@ -62,7 +71,7 @@ class Supervisor:
             with contextlib.suppress(Exception):
                 await old.stop()
 
-        runner = MappingRunner(mapping, logger=self._logger_factory(mapping))
+        runner = make_runner(mapping, self._logger_factory(mapping))
         if mapping.id not in self._order:
             self._order.append(mapping.id)
         async with self._lock:

@@ -32,7 +32,7 @@ PARITY_LABELS = {"N": "None", "E": "Even", "O": "Odd", "M": "Mark", "S": "Space"
 STOPBITS = (1, 1.5, 2)
 FLOWCONTROLS = ("none", "rtscts", "xonxoff", "dsrdtr")
 LINE_STATES = ("on", "off", "keep")
-PROTOCOLS = ("raw", "telnet", "rfc2217")
+PROTOCOLS = ("raw", "telnet", "rfc2217", "modbus")
 COMMON_BAUDRATES = (
     300, 1200, 2400, 4800, 9600, 19200, 38400, 57600,
     115200, 230400, 460800, 921600,
@@ -229,6 +229,8 @@ class NetworkSettings:
             raise ConfigError("Client queue size must be an integer >= 16.")
         if self.protocol == "rfc2217" and self.mode == "udp":
             raise ConfigError("RFC2217 requires a TCP (server/client) connection, not UDP.")
+        if self.protocol == "modbus" and self.mode != "server":
+            raise ConfigError("Modbus gateway requires TCP server mode (masters connect in).")
         if self.protocol == "rfc2217" and self.max_connections > 1:
             raise ConfigError(
                 "RFC2217 supports a single connection (clients share one serial "
@@ -267,6 +269,9 @@ class MappingOptions:
     # RFC2217 interop knobs for non-compliant peers:
     rfc2217_poll_modem_interval_s: float = 1.0
     rfc2217_net_timeout_s: float = 3.0
+    # Modbus gateway: how long to wait for an RTU slave's reply before returning a
+    # Modbus exception (0x0B gateway-target-failed) to the TCP master.
+    modbus_response_timeout_s: float = 1.0
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingOptions":

@@ -48,7 +48,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Transports:** TCP **server** (listen), TCP **client** (connect-out), **UDP**, and
   **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges.
 - **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live changes to
-  baud/parity/data bits/stop bits/flow control).
+  baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway).
+- **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
+  multiple masters, transaction serialization on the shared bus + transaction-id
+  integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
 - **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control
   (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open, RS-485.
 - **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
