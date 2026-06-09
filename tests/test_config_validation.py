@@ -139,7 +139,19 @@ def test_modbus_requires_server_mode():
     print("modbus gateway: server-mode required, udp rejected  OK")
 
 
+def test_legacy_password_migrates_to_admin_user():
+    cfg = AppConfig.from_dict({"password_hash": "scrypt$aa$bb", "pwd_version": 3})
+    assert cfg.password_set and len(cfg.users) == 1
+    u = cfg.users[0]
+    assert (u.username, u.role, u.password_hash, u.pwd_version) == ("admin", "admin", "scrypt$aa$bb", 3)
+    # round-trips through to_dict without the legacy top-level fields
+    d = cfg.to_dict()
+    assert "password_hash" not in d and d["users"][0]["username"] == "admin"
+    print("legacy single-password config migrates to one admin user  OK")
+
+
 def main():
+    test_legacy_password_migrates_to_admin_user()
     test_modbus_requires_server_mode()
     test_preserve_unmanaged_fields_on_edit()
     test_preserve_is_noop_for_new_mapping()
