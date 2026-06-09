@@ -52,6 +52,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
+- **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
+  (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
+  [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control
   (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open, RS-485.
 - **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
