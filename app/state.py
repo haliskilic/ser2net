@@ -18,6 +18,7 @@ import sys
 import time
 from collections import deque
 from contextlib import suppress as _suppress
+from logging.handlers import RotatingFileHandler
 
 from .config import AppConfig, ConfigStore, lock_down_dir
 from .engine.portlist import PortWatcher
@@ -28,6 +29,10 @@ from .web.auth import LoginRateLimiter
 LOG_MAX_BYTES = 100 * 1024 * 1024     # cap each mapping log at 100 MB
 LOG_MAX_AGE_DAYS = 15                  # drop entries older than 15 days
 LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at startup)
+# Global log rotation (all.log via RotatingFileHandler; audit.log rotated manually).
+ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
+ALL_LOG_BACKUPS = 5                    # keep 5 rotations (~60 MB total worst case)
+AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup kept)
 
 
 def _parse_log_ts(line: str) -> float | None:
@@ -42,8 +47,11 @@ def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
     """Rewrite a log file in place keeping only lines newer than cutoff_ts and,
     if still over max_bytes, only the most recent max_bytes. Returns True if the
     file changed. Runs in a worker thread (no event-loop blocking)."""
+    # newline="" so CRLF line endings (logging writes "\n" -> "\r\n" on Windows) are
+    # preserved verbatim on both read and write; otherwise the read collapses them to
+    # "\n", the byte-count is undercounted, and the rewritten file blows past max_bytes.
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        with open(path, "r", encoding="utf-8", errors="replace", newline="") as fh:
             content = fh.read()
     except OSError:
         return False
@@ -70,7 +78,7 @@ def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
     if data == content:
         return False
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         fh.write(data)
         fh.flush()
         os.fsync(fh.fileno())
@@ -115,7 +123,11 @@ class AppState:
 
         try:
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            fileh = logging.FileHandler(log_path, encoding="utf-8")
+            # rotate all.log so the global activity/audit trail can't grow without
+            # bound (per-mapping logs are trimmed separately by run_log_maintenance).
+            fileh = RotatingFileHandler(
+                log_path, maxBytes=ALL_LOG_MAX_BYTES, backupCount=ALL_LOG_BACKUPS,
+                encoding="utf-8")
             fileh.setFormatter(fmt)
             logger.addHandler(fileh)
         except OSError as e:
@@ -129,8 +141,16 @@ class AppState:
     def audit(self, actor_ip: str, action: str, detail: str = "") -> None:
         """Append a config-change audit record (who/what), separate from all.log."""
         line = f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{actor_ip}\t{action}\t{detail}"
+        apath = os.path.join(self.data_dir, "audit.log")
         try:
-            with open(os.path.join(self.data_dir, "audit.log"), "a", encoding="utf-8") as fh:
+            # size-based rotation (keep one backup) so audit.log can't grow forever
+            if os.path.getsize(apath) > AUDIT_LOG_MAX_BYTES:
+                with _suppress(OSError):
+                    os.replace(apath, apath + ".1")
+        except OSError:
+            pass  # file doesn't exist yet
+        try:
+            with open(apath, "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
         except OSError:
             pass
