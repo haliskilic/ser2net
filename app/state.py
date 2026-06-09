@@ -172,14 +172,25 @@ class AppState:
 
         return log
 
-    def read_mapping_log(self, mapping_id: str, limit: int = 1000) -> list[str]:
-        """Return the mapping's log lines, newest first (most recent at index 0)."""
+    def read_mapping_log(self, mapping_id: str, limit: int = 1000,
+                         tail_bytes: int = 512 * 1024) -> list[str]:
+        """Return the mapping's log lines, newest first (most recent at index 0).
+
+        Reads only the last ``tail_bytes`` of the file instead of the whole thing —
+        per-mapping logs can grow to 100 MB, and loading all of that to show the last
+        1000 lines wasted memory and blocked the event loop. Call via asyncio.to_thread
+        from async handlers (the read still does blocking file I/O)."""
         path = self.mapping_log_path(mapping_id)
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                lines = fh.read().splitlines()
+            size = os.path.getsize(path)
+            with open(path, "rb") as fh:
+                if size > tail_bytes:
+                    fh.seek(size - tail_bytes)
+                    fh.readline()  # drop the partial first line after the seek
+                data = fh.read()
         except OSError:
             return []
+        lines = data.decode("utf-8", errors="replace").splitlines()
         return lines[-limit:][::-1]
 
     def delete_mapping_log(self, mapping_id: str) -> None:
@@ -242,6 +253,12 @@ class AppState:
     def save(self) -> None:
         """Persist config atomically (validates first; raises ConfigError on bad config)."""
         self.store.save(self.config)
+
+    async def asave(self) -> None:
+        """Async wrapper around save(): the atomic write does blocking file I/O plus
+        two fsyncs, so run it off the event loop to avoid stalling every bridge while
+        config is persisted. Raises ConfigError on invalid config, same as save()."""
+        await asyncio.to_thread(self.store.save, self.config)
 
     async def start_engine(self) -> None:
         self.prune_mapping_logs()  # drop logs for mappings that no longer exist
