@@ -79,7 +79,9 @@ def authenticate(settings, username: str, password: str, logger=None,
     factory = conn_factory or _default_factory
     try:
         if server is None:
-            server = ldap3.Server(settings.server_uri, get_info=ldap3.NONE,
+            # connect_timeout so a dead/unreachable directory fails the login fast
+            # instead of hanging the worker thread on the OS socket timeout
+            server = ldap3.Server(settings.server_uri, get_info=ldap3.NONE, connect_timeout=5,
                                   use_ssl=settings.server_uri.lower().startswith("ldaps"))
         if settings.user_dn_template.strip():
             # direct bind: the supplied credentials bind as the templated DN
