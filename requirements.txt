@@ -30,6 +30,7 @@ colorama==0.4.6 ; platform_system == "Windows"
 markupsafe==3.0.3
 psutil==7.2.2
 
-# --- Optional, NOT required (graceful fallback to polling if absent) ---
+# --- Optional, NOT required (graceful fallback if absent) ---
 # pyudev>=0.24      ; sys_platform == "linux"   # event-driven hotplug on Linux
 # pywin32>=306      ; sys_platform == "win32"    # event-driven hotplug on Windows
+# paho-mqtt>=1.6                                 # per-mapping MQTT publishing (serial->broker)

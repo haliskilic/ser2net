@@ -753,6 +753,17 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             "trace_both": form.get("opt_trace_both", "").strip(),
             "trace_hexdump": _checkbox(form, "opt_trace_hexdump"),
         },
+        "mqtt": {
+            "enabled": _checkbox(form, "mqtt_enabled"),
+            "host": form.get("mqtt_host", "").strip(),
+            "port": _num(form, "mqtt_port", 1883, strict=strict),
+            "base_topic": form.get("mqtt_base_topic", "").strip(),
+            "qos": _num(form, "mqtt_qos", 0, strict=strict),
+            "tls": _checkbox(form, "mqtt_tls"),
+            "username": form.get("mqtt_username", "").strip(),
+            "password": form.get("mqtt_password", ""),
+            "client_id": form.get("mqtt_client_id", "").strip(),
+        },
     }
 
 
