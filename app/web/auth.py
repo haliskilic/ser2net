@@ -65,27 +65,42 @@ def _sign(secret: str, payload: str) -> str:
     return _b64e(hmac.new(secret.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).digest())
 
 
-def issue_session(secret: str, ttl_seconds: int, pwd_version: int = 0) -> str:
+def issue_session(secret: str, ttl_seconds: int, username: str, pwd_version: int = 0) -> str:
     payload = _b64e(json.dumps(
-        {"exp": int(time.time()) + ttl_seconds, "v": int(pwd_version)}
+        {"exp": int(time.time()) + ttl_seconds, "u": username, "v": int(pwd_version)}
     ).encode("utf-8"))
     return f"{payload}.{_sign(secret, payload)}"
 
 
-def check_session(secret: str, token: str | None, pwd_version: int = 0) -> bool:
+def decode_session(secret: str, token: str | None) -> dict | None:
+    """Verify a session cookie's signature + expiry and return its payload
+    ({"u": username, "v": pwd_version}), or None if invalid/expired. The caller
+    must still confirm the user exists and that pwd_version matches (so a password
+    change revokes only that user's sessions)."""
     if not token or "." not in token:
-        return False
+        return None
     payload, sig = token.rsplit(".", 1)
     if not hmac.compare_digest(sig, _sign(secret, payload)):
-        return False
+        return None
     try:
         data = json.loads(_b64d(payload))
     except (ValueError, json.JSONDecodeError):
-        return False
+        return None
     if int(data.get("exp", 0)) <= int(time.time()):
-        return False
-    # password change bumps pwd_version, invalidating all older sessions
-    return int(data.get("v", 0)) == int(pwd_version)
+        return None
+    return {"u": str(data.get("u", "")), "v": int(data.get("v", 0))}
+
+
+def session_user(cfg, token: str | None):
+    """Resolve a session cookie to the live User it authenticates, or None.
+    Confirms the signed username still exists and its pwd_version is current."""
+    data = decode_session(cfg.secret_key, token)
+    if data is None:
+        return None
+    user = cfg.get_user(data["u"])
+    if user is None or user.pwd_version != data["v"]:
+        return None
+    return user
 
 
 # --------------------------------------------------------------------------

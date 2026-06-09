@@ -8,8 +8,11 @@
     {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
     <form method="post" action="/login" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      <label>Username
+        <input type="text" name="username" value="admin" autocomplete="username" required>
+      </label>
       <label>Password
-        <input type="password" name="password" autocomplete="current-password" autofocus required>
+        <input type="password" name="password" autocomplete="current-password" required>
       </label>
       <button class="btn primary w-full" type="submit">Sign in</button>
     </form>
