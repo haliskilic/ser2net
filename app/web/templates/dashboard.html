@@ -4,7 +4,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>Serial → Network mappings</h2>
-    <button class="btn primary" hx-get="/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML">+ Add mapping</button>
+    {% if can_edit %}<button class="btn primary" hx-get="/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML">+ Add mapping</button>{% endif %}
   </div>
   <div id="form-panel"></div>
   <div id="mappings"

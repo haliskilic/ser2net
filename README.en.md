@@ -66,6 +66,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   (xterm.js over WebSocket — watch traffic or type to the device).
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers, session revocation on password change.
+- **Multi-user / RBAC:** `admin` / `operator` / `viewer` roles — viewer is read-only,
+  operator manages mappings, admin does everything plus user management. Existing
+  single-password setups migrate automatically to one `admin` user.
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
   status and ports; **bearer-token** auth; OpenAPI 3.0 (`/api/v1/openapi.json`). The
   token is generated in Settings.

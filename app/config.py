@@ -343,15 +343,40 @@ class AdminUI:
         return bool(self.tls_cert and self.tls_key)
 
 
+ROLES = ("admin", "operator", "viewer")
+# higher rank = more privilege; a route requires >= some rank
+ROLE_RANK = {"viewer": 1, "operator": 2, "admin": 3}
+
+
+@dataclass
+class User:
+    """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
+    on that user's password change to revoke only their existing sessions."""
+    username: str = ""
+    password_hash: str = ""
+    role: str = "admin"
+    pwd_version: int = 0
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "User":
+        d = dict(d or {})
+        known = {f.name for f in dataclasses.fields(User)}
+        u = User(**{k: v for k, v in d.items() if k in known})
+        if u.role not in ROLES:
+            u.role = "viewer"
+        return u
+
+
 @dataclass
 class AppConfig:
     version: int = 1
     admin_ui: AdminUI = field(default_factory=AdminUI)
-    password_hash: str = ""  # empty => not set yet (first-run setup pending)
-    pwd_version: int = 0      # bumped on every password change to revoke old sessions
     secret_key: str = field(default_factory=lambda: secrets.token_hex(32))
     api_token_hash: str = ""  # sha256 of the REST API bearer token (empty => API disabled)
     session_timeout_s: int = 8 * 3600
+    # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
+    # config (top-level password_hash) is migrated to one 'admin' user on load.
+    users: list[User] = field(default_factory=list)
     defaults: dict[str, Any] = field(default_factory=dict)  # serial defaults
     mappings: list[MappingConfig] = field(default_factory=list)
 
@@ -362,14 +387,17 @@ class AppConfig:
         admin = d.get("admin_ui", {}) or {}
         known = {f.name for f in dataclasses.fields(AdminUI)}
         admin_ui = AdminUI(**{k: v for k, v in admin.items() if k in known})
+        users = [User.from_dict(u) for u in d.get("users", [])]
+        if not users and d.get("password_hash"):  # migrate legacy single-password config
+            users = [User(username="admin", password_hash=d["password_hash"],
+                          role="admin", pwd_version=int(d.get("pwd_version", 0)))]
         cfg = AppConfig(
             version=int(d.get("version", 1)),
             admin_ui=admin_ui,
-            password_hash=d.get("password_hash", ""),
-            pwd_version=int(d.get("pwd_version", 0)),
             secret_key=d.get("secret_key") or secrets.token_hex(32),
             api_token_hash=d.get("api_token_hash", ""),
             session_timeout_s=int(d.get("session_timeout_s", 8 * 3600)),
+            users=users,
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
@@ -379,11 +407,10 @@ class AppConfig:
         return {
             "version": self.version,
             "admin_ui": asdict(self.admin_ui),
-            "password_hash": self.password_hash,
-            "pwd_version": self.pwd_version,
             "secret_key": self.secret_key,
             "api_token_hash": self.api_token_hash,
             "session_timeout_s": self.session_timeout_s,
+            "users": [asdict(u) for u in self.users],
             "defaults": self.defaults,
             "mappings": [m.to_dict() for m in self.mappings],
         }
@@ -391,7 +418,13 @@ class AppConfig:
     # ----- helpers -----
     @property
     def password_set(self) -> bool:
-        return bool(self.password_hash)
+        return bool(self.users)
+
+    def get_user(self, username: str) -> Optional[User]:
+        return next((u for u in self.users if u.username == username), None)
+
+    def admin_count(self) -> int:
+        return sum(1 for u in self.users if u.role == "admin")
 
     def get_mapping(self, mapping_id: str) -> Optional[MappingConfig]:
         return next((m for m in self.mappings if m.id == mapping_id), None)
