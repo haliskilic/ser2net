@@ -63,6 +63,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   (xterm.js over WebSocket — watch traffic or type to the device).
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers, session revocation on password change.
+- **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
+  status and ports; **bearer-token** auth; OpenAPI 3.0 (`/api/v1/openapi.json`). The
+  token is generated in Settings.
+- **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
+  Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **Fully offline:** all dependencies bundled as wheels; no internet required.
 
 ---
@@ -112,6 +117,17 @@ python3 -m pip download -r requirements.txt -d vendor/wheels \
   --platform win_amd64 --python-version 312 --only-binary=:all:
 ```
 
+### Docker
+```bash
+docker compose up -d        # edit the `devices:` line in docker-compose.yml first
+# or:
+docker build -t ser2net . && docker run -d -p 8080:8080 \
+  --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
+```
+Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
+`SER2NET_PORT` — the interactive picker can't run headless). Details:
+[`docs/DOCKER.md`](docs/DOCKER.md).
+
 ---
 
 ## 🖥️ Usage
@@ -124,8 +140,32 @@ python3 -m pip download -r requirements.txt -d vendor/wheels \
 - **Monitor:** live serial terminal in the browser (xterm.js); type to the device on
   network mappings.
 - **Settings:** change password, admin TLS (provide paths or generate self-signed),
-  mappings **backup/restore** (JSON), status.
+  generate/revoke the **REST API token**, mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (authenticated).
+
+---
+
+## 🔌 REST API
+
+Alongside the browser UI, a JSON API at `/api/v1` for automation. Authenticate with
+`Authorization: Bearer <token>`; generate the token under **Settings → REST API token**
+(shown only once). Full description: `GET /api/v1/openapi.json`.
+
+```bash
+TOKEN="s2n_..."   # generated in Settings
+# all mappings (config + live status)
+curl -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings
+# create a mapping
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"PLC-1","kind":"net","serial":{"port":"/dev/ttyUSB0","baudrate":9600},
+       "network":{"mode":"server","bind_ip":"0.0.0.0","port":4001}}' \
+  http://HOST:8080/api/v1/mappings
+# start / stop / restart
+curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
+```
+Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
+`POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
+`GET /health` (unauthenticated), `GET /openapi.json`.
 
 ---
 
@@ -141,6 +181,8 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 
 ## ⚙️ Run as a service
 
+- **Docker:** official `Dockerfile` + `docker-compose.yml` (see above and
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume.
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
   **Do not run as root.**
@@ -163,14 +205,14 @@ Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pru
 
 ## 🧪 Testing
 
-socat-based virtual serial ports (Linux); no hardware needed:
+Unified test runner — the portable suite (no hardware, no socat) runs on every OS:
 ```bash
-python3 tests/test_bridge_raw.py        # raw bidirectional
-python3 tests/test_rfc2217.py           # RFC2217 + live baud change
-python3 tests/test_v2_transports.py     # TCP-client / UDP / serial-bridge
-python3 tests/test_v2_console.py        # WebSocket console
-python3 tests/stress_24.py 24 512 200   # 24 concurrent bridges stress
+python3 tests/run_all.py            # portable suite (Windows + Linux)
+python3 tests/run_all.py --socat    # + socat-based data-path tests (Linux)
 ```
+The socat tests use virtual serial ports (Linux); no hardware needed. Individual
+files still run directly, e.g. `python3 tests/test_rest_api.py`. CI (GitHub Actions)
+runs ruff lint + the full matrix (ubuntu/windows × Python 3.10–3.13).
 
 ---
 

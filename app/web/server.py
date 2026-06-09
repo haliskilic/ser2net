@@ -40,6 +40,11 @@ class GuardMiddleware(BaseHTTPMiddleware):
         state = request.app.state.appstate
         cfg = state.config
         path = request.url.path
+
+        # JSON REST API (/api/v1): bearer-token auth, no cookie session, no CSRF.
+        if path.startswith("/api/v1"):
+            return await self._dispatch_api(request, call_next, cfg)
+
         is_public = path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES)
 
         # ensure a CSRF token exists for this request/response
@@ -83,21 +88,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
             ip = request.client.host if request.client else "?"
             state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
 
-        # security headers (admin UI is network-exposed)
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "DENY")
-        response.headers.setdefault("Referrer-Policy", "same-origin")
-        response.headers.setdefault(
-            "Content-Security-Policy",
-            # script-src stays 'self' (no inline JS — the important XSS guard).
-            # style-src allows 'unsafe-inline' because xterm.js injects a <style>
-            # element at runtime for its cell layout; without it the terminal
-            # renders unstyled. Inline-style relaxation is low risk.
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
-        )
-        if cfg.admin_ui.tls_enabled:
-            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+        self._security_headers(response, cfg)
 
         if set_csrf:
             response.set_cookie(
@@ -105,6 +96,36 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 httponly=True, secure=cfg.admin_ui.tls_enabled, path="/",
             )
         return response
+
+    async def _dispatch_api(self, request, call_next, cfg):
+        """Gate for the JSON REST API: bearer-token auth, no cookies/CSRF, JSON errors."""
+        path = request.url.path
+        if path not in ("/api/v1/health", "/api/v1/openapi.json"):
+            if not cfg.password_set:
+                return JSONResponse({"error": "setup_incomplete"}, status_code=503)
+            if not cfg.api_token_hash:
+                return JSONResponse({"error": "api_token_not_configured"}, status_code=401)
+            if not auth.verify_token(auth.bearer_token(request), cfg.api_token_hash):
+                return JSONResponse({"error": "unauthorized"}, status_code=401,
+                                    headers={"WWW-Authenticate": "Bearer"})
+        response = await call_next(request)
+        self._security_headers(response, cfg)
+        return response
+
+    @staticmethod
+    def _security_headers(response, cfg) -> None:
+        # script-src stays 'self' (no inline JS — the important XSS guard). style-src
+        # allows 'unsafe-inline' because xterm.js injects a <style> element at runtime.
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+        )
+        if cfg.admin_ui.tls_enabled:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
 
 
 def build_app(state) -> Starlette:
