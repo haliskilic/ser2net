@@ -25,6 +25,7 @@ from starlette.staticfiles import StaticFiles
 from ..config import ConfigError, MappingConfig
 from ..engine import netinfo
 from . import auth
+from .api import build_api_routes
 
 SESSION_TTL = 8 * 3600
 _TRIGGER = {"HX-Trigger": "refreshMappings"}
@@ -123,9 +124,11 @@ def build_routes(templates, state, static_dir):
             admin=state.config.admin_ui,
         )
 
-    async def settings_get(request, ok=None, error=None):
+    async def settings_get(request, ok=None, error=None, new_api_token=None):
         return render(request, "settings.html", ok=ok, error=error,
                       admin=state.config.admin_ui,
+                      api_token_set=bool(state.config.api_token_hash),
+                      new_api_token=new_api_token,
                       uptime=int(state.started_at))
 
     async def settings_password_post(request):
@@ -189,6 +192,32 @@ def build_routes(templates, state, static_dir):
             await state.asave()
         state.audit(client_ip(request), "admin_tls_generate", "")
         return await settings_get(request, ok="Self-signed certificate generated. Restart to apply TLS.")
+
+    # ---------------- REST API token ----------------
+    async def settings_api_token_post(request):
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        token = auth.new_api_token()
+        async with state.config_lock:
+            state.config.api_token_hash = auth.hash_token(token)
+            await state.asave()
+        state.log("REST API token generated")
+        state.audit(client_ip(request), "api_token_generate", "")
+        # show the token exactly once — only its hash is stored
+        return await settings_get(request, new_api_token=token,
+                                  ok="New API token generated. Copy it now — it is not shown again.")
+
+    async def settings_api_token_revoke(request):
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        async with state.config_lock:
+            state.config.api_token_hash = ""
+            await state.asave()
+        state.log("REST API token revoked")
+        state.audit(client_ip(request), "api_token_revoke", "")
+        return await settings_get(request, ok="API token revoked. The REST API is now disabled.")
 
     # ---------------- config export / import ----------------
     async def config_export(request):
@@ -465,10 +494,14 @@ def build_routes(templates, state, static_dir):
         Route("/settings/password", settings_password_post, methods=["POST"]),
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
+        Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
+        Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
         Route("/healthz", healthz),
         Route("/metrics", metrics),
         Route("/settings/config/export", config_export),
         Route("/settings/config/import", config_import, methods=["POST"]),
+        # JSON REST API (bearer-token auth, enforced in GuardMiddleware)
+        *build_api_routes(state),
         Route("/api/mappings/{mid}/duplicate", mapping_duplicate, methods=["POST"]),
         WebSocketRoute("/api/mappings/{mid}/console", console_ws),
         Route("/api/status", api_status),

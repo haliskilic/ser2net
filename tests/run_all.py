@@ -31,6 +31,7 @@ PORTABLE = [
     "test_log_maintenance.py",
     "test_web_auth.py",
     "test_form_validation.py",
+    "test_rest_api.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

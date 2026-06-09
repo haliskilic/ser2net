@@ -89,6 +89,37 @@ def check_session(secret: str, token: str | None, pwd_version: int = 0) -> bool:
 
 
 # --------------------------------------------------------------------------
+# API bearer token (for the JSON REST API / automation)
+# --------------------------------------------------------------------------
+API_TOKEN_PREFIX = "s2n_"
+
+
+def new_api_token() -> str:
+    """A high-entropy bearer token shown to the operator once on generation."""
+    return API_TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """SHA-256 hex of a token. The token is already 256 bits of entropy, so a fast
+    hash (not scrypt) is appropriate — we only store the hash, never the token."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def verify_token(token: str, stored_hash: str) -> bool:
+    if not token or not stored_hash:
+        return False
+    return hmac.compare_digest(hash_token(token), stored_hash)
+
+
+def bearer_token(request) -> str:
+    """Extract the token from an `Authorization: Bearer <token>` header."""
+    header = request.headers.get("authorization", "")
+    if header[:7].lower() == "bearer ":
+        return header[7:].strip()
+    return ""
+
+
+# --------------------------------------------------------------------------
 # CSRF (double-submit cookie)
 # --------------------------------------------------------------------------
 def new_csrf_token() -> str:

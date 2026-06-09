@@ -38,6 +38,32 @@
 </section>
 
 <section class="panel panel-narrow">
+  <div class="panel-head"><h2>REST API token</h2></div>
+  <p class="muted mb-sm">A bearer token for the JSON API at <span class="mono">/api/v1</span>
+     (automation, Ansible, fleet tools). Send it as
+     <span class="mono">Authorization: Bearer &lt;token&gt;</span>. Spec:
+     <a href="/api/v1/openapi.json">openapi.json</a>.</p>
+  {% if new_api_token %}
+  <div class="banner ok">New token (copy now — shown only once):
+    <div class="mono" style="word-break:break-all;margin-top:.4rem">{{ new_api_token }}</div>
+  </div>
+  {% endif %}
+  <p>Status:
+    {% if api_token_set %}<span class="tag">enabled</span>{% else %}<span class="tag">disabled</span>{% endif %}
+  </p>
+  <form method="post" action="/settings/api-token" class="inline">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <button class="btn primary" type="submit">{{ 'Regenerate token' if api_token_set else 'Generate token' }}</button>
+  </form>
+  {% if api_token_set %}
+  <form method="post" action="/settings/api-token/revoke" class="inline mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <button class="btn" type="submit">Revoke</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="panel panel-narrow">
   <div class="panel-head"><h2>Mappings backup</h2></div>
   <p><a class="btn" href="/settings/config/export">⤓ Export mappings (JSON)</a></p>
   <form method="post" action="/settings/config/import" enctype="multipart/form-data" class="authform">
