@@ -651,6 +651,7 @@ def _preserve_unmanaged_fields(new_map, existing) -> None:
     o.trace_timestamp = prev.trace_timestamp
     o.rfc2217_poll_modem_interval_s = prev.rfc2217_poll_modem_interval_s
     o.rfc2217_net_timeout_s = prev.rfc2217_net_timeout_s
+    o.modbus_response_timeout_s = prev.modbus_response_timeout_s
 
 
 def _form_error(render, request, state, form, message: str):
