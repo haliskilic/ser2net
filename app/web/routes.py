@@ -161,6 +161,7 @@ def build_routes(templates, state, static_dir):
         return render(request, "settings.html", ok=ok, error=error,
                       admin=state.config.admin_ui,
                       api_token_set=bool(state.config.api_token_hash),
+                      api_token_role=state.config.api_token_role,
                       new_api_token=new_api_token,
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
@@ -243,15 +244,20 @@ def build_routes(templates, state, static_dir):
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        role = form.get("api_token_role", "admin")
+        if role not in ROLES:
+            role = "admin"
         token = auth.new_api_token()
         async with state.config_lock:
             state.config.api_token_hash = auth.hash_token(token)
+            state.config.api_token_role = role
             await state.asave()
-        state.log("REST API token generated")
-        state.audit(client_ip(request), "api_token_generate", "")
+        state.log(f"REST API token generated (role: {role})")
+        state.audit(client_ip(request), "api_token_generate", role)
         # show the token exactly once — only its hash is stored
         return await settings_get(request, new_api_token=token,
-                                  ok="New API token generated. Copy it now — it is not shown again.")
+                                  ok=f"New API token generated (role: {role}). "
+                                     "Copy it now — it is not shown again.")
 
     async def settings_api_token_revoke(request):
         if deny := require_role(request, "admin"):
