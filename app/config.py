@@ -11,6 +11,7 @@ all config.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import ipaddress
 import json
@@ -44,6 +45,38 @@ class ConfigError(ValueError):
 
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def lock_down_dir(directory: str) -> None:
+    """Restrict a state directory to its owner so the secrets it holds (secret_key,
+    password hash in config.json) and captured serial logs are not readable by other
+    local users.
+
+    POSIX: chmod 0700. Windows: ``icacls`` removes inherited ACEs and grants Full
+    only to the current user, SYSTEM and the Administrators group, with inheritance
+    so child files (config.json, the atomic temp files, per-mapping logs) pick up the
+    same restriction. Best-effort: silently degrades if it cannot be applied (the
+    posix path was the only one protected before — Windows was left world-readable
+    despite the docs claiming 0600).
+    """
+    if os.name == "posix":
+        with contextlib.suppress(OSError):
+            os.chmod(directory, 0o700)
+        return
+    if os.name == "nt":
+        user = os.environ.get("USERNAME") or ""
+        if not user:
+            return
+        import subprocess
+
+        # SIDs are locale-independent: *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administrators.
+        grants = [f"{user}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
+        cmd = ["icacls", directory, "/inheritance:r"]
+        for g in grants:
+            cmd += ["/grant:r", g]
+        cmd += ["/T", "/C", "/Q"]
+        with contextlib.suppress(Exception):
+            subprocess.run(cmd, capture_output=True, timeout=15, check=False)
 
 
 def normalize_cidr(value: str) -> str:
@@ -392,13 +425,9 @@ class ConfigStore:
         self.path = os.path.abspath(path)
         directory = os.path.dirname(self.path)
         os.makedirs(directory, exist_ok=True)
-        # config.json holds the password hash + secret_key; keep the dir private.
-        # (config.json itself is written 0600 via tempfile.mkstemp + os.replace.)
-        if os.name == "posix":
-            try:
-                os.chmod(directory, 0o700)
-            except OSError:
-                pass
+        # config.json holds the password hash + secret_key; keep the dir private on
+        # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).
+        lock_down_dir(directory)
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)
