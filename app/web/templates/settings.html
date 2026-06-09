@@ -81,6 +81,7 @@
   <div class="panel-head"><h2>LDAP / Active Directory</h2></div>
   <p class="muted mb-sm">Authenticate users against a directory; their group membership maps to a
      ser2net role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).</p>
+  {% if ldap.enabled and not ldap_lib %}<div class="banner warn">LDAP is enabled but <span class="mono">ldap3</span> is not installed — LDAP login won't work until you <span class="mono">pip install ldap3</span> (local accounts still work).</div>{% endif %}
   <form method="post" action="/settings/ldap" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label class="chk"><input type="checkbox" name="ldap_enabled" {% if ldap.enabled %}checked{% endif %}> Enable LDAP / AD login</label>
