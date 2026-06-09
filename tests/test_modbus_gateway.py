@@ -22,6 +22,7 @@ from app.engine.modbus_gateway import ModbusGatewayRunner
 
 RESPONSIVE_UNIT = 1
 SILENT_UNIT = 9
+WRONG_UNIT = 7   # slave answers but with a different unit id (must be rejected)
 SLAVE_RESPONSE_PDU = bytes([0x03, 0x04, 0x00, 0x0A, 0x00, 0x0B])  # read regs: 2 words
 
 
@@ -48,6 +49,9 @@ async def fake_rtu_slave(reader, writer):
                 buf.clear()
                 if unit == RESPONSIVE_UNIT:
                     writer.write(modbus.rtu_wrap(unit, SLAVE_RESPONSE_PDU))
+                    await writer.drain()
+                elif unit == WRONG_UNIT:        # reply, but tagged with the wrong unit id
+                    writer.write(modbus.rtu_wrap(unit + 1, SLAVE_RESPONSE_PDU))
                     await writer.drain()
                 # SILENT_UNIT: consume but never answer
     except (ConnectionError, OSError):
@@ -106,6 +110,13 @@ async def main():
         txn, unit, pdu = await read_tcp_adu(mreader)
         assert txn == 0x4444 and pdu == bytes([0x83, modbus.GATEWAY_TARGET_FAILED]), pdu
         print("non-responding slave -> 0x83 0x0B gateway-timeout exception  OK")
+
+        # 4) a reply tagged with the wrong unit id is rejected (also -> 0x0B)
+        mwriter.write(modbus.build_tcp_adu(0x5555, WRONG_UNIT, req_pdu))
+        await mwriter.drain()
+        txn, unit, pdu = await read_tcp_adu(mreader)
+        assert txn == 0x5555 and pdu == bytes([0x83, modbus.GATEWAY_TARGET_FAILED]), pdu
+        print("mismatched-unit reply rejected -> 0x83 0x0B exception  OK")
 
         mwriter.close()
         with suppress(Exception):
