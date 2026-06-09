@@ -73,11 +73,10 @@
 - i18n (TR/EN) for the UI; dark/light theme toggle; xterm fit-to-window addon
 
 ### v2.4 — packaging & distribution
-- PyInstaller `--onedir` builds (Windows `.exe`, Linux ELF) + Windows service installer
-- `.deb` / `.rpm`; automated multi-platform wheelhouse (cp311–cp313 × OS)
-- **Bundle the optional wheels** (`paho-mqtt`, `ldap3`) so MQTT/LDAP work on air-gapped
-  installs (today they need internet to `pip install`; the UI now warns when missing)
-- GitHub Actions release artifacts
+- ~~PyInstaller standalone builds (Windows `.exe`, Linux binary) bundling the optional
+  MQTT/LDAP/OIDC deps; GitHub Actions release artifacts on `v*` tags~~ ✅ shipped
+- Windows service installer (Shawl); `.deb` / `.rpm`
+- Automated multi-platform offline wheelhouse (cp311–cp313 × OS) for source installs
 
 ### v2.5 — industrial/IIoT depth
 - **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)

@@ -18,6 +18,13 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+FROZEN = getattr(sys, "frozen", False)  # True inside a PyInstaller build
+
+
+def _app_dir() -> str:
+    """Where config/logs live: next to the executable in a frozen build (so they
+    survive and aren't written into the temp extraction dir), else the source tree."""
+    return os.path.dirname(sys.executable) if FROZEN else ROOT
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -27,7 +34,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--data-dir",
-        default=os.path.join(ROOT, "data"),
+        default=os.path.join(_app_dir(), "data"),
         help="Directory for config.json, backups and logs (default: ./data).",
     )
     p.add_argument(
@@ -56,16 +63,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    # 1. dependencies
-    sys.path.insert(0, ROOT)  # ensure local packages (app/, bootstrap) import first
-    if not args.no_bootstrap:
-        import bootstrap
+    # 1. dependencies — a frozen build has everything bundled, so skip the bootstrap
+    if not FROZEN:
+        sys.path.insert(0, ROOT)  # ensure local packages (app/, bootstrap) import first
+        if not args.no_bootstrap:
+            import bootstrap
 
-        bootstrap.ensure(online=args.online)
-    else:
-        lib = os.path.join(ROOT, "lib")
-        if os.path.isdir(lib):
-            sys.path.insert(0, lib)
+            bootstrap.ensure(online=args.online)
+        else:
+            lib = os.path.join(ROOT, "lib")
+            if os.path.isdir(lib):
+                sys.path.insert(0, lib)
 
     # 2. resolve config path
     config_path = args.config or os.path.join(args.data_dir, "config.json")

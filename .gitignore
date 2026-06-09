@@ -8,3 +8,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+
+# PyInstaller build output (release binaries are built in CI)
+/build/
+/dist/
