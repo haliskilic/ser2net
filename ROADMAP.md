@@ -36,6 +36,19 @@
   read live traffic, or type to the device (net mappings, not read-only)
 - Per-mapping monitor sink in the engine; session-cookie auth + Origin/Host CSWSH guard
 
+### v2.1b — hardening, REST API, Docker & CI
+- **Security/correctness fixes:** UDP `allowed_client_ips` enforcement; read-only
+  blocks RFC2217 control commands; `stop()`/`start()` lifecycle fixes (3.12+ deadlock,
+  serial-task leak); Windows config/log dir lockdown (`icacls`); HTMX validation-error
+  visibility; edit no longer drops `match`/RS-485/open-close strings; TCP+UDP same-port
+  allowed; cross-mapping serial-device collision check; `start.bat`/systemd fixes
+- **Reliability/perf:** scrypt/config-save/log-read moved off the event loop;
+  `all.log`/`audit.log` rotation; per-mapping log tail reads
+- **REST API** (`/api/v1`): mapping CRUD + start/stop/restart + status + ports,
+  bearer-token auth, OpenAPI 3.0 spec
+- **Docker** image + `docker-compose` + headless bind env; **CI** (GitHub Actions:
+  ruff + ubuntu/windows × Python 3.10–3.13); unified cross-platform test runner
+
 ---
 
 ## Planned
@@ -49,7 +62,8 @@
 - PyInstaller `--onedir` builds (Windows `.exe`, Linux ELF)
 - Windows service installer (Shawl); `.deb` / `.rpm`
 - Automated multi-platform wheelhouse (cp311–cp313 × OS)
-- CI/CD: GitHub Actions lint + test matrix (Linux/Windows), release artifacts
+- ~~CI/CD: GitHub Actions lint + test matrix (Linux/Windows)~~ ✅ shipped (v2.1b); add release artifacts
+- ~~Official Docker image~~ ✅ shipped (v2.1b)
 
 ### v2.3 — serial/industrial depth
 - RS-485 hardware auto-RTS (`TIOCSRS485`) UI + Modbus RTU inter-frame awareness
