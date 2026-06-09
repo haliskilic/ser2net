@@ -33,10 +33,10 @@
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">you</span>{% endif %}{% if u.source == 'ldap' %} <span class="tag">LDAP</span>{% endif %}</td>
+        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">you</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}</td>
         <td>
-          {% if u.source == 'ldap' %}
-            <span class="mono">{{ u.role }}</span> <span class="muted">(from LDAP groups)</span>
+          {% if u.source != 'local' %}
+            <span class="mono">{{ u.role }}</span> <span class="muted">(from {{ u.source|upper }})</span>
           {% else %}
           <form method="post" action="/settings/users/{{ u.username }}/role" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
@@ -116,6 +116,43 @@
       <label>Viewer group <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2net-viewers"></label>
     </div>
     <button class="btn primary" type="submit">Save LDAP</button>
+  </form>
+</section>
+
+<section class="panel panel-narrow">
+  <div class="panel-head"><h2>Single sign-on (OIDC)</h2></div>
+  <p class="muted mb-sm">OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a
+     ser2net role. Redirect URI: <span class="mono">&lt;this-url&gt;/auth/oidc/callback</span>.
+     Needs <span class="mono">authlib</span> (optional).</p>
+  {% if oidc.enabled and not oidc_lib %}<div class="banner warn">OIDC is enabled but <span class="mono">authlib</span> is not installed — SSO won't work until you <span class="mono">pip install authlib</span>.</div>{% endif %}
+  <form method="post" action="/settings/oidc" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label class="chk"><input type="checkbox" name="oidc_enabled" {% if oidc.enabled %}checked{% endif %}> Enable SSO login</label>
+    <label>Issuer URL <input type="text" name="oidc_issuer" value="{{ oidc.issuer }}" placeholder="https://keycloak.example.com/realms/main"></label>
+    <div class="grid2">
+      <label>Client ID <input type="text" name="oidc_client_id" value="{{ oidc.client_id }}"></label>
+      <label>Client secret <input type="password" name="oidc_client_secret" placeholder="{% if oidc.client_secret %}•••••• (unchanged){% endif %}"></label>
+    </div>
+    <div class="grid2">
+      <label>Redirect URI <span class="muted">(blank = auto)</span><input type="text" name="oidc_redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="auto from request"></label>
+      <label>Scopes <input type="text" name="oidc_scopes" value="{{ oidc.scopes }}" placeholder="openid email profile"></label>
+    </div>
+    <div class="grid2">
+      <label>Username claim <input type="text" name="oidc_username_claim" value="{{ oidc.username_claim }}" placeholder="preferred_username"></label>
+      <label>Groups/roles claim <input type="text" name="oidc_groups_claim" value="{{ oidc.groups_claim }}" placeholder="groups"></label>
+    </div>
+    <div class="grid3">
+      <label>Admin group <input type="text" name="oidc_admin_group" value="{{ oidc.admin_group }}" placeholder="ser2net-admins"></label>
+      <label>Operator group <input type="text" name="oidc_operator_group" value="{{ oidc.operator_group }}"></label>
+      <label>Viewer group <input type="text" name="oidc_viewer_group" value="{{ oidc.viewer_group }}"></label>
+    </div>
+    <label>Default role <span class="muted">(if no group matched)</span>
+      <select name="oidc_default_role">
+        <option value="" {% if not oidc.default_role %}selected{% endif %}>— deny login —</option>
+        {% for r in roles %}<option value="{{ r }}" {% if r == oidc.default_role %}selected{% endif %}>{{ r }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn primary" type="submit">Save SSO</button>
   </form>
 </section>
 
