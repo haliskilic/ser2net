@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 
@@ -26,15 +27,36 @@ from .state import AppState
 from .web.server import build_app
 
 
+def _env_bind_override(admin) -> bool:
+    """Apply SER2NET_BIND_IP / SER2NET_PORT env vars to the admin UI bind address.
+
+    Lets a headless/containerized deployment set the bind address without the
+    interactive console picker (which, being non-interactive in a container,
+    would default to loopback and leave the UI unreachable behind a published
+    port). Returns True if a bind IP was provided. Env wins on every start, so a
+    container's compose/run config stays the source of truth across restarts."""
+    ip = (os.environ.get("SER2NET_BIND_IP") or "").strip()
+    if not ip:
+        return False
+    admin.bind_ip = ip
+    port = (os.environ.get("SER2NET_PORT") or "").strip()
+    if port:
+        with contextlib.suppress(ValueError):
+            admin.port = int(port)
+    return True
+
+
 def main(config_path: str, reconfigure: bool = False) -> int:
     store = ConfigStore(config_path)
     first_run = not store.exists()
     config = store.load()
 
-    if first_run or reconfigure:
+    env_set = _env_bind_override(config.admin_ui)
+    if (first_run or reconfigure) and not env_set:
         bind_ip, port = console.choose_admin_bind(config.admin_ui)
         config.admin_ui.bind_ip = bind_ip
         config.admin_ui.port = port
+    if first_run or reconfigure or env_set:
         store.save(config)
 
     # Own the loop. Force SelectorEventLoop on Windows for pyserial-asyncio-fast.
