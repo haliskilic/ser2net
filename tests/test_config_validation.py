@@ -125,7 +125,22 @@ def test_dynamic_match_devices_not_collided():
     print("dynamic VID/PID match mappings: not flagged as a static collision  OK")
 
 
+def test_modbus_requires_server_mode():
+    bad = AppConfig.from_dict({"mappings": [
+        {"name": "mb", "serial": {"port": "COM1"},
+         "network": {"mode": "udp", "protocol": "modbus", "bind_ip": "127.0.0.1", "port": 502}},
+    ]})
+    _expect_error(bad, "Modbus gateway requires TCP server mode")
+    ok = AppConfig.from_dict({"mappings": [
+        {"name": "mb", "serial": {"port": "COM1"},
+         "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1", "port": 502}},
+    ]})
+    ok.validate()  # server-mode modbus is valid
+    print("modbus gateway: server-mode required, udp rejected  OK")
+
+
 def main():
+    test_modbus_requires_server_mode()
     test_preserve_unmanaged_fields_on_edit()
     test_preserve_is_noop_for_new_mapping()
     test_tcp_and_udp_share_port_ok()

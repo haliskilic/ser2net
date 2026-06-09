@@ -51,7 +51,10 @@ düzenlemeye gerek yok.
 - **Taşıma modları:** TCP **sunucu** (dinleme), TCP **istemci** (dışarı bağlanma),
   **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**.
 - **Protokoller:** `raw`, `telnet` (8-bit temiz), `rfc2217` (uzaktan canlı
-  baud/parity/databit/stopbit/akış kontrolü değişimi).
+  baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway).
+- **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
+  çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
+  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception.
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
   kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open, RS-485.
 - **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
