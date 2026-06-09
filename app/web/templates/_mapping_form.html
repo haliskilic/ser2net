@@ -175,5 +175,15 @@
     </div>
   </fieldset>
 
+  <fieldset data-show-when="network_protocol=modbus">
+    <legend>Modbus register polling → MQTT <span class="muted">(edge mode; also enable MQTT above)</span></legend>
+    <label>Poll interval (s) <input type="number" name="modbus_poll_interval_s" min="0.1" step="0.1" value="{{ mapping.modbus_poll.interval_s }}"></label>
+    <label>Points — JSON array
+      <span class="muted">[{"name","unit","fn":3|4,"address","dtype":"uint16|int16|uint32|int32|float32","scale"}]</span>
+      <textarea name="modbus_points" rows="5" spellcheck="false"
+                placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}]'>{{ modbus_points_json }}</textarea>
+    </label>
+  </fieldset>
+
   <button class="btn primary" type="submit">{{ 'Create mapping' if is_new else 'Save changes' }}</button>
 </form>

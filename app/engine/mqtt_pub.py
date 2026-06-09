@@ -62,6 +62,12 @@ class MqttPublisher:
         with contextlib.suppress(Exception):
             self._client.publish(topic, payload, qos=self._s.qos, retain=retain)
 
+    def publish_value(self, subtopic: str, payload: bytes) -> None:
+        """Publish a payload to <base_topic>/<subtopic> (used by Modbus register polling)."""
+        if not self._connected:
+            return
+        self._publish(self._data_topic + "/" + subtopic, payload)
+
     def feed(self, data: bytes) -> None:
         """Buffer serial bytes and publish each complete (newline-delimited) line."""
         if not self._connected or self._client is None:

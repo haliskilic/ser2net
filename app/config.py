@@ -315,6 +315,63 @@ class MqttSettings:
 
 
 # ---------------------------------------------------------------------------
+# Modbus register polling (gateway edge mode: read registers -> MQTT)
+# ---------------------------------------------------------------------------
+MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32")
+
+
+@dataclass
+class ModbusPoint:
+    name: str = ""
+    unit: int = 1               # RTU slave id
+    fn: int = 3                 # 3 = holding registers, 4 = input registers
+    address: int = 0            # 0-based register address
+    dtype: str = "uint16"       # uint16 | int16 | uint32 | int32 | float32
+    scale: float = 1.0          # published value = raw * scale
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "ModbusPoint":
+        d = dict(d or {})
+        known = {f.name for f in dataclasses.fields(ModbusPoint)}
+        return ModbusPoint(**{k: v for k, v in d.items() if k in known})
+
+
+@dataclass
+class ModbusPoll:
+    interval_s: float = 5.0
+    points: list[ModbusPoint] = field(default_factory=list)
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "ModbusPoll":
+        d = dict(d or {})
+        return ModbusPoll(
+            interval_s=float(d.get("interval_s", 5.0) or 5.0),
+            points=[ModbusPoint.from_dict(p) for p in d.get("points", [])],
+        )
+
+    def validate(self) -> None:
+        if not self.points:
+            return
+        if self.interval_s <= 0:
+            raise ConfigError("Modbus poll interval must be > 0 seconds.")
+        seen = set()
+        for p in self.points:
+            if not p.name.strip():
+                raise ConfigError("Each Modbus poll point needs a name.")
+            if p.name in seen:
+                raise ConfigError(f"Duplicate Modbus poll point name: {p.name!r}.")
+            seen.add(p.name)
+            if not (0 <= p.unit <= 255):
+                raise ConfigError(f"Point {p.name!r}: unit must be 0-255.")
+            if p.fn not in (3, 4):
+                raise ConfigError(f"Point {p.name!r}: function must be 3 (holding) or 4 (input).")
+            if not (0 <= p.address <= 65535):
+                raise ConfigError(f"Point {p.name!r}: address must be 0-65535.")
+            if p.dtype not in MODBUS_DTYPES:
+                raise ConfigError(f"Point {p.name!r}: dtype must be one of {MODBUS_DTYPES}.")
+
+
+# ---------------------------------------------------------------------------
 # A single serial<->TCP mapping
 # ---------------------------------------------------------------------------
 MAPPING_KINDS = ("net", "serialbridge")
@@ -331,6 +388,7 @@ class MappingConfig:
     network: NetworkSettings = field(default_factory=NetworkSettings)
     options: MappingOptions = field(default_factory=MappingOptions)
     mqtt: MqttSettings = field(default_factory=MqttSettings)
+    modbus_poll: ModbusPoll = field(default_factory=ModbusPoll)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingConfig":
@@ -345,6 +403,7 @@ class MappingConfig:
             network=NetworkSettings.from_dict(d.get("network", {})),
             options=MappingOptions.from_dict(d.get("options", {})),
             mqtt=MqttSettings.from_dict(d.get("mqtt", {})),
+            modbus_poll=ModbusPoll.from_dict(d.get("modbus_poll", {})),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -363,6 +422,10 @@ class MappingConfig:
         else:
             self.network.validate()
         self.mqtt.validate()
+        self.modbus_poll.validate()
+        if self.modbus_poll.points and not (self.kind == "net" and self.network.protocol == "modbus"):
+            raise ConfigError("Modbus register polling requires a Modbus-gateway mapping "
+                              "(protocol = modbus).")
 
 
 # ---------------------------------------------------------------------------
