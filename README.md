@@ -79,8 +79,8 @@ düzenlemeye gerek yok.
 - **LDAP / Active Directory auth (opsiyonel):** kullanıcılar dizine bind ederek doğrulanır;
   LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
-  durum ve portlar; **bearer-token** kimlik doğrulama; OpenAPI 3.0
-  (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
+  durum ve portlar; **bearer-token** kimlik doğrulama (rol seçilebilir — `viewer`
+  salt-okunur); OpenAPI 3.0 (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
