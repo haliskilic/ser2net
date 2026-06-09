@@ -33,8 +33,11 @@
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">you</span>{% endif %}</td>
+        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">you</span>{% endif %}{% if u.source == 'ldap' %} <span class="tag">LDAP</span>{% endif %}</td>
         <td>
+          {% if u.source == 'ldap' %}
+            <span class="mono">{{ u.role }}</span> <span class="muted">(from LDAP groups)</span>
+          {% else %}
           <form method="post" action="/settings/users/{{ u.username }}/role" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
             <select name="role">
@@ -42,6 +45,7 @@
             </select>
             <button class="btn sm" type="submit">Set</button>
           </form>
+          {% endif %}
         </td>
         <td>
           {% if me.username != u.username %}
@@ -70,6 +74,47 @@
       <label>Confirm <input type="password" name="password2" autocomplete="new-password" required></label>
     </div>
     <button class="btn" type="submit">Add user</button>
+  </form>
+</section>
+
+<section class="panel panel-narrow">
+  <div class="panel-head"><h2>LDAP / Active Directory</h2></div>
+  <p class="muted mb-sm">Authenticate users against a directory; their group membership maps to a
+     ser2net role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).</p>
+  <form method="post" action="/settings/ldap" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label class="chk"><input type="checkbox" name="ldap_enabled" {% if ldap.enabled %}checked{% endif %}> Enable LDAP / AD login</label>
+    <div class="grid2">
+      <label>Server URI <input type="text" name="ldap_server_uri" value="{{ ldap.server_uri }}" placeholder="ldaps://dc.corp.local:636"></label>
+      <label class="chk chk-pad"><input type="checkbox" name="ldap_start_tls" {% if ldap.start_tls %}checked{% endif %}> StartTLS</label>
+    </div>
+    <label>User DN template <span class="muted">(direct bind — AD: <span class="mono">{username}@corp.local</span>; LDAP: <span class="mono">uid={username},ou=people,dc=ex,dc=com</span>)</span>
+      <input type="text" name="ldap_user_dn_template" value="{{ ldap.user_dn_template }}" placeholder="optional">
+    </label>
+    <p class="muted">…or search + bind with a service account:</p>
+    <div class="grid2">
+      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com"></label>
+      <label>Bind password <input type="password" name="ldap_bind_password" placeholder="{% if ldap.bind_password %}•••••• (unchanged){% endif %}"></label>
+    </div>
+    <div class="grid2">
+      <label>User search base <input type="text" name="ldap_user_search_base" value="{{ ldap.user_search_base }}" placeholder="ou=people,dc=ex,dc=com"></label>
+      <label>User search filter <input type="text" name="ldap_user_search_filter" value="{{ ldap.user_search_filter }}" placeholder="(sAMAccountName={username})"></label>
+    </div>
+    <div class="grid2">
+      <label>Group attribute <input type="text" name="ldap_group_attr" value="{{ ldap.group_attr }}" placeholder="memberOf"></label>
+      <label>Default role <span class="muted">(if in no mapped group)</span>
+        <select name="ldap_default_role">
+          <option value="" {% if not ldap.default_role %}selected{% endif %}>— deny login —</option>
+          {% for r in roles %}<option value="{{ r }}" {% if r == ldap.default_role %}selected{% endif %}>{{ r }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="grid3">
+      <label>Admin group <input type="text" name="ldap_admin_group" value="{{ ldap.admin_group }}" placeholder="ser2net-admins"></label>
+      <label>Operator group <input type="text" name="ldap_operator_group" value="{{ ldap.operator_group }}" placeholder="ser2net-operators"></label>
+      <label>Viewer group <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2net-viewers"></label>
+    </div>
+    <button class="btn primary" type="submit">Save LDAP</button>
   </form>
 </section>
 

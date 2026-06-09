@@ -174,7 +174,20 @@ def test_modbus_poll_requires_gateway():
     print("modbus poll points require a modbus-gateway mapping  OK")
 
 
+def test_ldap_validation():
+    users = [{"username": "a", "password_hash": "x", "role": "admin"}]
+    _expect_error(AppConfig.from_dict({"users": users, "ldap": {"enabled": True}}),
+                  "no server URI")
+    _expect_error(AppConfig.from_dict({"users": users,
+                  "ldap": {"enabled": True, "server_uri": "ldap://h"}}), "user DN template")
+    ok = AppConfig.from_dict({"users": users, "ldap": {"enabled": True, "server_uri": "ldap://h",
+                                                       "user_dn_template": "{username}@corp"}})
+    ok.validate()
+    print("ldap: enabled requires server URI + a bind mode  OK")
+
+
 def main():
+    test_ldap_validation()
     test_modbus_poll_requires_gateway()
     test_mqtt_validation()
     test_legacy_password_migrates_to_admin_user()
