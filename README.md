@@ -117,6 +117,11 @@ python3 ser2net.py            # veya: ./start.sh
 start.bat
 ```
 
+### Standalone binary (Python gerektirmez)
+Her sürümde Windows `.exe` ve Linux binary'si **GitHub Releases**'a eklenir (PyInstaller;
+MQTT/LDAP/OIDC dahil bundle'lı). İndir, çalıştır — config/log `data/` altında binary'nin
+yanına yazılır. Kendin derlemek için: `pip install pyinstaller && pyinstaller ser2net.spec`.
+
 İlk çalıştırmada:
 1. **Konsolda** arayüzün hangi IP'den erişileceği sorulur (makine IP'leri veya custom)
    ve port (varsayılan 8080). Başsız/servis ortamında güvenli varsayılan **127.0.0.1**.
@@ -136,6 +141,10 @@ sürümü/işletim sistemi için ek wheel gerekirse:
 python3 -m pip download -r requirements.txt -d vendor/wheels \
   --platform win_amd64 --python-version 312 --only-binary=:all:
 ```
+Opsiyonel özellikleri (MQTT/LDAP/OIDC) offline kaynak kurulumunda etkinleştirmek için
+wheel'lerini de indirip kurun: `pip download paho-mqtt ldap3 authlib -d vendor/wheels`
+ardından `pip install --no-index --find-links vendor/wheels paho-mqtt ldap3 authlib`.
+(Standalone binary bunları zaten içerir.)
 
 ### Docker
 ```bash

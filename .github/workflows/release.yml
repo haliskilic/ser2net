@@ -1,0 +1,45 @@
+name: Release
+
+# Build standalone executables (no Python needed) and attach them to the GitHub
+# Release when a v* tag is pushed:  git tag v2.4.0 && git push --tags
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: ser2net-windows-x64.exe
+            built: dist/ser2net.exe
+          - os: ubuntu-latest
+            asset: ser2net-linux-x64
+            built: dist/ser2net
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps (incl. optional MQTT/LDAP/OIDC) + PyInstaller
+        run: pip install -r requirements.txt paho-mqtt ldap3 authlib pyinstaller
+      - name: Build
+        run: pyinstaller --clean --noconfirm ser2net.spec
+      - name: Smoke-test the binary starts
+        shell: bash
+        run: |
+          "${{ matrix.built }}" --help
+      - name: Name the artifact
+        shell: bash
+        run: cp "${{ matrix.built }}" "${{ matrix.asset }}"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
+          fail_on_unmatched_files: true
