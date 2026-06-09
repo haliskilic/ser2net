@@ -66,6 +66,11 @@ düzenlemeye gerek yok.
   seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz).
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları, parola değişince oturum iptali.
+- **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
+  durum ve portlar; **bearer-token** kimlik doğrulama; OpenAPI 3.0
+  (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
+- **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
+  Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **Tamamen offline:** tüm bağımlılıklar wheel olarak birlikte gelir; internet gerekmez.
 
 ---
@@ -115,6 +120,17 @@ python3 -m pip download -r requirements.txt -d vendor/wheels \
   --platform win_amd64 --python-version 312 --only-binary=:all:
 ```
 
+### Docker
+```bash
+docker compose up -d        # docker-compose.yml içindeki `devices:` satırını düzenleyin
+# veya:
+docker build -t ser2net . && docker run -d -p 8080:8080 \
+  --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
+```
+Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
+ayarlanır — başsız ortamda interaktif seçici çalışamaz). Ayrıntılar:
+[`docs/DOCKER.md`](docs/DOCKER.md).
+
 ---
 
 ## 🖥️ Kullanım
@@ -124,9 +140,33 @@ python3 -m pip download -r requirements.txt -d vendor/wheels \
 - **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde cihaza yazılabilir.
-- **Ayarlar:** parola değiştir, admin TLS (yol ver veya self-signed üret), mapping
-  **yedek al/yükle** (JSON), durum.
+- **Ayarlar:** parola değiştir, admin TLS (yol ver veya self-signed üret), **REST API
+  token'ı** üret/iptal et, mapping **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı).
+
+---
+
+## 🔌 REST API
+
+Tarayıcı arayüzünün yanında, otomasyon için JSON bir API (`/api/v1`). Kimlik doğrulama
+`Authorization: Bearer <token>` ile yapılır; token'ı **Ayarlar → REST API token**'dan
+üretin (yalnızca bir kez gösterilir). Tam tanım: `GET /api/v1/openapi.json`.
+
+```bash
+TOKEN="s2n_..."   # Ayarlar'dan üretilen token
+# tüm eşlemeler (config + canlı durum)
+curl -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings
+# eşleme oluştur
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"PLC-1","kind":"net","serial":{"port":"/dev/ttyUSB0","baudrate":9600},
+       "network":{"mode":"server","bind_ip":"0.0.0.0","port":4001}}' \
+  http://HOST:8080/api/v1/mappings
+# başlat / durdur / yeniden başlat
+curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
+```
+Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
+`POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
+`GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
 
 ---
 
@@ -142,6 +182,8 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 
 ## ⚙️ Servis olarak çalıştırma
 
+- **Docker:** resmi `Dockerfile` + `docker-compose.yml` (bkz. yukarısı ve
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume.
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
   **root ile çalıştırmayın.**
@@ -164,14 +206,15 @@ Tüm durum **veri dizininde** (varsayılan `data/`):
 
 ## 🧪 Test
 
-socat (Linux) ile sanal seri portlar kullanılır; donanım gerekmez:
+Birleşik test koşucusu — taşınabilir (donanımsız, socat'sız) takım her işletim
+sisteminde çalışır:
 ```bash
-python3 tests/test_bridge_raw.py        # raw çift yönlü
-python3 tests/test_rfc2217.py           # RFC2217 + canlı baud
-python3 tests/test_v2_transports.py     # TCP-client / UDP / serial-bridge
-python3 tests/test_v2_console.py        # WebSocket konsol
-python3 tests/stress_24.py 24 512 200   # 24 eşzamanlı köprü stres
+python3 tests/run_all.py            # taşınabilir takım (Windows + Linux)
+python3 tests/run_all.py --socat    # + socat tabanlı veri-yolu testleri (Linux)
 ```
+socat (Linux) ile sanal seri portlar kullanılır; donanım gerekmez. Tek tek de
+çalıştırılabilir, örn. `python3 tests/test_rest_api.py`. CI (GitHub Actions) ruff
+lint + tam matrisi (ubuntu/windows × Python 3.10–3.13) koşar.
 
 ---
 
