@@ -55,6 +55,9 @@ düzenlemeye gerek yok.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
   RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception.
+- **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
+  reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
+  bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
   kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open, RS-485.
 - **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
