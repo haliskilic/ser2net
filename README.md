@@ -77,6 +77,9 @@ düzenlemeye gerek yok.
   (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
+- **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
+  yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla. `paho-mqtt`
+  gerektirir (opsiyonel; yoksa köprü normal çalışır).
 - **Tamamen offline:** tüm bağımlılıklar wheel olarak birlikte gelir; internet gerekmez.
 
 ---

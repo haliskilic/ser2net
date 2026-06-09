@@ -74,6 +74,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   token is generated in Settings.
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
+- **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
+  broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status.
+  Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Fully offline:** all dependencies bundled as wheels; no internet required.
 
 ---
