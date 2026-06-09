@@ -382,6 +382,10 @@ def build_routes(templates, state, static_dir):
         try:
             data = _mapping_from_form(form)
             mapping = MappingConfig.from_dict(data)
+            # The form doesn't expose every field; when editing, carry the unexposed
+            # ones over so a save never silently wipes them (get_mapping is a sync
+            # read — safe outside the config lock).
+            _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id))
             mapping.validate()
         except (ValueError, ConfigError) as e:
             return _form_error(render, request, state, form, str(e))
@@ -588,6 +592,25 @@ def _build_mapping_dict(form, strict: bool) -> dict:
 
 def _mapping_from_form(form) -> dict:
     return _build_mapping_dict(form, strict=True)
+
+
+def _preserve_unmanaged_fields(new_map, existing) -> None:
+    """Carry over config fields the mapping form does not expose, so editing an
+    existing mapping never silently discards them: the stable-id `match`, the
+    advanced/RS-485 serial settings, open/close strings, the trace-timestamp flag
+    and the RFC2217 interop knobs. No-op when creating a new mapping."""
+    if existing is None:
+        return
+    for cur, old in ((new_map.serial, existing.serial),
+                     (new_map.serial_b, existing.serial_b)):
+        cur.match = old.match
+        cur.advanced = old.advanced
+    o, prev = new_map.options, existing.options
+    o.openstr = prev.openstr
+    o.closestr = prev.closestr
+    o.trace_timestamp = prev.trace_timestamp
+    o.rfc2217_poll_modem_interval_s = prev.rfc2217_poll_modem_interval_s
+    o.rfc2217_net_timeout_s = prev.rfc2217_net_timeout_s
 
 
 def _form_error(render, request, state, form, message: str):

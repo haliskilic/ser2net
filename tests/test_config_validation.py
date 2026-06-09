@@ -1,0 +1,140 @@
+"""Config validation + edit-preservation regression tests (M1, M3, M4).
+
+M1: editing a mapping via the form must not silently drop fields the form does
+    not expose (stable-id match, RS-485/advanced, openstr/closestr, rfc2217 knobs).
+M3: a TCP listener and a UDP listener may share the same port number.
+M4: two enabled mappings must not target the same serial device.
+
+Pure stdlib + the app package (needs ./lib on path for app.web.routes).
+Run: python3 tests/test_config_validation.py
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from app.config import AppConfig, ConfigError, MappingConfig
+from app.web.routes import _preserve_unmanaged_fields
+
+
+def _expect_error(cfg, needle):
+    try:
+        cfg.validate()
+    except ConfigError as e:
+        assert needle in str(e), f"wrong error: {e!r} (wanted {needle!r})"
+        return
+    raise AssertionError(f"expected ConfigError containing {needle!r}, but validate() passed")
+
+
+# ---- M1: edit preservation ----
+
+def test_preserve_unmanaged_fields_on_edit():
+    existing = MappingConfig.from_dict({
+        "name": "dev", "serial": {
+            "port": "COM3", "match": {"vid": "0403", "pid": "6001"},
+            "advanced": {"rs485_enabled": True, "rs485_delay_before_tx_ms": 5.0}},
+        "options": {"openstr": "INIT\r\n", "closestr": "BYE\r", "trace_timestamp": False,
+                    "rfc2217_net_timeout_s": 9.0}})
+    # what the form would submit (no match/advanced/openstr/closestr/rfc2217 fields)
+    edited = MappingConfig.from_dict({
+        "id": existing.id, "name": "dev", "serial": {"port": "COM3", "baudrate": 19200},
+        "options": {"banner": "hello", "closeon": "logout"}})
+
+    _preserve_unmanaged_fields(edited, existing)
+
+    assert edited.serial.match == {"vid": "0403", "pid": "6001"}, "stable-id match dropped on edit"
+    assert edited.serial.advanced.rs485_enabled is True, "RS-485 setting dropped on edit"
+    assert edited.serial.advanced.rs485_delay_before_tx_ms == 5.0
+    assert edited.options.openstr == "INIT\r\n" and edited.options.closestr == "BYE\r"
+    assert edited.options.trace_timestamp is False
+    assert edited.options.rfc2217_net_timeout_s == 9.0
+    # form-managed fields keep the submitted values
+    assert edited.options.banner == "hello" and edited.options.closeon == "logout"
+    assert edited.serial.baudrate == 19200
+    print("edit preserves match / RS-485 / openstr / closestr / rfc2217 knobs  OK")
+
+
+def test_preserve_is_noop_for_new_mapping():
+    fresh = MappingConfig.from_dict({"name": "new", "serial": {"port": "COM1"}})
+    _preserve_unmanaged_fields(fresh, None)
+    assert fresh.options.openstr == "" and fresh.serial.match == {}
+    print("new mapping: preserve is a no-op (defaults intact)  OK")
+
+
+# ---- M3: TCP and UDP can share a port ----
+
+def test_tcp_and_udp_share_port_ok():
+    cfg = AppConfig.from_dict({"mappings": [
+        {"name": "tcp", "serial": {"port": "COM1"},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 5000}},
+        {"name": "udp", "serial": {"port": "COM2"},
+         "network": {"mode": "udp", "bind_ip": "127.0.0.1", "port": 5000}},
+    ]})
+    cfg.validate()  # must NOT raise
+    print("TCP server + UDP on the same port: accepted  OK")
+
+
+def test_two_tcp_servers_same_port_rejected():
+    cfg = AppConfig.from_dict({"mappings": [
+        {"name": "a", "serial": {"port": "COM1"},
+         "network": {"mode": "server", "bind_ip": "0.0.0.0", "port": 5000}},
+        {"name": "b", "serial": {"port": "COM2"},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 5000}},
+    ]})
+    _expect_error(cfg, "TCP port 5000")
+    print("two TCP servers on overlapping address+port: rejected  OK")
+
+
+# ---- M4: serial-device collision ----
+
+def test_two_enabled_mappings_same_serial_rejected():
+    cfg = AppConfig.from_dict({"mappings": [
+        {"name": "a", "enabled": True, "serial": {"port": "COM7"},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 5001}},
+        {"name": "b", "enabled": True, "serial": {"port": "COM7"},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 5002}},
+    ]})
+    _expect_error(cfg, "serial port COM7")
+    print("two enabled mappings on the same serial device: rejected  OK")
+
+
+def test_disabled_mapping_does_not_collide():
+    cfg = AppConfig.from_dict({"mappings": [
+        {"name": "a", "enabled": True, "serial": {"port": "COM7"},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 5001}},
+        {"name": "b", "enabled": False, "serial": {"port": "COM7"},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 5002}},
+    ]})
+    cfg.validate()  # disabled mapping doesn't hold the port -> OK
+    print("disabled mapping on the same serial device: allowed  OK")
+
+
+def test_dynamic_match_devices_not_collided():
+    # two mappings resolved by VID/PID match share the literal placeholder port but
+    # resolve dynamically -> not treated as a static collision
+    cfg = AppConfig.from_dict({"mappings": [
+        {"name": "a", "enabled": True,
+         "serial": {"port": "auto", "match": {"vid": "0403", "serial_number": "A1"}},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 5001}},
+        {"name": "b", "enabled": True,
+         "serial": {"port": "auto", "match": {"vid": "0403", "serial_number": "B2"}},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 5002}},
+    ]})
+    cfg.validate()  # match-based devices are skipped by the static check -> OK
+    print("dynamic VID/PID match mappings: not flagged as a static collision  OK")
+
+
+def main():
+    test_preserve_unmanaged_fields_on_edit()
+    test_preserve_is_noop_for_new_mapping()
+    test_tcp_and_udp_share_port_ok()
+    test_two_tcp_servers_same_port_rejected()
+    test_two_enabled_mappings_same_serial_rejected()
+    test_disabled_mapping_does_not_collide()
+    test_dynamic_match_devices_not_collided()
+    print("\nPASS: config validation + edit preservation (M1, M3, M4)")
+
+
+if __name__ == "__main__":
+    main()
