@@ -22,9 +22,9 @@ from starlette.responses import (
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
-from ..config import ROLE_RANK, ROLES, ConfigError, MappingConfig, User
+from ..config import ROLE_RANK, ROLES, ConfigError, LdapSettings, MappingConfig, User
 from ..engine import netinfo
-from . import auth
+from . import auth, ldap_auth
 from .api import build_api_routes
 
 SESSION_TTL = 8 * 3600
@@ -85,15 +85,28 @@ def build_routes(templates, state, static_dir):
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
         user = state.config.get_user(username)
-        # scrypt is deliberately slow (~tens of ms); run it off the event loop so a
-        # login attempt doesn't stall every active bridge.
-        pw_ok = user is not None and await asyncio.to_thread(
-            auth.verify_password, password, user.password_hash)
-        if pw_ok:
+        authed = None
+        # local account: verify the scrypt hash off the event loop (it's slow on purpose)
+        if user is not None and user.source == "local":
+            if await asyncio.to_thread(auth.verify_password, password, user.password_hash):
+                authed = user
+        # LDAP/AD: for unknown users (or LDAP shadow accounts) when LDAP is enabled
+        elif state.config.ldap.enabled:
+            groups = await asyncio.to_thread(
+                ldap_auth.authenticate, state.config.ldap, username, password, state.log)
+            if groups is not None:
+                role = ldap_auth.role_for_groups(groups, state.config.ldap)
+                if role:
+                    async with state.config_lock:
+                        authed = ldap_auth.upsert_ldap_user(state.config, username, role)
+                        await state.asave()
+                else:
+                    state.log(f"LDAP login denied for {username!r}: in no mapped group")
+        if authed is not None:
             state.rate_limiter.reset(ip)
-            state.log(f"login: {username} ({user.role}) from {ip}")
+            state.log(f"login: {username} ({authed.role}, {authed.source}) from {ip}")
             resp = RedirectResponse("/", status_code=303)
-            set_session(resp, request, user)
+            set_session(resp, request, authed)
             return resp
         state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {username!r} from {ip}")
@@ -150,6 +163,7 @@ def build_routes(templates, state, static_dir):
                       api_token_set=bool(state.config.api_token_hash),
                       new_api_token=new_api_token,
                       me=current_user(request), users=state.config.users, roles=ROLES,
+                      ldap=state.config.ldap,
                       uptime=int(state.started_at))
 
     async def settings_password_post(request):
@@ -157,6 +171,9 @@ def build_routes(templates, state, static_dir):
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
         user = current_user(request)
+        if user is not None and user.source == "ldap":
+            return await settings_get(request,
+                                      error="Your account is managed by LDAP; change your password there.")
         cur = form.get("current", "")
         new = form.get("password", "")
         new2 = form.get("password2", "")
@@ -248,6 +265,26 @@ def build_routes(templates, state, static_dir):
         state.log("REST API token revoked")
         state.audit(client_ip(request), "api_token_revoke", "")
         return await settings_get(request, ok="API token revoked. The REST API is now disabled.")
+
+    # ---------------- LDAP / AD settings (admin only) ----------------
+    async def settings_ldap_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        async with state.config_lock:
+            old = state.config.ldap
+            state.config.ldap = _ldap_from_form(form, old)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                state.config.ldap = old
+                return await settings_get(request, error=str(e))
+        state.log(f"LDAP settings updated (enabled={state.config.ldap.enabled})")
+        state.audit(client_ip(request), "ldap_settings",
+                    "enabled" if state.config.ldap.enabled else "disabled")
+        return await settings_get(request, ok="LDAP settings saved.")
 
     # ---------------- user management (admin only) ----------------
     async def settings_users_create(request):
@@ -615,6 +652,7 @@ def build_routes(templates, state, static_dir):
         Route("/settings/users", settings_users_create, methods=["POST"]),
         Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
+        Route("/settings/ldap", settings_ldap_post, methods=["POST"]),
         Route("/healthz", healthz),
         Route("/metrics", metrics),
         Route("/settings/config/export", config_export),
@@ -673,6 +711,25 @@ def _password_problem(pw: str, pw2: str) -> str | None:
     if pw != pw2:
         return "Passwords do not match."
     return None
+
+
+def _ldap_from_form(form, old) -> LdapSettings:
+    pw = form.get("ldap_bind_password", "")
+    return LdapSettings.from_dict({
+        "enabled": _checkbox(form, "ldap_enabled"),
+        "server_uri": form.get("ldap_server_uri", "").strip(),
+        "start_tls": _checkbox(form, "ldap_start_tls"),
+        "user_dn_template": form.get("ldap_user_dn_template", "").strip(),
+        "bind_dn": form.get("ldap_bind_dn", "").strip(),
+        "bind_password": pw if pw else old.bind_password,   # blank => keep the stored one
+        "user_search_base": form.get("ldap_user_search_base", "").strip(),
+        "user_search_filter": form.get("ldap_user_search_filter", "").strip() or "(uid={username})",
+        "group_attr": form.get("ldap_group_attr", "").strip() or "memberOf",
+        "admin_group": form.get("ldap_admin_group", "").strip(),
+        "operator_group": form.get("ldap_operator_group", "").strip(),
+        "viewer_group": form.get("ldap_viewer_group", "").strip(),
+        "default_role": form.get("ldap_default_role", "").strip(),
+    })
 
 
 def _username_problem(username: str) -> str | None:
