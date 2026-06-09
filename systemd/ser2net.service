@@ -20,8 +20,14 @@ RestartSec=3
 
 # --- Hardening ---
 NoNewPrivileges=true
-# Writable config/logs dir (adjust to your --data-dir); rest of FS is read-only.
-ReadWritePaths=/opt/ser2net/data
+# Writable paths (rest of FS is read-only under ProtectSystem=strict):
+#  - /opt/ser2net/data : config.json + logs (adjust to your --data-dir)
+#  - /opt/ser2net/lib  : where the first-run offline bootstrap installs the bundled
+#    wheels. Without it ProtectSystem=strict makes ./lib read-only and the first
+#    start fails to install dependencies. If you instead pre-install deps at deploy
+#    time (python3 bootstrap.py) and add --no-bootstrap to ExecStart, you can drop
+#    /opt/ser2net/lib from this list.
+ReadWritePaths=/opt/ser2net/data /opt/ser2net/lib
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
@@ -37,6 +43,8 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
+# Add AF_NETLINK to enable pyudev event-driven hotplug; without it ser2net falls
+# back to polling (which works fine), so it is left out of the default allow-list.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
