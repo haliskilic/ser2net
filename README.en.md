@@ -78,8 +78,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   directory; LDAP group membership maps to a role. Works alongside local accounts;
   needs `ldap3`.
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
-  status and ports; **bearer-token** auth; OpenAPI 3.0 (`/api/v1/openapi.json`). The
-  token is generated in Settings.
+  status and ports; **bearer-token** auth (with a role — `viewer` is read-only); OpenAPI
+  3.0 (`/api/v1/openapi.json`). The token is generated in Settings.
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT

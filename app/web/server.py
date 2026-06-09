@@ -15,6 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
+from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
 
@@ -110,6 +111,12 @@ class GuardMiddleware(BaseHTTPMiddleware):
             if not auth.verify_token(auth.bearer_token(request), cfg.api_token_hash):
                 return JSONResponse({"error": "unauthorized"}, status_code=401,
                                     headers={"WWW-Authenticate": "Bearer"})
+            # a 'viewer' token is read-only: block state-changing methods
+            if request.method in ("POST", "PUT", "DELETE", "PATCH") and \
+                    ROLE_RANK.get(cfg.api_token_role, 0) < ROLE_RANK["operator"]:
+                return JSONResponse(
+                    {"error": "forbidden", "detail": "API token role 'viewer' is read-only"},
+                    status_code=403)
         response = await call_next(request)
         self._security_headers(response, cfg)
         return response
