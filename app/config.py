@@ -449,13 +449,59 @@ ROLE_RANK = {"viewer": 1, "operator": 2, "admin": 3}
 
 
 @dataclass
+class LdapSettings:
+    """LDAP / Active Directory authentication. Users authenticate by binding to the
+    directory; their group membership maps to a ser2net role. Two bind modes:
+      - direct: user_dn_template (e.g. 'uid={username},ou=people,dc=ex,dc=com' or the
+        AD UPN '{username}@corp.local'); the credentials bind as that DN.
+      - search+bind: bind as the service account (bind_dn/bind_password), find the user
+        with user_search_filter under user_search_base, then re-bind as that DN.
+    Group->role: a user in admin_group gets admin, operator_group -> operator, etc.;
+    default_role applies when authenticated but in no mapped group (empty => deny)."""
+    enabled: bool = False
+    server_uri: str = ""             # ldap://host:389 or ldaps://host:636
+    start_tls: bool = False
+    user_dn_template: str = ""       # direct-bind template (mutually exclusive with search)
+    bind_dn: str = ""                # service account for search+bind
+    bind_password: str = ""
+    user_search_base: str = ""
+    user_search_filter: str = "(uid={username})"   # AD: (sAMAccountName={username})
+    group_attr: str = "memberOf"     # attribute on the user entry listing group DNs
+    admin_group: str = ""
+    operator_group: str = ""
+    viewer_group: str = ""
+    default_role: str = ""           # role when no group matched; "" => deny login
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "LdapSettings":
+        d = dict(d or {})
+        known = {f.name for f in dataclasses.fields(LdapSettings)}
+        return LdapSettings(**{k: v for k, v in d.items() if k in known})
+
+    def validate(self) -> None:
+        if not self.enabled:
+            return
+        if not self.server_uri.strip():
+            raise ConfigError("LDAP is enabled but no server URI is set.")
+        if not (self.user_dn_template.strip() or
+                (self.bind_dn.strip() and self.user_search_base.strip())):
+            raise ConfigError("LDAP needs either a user DN template (direct bind) or a "
+                              "bind DN + user search base (search+bind).")
+        if self.default_role and self.default_role not in ROLES:
+            raise ConfigError(f"LDAP default role must be one of {ROLES} or blank.")
+
+
+@dataclass
 class User:
     """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
-    on that user's password change to revoke only their existing sessions."""
+    on that user's password/role change to revoke only their existing sessions.
+    `source` is 'local' (password in password_hash) or 'ldap' (a shadow account whose
+    role is derived from LDAP groups on each login; no local password)."""
     username: str = ""
     password_hash: str = ""
     role: str = "admin"
     pwd_version: int = 0
+    source: str = "local"
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "User":
@@ -464,6 +510,8 @@ class User:
         u = User(**{k: v for k, v in d.items() if k in known})
         if u.role not in ROLES:
             u.role = "viewer"
+        if u.source not in ("local", "ldap"):
+            u.source = "local"
         return u
 
 
@@ -477,6 +525,7 @@ class AppConfig:
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
     users: list[User] = field(default_factory=list)
+    ldap: LdapSettings = field(default_factory=LdapSettings)
     defaults: dict[str, Any] = field(default_factory=dict)  # serial defaults
     mappings: list[MappingConfig] = field(default_factory=list)
 
@@ -498,6 +547,7 @@ class AppConfig:
             api_token_hash=d.get("api_token_hash", ""),
             session_timeout_s=int(d.get("session_timeout_s", 8 * 3600)),
             users=users,
+            ldap=LdapSettings.from_dict(d.get("ldap", {})),
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
@@ -511,6 +561,7 @@ class AppConfig:
             "api_token_hash": self.api_token_hash,
             "session_timeout_s": self.session_timeout_s,
             "users": [asdict(u) for u in self.users],
+            "ldap": asdict(self.ldap),
             "defaults": self.defaults,
             "mappings": [m.to_dict() for m in self.mappings],
         }
@@ -539,6 +590,8 @@ class AppConfig:
         for path in (p for p in (cert, key) if p):
             if not os.path.isfile(path):
                 raise ConfigError(f"TLS file not found or not readable: {path}")
+
+        self.ldap.validate()
 
         seen: dict[tuple[str, str, int], str] = {}   # (proto, bind_ip, port) -> name
         serial_owner: dict[str, tuple[str, str]] = {}  # device -> (mapping_id, name)
