@@ -12,6 +12,19 @@
   --amber: #d29922;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
+:root[data-theme="light"] {
+  --bg: #f6f8fa;
+  --panel: #ffffff;
+  --panel2: #eef1f4;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --muted: #59636e;
+  --accent: #0969da;
+  --accent-hover: #0860ca;
+  --green: #1a7f37;
+  --red: #cf222e;
+  --amber: #9a6700;
+}
 * { box-sizing: border-box; }
 body {
   margin: 0;
