@@ -66,6 +66,7 @@ class PortWatcher:
         self._ports: list[dict[str, Any]] = []
         self._version = 0
         self._task: Optional[asyncio.Task] = None
+        self._rescans: set = set()   # keep refs to fire-and-forget rescan tasks
         self._stop = asyncio.Event()
 
     @property
@@ -98,8 +99,12 @@ class PortWatcher:
             self._task = None
 
     def _trigger_rescan(self) -> None:
-        if not self._stop.is_set():
-            asyncio.ensure_future(self.refresh_now())
+        # keep a reference so the task isn't garbage-collected mid-flight (RUF006)
+        if self._stop.is_set():
+            return
+        task = asyncio.ensure_future(self.refresh_now())
+        self._rescans.add(task)
+        task.add_done_callback(self._rescans.discard)
 
     def _start_event_watcher(self) -> None:
         """Best-effort hotplug events; silently no-op (polling continues) if the

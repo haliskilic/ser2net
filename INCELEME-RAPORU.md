@@ -5,6 +5,15 @@
 > Yöntem: 10 boyutta paralel kod-tarama ajanı + 4 piyasa-araştırma ajanı.
 > Tüm bulgular kaynak kodu (`file:line`) okunarak elle doğrulanmıştır.
 
+> ## ✅ DURUM: Bu rapordaki tüm bulgular GİDERİLDİ
+> Bu, projenin ilk durumunun tarihsel bir denetim kaydıdır. Aşağıdaki tüm hata ve
+> güvenlik bulguları (H1–H6, M1–M15) ile test/CI eksikleri **çözüldü ve merge edildi**;
+> ardından önerilen "must" özelliklerinin tamamı (REST API, Modbus gateway + edge
+> polling, RBAC, LDAP/AD, OIDC SSO, MQTT, client-side sanal COM) ve paketleme
+> (Docker, CI, standalone binary) gerçeklendi. Güncel yol haritası: [`ROADMAP.md`](ROADMAP.md).
+> **Aşağıdaki "açık" listelenen maddeler artık geçerli değildir** — yalnızca o günkü
+> durumu ve hâlâ değerli olan piyasa/rakip analizini belgeler.
+
 ---
 
 ## 1. Yönetici Özeti
