@@ -195,7 +195,8 @@ class _ClientConn:
         # Create the protocol session. RFC2217 needs the live serial instance.
         ser = self.runner.serial_instance
         self._session = make_session(m.network.protocol, ser,
-                                     poll_interval=m.options.rfc2217_poll_modem_interval_s)
+                                     poll_interval=m.options.rfc2217_poll_modem_interval_s,
+                                     read_only=m.network.read_only)
 
         # initial bytes: protocol negotiation, then banner
         init = bytearray(self._session.initial_net_bytes())

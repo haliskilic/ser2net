@@ -25,6 +25,20 @@ from .base import ProtocolSession
 
 _MODEM_READS = ("cts", "dsr", "ri", "cd")
 _LINE_WRITES = ("rts", "dtr", "break_condition")
+# Port-configuration writes RFC2217 SET-* commands perform on the live serial.
+# Blocked on read-only mappings so a "read-only" client cannot reconfigure the
+# physical port (baud/framing/flow-control) or toggle control lines.
+_CONFIG_WRITES = ("baudrate", "bytesize", "parity", "stopbits", "xonxoff", "rtscts", "dsrdtr")
+_RO_BLOCKED_WRITES = frozenset(_CONFIG_WRITES + _LINE_WRITES)
+# Mutating method calls (buffer purge, writes) blocked on read-only mappings.
+_RO_BLOCKED_CALLS = frozenset({
+    "write", "flush", "reset_input_buffer", "reset_output_buffer",
+    "flushInput", "flushOutput", "send_break", "setRTS", "setDTR", "setBreak",
+})
+
+
+def _noop(*_args, **_kwargs):
+    return None
 
 
 class _ModemSafeSerial:
@@ -34,10 +48,17 @@ class _ModemSafeSerial:
     if the backend doesn't support them. All other attribute access (including
     baudrate/parity/bytesize/stopbits changes that RFC2217 needs) is delegated
     verbatim to the real serial instance.
+
+    When ``read_only`` is set the proxy additionally drops every port-mutating
+    operation (SET-BAUDRATE/DATASIZE/PARITY/STOPSIZE/CONTROL, RTS/DTR/BREAK,
+    buffer purges). Reads still pass through, so the client keeps getting
+    NOTIFY-MODEMSTATE; PortManager then echoes the *actual* (unchanged) settings
+    back, which is the correct RFC2217 response for a request that took no effect.
     """
 
-    def __init__(self, ser) -> None:
+    def __init__(self, ser, read_only: bool = False) -> None:
         object.__setattr__(self, "_ser", ser)
+        object.__setattr__(self, "_read_only", read_only)
 
     def __getattr__(self, name):
         if name in _MODEM_READS:
@@ -45,9 +66,13 @@ class _ModemSafeSerial:
                 return getattr(self._ser, name)
             except Exception:
                 return False
+        if self._read_only and name in _RO_BLOCKED_CALLS:
+            return _noop
         return getattr(self._ser, name)
 
     def __setattr__(self, name, value):
+        if self._read_only and name in _RO_BLOCKED_WRITES:
+            return  # read-only: ignore baud/framing/flow-control/RTS/DTR/BREAK changes
         if name in _LINE_WRITES:
             try:
                 setattr(self._ser, name, value)
@@ -68,11 +93,12 @@ class _NetConnection:
 
 
 class Rfc2217Session(ProtocolSession):
-    def __init__(self, serial_instance, poll_interval: float = 1.0) -> None:
+    def __init__(self, serial_instance, poll_interval: float = 1.0, read_only: bool = False) -> None:
         from serial.rfc2217 import PortManager
 
         self._conn = _NetConnection()
-        safe_serial = _ModemSafeSerial(serial_instance) if serial_instance is not None else serial_instance
+        safe_serial = (_ModemSafeSerial(serial_instance, read_only=read_only)
+                       if serial_instance is not None else serial_instance)
         # PortManager.__init__ emits initial telnet negotiation into _conn.
         self._pm = PortManager(safe_serial, self._conn)
         self.poll_interval = poll_interval if poll_interval and poll_interval > 0 else 1.0
