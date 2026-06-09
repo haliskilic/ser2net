@@ -195,7 +195,8 @@ class _ClientConn:
         # Create the protocol session. RFC2217 needs the live serial instance.
         ser = self.runner.serial_instance
         self._session = make_session(m.network.protocol, ser,
-                                     poll_interval=m.options.rfc2217_poll_modem_interval_s)
+                                     poll_interval=m.options.rfc2217_poll_modem_interval_s,
+                                     read_only=m.network.read_only)
 
         # initial bytes: protocol negotiation, then banner
         init = bytearray(self._session.initial_net_bytes())
@@ -365,38 +366,51 @@ class MappingRunner:
         self._serial_task = asyncio.create_task(
             self._serial_supervisor(), name=f"serial:{self.mapping.name}")
 
-        if net.mode == "server":
-            self._server = await asyncio.start_server(
-                self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
-            self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
-                      f"{', TLS' if net.tls else ''})")
-        elif net.mode == "client":
-            self._main_task = asyncio.create_task(
-                self._client_supervisor(), name=f"connectout:{self.mapping.name}")
-            self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol})")
-        elif net.mode == "udp":
-            loop = asyncio.get_running_loop()
-            self._udp_transport, _ = await loop.create_datagram_endpoint(
-                lambda: _UdpBridge(self), local_addr=(net.bind_ip, net.port))
-            self._log(f"UDP on {net.bind_ip}:{net.port}")
+        # If the network side fails to come up (address-in-use, bad TLS cert, ...),
+        # tear everything down — otherwise the serial supervisor task is orphaned and
+        # keeps the serial device open forever, so no other mapping can use that port.
+        try:
+            if net.mode == "server":
+                self._server = await asyncio.start_server(
+                    self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
+                self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
+                          f"{', TLS' if net.tls else ''})")
+            elif net.mode == "client":
+                self._main_task = asyncio.create_task(
+                    self._client_supervisor(), name=f"connectout:{self.mapping.name}")
+                self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol})")
+            elif net.mode == "udp":
+                loop = asyncio.get_running_loop()
+                self._udp_transport, _ = await loop.create_datagram_endpoint(
+                    lambda: _UdpBridge(self), local_addr=(net.bind_ip, net.port))
+                self._log(f"UDP on {net.bind_ip}:{net.port}")
+        except BaseException:
+            await self.stop()
+            raise
         self.status.state = "running"
 
     async def stop(self) -> None:
         self._stop.set()
+        # Stop accepting new connections first (but do NOT await wait_closed yet).
         if self._server is not None:
             self._server.close()
-            with contextlib.suppress(Exception):
-                await self._server.wait_closed()
-            self._server = None
         if self._udp_transport is not None:
             with contextlib.suppress(Exception):
                 self._udp_transport.close()
             self._udp_transport = None
+        # Abort existing clients/monitors BEFORE awaiting the listener teardown:
+        # on Python 3.12+ asyncio.Server.wait_closed() blocks until every active
+        # connection has finished, so awaiting it before kicking clients would
+        # deadlock a stop() while clients are still connected.
         for c in list(self._clients):
             c.kick()
         for mon in list(self._monitors):
             mon.close()
         self._monitors.clear()
+        if self._server is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
+            self._server = None
         for task in (self._serial_task, self._main_task):
             if task:
                 task.cancel()
@@ -737,6 +751,12 @@ class _UdpBridge(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr) -> None:
         r = self.runner
+        # Access control: a TCP listener checks _client_allowed() in _on_client, but
+        # UDP has no accept hook — enforce the allow-list HERE. An unlisted source is
+        # dropped entirely, so a stray or spoofed datagram cannot become "the peer"
+        # and hijack the serial->net stream (this also protects read-only mappings).
+        if not r._client_allowed(addr[0]):
+            return
         peer = next((c for c in r._clients if isinstance(c, _UdpPeer)), None)
         if peer is None:
             peer = _UdpPeer(r, addr)

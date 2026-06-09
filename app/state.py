@@ -19,7 +19,7 @@ import time
 from collections import deque
 from contextlib import suppress as _suppress
 
-from .config import AppConfig, ConfigStore
+from .config import AppConfig, ConfigStore, lock_down_dir
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
 from .web.auth import LoginRateLimiter
@@ -95,13 +95,11 @@ class AppState:
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()
         self._maint_task: asyncio.Task | None = None
-        # per-mapping logs can contain traffic; keep the logs dir private too
-        if os.name == "posix":
-            try:
-                os.makedirs(self.logs_dir, exist_ok=True)
-                os.chmod(self.logs_dir, 0o700)
-            except OSError:
-                pass
+        # per-mapping logs can contain raw serial traffic; keep the logs dir private
+        # on both platforms (POSIX 0700 / Windows owner-only ACL).
+        with _suppress(OSError):
+            os.makedirs(self.logs_dir, exist_ok=True)
+        lock_down_dir(self.logs_dir)
 
     @staticmethod
     def _setup_logging(log_path: str) -> logging.Logger:

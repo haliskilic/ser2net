@@ -11,6 +11,7 @@ all config.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import ipaddress
 import json
@@ -44,6 +45,44 @@ class ConfigError(ValueError):
 
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def lock_down_dir(directory: str) -> None:
+    """Restrict a state directory to its owner so the secrets it holds (secret_key,
+    password hash in config.json) and captured serial logs are not readable by other
+    local users.
+
+    POSIX: chmod 0700. Windows: ``icacls`` removes inherited ACEs and grants Full
+    only to the current user, SYSTEM and the Administrators group, with inheritance
+    so child files (config.json, the atomic temp files, per-mapping logs) pick up the
+    same restriction. Best-effort: silently degrades if it cannot be applied (the
+    posix path was the only one protected before — Windows was left world-readable
+    despite the docs claiming 0600).
+    """
+    if os.name == "posix":
+        with contextlib.suppress(OSError):
+            os.chmod(directory, 0o700)
+        return
+    if os.name == "nt":
+        user = os.environ.get("USERNAME") or ""
+        if not user:
+            return
+        import subprocess
+
+        # Set the ACL on the directory only (NOT /T): /inheritance:r drops inherited
+        # ACEs, and the (OI)(CI) grants both protect the dir and propagate to child
+        # files/dirs, so config.json + the atomic temp files + per-mapping logs are
+        # created owner-private. Applying (OI)(CI) ACEs to existing *files* via /T
+        # corrupts their ACL (inheritance flags are meaningless on a leaf and left the
+        # owner unable to read config.json), so we rely on inheritance instead.
+        # SIDs are locale-independent: *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administrators.
+        grants = [f"{user}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
+        cmd = ["icacls", directory, "/inheritance:r"]
+        for g in grants:
+            cmd += ["/grant:r", g]
+        cmd += ["/C", "/Q"]
+        with contextlib.suppress(Exception):
+            subprocess.run(cmd, capture_output=True, timeout=15, check=False)
 
 
 def normalize_cidr(value: str) -> str:
@@ -360,21 +399,43 @@ class AppConfig:
             if not os.path.isfile(path):
                 raise ConfigError(f"TLS file not found or not readable: {path}")
 
-        seen: dict[tuple[str, int], str] = {}
+        seen: dict[tuple[str, str, int], str] = {}   # (proto, bind_ip, port) -> name
+        serial_owner: dict[str, tuple[str, str]] = {}  # device -> (mapping_id, name)
         for m in self.mappings:
             m.validate()
+
+            # A serial port can only be opened by one mapping. Flag two ENABLED
+            # mappings that target the same literal device (skip dynamic VID/PID
+            # `match` entries, whose device path is resolved at open time).
+            if m.enabled:
+                devices = []
+                if m.serial.port and not m.serial.match:
+                    devices.append(m.serial.port)
+                if m.kind == "serialbridge" and m.serial_b.port and not m.serial_b.match:
+                    devices.append(m.serial_b.port)
+                for dev in devices:
+                    prev = serial_owner.get(dev)
+                    if prev is not None and prev[0] != m.id:
+                        raise ConfigError(
+                            f"Mappings '{prev[1]}' and '{m.name}' both use serial port "
+                            f"{dev} — a serial port can only be opened by one mapping."
+                        )
+                    serial_owner[dev] = (m.id, m.name)
+
             # only listening mappings (server/udp) bind a port; client/serialbridge don't
             if m.kind != "net" or not m.network.listens:
                 continue
-            key = (m.network.bind_ip, m.network.port)
+            # A TCP listener and a UDP listener CAN share the same port number (they
+            # bind different transports), so the clash key includes the transport.
+            proto = "udp" if m.network.mode == "udp" else "tcp"
             # 0.0.0.0 collides with everything on that port; treat any overlap as a clash.
-            for (bip, bport), other in seen.items():
-                if bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
+            for (sproto, bip, bport), other in seen.items():
+                if sproto == proto and bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
                     raise ConfigError(
-                        f"Mappings '{other}' and '{m.name}' both use port {m.network.port} "
-                        f"on overlapping addresses ({bip} / {m.network.bind_ip})."
+                        f"Mappings '{other}' and '{m.name}' both use {proto.upper()} port "
+                        f"{m.network.port} on overlapping addresses ({bip} / {m.network.bind_ip})."
                     )
-            seen[key] = m.name
+            seen[(proto, m.network.bind_ip, m.network.port)] = m.name
 
 
 def _ip_overlaps(a: str, b: str) -> bool:
@@ -392,13 +453,9 @@ class ConfigStore:
         self.path = os.path.abspath(path)
         directory = os.path.dirname(self.path)
         os.makedirs(directory, exist_ok=True)
-        # config.json holds the password hash + secret_key; keep the dir private.
-        # (config.json itself is written 0600 via tempfile.mkstemp + os.replace.)
-        if os.name == "posix":
-            try:
-                os.chmod(directory, 0o700)
-            except OSError:
-                pass
+        # config.json holds the password hash + secret_key; keep the dir private on
+        # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).
+        lock_down_dir(directory)
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)

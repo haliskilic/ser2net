@@ -7,13 +7,14 @@ from .telnet import TelnetSession
 from .rfc2217 import Rfc2217Session
 
 
-def make_session(protocol: str, serial_instance, poll_interval: float = 1.0) -> ProtocolSession:
+def make_session(protocol: str, serial_instance, poll_interval: float = 1.0,
+                 read_only: bool = False) -> ProtocolSession:
     if protocol == "raw":
         return RawSession()
     if protocol == "telnet":
         return TelnetSession()
     if protocol == "rfc2217":
-        return Rfc2217Session(serial_instance, poll_interval=poll_interval)
+        return Rfc2217Session(serial_instance, poll_interval=poll_interval, read_only=read_only)
     raise ValueError(f"Unknown protocol: {protocol!r}")
 
 
