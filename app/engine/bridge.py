@@ -384,20 +384,26 @@ class MappingRunner:
 
     async def stop(self) -> None:
         self._stop.set()
+        # Stop accepting new connections first (but do NOT await wait_closed yet).
         if self._server is not None:
             self._server.close()
-            with contextlib.suppress(Exception):
-                await self._server.wait_closed()
-            self._server = None
         if self._udp_transport is not None:
             with contextlib.suppress(Exception):
                 self._udp_transport.close()
             self._udp_transport = None
+        # Abort existing clients/monitors BEFORE awaiting the listener teardown:
+        # on Python 3.12+ asyncio.Server.wait_closed() blocks until every active
+        # connection has finished, so awaiting it before kicking clients would
+        # deadlock a stop() while clients are still connected.
         for c in list(self._clients):
             c.kick()
         for mon in list(self._monitors):
             mon.close()
         self._monitors.clear()
+        if self._server is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
+            self._server = None
         for task in (self._serial_task, self._main_task):
             if task:
                 task.cancel()
