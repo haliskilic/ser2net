@@ -3,6 +3,7 @@
 Run: python3 tests/test_log_maintenance.py
 """
 import asyncio
+import logging
 import os
 import shutil
 import sys
@@ -14,6 +15,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.state import _trim_log_file, AppState, LOG_MAX_AGE_DAYS
 from app.config import AppConfig, ConfigStore, MappingConfig
+
+
+def _close_loggers():
+    # AppState opens FileHandlers that keep log files open; close them so the temp
+    # dir can be removed on Windows (open files can't be deleted there).
+    for name in list(logging.root.manager.loggerDict):
+        if name == "ser2net" or name.startswith("ser2net."):
+            lg = logging.getLogger(name)
+            for h in list(lg.handlers):
+                h.close()
+                lg.removeHandler(h)
 
 
 def ts(offset_s):
@@ -84,7 +96,8 @@ async def _integration():
         assert "fresh event 2" in after2, after2
         print("integration (old dropped + handler reattached, logging continues) OK")
     finally:
-        shutil.rmtree(d)
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":
