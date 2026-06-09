@@ -69,12 +69,18 @@ def lock_down_dir(directory: str) -> None:
             return
         import subprocess
 
+        # Set the ACL on the directory only (NOT /T): /inheritance:r drops inherited
+        # ACEs, and the (OI)(CI) grants both protect the dir and propagate to child
+        # files/dirs, so config.json + the atomic temp files + per-mapping logs are
+        # created owner-private. Applying (OI)(CI) ACEs to existing *files* via /T
+        # corrupts their ACL (inheritance flags are meaningless on a leaf and left the
+        # owner unable to read config.json), so we rely on inheritance instead.
         # SIDs are locale-independent: *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administrators.
         grants = [f"{user}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
         cmd = ["icacls", directory, "/inheritance:r"]
         for g in grants:
             cmd += ["/grant:r", g]
-        cmd += ["/T", "/C", "/Q"]
+        cmd += ["/C", "/Q"]
         with contextlib.suppress(Exception):
             subprocess.run(cmd, capture_output=True, timeout=15, check=False)
 
