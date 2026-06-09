@@ -345,6 +345,7 @@ class AppConfig:
     password_hash: str = ""  # empty => not set yet (first-run setup pending)
     pwd_version: int = 0      # bumped on every password change to revoke old sessions
     secret_key: str = field(default_factory=lambda: secrets.token_hex(32))
+    api_token_hash: str = ""  # sha256 of the REST API bearer token (empty => API disabled)
     session_timeout_s: int = 8 * 3600
     defaults: dict[str, Any] = field(default_factory=dict)  # serial defaults
     mappings: list[MappingConfig] = field(default_factory=list)
@@ -362,6 +363,7 @@ class AppConfig:
             password_hash=d.get("password_hash", ""),
             pwd_version=int(d.get("pwd_version", 0)),
             secret_key=d.get("secret_key") or secrets.token_hex(32),
+            api_token_hash=d.get("api_token_hash", ""),
             session_timeout_s=int(d.get("session_timeout_s", 8 * 3600)),
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
@@ -375,6 +377,7 @@ class AppConfig:
             "password_hash": self.password_hash,
             "pwd_version": self.pwd_version,
             "secret_key": self.secret_key,
+            "api_token_hash": self.api_token_hash,
             "session_timeout_s": self.session_timeout_s,
             "defaults": self.defaults,
             "mappings": [m.to_dict() for m in self.mappings],
