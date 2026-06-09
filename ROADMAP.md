@@ -49,26 +49,42 @@
 - **Docker** image + `docker-compose` + headless bind env; **CI** (GitHub Actions:
   ruff + ubuntu/windows × Python 3.10–3.13); unified cross-platform test runner
 
+### v2.2 — commercial features (Phase 2)
+- **REST API** (`/api/v1`): bearer-token JSON API — mapping CRUD, start/stop/restart,
+  status, ports, OpenAPI 3.0 spec
+- **Modbus RTU↔TCP gateway** (`protocol=modbus`): multi-master, bus-locked
+  transactions, txn-id integrity, `0x0B` timeout; reply-unit validation. **Edge mode:**
+  periodic register polling (uint/int/float 16/32, scaling) published to MQTT
+- **Multi-user / RBAC**: `admin` / `operator` / `viewer` roles, server-side enforcement,
+  Users panel; legacy single-password config auto-migrates to one admin
+- **LDAP / Active Directory auth** (optional `ldap3`): direct or search+bind, LDAP
+  group→role mapping, shadow accounts on the RBAC model
+- **MQTT publishing** (optional `paho-mqtt`): per-mapping serial-line → broker with
+  retained birth/death
+- **Client-side virtual COM** recipes (`docs/VIRTUAL-COM.md`); refreshed UI screenshots
+
 ---
 
 ## Planned
 
-### v2.1 (remaining) — UX & access
-- Multi-user / RBAC: accounts + roles (admin / operator / viewer), per-mapping permissions
-- i18n (TR/EN) for the UI
-- keyboard polish; dark/light theme toggle; xterm fit-to-window addon
+### v2.3 — UX & access polish
+- **OIDC / SAML browser-SSO** (next auth step after LDAP; auth-code flow + JWKS)
+- **REST API token scopes/roles** (currently a single admin-level token) + per-token
+- i18n (TR/EN) for the UI; dark/light theme toggle; xterm fit-to-window addon
 
-### v2.2 — packaging & distribution
-- PyInstaller `--onedir` builds (Windows `.exe`, Linux ELF)
-- Windows service installer (Shawl); `.deb` / `.rpm`
-- Automated multi-platform wheelhouse (cp311–cp313 × OS)
-- ~~CI/CD: GitHub Actions lint + test matrix (Linux/Windows)~~ ✅ shipped (v2.1b); add release artifacts
-- ~~Official Docker image~~ ✅ shipped (v2.1b)
+### v2.4 — packaging & distribution
+- PyInstaller `--onedir` builds (Windows `.exe`, Linux ELF) + Windows service installer
+- `.deb` / `.rpm`; automated multi-platform wheelhouse (cp311–cp313 × OS)
+- **Bundle the optional wheels** (`paho-mqtt`, `ldap3`) so MQTT/LDAP work on air-gapped
+  installs (today they need internet to `pip install`; the UI now warns when missing)
+- GitHub Actions release artifacts
 
-### v2.3 — serial/industrial depth
-- RS-485 hardware auto-RTS (`TIOCSRS485`) UI + Modbus RTU inter-frame awareness
-- Virtual COM helper integration/docs (com0com / socat / `rfc2217://`)
-- ser2net `ser2net.yaml` import/export for migration
+### v2.5 — industrial/IIoT depth
+- **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)
+- Modbus: write support (FC 5/6/15/16), per-point MQTT→register control, RTU inter-frame
+  tuning; RS-485 hardware auto-RTS (`TIOCSRS485`) UI
+- Multi-host **fleet dashboard** (manage several instances; subscription tier)
+- classic `ser2net.yaml` import for migration
 
 ### Icebox / conditional
 - Thread-per-port serial backend — only if a real Windows high-throughput /
