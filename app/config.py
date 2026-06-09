@@ -281,6 +281,40 @@ class MappingOptions:
 
 
 # ---------------------------------------------------------------------------
+# Per-mapping MQTT publishing (optional northbound to an IIoT broker)
+# ---------------------------------------------------------------------------
+@dataclass
+class MqttSettings:
+    enabled: bool = False
+    host: str = ""
+    port: int = 1883
+    base_topic: str = ""        # e.g. "ser2net/plc1"; serial lines publish to <base_topic>
+    qos: int = 0                # 0 | 1 | 2
+    tls: bool = False
+    username: str = ""
+    password: str = ""
+    client_id: str = ""         # blank => auto
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "MqttSettings":
+        d = dict(d or {})
+        known = {f.name for f in dataclasses.fields(MqttSettings)}
+        return MqttSettings(**{k: v for k, v in d.items() if k in known})
+
+    def validate(self) -> None:
+        if not self.enabled:
+            return
+        if not self.host.strip():
+            raise ConfigError("MQTT is enabled but no broker host is set.")
+        if not self.base_topic.strip():
+            raise ConfigError("MQTT is enabled but no base topic is set.")
+        if not isinstance(self.port, int) or not (1 <= self.port <= 65535):
+            raise ConfigError("MQTT port must be between 1 and 65535.")
+        if self.qos not in (0, 1, 2):
+            raise ConfigError("MQTT QoS must be 0, 1 or 2.")
+
+
+# ---------------------------------------------------------------------------
 # A single serial<->TCP mapping
 # ---------------------------------------------------------------------------
 MAPPING_KINDS = ("net", "serialbridge")
@@ -296,6 +330,7 @@ class MappingConfig:
     serial_b: SerialSettings = field(default_factory=SerialSettings)  # serialbridge only
     network: NetworkSettings = field(default_factory=NetworkSettings)
     options: MappingOptions = field(default_factory=MappingOptions)
+    mqtt: MqttSettings = field(default_factory=MqttSettings)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingConfig":
@@ -309,6 +344,7 @@ class MappingConfig:
             serial_b=SerialSettings.from_dict(d.get("serial_b", {})),
             network=NetworkSettings.from_dict(d.get("network", {})),
             options=MappingOptions.from_dict(d.get("options", {})),
+            mqtt=MqttSettings.from_dict(d.get("mqtt", {})),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -326,6 +362,7 @@ class MappingConfig:
                 raise ConfigError("Serial-to-serial bridge needs two different ports.")
         else:
             self.network.validate()
+        self.mqtt.validate()
 
 
 # ---------------------------------------------------------------------------
