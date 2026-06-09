@@ -151,7 +151,8 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 ## 🗂️ Configuration & state files
 
 All state lives in the **data dir** (default `data/`):
-- `config.json` — admin IP, password hash, all mappings (atomic write, 0600).
+- `config.json` — admin IP, password hash, all mappings (atomic write; owner-only
+  perms: 0600 on POSIX, `icacls` owner/SYSTEM/Administrators on Windows).
 - `all.log` — global activity/audit; `audit.log` — config changes.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `tls/` — certificate/key if self-signed is generated.

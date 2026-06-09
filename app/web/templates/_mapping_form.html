@@ -116,11 +116,14 @@
         <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> Kick old client</label>
         <label>Client buffer (chunks) <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
       </div>
-      <label>Allowed client IPs / CIDRs <span class="muted">(blank = any)</span>
-        <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.0/24">
-      </label>
       <label>High-priority client IPs / CIDRs <span class="muted">(kick an existing client when full)</span>
         <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.10">
+      </label>
+    </div>
+
+    <div data-show-when="network_mode=server,udp">
+      <label>Allowed client IPs / CIDRs <span class="muted">(blank = any; enforced for TCP server and UDP)</span>
+        <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.0/24">
       </label>
     </div>
 

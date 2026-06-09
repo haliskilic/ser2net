@@ -6,6 +6,19 @@ document.addEventListener("htmx:configRequest", function (e) {
   if (m) e.detail.headers["X-CSRF-Token"] = m.getAttribute("content");
 });
 
+// 1b) Surface server-side validation errors. htmx does NOT swap non-2xx responses
+//     by default, so a 400 from a form post (e.g. an invalid mapping) would silently
+//     do nothing — the user never sees why Save failed. For 400/422 (validation), let
+//     the re-rendered form fragment (with its error banner) swap into the panel.
+//     401/403 (auth/CSRF) are left as errors so they don't render a fragment.
+document.addEventListener("htmx:beforeSwap", function (e) {
+  var status = e.detail.xhr ? e.detail.xhr.status : 0;
+  if (status === 400 || status === 422) {
+    e.detail.shouldSwap = true;
+    e.detail.isError = false;
+  }
+});
+
 // 2) "Custom…" reveal: a <select data-custom="fieldName"> toggles the sibling
 //    <input name="fieldName"> when its value is "custom".
 function syncCustomInputs(root) {
