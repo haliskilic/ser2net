@@ -10,8 +10,11 @@
     <div class="banner warn">This interface is network-exposed. Choose a strong password.</div>
     <form method="post" action="/setup" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      <label>Admin username
+        <input type="text" name="username" value="admin" autocomplete="username" autofocus required>
+      </label>
       <label>New password (min 8 chars)
-        <input type="password" name="password" autocomplete="new-password" autofocus required>
+        <input type="password" name="password" autocomplete="new-password" required>
       </label>
       <label>Confirm password
         <input type="password" name="password2" autocomplete="new-password" required>

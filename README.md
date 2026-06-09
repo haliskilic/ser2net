@@ -69,6 +69,9 @@ düzenlemeye gerek yok.
   seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz).
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları, parola değişince oturum iptali.
+- **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunur,
+  operator eşlemeleri yönetir, admin her şey + kullanıcı yönetimi. Tek-parola kurulumları
+  otomatik olarak bir `admin` kullanıcısına geçer.
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
   durum ve portlar; **bearer-token** kimlik doğrulama; OpenAPI 3.0
   (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.

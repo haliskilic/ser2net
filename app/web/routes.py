@@ -22,7 +22,7 @@ from starlette.responses import (
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
-from ..config import ConfigError, MappingConfig
+from ..config import ROLE_RANK, ROLES, ConfigError, MappingConfig, User
 from ..engine import netinfo
 from . import auth
 from .api import build_api_routes
@@ -44,13 +44,27 @@ def build_routes(templates, state, static_dir):
             ip = ip[len("::ffff:"):]
         return ip
 
-    def set_session(response, request):
+    def set_session(response, request, user):
         response.set_cookie(
             auth.SESSION_COOKIE,
-            auth.issue_session(state.config.secret_key, SESSION_TTL, state.config.pwd_version),
+            auth.issue_session(state.config.secret_key, SESSION_TTL, user.username, user.pwd_version),
             max_age=SESSION_TTL, httponly=True, samesite="lax",
             secure=state.config.admin_ui.tls_enabled, path="/",
         )
+
+    def current_user(request):
+        return getattr(request.state, "user", None)
+
+    def require_role(request, role):
+        """Return a 403 response if the session user's role is below `role`, else None."""
+        u = current_user(request)
+        if u is None or ROLE_RANK.get(u.role, 0) < ROLE_RANK[role]:
+            return PlainTextResponse(f"Forbidden: requires {role} role.", status_code=403)
+        return None
+
+    def can_edit(request) -> bool:
+        u = current_user(request)
+        return u is not None and ROLE_RANK.get(u.role, 0) >= ROLE_RANK["operator"]
 
     # ---------------- pages ----------------
     async def healthz(request):
@@ -67,20 +81,23 @@ def build_routes(templates, state, static_dir):
         if state.rate_limiter.blocked(ip):
             return render(request, "login.html", status_code=429,
                           error="Too many attempts. Wait a few minutes and try again.")
+        # username defaults to "admin" so single-user (password-only) logins keep working
+        username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
+        user = state.config.get_user(username)
         # scrypt is deliberately slow (~tens of ms); run it off the event loop so a
         # login attempt doesn't stall every active bridge.
-        pw_ok = state.config.password_set and await asyncio.to_thread(
-            auth.verify_password, password, state.config.password_hash)
+        pw_ok = user is not None and await asyncio.to_thread(
+            auth.verify_password, password, user.password_hash)
         if pw_ok:
             state.rate_limiter.reset(ip)
-            state.log(f"admin login from {ip}")
+            state.log(f"login: {username} ({user.role}) from {ip}")
             resp = RedirectResponse("/", status_code=303)
-            set_session(resp, request)
+            set_session(resp, request, user)
             return resp
         state.rate_limiter.record_failure(ip)
-        state.log(f"failed login from {ip}")
-        return render(request, "login.html", status_code=401, error="Invalid password.")
+        state.log(f"failed login for {username!r} from {ip}")
+        return render(request, "login.html", status_code=401, error="Invalid username or password.")
 
     async def logout_post(request):
         form = await request.form()
@@ -99,21 +116,23 @@ def build_routes(templates, state, static_dir):
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        username = (form.get("username") or "admin").strip() or "admin"
         pw = form.get("password", "")
         pw2 = form.get("password2", "")
-        err = _password_problem(pw, pw2)
+        err = _username_problem(username) or _password_problem(pw, pw2)
         if err:
             return render(request, "setup.html", status_code=400, error=err,
                           ips=netinfo.list_ip_candidates(), admin=state.config.admin_ui)
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
         async with state.config_lock:
-            state.config.password_hash = pw_hash
-            state.config.pwd_version += 1
+            state.config.users = [User(username=username, password_hash=pw_hash,
+                                       role="admin", pwd_version=1)]
             await state.asave()
-        state.log("admin password set (first-run setup complete)")
-        state.audit(client_ip(request), "first_run_setup", "")
+        user = state.config.get_user(username)
+        state.log(f"first-run setup complete; admin user '{username}' created")
+        state.audit(client_ip(request), "first_run_setup", username)
         resp = RedirectResponse("/", status_code=303)
-        set_session(resp, request)
+        set_session(resp, request, user)
         return resp
 
     async def dashboard(request):
@@ -122,6 +141,7 @@ def build_routes(templates, state, static_dir):
             mappings=state.config.mappings,
             statuses=state.supervisor.all_status(),
             admin=state.config.admin_ui,
+            me=current_user(request), can_edit=can_edit(request),
         )
 
     async def settings_get(request, ok=None, error=None, new_api_token=None):
@@ -129,33 +149,37 @@ def build_routes(templates, state, static_dir):
                       admin=state.config.admin_ui,
                       api_token_set=bool(state.config.api_token_hash),
                       new_api_token=new_api_token,
+                      me=current_user(request), users=state.config.users, roles=ROLES,
                       uptime=int(state.started_at))
 
     async def settings_password_post(request):
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        user = current_user(request)
         cur = form.get("current", "")
         new = form.get("password", "")
         new2 = form.get("password2", "")
-        if not await asyncio.to_thread(auth.verify_password, cur, state.config.password_hash):
+        if user is None or not await asyncio.to_thread(auth.verify_password, cur, user.password_hash):
             return await settings_get(request, error="Current password is incorrect.")
         err = _password_problem(new, new2)
         if err:
             return await settings_get(request, error=err)
         new_hash = await asyncio.to_thread(auth.hash_password, new)
         async with state.config_lock:
-            state.config.password_hash = new_hash
-            state.config.pwd_version += 1
+            user.password_hash = new_hash
+            user.pwd_version += 1
             await state.asave()
-        state.log("admin password changed; other sessions signed out")
-        state.audit(client_ip(request), "password_change", "")
-        # refresh THIS session so the admin isn't logged out by their own change
-        resp = await settings_get(request, ok="Password updated. Other sessions were signed out.")
-        set_session(resp, request)
+        state.log(f"password changed for {user.username}; their other sessions signed out")
+        state.audit(client_ip(request), "password_change", user.username)
+        # refresh THIS session so the user isn't logged out by their own change
+        resp = await settings_get(request, ok="Password updated. Your other sessions were signed out.")
+        set_session(resp, request, user)
         return resp
 
     async def settings_tls_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
@@ -173,6 +197,8 @@ def build_routes(templates, state, static_dir):
         return await settings_get(request, ok="Admin TLS saved. Restart to apply.")
 
     async def settings_tls_generate(request):
+        if deny := require_role(request, "admin"):
+            return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
@@ -195,6 +221,8 @@ def build_routes(templates, state, static_dir):
 
     # ---------------- REST API token ----------------
     async def settings_api_token_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
@@ -209,6 +237,8 @@ def build_routes(templates, state, static_dir):
                                   ok="New API token generated. Copy it now — it is not shown again.")
 
     async def settings_api_token_revoke(request):
+        if deny := require_role(request, "admin"):
+            return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
@@ -219,6 +249,77 @@ def build_routes(templates, state, static_dir):
         state.audit(client_ip(request), "api_token_revoke", "")
         return await settings_get(request, ok="API token revoked. The REST API is now disabled.")
 
+    # ---------------- user management (admin only) ----------------
+    async def settings_users_create(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        username = (form.get("username") or "").strip()
+        role = form.get("role", "viewer")
+        pw, pw2 = form.get("password", ""), form.get("password2", "")
+        err = (_username_problem(username)
+               or (None if role in ROLES else "Invalid role.")
+               or _password_problem(pw, pw2))
+        if not err and state.config.get_user(username):
+            err = f"User '{username}' already exists."
+        if err:
+            return await settings_get(request, error=err)
+        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
+        async with state.config_lock:
+            state.config.users.append(User(username=username, password_hash=pw_hash,
+                                           role=role, pwd_version=1))
+            await state.asave()
+        state.log(f"user created: {username} ({role})")
+        state.audit(client_ip(request), "user_create", f"{username}:{role}")
+        return await settings_get(request, ok=f"User '{username}' created.")
+
+    async def settings_users_role(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        username = request.path_params["username"]
+        role = form.get("role", "viewer")
+        target = state.config.get_user(username)
+        if target is None:
+            return await settings_get(request, error="User not found.")
+        if role not in ROLES:
+            return await settings_get(request, error="Invalid role.")
+        if target.role == "admin" and role != "admin" and state.config.admin_count() <= 1:
+            return await settings_get(request, error="Cannot demote the last admin.")
+        async with state.config_lock:
+            target.role = role
+            target.pwd_version += 1  # force re-login so the new role applies everywhere
+            await state.asave()
+        state.log(f"user role changed: {username} -> {role}")
+        state.audit(client_ip(request), "user_role", f"{username}:{role}")
+        return await settings_get(request, ok=f"Role updated for '{username}'. They must sign in again.")
+
+    async def settings_users_delete(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        username = request.path_params["username"]
+        target = state.config.get_user(username)
+        if target is None:
+            return await settings_get(request, error="User not found.")
+        me = current_user(request)
+        if me and me.username == username:
+            return await settings_get(request, error="You cannot delete your own account.")
+        if target.role == "admin" and state.config.admin_count() <= 1:
+            return await settings_get(request, error="Cannot delete the last admin.")
+        async with state.config_lock:
+            state.config.users = [u for u in state.config.users if u.username != username]
+            await state.asave()
+        state.log(f"user deleted: {username}")
+        state.audit(client_ip(request), "user_delete", username)
+        return await settings_get(request, ok=f"User '{username}' deleted.")
+
     # ---------------- config export / import ----------------
     async def config_export(request):
         # mappings only — never export password_hash / secret_key
@@ -228,6 +329,8 @@ def build_routes(templates, state, static_dir):
             headers={"Content-Disposition": "attachment; filename=ser2net-mappings.json"})
 
     async def config_import(request):
+        if deny := require_role(request, "operator"):
+            return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
@@ -252,6 +355,8 @@ def build_routes(templates, state, static_dir):
         return await settings_get(request, ok=f"Imported {len(new_maps)} mappings (replaced existing).")
 
     async def mapping_duplicate(request):
+        if deny := require_role(request, "operator"):
+            return deny
         mid = request.path_params["mid"]
         async with state.config_lock:
             m = state.config.get_mapping(mid)
@@ -281,7 +386,8 @@ def build_routes(templates, state, static_dir):
         cfg = state.config
         # BaseHTTPMiddleware does NOT run for WebSocket scope, so authenticate here.
         token = websocket.cookies.get(auth.SESSION_COOKIE)
-        if not (cfg.password_set and auth.check_session(cfg.secret_key, token, cfg.pwd_version)):
+        ws_user = auth.session_user(cfg, token)
+        if ws_user is None:
             await websocket.close(code=1008)
             return
         # CSWSH guard: cross-origin WebSocket is rejected.
@@ -299,9 +405,11 @@ def build_routes(templates, state, static_dir):
         await websocket.accept()
         mon = _Monitor()
         runner.add_monitor(mon)
-        interactive = (mapping.kind == "net" and not mapping.network.read_only)
+        # viewers get an observe-only console; writing to the device needs operator+
+        can_write = ROLE_RANK.get(ws_user.role, 0) >= ROLE_RANK["operator"]
+        interactive = (mapping.kind == "net" and not mapping.network.read_only and can_write)
         peer = websocket.client.host if websocket.client else "?"
-        state.log(f"[{mapping.name}] console opened by {peer}")
+        state.log(f"[{mapping.name}] console opened by {ws_user.username} ({peer})")
 
         async def sender():
             while True:
@@ -364,7 +472,8 @@ def build_routes(templates, state, static_dir):
     async def api_status(request):
         return render(request, "_mappings_body.html",
                       mappings=state.config.mappings,
-                      statuses=state.supervisor.all_status())
+                      statuses=state.supervisor.all_status(),
+                      can_edit=can_edit(request))
 
     async def api_ports_json(request):
         return JSONResponse(state.ports.get())
@@ -414,6 +523,8 @@ def build_routes(templates, state, static_dir):
                       interactive=interactive)
 
     async def mapping_save(request):
+        if deny := require_role(request, "operator"):
+            return deny
         form = await request.form()
         try:
             data = _mapping_from_form(form)
@@ -447,6 +558,8 @@ def build_routes(templates, state, static_dir):
         return Response("", headers=_TRIGGER)
 
     async def mapping_delete(request):
+        if deny := require_role(request, "operator"):
+            return deny
         mid = request.path_params["mid"]
         removed = None
         async with state.config_lock:
@@ -463,6 +576,8 @@ def build_routes(templates, state, static_dir):
         return Response("", headers=_TRIGGER)
 
     async def mapping_action(request):
+        if deny := require_role(request, "operator"):
+            return deny
         mid = request.path_params["mid"]
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
@@ -496,6 +611,9 @@ def build_routes(templates, state, static_dir):
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
+        Route("/settings/users", settings_users_create, methods=["POST"]),
+        Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
+        Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
         Route("/healthz", healthz),
         Route("/metrics", metrics),
         Route("/settings/config/export", config_export),
@@ -553,6 +671,14 @@ def _password_problem(pw: str, pw2: str) -> str | None:
         return "Password must be at least 8 characters."
     if pw != pw2:
         return "Passwords do not match."
+    return None
+
+
+def _username_problem(username: str) -> str | None:
+    if not username:
+        return "Username is required."
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", username):
+        return "Username must be 1-32 characters: letters, digits, '.', '_' or '-'."
     return None
 
 

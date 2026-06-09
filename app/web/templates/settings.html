@@ -1,8 +1,11 @@
 {% extends "_shell.html" %}
 {% block title %}Settings — ser2net{% endblock %}
 {% block main %}
+{% set is_admin = me and me.role == 'admin' %}
+{% set is_operator = me and me.role in ['operator', 'admin'] %}
+
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>Change admin password</h2></div>
+  <div class="panel-head"><h2>Change your password</h2></div>
   {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
   <form method="post" action="/settings/password" class="authform">
@@ -20,6 +23,54 @@
      {% if admin.tls_enabled %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
   <p class="muted">To change the admin bind address, restart with
      <span class="mono">python3 ser2net.py --reconfigure</span>.</p>
+</section>
+
+{% if is_admin %}
+<section class="panel panel-narrow">
+  <div class="panel-head"><h2>Users</h2></div>
+  <table class="grid">
+    <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">you</span>{% endif %}</td>
+        <td>
+          <form method="post" action="/settings/users/{{ u.username }}/role" class="inline">
+            <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+            <select name="role">
+              {% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>{% endfor %}
+            </select>
+            <button class="btn sm" type="submit">Set</button>
+          </form>
+        </td>
+        <td>
+          {% if me.username != u.username %}
+          <form method="post" action="/settings/users/{{ u.username }}/delete" class="inline">
+            <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+            <button class="btn sm danger" type="submit">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted mb-sm">Roles: <span class="mono">admin</span> (everything),
+     <span class="mono">operator</span> (manage mappings), <span class="mono">viewer</span> (read-only).</p>
+  <form method="post" action="/settings/users" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <div class="grid2">
+      <label>Username <input type="text" name="username" placeholder="e.g. operator1" required></label>
+      <label>Role
+        <select name="role">{% for r in roles %}<option value="{{ r }}" {% if r == 'viewer' %}selected{% endif %}>{{ r }}</option>{% endfor %}</select>
+      </label>
+    </div>
+    <div class="grid2">
+      <label>Password (min 8) <input type="password" name="password" autocomplete="new-password" required></label>
+      <label>Confirm <input type="password" name="password2" autocomplete="new-password" required></label>
+    </div>
+    <button class="btn" type="submit">Add user</button>
+  </form>
 </section>
 
 <section class="panel panel-narrow">
@@ -62,7 +113,9 @@
   </form>
   {% endif %}
 </section>
+{% endif %}
 
+{% if is_operator %}
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>Mappings backup</h2></div>
   <p><a class="btn" href="/settings/config/export">⤓ Export mappings (JSON)</a></p>
@@ -74,4 +127,5 @@
     <button class="btn" type="submit">Import</button>
   </form>
 </section>
+{% endif %}
 {% endblock %}
