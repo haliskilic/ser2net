@@ -6,6 +6,7 @@
     <a href="/">Mappings</a>
     <a href="/settings">Settings</a>
     {% if request.state.user %}<span class="muted mono" title="signed in">{{ request.state.user.username }} · {{ request.state.user.role }}</span>{% endif %}
+    <button class="link" type="button" data-theme-toggle title="Toggle light / dark theme" aria-label="Toggle theme">◐</button>
     <form method="post" action="/logout" class="inline">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
       <button class="link" type="submit">Logout</button>
