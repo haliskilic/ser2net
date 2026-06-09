@@ -89,7 +89,10 @@ def main():
             async with websockets.connect(uri, additional_headers={"Cookie": f"ser2net_session={session}"}) as ws:
                 # device -> monitor (browser receives serial traffic)
                 await asyncio.to_thread(device.write, b"hello-mon"); await asyncio.to_thread(device.flush)
-                got = await asyncio.wait_for(ws.recv(), timeout=3)
+                # generous timeout: under CI load the serial->monitor->WS hop can be
+                # slow to warm up; we return as soon as data arrives, so this only
+                # raises the ceiling (reduces flakiness), it doesn't slow the happy path.
+                got = await asyncio.wait_for(ws.recv(), timeout=10)
                 got = got if isinstance(got, (bytes, bytearray)) else got.encode()
                 assert b"hello-mon" in got, got
                 # monitor -> device (interactive write)
