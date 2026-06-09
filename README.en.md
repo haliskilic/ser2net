@@ -117,6 +117,11 @@ python3 ser2net.py            # or: ./start.sh
 start.bat
 ```
 
+### Standalone binary (no Python needed)
+Every release attaches a Windows `.exe` and a Linux binary to **GitHub Releases**
+(PyInstaller; MQTT/LDAP/OIDC bundled in). Download and run — config/logs are written
+to `data/` next to the binary. Build it yourself: `pip install pyinstaller && pyinstaller ser2net.spec`.
+
 On first run:
 1. The **console** asks which local IP the admin UI binds to (machine IPs or custom)
    and a port (default 8080). Headless/service default is the safe **127.0.0.1**.
@@ -136,6 +141,10 @@ versions/OSes:
 python3 -m pip download -r requirements.txt -d vendor/wheels \
   --platform win_amd64 --python-version 312 --only-binary=:all:
 ```
+To enable the optional features (MQTT/LDAP/OIDC) on an offline source install, download
+their wheels too: `pip download paho-mqtt ldap3 authlib -d vendor/wheels`, then
+`pip install --no-index --find-links vendor/wheels paho-mqtt ldap3 authlib`. (The
+standalone binary already bundles them.)
 
 ### Docker
 ```bash
