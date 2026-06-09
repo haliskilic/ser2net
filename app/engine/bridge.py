@@ -313,6 +313,7 @@ class MappingRunner:
         self._tracer: Optional[Tracer] = None
         self._clients: set = set()
         self._monitors: set = set()  # browser console observers (read traffic)
+        self._mqtt = None            # optional MQTT publisher (serial -> broker)
         self._serial_ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._allowed_nets = self._parse_allowed(mapping.network.allowed_client_ips)
@@ -361,6 +362,12 @@ class MappingRunner:
             self._log("serial-to-serial bridge starting")
             return
 
+        # optional MQTT publisher: serial lines -> broker (net mappings)
+        if self.mapping.mqtt.enabled:
+            from .mqtt_pub import MqttPublisher
+            self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log)
+            self._mqtt.connect()
+
         net = self.mapping.network
         # serial side is shared by server/client/udp
         self._serial_task = asyncio.create_task(
@@ -407,6 +414,9 @@ class MappingRunner:
         for mon in list(self._monitors):
             mon.close()
         self._monitors.clear()
+        if self._mqtt is not None:
+            self._mqtt.close()
+            self._mqtt = None
         if self._server is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
@@ -517,6 +527,8 @@ class MappingRunner:
             if self._tracer:
                 self._tracer.write("ser>net", data)
             self._feed_monitors(data)
+            if self._mqtt is not None:
+                self._mqtt.feed(data)
             for c in list(self._clients):
                 c.feed_from_serial(data)
             if self._closeon:

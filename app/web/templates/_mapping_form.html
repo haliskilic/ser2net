@@ -155,5 +155,25 @@
     <label class="chk"><input type="checkbox" name="opt_trace_hexdump" {% if mapping.options.trace_hexdump %}checked{% endif %}> Trace as hex dump</label>
   </fieldset>
 
+  <fieldset data-show-when="kind=net">
+    <legend>MQTT publishing <span class="muted">(serial lines → broker; needs paho-mqtt)</span></legend>
+    <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> Publish serial lines to MQTT</label>
+    <div class="grid3">
+      <label>Broker host <input type="text" name="mqtt_host" value="{{ mapping.mqtt.host }}" placeholder="e.g. 192.168.1.5"></label>
+      <label>Port <input type="number" name="mqtt_port" min="1" max="65535" value="{{ mapping.mqtt.port }}"></label>
+      <label>QoS
+        <select name="mqtt_qos">{% for q in [0, 1, 2] %}<option value="{{ q }}" {% if q == mapping.mqtt.qos %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
+      </label>
+    </div>
+    <label>Base topic <span class="muted">(lines publish here; status at &lt;topic&gt;/status)</span>
+      <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="e.g. ser2net/plc1">
+    </label>
+    <div class="grid3">
+      <label>Username <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="optional"></label>
+      <label>Password <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="optional"></label>
+      <label class="chk chk-pad"><input type="checkbox" name="mqtt_tls" {% if mapping.mqtt.tls %}checked{% endif %}> TLS</label>
+    </div>
+  </fieldset>
+
   <button class="btn primary" type="submit">{{ 'Create mapping' if is_new else 'Save changes' }}</button>
 </form>

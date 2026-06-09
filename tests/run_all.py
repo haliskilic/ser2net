@@ -35,6 +35,7 @@ PORTABLE = [
     "test_modbus_frame.py",
     "test_modbus_gateway.py",
     "test_rbac.py",
+    "test_mqtt_pub.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
