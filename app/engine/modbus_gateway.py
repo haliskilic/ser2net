@@ -232,6 +232,8 @@ class ModbusGatewayRunner:
                 runit, rpdu = modbus.rtu_unwrap(rtu_resp)
             except ValueError:
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
+            if runit != unit:  # reply from a different slave id -> treat as no answer
+                return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
             return rpdu
 
     async def _poll_loop(self) -> None:
