@@ -1,0 +1,16 @@
+# ruff configuration for ser2net.
+# Focused on correctness over style: pyflakes (F), bugbear (B), async pitfalls
+# (ASYNC) and syntax errors (E9). Pure-style nits (line length, quotes, import
+# order) are intentionally not enforced.
+target-version = "py310"
+line-length = 100
+extend-exclude = ["vendor", "lib"]
+
+[lint]
+select = ["E9", "F", "B", "ASYNC"]
+# B008: Starlette/dataclass patterns use callables in defaults intentionally.
+ignore = ["B008"]
+
+[lint.per-file-ignores]
+# Test code legitimately opens files and sleeps inside async test helpers.
+"tests/**" = ["ASYNC", "B"]
