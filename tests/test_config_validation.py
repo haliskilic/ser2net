@@ -150,7 +150,19 @@ def test_legacy_password_migrates_to_admin_user():
     print("legacy single-password config migrates to one admin user  OK")
 
 
+def test_mqtt_validation():
+    base = {"name": "m", "serial": {"port": "COM1"},
+            "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4001}}
+    bad = AppConfig.from_dict({"mappings": [dict(base, mqtt={"enabled": True})]})  # no host/topic
+    _expect_error(bad, "no broker host")
+    ok = AppConfig.from_dict({"mappings": [dict(base, mqtt={"enabled": True, "host": "h",
+                                                            "base_topic": "ser2net/x"})]})
+    ok.validate()  # enabled + host + topic is valid
+    print("mqtt: enabled requires host + base_topic  OK")
+
+
 def main():
+    test_mqtt_validation()
     test_legacy_password_migrates_to_admin_user()
     test_modbus_requires_server_mode()
     test_preserve_unmanaged_fields_on_edit()
