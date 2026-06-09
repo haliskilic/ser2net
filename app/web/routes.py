@@ -67,7 +67,11 @@ def build_routes(templates, state, static_dir):
             return render(request, "login.html", status_code=429,
                           error="Too many attempts. Wait a few minutes and try again.")
         password = form.get("password", "")
-        if state.config.password_set and auth.verify_password(password, state.config.password_hash):
+        # scrypt is deliberately slow (~tens of ms); run it off the event loop so a
+        # login attempt doesn't stall every active bridge.
+        pw_ok = state.config.password_set and await asyncio.to_thread(
+            auth.verify_password, password, state.config.password_hash)
+        if pw_ok:
             state.rate_limiter.reset(ip)
             state.log(f"admin login from {ip}")
             resp = RedirectResponse("/", status_code=303)
@@ -100,10 +104,11 @@ def build_routes(templates, state, static_dir):
         if err:
             return render(request, "setup.html", status_code=400, error=err,
                           ips=netinfo.list_ip_candidates(), admin=state.config.admin_ui)
+        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
         async with state.config_lock:
-            state.config.password_hash = auth.hash_password(pw)
+            state.config.password_hash = pw_hash
             state.config.pwd_version += 1
-            state.save()
+            await state.asave()
         state.log("admin password set (first-run setup complete)")
         state.audit(client_ip(request), "first_run_setup", "")
         resp = RedirectResponse("/", status_code=303)
@@ -130,15 +135,16 @@ def build_routes(templates, state, static_dir):
         cur = form.get("current", "")
         new = form.get("password", "")
         new2 = form.get("password2", "")
-        if not auth.verify_password(cur, state.config.password_hash):
+        if not await asyncio.to_thread(auth.verify_password, cur, state.config.password_hash):
             return await settings_get(request, error="Current password is incorrect.")
         err = _password_problem(new, new2)
         if err:
             return await settings_get(request, error=err)
+        new_hash = await asyncio.to_thread(auth.hash_password, new)
         async with state.config_lock:
-            state.config.password_hash = auth.hash_password(new)
+            state.config.password_hash = new_hash
             state.config.pwd_version += 1
-            state.save()
+            await state.asave()
         state.log("admin password changed; other sessions signed out")
         state.audit(client_ip(request), "password_change", "")
         # refresh THIS session so the admin isn't logged out by their own change
@@ -156,7 +162,7 @@ def build_routes(templates, state, static_dir):
             state.config.admin_ui.tls_cert = cert
             state.config.admin_ui.tls_key = key
             try:
-                state.save()
+                await state.asave()
             except ConfigError as e:
                 state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key = old
                 return await settings_get(request, error=str(e))
@@ -180,7 +186,7 @@ def build_routes(templates, state, static_dir):
         async with state.config_lock:
             state.config.admin_ui.tls_cert = cert
             state.config.admin_ui.tls_key = key
-            state.save()
+            await state.asave()
         state.audit(client_ip(request), "admin_tls_generate", "")
         return await settings_get(request, ok="Self-signed certificate generated. Restart to apply TLS.")
 
@@ -207,7 +213,7 @@ def build_routes(templates, state, static_dir):
             backup = state.config.mappings
             state.config.mappings = new_maps
             try:
-                state.save()
+                await state.asave()
             except ConfigError as e:
                 state.config.mappings = backup
                 return await settings_get(request, error=f"Import rejected: {e}")
@@ -234,7 +240,7 @@ def build_routes(templates, state, static_dir):
                     dup.network.port += 1
             state.config.mappings.append(dup)
             try:
-                state.save()
+                await state.asave()
             except ConfigError as e:
                 state.config.mappings.remove(dup)
                 return PlainTextResponse(f"Duplicate failed: {e}", status_code=400)
@@ -365,8 +371,9 @@ def build_routes(templates, state, static_dir):
         m = state.config.get_mapping(mid)
         if not m:
             return PlainTextResponse("Mapping not found", status_code=404)
+        lines = await asyncio.to_thread(state.read_mapping_log, mid, 1000)
         return render(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
-                      lines=state.read_mapping_log(mid, limit=1000))
+                      lines=lines)
 
     async def console_view(request):
         mid = request.path_params["mid"]
@@ -401,7 +408,7 @@ def build_routes(templates, state, static_dir):
             else:
                 state.config.mappings.append(mapping)
             try:
-                state.save()
+                await state.asave()
             except ConfigError as e:
                 state.config.mappings = backup
                 return _form_error(render, request, state, form, str(e))
@@ -417,7 +424,7 @@ def build_routes(templates, state, static_dir):
             m = state.config.get_mapping(mid)
             if m:
                 state.config.mappings.remove(m)
-                state.save()
+                await state.asave()
                 removed = m
         if removed is not None:
             await state.supervisor.remove_mapping(mid)
@@ -436,7 +443,7 @@ def build_routes(templates, state, static_dir):
             if not m:
                 return PlainTextResponse("Mapping not found", status_code=404)
             m.enabled = action != "stop"
-            state.save()
+            await state.asave()
         if action == "stop":
             await state.supervisor.stop_mapping(mid)
         elif action == "restart":

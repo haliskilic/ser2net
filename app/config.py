@@ -210,7 +210,7 @@ class NetworkSettings:
             try:
                 ip = ipaddress.ip_address(self.bind_ip)
             except ValueError:
-                raise ConfigError(f"Invalid bind IP: {self.bind_ip!r}.")
+                raise ConfigError(f"Invalid bind IP: {self.bind_ip!r}.") from None
             # 0.0.0.0 and :: are the "all interfaces" wildcards and must be allowed
             # even though :: reports is_reserved=True.
             if ip.is_multicast or (ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
@@ -248,7 +248,7 @@ class NetworkSettings:
                 try:
                     ipaddress.ip_network(normalize_cidr(cidr), strict=False)
                 except ValueError:
-                    raise ConfigError(f"Invalid {label} client IP/CIDR: {cidr!r}.")
+                    raise ConfigError(f"Invalid {label} client IP/CIDR: {cidr!r}.") from None
 
 
 # ---------------------------------------------------------------------------

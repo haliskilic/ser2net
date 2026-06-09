@@ -226,7 +226,7 @@ class _ClientConn:
                     for exc in _iter_leaf_exceptions(unexpected):
                         self._log_unexpected(exc)
                 if base_only is not None:
-                    raise base_only
+                    raise base_only from None
         finally:
             self._closing = True
             with contextlib.suppress(Exception):
