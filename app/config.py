@@ -399,21 +399,43 @@ class AppConfig:
             if not os.path.isfile(path):
                 raise ConfigError(f"TLS file not found or not readable: {path}")
 
-        seen: dict[tuple[str, int], str] = {}
+        seen: dict[tuple[str, str, int], str] = {}   # (proto, bind_ip, port) -> name
+        serial_owner: dict[str, tuple[str, str]] = {}  # device -> (mapping_id, name)
         for m in self.mappings:
             m.validate()
+
+            # A serial port can only be opened by one mapping. Flag two ENABLED
+            # mappings that target the same literal device (skip dynamic VID/PID
+            # `match` entries, whose device path is resolved at open time).
+            if m.enabled:
+                devices = []
+                if m.serial.port and not m.serial.match:
+                    devices.append(m.serial.port)
+                if m.kind == "serialbridge" and m.serial_b.port and not m.serial_b.match:
+                    devices.append(m.serial_b.port)
+                for dev in devices:
+                    prev = serial_owner.get(dev)
+                    if prev is not None and prev[0] != m.id:
+                        raise ConfigError(
+                            f"Mappings '{prev[1]}' and '{m.name}' both use serial port "
+                            f"{dev} — a serial port can only be opened by one mapping."
+                        )
+                    serial_owner[dev] = (m.id, m.name)
+
             # only listening mappings (server/udp) bind a port; client/serialbridge don't
             if m.kind != "net" or not m.network.listens:
                 continue
-            key = (m.network.bind_ip, m.network.port)
+            # A TCP listener and a UDP listener CAN share the same port number (they
+            # bind different transports), so the clash key includes the transport.
+            proto = "udp" if m.network.mode == "udp" else "tcp"
             # 0.0.0.0 collides with everything on that port; treat any overlap as a clash.
-            for (bip, bport), other in seen.items():
-                if bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
+            for (sproto, bip, bport), other in seen.items():
+                if sproto == proto and bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
                     raise ConfigError(
-                        f"Mappings '{other}' and '{m.name}' both use port {m.network.port} "
-                        f"on overlapping addresses ({bip} / {m.network.bind_ip})."
+                        f"Mappings '{other}' and '{m.name}' both use {proto.upper()} port "
+                        f"{m.network.port} on overlapping addresses ({bip} / {m.network.bind_ip})."
                     )
-            seen[key] = m.name
+            seen[(proto, m.network.bind_ip, m.network.port)] = m.name
 
 
 def _ip_overlaps(a: str, b: str) -> bool:
