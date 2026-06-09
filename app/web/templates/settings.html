@@ -146,10 +146,16 @@
   </div>
   {% endif %}
   <p>Status:
-    {% if api_token_set %}<span class="tag">enabled</span>{% else %}<span class="tag">disabled</span>{% endif %}
+    {% if api_token_set %}<span class="tag">enabled</span> <span class="muted">role: <span class="mono">{{ api_token_role }}</span></span>{% else %}<span class="tag">disabled</span>{% endif %}
   </p>
   <form method="post" action="/settings/api-token" class="inline">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>Role <span class="muted">(viewer = read-only)</span>
+      <select name="api_token_role">
+        {% set cur = api_token_role if api_token_set else 'admin' %}
+        {% for r in roles %}<option value="{{ r }}" {% if r == cur %}selected{% endif %}>{{ r }}</option>{% endfor %}
+      </select>
+    </label>
     <button class="btn primary" type="submit">{{ 'Regenerate token' if api_token_set else 'Generate token' }}</button>
   </form>
   {% if api_token_set %}
