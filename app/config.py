@@ -492,6 +492,41 @@ class LdapSettings:
 
 
 @dataclass
+class OidcSettings:
+    """OpenID Connect single sign-on (authorization-code flow). Endpoints are
+    discovered from the issuer's /.well-known/openid-configuration. A claim
+    (groups_claim) maps to a ser2net role, like the LDAP group mapping."""
+    enabled: bool = False
+    issuer: str = ""                 # e.g. https://accounts.google.com or a Keycloak realm URL
+    client_id: str = ""
+    client_secret: str = ""
+    redirect_uri: str = ""           # blank => derived from the request
+    scopes: str = "openid email profile"
+    username_claim: str = "preferred_username"
+    groups_claim: str = "groups"
+    admin_group: str = ""
+    operator_group: str = ""
+    viewer_group: str = ""
+    default_role: str = ""           # role when no group matched; "" => deny
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "OidcSettings":
+        d = dict(d or {})
+        known = {f.name for f in dataclasses.fields(OidcSettings)}
+        return OidcSettings(**{k: v for k, v in d.items() if k in known})
+
+    def validate(self) -> None:
+        if not self.enabled:
+            return
+        if not (self.issuer.strip() and self.client_id.strip() and self.client_secret.strip()):
+            raise ConfigError("OIDC needs an issuer, client ID and client secret.")
+        if not self.issuer.strip().lower().startswith("https://"):
+            raise ConfigError("OIDC issuer must be an https:// URL.")
+        if self.default_role and self.default_role not in ROLES:
+            raise ConfigError(f"OIDC default role must be one of {ROLES} or blank.")
+
+
+@dataclass
 class User:
     """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
     on that user's password/role change to revoke only their existing sessions.
@@ -510,7 +545,7 @@ class User:
         u = User(**{k: v for k, v in d.items() if k in known})
         if u.role not in ROLES:
             u.role = "viewer"
-        if u.source not in ("local", "ldap"):
+        if u.source not in ("local", "ldap", "oidc"):
             u.source = "local"
         return u
 
@@ -527,6 +562,7 @@ class AppConfig:
     # config (top-level password_hash) is migrated to one 'admin' user on load.
     users: list[User] = field(default_factory=list)
     ldap: LdapSettings = field(default_factory=LdapSettings)
+    oidc: OidcSettings = field(default_factory=OidcSettings)
     defaults: dict[str, Any] = field(default_factory=dict)  # serial defaults
     mappings: list[MappingConfig] = field(default_factory=list)
 
@@ -550,6 +586,7 @@ class AppConfig:
             session_timeout_s=int(d.get("session_timeout_s", 8 * 3600)),
             users=users,
             ldap=LdapSettings.from_dict(d.get("ldap", {})),
+            oidc=OidcSettings.from_dict(d.get("oidc", {})),
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
@@ -565,6 +602,7 @@ class AppConfig:
             "session_timeout_s": self.session_timeout_s,
             "users": [asdict(u) for u in self.users],
             "ldap": asdict(self.ldap),
+            "oidc": asdict(self.oidc),
             "defaults": self.defaults,
             "mappings": [m.to_dict() for m in self.mappings],
         }
@@ -579,6 +617,18 @@ class AppConfig:
 
     def admin_count(self) -> int:
         return sum(1 for u in self.users if u.role == "admin")
+
+    def upsert_external_user(self, username: str, role: str, source: str) -> User:
+        """Create or refresh a shadow account for an externally-authenticated user
+        (LDAP/OIDC). Bumps pwd_version when the role or source changes."""
+        u = self.get_user(username)
+        if u is None:
+            u = User(username=username, password_hash="", role=role, source=source, pwd_version=1)
+            self.users.append(u)
+        elif u.role != role or u.source != source:
+            u.role, u.source = role, source
+            u.pwd_version += 1
+        return u
 
     def get_mapping(self, mapping_id: str) -> Optional[MappingConfig]:
         return next((m for m in self.mappings if m.id == mapping_id), None)
@@ -595,6 +645,7 @@ class AppConfig:
                 raise ConfigError(f"TLS file not found or not readable: {path}")
 
         self.ldap.validate()
+        self.oidc.validate()
 
         seen: dict[tuple[str, str, int], str] = {}   # (proto, bind_ip, port) -> name
         serial_owner: dict[str, tuple[str, str]] = {}  # device -> (mapping_id, name)

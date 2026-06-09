@@ -35,3 +35,4 @@ psutil==7.2.2
 # pywin32>=306      ; sys_platform == "win32"    # event-driven hotplug on Windows
 # paho-mqtt>=1.6                                 # per-mapping MQTT publishing (serial->broker)
 # ldap3>=2.9                                      # LDAP / Active Directory authentication
+# authlib>=1.3                                    # OIDC single sign-on (id_token validation)

@@ -77,6 +77,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **LDAP / Active Directory auth (optional):** users authenticate by binding to the
   directory; LDAP group membership maps to a role. Works alongside local accounts;
   needs `ldap3`.
+- **OIDC single sign-on (optional):** authorization-code flow with Keycloak / Entra ID /
+  Google / Okta; the id_token is validated (signature/iss/aud/exp/nonce) and a claim maps
+  to a role. Needs `authlib`.
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
   status and ports; **bearer-token** auth (with a role — `viewer` is read-only); OpenAPI
   3.0 (`/api/v1/openapi.json`). The token is generated in Settings.
