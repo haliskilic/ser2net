@@ -161,7 +161,21 @@ def test_mqtt_validation():
     print("mqtt: enabled requires host + base_topic  OK")
 
 
+def test_modbus_poll_requires_gateway():
+    pts = [{"name": "t", "unit": 1, "fn": 4, "address": 0, "dtype": "uint16"}]
+    bad = AppConfig.from_dict({"mappings": [{"name": "m", "serial": {"port": "COM1"},
+        "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1", "port": 4001},
+        "modbus_poll": {"points": pts}}]})
+    _expect_error(bad, "Modbus register polling requires")
+    ok = AppConfig.from_dict({"mappings": [{"name": "m", "serial": {"port": "COM1"},
+        "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1", "port": 502},
+        "modbus_poll": {"interval_s": 2, "points": pts}}]})
+    ok.validate()
+    print("modbus poll points require a modbus-gateway mapping  OK")
+
+
 def main():
+    test_modbus_poll_requires_gateway()
     test_mqtt_validation()
     test_legacy_password_migrates_to_admin_user()
     test_modbus_requires_server_mode()

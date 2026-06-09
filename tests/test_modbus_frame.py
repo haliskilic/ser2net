@@ -103,7 +103,31 @@ def test_gateway_conversion_chain():
     print("full TCP->RTU->TCP conversion preserves txn id, unit and PDU  OK")
 
 
+def test_register_read_and_decode():
+    import struct
+    # read request PDU: read 2 holding registers at 0x006B
+    assert modbus.read_pdu(3, 0x006B, 2) == bytes([3, 0x00, 0x6B, 0x00, 0x02])
+    # response_data extracts the data bytes; an exception PDU raises
+    resp = bytes([3, 4, 0x41, 0xBC, 0x00, 0x00])  # fn3, byte_count 4
+    assert modbus.response_data(resp, 3) == bytes([0x41, 0xBC, 0x00, 0x00])
+    for bad in (bytes([0x83, 0x0B]), bytes([3, 4, 0x00])):  # exception PDU / short data
+        try:
+            modbus.response_data(bad, 3)
+            raise AssertionError("should raise")
+        except ValueError:
+            pass
+    # decode every dtype (big-endian), incl. signed + 32-bit + float + scale
+    assert modbus.decode_value(bytes([0x04, 0xD2]), "uint16") == 1234
+    assert modbus.decode_value(bytes([0xFF, 0xFF]), "int16") == -1
+    assert modbus.decode_value(bytes([0x00, 0x01, 0x00, 0x00]), "uint32") == 65536
+    assert modbus.decode_value(bytes([0xFF, 0xFF, 0xFF, 0xFF]), "int32") == -1
+    assert abs(modbus.decode_value(struct.pack(">f", 23.5), "float32") - 23.5) < 1e-6
+    assert modbus.decode_value(bytes([0x00, 0x64]), "uint16", scale=0.1) == 10.0
+    print("read_pdu / response_data / decode_value (dtypes + scale + exception)  OK")
+
+
 def main():
+    test_register_read_and_decode()
     test_crc_and_rtu_known_vector()
     test_rtu_round_trip_and_bad_crc()
     test_tcp_adu_build_and_take()
