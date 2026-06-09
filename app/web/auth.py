@@ -91,6 +91,28 @@ def decode_session(secret: str, token: str | None) -> dict | None:
     return {"u": str(data.get("u", "")), "v": int(data.get("v", 0))}
 
 
+def sign_payload(secret: str, data: dict, ttl_seconds: int = 600) -> str:
+    """A short-lived HMAC-signed token carrying a small dict (e.g. the OIDC state +
+    nonce stashed in a cookie across the redirect)."""
+    payload = _b64e(json.dumps({**data, "exp": int(time.time()) + ttl_seconds}).encode("utf-8"))
+    return f"{payload}.{_sign(secret, payload)}"
+
+
+def read_payload(secret: str, token: str | None) -> dict | None:
+    if not token or "." not in token:
+        return None
+    payload, sig = token.rsplit(".", 1)
+    if not hmac.compare_digest(sig, _sign(secret, payload)):
+        return None
+    try:
+        data = json.loads(_b64d(payload))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if int(data.get("exp", 0)) <= int(time.time()):
+        return None
+    return data
+
+
 def session_user(cfg, token: str | None):
     """Resolve a session cookie to the live User it authenticates, or None.
     Confirms the signed username still exists and its pwd_version is current."""
