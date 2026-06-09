@@ -32,6 +32,7 @@ PORTABLE = [
     "test_web_auth.py",
     "test_form_validation.py",
     "test_rest_api.py",
+    "test_api_token_role.py",
     "test_modbus_frame.py",
     "test_modbus_gateway.py",
     "test_rbac.py",

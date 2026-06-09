@@ -521,6 +521,7 @@ class AppConfig:
     admin_ui: AdminUI = field(default_factory=AdminUI)
     secret_key: str = field(default_factory=lambda: secrets.token_hex(32))
     api_token_hash: str = ""  # sha256 of the REST API bearer token (empty => API disabled)
+    api_token_role: str = "admin"  # role granted by the API token (viewer = read-only)
     session_timeout_s: int = 8 * 3600
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
@@ -545,6 +546,7 @@ class AppConfig:
             admin_ui=admin_ui,
             secret_key=d.get("secret_key") or secrets.token_hex(32),
             api_token_hash=d.get("api_token_hash", ""),
+            api_token_role=d.get("api_token_role", "admin") if d.get("api_token_role", "admin") in ROLES else "admin",
             session_timeout_s=int(d.get("session_timeout_s", 8 * 3600)),
             users=users,
             ldap=LdapSettings.from_dict(d.get("ldap", {})),
@@ -559,6 +561,7 @@ class AppConfig:
             "admin_ui": asdict(self.admin_ui),
             "secret_key": self.secret_key,
             "api_token_hash": self.api_token_hash,
+            "api_token_role": self.api_token_role,
             "session_timeout_s": self.session_timeout_s,
             "users": [asdict(u) for u in self.users],
             "ldap": asdict(self.ldap),
