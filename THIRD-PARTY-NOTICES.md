@@ -27,8 +27,26 @@ These notices satisfy clause 5 of the ser2net LICENSE.
 | typing_extensions | PSF |
 | psutil | BSD-3-Clause |
 
-Optional (not bundled by default): `pyudev` (LGPL-2.1, used as a separate library via
-its public API on Linux), `pywin32` (PSF-style, Windows).
+### Optional feature dependencies
+
+Not installed by the offline bootstrap, but used when the corresponding feature is
+enabled and **bundled into the standalone binary and the Docker image**. Each is used
+as a library via its public API (no source modification), and shipped unmodified:
+
+| Component | Feature | License |
+|---|---|---|
+| paho-mqtt | MQTT publishing | EPL-2.0 / EDL-1.0 (dual) |
+| ldap3 | LDAP / AD auth | **LGPL-3.0** (dynamically linked library; replaceable) |
+| pyasn1 (ldap3 dep) | LDAP / AD auth | BSD-2-Clause |
+| Authlib | OIDC SSO | BSD-3-Clause |
+| cryptography (Authlib dep) | OIDC SSO | Apache-2.0 OR BSD-3-Clause |
+| pyudev | hotplug (Linux) | LGPL-2.1 (library via public API) |
+| pywin32 | hotplug (Windows) | PSF-style |
+
+> ldap3 and pyudev are LGPL: they are used unmodified as separate, replaceable
+> libraries through their public APIs, which their licenses permit in a proprietary
+> product. To honor the LGPL's relinking right, the standalone binary's ldap3/pyudev
+> can be swapped by installing a different version alongside it.
 
 ## Browser assets (app/web/static/)
 
