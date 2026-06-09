@@ -737,6 +737,12 @@ class _UdpBridge(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr) -> None:
         r = self.runner
+        # Access control: a TCP listener checks _client_allowed() in _on_client, but
+        # UDP has no accept hook — enforce the allow-list HERE. An unlisted source is
+        # dropped entirely, so a stray or spoofed datagram cannot become "the peer"
+        # and hijack the serial->net stream (this also protects read-only mappings).
+        if not r._client_allowed(addr[0]):
+            return
         peer = next((c for c in r._clients if isinstance(c, _UdpPeer)), None)
         if peer is None:
             peer = _UdpPeer(r, addr)
