@@ -74,6 +74,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Multi-user / RBAC:** `admin` / `operator` / `viewer` roles — viewer is read-only,
   operator manages mappings, admin does everything plus user management. Existing
   single-password setups migrate automatically to one `admin` user.
+- **LDAP / Active Directory auth (optional):** users authenticate by binding to the
+  directory; LDAP group membership maps to a role. Works alongside local accounts;
+  needs `ldap3`.
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
   status and ports; **bearer-token** auth; OpenAPI 3.0 (`/api/v1/openapi.json`). The
   token is generated in Settings.
