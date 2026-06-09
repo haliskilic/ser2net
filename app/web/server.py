@@ -22,7 +22,7 @@ from .routes import build_routes
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
-PUBLIC_PREFIXES = ("/static",)
+PUBLIC_PREFIXES = ("/static", "/auth/")  # /auth/oidc/* is the unauthenticated SSO flow
 PUBLIC_PATHS = {"/login", "/setup", "/healthz", "/favicon.ico"}
 
 # High-frequency automatic UI refreshes — not logged to all.log to avoid flooding
