@@ -54,7 +54,8 @@ düzenlemeye gerek yok.
   baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway).
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
-  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception.
+  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. **Edge modu:** register'ları
+  periyodik okuyup MQTT'ye yayınlar (uint/int/float 16/32, ölçek).
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).

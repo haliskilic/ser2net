@@ -60,6 +60,8 @@ class ModbusGatewayRunner:
         self._bus_lock = asyncio.Lock()      # RTU is single-master: one txn at a time
         self._clients: set = set()
         self._monitors: set = set()           # browser console observers (read the bus)
+        self._mqtt = None                      # optional MQTT publisher for register polling
+        self._poll_task: Optional[asyncio.Task] = None
         self._allowed = _parse_nets(mapping.network.allowed_client_ips)
         # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
         baud = max(1, mapping.serial.baudrate)
@@ -100,6 +102,13 @@ class ModbusGatewayRunner:
         except BaseException:
             await self.stop()
             raise
+        # optional edge mode: poll Modbus registers off the bus and publish to MQTT
+        if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:
+            from .mqtt_pub import MqttPublisher
+            self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log)
+            self._mqtt.connect()
+            self._poll_task = asyncio.create_task(
+                self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
         self.status.state = "running"
 
     async def stop(self) -> None:
@@ -112,6 +121,14 @@ class ModbusGatewayRunner:
         for mon in list(self._monitors):
             mon.close()
         self._monitors.clear()
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._poll_task
+            self._poll_task = None
+        if self._mqtt is not None:
+            self._mqtt.close()
+            self._mqtt = None
         if self._server is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
@@ -216,6 +233,28 @@ class ModbusGatewayRunner:
             except ValueError:
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
             return rpdu
+
+    async def _poll_loop(self) -> None:
+        """Edge mode: read configured registers off the RTU bus on an interval and
+        publish each decoded value to <base_topic>/<point name> over MQTT."""
+        poll = self.mapping.modbus_poll
+        while not self._stop.is_set():
+            for p in poll.points:
+                try:
+                    req = modbus.read_pdu(p.fn, p.address, modbus.dtype_registers(p.dtype))
+                    rpdu = await self._transaction(p.unit, req)
+                    data = modbus.response_data(rpdu, p.fn)
+                    value = modbus.decode_value(data, p.dtype, p.scale)
+                except Exception as e:  # one bad point must not stop the loop
+                    self._log(f"poll '{p.name}': {e}")
+                    continue
+                if self._mqtt is not None:
+                    self._mqtt.publish_value(p.name, str(value).encode())
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=poll.interval_s)
+                break
+            except asyncio.TimeoutError:
+                pass
 
     async def _read_rtu_response(self, reader) -> bytes:
         # wait for the first byte(s) within the response timeout
