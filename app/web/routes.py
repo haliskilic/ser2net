@@ -490,8 +490,9 @@ def build_routes(templates, state, static_dir):
 
     # ---------------- mapping form ----------------
     async def mapping_form_new(request):
+        m = MappingConfig(name="")
         return render(request, "_mapping_form.html",
-                      mapping=MappingConfig(name=""), is_new=True,
+                      mapping=m, is_new=True, modbus_points_json=_modbus_points_json(m),
                       ports=state.ports.get(), ips=netinfo.list_ip_candidates(),
                       error=None)
 
@@ -500,7 +501,7 @@ def build_routes(templates, state, static_dir):
         if not m:
             return PlainTextResponse("Mapping not found", status_code=404)
         return render(request, "_mapping_form.html",
-                      mapping=m, is_new=False,
+                      mapping=m, is_new=False, modbus_points_json=_modbus_points_json(m),
                       ports=state.ports.get(), ips=netinfo.list_ip_candidates(),
                       error=None)
 
@@ -764,7 +765,30 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             "password": form.get("mqtt_password", ""),
             "client_id": form.get("mqtt_client_id", "").strip(),
         },
+        "modbus_poll": {
+            "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),
+            "points": _parse_modbus_points(form.get("modbus_points", ""), strict),
+        },
     }
+
+
+def _modbus_points_json(mapping) -> str:
+    pts = [{"name": p.name, "unit": p.unit, "fn": p.fn, "address": p.address,
+            "dtype": p.dtype, "scale": p.scale} for p in mapping.modbus_poll.points]
+    return json.dumps(pts, indent=2) if pts else ""
+
+
+def _parse_modbus_points(raw: str, strict: bool) -> list:
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    try:
+        points = json.loads(raw)
+    except (ValueError, TypeError):
+        if strict:
+            raise ValueError("Modbus poll points must be a valid JSON array of objects.") from None
+        return []
+    return points if isinstance(points, list) else []
 
 
 def _mapping_from_form(form) -> dict:
@@ -801,5 +825,6 @@ def _form_error(render, request, state, form, message: str):
     is_new = not form.get("id")
     return render(request, "_mapping_form.html", status_code=400,
                   mapping=mapping, is_new=is_new,
+                  modbus_points_json=_modbus_points_json(mapping),
                   ports=state.ports.get(), ips=netinfo.list_ip_candidates(),
                   error=message)
