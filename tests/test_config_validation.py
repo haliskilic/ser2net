@@ -186,7 +186,40 @@ def test_ldap_validation():
     print("ldap: enabled requires server URI + a bind mode  OK")
 
 
+def test_config_round_trip():
+    # a config exercising every subsystem must survive to_dict -> from_dict unchanged
+    full = {
+        "admin_ui": {"bind_ip": "0.0.0.0", "port": 8080},
+        "api_token_hash": "abc", "api_token_role": "viewer",
+        "users": [{"username": "admin", "password_hash": "h", "role": "admin", "source": "local"},
+                  {"username": "alice", "password_hash": "", "role": "operator", "source": "oidc"}],
+        "ldap": {"enabled": True, "server_uri": "ldaps://dc", "user_dn_template": "{username}@c",
+                 "admin_group": "g-admins"},
+        "oidc": {"enabled": True, "issuer": "https://idp", "client_id": "cid",
+                 "client_secret": "sec", "groups_claim": "roles", "operator_group": "ops"},
+        "mappings": [{"name": "gw", "serial": {"port": "COM1"},
+                      "network": {"mode": "server", "protocol": "modbus", "bind_ip": "0.0.0.0",
+                                  "port": 502},
+                      "mqtt": {"enabled": True, "host": "broker", "base_topic": "p/a", "qos": 1},
+                      "modbus_poll": {"interval_s": 2, "points": [
+                          {"name": "t", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"}]}}],
+    }
+    cfg = AppConfig.from_dict(full)
+    cfg.validate()
+    once = cfg.to_dict()
+    twice = AppConfig.from_dict(once).to_dict()
+    assert once == twice, "config is not stable across to_dict/from_dict"
+    # spot-check that key fields actually persisted
+    assert once["api_token_role"] == "viewer"
+    assert once["ldap"]["enabled"] and once["oidc"]["client_id"] == "cid"
+    assert once["users"][1]["source"] == "oidc"
+    m = once["mappings"][0]
+    assert m["mqtt"]["host"] == "broker" and m["modbus_poll"]["points"][0]["dtype"] == "float32"
+    print("config round-trips with every subsystem (auth/ldap/oidc/mqtt/modbus) intact  OK")
+
+
 def main():
+    test_config_round_trip()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()
     test_mqtt_validation()
