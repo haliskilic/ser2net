@@ -366,20 +366,27 @@ class MappingRunner:
         self._serial_task = asyncio.create_task(
             self._serial_supervisor(), name=f"serial:{self.mapping.name}")
 
-        if net.mode == "server":
-            self._server = await asyncio.start_server(
-                self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
-            self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
-                      f"{', TLS' if net.tls else ''})")
-        elif net.mode == "client":
-            self._main_task = asyncio.create_task(
-                self._client_supervisor(), name=f"connectout:{self.mapping.name}")
-            self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol})")
-        elif net.mode == "udp":
-            loop = asyncio.get_running_loop()
-            self._udp_transport, _ = await loop.create_datagram_endpoint(
-                lambda: _UdpBridge(self), local_addr=(net.bind_ip, net.port))
-            self._log(f"UDP on {net.bind_ip}:{net.port}")
+        # If the network side fails to come up (address-in-use, bad TLS cert, ...),
+        # tear everything down — otherwise the serial supervisor task is orphaned and
+        # keeps the serial device open forever, so no other mapping can use that port.
+        try:
+            if net.mode == "server":
+                self._server = await asyncio.start_server(
+                    self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
+                self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
+                          f"{', TLS' if net.tls else ''})")
+            elif net.mode == "client":
+                self._main_task = asyncio.create_task(
+                    self._client_supervisor(), name=f"connectout:{self.mapping.name}")
+                self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol})")
+            elif net.mode == "udp":
+                loop = asyncio.get_running_loop()
+                self._udp_transport, _ = await loop.create_datagram_endpoint(
+                    lambda: _UdpBridge(self), local_addr=(net.bind_ip, net.port))
+                self._log(f"UDP on {net.bind_ip}:{net.port}")
+        except BaseException:
+            await self.stop()
+            raise
         self.status.state = "running"
 
     async def stop(self) -> None:
