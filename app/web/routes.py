@@ -163,7 +163,7 @@ def build_routes(templates, state, static_dir):
                       api_token_set=bool(state.config.api_token_hash),
                       new_api_token=new_api_token,
                       me=current_user(request), users=state.config.users, roles=ROLES,
-                      ldap=state.config.ldap,
+                      ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
                       uptime=int(state.started_at))
 
     async def settings_password_post(request):
@@ -711,6 +711,11 @@ def _password_problem(pw: str, pw2: str) -> str | None:
     if pw != pw2:
         return "Passwords do not match."
     return None
+
+
+def _module_present(name: str) -> bool:
+    import importlib.util
+    return importlib.util.find_spec(name) is not None
 
 
 def _ldap_from_form(form, old) -> LdapSettings:
