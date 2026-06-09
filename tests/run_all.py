@@ -21,6 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PORTABLE = [
     "test_config_validation.py",
     "test_dir_permissions.py",
+    "test_env_bind.py",
     "test_udp_acl.py",
     "test_rfc2217_readonly.py",
     "test_stop_with_clients.py",

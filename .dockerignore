@@ -1,0 +1,9 @@
+.git
+.github
+lib
+data
+**/__pycache__
+*.pyc
+*.pyo
+docs/screenshots
+INCELEME-RAPORU.md
