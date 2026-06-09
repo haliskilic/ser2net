@@ -32,10 +32,10 @@ jobs:
         run: pip install -r requirements.txt paho-mqtt ldap3 authlib pyinstaller
       - name: Build
         run: pyinstaller --clean --noconfirm ser2net.spec
-      - name: Smoke-test the binary starts
+      - name: Smoke-test the binary
         shell: bash
         run: |
-          "${{ matrix.built }}" --help
+          "${{ matrix.built }}" --version
       - name: Name the artifact
         shell: bash
         run: cp "${{ matrix.built }}" "${{ matrix.asset }}"

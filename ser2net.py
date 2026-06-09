@@ -17,6 +17,8 @@ import argparse
 import os
 import sys
 
+__version__ = "2.4.0"
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)  # True inside a PyInstaller build
 
@@ -32,6 +34,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="ser2net.py",
         description="Serial-to-network bridge with a web config UI.",
     )
+    p.add_argument("--version", action="version", version=f"ser2net {__version__}")
     p.add_argument(
         "--data-dir",
         default=os.path.join(_app_dir(), "data"),
