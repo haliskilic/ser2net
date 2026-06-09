@@ -76,6 +76,8 @@ düzenlemeye gerek yok.
 - **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunur,
   operator eşlemeleri yönetir, admin her şey + kullanıcı yönetimi. Tek-parola kurulumları
   otomatik olarak bir `admin` kullanıcısına geçer.
+- **LDAP / Active Directory auth (opsiyonel):** kullanıcılar dizine bind ederek doğrulanır;
+  LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
   durum ve portlar; **bearer-token** kimlik doğrulama; OpenAPI 3.0
   (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
