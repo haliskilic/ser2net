@@ -13,6 +13,7 @@ import contextlib
 import json
 import os
 import re
+import secrets
 import subprocess
 from urllib.parse import urlparse
 
@@ -22,10 +23,14 @@ from starlette.responses import (
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
-from ..config import ROLE_RANK, ROLES, ConfigError, LdapSettings, MappingConfig, User
+from ..config import (
+    ROLE_RANK, ROLES, ConfigError, LdapSettings, MappingConfig, OidcSettings, User,
+)
 from ..engine import netinfo
-from . import auth, ldap_auth
+from . import auth, ldap_auth, oidc_auth
 from .api import build_api_routes
+
+OIDC_COOKIE = "ser2net_oidc"
 
 SESSION_TTL = 8 * 3600
 _TRIGGER = {"HX-Trigger": "refreshMappings"}
@@ -71,7 +76,68 @@ def build_routes(templates, state, static_dir):
         return PlainTextResponse("ok")
 
     async def login_get(request):
-        return render(request, "login.html", error=None)
+        return render(request, "login.html", error=None,
+                      oidc_enabled=state.config.oidc.enabled)
+
+    # ---------------- OIDC single sign-on ----------------
+    def _oidc_redirect_uri(request) -> str:
+        cfg_uri = state.config.oidc.redirect_uri.strip()
+        if cfg_uri:
+            return cfg_uri
+        scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+        host = (request.headers.get("x-forwarded-host") or request.headers.get("host")
+                or request.url.netloc)
+        return f"{scheme}://{host}/auth/oidc/callback"
+
+    async def oidc_login(request):
+        oidc = state.config.oidc
+        if not oidc.enabled:
+            return RedirectResponse("/login", status_code=303)
+        redirect_uri = _oidc_redirect_uri(request)
+        st, nonce = secrets.token_urlsafe(16), secrets.token_urlsafe(16)
+        try:
+            url = await asyncio.to_thread(oidc_auth.build_authorize_url, oidc, redirect_uri, st, nonce)
+        except Exception as e:
+            state.log(f"OIDC login init failed: {e}")
+            return render(request, "login.html", status_code=502, error=None,
+                          oidc_enabled=True, oidc_error="SSO provider is unreachable.")
+        resp = RedirectResponse(url, status_code=303)
+        resp.set_cookie(OIDC_COOKIE,
+                        auth.sign_payload(state.config.secret_key,
+                                          {"s": st, "n": nonce, "r": redirect_uri}, ttl_seconds=600),
+                        max_age=600, httponly=True, samesite="lax",
+                        secure=state.config.admin_ui.tls_enabled, path="/auth/oidc")
+        return resp
+
+    async def oidc_callback(request):
+        oidc = state.config.oidc
+        if not oidc.enabled:
+            return RedirectResponse("/login", status_code=303)
+        data = auth.read_payload(state.config.secret_key, request.cookies.get(OIDC_COOKIE))
+        code = request.query_params.get("code", "")
+        st = request.query_params.get("state", "")
+        if not data or not code or not secrets.compare_digest(st, data.get("s", "")):
+            return render(request, "login.html", status_code=400, error=None, oidc_enabled=True,
+                          oidc_error="SSO state mismatch — please try again.")
+        claims = await asyncio.to_thread(oidc_auth.complete, oidc, data["r"], code, data["n"], state.log)
+        if claims is None:
+            return render(request, "login.html", status_code=401, error=None, oidc_enabled=True,
+                          oidc_error="SSO sign-in failed.")
+        username = oidc_auth.username_from_claims(claims, oidc)
+        role = oidc_auth.role_from_claims(claims, oidc)
+        if not username or not role:
+            state.log(f"OIDC login denied: user={username!r} role={role!r} (no mapped group)")
+            return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
+                          oidc_error="Your account isn't mapped to a role.")
+        async with state.config_lock:
+            user = state.config.upsert_external_user(username, role, "oidc")
+            await state.asave()
+        state.log(f"login: {username} ({role}, oidc) from {client_ip(request)}")
+        state.audit(client_ip(request), "oidc_login", username)
+        resp = RedirectResponse("/", status_code=303)
+        set_session(resp, request, user)
+        resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
+        return resp
 
     async def login_post(request):
         ip = client_ip(request)
@@ -80,7 +146,8 @@ def build_routes(templates, state, static_dir):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
         if state.rate_limiter.blocked(ip):
             return render(request, "login.html", status_code=429,
-                          error="Too many attempts. Wait a few minutes and try again.")
+                          error="Too many attempts. Wait a few minutes and try again.",
+                          oidc_enabled=state.config.oidc.enabled)
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
@@ -110,7 +177,8 @@ def build_routes(templates, state, static_dir):
             return resp
         state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {username!r} from {ip}")
-        return render(request, "login.html", status_code=401, error="Invalid username or password.")
+        return render(request, "login.html", status_code=401, error="Invalid username or password.",
+                      oidc_enabled=state.config.oidc.enabled)
 
     async def logout_post(request):
         form = await request.form()
@@ -165,6 +233,7 @@ def build_routes(templates, state, static_dir):
                       new_api_token=new_api_token,
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
+                      oidc=state.config.oidc, oidc_lib=_module_present("authlib"),
                       uptime=int(state.started_at))
 
     async def settings_password_post(request):
@@ -172,9 +241,10 @@ def build_routes(templates, state, static_dir):
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
         user = current_user(request)
-        if user is not None and user.source == "ldap":
+        if user is not None and user.source != "local":
             return await settings_get(request,
-                                      error="Your account is managed by LDAP; change your password there.")
+                                      error=f"Your account is managed by {user.source.upper()}; "
+                                            "change your password there.")
         cur = form.get("current", "")
         new = form.get("password", "")
         new2 = form.get("password2", "")
@@ -291,6 +361,25 @@ def build_routes(templates, state, static_dir):
         state.audit(client_ip(request), "ldap_settings",
                     "enabled" if state.config.ldap.enabled else "disabled")
         return await settings_get(request, ok="LDAP settings saved.")
+
+    async def settings_oidc_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        async with state.config_lock:
+            old = state.config.oidc
+            state.config.oidc = _oidc_from_form(form, old)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                state.config.oidc = old
+                return await settings_get(request, error=str(e))
+        state.log(f"OIDC settings updated (enabled={state.config.oidc.enabled})")
+        state.audit(client_ip(request), "oidc_settings",
+                    "enabled" if state.config.oidc.enabled else "disabled")
+        return await settings_get(request, ok="OIDC (SSO) settings saved.")
 
     # ---------------- user management (admin only) ----------------
     async def settings_users_create(request):
@@ -647,6 +736,8 @@ def build_routes(templates, state, static_dir):
         Route("/login", login_get, methods=["GET"]),
         Route("/login", login_post, methods=["POST"]),
         Route("/logout", logout_post, methods=["POST"]),
+        Route("/auth/oidc/login", oidc_login, methods=["GET"]),
+        Route("/auth/oidc/callback", oidc_callback, methods=["GET"]),
         Route("/setup", setup_get, methods=["GET"]),
         Route("/setup", setup_post, methods=["POST"]),
         Route("/settings", settings_get, methods=["GET"]),
@@ -659,6 +750,7 @@ def build_routes(templates, state, static_dir):
         Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
         Route("/settings/ldap", settings_ldap_post, methods=["POST"]),
+        Route("/settings/oidc", settings_oidc_post, methods=["POST"]),
         Route("/healthz", healthz),
         Route("/metrics", metrics),
         Route("/settings/config/export", config_export),
@@ -740,6 +832,24 @@ def _ldap_from_form(form, old) -> LdapSettings:
         "operator_group": form.get("ldap_operator_group", "").strip(),
         "viewer_group": form.get("ldap_viewer_group", "").strip(),
         "default_role": form.get("ldap_default_role", "").strip(),
+    })
+
+
+def _oidc_from_form(form, old) -> OidcSettings:
+    sec = form.get("oidc_client_secret", "")
+    return OidcSettings.from_dict({
+        "enabled": _checkbox(form, "oidc_enabled"),
+        "issuer": form.get("oidc_issuer", "").strip(),
+        "client_id": form.get("oidc_client_id", "").strip(),
+        "client_secret": sec if sec else old.client_secret,   # blank => keep stored
+        "redirect_uri": form.get("oidc_redirect_uri", "").strip(),
+        "scopes": form.get("oidc_scopes", "").strip() or "openid email profile",
+        "username_claim": form.get("oidc_username_claim", "").strip() or "preferred_username",
+        "groups_claim": form.get("oidc_groups_claim", "").strip() or "groups",
+        "admin_group": form.get("oidc_admin_group", "").strip(),
+        "operator_group": form.get("oidc_operator_group", "").strip(),
+        "viewer_group": form.get("oidc_viewer_group", "").strip(),
+        "default_role": form.get("oidc_default_role", "").strip(),
     })
 
 

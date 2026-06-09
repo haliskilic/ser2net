@@ -35,17 +35,8 @@ def role_for_groups(groups, settings) -> str | None:
 
 
 def upsert_ldap_user(config, username: str, role: str) -> User:
-    """Create or refresh the shadow account for an LDAP user. Bumps pwd_version when
-    the role or source changes so stale-role sessions are revoked."""
-    u = config.get_user(username)
-    if u is None:
-        u = User(username=username, password_hash="", role=role, source="ldap", pwd_version=1)
-        config.users.append(u)
-    elif u.role != role or u.source != "ldap":
-        u.role = role
-        u.source = "ldap"
-        u.pwd_version += 1
-    return u
+    """Create or refresh the shadow account for an LDAP user."""
+    return config.upsert_external_user(username, role, "ldap")
 
 
 def _entry_groups(entry, attr) -> list[str]:
