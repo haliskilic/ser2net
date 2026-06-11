@@ -1,46 +1,57 @@
-<table class="grid">
+{% if discovery_error %}
+<div class="banner warn">UDP auto-discovery is off: {{ discovery_error }}. Manually-added peers still work (Settings → LAN cluster).</div>
+{% endif %}
+<table class="grid cluster">
   <thead>
     <tr>
-      <th>Host</th><th>Mapping</th><th>Type</th><th>Endpoint</th><th>Serial</th>
+      <th>Mapping</th><th>Type</th><th>Endpoint</th><th>Serial</th>
       <th>State</th><th>Clients</th><th>In / Out</th><th></th>
     </tr>
   </thead>
   <tbody>
   {% for n in nodes %}
     {% set hosturl = n.scheme ~ '://' ~ n.ip ~ ':' ~ n.port %}
-    {% set hostcell %}
-      {{ n.name }}{% if n.self %} <span class="tag">this node</span>{% endif %}
-      <div class="peer mono">{{ n.ip }}:{{ n.port }}</div>
-    {% endset %}
-    {% if not n.online %}
-      <tr class="node-offline">
-        <td>{{ hostcell|safe }}</td>
-        <td colspan="8" class="muted">offline / unreachable</td>
-      </tr>
-    {% elif not n.mappings %}
-      <tr>
-        <td>{{ hostcell|safe }}</td>
-        <td colspan="8" class="muted">no mappings on this node</td>
-      </tr>
-    {% else %}
-      {% for m in n.mappings %}
-      <tr>
-        <td>{{ hostcell|safe }}</td>
-        <td>{{ m.name }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
-        <td class="mono">{{ m.kind }}</td>
-        <td class="mono">{{ m.endpoint }}</td>
-        <td class="mono">{{ m.serial }}</td>
-        <td><span class="state state-{{ m.state }}">{{ m.state }}</span></td>
-        <td>{{ m.client_count }}</td>
-        <td class="mono">{{ m.bytes_in }} / {{ m.bytes_out }}</td>
-        <td class="actions">
-          {% if not n.self %}<a class="btn sm" href="{{ hosturl }}" target="_blank" rel="noopener">Open</a>{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
+    <tr class="node-row{% if not n.online %} node-offline{% endif %}">
+      <td colspan="8">
+        <strong>{{ n.name }}</strong>
+        {% if n.self %}<span class="tag">this node</span>{% endif %}
+        {% if n.source == 'manual' %}<span class="tag">manual</span>{% endif %}
+        <span class="peer mono">{{ n.ip }}:{{ n.port }}</span>
+        {% if n.online %}
+          <span class="muted"> · up {{ n.uptime }}{% if n.version %} · v{{ n.version }}{% endif %} · {{ n.running_count }}/{{ n.mapping_count }} running</span>
+        {% else %}
+          <span class="state state-error">offline / unreachable</span>
+        {% endif %}
+        {% if not n.self and n.online %}<a class="btn sm" href="{{ hosturl }}" target="_blank" rel="noopener">Open</a>{% endif %}
+      </td>
+    </tr>
+    {% for m in n.mappings %}
+    <tr>
+      <td class="indent">{{ m.name }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
+      <td class="mono">{{ m.kind }}</td>
+      <td class="mono">{{ m.endpoint }}</td>
+      <td class="mono">{{ m.serial }}</td>
+      <td><span class="state state-{{ m.state }}">{{ m.state }}</span></td>
+      <td>{{ m.client_count }}</td>
+      <td class="mono">{{ m.bytes_in }} / {{ m.bytes_out }}</td>
+      <td class="actions">
+        {% if can_edit and not n.self %}
+          {% set vals = '{"scheme":"' ~ n.scheme ~ '","host":"' ~ n.ip ~ '","port":"' ~ n.port ~ '","mid":"' ~ m.id ~ '","action":"' %}
+          {% if m.enabled %}
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}stop"}' hx-swap="none">Stop</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}restart"}' hx-swap="none">Restart</button>
+          {% else %}
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}start"}' hx-swap="none">Start</button>
+          {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    {% if n.online and not n.mappings %}
+    <tr><td class="indent muted" colspan="8">no mappings on this node</td></tr>
     {% endif %}
   {% else %}
-    <tr><td colspan="9" class="muted">No cluster nodes discovered yet. Beacons are sent every few seconds.</td></tr>
+    <tr><td colspan="8" class="muted">No cluster nodes yet. Auto-discovery beacons run every few seconds; add manual peers under Settings → LAN cluster for routed networks.</td></tr>
   {% endfor %}
   </tbody>
 </table>

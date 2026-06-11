@@ -1,6 +1,6 @@
 # ser2net — Roadmap
 
-> Current release: **v2.5.0**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.6.0**. CI is green across Linux + Windows × Python 3.10–3.13.
 
 ## Shipped
 
@@ -75,24 +75,28 @@
 ### v2.5 — LAN cluster
 - **Auto-discovery + unified fleet view**: nodes find each other via HMAC-signed UDP
   broadcast beacons (no mDNS) and one node aggregates every node's mappings into a
-  single **read-only** table, each row tagged with its host (name + IP). Opt-in, off by
+  single read-only table, each row tagged with its host (name + IP). Opt-in, off by
   default; trust = a shared cluster key. Server-side fan-out to peers' key-guarded
   `/api/cluster/local`; the browser only talks to the node it logged into.
+
+### v2.6 — cluster depth
+- **Remote control** from the unified view: operators start/stop/restart a peer's mappings
+  (key-guarded `/api/cluster/control` on the target + a session-authed proxy that validates
+  the peer against a known-address allowlist, so the browser can't aim it anywhere)
+- **Per-node health**: uptime · version · running/total, plus an online/offline indicator
+  and a UI banner when UDP discovery can't bind (manual peers still work)
+- **Manual peers** (`host:port`) for routed/L3 networks broadcast can't reach, aggregated
+  alongside auto-discovered nodes
 
 ---
 
 ## Planned
 
-### v2.6 — cluster depth & hardening
-- **Remote control** from the unified view: start/stop/edit a peer's mappings (the read
-  path exists; add a key-guarded write endpoint + role check on the target node)
-- **Per-node health/uptime** column; surface a node-level "discovery disabled" status in
-  the UI when the UDP bind fails (today it only logs)
-- **Manual peer list** for routed/L3 networks where broadcast doesn't reach (complement
-  to auto-discovery)
-- **Security hardening** (from the v2.5 review): validate/curb peer-advertised IPs before
-  server-side fetch (SSRF defense-in-depth), optional TLS certificate pinning for peer
-  fetch, a light rate-limit on `/api/cluster/local`, optional IPv6 (multicast) discovery
+### v2.6.x — cluster hardening (from the v2.5 review)
+- Validate/curb peer-advertised IPs before the server-side fetch (SSRF defense-in-depth)
+- Optional TLS certificate pinning for peer fetch/control; a light rate-limit on the
+  key-guarded peer endpoints; optional IPv6 (multicast) discovery
+- Remote **edit** of a peer's mapping (today's remote control is start/stop/restart)
 
 ### v2.7 — industrial/IIoT depth
 - **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)

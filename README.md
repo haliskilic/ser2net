@@ -18,7 +18,7 @@ web arayüzünden yönetilen, çapraz-platform (Windows + Linux) saf-Python köp
 
 ![Pano](docs/screenshots/02-dashboard.png)
 
-**LAN cluster — ağdaki tüm düğümlerin eşlemeleri tek tabloda, her satırda host (ad + IP):**
+**LAN cluster — tüm düğümlerin eşlemeleri tek tabloda; düğüm sağlığı + uzaktan başlat/durdur:**
 
 ![Cluster](docs/screenshots/06-cluster.png)
 
@@ -87,11 +87,14 @@ düzenlemeye gerek yok.
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
   durum ve portlar; **bearer-token** kimlik doğrulama (rol seçilebilir — `viewer`
   salt-okunur); OpenAPI 3.0 (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
-- **LAN cluster (filo görünümü):** aynı ağdaki düğümler birbirini **otomatik bulur**
+- **LAN cluster (filo yönetimi):** aynı ağdaki düğümler birbirini **otomatik bulur**
   (imzalı UDP broadcast — mDNS yok) ve bir düğüm **tüm düğümlerin eşlemelerini tek
-  salt-okunur tabloda** gösterir; her satır hangi bilgisayara ait olduğunu (ad + IP)
-  belirtir. Düğümlerin birbirine güvenmesi için her birine **aynı paylaşılan anahtar**
-  girilir. Varsayılan kapalı; Ayarlar → LAN cluster'dan açılır.
+  tabloda** gösterir; her satır hangi bilgisayara ait olduğunu (ad + IP) ve her düğümün
+  **sağlığını** (uptime · sürüm · çalışan/toplam) belirtir. Operatörler bu ekrandan
+  başka bir host'un eşlemelerini **uzaktan başlat/durdur/yeniden başlat** edebilir.
+  Broadcast'in ulaşmadığı yönlendirilmiş/L3 ağlar için **manuel peer** (host:port)
+  eklenebilir. Güven = her düğümde **aynı paylaşılan anahtar**; varsayılan kapalı,
+  Ayarlar → LAN cluster'dan açılır.
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
