@@ -64,7 +64,8 @@ düzenlemeye gerek yok.
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
-  kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open, RS-485.
+  kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open. (RS-485
+  donanım modu şu an JSON import / REST API ile ayarlanır; web-UI kontrolü planlı.)
 - **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
   hotplug (Linux pyudev / Windows WM_DEVICECHANGE), yoksa polling'e düşer.
 - **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
@@ -235,7 +236,7 @@ Tüm durum **veri dizininde** (varsayılan `data/`). Veri dizini yalnızca sahib
 kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), böylece
 içindeki dosyalar başka kullanıcılarca okunamaz:
 - `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
-- `all.log` — global etkinlik/audit; `audit.log` — config değişiklikleri.
+- `all.log` — global etkinlik/audit (boyutla döner); `audit.log` — config değişiklikleri (döner).
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `tls/` — self-signed üretilirse sertifika/anahtar.
 
