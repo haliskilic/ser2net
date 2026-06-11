@@ -62,8 +62,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control
-  (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open. (RS-485 hardware
-  mode is set via JSON import / the REST API today; a web-UI control is planned.)
+  (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open, and RS-485 hardware
+  auto-RTS (Linux `TIOCSRS485`: enable + pre/post-TX delays + RTS-during-TX level).
 - **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
   Windows WM_DEVICECHANGE), falling back to polling. **IP picker** from the machine's
   own addresses (localhost / LAN / 0.0.0.0) or custom.

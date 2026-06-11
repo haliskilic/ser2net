@@ -64,8 +64,8 @@ düzenlemeye gerek yok.
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
-  kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open. (RS-485
-  donanım modu şu an JSON import / REST API ile ayarlanır; web-UI kontrolü planlı.)
+  kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open ve RS-485
+  donanım auto-RTS (Linux `TIOCSRS485`: aç + TX öncesi/sonrası gecikme + TX'te RTS seviyesi).
 - **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
   hotplug (Linux pyudev / Windows WM_DEVICECHANGE), yoksa polling'e düşer.
 - **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
