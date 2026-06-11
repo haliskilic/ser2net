@@ -1,6 +1,6 @@
 # ser2net — Roadmap
 
-> Current release: **v2.6.2**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.6.3**. CI is green across Linux + Windows × Python 3.10–3.13.
 
 ## Shipped
 
@@ -98,8 +98,14 @@
   uvicorn bind crash on a hand-edited config)
 - Closed the top test gap: **per-mapping TLS data-bridge e2e** (`test_tls_bridge.py` —
   verifies the channel is encrypted + plaintext is rejected) and a bind-IP validation case
-- Doc accuracy: RS-485 is config/REST/JSON-settable (no web UI yet); global logs are
-  size-rotated (distinct from the per-mapping 100 MB/15-day trim)
+- Doc accuracy: global logs are size-rotated (distinct from the per-mapping
+  100 MB/15-day trim)
+
+### v2.6.3 — RS-485 in the UI
+- **RS-485 hardware auto-RTS** (`TIOCSRS485`) is now exposed in the mapping form
+  (enable + RTS pre/post-TX delays + RTS-high-during-TX); the engine already applied it
+  via pyserial `rs485_mode`. Edit-preservation updated so the form owns the RS-485 fields
+  while still carrying over the two it doesn't expose (`hangup_when_done`, `nobreak`).
 
 ---
 
@@ -111,8 +117,6 @@
   key-guarded peer endpoints; optional IPv6 (multicast) discovery
 
 ### v2.7 — industrial/IIoT depth
-- **RS-485 hardware auto-RTS** UI (`TIOCSRS485`) — the config/REST already carry the
-  fields; expose them in the mapping form (closes the docs gap noted in v2.6.2)
 - **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)
 - **Modbus write** support (FC 5/6/15/16), per-point MQTT→register control, RTU
   inter-frame tuning

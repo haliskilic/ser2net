@@ -1192,6 +1192,14 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
         "rts_on_open": form.get(prefix + "rts_on_open", "keep"),
         "dtr_on_open": form.get(prefix + "dtr_on_open", "keep"),
         "exclusive": _checkbox(form, prefix + "exclusive"),
+        "advanced": {
+            "rs485_enabled": _checkbox(form, prefix + "rs485_enabled"),
+            "rs485_delay_before_tx_ms": _num(form, prefix + "rs485_delay_before_tx_ms",
+                                             0.0, strict=False, cast=float),
+            "rs485_delay_after_tx_ms": _num(form, prefix + "rs485_delay_after_tx_ms",
+                                            0.0, strict=False, cast=float),
+            "rs485_rts_level_for_tx": _checkbox(form, prefix + "rs485_rts_level_for_tx"),
+        },
     }
 
 
@@ -1274,15 +1282,17 @@ def _mapping_from_form(form) -> dict:
 
 def _preserve_unmanaged_fields(new_map, existing) -> None:
     """Carry over config fields the mapping form does not expose, so editing an
-    existing mapping never silently discards them: the stable-id `match`, the
-    advanced/RS-485 serial settings, open/close strings, the trace-timestamp flag
-    and the RFC2217 interop knobs. No-op when creating a new mapping."""
+    existing mapping never silently discards them: the stable-id `match`, the two
+    advanced serial flags the form omits (`hangup_when_done`, `nobreak`), open/close
+    strings, the trace-timestamp flag and the RFC2217 interop knobs. The RS-485 fields
+    ARE in the form now, so they're taken from the submission. No-op when creating."""
     if existing is None:
         return
     for cur, old in ((new_map.serial, existing.serial),
                      (new_map.serial_b, existing.serial_b)):
         cur.match = old.match
-        cur.advanced = old.advanced
+        cur.advanced.hangup_when_done = old.advanced.hangup_when_done
+        cur.advanced.nobreak = old.advanced.nobreak
     o, prev = new_map.options, existing.options
     o.openstr = prev.openstr
     o.closestr = prev.closestr
