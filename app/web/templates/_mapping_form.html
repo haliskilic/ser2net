@@ -45,12 +45,17 @@
 
 {% set ip_values = ips | map(attribute='value') | list %}
 {% set bind_is_custom = mapping.network.bind_ip not in ip_values %}
-<form class="mform" hx-post="/api/mappings/save" hx-target="#form-panel" hx-swap="innerHTML">
+<form class="mform" hx-post="{{ '/api/cluster/peer-save' if remote else '/api/mappings/save' }}" hx-target="#form-panel" hx-swap="innerHTML">
   <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+  {% if remote %}
+  <input type="hidden" name="scheme" value="{{ remote.scheme }}">
+  <input type="hidden" name="host" value="{{ remote.host }}">
+  <input type="hidden" name="port" value="{{ remote.port }}">
+  {% endif %}
   {% if not is_new %}<input type="hidden" name="id" value="{{ mapping.id }}">{% endif %}
 
   <div class="form-head">
-    <h3>{{ 'New mapping' if is_new else 'Edit mapping' }}</h3>
+    <h3>{{ 'New mapping' if is_new else 'Edit mapping' }}{% if remote %} <span class="tag">on {{ remote.host }}:{{ remote.port }}</span>{% endif %}</h3>
     <button type="button" class="btn sm" data-cancel>Cancel</button>
   </div>
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}

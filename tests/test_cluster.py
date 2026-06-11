@@ -293,7 +293,36 @@ def test_manual_peer_and_remote_control():
         assert post_a("/api/cluster/control-peer", bad) == 403, "unknown peer must be rejected"
         print("control proxy rejects an unknown (non-peer) address  OK")
 
-        print("\nPASS: manual peers + per-node health + remote control")
+        # ---- remote EDIT: load the peer's mapping into the form, change it, save ----
+        form_url = (f"/api/cluster/peer-form?scheme=http&host=127.0.0.1"
+                    f"&port={ui_b}&mid={mid}")
+        html = op.open(f"http://127.0.0.1:{ui_a}{form_url}", timeout=10).read().decode()
+        assert "/api/cluster/peer-save" in html and 'name="host"' in html, html[:400]
+        assert "Edit mapping" in html and "/dev/ttyTEST" in html, "form should show peer's values"
+        print("remote edit: peer's mapping loads into the form (routed to peer-save)  OK")
+
+        # peer-facing save is key-guarded
+        code, _ = raw_request(ui_b, "/api/cluster/mapping-save", method="POST")
+        assert code == 403, f"mapping-save without key must be 403, got {code}"
+
+        edit = {"_csrf": csrf(), "scheme": "http", "host": "127.0.0.1", "port": str(ui_b),
+                "id": mid, "name": "REMOTE1", "enabled": "on", "kind": "net",
+                "serial_port": "/dev/ttyEDITED", "serial_baudrate": "19200",
+                "serial_bytesize": "8", "serial_parity": "N", "serial_stopbits": "1",
+                "serial_flowcontrol": "none", "network_mode": "server",
+                "network_protocol": "raw", "network_bind_ip": "127.0.0.1",
+                "network_port": str(map_port)}
+        assert post_a("/api/cluster/peer-save", edit) == 200, "remote edit should be accepted"
+        for _ in range(20):
+            _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+            if json.loads(body)["mappings"][0]["serial"] == "/dev/ttyEDITED":
+                break
+            time.sleep(0.1)
+        assert json.loads(body)["mappings"][0]["serial"] == "/dev/ttyEDITED", \
+            "remote edit did not change the peer's mapping"
+        print("remote edit of a peer's mapping took effect on the peer  OK")
+
+        print("\nPASS: manual peers + per-node health + remote control + remote edit")
     finally:
         for proc, tmp in ((pa, ta), (pb, tb)):
             proc.terminate()

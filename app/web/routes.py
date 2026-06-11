@@ -757,6 +757,97 @@ def build_routes(templates, state, static_dir):
         state.audit(client_ip(request), f"cluster_control_{action}", f"{host}:{port}/{res.get('name', mid)}")
         return Response("", headers={"HX-Trigger": "refreshCluster"})
 
+    # ---- remote EDIT: peer renders no UI; THIS node renders the form (so the CSRF
+    #      token + form action belong to the browser's session) and proxies the save.
+    async def cluster_mapping_data(request):
+        """Peer-facing: a mapping's full config + this node's serial ports + IP
+        candidates, so the controlling node can render the edit form. Key-guarded."""
+        cfg = state.config
+        key = request.headers.get("x-cluster-key", "")
+        if not (cfg.cluster.active and key and hmac.compare_digest(key, cfg.cluster.key)):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        m = cfg.get_mapping(request.query_params.get("mid", ""))
+        if not m:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"mapping": m.to_dict(), "ports": state.ports.get(),
+                             "ips": netinfo.list_ip_candidates()})
+
+    async def cluster_mapping_save(request):
+        """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
+        from the same form the controlling node rendered. Key-guarded."""
+        cfg = state.config
+        key = request.headers.get("x-cluster-key", "")
+        if not (cfg.cluster.active and key and hmac.compare_digest(key, cfg.cluster.key)):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        form = await request.form()
+        ok, msg = await _save_mapping_from_form(form)
+        if not ok:
+            return JSONResponse({"ok": False, "error": msg}, status_code=400)
+        ip = client_ip(request)
+        state.log(f"cluster: remote edit of '{msg}' from {ip}")
+        state.audit(ip, "cluster_remote_save", msg)
+        return JSONResponse({"ok": True, "name": msg})
+
+    def _peer_from_request(getter):
+        """(scheme, host, port) from a request, validated against the peer allowlist.
+        Returns (tuple, None) on success or (None, error-response)."""
+        scheme, host = getter("scheme", "http"), getter("host", "")
+        try:
+            port = int(getter("port", "0"))
+        except ValueError:
+            return None, PlainTextResponse("Bad peer port", status_code=400)
+        if (host, port) not in state.cluster.known_addresses():
+            return None, PlainTextResponse("Unknown cluster peer", status_code=403)
+        return (scheme, host, port), None
+
+    async def cluster_peer_form(request):
+        """Browser-facing proxy: load a peer's mapping into the edit form (rendered
+        here so the CSRF token is the browser's). Submits to /api/cluster/peer-save."""
+        if deny := require_role(request, "operator"):
+            return deny
+        peer, err = _peer_from_request(request.query_params.get)
+        if err:
+            return err
+        scheme, host, port = peer
+        mid = request.query_params.get("mid", "")
+        data = await state.cluster.get_peer(scheme, host, port, f"/api/cluster/mapping-data?mid={mid}")
+        if not data or "mapping" not in data:
+            return PlainTextResponse("Could not load the peer's mapping.", status_code=502)
+        mapping = MappingConfig.from_dict(data["mapping"])
+        return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
+                      modbus_points_json=_modbus_points_json(mapping),
+                      ports=data.get("ports", []), ips=data.get("ips", []),
+                      remote={"scheme": scheme, "host": host, "port": port}, error=None)
+
+    async def cluster_peer_save(request):
+        """Browser-facing proxy: forward an edited mapping form to the peer's key-guarded
+        save (peer fields stripped); on a peer error, re-render the form with it."""
+        if deny := require_role(request, "operator"):
+            return deny
+        form = await request.form()
+        peer, err = _peer_from_request(form.get)
+        if err:
+            return err
+        scheme, host, port = peer
+        skip = {"_peer_scheme", "_peer_host", "_peer_port", "_csrf", "scheme", "host", "port"}
+        fields = [(k, v) for k, v in form.multi_items() if k not in skip]
+        res = await state.cluster.post_peer(scheme, host, port, "/api/cluster/mapping-save", fields)
+        if res and res.get("ok"):
+            state.log(f"cluster: edited '{res.get('name', '')}' on {host}:{port}")
+            state.audit(client_ip(request), "cluster_edit", f"{host}:{port}/{res.get('name', '')}")
+            return Response("", headers={"HX-Trigger": "refreshCluster"})
+        msg = (res or {}).get("error") or "The peer rejected the change or was unreachable."
+        data = await state.cluster.get_peer(scheme, host, port,
+                                            f"/api/cluster/mapping-data?mid={form.get('id', '')}")
+        try:
+            mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+        except Exception:
+            mapping = MappingConfig(name=form.get("name", ""))
+        return render(request, "_mapping_form.html", status_code=400, mapping=mapping, is_new=False,
+                      modbus_points_json=_modbus_points_json(mapping),
+                      ports=(data or {}).get("ports", []), ips=(data or {}).get("ips", []),
+                      remote={"scheme": scheme, "host": host, "port": port}, error=msg)
+
     async def settings_cluster_post(request):
         if deny := require_role(request, "admin"):
             return deny
@@ -839,21 +930,19 @@ def build_routes(templates, state, static_dir):
         return render(request, "_console.html", mid=mid, mapping_name=m.name,
                       interactive=interactive)
 
-    async def mapping_save(request):
-        if deny := require_role(request, "operator"):
-            return deny
-        form = await request.form()
+    async def _save_mapping_from_form(form) -> tuple[bool, str]:
+        """Parse a mapping form, validate, persist and (re)apply. Returns (ok, name)
+        on success or (False, error). Shared by the local UI save and the cluster
+        remote-edit save (which runs the same form on the target node)."""
         try:
-            data = _mapping_from_form(form)
-            mapping = MappingConfig.from_dict(data)
+            mapping = MappingConfig.from_dict(_mapping_from_form(form))
             # The form doesn't expose every field; when editing, carry the unexposed
             # ones over so a save never silently wipes them (get_mapping is a sync
             # read — safe outside the config lock).
             _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id))
             mapping.validate()
         except (ValueError, ConfigError) as e:
-            return _form_error(render, request, state, form, str(e))
-
+            return False, str(e)
         # Hold the lock only to mutate + persist config; release it BEFORE the
         # (potentially slow) supervisor call so other admin requests aren't blocked
         # while a serial port is being (re)opened.
@@ -868,10 +957,19 @@ def build_routes(templates, state, static_dir):
                 await state.asave()
             except ConfigError as e:
                 state.config.mappings = backup
-                return _form_error(render, request, state, form, str(e))
+                return False, str(e)
         await state.supervisor.apply_mapping(mapping)
-        state.log(f"mapping saved: {mapping.name}")
-        state.audit(client_ip(request), "mapping_save", mapping.name)
+        return True, mapping.name
+
+    async def mapping_save(request):
+        if deny := require_role(request, "operator"):
+            return deny
+        form = await request.form()
+        ok, msg = await _save_mapping_from_form(form)
+        if not ok:
+            return _form_error(render, request, state, form, msg)
+        state.log(f"mapping saved: {msg}")
+        state.audit(client_ip(request), "mapping_save", msg)
         return Response("", headers=_TRIGGER)
 
     async def mapping_delete(request):
@@ -957,6 +1055,10 @@ def build_routes(templates, state, static_dir):
         Route("/api/cluster/local", cluster_local),
         Route("/api/cluster/control", cluster_control, methods=["POST"]),
         Route("/api/cluster/control-peer", cluster_control_peer, methods=["POST"]),
+        Route("/api/cluster/mapping-data", cluster_mapping_data),
+        Route("/api/cluster/mapping-save", cluster_mapping_save, methods=["POST"]),
+        Route("/api/cluster/peer-form", cluster_peer_form),
+        Route("/api/cluster/peer-save", cluster_peer_save, methods=["POST"]),
         Route("/api/ports.json", api_ports_json),
         Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
         Route("/api/ports/table", api_ports_table),
