@@ -17,7 +17,9 @@ import argparse
 import os
 import sys
 
-__version__ = "2.5.0"
+# The script's own directory is on sys.path, so the `app` package imports here even
+# before the explicit sys.path setup below (and PyInstaller bundles it in frozen builds).
+from app import __version__
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)  # True inside a PyInstaller build
