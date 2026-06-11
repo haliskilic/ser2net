@@ -526,6 +526,28 @@ class OidcSettings:
             raise ConfigError(f"OIDC default role must be one of {ROLES} or blank.")
 
 
+def parse_cluster_peer(entry: str) -> tuple[str, str, int]:
+    """Parse a manual cluster-peer entry into (scheme, host, port). Accepts
+    'host:port' (defaults to http) or 'http(s)://host:port'. Raises ConfigError."""
+    s = (entry or "").strip()
+    scheme = "http"
+    if "://" in s:
+        scheme, s = s.split("://", 1)
+        scheme = scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ConfigError(f"Cluster peer scheme must be http or https: {entry}")
+    host, sep, port_s = s.rpartition(":")
+    if not sep or not host:
+        raise ConfigError(f"Cluster peer must be host:port — got: {entry}")
+    try:
+        port = int(port_s)
+    except ValueError:
+        raise ConfigError(f"Cluster peer port is not a number: {entry}") from None
+    if not (1 <= port <= 65535):
+        raise ConfigError(f"Cluster peer port must be 1..65535: {entry}")
+    return scheme, host, port
+
+
 @dataclass
 class ClusterSettings:
     """LAN cluster: instances discover each other via signed UDP broadcast beacons
@@ -533,17 +555,22 @@ class ClusterSettings:
     Opt-in: disabled until `enabled` is set AND a shared `key` is configured. The
     key both signs beacons (so only same-key nodes trust each other) and guards the
     peer-facing status endpoint. `advertise_ip` overrides the auto-detected LAN IP
-    that peers use to reach this node's web UI (blank => auto)."""
+    that peers use to reach this node's web UI (blank => auto). `peers` is a list of
+    manual 'host:port' entries for routed/L3 networks where UDP broadcast doesn't
+    reach — they're aggregated alongside auto-discovered peers."""
     enabled: bool = False
     key: str = ""                    # shared secret (PSK); empty => cluster off
     discovery_port: int = 41750      # UDP port for broadcast beacons
     advertise_ip: str = ""           # override advertised web-UI IP (blank => auto-detect)
+    peers: list[str] = field(default_factory=list)  # manual 'host:port' peer entries
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "ClusterSettings":
         d = dict(d or {})
         known = {f.name for f in dataclasses.fields(ClusterSettings)}
-        return ClusterSettings(**{k: v for k, v in d.items() if k in known})
+        c = ClusterSettings(**{k: v for k, v in d.items() if k in known})
+        c.peers = [str(p).strip() for p in (c.peers or []) if str(p).strip()]
+        return c
 
     @property
     def active(self) -> bool:
@@ -566,6 +593,8 @@ class ClusterSettings:
             except ValueError:
                 raise ConfigError(
                     f"Cluster advertise IP is not a valid address: {self.advertise_ip}") from None
+        for entry in self.peers:
+            parse_cluster_peer(entry)  # raises ConfigError on a bad entry
 
 
 @dataclass

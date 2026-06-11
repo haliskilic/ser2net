@@ -28,6 +28,7 @@ sys.path.insert(0, ROOT)
 
 from app.config import AppConfig, ClusterSettings              # noqa: E402
 from app.engine.cluster import ClusterDiscovery, PEER_TTL, _sign  # noqa: E402
+from app.web.auth import hash_password                         # noqa: E402
 
 
 def free_port():
@@ -191,9 +192,122 @@ def test_endpoints():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def start_node(cfg_obj):
+    tmp = tempfile.mkdtemp(prefix="ser2net_cl_")
+    cfg = os.path.join(tmp, "config.json")
+    with open(cfg, "w") as fh:
+        json.dump(cfg_obj, fh)
+    proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
+                            cwd=ROOT, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return proc, tmp
+
+
+def test_manual_peer_and_remote_control():
+    """Two real nodes linked by a MANUAL peer (no UDP dependency): node A aggregates
+    node B's mappings + health and can remotely start/stop them with the shared key."""
+    key = "rc-key-xyz"
+    ui_a, ui_b = free_port(), free_port()
+    # different discovery ports so the nodes DON'T auto-discover each other — the
+    # manual peer is the only link, making the test deterministic.
+    dp_a, dp_b = free_port(), free_port()
+    map_port = free_port()
+    node_b = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_b},
+              "users": [{"username": "admin", "password_hash": hash_password("clusteradmin1"),
+                         "role": "admin", "pwd_version": 1}],
+              "cluster": {"enabled": True, "key": key, "discovery_port": dp_b,
+                          "advertise_ip": "127.0.0.1"},
+              "mappings": [{"name": "REMOTE1", "enabled": False, "kind": "net",
+                            "serial": {"port": "/dev/ttyTEST", "baudrate": 9600},
+                            "network": {"mode": "server", "protocol": "raw",
+                                        "bind_ip": "127.0.0.1", "port": map_port}}]}
+    node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a},
+              "cluster": {"enabled": True, "key": key, "discovery_port": dp_a,
+                          "peers": [f"127.0.0.1:{ui_b}"]}}
+    pa, ta = start_node(node_a)
+    pb, tb = start_node(node_b)
+    try:
+        assert wait_port(ui_a) and wait_port(ui_b), "nodes did not start"
+
+        # admin session on node A
+        jar = http.cookiejar.CookieJar()
+        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+        def csrf():
+            return next(c.value for c in jar if c.name == "ser2net_csrf")
+
+        def post_a(path, fields):
+            req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}",
+                                         data=urllib.parse.urlencode(fields).encode(), method="POST")
+            req.add_header("Content-Type", "application/x-www-form-urlencoded")
+            req.add_header("X-CSRF-Token", csrf())
+            try:
+                return op.open(req, timeout=10).status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        op.open(f"http://127.0.0.1:{ui_a}/setup")
+        post_a("/setup", {"username": "admin", "password": "adminpass123",
+                          "password2": "adminpass123", "_csrf": csrf()})
+
+        # node B's mapping id (and confirm it starts disabled)
+        _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+        bmaps = json.loads(body)["mappings"]
+        mid = bmaps[0]["id"]
+        assert bmaps[0]["enabled"] is False, bmaps
+
+        # A's aggregated view fetches B through the manual peer: shows it + health
+        html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
+        assert "REMOTE1" in html and "manual" in html, html[:500]
+        assert ("v2.6" in html or "up " in html), "per-node health (version/uptime) missing"
+        print("manual peer aggregated with health (version/uptime) + 'manual' tag  OK")
+
+        # peer-facing control is key-guarded
+        code, _ = raw_request(ui_b, "/api/cluster/control", method="POST")
+        assert code == 403, f"control without key must be 403, got {code}"
+
+        # remote START via A's proxy -> B's mapping becomes enabled
+        ctrl = {"scheme": "http", "host": "127.0.0.1", "port": str(ui_b), "mid": mid, "action": "start"}
+        assert post_a("/api/cluster/control-peer", ctrl) == 200, "remote start should be accepted"
+        for _ in range(20):
+            _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+            if json.loads(body)["mappings"][0]["enabled"]:
+                break
+            time.sleep(0.1)
+        assert json.loads(body)["mappings"][0]["enabled"] is True, "remote start did not take effect"
+        print("remote start of a peer's mapping via the unified view  OK")
+
+        # remote STOP via A's proxy -> B's mapping becomes disabled
+        ctrl["action"] = "stop"
+        assert post_a("/api/cluster/control-peer", ctrl) == 200
+        for _ in range(20):
+            _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+            if not json.loads(body)["mappings"][0]["enabled"]:
+                break
+            time.sleep(0.1)
+        assert json.loads(body)["mappings"][0]["enabled"] is False, "remote stop did not take effect"
+        print("remote stop of a peer's mapping via the unified view  OK")
+
+        # the proxy refuses an address that isn't a known cluster peer (anti-SSRF)
+        bad = {"scheme": "http", "host": "9.9.9.9", "port": "1", "mid": mid, "action": "start"}
+        assert post_a("/api/cluster/control-peer", bad) == 403, "unknown peer must be rejected"
+        print("control proxy rejects an unknown (non-peer) address  OK")
+
+        print("\nPASS: manual peers + per-node health + remote control")
+    finally:
+        for proc, tmp in ((pa, ta), (pb, tb)):
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     test_discovery_unit()
     test_endpoints()
+    test_manual_peer_and_remote_control()
 
 
 if __name__ == "__main__":
