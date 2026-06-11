@@ -141,8 +141,13 @@ class ClusterDiscovery:
             sock.close()
             self.log(f"cluster: could not bind UDP {port}: {e} — discovery disabled")
             return
-        self._transport, _ = await loop.create_datagram_endpoint(
-            lambda: _BeaconProtocol(self.handle_datagram), sock=sock)
+        try:
+            self._transport, _ = await loop.create_datagram_endpoint(
+                lambda: _BeaconProtocol(self.handle_datagram), sock=sock)
+        except OSError as e:
+            sock.close()  # endpoint creation owns the socket only on success
+            self.log(f"cluster: could not start UDP listener on {port}: {e} — discovery disabled")
+            return
         self._running = True
         self._beacon_task = asyncio.create_task(self._beacon_loop(), name="cluster-beacon")
         self.log(f"cluster: discovery on UDP {port} as '{socket.gethostname()}' "
