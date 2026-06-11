@@ -1,6 +1,6 @@
 # ser2net — Roadmap
 
-> Current release: **v2.6.0**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.6.1**. CI is green across Linux + Windows × Python 3.10–3.13.
 
 ## Shipped
 
@@ -80,9 +80,11 @@
   `/api/cluster/local`; the browser only talks to the node it logged into.
 
 ### v2.6 — cluster depth
-- **Remote control** from the unified view: operators start/stop/restart a peer's mappings
-  (key-guarded `/api/cluster/control` on the target + a session-authed proxy that validates
-  the peer against a known-address allowlist, so the browser can't aim it anywhere)
+- **Remote control + edit** from the unified view: operators start/stop/restart **and edit**
+  a peer's mappings. Key-guarded peer endpoints (`/api/cluster/control`, `/mapping-data`,
+  `/mapping-save`); session-authed proxies validate the target against a known-address
+  allowlist, and the edit **form is rendered on the controlling node** (so the CSRF token
+  is the browser's) then proxied to the peer with the shared key.
 - **Per-node health**: uptime · version · running/total, plus an online/offline indicator
   and a UI banner when UDP discovery can't bind (manual peers still work)
 - **Manual peers** (`host:port`) for routed/L3 networks broadcast can't reach, aggregated
@@ -96,7 +98,6 @@
 - Validate/curb peer-advertised IPs before the server-side fetch (SSRF defense-in-depth)
 - Optional TLS certificate pinning for peer fetch/control; a light rate-limit on the
   key-guarded peer endpoints; optional IPv6 (multicast) discovery
-- Remote **edit** of a peer's mapping (today's remote control is start/stop/restart)
 
 ### v2.7 — industrial/IIoT depth
 - **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)
