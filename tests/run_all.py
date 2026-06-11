@@ -16,6 +16,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+TEST_TIMEOUT = 240  # seconds; longest real tests finish in ~7s, so this only traps hangs
 
 # Confirmed cross-platform (stdlib + ./lib; no socat, no real serial device).
 PORTABLE = [
@@ -65,7 +66,19 @@ def run_one(name: str) -> bool:
         print(f"SKIP  {name} (missing)")
         return True
     t0 = time.time()
-    proc = subprocess.run([sys.executable, path], capture_output=True, text=True)
+    # Per-test wall-clock cap: a wedged test must fail loudly (with its partial
+    # output) rather than hang the whole CI job until the 6-hour runner limit.
+    try:
+        proc = subprocess.run([sys.executable, path], capture_output=True,
+                              text=True, timeout=TEST_TIMEOUT)
+    except subprocess.TimeoutExpired as e:
+        dt = time.time() - t0
+        print(f"FAIL  {name}  ({dt:.1f}s, TIMED OUT after {TEST_TIMEOUT}s)")
+        out = (e.stdout or "") if isinstance(e.stdout, str) else (e.stdout or b"").decode("utf-8", "replace")
+        err = (e.stderr or "") if isinstance(e.stderr, str) else (e.stderr or b"").decode("utf-8", "replace")
+        sys.stdout.write(out[-2000:])
+        sys.stderr.write(err[-2000:])
+        return False
     dt = time.time() - t0
     ok = proc.returncode == 0
     print(f"{'PASS' if ok else 'FAIL'}  {name}  ({dt:.1f}s)")
