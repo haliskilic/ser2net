@@ -23,11 +23,12 @@ TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 PUBLIC_PREFIXES = ("/static", "/auth/")  # /auth/oidc/* is the unauthenticated SSO flow
-# /api/cluster/local + /api/cluster/control are authenticated by the shared cluster
-# KEY (checked in the handler), not a user session — so they skip the session gate.
-# (control-peer is the browser-facing proxy and keeps the normal session + CSRF.)
-PUBLIC_PATHS = {"/login", "/setup", "/healthz", "/favicon.ico",
-                "/api/cluster/local", "/api/cluster/control"}
+# The peer-facing cluster endpoints are authenticated by the shared cluster KEY
+# (checked in the handler), not a user session — so they skip the session gate.
+# (The *-peer / peer-* proxies are browser-facing and keep the normal session + CSRF.)
+_CLUSTER_PEER_PATHS = {"/api/cluster/local", "/api/cluster/control",
+                       "/api/cluster/mapping-data", "/api/cluster/mapping-save"}
+PUBLIC_PATHS = {"/login", "/setup", "/healthz", "/favicon.ico"} | _CLUSTER_PEER_PATHS
 
 # High-frequency automatic UI refreshes — not logged to all.log to avoid flooding
 # the audit trail (the user actions that drive them ARE logged).
@@ -66,7 +67,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # here, since doing so in a BaseHTTPMiddleware drains the stream before the
         # route handler can parse the form.
         if request.method in ("POST", "PUT", "DELETE", "PATCH") and path.startswith("/api/") \
-                and path != "/api/cluster/control":  # peer-to-peer call: key-authed, no cookie
+                and path not in _CLUSTER_PEER_PATHS:  # peer-to-peer calls: key-authed, no cookie
             if not auth.csrf_token_matches(request, request.headers.get("x-csrf-token")):
                 return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
 
