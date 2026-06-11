@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 from urllib.parse import urlparse
 
@@ -24,7 +26,8 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
 from ..config import (
-    ROLE_RANK, ROLES, ConfigError, LdapSettings, MappingConfig, OidcSettings, User,
+    ROLE_RANK, ROLES, ClusterSettings, ConfigError, LdapSettings, MappingConfig,
+    OidcSettings, User,
 )
 from ..engine import netinfo
 from . import auth, ldap_auth, oidc_auth
@@ -34,6 +37,20 @@ OIDC_COOKIE = "ser2net_oidc"
 
 SESSION_TTL = 8 * 3600
 _TRIGGER = {"HX-Trigger": "refreshMappings"}
+
+
+def _mapping_kind_label(m) -> str:
+    if m.kind == "serialbridge":
+        return "serial↔serial"
+    return f"{m.network.mode}/{m.network.protocol}"
+
+
+def _mapping_endpoint(m) -> str:
+    if m.kind == "serialbridge":
+        return f"{m.serial.port} ↔ {m.serial_b.port}"
+    if m.network.mode == "client":
+        return f"→ {m.network.remote_host}:{m.network.remote_port}"
+    return f"{m.network.bind_ip}:{m.network.port}"
 
 
 def build_routes(templates, state, static_dir):
@@ -222,6 +239,7 @@ def build_routes(templates, state, static_dir):
             mappings=state.config.mappings,
             statuses=state.supervisor.all_status(),
             admin=state.config.admin_ui,
+            cluster_on=state.config.cluster.active,
             me=current_user(request), can_edit=can_edit(request),
         )
 
@@ -234,6 +252,7 @@ def build_routes(templates, state, static_dir):
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
                       oidc=state.config.oidc, oidc_lib=_module_present("authlib"),
+                      cluster=state.config.cluster, instance_id=state.config.instance_id,
                       uptime=int(state.started_at))
 
     async def settings_password_post(request):
@@ -607,6 +626,93 @@ def build_routes(templates, state, static_dir):
                       statuses=state.supervisor.all_status(),
                       can_edit=can_edit(request))
 
+    # ---------------- LAN cluster (federated read-only view) ----------------
+    def local_node_payload() -> dict:
+        """This node's identity + a status row per mapping — the unit other nodes
+        aggregate. No secrets: just what the unified dashboard table shows."""
+        cfg = state.config
+        ip, port, scheme = state.cluster.advertised()
+        statuses = state.supervisor.all_status()
+        maps = []
+        for m in cfg.mappings:
+            st = statuses.get(m.id) or {}
+            maps.append({
+                "id": m.id, "name": m.name, "enabled": m.enabled,
+                "kind": _mapping_kind_label(m), "endpoint": _mapping_endpoint(m),
+                "serial": m.serial.port,
+                "state": st.get("state", "stopped"),
+                "client_count": st.get("client_count", 0),
+                "bytes_in": st.get("bytes_in", 0), "bytes_out": st.get("bytes_out", 0),
+            })
+        return {"id": cfg.instance_id, "name": socket.gethostname(),
+                "ip": ip, "port": port, "scheme": scheme, "mappings": maps}
+
+    async def cluster_local(request):
+        """Peer-facing: returns this node's mappings to another cluster node that
+        presents the matching shared key. Guarded by the key, not a user session
+        (added to PUBLIC_PATHS) — read-only, exposes no credentials."""
+        cfg = state.config
+        key = request.headers.get("x-cluster-key", "")
+        if not (cfg.cluster.active and key and hmac.compare_digest(key, cfg.cluster.key)):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        return JSONResponse(local_node_payload())
+
+    async def cluster_status(request):
+        """Aggregated view for the browser: local node + every discovered peer,
+        fetched server-side with the shared key. Renders the unified table."""
+        if not state.config.cluster.active:
+            return render(request, "_cluster_body.html", nodes=[])
+        local = local_node_payload()
+        nodes = [{**local, "self": True, "online": True}]
+        peers = state.cluster.peers()
+        results = await asyncio.gather(*[state.cluster.fetch_peer(p) for p in peers]) \
+            if peers else []
+        for p, data in zip(peers, results, strict=False):
+            if data:
+                nodes.append({
+                    "id": data.get("id", p["id"]), "name": data.get("name", p["name"]),
+                    "ip": data.get("ip", p["ip"]), "port": data.get("port", p["port"]),
+                    "scheme": data.get("scheme", p["scheme"]),
+                    "self": False, "online": True, "mappings": data.get("mappings", []),
+                })
+            else:
+                nodes.append({"id": p["id"], "name": p["name"], "ip": p["ip"],
+                              "port": p["port"], "scheme": p["scheme"],
+                              "self": False, "online": False, "mappings": []})
+        return render(request, "_cluster_body.html", nodes=nodes)
+
+    async def settings_cluster_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        try:
+            port = int(form.get("discovery_port") or 41750)
+        except ValueError:
+            return await settings_get(request, error="Cluster discovery port must be a number.")
+        new = ClusterSettings(
+            enabled=form.get("enabled") == "on",
+            key=(form.get("key") or "").strip(),
+            discovery_port=port,
+            advertise_ip=(form.get("advertise_ip") or "").strip(),
+        )
+        async with state.config_lock:
+            old = state.config.cluster
+            state.config.cluster = new
+            try:
+                await state.asave()
+            except ConfigError as e:
+                state.config.cluster = old
+                return await settings_get(request, error=str(e))
+        # apply live: restart discovery so a key/port/enable change takes effect now
+        await state.cluster.stop()
+        await state.cluster.start()
+        state.log(f"cluster settings updated (enabled={new.enabled})")
+        state.audit(client_ip(request), "cluster_settings",
+                    "enabled" if new.active else "disabled")
+        return await settings_get(request, ok="Cluster settings saved.")
+
     async def api_ports_json(request):
         return JSONResponse(state.ports.get())
 
@@ -751,6 +857,7 @@ def build_routes(templates, state, static_dir):
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
         Route("/settings/ldap", settings_ldap_post, methods=["POST"]),
         Route("/settings/oidc", settings_oidc_post, methods=["POST"]),
+        Route("/settings/cluster", settings_cluster_post, methods=["POST"]),
         Route("/healthz", healthz),
         Route("/metrics", metrics),
         Route("/settings/config/export", config_export),
@@ -760,6 +867,8 @@ def build_routes(templates, state, static_dir):
         Route("/api/mappings/{mid}/duplicate", mapping_duplicate, methods=["POST"]),
         WebSocketRoute("/api/mappings/{mid}/console", console_ws),
         Route("/api/status", api_status),
+        Route("/api/cluster/status", cluster_status),
+        Route("/api/cluster/local", cluster_local),
         Route("/api/ports.json", api_ports_json),
         Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
         Route("/api/ports/table", api_ports_table),
