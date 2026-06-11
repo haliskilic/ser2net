@@ -17,7 +17,7 @@ with low latency.
 
 ![Dashboard](docs/screenshots/02-dashboard.png)
 
-**LAN cluster — every node's mappings in one table, each row tagged with its host (name + IP):**
+**LAN cluster — every node's mappings in one table; per-node health + remote start/stop:**
 
 ![Cluster](docs/screenshots/06-cluster.png)
 
@@ -87,10 +87,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
   status and ports; **bearer-token** auth (with a role — `viewer` is read-only); OpenAPI
   3.0 (`/api/v1/openapi.json`). The token is generated in Settings.
-- **LAN cluster (fleet view):** nodes on the same network **auto-discover** each other
-  (signed UDP broadcast — no mDNS) and one node shows **every node's mappings in a single
-  read-only table**, each row tagged with its host (name + IP). Set the **same shared key**
-  on every node so they trust each other. Off by default; enable under Settings → LAN cluster.
+- **LAN cluster (fleet management):** nodes on the same network **auto-discover** each
+  other (signed UDP broadcast — no mDNS) and one node shows **every node's mappings in a
+  single table**, each row tagged with its host (name + IP) and each node's **health**
+  (uptime · version · running/total). Operators can **remotely start/stop/restart** a
+  peer's mappings from that view. For routed/L3 networks broadcast can't reach, add
+  **manual peers** (host:port). Trust = the **same shared key** on every node; off by
+  default, enable under Settings → LAN cluster.
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT

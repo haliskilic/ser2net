@@ -24,9 +24,11 @@ import json
 import socket
 import ssl
 import time
+import urllib.parse
 import urllib.request
 
 from . import netinfo
+from ..config import parse_cluster_peer
 
 BEACON_INTERVAL = 5.0   # seconds between outbound beacons
 PEER_TTL = 20.0         # a peer is dropped if not heard from within this window
@@ -60,6 +62,7 @@ class ClusterDiscovery:
         self._beacon_task: asyncio.Task | None = None
         self._peers: dict[str, dict] = {}   # id -> {id,name,ip,port,scheme,last_seen}
         self._running = False
+        self.discovery_error = ""           # non-empty when UDP discovery couldn't start
 
     # ----- config helpers -----
     @property
@@ -124,6 +127,37 @@ class ClusterDiscovery:
         self._peers = {p["id"]: p for p in live}
         return sorted(live, key=lambda p: (p["name"].lower(), p["ip"]))
 
+    def manual_targets(self) -> list[dict]:
+        """Configured manual peers (for routed/L3 networks broadcast can't reach),
+        parsed into fetch targets. Bad entries are skipped (validate() rejects them
+        at save time, so this only guards a hand-edited config)."""
+        out = []
+        for entry in self.cluster.peers:
+            try:
+                scheme, host, port = parse_cluster_peer(entry)
+            except Exception:
+                continue
+            out.append({"scheme": scheme, "ip": host, "port": port, "source": "manual"})
+        return out
+
+    def all_targets(self) -> list[dict]:
+        """Auto-discovered peers + manual peers, deduped by (ip, port). When a manual
+        peer is also auto-discovered the richer auto entry wins."""
+        seen, targets = set(), []
+        for p in self.peers():
+            seen.add((p["ip"], p["port"]))
+            targets.append({**p, "source": "auto"})
+        for m in self.manual_targets():
+            if (m["ip"], m["port"]) not in seen:
+                seen.add((m["ip"], m["port"]))
+                targets.append(m)
+        return targets
+
+    def known_addresses(self) -> set:
+        """(ip, port) allowlist of peers this node may reach — used to bound the
+        remote-control proxy so the browser can't aim it at an arbitrary address."""
+        return {(t["ip"], int(t["port"])) for t in self.all_targets()}
+
     # ----- lifecycle -----
     async def start(self) -> None:
         if self._running or not self.cluster.active:
@@ -139,15 +173,19 @@ class ClusterDiscovery:
             sock.bind(("", port))
         except OSError as e:
             sock.close()
-            self.log(f"cluster: could not bind UDP {port}: {e} — discovery disabled")
+            self.discovery_error = f"UDP discovery port {port} unavailable: {e}"
+            self.log(f"cluster: could not bind UDP {port}: {e} — discovery disabled "
+                     "(manual peers still work)")
             return
         try:
             self._transport, _ = await loop.create_datagram_endpoint(
                 lambda: _BeaconProtocol(self.handle_datagram), sock=sock)
         except OSError as e:
             sock.close()  # endpoint creation owns the socket only on success
+            self.discovery_error = f"UDP listener on {port} failed: {e}"
             self.log(f"cluster: could not start UDP listener on {port}: {e} — discovery disabled")
             return
+        self.discovery_error = ""
         self._running = True
         self._beacon_task = asyncio.create_task(self._beacon_loop(), name="cluster-beacon")
         self.log(f"cluster: discovery on UDP {port} as '{socket.gethostname()}' "
@@ -203,6 +241,15 @@ class ClusterDiscovery:
                 out.append(a)
         return out
 
+    @staticmethod
+    def _peer_ssl_ctx(url: str):
+        if not url.startswith("https"):
+            return None
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE   # cluster trust is the shared key, not the cert
+        return ctx
+
     # ----- peer aggregation (HTTP) -----
     async def fetch_peer(self, peer: dict, timeout: float = 2.5) -> dict | None:
         url = f"{peer['scheme']}://{peer['ip']}:{peer['port']}/api/cluster/local"
@@ -210,13 +257,26 @@ class ClusterDiscovery:
 
     def _http_get_json(self, url: str, timeout: float) -> dict | None:
         req = urllib.request.Request(url, headers={"X-Cluster-Key": self.cluster.key})
-        ctx = None
-        if url.startswith("https"):
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE   # cluster trust is the shared key, not the cert
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            with urllib.request.urlopen(req, timeout=timeout, context=self._peer_ssl_ctx(url)) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception:
+            return None
+
+    # ----- remote control (HTTP POST to a peer's key-guarded control endpoint) -----
+    async def control_peer(self, scheme: str, host: str, port: int, mapping_id: str,
+                           action: str, timeout: float = 4.0) -> dict | None:
+        url = f"{scheme}://{host}:{port}/api/cluster/control"
+        data = urllib.parse.urlencode({"mapping_id": mapping_id, "action": action}).encode()
+        return await asyncio.to_thread(self._http_post_json, url, data, timeout)
+
+    def _http_post_json(self, url: str, data: bytes, timeout: float) -> dict | None:
+        req = urllib.request.Request(
+            url, data=data, method="POST",
+            headers={"X-Cluster-Key": self.cluster.key,
+                     "Content-Type": "application/x-www-form-urlencoded"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=self._peer_ssl_ctx(url)) as r:
                 return json.loads(r.read().decode("utf-8"))
         except Exception:
             return None

@@ -21,7 +21,7 @@
     <h2>Cluster — all nodes on the LAN</h2>
     <span class="muted">read-only · auto-discovered · each row shows its host (name + IP)</span>
   </div>
-  <div id="cluster" hx-get="/api/cluster/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
+  <div id="cluster" hx-get="/api/cluster/status" hx-trigger="load, every 5s, refreshCluster from:body" hx-swap="innerHTML">
     <p class="muted">Discovering nodes…</p>
   </div>
 </section>
