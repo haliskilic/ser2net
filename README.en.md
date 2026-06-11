@@ -83,6 +83,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
   status and ports; **bearer-token** auth (with a role — `viewer` is read-only); OpenAPI
   3.0 (`/api/v1/openapi.json`). The token is generated in Settings.
+- **LAN cluster (fleet view):** nodes on the same network **auto-discover** each other
+  (signed UDP broadcast — no mDNS) and one node shows **every node's mappings in a single
+  read-only table**, each row tagged with its host (name + IP). Set the **same shared key**
+  on every node so they trust each other. Off by default; enable under Settings → LAN cluster.
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT

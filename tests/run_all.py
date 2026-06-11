@@ -40,6 +40,7 @@ PORTABLE = [
     "test_modbus_poll.py",
     "test_ldap.py",
     "test_oidc.py",
+    "test_cluster.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

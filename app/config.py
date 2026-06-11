@@ -527,6 +527,44 @@ class OidcSettings:
 
 
 @dataclass
+class ClusterSettings:
+    """LAN cluster: instances discover each other via signed UDP broadcast beacons
+    and one node aggregates every node's mappings into a single read-only view.
+    Opt-in: disabled until `enabled` is set AND a shared `key` is configured. The
+    key both signs beacons (so only same-key nodes trust each other) and guards the
+    peer-facing status endpoint. `advertise_ip` overrides the auto-detected LAN IP
+    that peers use to reach this node's web UI (blank => auto)."""
+    enabled: bool = False
+    key: str = ""                    # shared secret (PSK); empty => cluster off
+    discovery_port: int = 41750      # UDP port for broadcast beacons
+    advertise_ip: str = ""           # override advertised web-UI IP (blank => auto-detect)
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "ClusterSettings":
+        d = dict(d or {})
+        known = {f.name for f in dataclasses.fields(ClusterSettings)}
+        return ClusterSettings(**{k: v for k, v in d.items() if k in known})
+
+    @property
+    def active(self) -> bool:
+        return bool(self.enabled and self.key.strip())
+
+    def validate(self) -> None:
+        if not self.enabled:
+            return
+        if not self.key.strip():
+            raise ConfigError("Cluster is enabled but no shared key is set.")
+        if not (1 <= int(self.discovery_port) <= 65535):
+            raise ConfigError("Cluster discovery port must be 1..65535.")
+        if self.advertise_ip.strip():
+            try:
+                ipaddress.ip_address(self.advertise_ip.strip())
+            except ValueError:
+                raise ConfigError(
+                    f"Cluster advertise IP is not a valid address: {self.advertise_ip}") from None
+
+
+@dataclass
 class User:
     """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
     on that user's password/role change to revoke only their existing sessions.
@@ -563,6 +601,9 @@ class AppConfig:
     users: list[User] = field(default_factory=list)
     ldap: LdapSettings = field(default_factory=LdapSettings)
     oidc: OidcSettings = field(default_factory=OidcSettings)
+    cluster: ClusterSettings = field(default_factory=ClusterSettings)
+    # Stable per-node identity for the LAN cluster (generated once, persisted).
+    instance_id: str = field(default_factory=lambda: secrets.token_hex(8))
     defaults: dict[str, Any] = field(default_factory=dict)  # serial defaults
     mappings: list[MappingConfig] = field(default_factory=list)
 
@@ -587,6 +628,8 @@ class AppConfig:
             users=users,
             ldap=LdapSettings.from_dict(d.get("ldap", {})),
             oidc=OidcSettings.from_dict(d.get("oidc", {})),
+            cluster=ClusterSettings.from_dict(d.get("cluster", {})),
+            instance_id=d.get("instance_id") or secrets.token_hex(8),
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
@@ -603,6 +646,8 @@ class AppConfig:
             "users": [asdict(u) for u in self.users],
             "ldap": asdict(self.ldap),
             "oidc": asdict(self.oidc),
+            "cluster": asdict(self.cluster),
+            "instance_id": self.instance_id,
             "defaults": self.defaults,
             "mappings": [m.to_dict() for m in self.mappings],
         }
@@ -646,6 +691,7 @@ class AppConfig:
 
         self.ldap.validate()
         self.oidc.validate()
+        self.cluster.validate()
 
         seen: dict[tuple[str, str, int], str] = {}   # (proto, bind_ip, port) -> name
         serial_owner: dict[str, tuple[str, str]] = {}  # device -> (mapping_id, name)
