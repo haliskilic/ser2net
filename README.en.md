@@ -62,7 +62,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control
-  (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open, RS-485.
+  (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open. (RS-485 hardware
+  mode is set via JSON import / the REST API today; a web-UI control is planned.)
 - **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
   Windows WM_DEVICECHANGE), falling back to polling. **IP picker** from the machine's
   own addresses (localhost / LAN / 0.0.0.0) or custom.
@@ -236,7 +237,7 @@ All state lives in the **data dir** (default `data/`). The data directory is loc
 owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the files
 inside aren't readable by other users:
 - `config.json` — admin IP, password hash, all mappings (atomic write).
-- `all.log` — global activity/audit; `audit.log` — config changes.
+- `all.log` — global activity/audit (size-rotated); `audit.log` — config changes (rotated).
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `tls/` — certificate/key if self-signed is generated.
 

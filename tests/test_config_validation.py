@@ -218,8 +218,18 @@ def test_config_round_trip():
     print("config round-trips with every subsystem (auth/ldap/oidc/mqtt/modbus) intact  OK")
 
 
+def test_invalid_admin_bind_ip_rejected():
+    cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "not-an-ip", "port": 8080}})
+    _expect_error(cfg, "bind IP")
+    # valid wildcard/loopback/IP must pass
+    for ip in ("0.0.0.0", "::", "127.0.0.1", "192.168.1.5"):
+        AppConfig.from_dict({"admin_ui": {"bind_ip": ip, "port": 8080}}).validate()
+    print("invalid admin UI bind IP rejected; valid ones accepted  OK")
+
+
 def main():
     test_config_round_trip()
+    test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()
     test_mqtt_validation()

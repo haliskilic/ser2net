@@ -54,6 +54,7 @@ SOCAT = [
     "test_access_priority.py",
     "test_fullduplex.py",
     "test_v2_transports.py",
+    "test_tls_bridge.py",
     "test_v2_console.py",
     "test_v2_web.py",
     "test_web_e2e.py",

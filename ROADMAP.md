@@ -1,6 +1,6 @@
 # ser2net — Roadmap
 
-> Current release: **v2.6.1**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.6.2**. CI is green across Linux + Windows × Python 3.10–3.13.
 
 ## Shipped
 
@@ -90,6 +90,17 @@
 - **Manual peers** (`host:port`) for routed/L3 networks broadcast can't reach, aggregated
   alongside auto-discovered nodes
 
+### v2.6.2 — review hardening
+- Full multi-dimension review (engine correctness, web/security, config/packaging,
+  design/docs/tests). Net result: no critical bugs — the engine's `_clients` snapshots
+  are race-free (synchronous comprehensions), auth/RBAC/CSRF/SSRF model is sound.
+- Validate `admin_ui.bind_ip` in `AppConfig.validate()` (clear error instead of a
+  uvicorn bind crash on a hand-edited config)
+- Closed the top test gap: **per-mapping TLS data-bridge e2e** (`test_tls_bridge.py` —
+  verifies the channel is encrypted + plaintext is rejected) and a bind-IP validation case
+- Doc accuracy: RS-485 is config/REST/JSON-settable (no web UI yet); global logs are
+  size-rotated (distinct from the per-mapping 100 MB/15-day trim)
+
 ---
 
 ## Planned
@@ -100,10 +111,11 @@
   key-guarded peer endpoints; optional IPv6 (multicast) discovery
 
 ### v2.7 — industrial/IIoT depth
+- **RS-485 hardware auto-RTS** UI (`TIOCSRS485`) — the config/REST already carry the
+  fields; expose them in the mapping form (closes the docs gap noted in v2.6.2)
 - **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)
 - **Modbus write** support (FC 5/6/15/16), per-point MQTT→register control, RTU
   inter-frame tuning
-- **RS-485 hardware auto-RTS** (`TIOCSRS485`) UI
 
 ### v2.8 — packaging & migration
 - Windows service installer (Shawl); `.deb` / `.rpm` packages
@@ -111,8 +123,12 @@
 - Classic `ser2net.yaml` import for migration
 
 ### Maintenance
-- Bump pinned GitHub Actions off Node 20 (deprecated 2026-06-16) to current
-  `actions/*@v5` to clear the CI/release deprecation warnings
+- Bump pinned GitHub Actions off Node 20 (`checkout@v4`, `setup-python@v5`,
+  `action-gh-release@v2`) to the current Node-24 majors to clear the deprecation
+  warnings. Non-breaking — GitHub force-runs them on Node 24 from 2026-06-16, so this
+  is cosmetic; bump only after confirming the new tags exist.
+- Test backlog: confirm RFC2217 read-only also blocks control (baud/RTS/DTR) commands,
+  and add a UDP `allowed_client_ips` reject case if not already explicit.
 
 ### Icebox / conditional
 - Thread-per-port serial backend — only if a real Windows high-throughput /

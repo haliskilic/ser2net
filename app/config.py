@@ -722,6 +722,16 @@ class AppConfig:
             if not os.path.isfile(path):
                 raise ConfigError(f"TLS file not found or not readable: {path}")
 
+        # Admin UI bind IP (set via the console / --reconfigure, or a hand-edited
+        # config). Catch a bad value here with a clear error instead of letting
+        # uvicorn crash at bind time.
+        if self.admin_ui.bind_ip:
+            try:
+                ipaddress.ip_address(self.admin_ui.bind_ip)
+            except ValueError:
+                raise ConfigError(
+                    f"Invalid admin UI bind IP: {self.admin_ui.bind_ip}") from None
+
         self.ldap.validate()
         self.oidc.validate()
         self.cluster.validate()
