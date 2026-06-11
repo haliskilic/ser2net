@@ -1,0 +1,46 @@
+<table class="grid">
+  <thead>
+    <tr>
+      <th>Host</th><th>Mapping</th><th>Type</th><th>Endpoint</th><th>Serial</th>
+      <th>State</th><th>Clients</th><th>In / Out</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for n in nodes %}
+    {% set hosturl = n.scheme ~ '://' ~ n.ip ~ ':' ~ n.port %}
+    {% set hostcell %}
+      {{ n.name }}{% if n.self %} <span class="tag">this node</span>{% endif %}
+      <div class="peer mono">{{ n.ip }}:{{ n.port }}</div>
+    {% endset %}
+    {% if not n.online %}
+      <tr class="node-offline">
+        <td>{{ hostcell|safe }}</td>
+        <td colspan="8" class="muted">offline / unreachable</td>
+      </tr>
+    {% elif not n.mappings %}
+      <tr>
+        <td>{{ hostcell|safe }}</td>
+        <td colspan="8" class="muted">no mappings on this node</td>
+      </tr>
+    {% else %}
+      {% for m in n.mappings %}
+      <tr>
+        <td>{{ hostcell|safe }}</td>
+        <td>{{ m.name }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
+        <td class="mono">{{ m.kind }}</td>
+        <td class="mono">{{ m.endpoint }}</td>
+        <td class="mono">{{ m.serial }}</td>
+        <td><span class="state state-{{ m.state }}">{{ m.state }}</span></td>
+        <td>{{ m.client_count }}</td>
+        <td class="mono">{{ m.bytes_in }} / {{ m.bytes_out }}</td>
+        <td class="actions">
+          {% if not n.self %}<a class="btn sm" href="{{ hosturl }}" target="_blank" rel="noopener">Open</a>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% endif %}
+  {% else %}
+    <tr><td colspan="9" class="muted">No cluster nodes discovered yet. Beacons are sent every few seconds.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
