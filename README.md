@@ -14,15 +14,19 @@ web arayüzünden yönetilen, çapraz-platform (Windows + Linux) saf-Python köp
 
 ## 📸 Ekran Görüntüleri
 
-**Pano — onlarca eşleme, canlı durum, algılanan portlar:**
+**Pano — onlarca eşleme, canlı durum, algılanan portlar ve LAN cluster paneli:**
 
 ![Pano](docs/screenshots/02-dashboard.png)
+
+**LAN cluster — ağdaki tüm düğümlerin eşlemeleri tek tabloda, her satırda host (ad + IP):**
+
+![Cluster](docs/screenshots/06-cluster.png)
 
 | Eşleme ekleme (tüm seri/ağ seçenekleri) | Tarayıcı-içi seri konsol (xterm.js) |
 |---|---|
 | ![Eşleme formu](docs/screenshots/03-add-mapping.png) | ![Konsol](docs/screenshots/05-console.png) |
 
-| Ayarlar (parola · TLS · yedek) | Giriş |
+| Ayarlar (parola · TLS · cluster · yedek) | Giriş |
 |---|---|
 | ![Ayarlar](docs/screenshots/04-settings.png) | ![Giriş](docs/screenshots/01-login.png) |
 
@@ -224,9 +228,10 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 
 ## 🗂️ Yapılandırma & durum dosyaları
 
-Tüm durum **veri dizininde** (varsayılan `data/`):
-- `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım; sahibe özel
-  izinler: POSIX'te 0600, Windows'ta `icacls` ile sahip/SYSTEM/Administrators).
+Tüm durum **veri dizininde** (varsayılan `data/`). Veri dizini yalnızca sahibe açık
+kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), böylece
+içindeki dosyalar başka kullanıcılarca okunamaz:
+- `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
 - `all.log` — global etkinlik/audit; `audit.log` — config değişiklikleri.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `tls/` — self-signed üretilirse sertifika/anahtar.

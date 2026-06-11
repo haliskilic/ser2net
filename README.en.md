@@ -13,15 +13,19 @@ with low latency.
 
 ## 📸 Screenshots
 
-**Dashboard — dozens of mappings, live status, detected ports:**
+**Dashboard — dozens of mappings, live status, detected ports and the LAN cluster panel:**
 
 ![Dashboard](docs/screenshots/02-dashboard.png)
+
+**LAN cluster — every node's mappings in one table, each row tagged with its host (name + IP):**
+
+![Cluster](docs/screenshots/06-cluster.png)
 
 | Add mapping (all serial/network options) | In-browser serial console (xterm.js) |
 |---|---|
 | ![Mapping form](docs/screenshots/03-add-mapping.png) | ![Console](docs/screenshots/05-console.png) |
 
-| Settings (password · TLS · backup) | Login |
+| Settings (password · TLS · cluster · backup) | Login |
 |---|---|
 | ![Settings](docs/screenshots/04-settings.png) | ![Login](docs/screenshots/01-login.png) |
 
@@ -225,9 +229,10 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 
 ## 🗂️ Configuration & state files
 
-All state lives in the **data dir** (default `data/`):
-- `config.json` — admin IP, password hash, all mappings (atomic write; owner-only
-  perms: 0600 on POSIX, `icacls` owner/SYSTEM/Administrators on Windows).
+All state lives in the **data dir** (default `data/`). The data directory is locked to
+owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the files
+inside aren't readable by other users:
+- `config.json` — admin IP, password hash, all mappings (atomic write).
 - `all.log` — global activity/audit; `audit.log` — config changes.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `tls/` — certificate/key if self-signed is generated.
