@@ -667,7 +667,7 @@ def build_routes(templates, state, static_dir):
         peers = state.cluster.peers()
         results = await asyncio.gather(*[state.cluster.fetch_peer(p) for p in peers]) \
             if peers else []
-        for p, data in zip(peers, results):
+        for p, data in zip(peers, results, strict=False):
             if data:
                 nodes.append({
                     "id": data.get("id", p["id"]), "name": data.get("name", p["name"]),
