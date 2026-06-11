@@ -554,7 +554,11 @@ class ClusterSettings:
             return
         if not self.key.strip():
             raise ConfigError("Cluster is enabled but no shared key is set.")
-        if not (1 <= int(self.discovery_port) <= 65535):
+        try:
+            port = int(self.discovery_port)
+        except (TypeError, ValueError):
+            raise ConfigError("Cluster discovery port must be a number.") from None
+        if not (1 <= port <= 65535):
             raise ConfigError("Cluster discovery port must be 1..65535.")
         if self.advertise_ip.strip():
             try:

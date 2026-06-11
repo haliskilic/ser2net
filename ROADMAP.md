@@ -1,5 +1,7 @@
 # ser2net — Roadmap
 
+> Current release: **v2.5.0**. CI is green across Linux + Windows × Python 3.10–3.13.
+
 ## Shipped
 
 ### v1.0 — MVP
@@ -29,8 +31,6 @@
 - **Admin TLS** via cert/key paths or `openssl` self-signed generation
 - **Mappings export/import** (JSON, no secrets) + duplicate
 
----
-
 ### v2.1a — in-browser serial console
 - xterm.js terminal over an authenticated WebSocket (`/api/mappings/{id}/console`):
   read live traffic, or type to the device (net mappings, not read-only)
@@ -49,9 +49,7 @@
 - **Docker** image + `docker-compose` + headless bind env; **CI** (GitHub Actions:
   ruff + ubuntu/windows × Python 3.10–3.13); unified cross-platform test runner
 
-### v2.2 — commercial features (Phase 2)
-- **REST API** (`/api/v1`): bearer-token JSON API — mapping CRUD, start/stop/restart,
-  status, ports, OpenAPI 3.0 spec
+### v2.2 — Modbus, RBAC, LDAP, MQTT (Phase 2)
 - **Modbus RTU↔TCP gateway** (`protocol=modbus`): multi-master, bus-locked
   transactions, txn-id integrity, `0x0B` timeout; reply-unit validation. **Edge mode:**
   periodic register polling (uint/int/float 16/32, scaling) published to MQTT
@@ -61,33 +59,55 @@
   group→role mapping, shadow accounts on the RBAC model
 - **MQTT publishing** (optional `paho-mqtt`): per-mapping serial-line → broker with
   retained birth/death
-- **Client-side virtual COM** recipes (`docs/VIRTUAL-COM.md`); refreshed UI screenshots
+- **Client-side virtual COM** recipes (`docs/VIRTUAL-COM.md`)
+
+### v2.3 — UX & access polish
+- **OIDC single sign-on** (authorization-code flow + issuer discovery; claim→role
+  mapping, shadow accounts) — `app/web/oidc_auth.py`, optional `authlib`
+- **REST API token roles** (`admin` / `operator` / `viewer`; `viewer` is read-only)
+- **Light / dark theme toggle** (persisted in `localStorage`); xterm fit-to-window addon
+- _(i18n was dropped — the UI stays English by decision.)_
+
+### v2.4 — packaging & distribution
+- **PyInstaller standalone builds** (Windows `.exe`, Linux binary) bundling the optional
+  MQTT/LDAP/OIDC deps; GitHub Actions release artifacts published on `v*` tags
+
+### v2.5 — LAN cluster
+- **Auto-discovery + unified fleet view**: nodes find each other via HMAC-signed UDP
+  broadcast beacons (no mDNS) and one node aggregates every node's mappings into a
+  single **read-only** table, each row tagged with its host (name + IP). Opt-in, off by
+  default; trust = a shared cluster key. Server-side fan-out to peers' key-guarded
+  `/api/cluster/local`; the browser only talks to the node it logged into.
 
 ---
 
 ## Planned
 
-### v2.3 — UX & access polish
-- **OIDC / SAML browser-SSO** (next auth step after LDAP; auth-code flow + JWKS)
-- **REST API token scopes/roles** (currently a single admin-level token) + per-token
-- i18n (TR/EN) for the UI; dark/light theme toggle; xterm fit-to-window addon
+### v2.6 — cluster depth & hardening
+- **Remote control** from the unified view: start/stop/edit a peer's mappings (the read
+  path exists; add a key-guarded write endpoint + role check on the target node)
+- **Per-node health/uptime** column; surface a node-level "discovery disabled" status in
+  the UI when the UDP bind fails (today it only logs)
+- **Manual peer list** for routed/L3 networks where broadcast doesn't reach (complement
+  to auto-discovery)
+- **Security hardening** (from the v2.5 review): validate/curb peer-advertised IPs before
+  server-side fetch (SSRF defense-in-depth), optional TLS certificate pinning for peer
+  fetch, a light rate-limit on `/api/cluster/local`, optional IPv6 (multicast) discovery
 
-### v2.4 — packaging & distribution
-- ~~PyInstaller standalone builds (Windows `.exe`, Linux binary) bundling the optional
-  MQTT/LDAP/OIDC deps; GitHub Actions release artifacts on `v*` tags~~ ✅ shipped
-- Windows service installer (Shawl); `.deb` / `.rpm`
-- Automated multi-platform offline wheelhouse (cp311–cp313 × OS) for source installs
-
-### v2.5 — industrial/IIoT depth
+### v2.7 — industrial/IIoT depth
 - **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)
-- Modbus: write support (FC 5/6/15/16), per-point MQTT→register control, RTU inter-frame
-  tuning; RS-485 hardware auto-RTS (`TIOCSRS485`) UI
-- ~~LAN **cluster dashboard**: nodes auto-discover each other (signed UDP broadcast,
-  no mDNS) and one node shows every node's mappings in a single read-only table, each
-  row tagged with its host (name + IP)~~ ✅ shipped (v2.5a)
-- Cluster: remote control (start/stop/edit a peer's mappings from one screen) + per-node
-  health/uptime in the unified view
-- classic `ser2net.yaml` import for migration
+- **Modbus write** support (FC 5/6/15/16), per-point MQTT→register control, RTU
+  inter-frame tuning
+- **RS-485 hardware auto-RTS** (`TIOCSRS485`) UI
+
+### v2.8 — packaging & migration
+- Windows service installer (Shawl); `.deb` / `.rpm` packages
+- Automated multi-platform offline wheelhouse (cp310–cp313 × OS) for source installs
+- Classic `ser2net.yaml` import for migration
+
+### Maintenance
+- Bump pinned GitHub Actions off Node 20 (deprecated 2026-06-16) to current
+  `actions/*@v5` to clear the CI/release deprecation warnings
 
 ### Icebox / conditional
 - Thread-per-port serial backend — only if a real Windows high-throughput /
@@ -95,7 +115,8 @@
 - Per-mapping TLS client certificate verification (mTLS) for data bridges
 - Pluggable persistent session store
 
-> Note: mDNS/zeroconf advertising has been removed from the roadmap.
+> Note: mDNS/zeroconf advertising is intentionally **not** on the roadmap; LAN cluster
+> discovery uses signed UDP broadcast instead.
 
 ---
 
