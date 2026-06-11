@@ -2,7 +2,7 @@
 
 On first run this installs the bundled wheels from ``vendor/wheels/`` into a
 local ``lib/`` directory (added to ``sys.path`` by ``ser2net.py``), so the app
-runs on any machine that merely has a Python 3.11+ interpreter — no internet,
+runs on any machine that merely has a Python 3.10+ interpreter — no internet,
 no virtualenv, no system-wide installs required.
 
 It is idempotent: if every dependency already imports, it does nothing.
