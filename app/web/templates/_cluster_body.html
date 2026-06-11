@@ -43,6 +43,7 @@
           {% else %}
             <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}start"}' hx-swap="none">Start</button>
           {% endif %}
+          <button class="btn sm" hx-get="/api/cluster/peer-form?scheme={{ n.scheme }}&host={{ n.ip }}&port={{ n.port }}&mid={{ m.id }}" hx-target="#form-panel" hx-swap="innerHTML">Edit</button>
         {% endif %}
       </td>
     </tr>

@@ -250,10 +250,26 @@ class ClusterDiscovery:
         ctx.verify_mode = ssl.CERT_NONE   # cluster trust is the shared key, not the cert
         return ctx
 
-    # ----- peer aggregation (HTTP) -----
-    async def fetch_peer(self, peer: dict, timeout: float = 2.5) -> dict | None:
-        url = f"{peer['scheme']}://{peer['ip']}:{peer['port']}/api/cluster/local"
+    # ----- peer HTTP (all key-guarded; trust is the shared key) -----
+    async def get_peer(self, scheme: str, host: str, port: int, path: str,
+                       timeout: float = 3.0) -> dict | None:
+        url = f"{scheme}://{host}:{port}{path}"
         return await asyncio.to_thread(self._http_get_json, url, timeout)
+
+    async def post_peer(self, scheme: str, host: str, port: int, path: str,
+                        fields: dict, timeout: float = 6.0) -> dict | None:
+        url = f"{scheme}://{host}:{port}{path}"
+        data = urllib.parse.urlencode(fields).encode()
+        return await asyncio.to_thread(self._http_post_json, url, data, timeout)
+
+    async def fetch_peer(self, peer: dict, timeout: float = 2.5) -> dict | None:
+        return await self.get_peer(peer["scheme"], peer["ip"], peer["port"],
+                                   "/api/cluster/local", timeout)
+
+    async def control_peer(self, scheme: str, host: str, port: int, mapping_id: str,
+                           action: str, timeout: float = 4.0) -> dict | None:
+        return await self.post_peer(scheme, host, port, "/api/cluster/control",
+                                    {"mapping_id": mapping_id, "action": action}, timeout)
 
     def _http_get_json(self, url: str, timeout: float) -> dict | None:
         req = urllib.request.Request(url, headers={"X-Cluster-Key": self.cluster.key})
@@ -262,13 +278,6 @@ class ClusterDiscovery:
                 return json.loads(r.read().decode("utf-8"))
         except Exception:
             return None
-
-    # ----- remote control (HTTP POST to a peer's key-guarded control endpoint) -----
-    async def control_peer(self, scheme: str, host: str, port: int, mapping_id: str,
-                           action: str, timeout: float = 4.0) -> dict | None:
-        url = f"{scheme}://{host}:{port}/api/cluster/control"
-        data = urllib.parse.urlencode({"mapping_id": mapping_id, "action": action}).encode()
-        return await asyncio.to_thread(self._http_post_json, url, data, timeout)
 
     def _http_post_json(self, url: str, data: bytes, timeout: float) -> dict | None:
         req = urllib.request.Request(
