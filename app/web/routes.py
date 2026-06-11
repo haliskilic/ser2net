@@ -17,6 +17,7 @@ import re
 import secrets
 import socket
 import subprocess
+import time
 from urllib.parse import urlparse
 
 from starlette.responses import (
@@ -25,6 +26,7 @@ from starlette.responses import (
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
+from .. import __version__
 from ..config import (
     ROLE_RANK, ROLES, ClusterSettings, ConfigError, LdapSettings, MappingConfig,
     OidcSettings, User,
@@ -51,6 +53,18 @@ def _mapping_endpoint(m) -> str:
     if m.network.mode == "client":
         return f"→ {m.network.remote_host}:{m.network.remote_port}"
     return f"{m.network.bind_ip}:{m.network.port}"
+
+
+def _fmt_uptime(seconds: float) -> str:
+    s = int(max(0, seconds))
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    m, _ = divmod(s, 60)
+    if d:
+        return f"{d}d {h}h"
+    if h:
+        return f"{h}h {m}m"
+    return f"{m}m"
 
 
 def build_routes(templates, state, static_dir):
@@ -253,6 +267,7 @@ def build_routes(templates, state, static_dir):
                       ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
                       oidc=state.config.oidc, oidc_lib=_module_present("authlib"),
                       cluster=state.config.cluster, instance_id=state.config.instance_id,
+                      cluster_peers_text="\n".join(state.config.cluster.peers),
                       uptime=int(state.started_at))
 
     async def settings_password_post(request):
@@ -626,16 +641,18 @@ def build_routes(templates, state, static_dir):
                       statuses=state.supervisor.all_status(),
                       can_edit=can_edit(request))
 
-    # ---------------- LAN cluster (federated read-only view) ----------------
+    # ---------------- LAN cluster (federated view + remote control) ----------------
     def local_node_payload() -> dict:
-        """This node's identity + a status row per mapping — the unit other nodes
-        aggregate. No secrets: just what the unified dashboard table shows."""
+        """This node's identity, health and a status row per mapping — the unit other
+        nodes aggregate. No secrets: just what the unified dashboard table shows."""
         cfg = state.config
         ip, port, scheme = state.cluster.advertised()
         statuses = state.supervisor.all_status()
-        maps = []
+        maps, running = [], 0
         for m in cfg.mappings:
             st = statuses.get(m.id) or {}
+            if st.get("state") == "running":
+                running += 1
             maps.append({
                 "id": m.id, "name": m.name, "enabled": m.enabled,
                 "kind": _mapping_kind_label(m), "endpoint": _mapping_endpoint(m),
@@ -645,7 +662,9 @@ def build_routes(templates, state, static_dir):
                 "bytes_in": st.get("bytes_in", 0), "bytes_out": st.get("bytes_out", 0),
             })
         return {"id": cfg.instance_id, "name": socket.gethostname(),
-                "ip": ip, "port": port, "scheme": scheme, "mappings": maps}
+                "ip": ip, "port": port, "scheme": scheme,
+                "version": __version__, "uptime_s": int(time.time() - state.started_at),
+                "mapping_count": len(maps), "running_count": running, "mappings": maps}
 
     async def cluster_local(request):
         """Peer-facing: returns this node's mappings to another cluster node that
@@ -657,29 +676,86 @@ def build_routes(templates, state, static_dir):
             return JSONResponse({"error": "forbidden"}, status_code=403)
         return JSONResponse(local_node_payload())
 
+    def _node_from(target, data) -> dict:
+        """Build a fleet-table node entry from a fetch target + the peer's payload
+        (data is None when the peer is unreachable)."""
+        base = {"self": False, "source": target.get("source", "auto"),
+                "ip": target["ip"], "port": target["port"], "scheme": target["scheme"]}
+        if not data:
+            return {**base, "online": False, "id": target.get("id", ""),
+                    "name": target.get("name", f"{target['ip']}:{target['port']}"),
+                    "uptime": "", "version": "", "mapping_count": 0, "running_count": 0,
+                    "mappings": []}
+        return {**base, "online": True, "id": data.get("id", target.get("id", "")),
+                "name": data.get("name", base["ip"]),
+                "ip": data.get("ip", base["ip"]), "port": data.get("port", base["port"]),
+                "scheme": data.get("scheme", base["scheme"]),
+                "uptime": _fmt_uptime(data.get("uptime_s", 0)), "version": data.get("version", ""),
+                "mapping_count": data.get("mapping_count", len(data.get("mappings", []))),
+                "running_count": data.get("running_count", 0),
+                "mappings": data.get("mappings", [])}
+
     async def cluster_status(request):
-        """Aggregated view for the browser: local node + every discovered peer,
+        """Aggregated view for the browser: local node + every discovered/manual peer,
         fetched server-side with the shared key. Renders the unified table."""
         if not state.config.cluster.active:
-            return render(request, "_cluster_body.html", nodes=[])
+            return render(request, "_cluster_body.html", nodes=[], can_edit=can_edit(request),
+                          discovery_error="")
         local = local_node_payload()
-        nodes = [{**local, "self": True, "online": True}]
-        peers = state.cluster.peers()
-        results = await asyncio.gather(*[state.cluster.fetch_peer(p) for p in peers]) \
-            if peers else []
-        for p, data in zip(peers, results, strict=False):
-            if data:
-                nodes.append({
-                    "id": data.get("id", p["id"]), "name": data.get("name", p["name"]),
-                    "ip": data.get("ip", p["ip"]), "port": data.get("port", p["port"]),
-                    "scheme": data.get("scheme", p["scheme"]),
-                    "self": False, "online": True, "mappings": data.get("mappings", []),
-                })
-            else:
-                nodes.append({"id": p["id"], "name": p["name"], "ip": p["ip"],
-                              "port": p["port"], "scheme": p["scheme"],
-                              "self": False, "online": False, "mappings": []})
-        return render(request, "_cluster_body.html", nodes=nodes)
+        nodes = [{**local, "self": True, "online": True, "source": "self",
+                  "uptime": _fmt_uptime(local["uptime_s"])}]
+        targets = state.cluster.all_targets()
+        results = await asyncio.gather(*[state.cluster.fetch_peer(t) for t in targets]) \
+            if targets else []
+        for t, data in zip(targets, results, strict=False):
+            nodes.append(_node_from(t, data))
+        return render(request, "_cluster_body.html", nodes=nodes, can_edit=can_edit(request),
+                      discovery_error=state.cluster.discovery_error)
+
+    async def cluster_control(request):
+        """Peer-facing remote control: another cluster node (presenting the shared key)
+        asks us to start/stop/restart one of OUR mappings. Key-guarded, no session."""
+        cfg = state.config
+        key = request.headers.get("x-cluster-key", "")
+        if not (cfg.cluster.active and key and hmac.compare_digest(key, cfg.cluster.key)):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        form = await request.form()
+        mid, action = form.get("mapping_id", ""), form.get("action", "")
+        if action not in ("start", "stop", "restart"):
+            return JSONResponse({"error": "bad_action"}, status_code=400)
+        ok, name = await _apply_action(mid, action)
+        if not ok:
+            return JSONResponse({"error": name}, status_code=404)
+        ip = client_ip(request)
+        state.log(f"cluster: remote {action} of '{name}' from {ip}")
+        state.audit(ip, f"cluster_remote_{action}", name)
+        return JSONResponse({"ok": True, "name": name})
+
+    async def cluster_control_peer(request):
+        """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
+        The peer is validated against the known-address allowlist (so the browser can't
+        aim this at an arbitrary host), then the call is made with the shared key."""
+        if deny := require_role(request, "operator"):
+            return deny
+        form = await request.form()
+        scheme = form.get("scheme", "http")
+        host, action = form.get("host", ""), form.get("action", "")
+        mid = form.get("mid", "")
+        try:
+            port = int(form.get("port", "0"))
+        except ValueError:
+            return PlainTextResponse("Bad port", status_code=400)
+        if action not in ("start", "stop", "restart"):
+            return PlainTextResponse("Unknown action", status_code=400)
+        if (host, port) not in state.cluster.known_addresses():
+            return PlainTextResponse("Unknown cluster peer", status_code=403)
+        res = await state.cluster.control_peer(scheme, host, port, mid, action)
+        if not res or not res.get("ok"):
+            return PlainTextResponse("Peer did not accept the command "
+                                     "(unreachable or rejected).", status_code=502)
+        state.log(f"cluster: sent {action} to {host}:{port} for '{res.get('name', mid)}'")
+        state.audit(client_ip(request), f"cluster_control_{action}", f"{host}:{port}/{res.get('name', mid)}")
+        return Response("", headers={"HX-Trigger": "refreshCluster"})
 
     async def settings_cluster_post(request):
         if deny := require_role(request, "admin"):
@@ -691,11 +767,13 @@ def build_routes(templates, state, static_dir):
             port = int(form.get("discovery_port") or 41750)
         except ValueError:
             return await settings_get(request, error="Cluster discovery port must be a number.")
+        peers = [ln.strip() for ln in (form.get("peers") or "").splitlines() if ln.strip()]
         new = ClusterSettings(
             enabled=form.get("enabled") == "on",
             key=(form.get("key") or "").strip(),
             discovery_port=port,
             advertise_ip=(form.get("advertise_ip") or "").strip(),
+            peers=peers,
         )
         async with state.config_lock:
             old = state.config.cluster
@@ -708,7 +786,7 @@ def build_routes(templates, state, static_dir):
         # apply live: restart discovery so a key/port/enable change takes effect now
         await state.cluster.stop()
         await state.cluster.start()
-        state.log(f"cluster settings updated (enabled={new.enabled})")
+        state.log(f"cluster settings updated (enabled={new.enabled}, manual_peers={len(peers)})")
         state.audit(client_ip(request), "cluster_settings",
                     "enabled" if new.active else "disabled")
         return await settings_get(request, ok="Cluster settings saved.")
@@ -814,17 +892,13 @@ def build_routes(templates, state, static_dir):
             state.delete_mapping_log(mid)
         return Response("", headers=_TRIGGER)
 
-    async def mapping_action(request):
-        if deny := require_role(request, "operator"):
-            return deny
-        mid = request.path_params["mid"]
-        action = request.path_params["action"]
-        if action not in ("start", "stop", "restart"):
-            return PlainTextResponse("Unknown action", status_code=400)
+    async def _apply_action(mid, action) -> tuple[bool, str]:
+        """Start/stop/restart a local mapping by id. Returns (ok, name-or-error).
+        Shared by the UI action endpoint and the cluster remote-control endpoint."""
         async with state.config_lock:
             m = state.config.get_mapping(mid)
             if not m:
-                return PlainTextResponse("Mapping not found", status_code=404)
+                return False, "Mapping not found"
             m.enabled = action != "stop"
             await state.asave()
         if action == "stop":
@@ -833,8 +907,20 @@ def build_routes(templates, state, static_dir):
             await state.supervisor.restart_mapping(m)
         else:  # start
             await state.supervisor.apply_mapping(m)
-        state.log(f"mapping {action}: {m.name}")
-        state.audit(client_ip(request), f"mapping_{action}", m.name)
+        return True, m.name
+
+    async def mapping_action(request):
+        if deny := require_role(request, "operator"):
+            return deny
+        mid = request.path_params["mid"]
+        action = request.path_params["action"]
+        if action not in ("start", "stop", "restart"):
+            return PlainTextResponse("Unknown action", status_code=400)
+        ok, name = await _apply_action(mid, action)
+        if not ok:
+            return PlainTextResponse(name, status_code=404)
+        state.log(f"mapping {action}: {name}")
+        state.audit(client_ip(request), f"mapping_{action}", name)
         return Response("", headers=_TRIGGER)
 
     routes = [
@@ -869,6 +955,8 @@ def build_routes(templates, state, static_dir):
         Route("/api/status", api_status),
         Route("/api/cluster/status", cluster_status),
         Route("/api/cluster/local", cluster_local),
+        Route("/api/cluster/control", cluster_control, methods=["POST"]),
+        Route("/api/cluster/control-peer", cluster_control_peer, methods=["POST"]),
         Route("/api/ports.json", api_ports_json),
         Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
         Route("/api/ports/table", api_ports_table),
