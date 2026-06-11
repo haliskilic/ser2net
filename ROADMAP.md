@@ -82,7 +82,11 @@
 - **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)
 - Modbus: write support (FC 5/6/15/16), per-point MQTT→register control, RTU inter-frame
   tuning; RS-485 hardware auto-RTS (`TIOCSRS485`) UI
-- Multi-host **fleet dashboard** (manage several instances; subscription tier)
+- ~~LAN **cluster dashboard**: nodes auto-discover each other (signed UDP broadcast,
+  no mDNS) and one node shows every node's mappings in a single read-only table, each
+  row tagged with its host (name + IP)~~ ✅ shipped (v2.5a)
+- Cluster: remote control (start/stop/edit a peer's mappings from one screen) + per-node
+  health/uptime in the unified view
 - classic `ser2net.yaml` import for migration
 
 ### Icebox / conditional

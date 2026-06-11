@@ -15,6 +15,18 @@
   </div>
 </section>
 
+{% if cluster_on %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Cluster — all nodes on the LAN</h2>
+    <span class="muted">read-only · auto-discovered · each row shows its host (name + IP)</span>
+  </div>
+  <div id="cluster" hx-get="/api/cluster/status" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    <p class="muted">Discovering nodes…</p>
+  </div>
+</section>
+{% endif %}
+
 <section class="panel">
   <div class="panel-head">
     <h2>Detected serial ports</h2>

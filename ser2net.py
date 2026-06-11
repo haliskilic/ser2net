@@ -17,7 +17,7 @@ import argparse
 import os
 import sys
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)  # True inside a PyInstaller build
