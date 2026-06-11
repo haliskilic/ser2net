@@ -120,16 +120,19 @@ async def main():
 
         mwriter.close()
         with suppress(Exception):
-            await mwriter.wait_closed()
+            await asyncio.wait_for(mwriter.wait_closed(), timeout=2)
         print("\nPASS: Modbus RTU<->TCP gateway")
     finally:
+        # Python 3.12+ changed Server.wait_closed() to block until every active
+        # connection finishes — bound every wait_closed() so a lingering handler
+        # can't hang teardown forever (the assertions above already passed).
         runner._server.close()
         with suppress(Exception):
-            await runner._server.wait_closed()
+            await asyncio.wait_for(runner._server.wait_closed(), timeout=2)
         sw.close()
         slave_srv.close()
         with suppress(Exception):
-            await slave_srv.wait_closed()
+            await asyncio.wait_for(slave_srv.wait_closed(), timeout=2)
 
 
 if __name__ == "__main__":

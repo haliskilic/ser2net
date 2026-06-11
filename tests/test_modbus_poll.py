@@ -109,11 +109,13 @@ async def main():
         runner._stop.set()
         poll.cancel()
         with suppress(Exception):
-            await poll
+            await asyncio.wait_for(poll, timeout=2)
         sw.close()
         slave_srv.close()
+        # Python 3.12+ Server.wait_closed() blocks until active connections finish;
+        # bound it so a lingering slave handler can't hang teardown forever.
         with suppress(Exception):
-            await slave_srv.wait_closed()
+            await asyncio.wait_for(slave_srv.wait_closed(), timeout=2)
 
 
 if __name__ == "__main__":

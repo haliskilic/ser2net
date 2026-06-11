@@ -21,6 +21,7 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 
 from .config import AppConfig, ConfigStore, lock_down_dir
+from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
 from .web.auth import LoginRateLimiter
@@ -99,6 +100,7 @@ class AppState:
         self._mapping_loggers: dict[str, logging.Logger] = {}
         self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger)
         self.ports = PortWatcher(interval=2.0)
+        self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()
@@ -284,6 +286,7 @@ class AppState:
         self.prune_mapping_logs()  # drop logs for mappings that no longer exist
         await self.ports.start()
         await self.supervisor.start_all(self.config)
+        await self.cluster.start()  # no-op unless the LAN cluster is enabled + keyed
         # run an immediate pass, then hourly, to enforce log retention
         self._maint_task = asyncio.create_task(self._log_maintenance_loop(), name="log-maintenance")
 
@@ -293,5 +296,6 @@ class AppState:
             with _suppress(asyncio.CancelledError):
                 await self._maint_task
             self._maint_task = None
+        await self.cluster.stop()
         await self.supervisor.stop_all()
         await self.ports.stop()

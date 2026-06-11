@@ -83,6 +83,11 @@ düzenlemeye gerek yok.
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
   durum ve portlar; **bearer-token** kimlik doğrulama (rol seçilebilir — `viewer`
   salt-okunur); OpenAPI 3.0 (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
+- **LAN cluster (filo görünümü):** aynı ağdaki düğümler birbirini **otomatik bulur**
+  (imzalı UDP broadcast — mDNS yok) ve bir düğüm **tüm düğümlerin eşlemelerini tek
+  salt-okunur tabloda** gösterir; her satır hangi bilgisayara ait olduğunu (ad + IP)
+  belirtir. Düğümlerin birbirine güvenmesi için her birine **aynı paylaşılan anahtar**
+  girilir. Varsayılan kapalı; Ayarlar → LAN cluster'dan açılır.
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
