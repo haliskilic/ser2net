@@ -159,18 +159,21 @@
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>LAN cluster</h2></div>
   <p class="muted mb-sm">Discover other ser2net nodes on the local network (signed UDP
-     broadcast — no mDNS) and show every node's mappings in one read-only table on the
-     dashboard, each row tagged with its host (name + IP). Set the <em>same shared key</em>
-     on every node so they trust each other. This node's ID:
+     broadcast — no mDNS) and show every node's mappings in one table on the dashboard,
+     each row tagged with its host (name + IP). Set the <em>same shared key</em> on every
+     node so they trust each other; with the key, operators can start/stop/restart a
+     peer's mappings from the unified view. This node's ID:
      <span class="mono">{{ instance_id[:8] }}</span>.</p>
   <form method="post" action="/settings/cluster" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label class="chk"><input type="checkbox" name="enabled" {% if cluster.enabled %}checked{% endif %}> Enable LAN cluster discovery</label>
+    <label class="chk"><input type="checkbox" name="enabled" {% if cluster.enabled %}checked{% endif %}> Enable LAN cluster</label>
     <label>Shared cluster key <input type="password" name="key" value="{{ cluster.key }}" placeholder="same on every node — e.g. a long random string"></label>
     <div class="grid2">
       <label>Discovery UDP port <input type="number" name="discovery_port" value="{{ cluster.discovery_port }}" min="1" max="65535"></label>
       <label>Advertise IP <span class="muted">(blank = auto-detect)</span><input type="text" name="advertise_ip" value="{{ cluster.advertise_ip }}" placeholder="this node's LAN IP others reach"></label>
     </div>
+    <label>Manual peers <span class="muted">(one <span class="mono">host:port</span> per line — for routed/L3 networks broadcast can't reach)</span>
+      <textarea name="peers" rows="3" placeholder="10.0.5.12:8080&#10;https://plc-gw.example:8443">{{ cluster_peers_text }}</textarea></label>
     <button class="btn primary" type="submit">Save cluster</button>
   </form>
 </section>
