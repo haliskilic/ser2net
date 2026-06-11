@@ -23,11 +23,14 @@ TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 PUBLIC_PREFIXES = ("/static", "/auth/")  # /auth/oidc/* is the unauthenticated SSO flow
-PUBLIC_PATHS = {"/login", "/setup", "/healthz", "/favicon.ico"}
+# /api/cluster/local is authenticated by the shared cluster KEY (checked in the
+# handler), not a user session — so it must skip the session gate here.
+PUBLIC_PATHS = {"/login", "/setup", "/healthz", "/favicon.ico", "/api/cluster/local"}
 
 # High-frequency automatic UI refreshes — not logged to all.log to avoid flooding
 # the audit trail (the user actions that drive them ARE logged).
-QUIET_PATHS = {"/api/status", "/api/ports/table", "/api/ports.json", "/healthz", "/favicon.ico"}
+QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
+               "/api/ports/table", "/api/ports.json", "/healthz", "/favicon.ico"}
 
 
 def _wants_json(request) -> bool:
