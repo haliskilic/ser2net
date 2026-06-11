@@ -91,7 +91,7 @@ düzenlemeye gerek yok.
   (imzalı UDP broadcast — mDNS yok) ve bir düğüm **tüm düğümlerin eşlemelerini tek
   tabloda** gösterir; her satır hangi bilgisayara ait olduğunu (ad + IP) ve her düğümün
   **sağlığını** (uptime · sürüm · çalışan/toplam) belirtir. Operatörler bu ekrandan
-  başka bir host'un eşlemelerini **uzaktan başlat/durdur/yeniden başlat** edebilir.
+  başka bir host'un eşlemelerini **uzaktan başlat/durdur/yeniden başlat ve düzenle** edebilir.
   Broadcast'in ulaşmadığı yönlendirilmiş/L3 ağlar için **manuel peer** (host:port)
   eklenebilir. Güven = her düğümde **aynı paylaşılan anahtar**; varsayılan kapalı,
   Ayarlar → LAN cluster'dan açılır.
