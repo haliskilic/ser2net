@@ -144,7 +144,7 @@ def test_endpoints():
                 req.add_header("X-CSRF-Token", csrf())
             return op.open(req, timeout=10)
 
-        op.open(f"http://127.0.0.1:{ui}/setup")
+        op.open(f"http://127.0.0.1:{ui}/setup", timeout=10)
         post("/setup", {"username": "admin", "password": "adminpass123",
                         "password2": "adminpass123", "_csrf": csrf()})
 
