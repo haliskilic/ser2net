@@ -33,10 +33,11 @@ def test_preserve_unmanaged_fields_on_edit():
     existing = MappingConfig.from_dict({
         "name": "dev", "serial": {
             "port": "COM3", "match": {"vid": "0403", "pid": "6001"},
-            "advanced": {"rs485_enabled": True, "rs485_delay_before_tx_ms": 5.0}},
+            "advanced": {"rs485_enabled": True, "hangup_when_done": True, "nobreak": True}},
         "options": {"openstr": "INIT\r\n", "closestr": "BYE\r", "trace_timestamp": False,
                     "rfc2217_net_timeout_s": 9.0}})
-    # what the form would submit (no match/advanced/openstr/closestr/rfc2217 fields)
+    # what the form would submit: it DOES carry the RS-485 fields now (here: off),
+    # but NOT match / hangup_when_done / nobreak / openstr / closestr / rfc2217 knobs.
     edited = MappingConfig.from_dict({
         "id": existing.id, "name": "dev", "serial": {"port": "COM3", "baudrate": 19200},
         "options": {"banner": "hello", "closeon": "logout"}})
@@ -44,15 +45,18 @@ def test_preserve_unmanaged_fields_on_edit():
     _preserve_unmanaged_fields(edited, existing)
 
     assert edited.serial.match == {"vid": "0403", "pid": "6001"}, "stable-id match dropped on edit"
-    assert edited.serial.advanced.rs485_enabled is True, "RS-485 setting dropped on edit"
-    assert edited.serial.advanced.rs485_delay_before_tx_ms == 5.0
+    # RS-485 is form-managed now: the (empty) submission wins, not the old value
+    assert edited.serial.advanced.rs485_enabled is False, "RS-485 should follow the form, not persist"
+    # the two advanced flags the form omits are still preserved
+    assert edited.serial.advanced.hangup_when_done is True, "hangup_when_done dropped on edit"
+    assert edited.serial.advanced.nobreak is True, "nobreak dropped on edit"
     assert edited.options.openstr == "INIT\r\n" and edited.options.closestr == "BYE\r"
     assert edited.options.trace_timestamp is False
     assert edited.options.rfc2217_net_timeout_s == 9.0
     # form-managed fields keep the submitted values
     assert edited.options.banner == "hello" and edited.options.closeon == "logout"
     assert edited.serial.baudrate == 19200
-    print("edit preserves match / RS-485 / openstr / closestr / rfc2217 knobs  OK")
+    print("edit: form-managed RS-485 follows submission; match/hangup/nobreak/strings preserved  OK")
 
 
 def test_preserve_is_noop_for_new_mapping():

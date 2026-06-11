@@ -41,6 +41,17 @@
       <select name="{{ prefix }}dtr_on_open">{% for x in line_states %}<option value="{{ x }}" {% if x == s.dtr_on_open %}selected{% endif %}>{{ x }}</option>{% endfor %}</select>
     </label>
   </div>
+  <details class="rs485"{% if s.advanced.rs485_enabled %} open{% endif %}>
+    <summary>RS-485 (half-duplex, hardware auto-RTS)</summary>
+    <label class="chk"><input type="checkbox" name="{{ prefix }}rs485_enabled" {% if s.advanced.rs485_enabled %}checked{% endif %}> Enable RS-485 mode <span class="muted">(Linux <span class="mono">TIOCSRS485</span>; driver must support it)</span></label>
+    <div class="grid3">
+      <label>RTS delay before TX (ms)
+        <input type="number" step="0.1" min="0" name="{{ prefix }}rs485_delay_before_tx_ms" value="{{ s.advanced.rs485_delay_before_tx_ms }}"></label>
+      <label>RTS delay after TX (ms)
+        <input type="number" step="0.1" min="0" name="{{ prefix }}rs485_delay_after_tx_ms" value="{{ s.advanced.rs485_delay_after_tx_ms }}"></label>
+      <label class="chk chk-pad"><input type="checkbox" name="{{ prefix }}rs485_rts_level_for_tx" {% if s.advanced.rs485_rts_level_for_tx %}checked{% endif %}> RTS high during TX</label>
+    </div>
+  </details>
 {% endmacro %}
 
 {% set ip_values = ips | map(attribute='value') | list %}
