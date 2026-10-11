@@ -1,0 +1,15 @@
+ser2net
+Copyright (C) 2026 Halis KILIÇ <mail@haliskilic.com.tr>
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License, version 3 only
+(SPDX: AGPL-3.0-only). See the LICENSE file for the full license text.
+
+A separate commercial license is available for use that is incompatible with
+the AGPL-3.0 (e.g. closed-source / proprietary products, devices, or SaaS
+without source release); see COMMERCIAL_LICENSE.md.
+
+Contributions are accepted under the Individual Contributor License Agreement:
+https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823
+
+Third-party components keep their own licenses; see THIRD-PARTY-NOTICES.md.

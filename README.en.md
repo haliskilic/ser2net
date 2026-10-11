@@ -4,6 +4,8 @@
 
 # ser2net
 
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE) [![Commercial license](https://img.shields.io/badge/Commercial-license%20available-green.svg)](COMMERCIAL_LICENSE.md) [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/haliskilic)
+
 **A cross-platform (Windows + Linux), pure-Python serial-to-network bridge with a
 web management UI** — a modern, web-managed take on the classic `ser2net`. Map dozens
 of serial ports (COM / ttyUSB / ttyACM / ttyS) to TCP/UDP endpoints, bidirectionally,
@@ -260,9 +262,19 @@ runs ruff lint + the full matrix (ubuntu/windows × Python 3.10–3.13).
 
 ## 📜 License
 
-**Commercial / proprietary** — see [`LICENSE`](LICENSE). All rights reserved; no use,
-distribution or resale without a valid commercial license. Bundled third-party
-components keep their own (permissive) licenses — see
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). Contact: haliskilic90@gmail.com
+ser2net is **dual-licensed**:
+
+- **Open source — [GNU AGPL-3.0](LICENSE):** free to use, study, modify and share. If you distribute it, or run a modified version as a network service, you must make your complete source code available under the AGPL-3.0.
+- **Commercial license:** for closed-source products, devices or SaaS without the AGPL-3.0 obligations — see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) or email **mail@haliskilic.com.tr**.
+
+Bundled third-party components keep their own licenses — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+Contributions are welcome! On your first pull request you'll be asked to sign a one-time [Contributor License Agreement](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823); you keep the copyright to your work.
+
+Copyright © 2026 Halis KILIÇ.
+
+## ❤️ Support the project
+
+If ser2net is useful to you, please consider **[sponsoring my work on GitHub Sponsors ❤️](https://github.com/sponsors/haliskilic)** — sponsorships pay for test hardware and the time to keep the project maintained.
 
 Roadmap: [`ROADMAP.md`](ROADMAP.md) · Türkçe: [`README.md`](README.md)
