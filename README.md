@@ -4,6 +4,8 @@
 
 # ser2net
 
+[![Lisans: AGPL-3.0](https://img.shields.io/badge/Lisans-AGPL--3.0-blue.svg)](LICENSE) [![Ticari lisans](https://img.shields.io/badge/Ticari-lisans%20mevcut-green.svg)](COMMERCIAL_LICENSE.md) [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/haliskilic)
+
 **Seri portları (COM / ttyUSB / ttyACM / ttyS) ağ üzerinden erişilebilir kılan,
 web arayüzünden yönetilen, çapraz-platform (Windows + Linux) saf-Python köprü.**
 
@@ -260,9 +262,19 @@ lint + tam matrisi (ubuntu/windows × Python 3.10–3.13) koşar.
 
 ## 📜 Lisans
 
-**Ticari/özel lisans** — bkz. [`LICENSE`](LICENSE). Yazara ait, tüm hakları saklıdır;
-geçerli bir ticari lisans olmadan kullanım/dağıtım/satış yapılamaz. Birlikte gelen
-üçüncü-taraf bileşenler kendi (izin-verici) lisanslarını korur — bkz.
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). İletişim: haliskilic90@gmail.com
+ser2net **çift lisanslıdır**:
+
+- **Açık kaynak — [GNU AGPL-3.0](LICENSE):** kullanmak, incelemek, değiştirmek ve paylaşmak serbesttir. Dağıtırsan ya da değiştirilmiş bir sürümü ağ servisi olarak çalıştırırsan, tüm kaynak kodunu AGPL-3.0 ile sunman gerekir.
+- **Ticari lisans:** AGPL-3.0 yükümlülükleri olmadan kapalı kaynak ürün, cihaz ya da SaaS için — bkz. [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) veya **mail@haliskilic.com.tr**.
+
+Birlikte gelen üçüncü-taraf bileşenler kendi lisanslarını korur — bkz. [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+Katkılar memnuniyetle karşılanır! İlk pull request'inde tek seferlik bir [Katkıcı Lisans Sözleşmesi (CLA)](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823) imzalaman istenir; katkının telif hakkı sende kalır.
+
+Telif © 2026 Halis KILIÇ.
+
+## ❤️ Projeyi destekle
+
+ser2net işine yarıyorsa **[GitHub Sponsors üzerinden destek olmayı ❤️](https://github.com/sponsors/haliskilic)** düşünebilirsin — sponsorluklar test donanımını ve projenin bakımına ayrılan zamanı karşılıyor.
 
 Yol haritası: [`ROADMAP.md`](ROADMAP.md) · English: [`README.en.md`](README.en.md)

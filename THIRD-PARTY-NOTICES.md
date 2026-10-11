@@ -5,7 +5,8 @@ ser2net bundles the following third-party components (Python wheels in
 governed by its own license. All are **permissive** open-source licenses that allow
 commercial redistribution provided their copyright/license notices are preserved.
 
-These notices satisfy clause 5 of the ser2net LICENSE.
+These components are not covered by ser2net's own license (AGPL-3.0 or commercial —
+see `NOTICE`).
 
 ## Python dependencies (vendor/wheels/)
 
@@ -44,8 +45,8 @@ as a library via its public API (no source modification), and shipped unmodified
 | pywin32 | hotplug (Windows) | PSF-style |
 
 > ldap3 and pyudev are LGPL: they are used unmodified as separate, replaceable
-> libraries through their public APIs, which their licenses permit in a proprietary
-> product. To honor the LGPL's relinking right, the standalone binary's ldap3/pyudev
+> libraries through their public APIs, which their licenses permit under both the
+> AGPL-3.0 and the commercial license. To honor the LGPL's relinking right, the standalone binary's ldap3/pyudev
 > can be swapped by installing a different version alongside it.
 
 ## Browser assets (app/web/static/)
