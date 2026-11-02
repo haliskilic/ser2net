@@ -20,10 +20,18 @@ import time
 from typing import Optional
 
 from ..config import MappingConfig, normalize_cidr
-from . import modbus, serial_io
-from .bridge import RunnerStatus, fmt_duration
+from . import modbus, serial_io, sockopts
+from .bridge import RunnerStatus, describe_disconnect, fmt_duration
 
 READ_CHUNK = 512
+
+
+def _next_timer(idle_s: float, deadline: Optional[float]) -> Optional[float]:
+    """Seconds until a master's idle / max-connection-time timer fires (None = none)."""
+    waits = [idle_s] if idle_s > 0 else []
+    if deadline is not None:
+        waits.append(max(0.0, deadline - time.monotonic()))
+    return min(waits) if waits else None
 
 
 def _parse_nets(cidrs):
@@ -98,7 +106,7 @@ class ModbusGatewayRunner:
             self._server = await asyncio.start_server(
                 self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
             self._log(f"modbus gateway listening on {net.bind_ip}:{net.port}"
-                      f"{' (TLS)' if net.tls else ''}")
+                      f" ({'TLS, ' if net.tls else ''}{sockopts.describe(net)})")
         except BaseException:
             await self.stop()
             raise
@@ -300,15 +308,32 @@ class ModbusGatewayRunner:
                 writer.close()
             return
 
+        if err := sockopts.apply_keepalive(writer, net):
+            self._log(f"TCP keepalive not enabled for {peer}: {err}")
         writer.connected_at = time.time()
         writer.peer = peer
         self._clients.add(writer)
         self._refresh_clients()
         self._log(f"modbus master connected: {peer} ({len(self._clients)} total)")
+        opts = self.mapping.options
+        deadline = (time.monotonic() + opts.max_connection_time_s
+                    if opts.max_connection_time_s > 0 else None)
+        reason = "closed by master"
         buf = bytearray()
         try:
             while not self._stop.is_set():
-                data = await reader.read(READ_CHUNK)
+                try:
+                    data = await asyncio.wait_for(
+                        reader.read(READ_CHUNK), timeout=_next_timer(opts.idle_timeout_s, deadline))
+                except asyncio.TimeoutError as e:
+                    if getattr(e, "errno", None) is not None:
+                        raise  # a socket error (e.g. keepalive ETIMEDOUT), not our timer
+                    if deadline is not None and time.monotonic() >= deadline:
+                        reason = ("max connection time reached "
+                                  f"({fmt_duration(opts.max_connection_time_s)})")
+                    else:
+                        reason = f"idle timeout ({fmt_duration(opts.idle_timeout_s)} without traffic)"
+                    break
                 if not data:
                     break
                 buf += data
@@ -317,6 +342,7 @@ class ModbusGatewayRunner:
                         frame = modbus.take_tcp_adu(buf)
                     except ValueError as e:
                         self._log(f"bad Modbus/TCP framing from {peer}: {e}")
+                        reason = "bad Modbus/TCP framing"
                         return
                     if frame is None:
                         break
@@ -324,12 +350,15 @@ class ModbusGatewayRunner:
                     rpdu = await self._transaction(unit, pdu)
                     writer.write(modbus.build_tcp_adu(txn, unit, rpdu))
                     await writer.drain()
-        except (ConnectionError, asyncio.IncompleteReadError, OSError):
-            pass
+        except (ConnectionError, asyncio.IncompleteReadError, OSError) as e:
+            reason = describe_disconnect(e)
         finally:
             self._clients.discard(writer)
             self._refresh_clients()
             with contextlib.suppress(Exception):
                 writer.close()
+            if self._stop.is_set():
+                reason = "gateway stopped"
             held = fmt_duration(time.time() - getattr(writer, "connected_at", time.time()))
-            self._log(f"modbus master disconnected: {peer} after {held} ({len(self._clients)} total)")
+            self._log(f"modbus master disconnected: {peer} after {held} — {reason} "
+                      f"({len(self._clients)} total)")
