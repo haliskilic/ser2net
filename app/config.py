@@ -37,6 +37,7 @@ COMMON_BAUDRATES = (
     300, 1200, 2400, 4800, 9600, 19200, 38400, 57600,
     115200, 230400, 460800, 921600,
 )
+MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year)
 
 
 class ConfigError(ValueError):
@@ -83,6 +84,14 @@ def lock_down_dir(directory: str) -> None:
         cmd += ["/C", "/Q"]
         with contextlib.suppress(Exception):
             subprocess.run(cmd, capture_output=True, timeout=15, check=False)
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def normalize_cidr(value: str) -> str:
@@ -185,6 +194,19 @@ class NetworkSettings:
     # the serial source is dropped once this fills. Worst-case memory per client is
     # ~client_queue_max * 64KB; raise for bursty high-throughput links.
     client_queue_max: int = 2048
+    # Dead-peer detection for TCP (server + client mode): after keepalive_idle_s of
+    # silence the OS probes the peer every keepalive_interval_s and drops the link
+    # after keepalive_count unanswered probes. A client that vanished without a
+    # FIN/RST (power cut, cable pull, VPN/NAT drop) is then reaped in about
+    # idle + interval * count seconds instead of holding its slot forever.
+    tcp_keepalive: bool = True
+    keepalive_idle_s: int = 60
+    keepalive_interval_s: int = 10
+    keepalive_count: int = 3
+    # Client (connect-out) mode: abandon a TCP (+TLS) connect attempt after this many
+    # seconds and retry. 0 = no limit of our own (the OS gives up after ~21 s on
+    # Windows, ~2 min on Linux).
+    connect_timeout_s: float = 10.0
     # Per-mapping TLS for the data bridge (server/client TCP). Both files required.
     tls: bool = False
     tls_cert: str = ""
@@ -227,6 +249,14 @@ class NetworkSettings:
             raise ConfigError("Max connections must be >= 1.")
         if not isinstance(self.client_queue_max, int) or self.client_queue_max < 16:
             raise ConfigError("Client queue size must be an integer >= 16.")
+        # OS limits: Linux caps TCP_KEEPIDLE/TCP_KEEPINTVL at 32767 s and TCP_KEEPCNT at 127.
+        for label, value, high in (("Keepalive idle time", self.keepalive_idle_s, 32767),
+                                   ("Keepalive probe interval", self.keepalive_interval_s, 32767),
+                                   ("Keepalive probe count", self.keepalive_count, 127)):
+            if not _is_int(value) or not (1 <= value <= high):
+                raise ConfigError(f"{label} must be an integer between 1 and {high}.")
+        if not _is_number(self.connect_timeout_s) or not (0 <= self.connect_timeout_s <= 3600):
+            raise ConfigError("Connect timeout must be between 0 and 3600 seconds (0 = OS default).")
         if self.protocol == "rfc2217" and self.mode == "udp":
             raise ConfigError("RFC2217 requires a TCP (server/client) connection, not UDP.")
         if self.protocol == "modbus" and self.mode != "server":
@@ -262,7 +292,11 @@ class MappingOptions:
     openstr: str = ""
     closestr: str = ""
     closeon: str = ""
+    # Per-connection timers for TCP clients (0 = off): drop a client after this many
+    # seconds without traffic either way / after this long connected, active or not
+    # (a connect-out mapping then reconnects).
     idle_timeout_s: int = 0
+    max_connection_time_s: int = 0
     trace_both: str = ""  # file path; empty = disabled
     trace_hexdump: bool = False
     trace_timestamp: bool = True
@@ -278,6 +312,12 @@ class MappingOptions:
         d = dict(d or {})
         known = {f.name for f in dataclasses.fields(MappingOptions)}
         return MappingOptions(**{k: v for k, v in d.items() if k in known})
+
+    def validate(self) -> None:
+        for label, value in (("Idle timeout", self.idle_timeout_s),
+                             ("Max connection time", self.max_connection_time_s)):
+            if not _is_number(value) or not (0 <= value <= MAX_TIMER_S):
+                raise ConfigError(f"{label} must be between 0 (off) and {MAX_TIMER_S} seconds.")
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +461,7 @@ class MappingConfig:
                 raise ConfigError("Serial-to-serial bridge needs two different ports.")
         else:
             self.network.validate()
+        self.options.validate()
         self.mqtt.validate()
         self.modbus_poll.validate()
         if self.modbus_poll.points and not (self.kind == "net" and self.network.protocol == "modbus"):

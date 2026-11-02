@@ -22,6 +22,10 @@ Two layers:
                         same window and a new client is refused "Busy" — the
                         reported bug, which also proves the harness really produces
                         a half-open connection (FIN/RST never reach the server).
+   Also: a dead client while the device keeps streaming (data in flight, so Linux
+   needs TCP_USER_TIMEOUT), the legacy Windows SIO_KEEPALIVE_VALS path, a dead remote
+   in connect-out mode (it reconnects), a dead Modbus master, and a connect-out SYN
+   to a silent host (connect timeout). FIN/RST closes are checked portably.
    CI sets SER2NET_BLACKHOLE_TESTS=1, so a missing backend FAILS there instead of
    silently skipping. Locally it is opt-in because it edits the firewall
    (tip: run it inside a throwaway network namespace on Linux).
@@ -35,6 +39,7 @@ import contextlib
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -106,7 +111,7 @@ def _keepalive_state(sock) -> dict:
 
 
 def _assert_keepalive(state: dict, idle: int, interval: int, count: int, where: str) -> None:
-    assert state["on"], f"{where}: SO_KEEPALIVE is off — a vanished peer is never detected"
+    assert state["on"], f"{where}: SO_KEEPALIVE is off - a vanished peer is never detected"
     want = {"idle": idle, "interval": interval, "count": count}
     for key, value in want.items():
         if key in state:
@@ -143,10 +148,10 @@ def _sudo() -> list:
 
 
 class _IptablesBlackhole:
-    def __init__(self, src_port: int, dst_port: int) -> None:
-        self._rule = ["INPUT", "-i", "lo", "-p", "tcp", "--sport", str(src_port),
-                      "--dport", str(dst_port), "-m", "comment",
-                      "--comment", "ser2net-test-dead-peer", "-j", "DROP"]
+    def __init__(self, src_port, dst_port: int) -> None:  # src_port None = any
+        sport = ["--sport", str(src_port)] if src_port else []
+        self._rule = ["INPUT", "-i", "lo", "-p", "tcp", *sport, "--dport", str(dst_port),
+                      "-m", "comment", "--comment", "ser2net-test-dead-peer", "-j", "DROP"]
 
     @staticmethod
     def _iptables(*args) -> None:
@@ -162,11 +167,11 @@ class _IptablesBlackhole:
 
 
 class _WinDivertBlackhole:
-    def __init__(self, src_port: int, dst_port: int) -> None:
+    def __init__(self, src_port, dst_port: int) -> None:  # src_port None = any
         import pydivert
 
-        self._w = pydivert.WinDivert(
-            f"loopback and tcp.SrcPort == {src_port} and tcp.DstPort == {dst_port}")
+        sport = f" and tcp.SrcPort == {src_port}" if src_port else ""
+        self._w = pydivert.WinDivert(f"loopback and tcp.DstPort == {dst_port}{sport}")
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._drain, daemon=True)
 
@@ -257,6 +262,61 @@ async def test_server_socket_keepalive_custom_and_off():
     print("server mode: custom idle/interval/count applied; tcp_keepalive=false disables it  OK")
 
 
+async def test_closed_and_reset_clients_are_reaped():
+    """The paths that already worked: a FIN or an RST that DOES arrive is handled
+    promptly on every platform — the bug is only the silent (half-open) loss."""
+    port = _free_port()
+    logs = []
+    runner = MappingRunner(_mapping(port, max_connections=1), logger=logs.append)
+    await runner.start()
+    try:
+        for how in ("close (FIN)", "abort (RST)"):
+            _r, w = await asyncio.open_connection("127.0.0.1", port)
+            assert await _wait_for(lambda: len(runner._clients) == 1, 5), "client did not register"
+            if how.startswith("close"):
+                w.close()
+            else:
+                linger = struct.pack("HH" if sys.platform == "win32" else "ii", 1, 0)
+                w.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)
+                w.transport.abort()
+            assert await _wait_for(lambda: not runner._clients, 3), f"client not reaped after {how}"
+        assert sum("client disconnected" in ln for ln in logs) == 2, logs
+    finally:
+        await runner.stop()
+    print("FIN and RST from the client: reaped immediately (unchanged behaviour)  OK")
+
+
+async def test_windows_legacy_keepalive_fallback():
+    """Windows before 10 1709 (e.g. Server 2016) has no TCP_KEEPIDLE; the
+    SIO_KEEPALIVE_VALS path must still turn keepalive on with our timing."""
+    if sys.platform != "win32":
+        print("legacy Windows SIO_KEEPALIVE_VALS fallback: n/a on this OS  SKIP")
+        return
+    hidden = {n: getattr(socket, n) for n in ("TCP_KEEPIDLE", "TCP_KEEPINTVL", "TCP_KEEPCNT")
+              if hasattr(socket, n)}
+    port = _free_port()
+    runner = MappingRunner(_mapping(port, **KA), logger=lambda _m: None)
+    await runner.start()
+    try:
+        for name in hidden:
+            delattr(socket, name)
+        _r, w = await asyncio.open_connection("127.0.0.1", port)
+        assert await _wait_for(lambda: len(runner._clients) == 1, 5), "client did not register"
+    finally:
+        for name, value in hidden.items():
+            setattr(socket, name, value)
+    try:
+        ts = next(iter(runner._clients)).writer.get_extra_info("socket")
+        assert ts.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE), "fallback left keepalive off"
+        if "TCP_KEEPIDLE" in hidden:  # read the ioctl's idle time back through the new API
+            idle = ts.getsockopt(socket.IPPROTO_TCP, hidden["TCP_KEEPIDLE"])
+            assert idle == KA["keepalive_idle_s"], f"SIO_KEEPALIVE_VALS idle not applied: {idle}"
+        await _close(w)
+    finally:
+        await runner.stop()
+    print("legacy Windows SIO_KEEPALIVE_VALS fallback: keepalive on with our idle time  OK")
+
+
 async def test_connect_out_socket_keepalive():
     accepted = asyncio.Queue()
 
@@ -319,7 +379,7 @@ async def e2e_raw_dead_client_is_reaped(Blackhole):
             reaped = await _wait_for(lambda: not runner._clients, _detect_budget())
             elapsed = time.monotonic() - t0
             assert reaped, (f"dead client still registered after {elapsed:.1f}s "
-                            f"(status: {runner.status.client_count} client(s)) — never detected")
+                            f"(status: {runner.status.client_count} client(s)) - never detected")
             assert await _wait_for(lambda: not _server_side_established(port, cport), 2), \
                 "server-side socket is still ESTABLISHED in the OS table"
         # the only slot is free again: a new client is accepted, not refused "Busy"
@@ -329,11 +389,67 @@ async def e2e_raw_dead_client_is_reaped(Blackhole):
         got = await _read_some(r2, 0.5)
         assert b"Busy" not in got, f"new client refused: {got!r}"
         why = next((ln for ln in logs if "client disconnected" in ln), "")
-        print(f"raw server: dead client reaped after {elapsed:.1f}s, slot reused  OK\n   log: {why}")
+        print(f"raw server: dead client reaped after {elapsed:.1f}s, slot reused  OK\n"
+              f"   log: {why.replace('—', '-')}")
     finally:
         for w in writers:
             await _close(w)
         await runner.stop()
+
+
+async def e2e_raw_dead_client_while_streaming(Blackhole):
+    """The device keeps talking while the client is dead: the data stays unacked, so
+    Linux sends no keepalive probes — TCP_USER_TIMEOUT bounds it to the same window
+    (~15 min of retransmissions otherwise). Windows gives up by itself after its
+    retransmission limit (~20 s), hence the longer budget there."""
+    port = _free_port()
+    logs = []
+    runner = MappingRunner(_mapping(port, max_connections=1, **KA), logger=logs.append)
+    await runner.start()
+    writers, feeder = [], None
+    try:
+        _r1, w1 = await asyncio.open_connection("127.0.0.1", port)
+        writers.append(w1)
+        assert await _wait_for(lambda: len(runner._clients) == 1, 5), "client did not register"
+        conn = next(iter(runner._clients))
+        cport = w1.get_extra_info("sockname")[1]
+
+        async def device_streams():  # what the serial read loop does per chunk read
+            while conn in runner._clients:
+                conn.feed_from_serial(b"x" * 256)
+                await asyncio.sleep(0.05)
+
+        budget = _detect_budget() if sys.platform.startswith("linux") else 60.0
+        t0 = time.monotonic()
+        with Blackhole(cport, port):
+            feeder = asyncio.create_task(device_streams())
+            reaped = await _wait_for(lambda: not runner._clients, budget)
+            elapsed = time.monotonic() - t0
+            assert reaped, f"dead client with data in flight still registered after {elapsed:.1f}s"
+        why = next((ln for ln in logs if "client disconnected" in ln), "")
+        assert "queue full" not in why, f"reaped by queue overflow, not by TCP: {why}"
+        print(f"raw server, device streaming: dead client reaped after {elapsed:.1f}s  OK\n"
+              f"   log: {why.replace('—', '-')}")
+    finally:
+        if feeder is not None:
+            feeder.cancel()
+        for w in writers:
+            await _close(w)
+        await runner.stop()
+
+
+async def e2e_legacy_windows_fallback_reaps(Blackhole):
+    """Same headline scenario through the pre-1709 SIO_KEEPALIVE_VALS path (the OS
+    fixes the probe count at 10, so detection takes idle + 10 * interval)."""
+    hidden = {n: getattr(socket, n) for n in ("TCP_KEEPIDLE", "TCP_KEEPINTVL", "TCP_KEEPCNT")
+              if hasattr(socket, n)}
+    for name in hidden:
+        delattr(socket, name)
+    try:
+        await e2e_raw_dead_client_is_reaped(Blackhole)
+    finally:
+        for name, value in hidden.items():
+            setattr(socket, name, value)
 
 
 async def e2e_raw_control_without_keepalive(Blackhole):
@@ -358,7 +474,7 @@ async def e2e_raw_control_without_keepalive(Blackhole):
             got = await _read_some(r2, 2.0)
             assert got.startswith(b"Busy"), f"expected the new client to be refused, got {got!r}"
         print(f"control (keepalive off): after {window:.0f}s the dead client is still "
-              f"ESTABLISHED and a new client gets {got.strip()!r} — the reported bug  OK")
+              f"ESTABLISHED and a new client gets {got.strip()!r} - the reported bug  OK")
     finally:
         for w in writers:
             await _close(w)
@@ -402,6 +518,31 @@ async def e2e_connect_out_dead_server_reconnects(Blackhole):
             await _close(w)
         await runner.stop()
         srv.close()
+
+
+async def e2e_connect_timeout_on_silent_host(Blackhole):
+    """Connect-out to a host that swallows SYNs (down / firewalled-drop): the attempt
+    is abandoned after connect_timeout_s and retried, instead of the OS's ~21 s
+    (Windows) / ~2 min (Linux) SYN timeout."""
+    port = _free_port()  # nothing listens; dropping the SYN means no RST either
+    logs = []
+    m = MappingConfig.from_dict({
+        "name": "silent-host", "enabled": True,
+        "serial": {"port": "/dev/does-not-exist", "baudrate": 115200},
+        "network": {"mode": "client", "protocol": "raw", "remote_host": "127.0.0.1",
+                    "remote_port": port, "connect_timeout_s": 1},
+    })
+    with Blackhole(None, port):
+        runner = MappingRunner(m, logger=logs.append)
+        await runner.start()
+        try:
+            failures = lambda: [ln for ln in logs if "connect-out failed" in ln]  # noqa: E731
+            assert await _wait_for(lambda: len(failures()) >= 2, 6), \
+                f"no timed-out connect attempts: {logs}"
+            assert all("timed out after 1s" in ln for ln in failures()), failures()
+        finally:
+            await runner.stop()
+    print("client (connect-out): SYN to a silent host abandoned after 1s and retried  OK")
 
 
 async def e2e_modbus_dead_master_is_reaped(Blackhole):
@@ -455,7 +596,8 @@ def _run(fn, *args, loop_factory=None) -> bool:
         for task in pending:
             task.cancel()
         with contextlib.suppress(Exception):
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
 
@@ -466,7 +608,8 @@ def main() -> int:
         if len(_loops()) > 1:
             print(f"-- {label} event loop --")
         results.append(_run(test_server_socket_keepalive_default, loop_factory=factory))
-    for fn in (test_server_socket_keepalive_custom_and_off, test_connect_out_socket_keepalive,
+    for fn in (test_server_socket_keepalive_custom_and_off, test_closed_and_reset_clients_are_reaped,
+               test_windows_legacy_keepalive_fallback, test_connect_out_socket_keepalive,
                test_modbus_gateway_socket_keepalive):
         results.append(_run(fn))
 
@@ -482,9 +625,13 @@ def main() -> int:
         else:
             print(f"\n-- end-to-end half-open connections ({backend.__name__}) --")
             for fn in (e2e_raw_dead_client_is_reaped, e2e_raw_control_without_keepalive,
-                       e2e_connect_out_dead_server_reconnects, e2e_modbus_dead_master_is_reaped):
+                       e2e_raw_dead_client_while_streaming, e2e_connect_out_dead_server_reconnects,
+                       e2e_connect_timeout_on_silent_host, e2e_modbus_dead_master_is_reaped):
                 results.append(_run(fn, backend))
-            if sys.platform == "win32":  # the default loop too, for the headline case
+            if sys.platform == "win32":
+                print("-- legacy (pre-1709) Windows keepalive path --")
+                results.append(_run(e2e_legacy_windows_fallback_reaps, backend))
+                print("-- proactor event loop --")
                 results.append(_run(e2e_raw_dead_client_is_reaped, backend,
                                     loop_factory=asyncio.ProactorEventLoop))
 

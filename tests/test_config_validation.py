@@ -231,8 +231,55 @@ def test_invalid_admin_bind_ip_rejected():
     print("invalid admin UI bind IP rejected; valid ones accepted  OK")
 
 
+def test_connection_lifecycle_defaults_and_upgrade():
+    # a config written before v2.7 has none of the new keys: it must load with
+    # dead-peer detection ON (the fix applies on upgrade) and the timers off
+    m = MappingConfig.from_dict({"name": "old", "serial": {"port": "COM1"},
+                                 "network": {"mode": "server", "port": 4001}})
+    n, o = m.network, m.options
+    assert n.tcp_keepalive is True
+    assert (n.keepalive_idle_s, n.keepalive_interval_s, n.keepalive_count) == (60, 10, 3)
+    assert n.connect_timeout_s == 10.0
+    assert o.idle_timeout_s == 0 and o.max_connection_time_s == 0
+    m.validate()
+    d = m.to_dict()
+    assert d["network"]["tcp_keepalive"] is True and d["options"]["max_connection_time_s"] == 0
+    print("pre-v2.7 mapping: keepalive on (60s/10s/3), connect timeout 10s, timers off  OK")
+
+
+def test_connection_lifecycle_validation():
+    def mapping(network=None, options=None):
+        return MappingConfig.from_dict({
+            "name": "m", "serial": {"port": "COM1"},
+            "network": {"mode": "server", "port": 4001, **(network or {})},
+            "options": options or {}})
+
+    bad = [
+        ({"keepalive_idle_s": 0}, None, "Keepalive idle time"),
+        ({"keepalive_idle_s": 40000}, None, "Keepalive idle time"),
+        ({"keepalive_interval_s": "10"}, None, "Keepalive probe interval"),
+        ({"keepalive_count": 0}, None, "Keepalive probe count"),
+        ({"keepalive_count": 128}, None, "Keepalive probe count"),
+        ({"keepalive_count": True}, None, "Keepalive probe count"),
+        ({"connect_timeout_s": -1}, None, "Connect timeout"),
+        ({"connect_timeout_s": 3601}, None, "Connect timeout"),
+        (None, {"idle_timeout_s": -5}, "Idle timeout"),
+        (None, {"max_connection_time_s": -1}, "Max connection time"),
+        (None, {"max_connection_time_s": "24h"}, "Max connection time"),
+    ]
+    for network, options, needle in bad:
+        _expect_error(mapping(network, options), needle)
+    # boundaries / valid values
+    mapping({"keepalive_idle_s": 1, "keepalive_interval_s": 32767, "keepalive_count": 127,
+             "connect_timeout_s": 0}, {"idle_timeout_s": 300, "max_connection_time_s": 86400}).validate()
+    mapping({"tcp_keepalive": False, "connect_timeout_s": 2.5}).validate()
+    print("keepalive/connect-timeout/idle/max-connection-time validation (types + ranges)  OK")
+
+
 def main():
     test_config_round_trip()
+    test_connection_lifecycle_defaults_and_upgrade()
+    test_connection_lifecycle_validation()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()
