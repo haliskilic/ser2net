@@ -693,8 +693,10 @@ class MappingRunner:
 
     # ---------------- connect-out (TCP client) ----------------
     async def _connect_out(self):
-        """Resolve the remote host, then connect (+ TLS handshake) within
-        connect_timeout_s, trying each resolved address until the deadline.
+        """Resolve the remote host, then connect (+ TLS handshake) to each resolved
+        address in turn, giving each one connect_timeout_s — like an OS connect
+        timeout per address — so a dual-stack host whose IPv6 path is dead still
+        falls back to IPv4 instead of the first address eating the whole budget.
 
         The DNS lookup is deliberately NOT under the timeout: getaddrinfo runs in a
         worker thread that cancellation can't stop, so timing it out would leave one
@@ -706,19 +708,14 @@ class MappingRunner:
         infos = await loop.getaddrinfo(net.remote_host, net.remote_port,
                                        type=socket.SOCK_STREAM)
         ssl_ctx = self._client_ssl()
-        limit = net.connect_timeout_s or None
-        deadline = loop.time() + limit if limit else None
         error: BaseException = ConnectionError(f"no address for {net.remote_host}")
         for family, _type, _proto, _name, sockaddr in infos:
-            remaining = None if deadline is None else deadline - loop.time()
-            if remaining is not None and remaining <= 0:
-                break
             try:
                 return await asyncio.wait_for(
                     asyncio.open_connection(
                         sockaddr[0], sockaddr[1], family=family, ssl=ssl_ctx,
                         server_hostname=net.remote_host if ssl_ctx else None),
-                    timeout=remaining)
+                    timeout=net.connect_timeout_s or None)
             except asyncio.TimeoutError as e:
                 if getattr(e, "errno", None) is not None:
                     error = e  # the OS's own connect timeout, not ours
