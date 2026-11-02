@@ -1,3 +1,6 @@
+{% if peers_hidden %}
+<div class="banner warn">Open access: only this node is shown. <a href="/login">Sign in</a> to see and manage the other cluster nodes.</div>
+{% endif %}
 {% if discovery_error %}
 <div class="banner warn">UDP auto-discovery is off: {{ discovery_error }}. Manually-added peers still work (Settings → LAN cluster).</div>
 {% endif %}

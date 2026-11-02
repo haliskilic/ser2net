@@ -81,6 +81,9 @@ async def _serve(store: ConfigStore, config) -> int:
         state.log("WARNING: admin UI is bound to a network address over plain HTTP — "
                   "the password and session cookies travel unencrypted. Configure TLS "
                   "(admin_ui.tls_cert/tls_key) or bind to 127.0.0.1.")
+    if config.password_set and not admin.require_login:
+        state.log(f"WARNING: web UI login is switched off — visitors without a session get "
+                  f"the '{admin.anonymous_role}' role (Settings → Web UI access).")
 
     await state.start_engine()
     app = build_app(state)

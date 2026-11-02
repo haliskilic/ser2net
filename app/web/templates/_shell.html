@@ -5,12 +5,18 @@
   <nav>
     <a href="/">Mappings</a>
     <a href="/settings">Settings</a>
-    {% if request.state.user %}<span class="muted mono" title="signed in">{{ request.state.user.username }} · {{ request.state.user.role }}</span>{% endif %}
+    {% set u = request.state.user %}
+    {% if u and u.source == 'anonymous' %}<span class="muted mono" title="login is switched off — open access">no login · {{ u.role }}</span>
+    {% elif u %}<span class="muted mono" title="signed in">{{ u.username }} · {{ u.role }}</span>{% endif %}
     <button class="link" type="button" data-theme-toggle title="Toggle light / dark theme" aria-label="Toggle theme">◐</button>
+    {% if u and u.source == 'anonymous' %}
+    <a href="/login">Sign in</a>
+    {% else %}
     <form method="post" action="/logout" class="inline">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
       <button class="link" type="submit">Logout</button>
     </form>
+    {% endif %}
   </nav>
 </header>
 <main>

@@ -12,13 +12,19 @@ port. Each client has its OWN bounded outbound queue + writer task, so a slow
 client cannot stall serial reads for the others (per-client backpressure
 isolation). Network->serial backpressure is handled by awaiting the serial
 writer's drain() before reading more from that client.
+
+Every TCP data socket (accepted or connect-out) gets TCP keepalive (sockopts.py), so
+a peer that vanished without a FIN/RST is detected and its slot freed instead of
+staying ESTABLISHED forever; each disconnect is logged with its reason.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import ipaddress
 import os
+import socket
 import sys
 import time
 from dataclasses import dataclass, field
@@ -35,11 +41,36 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from exceptiongroup import BaseExceptionGroup
 
 from ..config import MappingConfig
-from . import serial_io
+from . import serial_io, sockopts
 from .protocols import make_session
 
 READ_CHUNK = 4096
 CLIENT_QUEUE_MAX = 2048  # outbound chunks buffered per client before it's dropped
+# errno/winerror values for "the peer stopped answering" (keepalive or retransmission
+# timeout): ETIMEDOUT, plus on Windows WSAETIMEDOUT, WSAENETRESET and the overlapped-I/O
+# ERROR_SEM_TIMEOUT.
+_PEER_TIMEOUT_ERRNOS = {errno.ETIMEDOUT, 10060, 10052, 121}
+
+
+class _Disconnect(ConnectionError):
+    """Ends a client session for a known reason (the message is logged)."""
+
+
+def describe_disconnect(exc: BaseException) -> str:
+    """Short, operator-facing reason a TCP client connection ended."""
+    if isinstance(exc, _Disconnect):
+        return str(exc)
+    code = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+    if code in _PEER_TIMEOUT_ERRNOS:
+        return "peer stopped responding (TCP timeout: unreachable, or not reading its data)"
+    if isinstance(exc, ConnectionResetError):
+        # Windows reports a failed keepalive as WSAECONNRESET too, so don't blame the peer
+        if sys.platform == "win32":
+            return "connection reset (by the peer, or TCP keepalive found it unreachable)"
+        return "connection reset by peer"
+    if isinstance(exc, asyncio.IncompleteReadError):
+        return "closed by peer"
+    return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
 
 
 def _iter_leaf_exceptions(eg: BaseExceptionGroup):
@@ -161,6 +192,7 @@ class _ClientConn:
         self._session = None
         self._last_activity = time.monotonic()
         self._closing = False
+        self.close_reason = ""  # why the session ended (first cause wins; for the log)
 
     def _log_unexpected(self, exc: BaseException) -> None:
         self.runner._log(f"client {self.peer} pump error: {type(exc).__name__}: {exc}")
@@ -183,6 +215,7 @@ class _ClientConn:
             # slow client: protect the others by dropping this one. This loses the
             # current chunk for THIS client only — surface it instead of hiding it.
             self._closing = True
+            self.close_reason = self.close_reason or "dropped: output queue full (slow client)"
             self.runner.status.queue_overflows += 1
             self.runner.status.dropped_clients += 1
             self.runner._log(f"dropping slow client {self.peer}: output queue full "
@@ -214,12 +247,16 @@ class _ClientConn:
                     tg.create_task(self._pump_poll())
                 if m.options.idle_timeout_s > 0:
                     tg.create_task(self._idle_guard(m.options.idle_timeout_s))
+                if m.options.max_connection_time_s > 0:
+                    tg.create_task(self._lifetime_guard(m.options.max_connection_time_s))
         except BaseExceptionGroup as eg:
             # Mirror the original `except*` split: connection-reset paths are a
             # normal disconnect (swallow them); log every other Exception; let
             # anything that is not an Exception (e.g. CancelledError) propagate.
             _normal = (ConnectionError, asyncio.IncompleteReadError, OSError)
-            _, rest = eg.split(_normal)
+            normal, rest = eg.split(_normal)
+            if normal is not None and not self.close_reason:
+                self.close_reason = describe_disconnect(next(_iter_leaf_exceptions(normal)))
             if rest is not None:
                 unexpected, base_only = rest.split(Exception)
                 if unexpected is not None:
@@ -248,7 +285,7 @@ class _ClientConn:
             if serial_bound and not m.network.read_only:
                 await self.runner.serial_write(serial_bound)
                 self.runner.status.bytes_out += len(serial_bound)
-        raise ConnectionError("client closed")
+        raise _Disconnect("closed by peer")
 
     async def _pump_serial_to_net(self) -> None:
         while True:
@@ -260,7 +297,7 @@ class _ClientConn:
                     if d:
                         self.writer.write(d)
                 await self.writer.drain()
-                raise ConnectionError("closed by closeon")
+                raise _Disconnect("closed by closeon match")
             self.writer.write(data)
             await self.writer.drain()
             self._last_activity = time.monotonic()
@@ -279,10 +316,15 @@ class _ClientConn:
         while not self._closing:
             await asyncio.sleep(1.0)
             if time.monotonic() - self._last_activity > timeout:
-                raise ConnectionError("idle timeout")
+                raise _Disconnect(f"idle timeout ({fmt_duration(timeout)} without traffic)")
 
-    def kick(self) -> None:
+    async def _lifetime_guard(self, limit: float) -> None:
+        await asyncio.sleep(limit)
+        raise _Disconnect(f"max connection time reached ({fmt_duration(limit)})")
+
+    def kick(self, reason: str = "kicked") -> None:
         self._closing = True
+        self.close_reason = self.close_reason or reason
         with contextlib.suppress(Exception):
             self.writer.transport.abort()
 
@@ -292,6 +334,7 @@ class _ClientConn:
         if self._closing:
             return
         self._closing = True
+        self.close_reason = self.close_reason or "closed by closeon match"
         try:
             self._out.put_nowait(None)  # sentinel handled by _pump_serial_to_net
         except asyncio.QueueFull:
@@ -381,11 +424,12 @@ class MappingRunner:
                 self._server = await asyncio.start_server(
                     self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
                 self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
-                          f"{', TLS' if net.tls else ''})")
+                          f"{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
             elif net.mode == "client":
                 self._main_task = asyncio.create_task(
                     self._client_supervisor(), name=f"connectout:{self.mapping.name}")
-                self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol})")
+                self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol}, "
+                          f"{sockopts.describe(net)})")
             elif net.mode == "udp":
                 loop = asyncio.get_running_loop()
                 self._udp_transport, _ = await loop.create_datagram_endpoint(
@@ -410,7 +454,7 @@ class MappingRunner:
         # connection has finished, so awaiting it before kicking clients would
         # deadlock a stop() while clients are still connected.
         for c in list(self._clients):
-            c.kick()
+            c.kick("mapping stopped")
         for mon in list(self._monitors):
             mon.close()
         self._monitors.clear()
@@ -602,7 +646,7 @@ class MappingRunner:
                 if victim is not None:
                     why = "priority client" if is_priority else "new client"
                     self._log(f"kicking {victim.peer} for {why} {peer_label}")
-                    victim.kick()
+                    victim.kick(f"kicked for {why} {peer_label}")
             else:
                 self._log(f"rejected {peer_label}: max connections reached")
                 with contextlib.suppress(Exception):
@@ -621,6 +665,7 @@ class MappingRunner:
                 writer.close()
                 return
 
+        self._enable_keepalive(writer, peer_label)
         client = _ClientConn(self, reader, writer, peer_ip, peer_port, priority=is_priority)
         self._clients.add(client)
         self._refresh_clients()
@@ -632,31 +677,75 @@ class MappingRunner:
             self._clients.discard(client)
             self._refresh_clients()
             held = fmt_duration(time.time() - client.connected_at)
-            self._log(f"client disconnected: {peer_label} after {held} ({len(self._clients)} total)")
+            why = f" — {client.close_reason}" if client.close_reason else ""
+            self._log(f"client disconnected: {peer_label} after {held}{why} "
+                      f"({len(self._clients)} total)")
             # closestr to device when the last client leaves
             if not self._clients and self.mapping.options.closestr and self._swriter:
                 with contextlib.suppress(Exception):
                     self._swriter.write(self.mapping.options.closestr.encode("utf-8", "replace"))
                     await self._swriter.drain()
 
+    def _enable_keepalive(self, writer: asyncio.StreamWriter, peer: str) -> None:
+        net = self.mapping.network
+        if err := sockopts.apply_keepalive(writer, net):
+            self._log(f"TCP keepalive not enabled for {peer}: {err}")
+
     # ---------------- connect-out (TCP client) ----------------
+    async def _connect_out(self):
+        """Resolve the remote host, then connect (+ TLS handshake) to each resolved
+        address in turn, giving each one connect_timeout_s — like an OS connect
+        timeout per address — so a dual-stack host whose IPv6 path is dead still
+        falls back to IPv4 instead of the first address eating the whole budget.
+
+        The DNS lookup is deliberately NOT under the timeout: getaddrinfo runs in a
+        worker thread that cancellation can't stop, so timing it out would leave one
+        stuck thread behind per retry during a DNS outage and starve the shared
+        executor (asyncio.to_thread: password hashing, config saves, log reads).
+        Connecting to the resolved IP literal needs no further lookup."""
+        net = self.mapping.network
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(net.remote_host, net.remote_port,
+                                       type=socket.SOCK_STREAM)
+        ssl_ctx = self._client_ssl()
+        error: BaseException = ConnectionError(f"no address for {net.remote_host}")
+        for family, _type, _proto, _name, sockaddr in infos:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.open_connection(
+                        sockaddr[0], sockaddr[1], family=family, ssl=ssl_ctx,
+                        server_hostname=net.remote_host if ssl_ctx else None),
+                    timeout=net.connect_timeout_s or None)
+            except asyncio.TimeoutError as e:
+                if getattr(e, "errno", None) is not None:
+                    error = e  # the OS's own connect timeout, not ours
+                    continue
+                error = ConnectionError(f"timed out after {net.connect_timeout_s:g}s")
+            except OSError as e:
+                error = e
+        raise error
+
     async def _client_supervisor(self) -> None:
         net = self.mapping.network
+        target = f"{net.remote_host}:{net.remote_port}"
         backoff, attempt = 0.5, 0
         while not self._stop.is_set():
             try:
-                reader, writer = await asyncio.open_connection(
-                    net.remote_host, net.remote_port, ssl=self._client_ssl())
+                reader, writer = await self._connect_out()
+                self._enable_keepalive(writer, target)
                 client = _ClientConn(self, reader, writer, net.remote_host, net.remote_port)
                 self._clients.add(client)
                 self._refresh_clients()
-                self._log(f"connected out to {net.remote_host}:{net.remote_port}")
+                self._log(f"connected out to {target}")
                 backoff, attempt = 0.5, 0
                 try:
                     await client.run()
                 finally:
                     self._clients.discard(client)
                     self._refresh_clients()
+                    held = fmt_duration(time.time() - client.connected_at)
+                    why = f" — {client.close_reason}" if client.close_reason else ""
+                    self._log(f"connect-out link to {target} closed after {held}{why}")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -750,7 +839,7 @@ class _UdpPeer:
                 t.sendto(data, self.addr)
             self.runner.status.bytes_in += len(data)
 
-    def kick(self) -> None:
+    def kick(self, reason: str = "") -> None:
         pass
 
     def request_graceful_close(self) -> None:

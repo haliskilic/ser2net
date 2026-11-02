@@ -23,9 +23,17 @@ def _client_ip(request) -> str:
     return ip
 
 
+REDACTED = "********"
+
+
 def _mapping_view(mapping, state) -> dict:
-    """A mapping's full config plus its live runtime status."""
+    """A mapping's full config plus its live runtime status. A read-only (viewer)
+    token doesn't get stored secrets (the MQTT password) — the same rule as the web
+    UI, where viewers can't open the edit form or the export. Operator/admin tokens
+    see the real value, so a GET -> PUT round trip keeps working for them."""
     view = mapping.to_dict()
+    if state.config.api_token_role == "viewer" and view["mqtt"].get("password"):
+        view["mqtt"]["password"] = REDACTED
     view["status"] = state.supervisor.status(mapping.id)
     return view
 

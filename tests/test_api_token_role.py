@@ -106,6 +106,25 @@ def main():
         api("POST", "/api/v1/mappings", otok, body=mapping(free_port(), "/dev/ttyO"), expect=201)
         print("operator token: GET + POST allowed (read-write)  OK")
 
+        # stored secrets: operator sees the MQTT password (GET -> PUT round trip), a
+        # viewer token gets it redacted
+        with_secret = dict(mapping(free_port(), "/dev/ttyS"),
+                           mqtt={"enabled": False, "password": "broker-secret"})
+        api("POST", "/api/v1/mappings", otok, body=with_secret, expect=201)
+
+        def mqtt_passwords(token):
+            req = urllib.request.Request(BASE + "/api/v1/mappings",
+                                         headers={"Authorization": f"Bearer {token}"})
+            doc = json.loads(urllib.request.urlopen(req, timeout=10).read())
+            return {m["name"]: m["mqtt"]["password"] for m in doc["mappings"]}
+
+        assert mqtt_passwords(otok)[with_secret["name"]] == "broker-secret"
+        vtok = gen_token("viewer")
+        seen = mqtt_passwords(vtok)
+        assert seen[with_secret["name"]] == "********", seen
+        assert "broker-secret" not in json.dumps(seen)
+        print("viewer token: stored MQTT password redacted; operator token sees it  OK")
+
         print("\nPASS: REST API token roles")
     finally:
         srv.terminate()

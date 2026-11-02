@@ -6,9 +6,11 @@ tests (Linux only; requires the `socat` binary on PATH).
 
     python3 tests/run_all.py            # portable suite (cross-platform)
     python3 tests/run_all.py --socat    # + socat data-path tests (Linux)
+    python3 tests/run_all.py -v         # also show the output of passing tests
 
 Exit code is non-zero if any selected test fails, so CI can gate on it.
 """
+import contextlib
 import os
 import shutil
 import subprocess
@@ -26,11 +28,15 @@ PORTABLE = [
     "test_udp_acl.py",
     "test_rfc2217_readonly.py",
     "test_stop_with_clients.py",
+    "test_dead_peer.py",
+    "test_conn_timers.py",
+    "test_upgrade_from_2_6.py",
     "test_start_failure_cleanup.py",
     "test_log_read.py",
     "test_log_rotation.py",
     "test_log_maintenance.py",
     "test_web_auth.py",
+    "test_open_access.py",
     "test_form_validation.py",
     "test_rest_api.py",
     "test_api_token_role.py",
@@ -61,7 +67,7 @@ SOCAT = [
 ]
 
 
-def run_one(name: str) -> bool:
+def run_one(name: str, verbose: bool = False) -> bool:
     path = os.path.join(HERE, name)
     if not os.path.exists(path):
         print(f"SKIP  {name} (missing)")
@@ -69,9 +75,12 @@ def run_one(name: str) -> bool:
     t0 = time.time()
     # Per-test wall-clock cap: a wedged test must fail loudly (with its partial
     # output) rather than hang the whole CI job until the 6-hour runner limit.
+    # Children write UTF-8 regardless of the console code page (Windows: cp1252),
+    # and undecodable bytes never crash the runner.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     try:
-        proc = subprocess.run([sys.executable, path], capture_output=True,
-                              text=True, timeout=TEST_TIMEOUT)
+        proc = subprocess.run([sys.executable, path], capture_output=True, env=env,
+                              encoding="utf-8", errors="replace", timeout=TEST_TIMEOUT)
     except subprocess.TimeoutExpired as e:
         dt = time.time() - t0
         print(f"FAIL  {name}  ({dt:.1f}s, TIMED OUT after {TEST_TIMEOUT}s)")
@@ -86,11 +95,16 @@ def run_one(name: str) -> bool:
     if not ok:
         sys.stdout.write(proc.stdout[-2000:])
         sys.stderr.write(proc.stderr[-2000:])
+    elif verbose:
+        sys.stdout.write("".join(f"      {ln}\n" for ln in proc.stdout[-4000:].splitlines()))
     return ok
 
 
 def main(argv) -> int:
+    with contextlib.suppress(AttributeError, ValueError):  # don't die on a narrow console
+        sys.stdout.reconfigure(errors="replace")
     want_socat = "--socat" in argv
+    verbose = "-v" in argv or "--verbose" in argv
     selected = list(PORTABLE)
     if want_socat:
         if shutil.which("socat"):
@@ -99,7 +113,7 @@ def main(argv) -> int:
             print("note: --socat given but socat binary not found; skipping socat tests")
 
     print(f"running {len(selected)} test file(s)\n")
-    failed = [name for name in selected if not run_one(name)]
+    failed = [name for name in selected if not run_one(name, verbose)]
     print(f"\n{'-' * 40}\n{len(selected) - len(failed)} passed, {len(failed)} failed")
     if failed:
         print("FAILED: " + ", ".join(failed))

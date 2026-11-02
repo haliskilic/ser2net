@@ -130,6 +130,9 @@ def main():
                                                "password": "userpass123", "password2": "userpass123",
                                                "_csrf": viewer.csrf()}) == 403, \
             "viewer must not manage users"
+        # the edit form and the export render stored secrets (MQTT password): not for viewers
+        for path in ("/api/mappings/form", "/settings/config/export"):
+            assert viewer.get(path) == 403, f"viewer must not read {path}"
         print("viewer: can read, blocked from mapping writes and user management (403)  OK")
 
         # ---- operator: mappings yes, admin functions no ----
@@ -138,6 +141,8 @@ def main():
         oport = free_port()
         assert operator.post("/api/mappings/save", mapping_fields("m-op", oport, "/dev/ttyB")) == 200, \
             "operator must be able to create mappings"
+        assert operator.get("/api/mappings/form") == 200, "operator must open the mapping form"
+        assert operator.get("/settings/config/export") == 200, "operator must export mappings"
         assert operator.post("/settings/users", {"username": "y", "role": "viewer",
                                                  "password": "userpass123", "password2": "userpass123",
                                                  "_csrf": operator.csrf()}) == 403, \
