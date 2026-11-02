@@ -38,6 +38,7 @@ from .api import build_api_routes
 OIDC_COOKIE = "ser2net_oidc"
 
 SESSION_TTL = 8 * 3600
+CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
 _TRIGGER = {"HX-Trigger": "refreshMappings"}
 
 
@@ -101,6 +102,18 @@ def build_routes(templates, state, static_dir):
     def can_edit(request) -> bool:
         u = current_user(request)
         return u is not None and ROLE_RANK.get(u.role, 0) >= ROLE_RANK["operator"]
+
+    def is_anonymous(request) -> bool:
+        u = current_user(request)
+        return u is not None and u.source == "anonymous"
+
+    def require_peer_access(request):
+        """Cluster peer actions act on OTHER nodes with the shared key, so they need a
+        signed-in operator: open access on this node must not open every peer (which
+        may well require a login of its own)."""
+        if is_anonymous(request):
+            return PlainTextResponse("Sign in to manage other cluster nodes.", status_code=403)
+        return require_role(request, "operator")
 
     # ---------------- pages ----------------
     async def healthz(request):
@@ -590,7 +603,7 @@ def build_routes(templates, state, static_dir):
         cfg = state.config
         # BaseHTTPMiddleware does NOT run for WebSocket scope, so authenticate here.
         token = websocket.cookies.get(auth.SESSION_COOKIE)
-        ws_user = auth.request_user(cfg, token, websocket.headers.get("host"))
+        ws_user = auth.request_user(cfg, token, websocket.headers)
         if ws_user is None:
             await websocket.close(code=1008)
             return
@@ -635,14 +648,26 @@ def build_routes(templates, state, static_dir):
                 if data and interactive:
                     await runner.serial_write(data)
 
+        async def access_watch():
+            # A console outlives the check at connect: end it once its access is gone
+            # (login switched back on, session revoked by a password change, role
+            # changed) instead of letting it keep watching — or writing to — the device.
+            while True:
+                await asyncio.sleep(CONSOLE_ACCESS_RECHECK_S)
+                now = auth.request_user(state.config, token, websocket.headers)
+                if now is None or now.role != ws_user.role:
+                    state.log(f"[{mapping.name}] console closed: access changed ({peer})")
+                    return
+
         st = asyncio.create_task(sender())
         rt = asyncio.create_task(receiver())
+        wt = asyncio.create_task(access_watch())
         try:
-            await asyncio.wait({st, rt}, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait({st, rt, wt}, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            for t in (st, rt):
+            for t in (st, rt, wt):
                 t.cancel()
-            for t in (st, rt):
+            for t in (st, rt, wt):
                 with contextlib.suppress(BaseException):
                     await t
             runner.discard_monitor(mon)
@@ -742,6 +767,9 @@ def build_routes(templates, state, static_dir):
         local = local_node_payload()
         nodes = [{**local, "self": True, "online": True, "source": "self",
                   "uptime": _fmt_uptime(local["uptime_s"])}]
+        if is_anonymous(request):  # other nodes' data needs a real login here
+            return render(request, "_cluster_body.html", nodes=nodes, can_edit=False,
+                          discovery_error="", peers_hidden=True)
         targets = state.cluster.all_targets()
         results = await asyncio.gather(*[state.cluster.fetch_peer(t) for t in targets]) \
             if targets else []
@@ -773,7 +801,7 @@ def build_routes(templates, state, static_dir):
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
         The peer is validated against the known-address allowlist (so the browser can't
         aim this at an arbitrary host), then the call is made with the shared key."""
-        if deny := require_role(request, "operator"):
+        if deny := require_peer_access(request):
             return deny
         form = await request.form()
         scheme = form.get("scheme", "http")
@@ -841,7 +869,7 @@ def build_routes(templates, state, static_dir):
     async def cluster_peer_form(request):
         """Browser-facing proxy: load a peer's mapping into the edit form (rendered
         here so the CSRF token is the browser's). Submits to /api/cluster/peer-save."""
-        if deny := require_role(request, "operator"):
+        if deny := require_peer_access(request):
             return deny
         peer, err = _peer_from_request(request.query_params.get)
         if err:
@@ -860,7 +888,7 @@ def build_routes(templates, state, static_dir):
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping form to the peer's key-guarded
         save (peer fields stripped); on a peer error, re-render the form with it."""
-        if deny := require_role(request, "operator"):
+        if deny := require_peer_access(request):
             return deny
         form = await request.form()
         peer, err = _peer_from_request(form.get)
@@ -879,6 +907,8 @@ def build_routes(templates, state, static_dir):
                                             f"/api/cluster/mapping-data?mid={form.get('id', '')}")
         try:
             mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+            if data and data.get("mapping"):
+                _preserve_unmanaged_fields(mapping, MappingConfig.from_dict(data["mapping"]), form)
         except Exception:
             mapping = MappingConfig(name=form.get("name", ""))
         return render(request, "_mapping_form.html", status_code=400, mapping=mapping, is_new=False,
@@ -1390,6 +1420,9 @@ def _form_error(render, request, state, form, message: str):
     from ..engine import netinfo
     try:
         mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+        # keep stored values for fields this form didn't post (else the re-rendered,
+        # hidden inputs would carry defaults into the next save)
+        _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id), form)
     except Exception:
         mapping = MappingConfig(name=form.get("name", ""))
     is_new = not form.get("id")

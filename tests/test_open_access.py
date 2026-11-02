@@ -9,7 +9,10 @@ Spawns the real server and checks, over HTTP / WebSocket:
   - signing in still works on an open UI; the REST API still needs its token,
   - the edit form / mappings export (they carry the MQTT password) need operator+,
   - the console WebSocket follows the same rule, and switching login back on closes
-    the door again,
+    the door again — including consoles that are already open,
+  - reverse-proxy host headers (X-Forwarded-Host / Forwarded) are checked too,
+  - with a LAN cluster, anonymous visitors see only this node and can't act on peers,
+  - a failed save re-renders the form without resetting unposted stored values,
   - the mapping form saves keepalive / connect timeout / max connection time and
     re-renders them on edit.
 
@@ -159,6 +162,16 @@ def main():
         assert 'name="network_tcp_keepalive" checked' in body
         print("mapping form: keepalive / idle / max connection time saved and re-rendered  OK")
 
+        # an INVALID save from a view that doesn't post the keepalive block (UDP mode):
+        # the re-rendered form must still carry the stored values, not defaults
+        st, body, _ = admin.post("/api/mappings/save", dict(
+            mapping_form("", mport, "/dev/ttyOPEN1"), id=mid, network_mode="udp"))
+        assert st == 400 and "Mapping name is required" in body, st
+        assert 'name="network_keepalive_idle_s" min="1" max="32767" value="45"' in body, \
+            "error re-render reset the stored keepalive idle to the default"
+        assert config()["mappings"][0]["network"]["keepalive_idle_s"] == 45
+        print("failed save: the re-rendered form keeps stored values of unposted fields  OK")
+
         # ---- default: login required ----
         anon = Session()
         st, _, loc = anon.get("/")
@@ -186,6 +199,14 @@ def main():
         assert console_ws_accepted(mid), "open access (viewer) should allow the read-only console"
         print("open access (viewer): dashboard + console without login; writes/admin -> 403  OK")
 
+        # a reverse proxy's forwarded host names count too (they can only narrow access)
+        st, _, loc = Session().get("/", headers={"X-Forwarded-Host": "attacker.example"})
+        assert st == 303 and loc.endswith("/login"), f"foreign X-Forwarded-Host must sign in: {st}"
+        st, _, loc = Session().get("/", headers={"Forwarded": "for=1.2.3.4;host=attacker.example"})
+        assert st == 303 and loc.endswith("/login"), f"foreign Forwarded host must sign in: {st}"
+        assert Session().get("/", headers={"X-Forwarded-Host": f"127.0.0.1:{UI}"})[0] == 200
+        print("open access also checks X-Forwarded-Host / Forwarded host names  OK")
+
         # ---- DNS-rebinding guard: another host name must still sign in ----
         rebind = Session()
         st, _, loc = rebind.get("/", host=f"attacker.example:{UI}")
@@ -206,6 +227,21 @@ def main():
                                              "password2": "userpass123", "_csrf": anon.csrf()})[0] == 403
         print("open access (operator): mapping edits allowed, user management still 403  OK")
 
+        # LAN cluster: open access on THIS node must not open the other nodes
+        st, _, _ = admin.post("/settings/cluster", {"enabled": "on", "key": "shared-cluster-key",
+                                                    "discovery_port": str(free_port()),
+                                                    "_csrf": admin.csrf()})
+        assert st == 200 and config()["cluster"]["enabled"] is True
+        st, body, _ = anon.get("/api/cluster/status")
+        assert st == 200 and "Sign in</a> to see and manage the other cluster nodes" in body
+        st, body, _ = admin.get("/api/cluster/status")
+        assert st == 200 and "to see and manage the other cluster nodes" not in body
+        peer = {"scheme": "http", "host": "127.0.0.1", "port": str(UI), "mid": mid}
+        assert anon.post("/api/cluster/control-peer", dict(peer, action="stop"))[0] == 403
+        assert anon.get("/api/cluster/peer-form?" + urllib.parse.urlencode(peer))[0] == 403
+        assert anon.post("/api/cluster/peer-save", dict(peer, name="x"))[0] == 403
+        print("cluster: anonymous visitors see only this node; peer control/edit need a login  OK")
+
         # ---- signing in still works on an open UI ----
         alice = Session()
         alice.prime("/login")
@@ -219,8 +255,20 @@ def main():
         # ---- invalid role is rejected, login back on closes the door ----
         st, body, _ = admin.post("/settings/access", {"anonymous_role": "root", "_csrf": admin.csrf()})
         assert "Invalid role" in body and config()["admin_ui"]["anonymous_role"] == "operator"
+        from websockets.exceptions import ConnectionClosed
+        from websockets.sync.client import connect
+        ws = connect(f"ws://127.0.0.1:{UI}/api/mappings/{mid}/console", open_timeout=5)
         assert admin.post("/settings/access", {"require_login": "on", "anonymous_role": "viewer",
                                                "_csrf": admin.csrf()})[0] == 200
+        try:
+            ws.recv(timeout=6)  # no serial data flows here: only a close can end this
+            raise AssertionError("an open anonymous console survived login being switched on")
+        except ConnectionClosed:
+            pass
+        except TimeoutError:
+            raise AssertionError("an open anonymous console survived login being switched on") from None
+        finally:
+            ws.close()
         assert config()["admin_ui"]["require_login"] is True
         st, _, loc = anon.get("/")
         assert st == 303 and loc.endswith("/login"), "login must be required again"
