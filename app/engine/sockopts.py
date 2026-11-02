@@ -12,14 +12,25 @@ and tears the client down.
   - SO_KEEPALIVE, plus idle / interval / count (Linux, Windows 10 1709+, macOS),
   - on Windows builds without TCP_KEEPIDLE: SIO_KEEPALIVE_VALS (idle + interval;
     the probe count is fixed by the OS at 10),
-  - on Linux: TCP_USER_TIMEOUT = idle + interval * count, so the same bound also
-    applies while data is in flight to a dead peer (otherwise ~15 min of
-    retransmissions, tcp_retries2). Windows already gives up after ~20 s there.
+  - on Linux, when idle + interval * count is shorter than the kernel's own give-up
+    time for unacknowledged data (~15 min, tcp_retries2): TCP_USER_TIMEOUT of that
+    length, so a peer that dies while data is in flight (keepalive doesn't probe
+    then) is dropped in the same window. Since Linux 5.11 this also drops a live
+    client whose receive window stays closed (it stopped reading) that long — the
+    bridge would drop such a client anyway once its output queue overflows.
+    Windows' own retransmission limit is far shorter (tests/test_dead_peer.py).
 """
 from __future__ import annotations
 
 import socket
 import sys
+
+# Linux gives up on unacknowledged data after ~924 s by default (tcp_retries2 = 15);
+# a longer TCP_USER_TIMEOUT would make things worse, not better.
+_LINUX_DATA_GIVE_UP_S = 900
+
+# what a bad option value can raise from setsockopt/ioctl (e.g. an int overflow)
+_SOCKOPT_ERRORS = (OSError, ValueError, TypeError, OverflowError)
 
 
 def _ioctl_socket(sock):
@@ -32,7 +43,7 @@ def enable_keepalive(sock, idle_s: int, interval_s: int, count: int) -> None:
     """Enable TCP keepalive on a connected TCP socket (a ``socket.socket`` or the
     ``TransportSocket`` from ``writer.get_extra_info("socket")``).
 
-    Raises OSError if the OS rejects SO_KEEPALIVE or the timing; the probe count and
+    Raises if the OS rejects SO_KEEPALIVE or the timing; the probe count and
     TCP_USER_TIMEOUT are best-effort (older kernels/Windows builds lack them).
     """
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
@@ -43,14 +54,15 @@ def enable_keepalive(sock, idle_s: int, interval_s: int, count: int) -> None:
         sock.setsockopt(socket.IPPROTO_TCP, idle_opt, idle_s)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval_s)
         optional = [("TCP_KEEPCNT", count)]
-        if sys.platform.startswith("linux"):
-            optional.append(("TCP_USER_TIMEOUT", (idle_s + interval_s * count) * 1000))
+        reap_s = idle_s + interval_s * count
+        if sys.platform.startswith("linux") and reap_s < _LINUX_DATA_GIVE_UP_S:
+            optional.append(("TCP_USER_TIMEOUT", reap_s * 1000))
         for name, value in optional:
             opt = getattr(socket, name, None)
             if opt is not None:
                 try:
                     sock.setsockopt(socket.IPPROTO_TCP, opt, value)
-                except OSError:
+                except _SOCKOPT_ERRORS:
                     pass
         return
     if hasattr(socket, "SIO_KEEPALIVE_VALS"):  # Windows before 10 1709
@@ -67,8 +79,9 @@ def enable_keepalive(sock, idle_s: int, interval_s: int, count: int) -> None:
 
 def apply_keepalive(writer, net) -> str | None:
     """Apply a mapping's keepalive settings (``NetworkSettings``) to a stream
-    writer's socket. Returns why it could not be enabled, or None (also when the
-    mapping has keepalive turned off)."""
+    writer's socket. Never raises: returns why keepalive could not be enabled, or
+    None (also when the mapping has keepalive turned off) — a socket-option problem
+    must not take the connection down with it."""
     if not net.tcp_keepalive:
         return None
     sock = writer.get_extra_info("socket")
@@ -77,8 +90,8 @@ def apply_keepalive(writer, net) -> str | None:
     try:
         enable_keepalive(sock, net.keepalive_idle_s, net.keepalive_interval_s,
                          net.keepalive_count)
-    except OSError as e:
-        return str(e)
+    except _SOCKOPT_ERRORS as e:
+        return f"{type(e).__name__}: {e}"
     return None
 
 

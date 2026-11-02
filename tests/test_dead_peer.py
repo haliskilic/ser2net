@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
+from app.engine import sockopts
 from app.engine.bridge import MappingRunner
 from app.engine.modbus_gateway import ModbusGatewayRunner
 
@@ -250,6 +251,62 @@ async def test_server_socket_keepalive_custom_and_off():
     print("server mode: custom idle/interval/count applied; tcp_keepalive=false disables it  OK")
 
 
+async def test_extreme_keepalive_values_are_safe():
+    """The form's maximum values (32767 s / 32767 s / 127) must not break anything:
+    they once overflowed TCP_USER_TIMEOUT (a C int) and the uncaught error dropped
+    every connection. A socket that rejects the options must not either."""
+    port = _free_port()
+    logs = []
+    big = {"keepalive_idle_s": 32767, "keepalive_interval_s": 32767, "keepalive_count": 127}
+    runner = MappingRunner(_mapping(port, **big), logger=logs.append)
+    await runner.start()
+    try:
+        _r, w = await asyncio.open_connection("127.0.0.1", port)
+        assert await _wait_for(lambda: len(runner._clients) == 1, 5), f"client dropped: {logs}"
+        await asyncio.sleep(0.3)
+        assert len(runner._clients) == 1, f"client dropped: {logs}"
+        assert not any("keepalive not enabled" in ln for ln in logs), logs
+        sock = next(iter(runner._clients)).writer.get_extra_info("socket")
+        _assert_keepalive(_keepalive_state(sock), 32767, 32767, 127, "maximum values")
+        await _close(w)
+    finally:
+        await runner.stop()
+
+    class _RejectingSocket:
+        def setsockopt(self, *_args):
+            raise TypeError("a bytes-like object is required, not 'int'")
+
+    class _Writer:
+        def get_extra_info(self, _key):
+            return _RejectingSocket()
+
+    err = sockopts.apply_keepalive(_Writer(), _mapping(port, **big).network)
+    assert err and "TypeError" in err, err
+    print("keepalive at the form's maximums: connection stays up; option errors never raise  OK")
+
+
+async def test_linux_user_timeout_only_when_tighter():
+    """Linux: TCP_USER_TIMEOUT = idle + interval * count, but only when that is shorter
+    than the kernel's own ~15 min give-up for unacknowledged data."""
+    if not sys.platform.startswith("linux"):
+        print("TCP_USER_TIMEOUT policy: Linux only  SKIP")
+        return
+    for net, expect_ms in ((KA, 3000), ({}, 90_000), ({"keepalive_idle_s": 900}, 0)):
+        port = _free_port()
+        runner = MappingRunner(_mapping(port, **net), logger=lambda _m: None)
+        await runner.start()
+        try:
+            _r, w = await asyncio.open_connection("127.0.0.1", port)
+            assert await _wait_for(lambda: len(runner._clients) == 1, 5), "client did not register"
+            sock = next(iter(runner._clients)).writer.get_extra_info("socket")
+            got = sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT)
+            assert got == expect_ms, f"{net or 'defaults'}: TCP_USER_TIMEOUT={got}, want {expect_ms}"
+            await _close(w)
+        finally:
+            await runner.stop()
+    print("Linux TCP_USER_TIMEOUT: set to idle+interval*count only when < 15 min  OK")
+
+
 async def test_closed_and_reset_clients_are_reaped():
     """The paths that already worked: a FIN or an RST that DOES arrive is handled
     promptly on every platform — the bug is only the silent (half-open) loss."""
@@ -388,8 +445,8 @@ async def e2e_raw_dead_client_is_reaped(Blackhole):
 async def e2e_raw_dead_client_while_streaming(Blackhole):
     """The device keeps talking while the client is dead: the data stays unacked, so
     Linux sends no keepalive probes — TCP_USER_TIMEOUT bounds it to the same window
-    (~15 min of retransmissions otherwise). Windows gives up by itself after its
-    retransmission limit (~20 s), hence the longer budget there."""
+    (~15 min of retransmissions otherwise). Windows relies on its own, much shorter
+    retransmission limit, hence the more generous budget there."""
     port = _free_port()
     logs = []
     runner = MappingRunner(_mapping(port, max_connections=1, **KA), logger=logs.append)
@@ -599,7 +656,8 @@ def main() -> int:
         if len(_loops()) > 1:
             print(f"-- {label} event loop --")
         results.append(_run(test_server_socket_keepalive_default, loop_factory=factory))
-    for fn in (test_server_socket_keepalive_custom_and_off, test_closed_and_reset_clients_are_reaped,
+    for fn in (test_server_socket_keepalive_custom_and_off, test_extreme_keepalive_values_are_safe,
+               test_linux_user_timeout_only_when_tighter, test_closed_and_reset_clients_are_reaped,
                test_windows_legacy_keepalive_fallback, test_connect_out_socket_keepalive,
                test_modbus_gateway_socket_keepalive):
         results.append(_run(fn))
