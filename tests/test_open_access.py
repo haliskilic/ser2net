@@ -122,9 +122,12 @@ def main():
     cfg_path = os.path.join(tmp, "config.json")
     with open(cfg_path, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
+    # The server logs to stdout: send it to a file, never an unread pipe — on Windows the
+    # pipe buffer is ~4 KB and a full pipe blocks the server's event loop mid-test.
+    server_log = open(os.path.join(tmp, "server.log"), "wb")
     srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg_path],
-                           cwd=ROOT, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           cwd=ROOT, stdin=subprocess.DEVNULL, stdout=server_log,
+                           stderr=subprocess.STDOUT)
 
     def config():
         with open(cfg_path, encoding="utf-8") as fh:
@@ -277,12 +280,18 @@ def main():
         print("invalid role rejected; re-enabling login locks anonymous visitors out again  OK")
 
         print("\nPASS: optional web login (open access) + connection fields in the form")
+    except BaseException:
+        server_log.flush()
+        with open(os.path.join(tmp, "server.log"), "rb") as fh:
+            print("--- server log (tail) ---\n" + fh.read()[-3000:].decode("utf-8", "replace"))
+        raise
     finally:
         srv.terminate()
         try:
             srv.wait(timeout=5)
         except subprocess.TimeoutExpired:
             srv.kill()
+        server_log.close()
         shutil.rmtree(tmp, ignore_errors=True)
 
 

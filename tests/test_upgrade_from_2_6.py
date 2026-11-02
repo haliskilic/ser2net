@@ -87,12 +87,17 @@ def main():
     with open(cfg_path, "w", encoding="utf-8") as fh:
         json.dump(v26_config(ui), fh)
     env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(ui))
+    # server output goes to a file, never an unread pipe (a full pipe blocks the server)
+    log_path = os.path.join(tmp, "server.log")
+    server_log = open(log_path, "wb")
     srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg_path],
                            cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           stdout=server_log, stderr=subprocess.STDOUT)
     try:
         if not wait_port(ui):
-            out = srv.stdout.read().decode("utf-8", "replace") if srv.poll() is not None else ""
+            server_log.flush()
+            with open(log_path, "rb") as fh:
+                out = fh.read().decode("utf-8", "replace")
             raise AssertionError(f"2.6.x config did not boot (Docker-style re-save):\n{out[-1500:]}")
         print("2.6.x config boots with SER2NET_BIND_IP (re-saved + validated on start)  OK")
 
@@ -132,6 +137,7 @@ def main():
             srv.wait(timeout=5)
         except subprocess.TimeoutExpired:
             srv.kill()
+        server_log.close()
         shutil.rmtree(tmp, ignore_errors=True)
 
 
