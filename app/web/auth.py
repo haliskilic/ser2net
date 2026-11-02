@@ -8,10 +8,11 @@ The admin UI is network-exposed by design, so it is password-protected by defaul
 
 An admin may switch the login requirement off for trusted networks: a visitor
 without a session then gets a pseudo-user with ``admin_ui.anonymous_role``. That
-only applies when the request's Host is an IP literal, ``localhost`` or this
-machine's own name — a page on an attacker's domain that DNS-rebinds to this UI
-carries the attacker's host name, so it never gets anonymous access (CSRF still
-applies to everything).
+only applies when every host name the request claims (Host, and X-Forwarded-Host /
+Forwarded from a reverse proxy) is an IP literal, ``localhost`` or this machine's
+own name — a page on an attacker's domain that DNS-rebinds to this UI carries the
+attacker's host name, so it never gets anonymous access (CSRF still applies to
+everything, and cluster peer actions always need a real login).
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import re
 import secrets
 import socket
 import time
@@ -174,21 +176,44 @@ def is_own_host(host_header: str | None) -> bool:
     return name == "localhost" or name in _own_host_names()
 
 
-def anonymous_user(cfg, host_header: str | None):
+_FORWARDED_HOST = re.compile(r'(?:^|[;,\s])host="?([^";,\s]+)', re.IGNORECASE)
+
+
+def _claimed_hosts(headers) -> list:
+    """Every host name the request claims: Host, plus X-Forwarded-Host / Forwarded
+    host= when a reverse proxy sets them. All must be this machine for open access
+    (requiring more names to match can only narrow it, so a client-supplied header
+    can't widen anything)."""
+    hosts = [headers.get("host") or ""]
+    xfh = headers.get("x-forwarded-host")
+    if xfh:
+        hosts += [h.strip() for h in xfh.split(",")]
+    fwd = headers.get("forwarded")
+    if fwd:
+        hosts += _FORWARDED_HOST.findall(fwd)
+    return hosts
+
+
+def anonymous_user(cfg, headers):
     """The pseudo-user for a visitor without a session, or None when login is
-    required (the default), setup isn't done yet, or the Host isn't trusted."""
+    required (the default), setup isn't done yet, or a claimed host isn't this
+    machine. Note: a reverse proxy that rewrites Host to 127.0.0.1 without passing
+    the original as X-Forwarded-Host/Forwarded hides the real name from this check."""
     ui = cfg.admin_ui
-    if ui.require_login or not cfg.password_set or not is_own_host(host_header):
+    if ui.require_login or not cfg.password_set:
+        return None
+    if not all(is_own_host(h) for h in _claimed_hosts(headers)):
         return None
     from ..config import User
 
     return User(username=ANONYMOUS_USERNAME, role=ui.anonymous_role, source="anonymous")
 
 
-def request_user(cfg, token: str | None, host_header: str | None):
+def request_user(cfg, token: str | None, headers):
     """The user a request acts as: its session's user, else the anonymous pseudo-user
-    when the login requirement is off, else None (must sign in)."""
-    return session_user(cfg, token) or anonymous_user(cfg, host_header)
+    when the login requirement is off, else None (must sign in). ``headers`` is the
+    request's (or WebSocket's) header mapping."""
+    return session_user(cfg, token) or anonymous_user(cfg, headers)
 
 
 # --------------------------------------------------------------------------
