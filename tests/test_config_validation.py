@@ -263,12 +263,21 @@ def test_connection_lifecycle_validation():
         ({"keepalive_count": True}, None, "Keepalive probe count"),
         ({"connect_timeout_s": -1}, None, "Connect timeout"),
         ({"connect_timeout_s": 3601}, None, "Connect timeout"),
-        (None, {"idle_timeout_s": -5}, "Idle timeout"),
         (None, {"max_connection_time_s": -1}, "Max connection time"),
         (None, {"max_connection_time_s": "24h"}, "Max connection time"),
     ]
     for network, options, needle in bad:
         _expect_error(mapping(network, options), needle)
+    # a negative idle timeout is rejected when set directly...
+    neg = mapping()
+    neg.options.idle_timeout_s = -5
+    _expect_error(neg, "Idle timeout")
+    # ...but values a pre-v2.7 config could hold (unvalidated then; <= 0 meant "off")
+    # still load + save — a Docker/headless boot re-saves (= validates) the config
+    for stored, loaded in ((-1, 0), ("300", 300), ("abc", 0), (10**12, 31536000)):
+        legacy = mapping(options={"idle_timeout_s": stored})
+        assert legacy.options.idle_timeout_s == loaded, (stored, legacy.options.idle_timeout_s)
+        legacy.validate()
     # boundaries / valid values
     mapping({"keepalive_idle_s": 1, "keepalive_interval_s": 32767, "keepalive_count": 127,
              "connect_timeout_s": 0}, {"idle_timeout_s": 300, "max_connection_time_s": 86400}).validate()

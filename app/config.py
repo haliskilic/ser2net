@@ -15,6 +15,7 @@ import contextlib
 import dataclasses
 import ipaddress
 import json
+import math
 import os
 import secrets
 import tempfile
@@ -92,6 +93,23 @@ def _is_int(value: Any) -> bool:
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _legacy_seconds(value: Any) -> Any:
+    """Normalize a timer that predates validation (idle_timeout_s). Before v2.7 the
+    REST API / import stored it unchecked and anything <= 0 meant "off", so an old
+    config may hold -1 or a numeric string. Map those onto the validated range rather
+    than refuse to start: a headless/Docker boot re-saves (= validates) the config."""
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except ValueError:
+            return 0
+        if value.is_integer():
+            value = int(value)
+    if not _is_number(value) or not math.isfinite(value) or value < 0:
+        return 0
+    return min(value, MAX_TIMER_S)
 
 
 def normalize_cidr(value: str) -> str:
@@ -311,7 +329,9 @@ class MappingOptions:
     def from_dict(d: dict[str, Any]) -> "MappingOptions":
         d = dict(d or {})
         known = {f.name for f in dataclasses.fields(MappingOptions)}
-        return MappingOptions(**{k: v for k, v in d.items() if k in known})
+        opts = MappingOptions(**{k: v for k, v in d.items() if k in known})
+        opts.idle_timeout_s = _legacy_seconds(opts.idle_timeout_s)
+        return opts
 
     def validate(self) -> None:
         for label, value in (("Idle timeout", self.idle_timeout_s),
