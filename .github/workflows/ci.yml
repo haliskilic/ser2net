@@ -26,6 +26,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      # tests/test_dead_peer.py: run the real half-open-connection scenarios (they
+      # blackhole a loopback flow — iptables via passwordless sudo on Linux, WinDivert
+      # as Administrator on Windows). Set in CI, a missing backend fails, not skips.
+      SER2NET_BLACKHOLE_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,6 +41,9 @@ jobs:
       - name: Install socat (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y socat
+      - name: Install pydivert (Windows dead-peer test)
+        if: runner.os == 'Windows'
+        run: pip install pydivert==4.0.1
       - name: Run portable test suite (Windows)
         if: runner.os == 'Windows'
         run: python tests/run_all.py
