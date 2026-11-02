@@ -1,6 +1,6 @@
 # ser2net — Roadmap
 
-> Current release: **v2.6.3**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.7.0**. CI is green across Linux + Windows × Python 3.10–3.13.
 
 ## Shipped
 
@@ -107,6 +107,25 @@
   via pyserial `rs485_mode`. Edit-preservation updated so the form owns the RS-485 fields
   while still carrying over the two it doesn't expose (`hangup_when_done`, `nobreak`).
 
+### v2.7 — connection lifecycle & optional login ([#24](https://github.com/haliskilic/ser2net/issues/24))
+- **Fix: dead TCP peers are detected.** A client (or connect-out remote / Modbus master)
+  that vanished without a FIN/RST — power cut, cable pull, Wi-Fi/VPN/NAT drop — stayed
+  `ESTABLISHED` forever on a quiet raw bridge and, with `max_connections=1`, locked
+  everyone else out ("Busy"). Every TCP data socket now gets **TCP keepalive**, on by
+  default (60 s idle / 10 s interval / 3 probes, per mapping): SO_KEEPALIVE +
+  TCP_KEEPIDLE/INTVL/CNT, `SIO_KEEPALIVE_VALS` on pre-1709 Windows, and on Linux
+  `TCP_USER_TIMEOUT` so the bound also holds while data is in flight.
+- **Connect timeout** for connect-out (TCP + TLS handshake; default 10 s, 0 = OS default),
+  **max connection time** (0 = unlimited), **idle timeout** now also on the Modbus
+  gateway; every disconnect is logged with its reason. All in the mapping form.
+- **Optional web login:** Settings → Web UI access — switch "Require login" off and give
+  visitors a role; signing in still works, the REST API keeps its token, and open
+  access applies only via IP / localhost / own host name (DNS-rebinding guard).
+- Tests: real **half-open TCP** end-to-end tests on Linux (iptables) **and Windows**
+  (WinDivert) in CI — dead client / dead client while streaming / connect-out dead remote
+  / dead Modbus master / SYN to a silent host / legacy Windows path, plus a keepalive-off
+  control that reproduces the original bug; timer and open-access e2e tests.
+
 ---
 
 ## Planned
@@ -116,12 +135,12 @@
 - Optional TLS certificate pinning for peer fetch/control; a light rate-limit on the
   key-guarded peer endpoints; optional IPv6 (multicast) discovery
 
-### v2.7 — industrial/IIoT depth
+### v2.8 — industrial/IIoT depth
 - **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)
 - **Modbus write** support (FC 5/6/15/16), per-point MQTT→register control, RTU
   inter-frame tuning
 
-### v2.8 — packaging & migration
+### v2.9 — packaging & migration
 - Windows service installer (Shawl); `.deb` / `.rpm` packages
 - Automated multi-platform offline wheelhouse (cp310–cp313 × OS) for source installs
 - Classic `ser2net.yaml` import for migration

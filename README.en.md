@@ -72,12 +72,21 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Dozens of mappings:** add/edit/delete/start/stop from one screen, with live status.
 - **Per-mapping access control:** allowed IP/CIDR list, **high-priority** client IPs
   (a priority client evicts the oldest when the port is full), max connections,
-  kick-old-user, read-only, idle timeout, banner, open/close strings, `closeon`.
+  kick-old-user, read-only, banner, open/close strings, `closeon`.
+- **Connection lifecycle (per mapping, TCP):** **dead-peer detection via TCP keepalive**
+  — a client or remote server that vanishes without a FIN/RST (power cut, cable pull,
+  Wi-Fi/VPN/NAT drop) no longer stays `ESTABLISHED` forever: with the defaults (on ·
+  60 s idle · 10 s interval · 3 probes) it is dropped within ~90 s and its slot freed —
+  also while the device keeps sending (Linux `TCP_USER_TIMEOUT`). Plus a **connect
+  timeout** for connect-out (default 10 s), an **idle timeout** and a **max connection
+  time** (e.g. 24 h); every disconnect is logged with its reason.
 - **Observability:** per-mapping traffic trace (hex/timestamp), Prometheus `/metrics`,
   config-change audit log, live log viewer, and an in-browser **serial console**
   (xterm.js over WebSocket — watch traffic or type to the device).
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers, session revocation on password change.
+  For trusted networks the login requirement can be switched off under **Settings → Web
+  UI access** (visitors then use the UI with a chosen role; see Security).
 - **Multi-user / RBAC:** `admin` / `operator` / `viewer` roles — viewer is read-only,
   operator manages mappings, admin does everything plus user management. Existing
   single-password setups migrate automatically to one `admin` user.
@@ -182,8 +191,9 @@ Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); type to the device on
   network mappings.
-- **Settings:** change password, admin TLS (provide paths or generate self-signed),
-  generate/revoke the **REST API token**, mappings **backup/restore** (JSON), status.
+- **Settings:** change password, **web UI access** (login required / open access with a
+  role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
+  token**, mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (authenticated).
 
 ---
@@ -214,11 +224,19 @@ Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 
 ## 🔒 Security
 
-The UI is **always password-protected** and binds to **127.0.0.1** by default.
+The UI is **password-protected by default** and binds to **127.0.0.1** by default.
 Exposing it to the network requires an explicit IP choice at startup and warns when
 bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mapping
 `allowed_client_ips`. Raw TCP is plaintext — be careful on untrusted networks. A bare
 `0.0.0.0`/`::` in an allow/priority list means "any client".
+
+**Open access (optional):** for trusted networks only, an admin can untick "Require
+login" under **Settings → Web UI access** and give visitors a role (`viewer` read-only /
+`operator` / `admin`). Signing in still works (you get your own role), RBAC and CSRF
+apply unchanged, and the **REST API always needs its token**. Open access is honoured
+only when the UI is reached by **IP address, `localhost` or this machine's own name** —
+requests via any other host name (e.g. a malicious page doing DNS rebinding) are sent to
+the login page. While it is on, the UI shows a warning and startup logs it.
 
 ---
 
@@ -253,10 +271,17 @@ Unified test runner — the portable suite (no hardware, no socat) runs on every
 ```bash
 python3 tests/run_all.py            # portable suite (Windows + Linux)
 python3 tests/run_all.py --socat    # + socat-based data-path tests (Linux)
+python3 tests/run_all.py -v         # also show the output of passing tests
 ```
 The socat tests use virtual serial ports (Linux); no hardware needed. Individual
 files still run directly, e.g. `python3 tests/test_rest_api.py`. CI (GitHub Actions)
 runs ruff lint + the full matrix (ubuntu/windows × Python 3.10–3.13).
+
+`tests/test_dead_peer.py` also exercises dead-peer detection against **real half-open
+TCP connections**: with `SER2NET_BLACKHOLE_TESTS=1` it drops the packets of a loopback
+flow (Linux: root/passwordless sudo + `iptables`; Windows: Administrator +
+`pip install pydivert`). Since that edits the firewall it is opt-in locally (on Linux,
+best run inside a throwaway network namespace); CI always runs it on both OSes.
 
 ---
 
