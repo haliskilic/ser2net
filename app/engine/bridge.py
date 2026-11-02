@@ -63,6 +63,9 @@ def describe_disconnect(exc: BaseException) -> str:
     if code in _PEER_TIMEOUT_ERRNOS:
         return "peer stopped responding (TCP keepalive/retransmission timeout)"
     if isinstance(exc, ConnectionResetError):
+        # Windows reports a failed keepalive as WSAECONNRESET too, so don't blame the peer
+        if sys.platform == "win32":
+            return "connection reset (by the peer, or TCP keepalive found it unreachable)"
         return "connection reset by peer"
     if isinstance(exc, asyncio.IncompleteReadError):
         return "closed by peer"
