@@ -3,7 +3,9 @@
 The app is built around a shared AppState. Auth and CSRF are enforced in one
 middleware so every route is protected uniformly: while no password is set, all
 traffic is funneled to /setup; afterwards a valid session cookie is required for
-everything except the login/setup/static endpoints.
+everything except the login/setup/static endpoints — unless an admin switched the
+login requirement off, in which case a visitor without a session acts as the
+anonymous pseudo-user (see auth.anonymous_user) and role checks still apply.
 """
 from __future__ import annotations
 
@@ -81,7 +83,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 return RedirectResponse("/", status_code=303)
             if not is_public:
                 token = request.cookies.get(auth.SESSION_COOKIE)
-                user = auth.session_user(cfg, token)
+                user = auth.request_user(cfg, token, request.headers.get("host"))
                 if user is None:
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)

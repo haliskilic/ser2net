@@ -478,6 +478,11 @@ class AdminUI:
     port: int = 8080
     tls_cert: str = ""
     tls_key: str = ""
+    # Web-UI login can be switched off from Settings (trusted networks only): visitors
+    # without a session then act with anonymous_role. Signing in still works, and the
+    # REST API keeps its bearer token.
+    require_login: bool = True
+    anonymous_role: str = "viewer"
 
     @property
     def tls_enabled(self) -> bool:
@@ -772,6 +777,8 @@ class AppConfig:
             except ValueError:
                 raise ConfigError(
                     f"Invalid admin UI bind IP: {self.admin_ui.bind_ip}") from None
+        if self.admin_ui.anonymous_role not in ROLES:
+            raise ConfigError(f"Role for visitors without login must be one of {ROLES}.")
 
         self.ldap.validate()
         self.oidc.validate()

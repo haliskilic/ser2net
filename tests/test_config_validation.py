@@ -326,8 +326,20 @@ def test_form_conn_options_parse_and_preserve():
     print("form: keepalive/connect-timeout/max-time parsed when posted, kept when absent  OK")
 
 
+def test_web_access_settings():
+    cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
+    assert cfg.admin_ui.require_login is True, "login must be required by default"
+    assert cfg.admin_ui.anonymous_role == "viewer"
+    cfg.validate()
+    _expect_error(AppConfig.from_dict({"admin_ui": {"require_login": False,
+                                                    "anonymous_role": "root"}}),
+                  "Role for visitors without login")
+    print("web UI access: login required by default; anonymous role must be a real role  OK")
+
+
 def main():
     test_config_round_trip()
+    test_web_access_settings()
     test_connection_lifecycle_defaults_and_upgrade()
     test_connection_lifecycle_validation()
     test_form_conn_options_parse_and_preserve()

@@ -35,6 +35,7 @@ PORTABLE = [
     "test_log_rotation.py",
     "test_log_maintenance.py",
     "test_web_auth.py",
+    "test_open_access.py",
     "test_form_validation.py",
     "test_rest_api.py",
     "test_api_token_role.py",

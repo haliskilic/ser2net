@@ -275,6 +275,8 @@ def build_routes(templates, state, static_dir):
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
         user = current_user(request)
+        if user is not None and user.source == "anonymous":
+            return await settings_get(request, error="Sign in to change your password.")
         if user is not None and user.source != "local":
             return await settings_get(request,
                                       error=f"Your account is managed by {user.source.upper()}; "
@@ -340,6 +342,38 @@ def build_routes(templates, state, static_dir):
             await state.asave()
         state.audit(client_ip(request), "admin_tls_generate", "")
         return await settings_get(request, ok="Self-signed certificate generated. Restart to apply TLS.")
+
+    # ---------------- web-UI access (login requirement) ----------------
+    async def settings_access_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        require_login = _checkbox(form, "require_login")
+        role = form.get("anonymous_role", "viewer")
+        if role not in ROLES:
+            return await settings_get(request, error="Invalid role for visitors without login.")
+        ui = state.config.admin_ui
+        async with state.config_lock:
+            old = (ui.require_login, ui.anonymous_role)
+            ui.require_login, ui.anonymous_role = require_login, role
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.require_login, ui.anonymous_role = old
+                return await settings_get(request, error=str(e))
+        if require_login:
+            state.log("web UI login requirement ENABLED (every visitor must sign in)")
+            ok = "Login is required again for the web UI."
+        else:
+            state.log(f"WARNING: web UI login requirement DISABLED — visitors without a "
+                      f"session get the '{role}' role (by IP / localhost / host name)")
+            ok = (f"Open access enabled: visitors without a login now get the '{role}' role. "
+                  "Use this only on a trusted network.")
+        state.audit(client_ip(request), "web_access",
+                    "login-required" if require_login else f"open:{role}")
+        return await settings_get(request, ok=ok)
 
     # ---------------- REST API token ----------------
     async def settings_api_token_post(request):
@@ -552,7 +586,7 @@ def build_routes(templates, state, static_dir):
         cfg = state.config
         # BaseHTTPMiddleware does NOT run for WebSocket scope, so authenticate here.
         token = websocket.cookies.get(auth.SESSION_COOKIE)
-        ws_user = auth.session_user(cfg, token)
+        ws_user = auth.request_user(cfg, token, websocket.headers.get("host"))
         if ws_user is None:
             await websocket.close(code=1008)
             return
@@ -1034,6 +1068,7 @@ def build_routes(templates, state, static_dir):
         Route("/settings/password", settings_password_post, methods=["POST"]),
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
+        Route("/settings/access", settings_access_post, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
         Route("/settings/users", settings_users_create, methods=["POST"]),

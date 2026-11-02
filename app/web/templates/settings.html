@@ -3,8 +3,17 @@
 {% block main %}
 {% set is_admin = me and me.role == 'admin' %}
 {% set is_operator = me and me.role in ['operator', 'admin'] %}
+{% set is_anonymous = me and me.source == 'anonymous' %}
 
 <section class="panel panel-narrow">
+  {% if is_anonymous %}
+  <div class="panel-head"><h2>Signed out (open access)</h2></div>
+  {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
+  {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+  <p>Login is switched off for this UI, so you are using it without an account, with the
+     <span class="mono">{{ me.role }}</span> role. <a href="/login">Sign in</a> for your own role
+     (or to change your password).</p>
+  {% else %}
   <div class="panel-head"><h2>Change your password</h2></div>
   {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
@@ -15,6 +24,7 @@
     <label>Confirm new password <input type="password" name="password2" autocomplete="new-password" required></label>
     <button class="btn primary" type="submit">Update password</button>
   </form>
+  {% endif %}
 </section>
 
 <section class="panel panel-narrow">
@@ -26,6 +36,30 @@
 </section>
 
 {% if is_admin %}
+<section class="panel panel-narrow">
+  <div class="panel-head"><h2>Web UI access</h2></div>
+  <p class="muted mb-sm">By default every visitor must sign in. On a trusted network you can let
+     visitors use this UI <em>without a password</em>, with the role chosen below; signing in
+     still gives a user their own role. Open access is honoured only when the UI is reached by
+     IP address, <span class="mono">localhost</span> or this machine's host name (protection
+     against DNS rebinding — other names still ask for a login). The REST API always needs its
+     token.</p>
+  {% if not admin.require_login %}
+  <div class="banner warn">Open access is <b>ON</b>: anyone who can reach this page gets the
+     <span class="mono">{{ admin.anonymous_role }}</span> role without a password{% if admin.bind_ip not in ['127.0.0.1', '::1'] %} — and the UI listens on <span class="mono">{{ admin.bind_ip }}</span>{% endif %}.</div>
+  {% endif %}
+  <form method="post" action="/settings/access" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label class="chk"><input type="checkbox" name="require_login" {% if admin.require_login %}checked{% endif %}> Require login (password) for the web UI</label>
+    <label>Role for visitors without login <span class="muted">(used only when login is not required)</span>
+      <select name="anonymous_role">
+        {% for r in roles %}<option value="{{ r }}" {% if r == admin.anonymous_role %}selected{% endif %}>{{ r }}{% if r == 'viewer' %} (read-only){% endif %}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn primary" type="submit">Save access</button>
+  </form>
+</section>
+
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>Users</h2></div>
   <table class="grid">
