@@ -46,7 +46,7 @@ jobs:
         run: pip install pydivert==4.0.1
       - name: Run portable test suite (Windows)
         if: runner.os == 'Windows'
-        run: python tests/run_all.py
+        run: python tests/run_all.py -v
       - name: Run full test suite incl. socat data-path (Linux)
         if: runner.os == 'Linux'
-        run: python tests/run_all.py --socat
+        run: python tests/run_all.py --socat -v
