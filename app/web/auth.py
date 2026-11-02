@@ -1,18 +1,28 @@
 """Authentication, sessions, CSRF and login rate-limiting — all stdlib.
 
-The admin UI is network-exposed by design, so it is always password-protected:
+The admin UI is network-exposed by design, so it is password-protected by default:
   - scrypt password hashing (no extra dependency),
   - a stateless HMAC-signed session cookie (secret from AppConfig.secret_key),
   - double-submit-cookie CSRF protection on every state-changing request,
   - a simple in-memory per-IP login rate limiter to blunt brute force.
+
+An admin may switch the login requirement off for trusted networks: a visitor
+without a session then gets a pseudo-user with ``admin_ui.anonymous_role``. That
+only applies when the request's Host is an IP literal, ``localhost`` or this
+machine's own name — a page on an attacker's domain that DNS-rebinds to this UI
+carries the attacker's host name, so it never gets anonymous access (CSRF still
+applies to everything).
 """
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
+import socket
 import time
 from collections import defaultdict, deque
 
@@ -123,6 +133,62 @@ def session_user(cfg, token: str | None):
     if user is None or user.pwd_version != data["v"]:
         return None
     return user
+
+
+# --------------------------------------------------------------------------
+# optional anonymous access (login requirement switched off by an admin)
+# --------------------------------------------------------------------------
+# Not a valid account name (see routes._username_problem), so it can never collide
+# with a real user.
+ANONYMOUS_USERNAME = "(anonymous)"
+
+
+@functools.lru_cache(maxsize=1)
+def _own_host_names() -> frozenset:
+    # gethostname() only (no DNS lookup on the event loop): the name as configured,
+    # its short form and the mDNS "<short>.local" variant.
+    full = socket.gethostname().strip().lower()
+    short = full.split(".", 1)[0]
+    return frozenset(n for n in (full, short, f"{short}.local" if short else "") if n)
+
+
+def _host_only(host_header: str | None) -> str:
+    """'Host' header value without the port (and IPv6 brackets), lower-cased."""
+    h = (host_header or "").strip().lower()
+    if h.startswith("["):
+        return h[1:h.find("]")] if "]" in h else ""
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+def is_own_host(host_header: str | None) -> bool:
+    """True when the browser addressed this UI by IP, localhost or this machine's own
+    name — i.e. not through some other DNS name (the DNS-rebinding guard)."""
+    name = _host_only(host_header)
+    if not name:
+        return False
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    return name == "localhost" or name in _own_host_names()
+
+
+def anonymous_user(cfg, host_header: str | None):
+    """The pseudo-user for a visitor without a session, or None when login is
+    required (the default), setup isn't done yet, or the Host isn't trusted."""
+    ui = cfg.admin_ui
+    if ui.require_login or not cfg.password_set or not is_own_host(host_header):
+        return None
+    from ..config import User
+
+    return User(username=ANONYMOUS_USERNAME, role=ui.anonymous_role, source="anonymous")
+
+
+def request_user(cfg, token: str | None, host_header: str | None):
+    """The user a request acts as: its session's user, else the anonymous pseudo-user
+    when the login requirement is off, else None (must sign in)."""
+    return session_user(cfg, token) or anonymous_user(cfg, host_header)
 
 
 # --------------------------------------------------------------------------
