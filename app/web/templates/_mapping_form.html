@@ -121,9 +121,11 @@
       <label>Listen port <input type="number" name="network_port" min="1" max="65535" value="{{ mapping.network.port }}"></label>
     </div>
 
-    <div class="grid2" data-show-when="network_mode=client">
+    <div class="grid3" data-show-when="network_mode=client">
       <label>Remote host <input type="text" name="network_remote_host" value="{{ mapping.network.remote_host }}" placeholder="e.g. 192.168.1.20"></label>
       <label>Remote port <input type="number" name="network_remote_port" min="1" max="65535" value="{{ mapping.network.remote_port or '' }}"></label>
+      <label>Connect timeout (s) <span class="muted">(0 = OS default)</span>
+        <input type="number" name="network_connect_timeout_s" min="0" max="3600" step="any" value="{{ '%g'|format(mapping.network.connect_timeout_s) }}"></label>
     </div>
 
     <div data-show-when="network_mode=server">
@@ -150,6 +152,15 @@
         <label>TLS key path <input type="text" name="network_tls_key" value="{{ mapping.network.tls_key }}" placeholder="/path/key.pem"></label>
       </div>
     </div>
+
+    <div data-show-when="network_mode=server,client">
+      <label class="chk"><input type="checkbox" name="network_tcp_keepalive" {% if mapping.network.tcp_keepalive %}checked{% endif %}> TCP keepalive <span class="muted">(detect a peer that vanished without closing — power loss, cable pull, VPN/NAT drop — and free its slot after ≈ idle + interval × count)</span></label>
+      <div class="grid3">
+        <label>Keepalive idle (s) <input type="number" name="network_keepalive_idle_s" min="1" max="32767" value="{{ mapping.network.keepalive_idle_s }}"></label>
+        <label>Probe interval (s) <input type="number" name="network_keepalive_interval_s" min="1" max="32767" value="{{ mapping.network.keepalive_interval_s }}"></label>
+        <label>Probe count <input type="number" name="network_keepalive_count" min="1" max="127" value="{{ mapping.network.keepalive_count }}"></label>
+      </div>
+    </div>
   </fieldset>
 
   <fieldset>
@@ -158,17 +169,22 @@
       <label>Connect banner <span class="muted">(\d device, \I IP, \N name, \p port)</span>
         <input type="text" name="opt_banner" value="{{ mapping.options.banner }}" placeholder="optional">
       </label>
-      <label>Idle timeout (s, 0 = off) <input type="number" name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
-    </div>
-    <div class="grid2">
       <label>Close-on string <span class="muted">(disconnect clients when device sends this)</span>
         <input type="text" name="opt_closeon" value="{{ mapping.options.closeon }}" placeholder="optional">
       </label>
+    </div>
+    <div class="grid2">
+      <label>Idle timeout (s) <span class="muted">(TCP; no traffic either way · 0 = off)</span>
+        <input type="number" name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
+      <label>Max connection time (s) <span class="muted">(TCP; 0 = unlimited · 86400 = 24 h)</span>
+        <input type="number" name="opt_max_connection_time_s" min="0" value="{{ mapping.options.max_connection_time_s }}"></label>
+    </div>
+    <div class="grid2">
       <label>Trace file path <span class="muted">(log serial traffic)</span>
         <input type="text" name="opt_trace_both" value="{{ mapping.options.trace_both }}" placeholder="optional, e.g. data/trace-plc1.log">
       </label>
+      <label class="chk chk-pad"><input type="checkbox" name="opt_trace_hexdump" {% if mapping.options.trace_hexdump %}checked{% endif %}> Trace as hex dump</label>
     </div>
-    <label class="chk"><input type="checkbox" name="opt_trace_hexdump" {% if mapping.options.trace_hexdump %}checked{% endif %}> Trace as hex dump</label>
   </fieldset>
 
   <fieldset data-show-when="kind=net">

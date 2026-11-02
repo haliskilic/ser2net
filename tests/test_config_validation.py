@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import AppConfig, ConfigError, MappingConfig
-from app.web.routes import _preserve_unmanaged_fields
+from app.web.routes import _build_mapping_dict, _preserve_unmanaged_fields
 
 
 def _expect_error(cfg, needle):
@@ -276,10 +276,61 @@ def test_connection_lifecycle_validation():
     print("keepalive/connect-timeout/idle/max-connection-time validation (types + ranges)  OK")
 
 
+def test_form_conn_options_parse_and_preserve():
+    """The mapping form owns the keepalive / connect-timeout / max-connection-time
+    fields, but does not always POST them (hidden blocks are disabled; an older
+    cluster peer's form lacks them). Absent => keep the stored values on edit."""
+    base = {"name": "plc", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_protocol": "raw",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+
+    # 1) visible block: parsed from the form (keepalive unchecked => off)
+    form = dict(base, network_mode="server", network_keepalive_idle_s="30",
+                network_keepalive_interval_s="5", network_keepalive_count="4",
+                opt_max_connection_time_s="86400", opt_idle_timeout_s="300")
+    m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+    assert (m.network.tcp_keepalive, m.network.keepalive_idle_s, m.network.keepalive_interval_s,
+            m.network.keepalive_count) == (False, 30, 5, 4)
+    assert m.options.max_connection_time_s == 86400 and m.options.idle_timeout_s == 300
+    form["network_tcp_keepalive"] = "on"
+    assert MappingConfig.from_dict(_build_mapping_dict(form, strict=True)).network.tcp_keepalive
+
+    # 2) a new mapping whose form lacks the blocks gets the safe defaults
+    fresh = MappingConfig.from_dict(_build_mapping_dict(dict(base, network_mode="udp"), strict=True))
+    assert fresh.network.tcp_keepalive is True and fresh.network.keepalive_idle_s == 60
+    assert fresh.network.connect_timeout_s == 10.0 and fresh.options.max_connection_time_s == 0
+
+    # 3) editing with the blocks absent (UDP view / older peer) keeps the stored values
+    existing = MappingConfig.from_dict({
+        "name": "plc", "serial": {"port": "COM7"},
+        "network": {"mode": "client", "remote_host": "10.0.0.9", "remote_port": 4001,
+                    "tcp_keepalive": False, "keepalive_idle_s": 15, "keepalive_interval_s": 3,
+                    "keepalive_count": 9, "connect_timeout_s": 2.5},
+        "options": {"max_connection_time_s": 3600}})
+    old_peer_form = dict(base, id=existing.id, network_mode="udp")
+    edited = MappingConfig.from_dict(_build_mapping_dict(old_peer_form, strict=True))
+    _preserve_unmanaged_fields(edited, existing, old_peer_form)
+    n = edited.network
+    assert (n.tcp_keepalive, n.keepalive_idle_s, n.keepalive_interval_s, n.keepalive_count,
+            n.connect_timeout_s) == (False, 15, 3, 9, 2.5), n
+    assert edited.options.max_connection_time_s == 3600
+
+    # 4) ...but a posted field still wins (client view posts the connect timeout)
+    client_form = dict(base, id=existing.id, network_mode="client",
+                       network_remote_host="10.0.0.9", network_remote_port="4001",
+                       network_connect_timeout_s="7.5")
+    edited = MappingConfig.from_dict(_build_mapping_dict(client_form, strict=True))
+    _preserve_unmanaged_fields(edited, existing, client_form)
+    assert edited.network.connect_timeout_s == 7.5
+    assert edited.network.keepalive_idle_s == 15  # block absent from this form -> kept
+    print("form: keepalive/connect-timeout/max-time parsed when posted, kept when absent  OK")
+
+
 def main():
     test_config_round_trip()
     test_connection_lifecycle_defaults_and_upgrade()
     test_connection_lifecycle_validation()
+    test_form_conn_options_parse_and_preserve()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()
