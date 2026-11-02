@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import AppConfig, ConfigError, MappingConfig
-from app.web.routes import _preserve_unmanaged_fields
+from app.web.routes import _build_mapping_dict, _preserve_unmanaged_fields
 
 
 def _expect_error(cfg, needle):
@@ -231,8 +231,127 @@ def test_invalid_admin_bind_ip_rejected():
     print("invalid admin UI bind IP rejected; valid ones accepted  OK")
 
 
+def test_connection_lifecycle_defaults_and_upgrade():
+    # a config written before v2.7 has none of the new keys: it must load with
+    # dead-peer detection ON (the fix applies on upgrade) and the timers off
+    m = MappingConfig.from_dict({"name": "old", "serial": {"port": "COM1"},
+                                 "network": {"mode": "server", "port": 4001}})
+    n, o = m.network, m.options
+    assert n.tcp_keepalive is True
+    assert (n.keepalive_idle_s, n.keepalive_interval_s, n.keepalive_count) == (60, 10, 3)
+    assert n.connect_timeout_s == 10.0
+    assert o.idle_timeout_s == 0 and o.max_connection_time_s == 0
+    m.validate()
+    d = m.to_dict()
+    assert d["network"]["tcp_keepalive"] is True and d["options"]["max_connection_time_s"] == 0
+    print("pre-v2.7 mapping: keepalive on (60s/10s/3), connect timeout 10s, timers off  OK")
+
+
+def test_connection_lifecycle_validation():
+    def mapping(network=None, options=None):
+        return MappingConfig.from_dict({
+            "name": "m", "serial": {"port": "COM1"},
+            "network": {"mode": "server", "port": 4001, **(network or {})},
+            "options": options or {}})
+
+    bad = [
+        ({"keepalive_idle_s": 0}, None, "Keepalive idle time"),
+        ({"keepalive_idle_s": 40000}, None, "Keepalive idle time"),
+        ({"keepalive_interval_s": "10"}, None, "Keepalive probe interval"),
+        ({"keepalive_count": 0}, None, "Keepalive probe count"),
+        ({"keepalive_count": 128}, None, "Keepalive probe count"),
+        ({"keepalive_count": True}, None, "Keepalive probe count"),
+        ({"connect_timeout_s": -1}, None, "Connect timeout"),
+        ({"connect_timeout_s": 3601}, None, "Connect timeout"),
+        (None, {"max_connection_time_s": -1}, "Max connection time"),
+        (None, {"max_connection_time_s": "24h"}, "Max connection time"),
+    ]
+    for network, options, needle in bad:
+        _expect_error(mapping(network, options), needle)
+    # a negative idle timeout is rejected when set directly...
+    neg = mapping()
+    neg.options.idle_timeout_s = -5
+    _expect_error(neg, "Idle timeout")
+    # ...but values a pre-v2.7 config could hold (unvalidated then; <= 0 meant "off")
+    # still load + save — a Docker/headless boot re-saves (= validates) the config
+    for stored, loaded in ((-1, 0), ("300", 300), ("abc", 0), (10**12, 31536000)):
+        legacy = mapping(options={"idle_timeout_s": stored})
+        assert legacy.options.idle_timeout_s == loaded, (stored, legacy.options.idle_timeout_s)
+        legacy.validate()
+    # boundaries / valid values
+    mapping({"keepalive_idle_s": 1, "keepalive_interval_s": 32767, "keepalive_count": 127,
+             "connect_timeout_s": 0}, {"idle_timeout_s": 300, "max_connection_time_s": 86400}).validate()
+    mapping({"tcp_keepalive": False, "connect_timeout_s": 2.5}).validate()
+    print("keepalive/connect-timeout/idle/max-connection-time validation (types + ranges)  OK")
+
+
+def test_form_conn_options_parse_and_preserve():
+    """The mapping form owns the keepalive / connect-timeout / max-connection-time
+    fields, but does not always POST them (hidden blocks are disabled; an older
+    cluster peer's form lacks them). Absent => keep the stored values on edit."""
+    base = {"name": "plc", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_protocol": "raw",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+
+    # 1) visible block: parsed from the form (keepalive unchecked => off)
+    form = dict(base, network_mode="server", network_keepalive_idle_s="30",
+                network_keepalive_interval_s="5", network_keepalive_count="4",
+                opt_max_connection_time_s="86400", opt_idle_timeout_s="300")
+    m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+    assert (m.network.tcp_keepalive, m.network.keepalive_idle_s, m.network.keepalive_interval_s,
+            m.network.keepalive_count) == (False, 30, 5, 4)
+    assert m.options.max_connection_time_s == 86400 and m.options.idle_timeout_s == 300
+    form["network_tcp_keepalive"] = "on"
+    assert MappingConfig.from_dict(_build_mapping_dict(form, strict=True)).network.tcp_keepalive
+
+    # 2) a new mapping whose form lacks the blocks gets the safe defaults
+    fresh = MappingConfig.from_dict(_build_mapping_dict(dict(base, network_mode="udp"), strict=True))
+    assert fresh.network.tcp_keepalive is True and fresh.network.keepalive_idle_s == 60
+    assert fresh.network.connect_timeout_s == 10.0 and fresh.options.max_connection_time_s == 0
+
+    # 3) editing with the blocks absent (UDP view / older peer) keeps the stored values
+    existing = MappingConfig.from_dict({
+        "name": "plc", "serial": {"port": "COM7"},
+        "network": {"mode": "client", "remote_host": "10.0.0.9", "remote_port": 4001,
+                    "tcp_keepalive": False, "keepalive_idle_s": 15, "keepalive_interval_s": 3,
+                    "keepalive_count": 9, "connect_timeout_s": 2.5},
+        "options": {"max_connection_time_s": 3600}})
+    old_peer_form = dict(base, id=existing.id, network_mode="udp")
+    edited = MappingConfig.from_dict(_build_mapping_dict(old_peer_form, strict=True))
+    _preserve_unmanaged_fields(edited, existing, old_peer_form)
+    n = edited.network
+    assert (n.tcp_keepalive, n.keepalive_idle_s, n.keepalive_interval_s, n.keepalive_count,
+            n.connect_timeout_s) == (False, 15, 3, 9, 2.5), n
+    assert edited.options.max_connection_time_s == 3600
+
+    # 4) ...but a posted field still wins (client view posts the connect timeout)
+    client_form = dict(base, id=existing.id, network_mode="client",
+                       network_remote_host="10.0.0.9", network_remote_port="4001",
+                       network_connect_timeout_s="7.5")
+    edited = MappingConfig.from_dict(_build_mapping_dict(client_form, strict=True))
+    _preserve_unmanaged_fields(edited, existing, client_form)
+    assert edited.network.connect_timeout_s == 7.5
+    assert edited.network.keepalive_idle_s == 15  # block absent from this form -> kept
+    print("form: keepalive/connect-timeout/max-time parsed when posted, kept when absent  OK")
+
+
+def test_web_access_settings():
+    cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
+    assert cfg.admin_ui.require_login is True, "login must be required by default"
+    assert cfg.admin_ui.anonymous_role == "viewer"
+    cfg.validate()
+    _expect_error(AppConfig.from_dict({"admin_ui": {"require_login": False,
+                                                    "anonymous_role": "root"}}),
+                  "Role for visitors without login")
+    print("web UI access: login required by default; anonymous role must be a real role  OK")
+
+
 def main():
     test_config_round_trip()
+    test_web_access_settings()
+    test_connection_lifecycle_defaults_and_upgrade()
+    test_connection_lifecycle_validation()
+    test_form_conn_options_parse_and_preserve()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

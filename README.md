@@ -74,12 +74,21 @@ düzenlemeye gerek yok.
 - **Onlarca eşleme:** tek ekrandan ekle/düzenle/sil/başlat/durdur, canlı durum.
 - **Erişim kontrolü (eşleme başına):** izinli IP/CIDR listesi, **yüksek-öncelikli**
   istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at,
-  salt-okunur, idle timeout, banner, open/close string, `closeon`.
+  salt-okunur, banner, open/close string, `closeon`.
+- **Bağlantı yaşam döngüsü (eşleme başına, TCP):** **TCP keepalive ile ölü bağlantı
+  tespiti** — FIN/RST göndermeden kaybolan istemci ya da uzak sunucu (elektrik kesintisi,
+  kablo çekilmesi, Wi-Fi/VPN/NAT düşmesi) artık sonsuza dek `ESTABLISHED` kalmaz:
+  varsayılan ayarlarla (açık · 60 sn boşta · 10 sn aralık · 3 deneme) ~90 sn içinde
+  düşürülür ve yuvası boşalır — cihaz veri gönderirken de (Linux `TCP_USER_TIMEOUT`).
+  Ayrıca dışa bağlanmada **bağlantı zaman aşımı** (varsayılan 10 sn), **idle timeout**
+  ve **maksimum bağlantı süresi** (ör. 24 sa); her kopuş nedeniyle loglanır.
 - **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp), Prometheus
   `/metrics`, config-değişiklik audit log, canlı log görüntüleyici, ve **tarayıcı-içi
   seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz).
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları, parola değişince oturum iptali.
+  Güvenilir ağlar için giriş zorunluluğu **Ayarlar → Web UI access**'ten kapatılabilir
+  (ziyaretçiler seçilen rolle parolasız kullanır; bkz. Güvenlik).
 - **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunur,
   operator eşlemeleri yönetir, admin her şey + kullanıcı yönetimi. Tek-parola kurulumları
   otomatik olarak bir `admin` kullanıcısına geçer.
@@ -181,8 +190,9 @@ ayarlanır — başsız ortamda interaktif seçici çalışamaz). Ayrıntılar:
 - **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde cihaza yazılabilir.
-- **Ayarlar:** parola değiştir, admin TLS (yol ver veya self-signed üret), **REST API
-  token'ı** üret/iptal et, mapping **yedek al/yükle** (JSON), durum.
+- **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
+  admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
+  **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı).
 
 ---
@@ -213,11 +223,23 @@ Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 
 ## 🔒 Güvenlik
 
-Arayüz **her zaman parola korumalı**. Varsayılan bind **127.0.0.1**; ağa açmak için
-açılışta IP seçimi gerekir ve TLS'siz ağ bind'inde uyarı verilir. LAN'a açılan
+Arayüz **varsayılan olarak parola korumalı**. Varsayılan bind **127.0.0.1**; ağa açmak
+için açılışta IP seçimi gerekir ve TLS'siz ağ bind'inde uyarı verilir. LAN'a açılan
 kurulumlarda TLS (`admin_ui.tls_*`) ve eşleme bazlı `allowed_client_ips` önerilir.
 Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde tek başına
 `0.0.0.0`/`::` "herkes" demektir.
+
+**Parolasız erişim (isteğe bağlı):** yalnızca güvenilir ağlar için, bir admin
+**Ayarlar → Web UI access**'ten "Require login"i kapatıp ziyaretçilere bir rol
+(`viewer` salt-okunur / `operator` / `admin`) verebilir. Oturum açmak yine mümkündür
+(kendi rolünüz geçerli olur), RBAC ve CSRF aynen uygulanır, **REST API her zaman
+token ister**. Parolasız erişim yalnızca arayüze **IP adresi, `localhost` veya makinenin
+kendi adıyla** gelindiğinde geçerlidir — başka bir alan adıyla (ör. DNS-rebinding yapan
+kötü niyetli bir sayfa) gelen istekler giriş ekranına yönlendirilir. Ters proxy arkasında
+proxy özgün adı `X-Forwarded-Host` ile iletmelidir (iletmiyorsa girişi açık tutun).
+LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve yönetilebilir;
+erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
+gösterilir ve açılışta loga yazılır.
 
 ---
 
@@ -253,10 +275,18 @@ sisteminde çalışır:
 ```bash
 python3 tests/run_all.py            # taşınabilir takım (Windows + Linux)
 python3 tests/run_all.py --socat    # + socat tabanlı veri-yolu testleri (Linux)
+python3 tests/run_all.py -v         # geçen testlerin çıktısını da göster
 ```
 socat (Linux) ile sanal seri portlar kullanılır; donanım gerekmez. Tek tek de
 çalıştırılabilir, örn. `python3 tests/test_rest_api.py`. CI (GitHub Actions) ruff
 lint + tam matrisi (ubuntu/windows × Python 3.10–3.13) koşar.
+
+`tests/test_dead_peer.py` ölü bağlantı tespitini **gerçek yarı-açık (half-open) TCP
+bağlantılarıyla** da sınar: `SER2NET_BLACKHOLE_TESTS=1` verildiğinde bir loopback
+akışının paketlerini düşürür (Linux: root/şifresiz sudo + `iptables`; Windows: Yönetici
++ `pip install pydivert`). Güvenlik duvarını değiştirdiği için yerelde isteğe bağlıdır
+(Linux'ta tek kullanımlık bir network namespace içinde çalıştırmak önerilir); CI'da
+her iki işletim sisteminde de her zaman koşar.
 
 ---
 

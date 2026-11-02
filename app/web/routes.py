@@ -38,6 +38,7 @@ from .api import build_api_routes
 OIDC_COOKIE = "ser2net_oidc"
 
 SESSION_TTL = 8 * 3600
+CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
 _TRIGGER = {"HX-Trigger": "refreshMappings"}
 
 
@@ -101,6 +102,18 @@ def build_routes(templates, state, static_dir):
     def can_edit(request) -> bool:
         u = current_user(request)
         return u is not None and ROLE_RANK.get(u.role, 0) >= ROLE_RANK["operator"]
+
+    def is_anonymous(request) -> bool:
+        u = current_user(request)
+        return u is not None and u.source == "anonymous"
+
+    def require_peer_access(request):
+        """Cluster peer actions act on OTHER nodes with the shared key, so they need a
+        signed-in operator: open access on this node must not open every peer (which
+        may well require a login of its own)."""
+        if is_anonymous(request):
+            return PlainTextResponse("Sign in to manage other cluster nodes.", status_code=403)
+        return require_role(request, "operator")
 
     # ---------------- pages ----------------
     async def healthz(request):
@@ -275,6 +288,8 @@ def build_routes(templates, state, static_dir):
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
         user = current_user(request)
+        if user is not None and user.source == "anonymous":
+            return await settings_get(request, error="Sign in to change your password.")
         if user is not None and user.source != "local":
             return await settings_get(request,
                                       error=f"Your account is managed by {user.source.upper()}; "
@@ -340,6 +355,38 @@ def build_routes(templates, state, static_dir):
             await state.asave()
         state.audit(client_ip(request), "admin_tls_generate", "")
         return await settings_get(request, ok="Self-signed certificate generated. Restart to apply TLS.")
+
+    # ---------------- web-UI access (login requirement) ----------------
+    async def settings_access_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        require_login = _checkbox(form, "require_login")
+        role = form.get("anonymous_role", "viewer")
+        if role not in ROLES:
+            return await settings_get(request, error="Invalid role for visitors without login.")
+        ui = state.config.admin_ui
+        async with state.config_lock:
+            old = (ui.require_login, ui.anonymous_role)
+            ui.require_login, ui.anonymous_role = require_login, role
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.require_login, ui.anonymous_role = old
+                return await settings_get(request, error=str(e))
+        if require_login:
+            state.log("web UI login requirement ENABLED (every visitor must sign in)")
+            ok = "Login is required again for the web UI."
+        else:
+            state.log(f"WARNING: web UI login requirement DISABLED — visitors without a "
+                      f"session get the '{role}' role (by IP / localhost / host name)")
+            ok = (f"Open access enabled: visitors without a login now get the '{role}' role. "
+                  "Use this only on a trusted network.")
+        state.audit(client_ip(request), "web_access",
+                    "login-required" if require_login else f"open:{role}")
+        return await settings_get(request, ok=ok)
 
     # ---------------- REST API token ----------------
     async def settings_api_token_post(request):
@@ -488,7 +535,11 @@ def build_routes(templates, state, static_dir):
 
     # ---------------- config export / import ----------------
     async def config_export(request):
-        # mappings only — never export password_hash / secret_key
+        # mappings only — never export password_hash / secret_key. Mappings can carry
+        # secrets (MQTT password), so — like import — this needs operator+ (the UI only
+        # offers it to operators; a viewer, possibly an anonymous one, must not read them).
+        if deny := require_role(request, "operator"):
+            return deny
         data = {"version": 1, "mappings": [m.to_dict() for m in state.config.mappings]}
         return Response(
             json.dumps(data, indent=2), media_type="application/json",
@@ -552,7 +603,7 @@ def build_routes(templates, state, static_dir):
         cfg = state.config
         # BaseHTTPMiddleware does NOT run for WebSocket scope, so authenticate here.
         token = websocket.cookies.get(auth.SESSION_COOKIE)
-        ws_user = auth.session_user(cfg, token)
+        ws_user = auth.request_user(cfg, token, websocket.headers)
         if ws_user is None:
             await websocket.close(code=1008)
             return
@@ -597,14 +648,26 @@ def build_routes(templates, state, static_dir):
                 if data and interactive:
                     await runner.serial_write(data)
 
+        async def access_watch():
+            # A console outlives the check at connect: end it once its access is gone
+            # (login switched back on, session revoked by a password change, role
+            # changed) instead of letting it keep watching — or writing to — the device.
+            while True:
+                await asyncio.sleep(CONSOLE_ACCESS_RECHECK_S)
+                now = auth.request_user(state.config, token, websocket.headers)
+                if now is None or now.role != ws_user.role:
+                    state.log(f"[{mapping.name}] console closed: access changed ({peer})")
+                    return
+
         st = asyncio.create_task(sender())
         rt = asyncio.create_task(receiver())
+        wt = asyncio.create_task(access_watch())
         try:
-            await asyncio.wait({st, rt}, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait({st, rt, wt}, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            for t in (st, rt):
+            for t in (st, rt, wt):
                 t.cancel()
-            for t in (st, rt):
+            for t in (st, rt, wt):
                 with contextlib.suppress(BaseException):
                     await t
             runner.discard_monitor(mon)
@@ -704,6 +767,9 @@ def build_routes(templates, state, static_dir):
         local = local_node_payload()
         nodes = [{**local, "self": True, "online": True, "source": "self",
                   "uptime": _fmt_uptime(local["uptime_s"])}]
+        if is_anonymous(request):  # other nodes' data needs a real login here
+            return render(request, "_cluster_body.html", nodes=nodes, can_edit=False,
+                          discovery_error="", peers_hidden=True)
         targets = state.cluster.all_targets()
         results = await asyncio.gather(*[state.cluster.fetch_peer(t) for t in targets]) \
             if targets else []
@@ -735,7 +801,7 @@ def build_routes(templates, state, static_dir):
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
         The peer is validated against the known-address allowlist (so the browser can't
         aim this at an arbitrary host), then the call is made with the shared key."""
-        if deny := require_role(request, "operator"):
+        if deny := require_peer_access(request):
             return deny
         form = await request.form()
         scheme = form.get("scheme", "http")
@@ -803,7 +869,7 @@ def build_routes(templates, state, static_dir):
     async def cluster_peer_form(request):
         """Browser-facing proxy: load a peer's mapping into the edit form (rendered
         here so the CSRF token is the browser's). Submits to /api/cluster/peer-save."""
-        if deny := require_role(request, "operator"):
+        if deny := require_peer_access(request):
             return deny
         peer, err = _peer_from_request(request.query_params.get)
         if err:
@@ -822,7 +888,7 @@ def build_routes(templates, state, static_dir):
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping form to the peer's key-guarded
         save (peer fields stripped); on a peer error, re-render the form with it."""
-        if deny := require_role(request, "operator"):
+        if deny := require_peer_access(request):
             return deny
         form = await request.form()
         peer, err = _peer_from_request(form.get)
@@ -841,6 +907,8 @@ def build_routes(templates, state, static_dir):
                                             f"/api/cluster/mapping-data?mid={form.get('id', '')}")
         try:
             mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+            if data and data.get("mapping"):
+                _preserve_unmanaged_fields(mapping, MappingConfig.from_dict(data["mapping"]), form)
         except Exception:
             mapping = MappingConfig(name=form.get("name", ""))
         return render(request, "_mapping_form.html", status_code=400, mapping=mapping, is_new=False,
@@ -896,7 +964,11 @@ def build_routes(templates, state, static_dir):
                       in_use=state.supervisor.devices_in_use())
 
     # ---------------- mapping form ----------------
+    # The form is for editing (operator+), and it renders stored secrets (the MQTT
+    # password) into the page, so viewers get 403 — the UI never offers it to them.
     async def mapping_form_new(request):
+        if deny := require_role(request, "operator"):
+            return deny
         m = MappingConfig(name="")
         return render(request, "_mapping_form.html",
                       mapping=m, is_new=True, modbus_points_json=_modbus_points_json(m),
@@ -904,6 +976,8 @@ def build_routes(templates, state, static_dir):
                       error=None)
 
     async def mapping_form_edit(request):
+        if deny := require_role(request, "operator"):
+            return deny
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return PlainTextResponse("Mapping not found", status_code=404)
@@ -936,10 +1010,10 @@ def build_routes(templates, state, static_dir):
         remote-edit save (which runs the same form on the target node)."""
         try:
             mapping = MappingConfig.from_dict(_mapping_from_form(form))
-            # The form doesn't expose every field; when editing, carry the unexposed
-            # ones over so a save never silently wipes them (get_mapping is a sync
+            # The form doesn't expose (or always post) every field; when editing, carry
+            # those over so a save never silently wipes them (get_mapping is a sync
             # read — safe outside the config lock).
-            _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id))
+            _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id), form)
             mapping.validate()
         except (ValueError, ConfigError) as e:
             return False, str(e)
@@ -1034,6 +1108,7 @@ def build_routes(templates, state, static_dir):
         Route("/settings/password", settings_password_post, methods=["POST"]),
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
+        Route("/settings/access", settings_access_post, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
         Route("/settings/users", settings_users_create, methods=["POST"]),
@@ -1203,10 +1278,63 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
     }
 
 
+# Form fields that are not always posted: data-show-when hides AND disables a block,
+# so the keepalive block isn't sent for UDP and the connect timeout only in client
+# mode — and an older cluster peer's form (remote edit) doesn't know them at all. An
+# absent field is left out of the parsed dict (defaults for a new mapping) and
+# _preserve_unmanaged_fields keeps the stored values on edit, so switching mode back
+# and forth or a mixed-version remote edit never silently resets them.
+#   presence-marker form field -> (config section, attributes it governs)
+_OPTIONAL_FORM_FIELDS = {
+    "network_keepalive_idle_s": ("network", ("tcp_keepalive", "keepalive_idle_s",
+                                             "keepalive_interval_s", "keepalive_count")),
+    "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
+    "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
+}
+
+
 def _build_mapping_dict(form, strict: bool) -> dict:
     bind = form.get("network_bind_ip", "0.0.0.0")
     if bind == "custom":
         bind = form.get("network_bind_ip_custom", "").strip()
+    network = {
+        "mode": form.get("network_mode", "server"),
+        "protocol": form.get("network_protocol", "raw"),
+        "bind_ip": bind or "0.0.0.0",
+        "port": _num(form, "network_port", 4001, strict=strict),
+        "remote_host": form.get("network_remote_host", "").strip(),
+        "remote_port": (_num(form, "network_remote_port", 0, strict=strict)
+                        if form.get("network_remote_port") else 0),
+        "max_connections": _num(form, "network_max_connections", 1, strict=strict),
+        "kick_old_user": _checkbox(form, "network_kick_old_user"),
+        "read_only": _checkbox(form, "network_read_only"),
+        "allowed_client_ips": _split(form.get("network_allowed_client_ips", "")),
+        "priority_client_ips": _split(form.get("network_priority_client_ips", "")),
+        "client_queue_max": _num(form, "network_client_queue_max", 2048, strict=strict),
+        "tls": _checkbox(form, "network_tls"),
+        "tls_cert": form.get("network_tls_cert", "").strip(),
+        "tls_key": form.get("network_tls_key", "").strip(),
+    }
+    if "network_keepalive_idle_s" in form:
+        network.update(
+            tcp_keepalive=_checkbox(form, "network_tcp_keepalive"),
+            keepalive_idle_s=_num(form, "network_keepalive_idle_s", 60, strict=strict),
+            keepalive_interval_s=_num(form, "network_keepalive_interval_s", 10, strict=strict),
+            keepalive_count=_num(form, "network_keepalive_count", 3, strict=strict),
+        )
+    if "network_connect_timeout_s" in form:
+        network["connect_timeout_s"] = _num(form, "network_connect_timeout_s", 10.0,
+                                            strict=strict, cast=float)
+    options = {
+        "banner": form.get("opt_banner", ""),
+        "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
+        "closeon": form.get("opt_closeon", ""),
+        "trace_both": form.get("opt_trace_both", "").strip(),
+        "trace_hexdump": _checkbox(form, "opt_trace_hexdump"),
+    }
+    if "opt_max_connection_time_s" in form:
+        options["max_connection_time_s"] = _num(form, "opt_max_connection_time_s", 0,
+                                                strict=strict)
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),
@@ -1214,31 +1342,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         "kind": form.get("kind", "net"),
         "serial": _serial_dict(form, "serial_", strict),
         "serial_b": _serial_dict(form, "serial_b_", strict),
-        "network": {
-            "mode": form.get("network_mode", "server"),
-            "protocol": form.get("network_protocol", "raw"),
-            "bind_ip": bind or "0.0.0.0",
-            "port": _num(form, "network_port", 4001, strict=strict),
-            "remote_host": form.get("network_remote_host", "").strip(),
-            "remote_port": (_num(form, "network_remote_port", 0, strict=strict)
-                            if form.get("network_remote_port") else 0),
-            "max_connections": _num(form, "network_max_connections", 1, strict=strict),
-            "kick_old_user": _checkbox(form, "network_kick_old_user"),
-            "read_only": _checkbox(form, "network_read_only"),
-            "allowed_client_ips": _split(form.get("network_allowed_client_ips", "")),
-            "priority_client_ips": _split(form.get("network_priority_client_ips", "")),
-            "client_queue_max": _num(form, "network_client_queue_max", 2048, strict=strict),
-            "tls": _checkbox(form, "network_tls"),
-            "tls_cert": form.get("network_tls_cert", "").strip(),
-            "tls_key": form.get("network_tls_key", "").strip(),
-        },
-        "options": {
-            "banner": form.get("opt_banner", ""),
-            "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
-            "closeon": form.get("opt_closeon", ""),
-            "trace_both": form.get("opt_trace_both", "").strip(),
-            "trace_hexdump": _checkbox(form, "opt_trace_hexdump"),
-        },
+        "network": network,
+        "options": options,
         "mqtt": {
             "enabled": _checkbox(form, "mqtt_enabled"),
             "host": form.get("mqtt_host", "").strip(),
@@ -1280,14 +1385,22 @@ def _mapping_from_form(form) -> dict:
     return _build_mapping_dict(form, strict=True)
 
 
-def _preserve_unmanaged_fields(new_map, existing) -> None:
+def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     """Carry over config fields the mapping form does not expose, so editing an
     existing mapping never silently discards them: the stable-id `match`, the two
     advanced serial flags the form omits (`hangup_when_done`, `nobreak`), open/close
     strings, the trace-timestamp flag and the RFC2217 interop knobs. The RS-485 fields
-    ARE in the form now, so they're taken from the submission. No-op when creating."""
+    ARE in the form now, so they're taken from the submission. Given the submitted
+    `form`, the not-always-posted fields (_OPTIONAL_FORM_FIELDS) are kept too when
+    absent. No-op when creating."""
     if existing is None:
         return
+    if form is not None:
+        for marker, (section, attrs) in _OPTIONAL_FORM_FIELDS.items():
+            if marker not in form:
+                for attr in attrs:
+                    setattr(getattr(new_map, section), attr,
+                            getattr(getattr(existing, section), attr))
     for cur, old in ((new_map.serial, existing.serial),
                      (new_map.serial_b, existing.serial_b)):
         cur.match = old.match
@@ -1307,6 +1420,9 @@ def _form_error(render, request, state, form, message: str):
     from ..engine import netinfo
     try:
         mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+        # keep stored values for fields this form didn't post (else the re-rendered,
+        # hidden inputs would carry defaults into the next save)
+        _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id), form)
     except Exception:
         mapping = MappingConfig(name=form.get("name", ""))
     is_new = not form.get("id")
