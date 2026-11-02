@@ -7,6 +7,7 @@ Spawns the real server and checks, over HTTP / WebSocket:
   - the DNS-rebinding guard: open access only for an IP / localhost Host header —
     any other host name still has to sign in,
   - signing in still works on an open UI; the REST API still needs its token,
+  - the edit form / mappings export (they carry the MQTT password) need operator+,
   - the console WebSocket follows the same rule, and switching login back on closes
     the door again,
   - the mapping form saves keepalive / connect timeout / max connection time and
@@ -179,6 +180,9 @@ def main():
         assert anon.post("/settings/access", {"require_login": "on", "_csrf": anon.csrf()})[0] == 403
         st, body, _ = anon.get("/settings")
         assert st == 200 and "Web UI access" not in body and "Change your password" not in body
+        # the edit form and the export carry stored secrets (MQTT password): operator+ only
+        for path in (f"/api/mappings/{mid}/form", "/api/mappings/form", "/settings/config/export"):
+            assert anon.get(path)[0] == 403, f"anonymous viewer must not read {path}"
         assert console_ws_accepted(mid), "open access (viewer) should allow the read-only console"
         print("open access (viewer): dashboard + console without login; writes/admin -> 403  OK")
 
@@ -197,6 +201,7 @@ def main():
                                                "_csrf": admin.csrf()})[0] == 200
         st, _, _ = anon.post("/api/mappings/save", mapping_form("by-anon", free_port(), "/dev/ttyOPEN2"))
         assert st == 200, f"anonymous operator should save mappings, got {st}"
+        assert anon.get(f"/api/mappings/{mid}/form")[0] == 200, "operator may open the edit form"
         assert anon.post("/settings/users", {"username": "x", "role": "viewer", "password": "userpass123",
                                              "password2": "userpass123", "_csrf": anon.csrf()})[0] == 403
         print("open access (operator): mapping edits allowed, user management still 403  OK")

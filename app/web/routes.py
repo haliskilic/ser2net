@@ -522,7 +522,11 @@ def build_routes(templates, state, static_dir):
 
     # ---------------- config export / import ----------------
     async def config_export(request):
-        # mappings only — never export password_hash / secret_key
+        # mappings only — never export password_hash / secret_key. Mappings can carry
+        # secrets (MQTT password), so — like import — this needs operator+ (the UI only
+        # offers it to operators; a viewer, possibly an anonymous one, must not read them).
+        if deny := require_role(request, "operator"):
+            return deny
         data = {"version": 1, "mappings": [m.to_dict() for m in state.config.mappings]}
         return Response(
             json.dumps(data, indent=2), media_type="application/json",
@@ -930,7 +934,11 @@ def build_routes(templates, state, static_dir):
                       in_use=state.supervisor.devices_in_use())
 
     # ---------------- mapping form ----------------
+    # The form is for editing (operator+), and it renders stored secrets (the MQTT
+    # password) into the page, so viewers get 403 — the UI never offers it to them.
     async def mapping_form_new(request):
+        if deny := require_role(request, "operator"):
+            return deny
         m = MappingConfig(name="")
         return render(request, "_mapping_form.html",
                       mapping=m, is_new=True, modbus_points_json=_modbus_points_json(m),
@@ -938,6 +946,8 @@ def build_routes(templates, state, static_dir):
                       error=None)
 
     async def mapping_form_edit(request):
+        if deny := require_role(request, "operator"):
+            return deny
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return PlainTextResponse("Mapping not found", status_code=404)
