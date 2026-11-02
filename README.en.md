@@ -236,7 +236,10 @@ login" under **Settings → Web UI access** and give visitors a role (`viewer` r
 apply unchanged, and the **REST API always needs its token**. Open access is honoured
 only when the UI is reached by **IP address, `localhost` or this machine's own name** —
 requests via any other host name (e.g. a malicious page doing DNS rebinding) are sent to
-the login page. While it is on, the UI shows a warning and startup logs it.
+the login page. Behind a reverse proxy, the proxy must pass the original name in
+`X-Forwarded-Host` (otherwise keep login on). **Other LAN-cluster nodes** are only shown
+and managed after signing in, and open consoles are closed when access is revoked or the
+role changes. While it is on, the UI shows a warning and startup logs it.
 
 ---
 
