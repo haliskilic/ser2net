@@ -235,8 +235,11 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 (kendi rolünüz geçerli olur), RBAC ve CSRF aynen uygulanır, **REST API her zaman
 token ister**. Parolasız erişim yalnızca arayüze **IP adresi, `localhost` veya makinenin
 kendi adıyla** gelindiğinde geçerlidir — başka bir alan adıyla (ör. DNS-rebinding yapan
-kötü niyetli bir sayfa) gelen istekler giriş ekranına yönlendirilir. Açıkken arayüzde
-uyarı gösterilir ve açılışta loga yazılır.
+kötü niyetli bir sayfa) gelen istekler giriş ekranına yönlendirilir. Ters proxy arkasında
+proxy özgün adı `X-Forwarded-Host` ile iletmelidir (iletmiyorsa girişi açık tutun).
+LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve yönetilebilir;
+erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
+gösterilir ve açılışta loga yazılır.
 
 ---
 

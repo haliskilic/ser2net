@@ -114,13 +114,19 @@
   everyone else out ("Busy"). Every TCP data socket now gets **TCP keepalive**, on by
   default (60 s idle / 10 s interval / 3 probes, per mapping): SO_KEEPALIVE +
   TCP_KEEPIDLE/INTVL/CNT, `SIO_KEEPALIVE_VALS` on pre-1709 Windows, and on Linux
-  `TCP_USER_TIMEOUT` so the bound also holds while data is in flight.
+  `TCP_USER_TIMEOUT` (when shorter than the kernel's ~15 min) so the bound also holds
+  while data is in flight.
 - **Connect timeout** for connect-out (TCP + TLS handshake; default 10 s, 0 = OS default),
   **max connection time** (0 = unlimited), **idle timeout** now also on the Modbus
   gateway; every disconnect is logged with its reason. All in the mapping form.
 - **Optional web login:** Settings → Web UI access — switch "Require login" off and give
-  visitors a role; signing in still works, the REST API keeps its token, and open
-  access applies only via IP / localhost / own host name (DNS-rebinding guard).
+  visitors a role; signing in still works, the REST API keeps its token, open access
+  applies only via IP / localhost / own host name (DNS-rebinding guard, proxy headers
+  included), other cluster nodes still need a real login, and open consoles close when
+  access is revoked.
+- Viewers can no longer read stored MQTT credentials (mapping form / export: operator+;
+  viewer API tokens get them redacted). Legacy `idle_timeout_s` values from 2.6.x
+  configs are normalised so headless/Docker boots don't fail validation.
 - Tests: real **half-open TCP** end-to-end tests on Linux (iptables) **and Windows**
   (WinDivert) in CI — dead client / dead client while streaming / connect-out dead remote
   / dead Modbus master / SYN to a silent host / legacy Windows path, plus a keepalive-off
