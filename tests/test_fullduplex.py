@@ -77,7 +77,7 @@ def sock_recv(sock, n, out):
     out.append(bytes(buf))
 
 
-def harness(ports, masters, cli_out, dev_out, done):
+def harness(ports, masters, cli_out, dev_out, connected, go, done):
     threads = []
     socks = []
     for i in range(N):
@@ -89,6 +89,12 @@ def harness(ports, masters, cli_out, dev_out, done):
         socks.append(s)
         threads.append(threading.Thread(target=sock_send, args=(s, cli_pattern(i)), daemon=True))
         threads.append(threading.Thread(target=sock_recv, args=(s, PAYLOAD, cli_out[i]), daemon=True))
+    # The bridge drops serial data that arrives before a client is registered (no one
+    # to send it to), and the kernel completes a TCP connect before the bridge accepts
+    # it. Starting the devices right away made the device->client check flaky; wait
+    # until the bridge has registered every client.
+    connected.set()
+    go.wait(10)
     for t in threads:
         t.start()
     deadline = time.monotonic() + 40
@@ -120,11 +126,19 @@ async def main():
 
     cli_out = [[] for _ in range(N)]
     dev_out = [[] for _ in range(N)]
-    done = threading.Event()
+    connected, go, done = threading.Event(), threading.Event(), threading.Event()
     ports = [BASE + i for i in range(N)]
-    hthread = threading.Thread(target=harness, args=(ports, masters, cli_out, dev_out, done), daemon=True)
-    t0 = time.monotonic()
+    hthread = threading.Thread(target=harness, args=(ports, masters, cli_out, dev_out, connected, go, done),
+                               daemon=True)
     hthread.start()
+    while not connected.is_set():       # keep the bridge's event loop running
+        await asyncio.sleep(0.01)
+    for _ in range(500):                # every bridge has registered its client
+        if all((sup.status(m.id) or {}).get("client_count") == 1 for m in maps):
+            break
+        await asyncio.sleep(0.01)
+    t0 = time.monotonic()
+    go.set()
     while not done.is_set():            # keep the bridge's event loop running
         await asyncio.sleep(0.05)
     elapsed = time.monotonic() - t0
