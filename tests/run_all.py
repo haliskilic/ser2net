@@ -26,6 +26,7 @@ PORTABLE = [
     "test_udp_acl.py",
     "test_rfc2217_readonly.py",
     "test_stop_with_clients.py",
+    "test_dead_peer.py",
     "test_start_failure_cleanup.py",
     "test_log_read.py",
     "test_log_rotation.py",
