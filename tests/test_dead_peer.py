@@ -36,13 +36,13 @@ on that loop there; the server-side socket checks also run on the default
 """
 import asyncio
 import contextlib
+import faulthandler
 import os
 import shutil
 import socket
 import struct
 import subprocess
 import sys
-import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -171,29 +171,17 @@ class _WinDivertBlackhole:
         import pydivert
 
         sport = f" and tcp.SrcPort == {src_port}" if src_port else ""
-        self._w = pydivert.WinDivert(f"loopback and tcp.DstPort == {dst_port}{sport}")
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._drain, daemon=True)
-
-    def _drain(self) -> None:
-        while not self._stop.is_set():
-            try:
-                self._w.recv(timeout=0.2)  # captured and dropped: never re-injected
-            except TimeoutError:
-                continue
-            except Exception:
-                return
+        # DROP mode: the driver discards matching packets itself, so no reader thread
+        # (pydivert's timed recv() cancels overlapped I/O unsafely and can crash).
+        self._w = pydivert.WinDivert(f"loopback and tcp.DstPort == {dst_port}{sport}",
+                                     flags=pydivert.Flag.DROP)
 
     def __enter__(self):
         self._w.open()
-        self._thread.start()
         return self
 
     def __exit__(self, *_exc) -> None:
-        self._stop.set()
-        self._thread.join(timeout=2)
-        with contextlib.suppress(Exception):
-            self._w.close()
+        self._w.close()
 
 
 def _blackhole_backend():
@@ -603,6 +591,9 @@ def _run(fn, *args, loop_factory=None) -> bool:
 
 
 def main() -> int:
+    # a native crash (packet-filter driver) must still leave the log and a traceback
+    sys.stdout.reconfigure(line_buffering=True)
+    faulthandler.enable()
     results = []
     for label, factory in _loops():
         if len(_loops()) > 1:
