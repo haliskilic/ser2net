@@ -191,6 +191,49 @@ async def test_connect_timeout_zero_means_no_limit():
     print("connect timeout 0: no limit of our own (asyncio/OS defaults apply)  OK")
 
 
+async def test_connect_timeout_excludes_dns():
+    """The DNS lookup is not under connect_timeout_s: getaddrinfo runs in a worker
+    thread that a timeout can't stop, so timing it out would only pile up stuck
+    threads (one per retry) during a DNS outage. A resolver slower than the timeout
+    must therefore still connect, with one lookup in flight at a time."""
+    loop = asyncio.get_running_loop()
+    real_getaddrinfo = loop.getaddrinfo
+    lookups = {"now": 0, "max": 0}
+
+    async def slow_getaddrinfo(*args, **kwargs):
+        lookups["now"] += 1
+        lookups["max"] = max(lookups["max"], lookups["now"])
+        try:
+            await asyncio.sleep(1.5)  # resolver slower than the 1 s connect timeout
+            return await real_getaddrinfo(*args, **kwargs)
+        finally:
+            lookups["now"] -= 1
+
+    accepted = asyncio.Queue()
+
+    async def on_conn(reader, writer):
+        await accepted.put(writer)
+
+    srv = await asyncio.start_server(on_conn, "127.0.0.1", 0)
+    sport = srv.sockets[0].getsockname()[1]
+    logs = []
+    runner = MappingRunner(_mapping(network={"mode": "client", "remote_host": "localhost",
+                                             "remote_port": sport, "connect_timeout_s": 1}),
+                           logger=logs.append)
+    loop.getaddrinfo = slow_getaddrinfo
+    try:
+        await runner.start()
+        w = await asyncio.wait_for(accepted.get(), 6)
+        assert not any("timed out" in ln for ln in logs), logs
+        assert lookups["max"] == 1, f"{lookups['max']} lookups were in flight at once"
+        w.close()
+    finally:
+        loop.getaddrinfo = real_getaddrinfo
+        await runner.stop()
+        srv.close()
+    print("connect timeout: a slow DNS lookup is outside it (connects; one lookup at a time)  OK")
+
+
 async def test_modbus_gateway_idle_and_max_time():
     for options, expect in (({"idle_timeout_s": 1}, "idle timeout"),
                             ({"max_connection_time_s": 1}, "max connection time")):
@@ -236,6 +279,7 @@ async def main():
     await test_max_connection_time_connect_out_reconnects()
     await test_connect_timeout_aborts_hung_handshake()
     await test_connect_timeout_zero_means_no_limit()
+    await test_connect_timeout_excludes_dns()
     await test_modbus_gateway_idle_and_max_time()
     await test_kick_reason_logged()
     print("\nPASS: per-connection timers (idle / max connection time / connect timeout)")

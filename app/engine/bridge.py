@@ -24,6 +24,7 @@ import contextlib
 import errno
 import ipaddress
 import os
+import socket
 import sys
 import time
 from dataclasses import dataclass, field
@@ -61,7 +62,7 @@ def describe_disconnect(exc: BaseException) -> str:
         return str(exc)
     code = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
     if code in _PEER_TIMEOUT_ERRNOS:
-        return "peer stopped responding (TCP keepalive/retransmission timeout)"
+        return "peer stopped responding (TCP timeout: unreachable, or not reading its data)"
     if isinstance(exc, ConnectionResetError):
         # Windows reports a failed keepalive as WSAECONNRESET too, so don't blame the peer
         if sys.platform == "win32":
@@ -691,22 +692,49 @@ class MappingRunner:
             self._log(f"TCP keepalive not enabled for {peer}: {err}")
 
     # ---------------- connect-out (TCP client) ----------------
+    async def _connect_out(self):
+        """Resolve the remote host, then connect (+ TLS handshake) within
+        connect_timeout_s, trying each resolved address until the deadline.
+
+        The DNS lookup is deliberately NOT under the timeout: getaddrinfo runs in a
+        worker thread that cancellation can't stop, so timing it out would leave one
+        stuck thread behind per retry during a DNS outage and starve the shared
+        executor (asyncio.to_thread: password hashing, config saves, log reads).
+        Connecting to the resolved IP literal needs no further lookup."""
+        net = self.mapping.network
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(net.remote_host, net.remote_port,
+                                       type=socket.SOCK_STREAM)
+        ssl_ctx = self._client_ssl()
+        limit = net.connect_timeout_s or None
+        deadline = loop.time() + limit if limit else None
+        error: BaseException = ConnectionError(f"no address for {net.remote_host}")
+        for family, _type, _proto, _name, sockaddr in infos:
+            remaining = None if deadline is None else deadline - loop.time()
+            if remaining is not None and remaining <= 0:
+                break
+            try:
+                return await asyncio.wait_for(
+                    asyncio.open_connection(
+                        sockaddr[0], sockaddr[1], family=family, ssl=ssl_ctx,
+                        server_hostname=net.remote_host if ssl_ctx else None),
+                    timeout=remaining)
+            except asyncio.TimeoutError as e:
+                if getattr(e, "errno", None) is not None:
+                    error = e  # the OS's own connect timeout, not ours
+                    continue
+                error = ConnectionError(f"timed out after {net.connect_timeout_s:g}s")
+            except OSError as e:
+                error = e
+        raise error
+
     async def _client_supervisor(self) -> None:
         net = self.mapping.network
         target = f"{net.remote_host}:{net.remote_port}"
         backoff, attempt = 0.5, 0
         while not self._stop.is_set():
             try:
-                try:
-                    reader, writer = await asyncio.wait_for(
-                        asyncio.open_connection(net.remote_host, net.remote_port,
-                                                ssl=self._client_ssl()),
-                        timeout=net.connect_timeout_s or None)
-                except asyncio.TimeoutError as e:
-                    if getattr(e, "errno", None) is not None:
-                        raise  # the OS's own connect timeout (connect_timeout_s = 0)
-                    raise ConnectionError(
-                        f"timed out after {net.connect_timeout_s:g}s") from None
+                reader, writer = await self._connect_out()
                 self._enable_keepalive(writer, target)
                 client = _ClientConn(self, reader, writer, net.remote_host, net.remote_port)
                 self._clients.add(client)
