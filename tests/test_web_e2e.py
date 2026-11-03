@@ -128,7 +128,7 @@ def main():
         print("mapping create OK (HX-Trigger present)")
 
         # 5) status fragment lists it
-        body = c.get("/api/status").read().decode()
+        body = c.get("/api/status").read().decode().replace("<wbr>", "")  # soft line breaks
         assert "e2e-map" in body and "running" in body, body[:400]
         print("status fragment shows running mapping")
 

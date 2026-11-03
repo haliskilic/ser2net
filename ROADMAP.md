@@ -1,6 +1,6 @@
 # ser2net — Roadmap
 
-> Current release: **v2.7.0**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.7.1**. CI is green across Linux + Windows × Python 3.10–3.13.
 
 ## Shipped
 
@@ -131,6 +131,24 @@
   (WinDivert) in CI — dead client / dead client while streaming / connect-out dead remote
   / dead Modbus master / SYN to a silent host / legacy Windows path, plus a keepalive-off
   control that reproduces the original bug; timer and open-access e2e tests.
+
+### v2.7.1 — long names in the UI, truly standalone binaries ([#26](https://github.com/haliskilic/ser2net/issues/26))
+- **Web UI:** long mapping names, `/dev/serial/by-id/...` paths, host names and error
+  messages no longer push the row buttons out of the panel (they sat up to ~1000 px
+  outside it and the page scrolled sideways). Tables wrap long text at separators, row
+  buttons wrap inside their cell, below 940 px the lists become cards; header, log and
+  console titles wrap too. Checked in a real browser at 1440–390 px in CI.
+- **Linux binary runs on glibc ≥ 2.28** (RHEL 8+, Debian 11+, Ubuntu 20.04+…), not only on
+  the newest distributions (it needed glibc 2.38): built in an AlmaLinux 8 container with
+  a python-build-standalone CPython.
+- **No external programs:** "Generate self-signed certificate" no longer needs the
+  `openssl` command (made in-process with the bundled `cryptography`); the Linux binary
+  finds the distribution's CA bundle on its own (Debian/RHEL/openSUSE layouts); `icacls`
+  runs by its full System32 path.
+- **Tests:** every PR and release checks the executables — bundle contents (nothing but
+  glibc / Windows system DLLs from outside), an empty-`PATH` run, the libraries the running
+  process loads, and clean AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04,
+  openSUSE and Fedora containers; release assets are published only after that passes.
 
 ---
 

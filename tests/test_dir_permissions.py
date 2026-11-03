@@ -39,6 +39,22 @@ def test_windows_owner_only_acl():
         assert user and user.lower() in out.lower(), f"current user not granted access\n{out}"
     print("Windows: state dir restricted to owner/SYSTEM/Administrators  OK")
 
+    # icacls must be run by its full System32 path: an unqualified name is searched
+    # in the program's own folder and the current directory BEFORE System32, so an
+    # icacls.exe planted next to ser2net.exe (e.g. in Downloads) would run instead
+    calls, real_run = [], subprocess.run
+    subprocess.run = lambda cmd, *a, **kw: calls.append(cmd) or real_run(cmd, *a, **kw)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            lock_down_dir(d)
+    finally:
+        subprocess.run = real_run
+    exe = calls[0][0] if calls else ""
+    system32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32").lower()
+    assert os.path.isabs(exe) and os.path.dirname(exe).lower() == system32, \
+        f"icacls not run by its full System32 path: {exe!r}"
+    print("Windows: icacls run by its full System32 path (no binary planting)  OK")
+
 
 def main():
     if os.name == "posix":

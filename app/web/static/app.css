@@ -35,29 +35,36 @@ body {
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.mono { font-family: var(--mono); font-size: 12.5px; }
+/* mono text is mostly device paths, hosts and IDs: let an unbroken one wrap
+   rather than push its box (and the buttons next to it) out of the layout */
+.mono { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
+.nowrap { white-space: nowrap; }
 
 .topbar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 8px 16px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; }
-.topbar nav { display: flex; gap: 16px; align-items: center; }
+.topbar nav { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; min-width: 0; }
+.topbar .who { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 main { max-width: 1180px; margin: 22px auto; padding: 0 20px; }
 
 .panel {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 10px; padding: 18px; margin-bottom: 22px;
 }
-.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-.panel-head h2 { font-size: 15px; margin: 0; }
+.panel-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px 12px; margin-bottom: 14px;
+}
+.panel-head h2 { font-size: 15px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
 h3 { margin: 0 0 4px; font-size: 14px; }
 
 /* buttons */
 .btn {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-  border-radius: 7px; padding: 7px 12px; font-size: 13px; cursor: pointer;
+  border-radius: 7px; padding: 7px 12px; font-size: 13px; cursor: pointer; white-space: nowrap;
 }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -67,24 +74,40 @@ h3 { margin: 0 0 4px; font-size: 14px; }
 button.link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 14px; }
 form.inline { display: inline; margin: 0; }
 
-/* tables */
+/* tables: long names, device paths and errors wrap inside their cell, and the row
+   buttons wrap inside theirs. A table that still can't fit (phones) scrolls inside
+   its .table-scroll wrapper instead of pushing the page out of the panel. */
+.table-scroll { overflow-x: auto; }
 table.grid { width: 100%; border-collapse: collapse; }
 table.grid th, table.grid td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-table.grid th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+table.grid td { overflow-wrap: anywhere; }
+table.grid th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; white-space: nowrap; }
 table.grid tr:hover td { background: rgba(255,255,255,.02); }
-.actions { white-space: nowrap; display: flex; gap: 5px; }
+table.list { min-width: 52rem; }     /* mappings + cluster: narrower than this, scroll */
+table.ports { min-width: 40rem; }
+.sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+/* row buttons come in two groups (run controls | log, monitor, copy, delete): one
+   line when the row has room, otherwise group under group — never a lone button */
+.row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.btn-group { display: flex; gap: 5px; }
+/* header button groups (log / console / form) */
+.actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; margin-left: auto; }
 
 /* state badges */
-.state { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
+.state { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .state-running { background: rgba(46,160,67,.18); color: #4dd069; }
 .state-stopped { background: rgba(139,152,165,.18); color: var(--muted); }
 .state-reconnecting { background: rgba(210,153,34,.18); color: #e3b341; }
 .state-device-missing { background: rgba(210,153,34,.18); color: #e3b341; }
 .state-error { background: rgba(248,81,73,.18); color: #ff6b64; }
-.tag { font-size: 10.5px; background: var(--panel2); color: var(--muted); padding: 1px 6px; border-radius: 10px; }
-.err-small { color: var(--red); font-size: 11px; margin-top: 3px; max-width: 240px; }
+.tag { font-size: 10.5px; background: var(--panel2); color: var(--muted); padding: 1px 6px; border-radius: 10px; white-space: nowrap; }
+/* at most 3 lines; the full message is in the title tooltip and the mapping log */
+.err-small {
+  color: var(--red); font-size: 11px; margin-top: 3px; max-width: 16rem;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
 .clients { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
-.peer { background: rgba(46,160,67,.14); color: #4dd069; border-radius: 4px; padding: 1px 6px; font-size: 11px; white-space: nowrap; }
+.peer { background: rgba(46,160,67,.14); color: #4dd069; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 .peer-prio { background: rgba(47,129,247,.18); color: #6cb0ff; }
 .logbox {
   background: #0b0f14; border: 1px solid var(--border); border-radius: 7px;
@@ -115,12 +138,16 @@ input[type=checkbox] { width: auto; margin: 0; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px 2px; margin: 0 0 16px; }
 legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; padding: 0 6px; }
 .custom-input { margin-top: 6px; }
-.form-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.form-head {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+  gap: 8px 12px; margin-bottom: 14px;
+}
+.form-head h3 { flex: 1 1 16rem; min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .select-with-btn { display: flex; gap: 8px; align-items: flex-end; }
 .portsel-wrap { flex: 1; }
 
 /* banners */
-.banner { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
+.banner { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; overflow-wrap: anywhere; }
 .banner.error { background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.4); color: #ff8580; }
 .banner.ok { background: rgba(46,160,67,.14); border: 1px solid rgba(46,160,67,.4); color: #56d364; }
 .banner.warn { background: rgba(210,153,34,.14); border: 1px solid rgba(210,153,34,.4); color: #e3b341; }
@@ -145,3 +172,31 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 
 #form-panel:empty { display: none; }
 #form-panel { background: var(--panel2); border: 1px solid var(--border); border-radius: 9px; padding: 16px; margin-bottom: 16px; }
+
+/* phones / narrow windows */
+@media (max-width: 720px) {
+  .topbar { padding: 10px 12px; }
+  main { margin: 14px auto; padding: 0 12px; }
+  .panel { padding: 14px; }
+  #form-panel { padding: 12px; }
+  .grid2, .grid3 { grid-template-columns: 1fr; }
+}
+
+/* below the width the list tables need (52rem + page/panel padding), they become
+   stacked cards: the name on top, "LABEL value" lines, then the row's buttons —
+   nothing to scroll sideways for (tablets, phones) */
+@media (max-width: 940px) {
+  table.stackable { min-width: 0; }
+  table.stackable thead { display: none; }
+  table.stackable, table.stackable tbody, table.stackable tr, table.stackable td { display: block; }
+  table.stackable tr { padding: 8px 0; border-bottom: 1px solid var(--border); }
+  table.stackable td { border: 0; padding: 3px 2px; }
+  table.stackable td.col-name { font-weight: 600; }
+  table.stackable td[data-label] { position: relative; padding-left: 6.5rem; }
+  table.stackable td[data-label]::before {
+    content: attr(data-label); position: absolute; left: 2px; top: 4px; width: 6rem;
+    color: var(--muted); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
+  }
+  table.stackable .row-actions { justify-content: flex-start; margin-top: 4px; }
+}

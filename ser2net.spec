@@ -2,6 +2,10 @@
 # PyInstaller spec — build a standalone ser2net executable (no Python install needed).
 #   pip install pyinstaller && pyinstaller ser2net.spec
 # Produces dist/ser2net(.exe). Config/logs are written next to the binary (./data).
+# Release builds: Linux via tools/build_standalone_linux.sh (old-glibc container),
+# Windows in .github/workflows/standalone.yml; tests/test_standalone.py checks both.
+import os
+
 from PyInstaller.utils.hooks import collect_all
 
 datas = [("app/web/templates", "app/web/templates"), ("app/web/static", "app/web/static")]
@@ -31,6 +35,10 @@ a = Analysis(
     excludes=["bootstrap"],  # the frozen build skips the offline bootstrap (deps are inside)
     noarchive=False,
 )
+# libgcc_s (wanted by cryptography's Rust module) is part of every glibc system, and
+# manylinux wheels expect the system's copy; bundling the build machine's would only
+# raise the minimum glibc version.
+a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith("libgcc_s.so")]
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
