@@ -64,6 +64,7 @@
 
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>Users</h2></div>
+  <div class="table-scroll">
   <table class="grid">
     <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
     <tbody>
@@ -95,6 +96,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
   <p class="muted mb-sm">Roles: <span class="mono">admin</span> (everything),
      <span class="mono">operator</span> (manage mappings), <span class="mono">viewer</span> (read-only).</p>
   <form method="post" action="/settings/users" class="authform">

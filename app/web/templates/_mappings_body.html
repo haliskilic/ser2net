@@ -1,8 +1,9 @@
-<table class="grid">
+<div class="table-scroll">
+<table class="grid list stackable">
   <thead>
     <tr>
-      <th>Name</th><th>Serial</th><th>Params</th><th>Listen</th><th>Mode</th>
-      <th>State</th><th>Clients</th><th>In / Out</th><th></th>
+      <th>Name</th><th>Serial</th><th>Network</th>
+      <th>State</th><th>Clients</th><th>In / Out</th><th class="col-actions"></th>
     </tr>
   </thead>
   <tbody>
@@ -10,28 +11,32 @@
     {% set st = statuses.get(m.id) %}
     {% set state = st.state if st else ('stopped' if not m.enabled else 'stopped') %}
     <tr>
-      <td>{{ m.name }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
-      <td class="mono">{{ m.serial.port }}</td>
-      <td class="mono">{{ m.serial.compact() }}{% if m.serial.flowcontrol != 'none' %} · {{ m.serial.flowcontrol }}{% endif %}</td>
-      <td class="mono">
-        {%- if m.kind == 'serialbridge' -%}{{ m.serial_b.port }}
-        {%- elif m.network.mode == 'client' -%}→ {{ m.network.remote_host }}:{{ m.network.remote_port }}
-        {%- else -%}{{ m.network.bind_ip }}:{{ m.network.port }}{%- endif -%}
+      <td class="col-name">{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
+      <td data-label="Serial">
+        <div class="mono">{{ m.serial.port|softbreak }}</div>
+        <div class="sub mono">{{ m.serial.compact() }}{% if m.serial.flowcontrol != 'none' %} · {{ m.serial.flowcontrol }}{% endif %}</div>
       </td>
-      <td>
-        {%- if m.kind == 'serialbridge' -%}serial↔serial
-        {%- else -%}{{ m.network.mode }}/{{ m.network.protocol }}
-          {%- if m.network.tls %} <span class="tag">TLS</span>{% endif %}
-          {%- if m.network.read_only %} <span class="tag">RO</span>{% endif %}
-        {%- endif -%}
+      <td data-label="Network">
+        <div class="mono">
+          {%- if m.kind == 'serialbridge' -%}{{ m.serial_b.port|softbreak }}
+          {%- elif m.network.mode == 'client' -%}→ {{ m.network.remote_host|softbreak }}:<wbr>{{ m.network.remote_port }}
+          {%- else -%}{{ m.network.bind_ip|softbreak }}:<wbr>{{ m.network.port }}{%- endif -%}
+        </div>
+        <div class="sub">
+          {%- if m.kind == 'serialbridge' -%}serial↔serial
+          {%- else -%}{{ m.network.mode }}/{{ m.network.protocol }}
+            {%- if m.network.tls %} <span class="tag">TLS</span>{% endif %}
+            {%- if m.network.read_only %} <span class="tag">RO</span>{% endif %}
+          {%- endif -%}
+        </div>
       </td>
-      <td>
+      <td data-label="State">
         <span class="state state-{{ state }}">{{ state }}</span>
         {% if st and st.last_error and state in ('error','device-missing','reconnecting') %}
-          <div class="err-small">{{ st.last_error }}</div>
+          <div class="err-small" title="{{ st.last_error }}">{{ st.last_error|softbreak }}</div>
         {% endif %}
       </td>
-      <td>
+      <td data-label="Clients">
         {{ st.client_count if st else 0 }}{% if m.network.max_connections > 1 %}/{{ m.network.max_connections }}{% endif %}
         {% if st and st.clients %}
           <div class="clients">
@@ -40,8 +45,9 @@
         {% endif %}
         {% if st and st.dropped_clients %}<div class="err-small">⚠ {{ st.dropped_clients }} slow client(s) dropped</div>{% endif %}
       </td>
-      <td class="mono">{{ (st.bytes_in if st else 0) }} / {{ (st.bytes_out if st else 0) }}</td>
-      <td class="actions">
+      <td class="mono nowrap" data-label="In / Out">{{ (st.bytes_in if st else 0) }} / {{ (st.bytes_out if st else 0) }}</td>
+      <td class="col-actions">
+        <div class="row-actions">
         {% if can_edit %}
           {% if m.enabled %}
             <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/stop" hx-swap="none">Stop</button>
@@ -51,17 +57,19 @@
           {% endif %}
           <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/form" hx-target="#form-panel" hx-swap="innerHTML">Edit</button>
         {% endif %}
-        <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">Log</button>
-        <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">Monitor</button>
+          <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">Log</button>
+          <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">Monitor</button>
         {% if can_edit %}
           <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none">Copy</button>
           <button class="btn sm danger" hx-delete="/api/mappings/{{ m.id }}"
                   hx-confirm="Delete mapping “{{ m.name }}”?" hx-swap="none">Delete</button>
         {% endif %}
+        </div>
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="9" class="muted">No mappings yet. Click “Add mapping” to create one.</td></tr>
+    <tr><td colspan="7" class="muted">No mappings yet. Click “Add mapping” to create one.</td></tr>
   {% endfor %}
   </tbody>
 </table>
+</div>
