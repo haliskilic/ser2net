@@ -1,0 +1,206 @@
+"""The markup the long-text layout fix relies on (issue #26) — no browser needed.
+
+tests/test_ui_layout.py measures the real layout in Chromium (opt-in); this
+portable test guards the template side of the contract on every platform:
+
+  * the `softbreak` filter escapes first and only then adds <wbr> after
+    / \\ _ . : @ -  (its output is marked safe, so this is the XSS guard);
+  * the mappings / cluster / ports tables sit in a .table-scroll wrapper and are
+    .stackable; every row button is inside td.col-actions > div.row-actions;
+    every data cell (not the name, not the buttons) has a data-label for the
+    phone card layout; each row spans exactly as many columns as the header;
+  * a mapping name / device path full of HTML is rendered escaped;
+  * the static assets carry ?v=<version> (fresh CSS/JS right after an upgrade).
+
+Run: python3 tests/test_ui_markup.py
+"""
+import html.parser
+import os
+import sys
+
+ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.join(ROOT, "lib"))
+sys.path.insert(0, ROOT)
+
+from markupsafe import Markup  # noqa: E402
+
+from app import __version__  # noqa: E402
+from app.config import MappingConfig  # noqa: E402
+from app.web.server import make_templates, softbreak  # noqa: E402
+
+VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+        "source", "track", "wbr"}
+EVIL = '<img src=x onerror="alert(1)">_x'
+BY_ID = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A50285BI-if00-port0"
+
+
+class Node:
+    def __init__(self, tag, attrs, parent):
+        self.tag, self.attrs, self.parent, self.children = tag, dict(attrs), parent, []
+
+    def classes(self):
+        return set((self.attrs.get("class") or "").split())
+
+    def walk(self):
+        yield self
+        for c in self.children:
+            yield from c.walk()
+
+    def ancestors(self):
+        n = self.parent
+        while n is not None:
+            yield n
+            n = n.parent
+
+
+def parse(markup):
+    """Tiny DOM: enough to check nesting (html.parser is stdlib)."""
+    root = Node("#root", {}, None)
+
+    class P(html.parser.HTMLParser):
+        cur = root
+
+        def handle_starttag(self, tag, attrs):
+            node = Node(tag, attrs, self.cur)
+            self.cur.children.append(node)
+            if tag not in VOID:
+                self.cur = node
+
+        def handle_endtag(self, tag):
+            n = self.cur
+            while n is not root and n.tag != tag:
+                n = n.parent
+            if n is not root:
+                self.cur = n.parent
+
+    P().feed(markup)
+    return root
+
+
+def check_table_contract(markup, where):
+    root = parse(markup)
+    tables = [n for n in root.walk() if n.tag == "table"]
+    assert tables, f"{where}: no table rendered"
+    for t in tables:
+        assert "stackable" in t.classes(), f"{where}: table is not .stackable"
+        assert any("table-scroll" in a.classes() for a in t.ancestors()), \
+            f"{where}: table is not inside a .table-scroll wrapper"
+        ncols = sum(1 for n in t.walk() if n.tag == "th")
+        for tr in (n for n in t.walk() if n.tag == "tr"):
+            cells = [c for c in tr.children if c.tag in ("td", "th")]
+            span = sum(int(c.attrs.get("colspan") or 1) for c in cells)
+            assert span == ncols, f"{where}: a row spans {span} columns, the header has {ncols}"
+            if len(cells) > 1 and cells[0].tag == "td":
+                for c in cells:
+                    if not (c.classes() & {"col-name", "col-actions"}):
+                        assert c.attrs.get("data-label"), \
+                            f"{where}: data cell without data-label (phone cards need it)"
+    for b in (n for n in root.walk() if n.tag == "button"):
+        anc = list(b.ancestors())
+        assert any("row-actions" in a.classes() for a in anc), f"{where}: button outside .row-actions"
+        assert any(a.tag == "td" and "col-actions" in a.classes() for a in anc), \
+            f"{where}: button outside td.col-actions"
+    return root
+
+
+def test_softbreak():
+    out = softbreak(BY_ID)
+    assert isinstance(out, Markup)
+    assert str(out).replace("<wbr>", "") == BY_ID, "softbreak must not change the text"
+    assert "by-<wbr>id/<wbr>usb-<wbr>FTDI_<wbr>FT232R_" in out
+    evil = str(softbreak(EVIL))
+    assert "<img" not in evil and "&lt;img" in evil and "&#34;alert(1)&#34;" in evil, evil
+    assert "&<wbr>" not in evil and ";<wbr>" not in str(softbreak("a&b;c")), "entity split"
+    assert str(softbreak(r"C:\COM3")) == r"C:<wbr>\<wbr>COM3"
+    assert str(softbreak("plain")) == "plain"
+    print("softbreak: escapes first, then <wbr> after separators only  OK")
+
+
+def mappings():
+    long_name = "PRODUCTION_LINE_3_PLC_SIEMENS_S7_1500_MAIN_CONTROLLER_BUILDING_B"
+    return [
+        MappingConfig.from_dict({"id": "m1", "name": long_name, "enabled": True,
+                                 "serial": {"port": BY_ID},
+                                 "network": {"mode": "server", "port": 4001, "max_connections": 4}}),
+        MappingConfig.from_dict({"id": "m2", "name": EVIL, "enabled": False,
+                                 "serial": {"port": EVIL},
+                                 "network": {"mode": "client", "remote_host": "host.example",
+                                             "remote_port": 4001}}),
+        MappingConfig.from_dict({"id": "m3", "name": "bridge", "kind": "serialbridge",
+                                 "serial": {"port": BY_ID}, "serial_b": {"port": BY_ID + "-b"}}),
+    ]
+
+
+def test_mappings_table():
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    statuses = {"m1": {"state": "reconnecting", "last_error": f"could not open port {BY_ID}",
+                       "client_count": 2, "dropped_clients": 1, "bytes_in": 10, "bytes_out": 20,
+                       "clients": [{"peer": "127.0.0.1:50000", "duration": "3m", "priority": True}]}}
+    for can_edit in (True, False):
+        out = tpl.render(mappings=mappings(), statuses=statuses, can_edit=can_edit)
+        root = check_table_contract(out, f"mappings table (can_edit={can_edit})")
+        assert "<img" not in out and "&lt;img" in out, "mapping name/path must be escaped"
+        assert "by-<wbr>id/" in out, "device paths should get soft line breaks"
+        n_btn = sum(1 for n in root.walk() if n.tag == "button")
+        assert n_btn == (7 + 6 + 7 if can_edit else 2 * 3), f"unexpected button count {n_btn}"
+        err = next(n for n in root.walk() if "err-small" in n.classes())
+        assert err.attrs.get("title", "").endswith(BY_ID), "full error belongs in the tooltip"
+    empty = tpl.render(mappings=[], statuses={}, can_edit=True)
+    check_table_contract(empty, "empty mappings table")
+    print("mappings table: wrapper, card labels, buttons in their cell, escaping  OK")
+
+
+def test_cluster_table():
+    tpl = make_templates().env.get_template("_cluster_body.html")
+    node_maps = [{"id": "x1", "name": EVIL, "enabled": True, "kind": "server/raw",
+                  "endpoint": "127.0.0.1:4001", "serial": BY_ID, "state": "running",
+                  "client_count": 1, "bytes_in": 1, "bytes_out": 2},
+                 {"id": "x2", "name": "off", "enabled": False, "kind": "client/raw",
+                  "endpoint": "→ h:1", "serial": "COM3", "state": "stopped",
+                  "client_count": 0, "bytes_in": 0, "bytes_out": 0}]
+    nodes = [
+        {"name": "this-host", "self": True, "source": "self", "ip": "10.0.0.1", "port": 8080,
+         "scheme": "http", "online": True, "uptime": "1h", "version": __version__,
+         "running_count": 1, "mapping_count": 2, "mappings": node_maps},
+        {"name": "peer-host", "self": False, "source": "manual", "ip": "10.0.0.2", "port": 8080,
+         "scheme": "https", "online": True, "uptime": "2h", "version": __version__,
+         "running_count": 1, "mapping_count": 2, "mappings": node_maps},
+        {"name": "gone", "self": False, "source": "auto", "ip": "10.0.0.3", "port": 8080,
+         "scheme": "http", "online": False, "mappings": []},
+    ]
+    out = tpl.render(nodes=nodes, can_edit=True, peers_hidden=False, discovery_error="")
+    root = check_table_contract(out, "cluster table")
+    assert "<img" not in out and "&lt;img" in out, "peer mapping names must be escaped"
+    assert sum(1 for n in root.walk() if n.tag == "button") == 3 + 2, \
+        "only the peer's rows get buttons (Stop+Restart+Edit / Start+Edit)"
+    check_table_contract(tpl.render(nodes=[], can_edit=True), "empty cluster table")
+    print("cluster table: wrapper, card labels, buttons in their cell, escaping  OK")
+
+
+def test_ports_table_and_assets():
+    env = make_templates().env
+    ports = [{"device": BY_ID, "description": "FT232R USB UART", "vid": "0403", "pid": "6001",
+              "serial_number": "A50285BI", "manufacturer": "FTDI"}]
+    out = env.get_template("_ports_table.html").render(ports=ports, in_use={BY_ID})
+    check_table_contract(out, "ports table")
+
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    page = env.get_template("base.html").render(request=Req)
+    for asset in ("app.css", "app.js", "htmx.min.js", "xterm.js", "xterm.css"):
+        assert f"/static/{asset}?v={__version__}" in page, f"{asset} lacks the ?v= cache-buster"
+    print("ports table contract + versioned static asset URLs  OK")
+
+
+def main():
+    test_softbreak()
+    test_mappings_table()
+    test_cluster_table()
+    test_ports_table_and_assets()
+    print("\nPASS: UI markup contract")
+
+
+if __name__ == "__main__":
+    main()

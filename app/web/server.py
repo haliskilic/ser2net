@@ -10,7 +10,9 @@ anonymous pseudo-user (see auth.anonymous_user) and role checks still apply.
 from __future__ import annotations
 
 import os
+import re
 
+from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -23,6 +25,16 @@ from .routes import build_routes
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+_SOFT_BREAK_AFTER = re.compile(r"([/\\_.:@-])")
+
+
+def softbreak(value) -> Markup:
+    """Escape *value* and allow a line break after / \\ _ . : @ - so a long device
+    path or name wraps at a separator instead of mid-word (<wbr> adds no text,
+    so copy/paste is unchanged). Safe: the separators never occur in entities."""
+    return Markup(_SOFT_BREAK_AFTER.sub(r"\1<wbr>", str(escape(value))))
+
 
 PUBLIC_PREFIXES = ("/static", "/auth/")  # /auth/oidc/* is the unauthenticated SSO flow
 # The peer-facing cluster endpoints are authenticated by the shared cluster KEY
@@ -146,7 +158,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
 
 
-def build_app(state) -> Starlette:
+def make_templates() -> Jinja2Templates:
+    """The Jinja environment every page is rendered with (globals + filters)."""
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
     # template globals used across pages
@@ -154,12 +167,21 @@ def build_app(state) -> Starlette:
         COMMON_BAUDRATES, BYTESIZES, PARITIES, PARITY_LABELS, STOPBITS,
         FLOWCONTROLS, PROTOCOLS, LINE_STATES,
     )
+    from .. import __version__
     templates.env.globals.update(
         baudrates=COMMON_BAUDRATES, bytesizes=BYTESIZES, parities=PARITIES,
         parity_labels=PARITY_LABELS, stopbits=STOPBITS, flowcontrols=FLOWCONTROLS,
         protocols=PROTOCOLS, line_states=LINE_STATES,
+        # ?v=<version> on the static URLs: browsers fetch the new CSS/JS right after an
+        # upgrade instead of reusing a heuristically cached copy with the new templates
+        asset_version=__version__,
     )
+    templates.env.filters["softbreak"] = softbreak
+    return templates
 
+
+def build_app(state) -> Starlette:
+    templates = make_templates()
     routes = build_routes(templates, state, STATIC_DIR)
     middleware = [Middleware(GuardMiddleware)]
     app = Starlette(routes=routes, middleware=middleware)

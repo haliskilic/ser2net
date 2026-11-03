@@ -18,6 +18,30 @@ jobs:
       - run: pip install ruff
       - run: ruff check . --output-format github
 
+  ui:
+    name: ui layout (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies + Playwright Chromium
+        run: |
+          pip install -r requirements.txt playwright==1.64.1
+          python -m playwright install --with-deps chromium
+      - name: Long names stay inside their panels (desktop, half-screen, tablet, phone)
+        env:
+          SER2NET_UI_TESTS: "1"          # a missing browser fails here instead of skipping
+          SER2NET_UI_ARTIFACTS: ui-screenshots
+        run: python tests/test_ui_layout.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-screenshots
+          path: ui-screenshots
+          retention-days: 14
+
   test:
     name: test ${{ matrix.os }} py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
@@ -36,8 +60,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install dependencies (+ cryptography for the in-process certificate tests)
+        run: pip install -r requirements.txt cryptography
       - name: Install socat (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y socat
@@ -50,3 +74,9 @@ jobs:
       - name: Run full test suite incl. socat data-path (Linux)
         if: runner.os == 'Linux'
         run: python tests/run_all.py --socat -v
+
+  # Build the standalone executables and prove they need nothing else installed
+  # (same workflow the release uses). Heavy, so: pull requests and main only.
+  standalone:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/standalone.yml
