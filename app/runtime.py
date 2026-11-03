@@ -21,7 +21,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import console
+from . import console, standalone
 from .config import ConfigStore
 from .state import AppState
 from .web.server import build_app
@@ -47,6 +47,7 @@ def _env_bind_override(admin) -> bool:
 
 
 def main(config_path: str, reconfigure: bool = False) -> int:
+    standalone.prepare()  # standalone Linux binary: find the system CA certificates
     store = ConfigStore(config_path)
     first_run = not store.exists()
     config = store.load()
@@ -75,6 +76,8 @@ async def _serve(store: ConfigStore, config) -> int:
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
     state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
+    for note in standalone.notes:
+        state.log(note)
     if not config.password_set:
         state.log("no admin password set yet — open the UI to complete first-run setup")
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:

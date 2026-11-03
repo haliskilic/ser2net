@@ -141,10 +141,35 @@ python3 ser2net.py            # veya: ./start.sh
 start.bat
 ```
 
-### Standalone binary (Python gerektirmez)
-Her sürümde Windows `.exe` ve Linux binary'si **GitHub Releases**'a eklenir (PyInstaller;
-MQTT/LDAP/OIDC dahil bundle'lı). İndir, çalıştır — config/log `data/` altında binary'nin
-yanına yazılır. Kendin derlemek için: `pip install pyinstaller && pyinstaller ser2net.spec`.
+### Standalone binary (başka hiçbir şey kurmak gerekmez)
+Her sürümde Windows `.exe` ve Linux binary'si **GitHub Releases**'a eklenir. İkisi de
+her şeyi içinde taşıyan tek bir dosyadır: Python, OpenSSL, VC++ runtime (Windows),
+MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. İndir,
+çalıştır; config/log `data/` altında binary'nin yanına yazılır.
+
+| Dosya | Çalıştığı sistemler |
+|---|---|
+| `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 ve sonrası (x64) |
+| `ser2net-linux-x64` | glibc ≥ 2.28 olan x86_64 Linux: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (musl/Alpine değil — orada Docker kullanın) |
+
+Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
+- paketin içindekiler işletim sisteminin temel kütüphanelerinden (glibc ≤ 2.28 / Windows
+  sistem DLL'leri) başka bir şeye ihtiyaç duymamalı;
+- binary boş bir `PATH` ile (Python yok, `openssl` yok) çalışmalı;
+- Linux binary'si temiz AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04,
+  openSUSE Leap 15.6 ve Fedora konteynerlerinde çalışmalı.
+
+Linux notları:
+- `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.
+- Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
+  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin.
+- Sertifika kontrolleri (TLS üzerinden MQTT, OIDC) için dağıtımın CA paketini, ayarlıysa
+  `SSL_CERT_FILE`'ı kullanır.
+
+Kendin derlemek için:
+- Windows: `pip install pyinstaller && pyinstaller ser2net.spec`
+- Linux (eski dağıtımlarda da çalışsın diye eski glibc'li bir konteynerde):
+  `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`
 
 İlk çalıştırmada:
 1. **Konsolda** arayüzün hangi IP'den erişileceği sorulur (makine IP'leri veya custom)
@@ -287,6 +312,14 @@ akışının paketlerini düşürür (Linux: root/şifresiz sudo + `iptables`; W
 + `pip install pydivert`). Güvenlik duvarını değiştirdiği için yerelde isteğe bağlıdır
 (Linux'ta tek kullanımlık bir network namespace içinde çalıştırmak önerilir); CI'da
 her iki işletim sisteminde de her zaman koşar.
+
+`tests/test_ui_layout.py` web arayüzünü gerçek bir tarayıcıda (Playwright + Chromium)
+çok uzun eşleme adları ve cihaz yollarıyla, masaüstünden telefona farklı genişliklerde
+açar. Panelinin dışına taşan bir şey olursa başarısız olur
+(`pip install playwright && python -m playwright install chromium`; CI'da `ui` işi).
+`tests/test_standalone.py` derlenmiş bir binary'yi sınar
+(`SER2NET_STANDALONE_BIN=dist/ser2net`). CI'da bunu `standalone.yml` workflow'u yapar;
+her sürüm de aynı workflow'dan geçer.
 
 ---
 
