@@ -199,7 +199,7 @@ def test_web_button_with_empty_path():
             admin = json.load(fh)["admin_ui"]
         assert admin["tls_cert"].endswith("cert.pem") and admin["tls_key"].endswith("key.pem"), admin
         ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(admin["tls_cert"], admin["tls_key"])
-        print("server with an empty PATH: Settings → Generate self-signed certificate works  OK")
+        print("server with an empty PATH: Settings -> Generate self-signed certificate works  OK")
     finally:
         srv.terminate()
         try:

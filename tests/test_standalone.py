@@ -19,10 +19,10 @@ CI 'standalone' jobs build the executables and set it):
   3. every shared library the running processes mapped comes from the bundle or
      the OS base (Linux /proc/<pid>/maps, Windows module list);
   4. SER2NET_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
-     of that distribution (no Python, no openssl, empty PATH) instead; the test CA
-     is mounted where that distribution keeps its CA bundle
-     (SER2NET_STANDALONE_CA=<path>), so the OIDC check also proves the binary
-     found it on its own.
+     of that distribution (no Python, no openssl, empty PATH) instead. The test CA
+     is mounted over the CA bundle the image has (or, for base images that ship
+     without ca-certificates, at SER2NET_STANDALONE_CA=<the distribution's path>),
+     so the OIDC check also proves the binary found it on its own.
 Test-side needs: cryptography; pyelftools (Linux) or pefile (Windows); docker for 4.
 
 Run: python3 tests/test_standalone.py
@@ -235,11 +235,25 @@ def write_config(data_dir, ui, raw_port, issuer, mqtt_port):
         json.dump(cfg, fh)
 
 
+def image_ca_path():
+    """Where the binary should find the CA bundle in IMAGE: the first of
+    standalone.CA_BUNDLES the image has (some carry several — current Fedora has the
+    Debian path too), else SER2NET_STANDALONE_CA for images without ca-certificates."""
+    script = ("for f in " + " ".join(standalone.CA_BUNDLES) +
+              '; do if [ -f "$f" ]; then echo "$f"; exit 0; fi; done')
+    out = subprocess.run(["docker", "run", "--rm", "--entrypoint", "sh", IMAGE, "-c", script],
+                         capture_output=True, text=True, timeout=300)
+    found = out.stdout.strip()
+    assert found or IMAGE_CA, f"{IMAGE} has no CA bundle and SER2NET_STANDALONE_CA is not set"
+    return found or IMAGE_CA
+
+
 class Launch:
     """The binary, natively with a minimal environment or in a clean container."""
 
     def __init__(self, work, pki):
         self.work, self.pki = work, pki
+        self.ca_path = image_ca_path() if IMAGE else ""
         self.tmp = os.path.join(work, "tmp")
         self.empty = os.path.join(work, "emptybin")  # PATH: nothing to find
         for d in (self.tmp, self.empty):
@@ -253,7 +267,7 @@ class Launch:
         return ["docker", "run", "--rm", "--init", "--name", self.name, "--network", "host", *user,
                 "-e", "HOME=/work", "-e", "TMPDIR=/work/tmp", "-e", "PATH=/work/emptybin",
                 "-v", f"{self.work}:/work", "-v", f"{BIN}:/opt/ser2net/ser2net:ro",
-                "-v", f"{self.pki['ca.pem']}:{IMAGE_CA}:ro",
+                "-v", f"{self.pki['ca.pem']}:{self.ca_path}:ro",
                 IMAGE, "/opt/ser2net/ser2net"] + [a.replace(self.work, "/work") for a in args]
 
     def env(self):
@@ -488,7 +502,7 @@ def test_binary():
             assert os.path.getsize(os.path.join(data, "tls", f)) > 0, f
         ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(
             os.path.join(data, "tls", "cert.pem"), os.path.join(data, "tls", "key.pem"))
-        print(f"{where}: Settings → Generate self-signed certificate, no openssl on PATH  OK")
+        print(f"{where}: Settings -> Generate self-signed certificate, no openssl on PATH  OK")
 
         st, headers, page = s.request("/auth/oidc/login")
         location = headers.get("Location", "") if headers else ""
@@ -504,8 +518,8 @@ def test_binary():
         assert "MQTT publishing serial lines to 127.0.0.1" in log, "paho-mqtt missing from the bundle?"
         assert "not installed" not in log, log[-1500:]
         if IMAGE:
-            assert f"TLS: using the system CA bundle {IMAGE_CA}" in log, \
-                "binary did not pick the distribution's CA bundle:\n" + log[:1500]
+            assert f"TLS: using the system CA bundle {run.ca_path}" in log, \
+                f"binary did not pick {run.ca_path}:\n" + log[:1500]
         elif not WINDOWS:
             assert "TLS: CA certificates from SSL_CERT_FILE" in log, log[:1500]
         print(f"{where}: UI, raw TCP mapping, MQTT/LDAP/OIDC libraries present  OK")
