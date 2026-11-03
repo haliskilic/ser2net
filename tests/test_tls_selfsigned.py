@@ -72,7 +72,8 @@ def verified_handshake(cert, key, server_name):
         conn, _ = lsock.accept()
         try:
             with srv_ctx.wrap_socket(conn, server_side=True) as s:
-                s.recv(1)
+                if s.recv(1) == b"x":
+                    s.sendall(b"y")
         except (OSError, ssl.SSLError) as e:
             errors.append(e)
 
@@ -82,6 +83,9 @@ def verified_handshake(cert, key, server_name):
         with socket.create_connection(lsock.getsockname(), timeout=5) as raw:
             with cli_ctx.wrap_socket(raw, server_hostname=server_name) as s:
                 s.sendall(b"x")
+                # wait for the reply: closing with the server's TLS 1.3 session tickets
+                # still unread makes Windows reset the connection under the server
+                assert s.recv(1) == b"y", "no reply over the verified connection"
     finally:
         t.join(5)
         lsock.close()
