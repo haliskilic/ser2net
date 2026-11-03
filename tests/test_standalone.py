@@ -418,7 +418,13 @@ def loaded_problems(bundle, pids):
     problems = []
     norm = os.path.normcase
     bundle_n = norm(os.path.realpath(bundle)) + os.sep
+    bundled = {norm(f) for _, _, fs in os.walk(bundle) for f in fs}
     sysroot = norm(os.environ.get("SystemRoot", r"C:\Windows")) + os.sep
+    # Windows Defender injects its AMSI provider (MpOAV.dll) into processes itself
+    defender = tuple(norm(os.path.join(os.environ.get(var, default), *sub)) + os.sep
+                     for var, default, sub in (
+                         ("ProgramData", r"C:\ProgramData", ("Microsoft", "Windows Defender")),
+                         ("ProgramFiles", r"C:\Program Files", ("Windows Defender",))))
     libs = mapped_libraries(pids)
     for path in sorted(libs):
         p = norm(os.path.realpath(path))
@@ -426,7 +432,11 @@ def loaded_problems(bundle, pids):
         if p.startswith(bundle_n) or p == norm(os.path.realpath(BIN)):
             continue
         if WINDOWS:
-            if p.startswith(sysroot) and not WIN_REDIST.match(base):
+            # a VC++ runtime in System32 is only the machine's own copy when the
+            # bundle carries the same DLL (the static check requires that)
+            if p.startswith(sysroot) and (not WIN_REDIST.match(base) or norm(base) in bundled):
+                continue
+            if p.startswith(defender):
                 continue
             problems.append(f"loaded from outside the bundle and Windows: {path}")
         elif not (linux_base(base) or "/gconv/" in p):
