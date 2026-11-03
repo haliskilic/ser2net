@@ -1,5 +1,5 @@
 <div class="form-head">
-  <h3>Console — {{ mapping_name }}</h3>
+  <h3>Console — {{ mapping_name|softbreak }}</h3>
   <div class="actions">
     {% if interactive %}<span class="muted">type to send to the device</span>
     {% else %}<span class="muted">read-only</span>{% endif %}

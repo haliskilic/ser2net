@@ -18,6 +18,30 @@ jobs:
       - run: pip install ruff
       - run: ruff check . --output-format github
 
+  ui:
+    name: ui layout (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies + Playwright Chromium
+        run: |
+          pip install -r requirements.txt playwright==1.64.1
+          python -m playwright install --with-deps chromium
+      - name: Long names stay inside their panels (desktop, half-screen, tablet, phone)
+        env:
+          SER2NET_UI_TESTS: "1"          # a missing browser fails here instead of skipping
+          SER2NET_UI_ARTIFACTS: ui-screenshots
+        run: python tests/test_ui_layout.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-screenshots
+          path: ui-screenshots
+          retention-days: 14
+
   test:
     name: test ${{ matrix.os }} py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}

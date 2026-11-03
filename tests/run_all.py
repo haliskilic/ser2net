@@ -48,6 +48,8 @@ PORTABLE = [
     "test_ldap.py",
     "test_oidc.py",
     "test_cluster.py",
+    "test_ui_markup.py",
+    "test_ui_layout.py",      # browser layout check; skips without Playwright (CI 'ui' job runs it)
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
