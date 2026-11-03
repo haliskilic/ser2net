@@ -42,7 +42,7 @@
       <td class="mono nowrap" data-label="In / Out">{{ m.bytes_in }} / {{ m.bytes_out }}</td>
       <td class="col-actions">
         {% if can_edit and not n.self %}
-        <div class="row-actions">
+        <div class="row-actions"><div class="btn-group">
           {% set vals = '{"scheme":"' ~ n.scheme ~ '","host":"' ~ n.ip ~ '","port":"' ~ n.port ~ '","mid":"' ~ m.id ~ '","action":"' %}
           {% if m.enabled %}
             <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}stop"}' hx-swap="none">Stop</button>
@@ -51,7 +51,7 @@
             <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}start"}' hx-swap="none">Start</button>
           {% endif %}
           <button class="btn sm" hx-get="/api/cluster/peer-form?scheme={{ n.scheme }}&host={{ n.ip }}&port={{ n.port }}&mid={{ m.id }}" hx-target="#form-panel" hx-swap="innerHTML">Edit</button>
-        </div>
+        </div></div>
         {% endif %}
       </td>
     </tr>

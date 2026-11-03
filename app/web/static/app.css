@@ -86,11 +86,10 @@ table.grid tr:hover td { background: rgba(255,255,255,.02); }
 table.list { min-width: 52rem; }     /* mappings + cluster: narrower than this, scroll */
 table.ports { min-width: 40rem; }
 .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-td.col-actions { width: 1%; }
-.row-actions {
-  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px;
-  width: max-content; max-width: 13.5rem; margin-left: auto;
-}
+/* row buttons come in two groups (run controls | log, monitor, copy, delete): one
+   line when the row has room, otherwise group under group — never a lone button */
+.row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.btn-group { display: flex; gap: 5px; }
 /* header button groups (log / console / form) */
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; margin-left: auto; }
 
@@ -199,6 +198,5 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
     color: var(--muted); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
     font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
   }
-  table.stackable td.col-actions { width: auto; }
-  table.stackable .row-actions { width: auto; max-width: none; justify-content: flex-start; margin: 4px 0 0; }
+  table.stackable .row-actions { justify-content: flex-start; margin-top: 4px; }
 }
