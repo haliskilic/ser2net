@@ -16,7 +16,6 @@ import os
 import re
 import secrets
 import socket
-import subprocess
 import time
 from urllib.parse import urlparse
 
@@ -32,7 +31,7 @@ from ..config import (
     OidcSettings, User,
 )
 from ..engine import netinfo
-from . import auth, ldap_auth, oidc_auth
+from . import auth, ldap_auth, oidc_auth, selfsigned
 from .api import build_api_routes
 
 OIDC_COOKIE = "ser2net_oidc"
@@ -343,12 +342,9 @@ def build_routes(templates, state, static_dir):
         os.makedirs(tdir, exist_ok=True)
         cert, key = os.path.join(tdir, "cert.pem"), os.path.join(tdir, "key.pem")
         try:
-            await asyncio.to_thread(subprocess.run, [
-                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                "-keyout", key, "-out", cert, "-days", "825", "-subj", "/CN=ser2net",
-            ], check=True, capture_output=True, timeout=30)
-        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
-            return await settings_get(request, error=f"openssl not available or failed: {e}")
+            await asyncio.to_thread(selfsigned.generate, cert, key)
+        except (selfsigned.CertError, OSError) as e:
+            return await settings_get(request, error=f"Could not generate a certificate: {e}")
         async with state.config_lock:
             state.config.admin_ui.tls_cert = cert
             state.config.admin_ui.tls_key = key

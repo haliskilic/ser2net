@@ -79,7 +79,12 @@ def lock_down_dir(directory: str) -> None:
         # owner unable to read config.json), so we rely on inheritance instead.
         # SIDs are locale-independent: *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administrators.
         grants = [f"{user}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
-        cmd = ["icacls", directory, "/inheritance:r"]
+        # by full path: Windows searches an unqualified name in the program's own
+        # folder and the current directory before System32, so an icacls.exe planted
+        # next to ser2net.exe (e.g. in Downloads) would otherwise run instead
+        root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+        icacls = os.path.join(root, "System32", "icacls.exe")
+        cmd = [icacls if os.path.isfile(icacls) else "icacls", directory, "/inheritance:r"]
         for g in grants:
             cmd += ["/grant:r", g]
         cmd += ["/C", "/Q"]

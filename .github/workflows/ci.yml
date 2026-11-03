@@ -60,8 +60,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install dependencies (+ cryptography for the in-process certificate tests)
+        run: pip install -r requirements.txt cryptography
       - name: Install socat (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y socat
@@ -74,3 +74,9 @@ jobs:
       - name: Run full test suite incl. socat data-path (Linux)
         if: runner.os == 'Linux'
         run: python tests/run_all.py --socat -v
+
+  # Build the standalone executables and prove they need nothing else installed
+  # (same workflow the release uses). Heavy, so: pull requests and main only.
+  standalone:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/standalone.yml

@@ -140,10 +140,31 @@ python3 ser2net.py            # or: ./start.sh
 start.bat
 ```
 
-### Standalone binary (no Python needed)
-Every release attaches a Windows `.exe` and a Linux binary to **GitHub Releases**
-(PyInstaller; MQTT/LDAP/OIDC bundled in). Download and run — config/logs are written
-to `data/` next to the binary. Build it yourself: `pip install pyinstaller && pyinstaller ser2net.spec`.
+### Standalone binary (nothing else to install)
+Every release attaches a Windows `.exe` and a Linux binary to **GitHub Releases**. Each
+is one file with everything inside — Python, OpenSSL, the VC++ runtime (Windows), MQTT /
+LDAP / OIDC support — so no Python, `openssl` or other package is needed. Download and
+run; config/logs are written to `data/` next to the binary.
+
+| File | Runs on |
+|---|---|
+| `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 or newer (x64) |
+| `ser2net-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
+
+Every pull request and release proves it (`tests/test_standalone.py`): the bundle may
+need nothing but OS-base libraries (glibc ≤ 2.28 / Windows system DLLs), the binary must
+work with an empty `PATH` (no Python, no `openssl`), and the Linux one must run in clean
+AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04, openSUSE Leap 15.6 and Fedora
+containers.
+
+Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
+group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
+mounted `noexec`, point `TMPDIR` at a directory that isn't. For certificate checks (MQTT
+over TLS, OIDC) it uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
+
+Build it yourself — Windows: `pip install pyinstaller && pyinstaller ser2net.spec`;
+Linux (in an old-glibc container, so the result runs on older distributions too):
+`docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`.
 
 On first run:
 1. The **console** asks which local IP the admin UI binds to (machine IPs or custom)
@@ -285,6 +306,13 @@ TCP connections**: with `SER2NET_BLACKHOLE_TESTS=1` it drops the packets of a lo
 flow (Linux: root/passwordless sudo + `iptables`; Windows: Administrator +
 `pip install pydivert`). Since that edits the firewall it is opt-in locally (on Linux,
 best run inside a throwaway network namespace); CI always runs it on both OSes.
+
+`tests/test_ui_layout.py` opens the web UI in a real browser (Playwright + Chromium)
+with very long mapping names / device paths at desktop-to-phone widths and fails if
+anything sticks out of its panel (`pip install playwright && python -m playwright
+install chromium`; CI job `ui`). `tests/test_standalone.py` checks a built executable
+(`SER2NET_STANDALONE_BIN=dist/ser2net`; CI workflow `standalone.yml`, also used by
+every release).
 
 ---
 

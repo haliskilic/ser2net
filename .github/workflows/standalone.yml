@@ -1,0 +1,114 @@
+name: Standalone
+
+# Builds the standalone executables and proves they need nothing else installed
+# (tests/test_standalone.py). Called by ci.yml for pull requests / main and by
+# release.yml on a v* tag — which publishes the binaries only after every check
+# here has passed.
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Attach the executables to the GitHub Release of the pushed tag
+        type: boolean
+        default: false
+
+jobs:
+  linux:
+    name: build linux (glibc 2.28 baseline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build inside AlmaLinux 8 (glibc 2.28) with python-build-standalone
+        run: docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test-side dependencies
+        run: pip install -r requirements.txt cryptography pyelftools
+      - name: Bundle contents, empty-PATH run, loaded libraries
+        env:
+          SER2NET_STANDALONE_BIN: dist/ser2net
+        run: python tests/test_standalone.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ser2net-linux-x64
+          path: dist/ser2net
+          if-no-files-found: error
+
+  linux-distros:
+    name: linux on ${{ matrix.image }}
+    needs: linux
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:  # oldest supported first; ca = where the distribution keeps its CA bundle
+          - { image: "almalinux:8", ca: /etc/pki/tls/certs/ca-bundle.crt }          # glibc 2.28
+          - { image: "debian:11", ca: /etc/ssl/certs/ca-certificates.crt }          # 2.31
+          - { image: "ubuntu:20.04", ca: /etc/ssl/certs/ca-certificates.crt }       # 2.31
+          - { image: "almalinux:9", ca: /etc/pki/tls/certs/ca-bundle.crt }          # 2.34
+          - { image: "ubuntu:22.04", ca: /etc/ssl/certs/ca-certificates.crt }       # 2.35
+          - { image: "debian:12", ca: /etc/ssl/certs/ca-certificates.crt }          # 2.36
+          - { image: "opensuse/leap:15.6", ca: /etc/ssl/ca-bundle.pem }             # 2.38
+          - { image: "ubuntu:24.04", ca: /etc/ssl/certs/ca-certificates.crt }       # 2.39
+          - { image: "fedora:latest", ca: /etc/pki/tls/certs/ca-bundle.crt }        # newest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ser2net-linux-x64
+          path: dist
+      - run: chmod +x dist/ser2net
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt cryptography
+      - name: Runs in a clean ${{ matrix.image }} container (no Python, no openssl, empty PATH)
+        env:
+          SER2NET_STANDALONE_BIN: dist/ser2net
+          SER2NET_STANDALONE_IMAGE: ${{ matrix.image }}
+          SER2NET_STANDALONE_CA: ${{ matrix.ca }}
+        run: python tests/test_standalone.py
+
+  windows:
+    name: build windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencies (incl. MQTT/LDAP/OIDC + cryptography), PyInstaller, test-side pefile
+        run: pip install -r requirements.txt paho-mqtt ldap3 authlib cryptography pyinstaller==6.22.3 pefile
+      - name: Build
+        run: pyinstaller --clean --noconfirm ser2net.spec
+      - name: Bundle contents, empty-PATH run, loaded libraries
+        env:
+          SER2NET_STANDALONE_BIN: dist/ser2net.exe
+        run: python tests/test_standalone.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ser2net-windows-x64
+          path: dist/ser2net.exe
+          if-no-files-found: error
+
+  publish:
+    name: attach to the release
+    if: inputs.publish
+    needs: [linux, linux-distros, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Name the release assets
+        run: |
+          cp artifacts/ser2net-linux-x64/ser2net ser2net-linux-x64
+          chmod +x ser2net-linux-x64
+          cp artifacts/ser2net-windows-x64/ser2net.exe ser2net-windows-x64.exe
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ser2net-linux-x64
+            ser2net-windows-x64.exe
+          fail_on_unmatched_files: true
