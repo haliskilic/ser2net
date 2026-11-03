@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:  # oldest supported first; ca = where the distribution keeps its CA bundle
+        include:  # oldest first; ca = the distribution's CA bundle path (used for base images that ship without ca-certificates)
           - { image: "almalinux:8", ca: /etc/pki/tls/certs/ca-bundle.crt }          # glibc 2.28
           - { image: "debian:11", ca: /etc/ssl/certs/ca-certificates.crt }          # 2.31
           - { image: "ubuntu:20.04", ca: /etc/ssl/certs/ca-certificates.crt }       # 2.31
