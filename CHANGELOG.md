@@ -25,6 +25,30 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
   the first-run setup (`/healthz` answers then too) (#29).
 
 ### Added
+- **Bind a mapping to a USB device's identity** (VID:PID + serial number) from the mapping
+  form, so re-plugging an adapter as another `ttyUSB*` / `COM*` keeps the mapping working;
+  the port list shows Linux `/dev/serial/by-id` names (selectable) and hides the kernel's
+  placeholder `ttyS` ports that have no hardware (#31).
+- **Notifications:** webhook (JSON, Slack, Microsoft Teams Workflows, Discord, Telegram)
+  and/or e-mail when a serial device is lost or comes back, a mapping fails to start,
+  clients connect/disconnect, or a sign-in fails; repeat suppression, rate limit, test
+  message (Settings → Notifications) (#31).
+- **Dashboard:** search, state filter, sort, and start/stop/restart of selected mappings
+  (`POST /api/mappings/bulk`); the table is only redrawn when it changed (the refresh
+  answers 204 otherwise), so it no longer flickers or loses selections (#31).
+- **Traces in the UI:** list and download a mapping's trace files (current + rotated);
+  the console has a **hex view** with both directions and timestamps (a new read-only
+  WebSocket); the text console's description now says what it shows (#31).
+- **Modbus write from MQTT:** points with `"writable": true` take values from
+  `<topic>/<point>/set` (coils FC5/FC15, holding registers FC6/FC16; the result goes to
+  `.../set/result`); coils and discrete inputs (FC1/FC2) can be polled too (#31).
+- **Sparkplug B:** a Modbus-polling mapping can publish as a Sparkplug B edge node
+  (NBIRTH/NDATA/NDEATH with `bdSeq`/`seq`, writes and rebirth through NCMD), without a
+  protobuf dependency (#31).
+- **Import from the classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) go
+  through the import preview; options without an equivalent are listed as warnings. ser2net
+  opens a device only while a client is connected, a mapping here keeps it open: of several
+  ports on one device the first is imported enabled, the others disabled (#31).
 - **Linux arm64 executable** (`ser2net-linux-arm64`, glibc ≥ 2.28: Raspberry Pi 3/4/5 with a
   64-bit OS, ARM gateways), tested like the x86_64 one in 9 clean distributions (#30).
 - **Windows service** without extra software: `--install-service` / `--uninstall-service`
