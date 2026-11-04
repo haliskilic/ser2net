@@ -166,8 +166,12 @@ Linux notları:
 - Sertifika kontrolleri (TLS üzerinden MQTT, OIDC) için dağıtımın CA paketini, ayarlıysa
   `SSL_CERT_FILE`'ı kullanır.
 
+`ser2net --about` sürümleri (Python, OpenSSL, bileşenler) gösterir; hata bildirirken
+ekleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini yazar
+(sürümlere `*.THIRD-PARTY-LICENSES.txt` olarak da eklenir).
+
 Kendin derlemek için:
-- Windows: `pip install pyinstaller && pyinstaller ser2net.spec`
+- Windows: `pip install -r requirements.txt -r requirements-optional.txt pyinstaller && pyinstaller ser2net.spec`
 - Linux (eski dağıtımlarda da çalışsın diye eski glibc'li bir konteynerde):
   `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`
 
@@ -184,15 +188,12 @@ python3 ser2net.py --reconfigure
 
 ### Offline kurulum (internetsiz makine)
 Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2net.py` ilk açılışta bunları
-`./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Farklı Python
-sürümü/işletim sistemi için ek wheel gerekirse:
-```bash
-python3 -m pip download -r requirements.txt -d vendor/wheels \
-  --platform win_amd64 --python-version 312 --only-binary=:all:
-```
+`./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, Linux x86_64 ve
+Windows x64'te Python 3.10–3.14'ü kapsar; `requirements.txt` değişince
+`python3 tools/refresh_wheels.py` ile yenilenir (`tests/test_vendor_wheels.py` denetler).
 Opsiyonel özellikleri (MQTT/LDAP/OIDC) offline kaynak kurulumunda etkinleştirmek için
-wheel'lerini de indirip kurun: `pip download paho-mqtt ldap3 authlib -d vendor/wheels`
-ardından `pip install --no-index --find-links vendor/wheels paho-mqtt ldap3 authlib`.
+wheel'lerini de indirip kurun: `pip download -r requirements-optional.txt -d vendor/wheels`
+ardından `pip install --no-index --find-links vendor/wheels -r requirements-optional.txt`.
 (Standalone binary bunları zaten içerir.)
 
 ### Docker
@@ -303,8 +304,11 @@ python3 tests/run_all.py --socat    # + socat tabanlı veri-yolu testleri (Linux
 python3 tests/run_all.py -v         # geçen testlerin çıktısını da göster
 ```
 socat (Linux) ile sanal seri portlar kullanılır; donanım gerekmez. Tek tek de
-çalıştırılabilir, örn. `python3 tests/test_rest_api.py`. CI (GitHub Actions) ruff
-lint + tam matrisi (ubuntu/windows × Python 3.10–3.13) koşar.
+çalıştırılabilir, örn. `python3 tests/test_rest_api.py`. CI (GitHub Actions) her pull
+request'te ruff, mypy, `pip-audit`, çevrimdışı wheel kontrolü, tam test matrisi
+(ubuntu/windows × Python 3.10–3.13) ve coverage koşar
+(`python3 tests/coverage_run.py`: testlerin başlattığı sunucular da ölçülür). Geliştirme
+ortamı ve kurallar için [CONTRIBUTING.md](CONTRIBUTING.md).
 
 `tests/test_dead_peer.py` ölü bağlantı tespitini **gerçek yarı-açık (half-open) TCP
 bağlantılarıyla** da sınar: `SER2NET_BLACKHOLE_TESTS=1` verildiğinde bir loopback
@@ -330,7 +334,10 @@ ser2net **çift lisanslıdır**:
 - **Açık kaynak — [GNU AGPL-3.0](LICENSE):** kullanmak, incelemek, değiştirmek ve paylaşmak serbesttir. Dağıtırsan ya da değiştirilmiş bir sürümü ağ servisi olarak çalıştırırsan, tüm kaynak kodunu AGPL-3.0 ile sunman gerekir.
 - **Ticari lisans:** AGPL-3.0 yükümlülükleri olmadan kapalı kaynak ürün, cihaz ya da SaaS için — bkz. [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) veya **mail@haliskilic.com.tr**.
 
-Birlikte gelen üçüncü-taraf bileşenler kendi lisanslarını korur — bkz. [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+Birlikte gelen üçüncü-taraf bileşenler kendi lisanslarını korur — bkz. [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md);
+binary'deki tam metinler: `ser2net --licenses`. LGPL lisanslı ldap3 binary'de kaynak
+dosyaları olarak durur; `SER2NET_LIB_OVERRIDE=<klasör>` ile başka bir sürümü yüklenebilir.
+Güvenlik açığı bildirimi: [SECURITY.md](SECURITY.md).
 
 Katkılar memnuniyetle karşılanır! İlk pull request'inde tek seferlik bir [Katkıcı Lisans Sözleşmesi (CLA)](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823) imzalaman istenir; katkının telif hakkı sende kalır.
 

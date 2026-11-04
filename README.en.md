@@ -162,7 +162,11 @@ group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `
 mounted `noexec`, point `TMPDIR` at a directory that isn't. For certificate checks (MQTT
 over TLS, OIDC) it uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
 
-Build it yourself — Windows: `pip install pyinstaller && pyinstaller ser2net.spec`;
+`ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
+reports. `ser2net --licenses` prints the license text of every component inside the
+executable (releases also attach it as `*.THIRD-PARTY-LICENSES.txt`).
+
+Build it yourself — Windows: `pip install -r requirements.txt -r requirements-optional.txt pyinstaller && pyinstaller ser2net.spec`;
 Linux (in an old-glibc container, so the result runs on older distributions too):
 `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`.
 
@@ -179,15 +183,12 @@ python3 ser2net.py --reconfigure
 
 ### Offline install (no-internet machine)
 Dependencies live in `vendor/wheels/`; `ser2net.py` installs them to `./lib` on first
-launch (`pip install --no-index`). No internet needed. Add wheels for other Python
-versions/OSes:
-```bash
-python3 -m pip download -r requirements.txt -d vendor/wheels \
-  --platform win_amd64 --python-version 312 --only-binary=:all:
-```
+launch (`pip install --no-index`). No internet needed. The set covers Python 3.10–3.14 on
+Linux x86_64 and Windows x64; after a `requirements.txt` change, refresh it with
+`python3 tools/refresh_wheels.py` (`tests/test_vendor_wheels.py` checks it).
 To enable the optional features (MQTT/LDAP/OIDC) on an offline source install, download
-their wheels too: `pip download paho-mqtt ldap3 authlib -d vendor/wheels`, then
-`pip install --no-index --find-links vendor/wheels paho-mqtt ldap3 authlib`. (The
+their wheels too: `pip download -r requirements-optional.txt -d vendor/wheels`, then
+`pip install --no-index --find-links vendor/wheels -r requirements-optional.txt`. (The
 standalone binary already bundles them.)
 
 ### Docker
@@ -298,8 +299,11 @@ python3 tests/run_all.py --socat    # + socat-based data-path tests (Linux)
 python3 tests/run_all.py -v         # also show the output of passing tests
 ```
 The socat tests use virtual serial ports (Linux); no hardware needed. Individual
-files still run directly, e.g. `python3 tests/test_rest_api.py`. CI (GitHub Actions)
-runs ruff lint + the full matrix (ubuntu/windows × Python 3.10–3.13).
+files still run directly, e.g. `python3 tests/test_rest_api.py`. On every pull request
+CI (GitHub Actions) runs ruff, mypy, `pip-audit`, the offline-wheel check, the full
+matrix (ubuntu/windows × Python 3.10–3.13) and coverage (`python3 tests/coverage_run.py`,
+which also measures the servers the tests start). Development setup and rules:
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 `tests/test_dead_peer.py` also exercises dead-peer detection against **real half-open
 TCP connections**: with `SER2NET_BLACKHOLE_TESTS=1` it drops the packets of a loopback
@@ -323,7 +327,10 @@ ser2net is **dual-licensed**:
 - **Open source — [GNU AGPL-3.0](LICENSE):** free to use, study, modify and share. If you distribute it, or run a modified version as a network service, you must make your complete source code available under the AGPL-3.0.
 - **Commercial license:** for closed-source products, devices or SaaS without the AGPL-3.0 obligations — see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) or email **mail@haliskilic.com.tr**.
 
-Bundled third-party components keep their own licenses — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+Bundled third-party components keep their own licenses — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md);
+the full texts inside an executable: `ser2net --licenses`. The LGPL-licensed ldap3 stays
+in the executable as plain source files; `SER2NET_LIB_OVERRIDE=<dir>` loads another
+version of it. Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 
 Contributions are welcome! On your first pull request you'll be asked to sign a one-time [Contributor License Agreement](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823); you keep the copyright to your work.
 
