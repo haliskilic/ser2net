@@ -67,8 +67,8 @@ def main():
         tdir = os.path.join(srv.data, "traces")
         for name, text in (("aaaaaaaaaaa1-alpha.log", "line now\n"), ("aaaaaaaaaaa1-alpha.log.1", "older\n"),
                            ("aaaaaaaaaaa2-secret.log", "other mapping\n")):
-            with open(os.path.join(tdir, name), "w") as fh:
-                fh.write(text)
+            with open(os.path.join(tdir, name), "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)  # byte-exact (no \r\n on Windows): the download must match
         st, _, page = v.get("/api/mappings/aaaaaaaaaaa1/traces")
         assert st == 200 and "aaaaaaaaaaa1-alpha.log.1" in page and "secret" not in page, page[:400]
         st, h, body = v.get("/api/mappings/aaaaaaaaaaa1/traces/aaaaaaaaaaa1-alpha.log")
