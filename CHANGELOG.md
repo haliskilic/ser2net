@@ -25,6 +25,16 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
   the first-run setup (`/healthz` answers then too) (#29).
 
 ### Added
+- **Linux arm64 executable** (`ser2net-linux-arm64`, glibc ≥ 2.28: Raspberry Pi 3/4/5 with a
+  64-bit OS, ARM gateways), tested like the x86_64 one in 9 clean distributions (#30).
+- **Windows service** without extra software: `--install-service` / `--uninstall-service`
+  (starts at boot, restarts after a failure, `--service-name` for several instances),
+  through the Windows API (#30).
+- **Docker image on GHCR** for amd64 + arm64 with every release (`ghcr.io/haliskilic/ser2net`),
+  smoke-tested on both architectures (#30).
+- Releases publish `SHA256SUMS`, a CycloneDX SBOM per executable and GitHub build provenance
+  + SBOM attestations; the Windows exe is code-signed when a signing service is configured
+  (SignPath or Azure Trusted Signing, `docs/SIGNING.md`) (#30).
 - Automatic configuration backups: each change keeps the previous `config.json` in
   `data/backups/` (newest 50); admins can download or restore them in Settings, and a
   restore is itself backed up (#29).

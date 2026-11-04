@@ -1,6 +1,7 @@
 """Third-party component inventory of a ser2net build, from the build environment.
 
-    python tools/third_party.py licenses OUT.txt [--extra DIR]...
+    python tools/third_party.py licenses OUT.txt [--extra DIR]... [--strict]
+    python tools/third_party.py sbom OUT.cdx.json [--strict]
 
 Run it with the interpreter that builds the standalone executable (PyInstaller). It
 writes every bundled component's license text into one file, which ser2net.spec
@@ -188,6 +189,71 @@ def write_licenses(out_path: str, extra_dirs: list[str], strict: bool = False) -
           f"{sum(len(os.listdir(d)) for d in extra_dirs)} extra license files")
 
 
+def write_sbom(out_path: str, strict: bool = False) -> None:
+    """A CycloneDX 1.5 SBOM of the executable: ser2net, the interpreter (CPython +
+    OpenSSL), every bundled Python distribution and the PyInstaller bootloader."""
+    import datetime
+    import json
+    import ssl
+    import uuid
+
+    sys.path.insert(0, ROOT)
+    from app import __version__
+
+    def lic(dist: metadata.Distribution) -> list:
+        expr = dist.metadata.get("License-Expression")
+        return [{"expression": expr}] if expr else [{"license": {"name": license_of(dist)}}]
+
+    components = []
+    py = platform.python_version()
+    components.append({"type": "library", "bom-ref": f"pkg:generic/cpython@{py}", "name": "cpython",
+                       "version": py, "purl": f"pkg:generic/cpython@{py}",
+                       "licenses": [{"expression": "PSF-2.0"}],
+                       "description": "bundled Python interpreter and standard library"})
+    m = re.search(r"OpenSSL (\S+)", ssl.OPENSSL_VERSION)
+    if m:
+        components.append({"type": "library", "bom-ref": f"pkg:generic/openssl@{m.group(1)}",
+                           "name": "openssl", "version": m.group(1),
+                           "purl": f"pkg:generic/openssl@{m.group(1)}",
+                           "licenses": [{"expression": "Apache-2.0"}],
+                           "description": "linked into the bundled interpreter"})
+    dists = runtime_distributions(strict)
+    for name in BUILD_EMBEDDED:
+        try:
+            dists.append(metadata.distribution(name))
+        except metadata.PackageNotFoundError:
+            pass
+    for dist in dists:
+        name, version = canonical(dist.metadata["Name"]), dist.version
+        purl = f"pkg:pypi/{name}@{version}"
+        comp = {"type": "library", "bom-ref": purl, "name": name, "version": version,
+                "purl": purl, "licenses": lic(dist)}
+        if name in BUILD_EMBEDDED:
+            comp["description"] = BUILD_EMBEDDED[name] + " embedded in the executable"
+        components.append(comp)
+    root = f"pkg:github/haliskilic/ser2net@v{__version__}"
+    bom = {
+        "bomFormat": "CycloneDX", "specVersion": "1.5",
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}", "version": 1,
+        "metadata": {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "tools": {"components": [{"type": "application", "name": "ser2net tools/third_party.py"}]},
+            "component": {"type": "application", "bom-ref": root, "name": "ser2net",
+                          "version": __version__, "purl": root,
+                          "licenses": [{"expression": "AGPL-3.0-only"}],
+                          "description": f"standalone executable for {platform.system()} "
+                                         f"{platform.machine()}"},
+        },
+        "components": components,
+        "dependencies": [{"ref": root, "dependsOn": [c["bom-ref"] for c in components]}],
+    }
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(bom, fh, indent=2)
+        fh.write("\n")
+    print(f"wrote {out_path}: {len(components)} components")
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -196,9 +262,14 @@ def main(argv: list[str]) -> int:
     lic.add_argument("--extra", action="append", default=[], metavar="DIR")
     lic.add_argument("--strict", action="store_true",
                      help="fail when a pinned package is not installed (release builds)")
+    bom = sub.add_parser("sbom", help="write a CycloneDX SBOM")
+    bom.add_argument("out")
+    bom.add_argument("--strict", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd == "licenses":
         write_licenses(args.out, args.extra, args.strict)
+    else:
+        write_sbom(args.out, args.strict)
     return 0
 
 

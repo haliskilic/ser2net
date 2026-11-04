@@ -73,6 +73,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the licenses of ser2net and every bundled third-party component, then exit.",
     )
+    svc = p.add_argument_group("Windows service")
+    svc.add_argument("--install-service", action="store_true",
+                     help="Install ser2net as a Windows service (starts at boot, restarts after "
+                          "a failure) with this --data-dir, and start it. Needs Administrator.")
+    svc.add_argument("--uninstall-service", action="store_true",
+                     help="Stop and remove the Windows service (the data directory is kept).")
+    svc.add_argument("--service-name", default="ser2net",
+                     help="Name of the Windows service (default: ser2net); lets several "
+                          "instances with different data directories run side by side.")
+    svc.add_argument("--service", action="store_true", help=argparse.SUPPRESS)  # used by the SCM
     p.add_argument(
         "--healthcheck",
         action="store_true",
@@ -151,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
     apply_lib_override()
     if args.licenses:
         return print_licenses()
+    if args.uninstall_service:
+        return _service_call(lambda ws: ws.uninstall(args.service_name))
     if args.healthcheck:  # stdlib only: no bootstrap needed
         from app import healthcheck
 
@@ -179,7 +191,31 @@ def main(argv: list[str] | None = None) -> int:
     # 3. hand off
     from app import runtime
 
+    if args.install_service:
+        if _service_call(lambda ws: ws.require_windows()):
+            return 1
+        data_dir = os.path.abspath(args.data_dir)
+        config = os.path.abspath(args.config) if args.config else None
+        runtime.prepare_config(config_path, args.reconfigure)  # first run: asks for the UI address
+        return _service_call(lambda ws: ws.install(args.service_name, data_dir, config))
+    if args.service:
+        from app import winservice
+
+        return winservice.run(args.service_name,
+                              lambda: runtime.main(config_path=config_path),
+                              runtime.request_shutdown)
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
+
+
+def _service_call(fn) -> int:
+    from app import winservice
+
+    try:
+        fn(winservice)
+    except winservice.ServiceError as e:
+        print(f"ser2net: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

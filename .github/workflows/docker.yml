@@ -1,0 +1,26 @@
+name: Docker image
+
+# Builds the image for linux/amd64 and linux/arm64 and smoke-tests each natively
+# (tests/docker_smoke.sh: non-root, HEALTHCHECK, upgrade from a root-owned volume).
+# Called by ci.yml and release.yml; release.yml then pushes the multi-arch image to
+# GHCR (its own job, with the write permissions this one doesn't need).
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: docker ${{ matrix.arch }} (non-root, healthcheck, upgrade)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t ser2net:test .
+      - run: tests/docker_smoke.sh ser2net:test

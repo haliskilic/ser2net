@@ -13,6 +13,7 @@ import contextlib
 import os
 import signal
 import sys
+import threading
 
 # asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
 # (bundled: taskgroup), which accepts the same loop_factory argument.
@@ -46,8 +47,22 @@ def _env_bind_override(admin) -> bool:
     return True
 
 
-def main(config_path: str, reconfigure: bool = False) -> int:
-    standalone.prepare()  # standalone Linux binary: find the system CA certificates
+# Stopping from another thread (the Windows service's stop request): request_shutdown()
+# sets the event and calls the hook a running _serve() registered.
+_shutdown_requested = threading.Event()
+_shutdown_hooks: list = []
+
+
+def request_shutdown() -> None:
+    """Ask the running server to stop, from any thread (thread-safe)."""
+    _shutdown_requested.set()
+    for hook in list(_shutdown_hooks):
+        hook()
+
+
+def prepare_config(config_path: str, reconfigure: bool = False):
+    """Load config.json (creating it on the first run, when the console asks for the
+    admin UI address) and apply SER2NET_BIND_IP / SER2NET_PORT. Returns (store, config)."""
     store = ConfigStore(config_path)
     first_run = not store.exists()
     config = store.load()
@@ -59,6 +74,12 @@ def main(config_path: str, reconfigure: bool = False) -> int:
         config.admin_ui.port = port
     if first_run or reconfigure or env_set:
         store.save(config)
+    return store, config
+
+
+def main(config_path: str, reconfigure: bool = False) -> int:
+    standalone.prepare()  # standalone Linux binary: find the system CA certificates
+    store, config = prepare_config(config_path, reconfigure)
 
     # Own the loop. Force SelectorEventLoop on Windows for pyserial-asyncio-fast.
     loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
@@ -111,10 +132,18 @@ async def _serve(store: ConfigStore, config) -> int:
     def _request_shutdown() -> None:
         server.should_exit = True
 
+    # (not on Windows, and not outside the main thread — e.g. the Windows service
+    # thread; request_shutdown() covers those)
     for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(NotImplementedError, ValueError, AttributeError):
+        with contextlib.suppress(NotImplementedError, ValueError, RuntimeError, AttributeError):
             loop.add_signal_handler(sig, _request_shutdown)
 
+    def _from_other_thread() -> None:
+        loop.call_soon_threadsafe(_request_shutdown)
+
+    _shutdown_hooks.append(_from_other_thread)
+    if _shutdown_requested.is_set():  # asked to stop before we were ready
+        _request_shutdown()
     try:
         await serve_task
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -122,6 +151,7 @@ async def _serve(store: ConfigStore, config) -> int:
         with contextlib.suppress(Exception):
             await serve_task
     finally:
+        _shutdown_hooks.remove(_from_other_thread)
         state.log("shutting down — stopping all mappings")
         await state.stop_engine()
     return 0
