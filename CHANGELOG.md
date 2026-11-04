@@ -6,6 +6,12 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 
 ## [Unreleased]
 
+## [2.8.0] — 2026-11-04
+Upgrading from 2.7.x needs no change: `config.json` and `data/` are used as they are, and the
+first configuration change keeps the old `config.json` in `data/backups/`. A trace path in an
+old config becomes a file name under `data/traces/` (the start-up log says so); the Docker
+image takes over a `/data` volume written by the old root image on its first start.
+
 ### Security
 - **Traces can no longer write outside the data directory.** A mapping's trace was a free
   file path, so an operator (not only an admin) could have raw network bytes appended to
@@ -25,6 +31,9 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
   the first-run setup (`/healthz` answers then too) (#29).
 
 ### Added
+- **Turkish web UI** next to English: TR / EN in the top bar (remembered per browser), else
+  the browser's language or the admin's default (Settings → Web UI access), which notifications
+  use too. Logs, the audit log and the REST API stay English (#32).
 - **Bind a mapping to a USB device's identity** (VID:PID + serial number) from the mapping
   form, so re-plugging an adapter as another `ttyUSB*` / `COM*` keeps the mapping working;
   the port list shows Linux `/dev/serial/by-id` names (selectable) and hides the kernel's
@@ -144,7 +153,8 @@ Hardening and operations.
 ## [1.0] — 2026-06-06
 First release: serial↔TCP (raw, telnet, RFC 2217), web UI, access control, logs.
 
-[Unreleased]: https://github.com/haliskilic/ser2net/compare/v2.7.1...HEAD
+[Unreleased]: https://github.com/haliskilic/ser2net/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.8.0
 [2.7.1]: https://github.com/haliskilic/ser2net/releases/tag/v2.7.1
 [2.7.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.7.0
 [2.6.3]: https://github.com/haliskilic/ser2net/releases/tag/v2.6.3

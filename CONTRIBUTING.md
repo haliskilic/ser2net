@@ -52,6 +52,14 @@ machine whose firewall matters. The standalone executable checks need a build
 `app/web/api.py` the REST API · `app/config.py` the config model ·
 `tests/` one file per feature, collected by `tests/run_all.py`.
 
+### Translations
+The web UI is English with a Turkish translation. Wrap every user-facing string:
+`{{ _("Save changes") }}` in templates (values as `%(name)s`:
+`{{ _("Port %(port)s", port=p) }}`), `_("Port {0} is in use.").format(port)` in Python.
+Add the Turkish text to `app/locale/tr.json`; `tests/test_i18n.py` fails on a missing or
+unused entry and on a translation that loses a placeholder or an HTML tag. Logs, the audit log
+and REST API messages are not translated.
+
 ### Dependencies
 Runtime pins live in `requirements.txt` (with the Python 3.10 line kept by markers),
 the optional feature packages bundled into the binaries and the Docker image in
@@ -98,6 +106,12 @@ silinebilir bir ağ ad alanında (network namespace) ya da sanal makinede çalı
   eski config'lerle açılış yapar; config modeline dokunduğunuzda bu testleri genişletin.
 - REST API (`/api/v1`) ve komut satırı yalnızca büyür: alan, rota ya da seçenek kaldırılmaz.
 - Log'lar, audit log ve REST API mesajları İngilizce kalır (aranır ve işlenirler).
+
+### Çeviriler
+Web arayüzü İngilizce, Türkçe çevirisiyle. Kullanıcıya görünen her metni sarın: şablonlarda
+`{{ _("Save changes") }}`, Python'da `_("Port {0} is in use.").format(port)`. Türkçesini
+`app/locale/tr.json`'a ekleyin; `tests/test_i18n.py` eksik ya da kullanılmayan girdide ve yer
+tutucusunu ya da HTML etiketini kaybeden çeviride başarısız olur.
 
 ### Bağımlılıklar
 Çalışma zamanı sürümleri `requirements.txt`'te (Python 3.10 hattı işaretlerle korunur),
