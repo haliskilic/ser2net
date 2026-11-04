@@ -16,7 +16,10 @@ from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import importer
-from ...config import ROLES, AppConfig, ClusterSettings, ConfigError, User
+from ...config import (
+    NOTIFY_EVENTS, ROLES, SMTP_SECURITY, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
+    ConfigError, NotificationSettings, User,
+)
 from .. import auth, selfsigned
 from .common import Ctx
 from .forms import (
@@ -44,6 +47,8 @@ def routes(ctx: Ctx) -> list:
                       cluster=state.config.cluster, instance_id=state.config.instance_id,
                       cluster_peers_text="\n".join(state.config.cluster.peers),
                       session_minutes=state.config.session_timeout_s // 60,
+                      notify=state.config.notifications, notify_events=NOTIFY_EVENTS,
+                      webhook_formats=WEBHOOK_FORMATS, smtp_security=SMTP_SECURITY,
                       uptime=int(state.started_at))
 
     async def settings_password_post(request):
@@ -415,6 +420,55 @@ def routes(ctx: Ctx) -> list:
                   f"{count['same']} unchanged.")
         return await settings_get(request, ok=ok + " The previous configuration was kept as a backup.")
 
+    # ---------------- event notifications (admin) ----------------
+    def _notify_from_form(form, old: NotificationSettings) -> NotificationSettings:
+        try:
+            port = int(form.get("notify_smtp_port") or 587)
+            repeat = int(float(form.get("notify_repeat_min") or 5) * 60)
+        except ValueError:
+            raise ConfigError("SMTP port and repeat interval must be numbers.") from None
+        url, pw = form.get("notify_webhook_url", "").strip(), form.get("notify_smtp_password", "")
+        return NotificationSettings.from_dict({
+            "enabled": _checkbox(form, "notify_enabled"),
+            "events": [e for e in NOTIFY_EVENTS if _checkbox(form, f"notify_event_{e}")],
+            "repeat_s": repeat,
+            "webhook_url": url if url else ("" if _checkbox(form, "notify_webhook_clear") else old.webhook_url),
+            "webhook_format": form.get("notify_webhook_format", "json"),
+            "telegram_chat_id": form.get("notify_telegram_chat_id", "").strip(),
+            "email_to": form.get("notify_email_to", "").strip(),
+            "email_from": form.get("notify_email_from", "").strip(),
+            "smtp_host": form.get("notify_smtp_host", "").strip(),
+            "smtp_port": port,
+            "smtp_security": form.get("notify_smtp_security", "starttls"),
+            "smtp_username": form.get("notify_smtp_username", "").strip(),
+            "smtp_password": pw if pw else old.smtp_password,   # blank => keep the stored one
+        })
+
+    async def settings_notifications_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        async with state.config_lock:
+            old = state.config.notifications
+            try:
+                state.config.notifications = _notify_from_form(form, old)
+                await state.asave()
+            except ConfigError as e:
+                state.config.notifications = old
+                return await settings_get(request, error=str(e))
+        new = state.config.notifications
+        state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)})")
+        ctx.audit(request, "notification_settings", "enabled" if new.enabled else "disabled")
+        if form.get("then") == "test":
+            errors = await state.notifier.deliver("test", "", "If you can read this, "
+                                                  "ser2net can reach you.")
+            if errors:
+                return await settings_get(request, error="Saved, but the test failed: " + "; ".join(errors))
+            return await settings_get(request, ok="Saved; the test notification was sent.")
+        return await settings_get(request, ok="Notification settings saved.")
+
     # ---------------- audit log viewer (admin) ----------------
     AUDIT_PAGE = 100
 
@@ -564,6 +618,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/config/export", config_export),
         Route("/settings/config/import", config_import, methods=["POST"]),
         Route("/settings/config/import/apply", config_import_apply, methods=["POST"]),
+        Route("/settings/notifications", settings_notifications_post, methods=["POST"]),
         Route("/settings/audit", audit_page),
         Route("/settings/audit.csv", audit_csv),
         Route("/settings/backups/restore", backup_restore, methods=["POST"]),

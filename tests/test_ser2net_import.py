@@ -1,0 +1,617 @@
+"""Migrating from the classic (C) ser2net: importing ser2net.yaml / ser2net.conf.
+
+app/ser2net_import.py turns a ser2net 4.x YAML file or a 3.x ser2net.conf into mapping
+dicts plus warnings. Checks:
+  * the default ser2net.yaml Debian ships (define: &banner, multi-line connectors,
+    *banner aliases): 4 mappings; the two that share a device with an earlier one come
+    in disabled, so the whole import validates;
+  * accepters: telnet, telnet(rfc2217), udp, bind address forms (host, localhost, ipv6),
+    TLS/certauth/sctp layers warned about, unusable ones skipped;
+  * connectors: serialdev/sdev options (9600n81, rtscts, xonxoff, dtr=, nobreak, ...),
+    Windows //./COMn, network/IPMI connectors skipped;
+  * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
+    trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
+  * *(name), $(name), =(name) and *alias substitution; defaults; version 2 files;
+  * YAML subset details: quotes, comments, flow [..]/{..}, block scalars, documents;
+  * a 3.x ser2net.conf with BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/DEFAULT/
+    CONTROLPORT/LED/SIGNATURE lines, every state and line continuation;
+  * garbage, JSON, empty and non-ser2net YAML -> ConfigError;
+  * every produced dict passes MappingConfig.from_dict(d).validate(), and the set of
+    them passes AppConfig.validate() (no port or serial-device clash).
+Pure parsing: no network, no serial hardware.
+
+Run: python3 tests/test_ser2net_import.py
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from app.config import AppConfig, ConfigError, MappingConfig
+from app.ser2net_import import parse_ser2net_config
+
+# /etc/ser2net/ser2net.yaml as the Debian ser2net 4.x package ships it
+DEBIAN_DEFAULT = r"""%YAML 1.1
+---
+# This is a ser2net configuration file, tailored to be rather
+# simple.
+#
+# Find detailed documentation in ser2net.yaml(5)
+# A fully featured configuration file is in
+# /usr/share/doc/ser2net/examples/ser2net.yaml.gz
+#
+# If you find your configuration more useful than this very simple
+# one, please submit it as a bugreport
+
+define: &banner \r\nser2net port \p device \d [\B] (Debian GNU/Linux)\r\n\r\n
+
+connection: &con0096
+    accepter: tcp,localhost,2000
+    enable: on
+    options:
+      banner: *banner
+      kickolduser: true
+      telnet-brk-on-sync: true
+    connector: serialdev,
+              /dev/ttyS0,
+              9600n81,local
+
+connection: &con1096
+    accepter: tcp,localhost,2001
+    enable: on
+    options:
+      banner: *banner
+      kickolduser: true
+      telnet-brk-on-sync: true
+    connector: serialdev,
+              /dev/ttyS1,
+              9600n81,local
+
+connection: &con0192
+    accepter: tcp,localhost,3000
+    enable: on
+    options:
+      banner: *banner
+      kickolduser: true
+      telnet-brk-on-sync: true
+    connector: serialdev,
+              /dev/ttyS0,
+              19200n81,local
+
+connection: &con1192
+    accepter: tcp,localhost,3001
+    enable: on
+    options:
+      banner: *banner
+      kickolduser: true
+      telnet-brk-on-sync: true
+    connector: serialdev,
+              /dev/ttyS1,
+              19200n81,local
+"""
+
+
+def parse(text, filename=""):
+    """parse_ser2net_config + the guarantees every caller relies on."""
+    maps, warns = parse_ser2net_config(text, filename)
+    assert all(isinstance(w, str) and w for w in warns), warns
+    for d in maps:
+        MappingConfig.from_dict(d).validate()
+    AppConfig(mappings=[MappingConfig.from_dict(d) for d in maps]).validate()
+    return {d["name"]: d for d in maps}, warns
+
+
+def has(warns, *parts):
+    return any(all(p in w for p in parts) for w in warns)
+
+
+def test_debian_default():
+    maps, warns = parse(DEBIAN_DEFAULT, "ser2net.yaml")
+    assert list(maps) == ["con0096", "con1096", "con0192", "con1192"], list(maps)
+    a = maps["con0096"]
+    assert a["serial"]["port"] == "/dev/ttyS0" and a["serial"]["baudrate"] == 9600
+    assert (a["serial"]["parity"], a["serial"]["bytesize"], a["serial"]["stopbits"]) == ("N", 8, 1)
+    assert a["network"] == {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
+                            "port": 2000, "kick_old_user": True}, a["network"]
+    assert a["options"]["banner"] == \
+        r"\r\nser2net port \p device \d [9600N81] (Debian GNU/Linux)\r\n\r\n", a["options"]
+    assert maps["con0192"]["serial"]["baudrate"] == 19200
+    assert maps["con1192"]["network"]["port"] == 3001
+    assert [maps[n]["enabled"] for n in maps] == [True, True, False, False]
+    assert has(warns, "con0192", "imported disabled", "/dev/ttyS0", "con0096")
+    assert has(warns, "con0096", r"\B", "9600N81")
+    assert not has(warns, "telnet-brk-on-sync"), warns  # meaningless on a raw TCP port
+    print("Debian default ser2net.yaml: 4 mappings, banner alias, multi-line connectors, "
+          "shared devices imported disabled  OK")
+
+
+ACCEPTERS = r"""
+connection: &tel
+  accepter: telnet,tcp,2001
+  connector: serialdev,/dev/ttyUSB1,9600n81
+connection: &rfc
+  accepter: telnet(rfc2217),tcp,192.168.1.5,2002
+  connector: serialdev,/dev/ttyUSB2,9600n81
+  options:
+    max-connections: 3
+connection: &rfcoff
+  accepter: telnet(rfc2217=false),tcp,2003
+  connector: serialdev,/dev/ttyUSB3
+connection: &udp
+  accepter: udp,2004
+  connector: serialdev,/dev/ttyUSB4
+connection: &udptel
+  accepter: telnet,udp,2005
+  connector: serialdev,/dev/ttyUSB5
+connection: &v6
+  accepter: tcp,ipv6,::1,2006
+  connector: serialdev,/dev/ttyUSB6
+connection: &v6any
+  accepter: tcp,ipv6,2007
+  connector: serialdev,/dev/ttyUSB7
+connection: &hostname
+  accepter: tcp,myhost.example.com,2009
+  connector: serialdev,/dev/ttyUSB9
+connection: &tls
+  accepter: telnet,ssl(key=/etc/ser2net/k.key),tcp,2010
+  connector: serialdev,/dev/ttyUSB10
+connection: &gtlssh
+  accepter: telnet(rfc2217),mux,certauth(enable-password),ssl,sctp,2011
+  connector: serialdev,/dev/ttyUSB11
+connection: &unixsock
+  accepter: unix,/run/ser2net.sock
+  connector: serialdev,/dev/ttyUSB12
+connection: &dynamic
+  accepter: tcp,0
+  connector: serialdev,/dev/ttyUSB13
+"""
+
+
+def test_accepters():
+    maps, warns = parse(ACCEPTERS)
+    net = {n: d["network"] for n, d in maps.items()}
+    assert net["tel"]["protocol"] == "telnet" and net["tel"]["bind_ip"] == "0.0.0.0"
+    assert net["rfc"]["protocol"] == "rfc2217" and net["rfc"]["bind_ip"] == "192.168.1.5"
+    assert net["rfc"]["max_connections"] == 1 and has(warns, "rfc:", "single client")
+    assert net["rfcoff"]["protocol"] == "telnet"
+    assert (net["udp"]["mode"], net["udp"]["protocol"], net["udp"]["port"]) == ("udp", "raw", 2004)
+    assert net["udptel"]["protocol"] == "raw" and has(warns, "udptel:", "telnet over UDP")
+    # ::1 is not accepted as a bind IP here (config treats ::/8 as reserved): stay on loopback
+    assert net["v6"]["bind_ip"] == "127.0.0.1" and has(warns, "v6:", "IPv6 loopback")
+    assert net["v6any"]["bind_ip"] == "::"
+    # a host name can't be bound: listening on 0.0.0.0 would be wider, so it comes in disabled
+    assert net["hostname"]["bind_ip"] == "0.0.0.0" and maps["hostname"]["enabled"] is False
+    assert has(warns, "hostname:", "myhost.example.com", "imported disabled")
+    assert all(maps[n]["enabled"] for n in maps if n != "hostname")
+    assert not net["tls"].get("tls") and has(warns, "tls:", "TLS (ssl) is not imported")
+    assert net["gtlssh"]["protocol"] == "rfc2217" and net["gtlssh"]["port"] == 2011
+    assert has(warns, "gtlssh:", "certauth") and has(warns, "gtlssh:", "SCTP")
+    assert "unixsock" not in maps and has(warns, "unixsock:", "skipped", "not a TCP/UDP port")
+    assert "dynamic" not in maps and has(warns, "dynamic:", "skipped", "'0'")
+    print("accepters: telnet / rfc2217 / udp / bind forms; TLS, certauth, SCTP warned; "
+          "unix socket and port 0 skipped  OK")
+
+
+CONNECTORS = r"""
+connection: &a
+  accepter: tcp,3001
+  connector: serialdev,/dev/ttyUSB0,115200e71,rtscts,nobreak,hangup-when-done
+connection: &b
+  accepter: tcp,3002
+  connector: sdev,/dev/ttyUSB1, 9600n82 xonxoff dtr=off rts=on
+connection: &c
+  accepter: tcp,3003
+  connector: serialdev(uucplock=false),/dev/ttyUSB2,19200,rs485=10:20
+connection: &d
+  accepter: tcp,3004
+  connector: serialdev,//./COM3,9600n81
+connection: &e
+  accepter: tcp,3005
+  connector: serialdev,/dev/ttyUSB5,9600n81,local=false,xonxoff,rtscts,drain_time=50
+connection: &net
+  accepter: tcp,3006
+  connector: tcp,remotehost,4000
+connection: &remote2217
+  accepter: tcp,3007
+  connector: telnet(rfc2217),tcp,serverhost,3000
+connection: &sol
+  accepter: telnet,tcp,3008
+  connector: ipmisol,lan -U admin -P secret 192.168.27.37,115200
+"""
+
+
+def test_connectors():
+    maps, warns = parse(CONNECTORS)
+    a, b = maps["a"]["serial"], maps["b"]["serial"]
+    assert (a["baudrate"], a["parity"], a["bytesize"], a["stopbits"], a["flowcontrol"]) == \
+        (115200, "E", 7, 1, "rtscts"), a
+    assert a["advanced"] == {"nobreak": True, "hangup_when_done": True}, a
+    assert (b["port"], b["stopbits"], b["flowcontrol"]) == ("/dev/ttyUSB1", 2, "xonxoff"), b
+    assert (b["dtr_on_open"], b["rts_on_open"]) == ("off", "on"), b
+    assert maps["c"]["serial"]["baudrate"] == 19200 and has(warns, "c:", "rs485=10:20")
+    assert maps["d"]["serial"]["port"] == "COM3"
+    assert maps["e"]["serial"]["flowcontrol"] == "rtscts" and has(warns, "e:", "only RTS/CTS")
+    assert has(warns, "e:", "local=false") and has(warns, "e:", "not imported", "drain_time=50")
+    for name in ("net", "remote2217", "sol"):
+        assert name not in maps and has(warns, f"{name}:", "skipped", "not a local serial port")
+    print("connectors: serial parameters, flow control, dtr/rts, nobreak/hangup, COM ports; "
+          "network and IPMI connectors skipped  OK")
+
+
+OPTIONS = r"""
+led: &led1
+  driver: sysfs
+  options:
+    device: "tpacpi::standby"
+
+connection: &opts
+  accepter: telnet,tcp,4001
+  timeout: 600
+  enable: off
+  connector: serialdev,/dev/ttyACM0,57600n81
+  options:
+    kickolduser: true
+    max-connections: 3
+    banner: 'Hi \I, this is \N on \o:\p\t\x41 at \H:\i\r\n'
+    openstr: 'AT\r\n'
+    closestr: "ATH\r"
+    closeon: 'ctrl-a\001nil\000'
+    trace-both: '/var/log/trace-\p-\N'
+    trace-hexdump: true
+    trace-timestamp: false
+    remaddr: 192.168.33.0/24,0;10.0.0.5,0
+    no-acc-to-con: true
+    telnet-brk-on-sync: true
+    chardelay: false
+    chardelay-scale: 25
+    mdns: true
+    mdns-name: rack-3
+    led-tx: *led1
+    authdir: /usr/share/ser2net/auth
+
+connection: &locked
+  accepter: tcp,4002
+  connector: serialdev,/dev/ttyACM1
+  options:
+    remaddr: otherserver,0
+"""
+
+
+def test_options():
+    maps, warns = parse(OPTIONS)
+    d = maps["opts"]
+    o, n = d["options"], d["network"]
+    assert d["enabled"] is False
+    assert (n["kick_old_user"], n["max_connections"], n["read_only"]) == (True, 3, True), n
+    assert n["allowed_client_ips"] == ["192.168.33.0/24", "10.0.0.5"], n
+    assert o["idle_timeout_s"] == 600
+    assert o["banner"] == "Hi \\I, this is \\N on \\d:\\p\tA at :\\r\\n", repr(o["banner"])
+    assert has(warns, "opts:", "banner:", r"\H \i", "left out")
+    assert (o["openstr"], o["closestr"], o["closeon"]) == ("AT\r\n", "ATH\r", "ctrl-a\x01nil\x00")
+    assert o["trace_both"] == "/var/log/trace-4001-opts" and o["trace_hexdump"] is True
+    assert o["trace_timestamp"] is False
+    assert MappingConfig.from_dict(d).options.trace_both == "trace-4001-opts"
+    assert has(warns, "opts:", "traces/<mapping id>-trace-4001-opts")
+    drop = next(w for w in warns if w.startswith("opts: not imported"))
+    listed = [k.strip() for k in drop.split(":", 2)[2].split(",")]
+    assert listed == ["telnet-brk-on-sync", "chardelay-scale", "mdns", "mdns-name", "led-tx",
+                      "authdir"], listed  # chardelay: false is what happens here anyway
+    assert not has(warns, "led-tx is not a single value")  # *led1 is the LED's name
+    locked = maps["locked"]
+    assert locked["enabled"] is False
+    assert has(warns, "locked:", "imported disabled rather than open")
+    print("options: kickolduser, max-connections, banner/openstr/closestr/closeon escapes, "
+          "trace-both, timeout, enable: off, remaddr, read-only; the rest warned once  OK")
+
+
+SUBSTITUTION = r"""
+%YAML 1.1
+---
+define: &dev /dev/ttyUSB7
+define: &host "192.168.10.1"
+define: &greet Hello from *(dev)
+connection: &c1
+  accepter: tcp,*(host),3100
+  connector: serialdev,*(dev),9600n81
+  options:
+    banner: *greet
+    openstr: '$(dev) is open'
+    closestr: 'two **stars and *(* paren'
+    closeon: 'x*(nope)y*{/etc/ser2net/pw}z'
+connection: &c2
+  accepter: tcp,3101
+  connector: serialdev,/dev/ttyUSB8
+  options:
+    banner: 'see *(c1)'
+"""
+
+VERSION2 = r"""
+%YAML 1.1
+---
+defines:
+  banner1: Connected to port \N(\d)\r\n
+  base: /dev/ttyUSB
+
+defaults:
+  speed:
+    value: 38400n81
+    class: serialdev
+  kickolduser:
+    value: true
+
+connections:
+  ttyUSB0:
+    accepter: telnet(rfc2217),tcp,4001
+    connector: serialdev,=(base)0
+    options:
+      banner: =(banner1)
+  ttyUSB1:
+    accepter: tcp,4002
+    connector: serialdev,=(base)1,115200n81
+---
+connections:
+  second:
+    accepter: tcp,4003
+    connector: serialdev,/dev/ttyS3
+rotators:
+  rot1:
+    accepter: tcp,4010
+    connections: [
+      ttyUSB0,
+      ttyUSB1
+    ]
+"""
+
+
+def test_substitution():
+    maps, warns = parse(SUBSTITUTION)
+    c1 = maps["c1"]
+    assert c1["serial"]["port"] == "/dev/ttyUSB7" and c1["network"]["bind_ip"] == "192.168.10.1"
+    o = c1["options"]
+    assert o["banner"] == "Hello from /dev/ttyUSB7", o
+    assert o["openstr"] == "/dev/ttyUSB7 is open" and o["closestr"] == "two *stars and *( paren"
+    assert o["closeon"] == "x*(nope)yz", o
+    assert has(warns, "c1:", "unknown reference *(nope)")
+    assert has(warns, "c1:", "*{/etc/ser2net/pw}")
+    assert maps["c2"]["options"]["banner"] == "see c1"  # *(connection) is its name, as in ser2net
+    print("version 1: *alias, *(name), $(name), ** and *(* escapes, *{file} left out  OK")
+
+    maps, warns = parse(VERSION2)
+    assert list(maps) == ["ttyUSB0", "ttyUSB1", "second"], list(maps)
+    u0, u1 = maps["ttyUSB0"], maps["ttyUSB1"]
+    assert u0["serial"]["port"] == "/dev/ttyUSB0" and u0["serial"]["baudrate"] == 38400
+    assert u0["network"]["protocol"] == "rfc2217" and u0["network"]["kick_old_user"] is True
+    assert u0["options"]["banner"] == r"Connected to port \N(\d)\r\n"
+    assert u1["serial"]["baudrate"] == 115200 and maps["second"]["serial"]["baudrate"] == 38400
+    assert has(warns, "rotator rot1", "not imported")
+    print("version 2: defines/=(name), defaults, connections map, two documents, rotator  OK")
+
+
+DEFAULTS = r"""
+connection: &before
+  accepter: tcp,5001
+  connector: serialdev,/dev/ttyS1
+default: { name: speed, value: 115200 }
+default:
+  name: kickolduser
+  value: true
+default:
+  name: mdns
+  value: true
+default:
+  name: speed
+  value: 4800
+  class: ipmisol
+connection: &after
+  accepter: tcp,5002
+  connector: serialdev,/dev/ttyS2
+delete_default:
+  name: kickolduser
+  class: ser2net
+connection: &last
+  accepter: tcp,5003
+  connector: serialdev,/dev/ttyS3,9600
+"""
+
+
+def test_defaults():
+    maps, warns = parse(DEFAULTS)
+    assert maps["before"]["serial"]["baudrate"] == 9600
+    assert not maps["before"]["network"].get("kick_old_user")
+    assert maps["after"]["serial"]["baudrate"] == 115200
+    assert maps["after"]["network"]["kick_old_user"] is True
+    assert maps["last"]["serial"]["baudrate"] == 9600
+    assert not maps["last"]["network"].get("kick_old_user")
+    assert has(warns, "default mdns", "not imported") and not has(warns, "ipmisol")
+    print("default: (flow and block form) applies to later connections; delete_default; "
+          "unsupported defaults warned  OK")
+
+
+SYNTAX = r"""%YAML 1.1
+---
+# comments everywhere
+define: &b1 "Line\r\nTab\there # not a comment"   # a comment
+connection: &q
+  accepter: tcp,6001     # trailing comment
+  connector: "serialdev,/dev/ttyS6,9600n81"
+  options:
+    banner: *b1
+    openstr: 'it''s C# time'
+    closestr: Plain C#sharp with: colon
+connection: &lit
+  accepter: tcp,6002
+  connector: >-
+    serialdev,/dev/ttyS7,
+    19200n81
+  options:
+    banner: |
+      first \d
+      second
+    closeon: "unicode \u00e9 \x41"
+rotator: &r
+  accepter: tcp,6010
+  connections: [
+    *q, *lit  # aliases to connections
+  ]
+...
+---
+connection: &doc2
+	accepter: tcp,6003
+	connector: serialdev,/dev/ttyS8
+"""
+
+
+def test_yaml_syntax():
+    maps, warns = parse(SYNTAX)
+    q = maps["q"]
+    assert q["serial"]["port"] == "/dev/ttyS6" and q["network"]["port"] == 6001
+    assert q["options"]["banner"] == "Line\\r\\nTab\there # not a comment", q["options"]
+    assert q["options"]["openstr"] == "it's C# time"
+    assert q["options"]["closestr"] == "Plain C#sharp with: colon"
+    lit = maps["lit"]
+    assert lit["serial"]["port"] == "/dev/ttyS7" and lit["serial"]["baudrate"] == 19200
+    assert lit["options"]["banner"] == "first \\d\\nsecond\\n", lit["options"]
+    assert lit["options"]["closeon"] == "unicode \u00e9 A"
+    assert maps["doc2"]["serial"]["port"] == "/dev/ttyS8"  # tab indentation, 2nd document
+    assert has(warns, "rotator r", "not imported")
+    print("YAML subset: quotes, comments, folded/literal blocks, flow lists of aliases, "
+          "documents, tab indentation  OK")
+
+
+CONF3 = "\n".join([
+    "# ser2net.conf (3.x)",
+    "BANNER:b1:Welcome to \\p on \\d [\\s] \\N\\r\\n",
+    "BANNER:b2:line one\\r\\n\\",
+    "line two\\r\\n",
+    "TRACEFILE:t1:/var/log/s2n/\\p-\\Y\\M\\D.log",
+    "OPENSTR:o1:AT\\r",
+    "CLOSESTR:c1:ATH\\r",
+    "CLOSEON:co1:\\004",
+    "DEVICE:usb:/dev/serial/by-id/usb-FTDI_1:2-if00",
+    "CONTROLPORT:localhost,2000",
+    "LED:rx:sysfs:device=input3::capslock",
+    "SIGNATURE:sig1:ser2net port 1",
+    "",
+    "2000:raw:600:/dev/ttyS0:9600 NONE 1STOPBIT 8DATABITS XONXOFF LOCAL -RTSCTS b1",
+    "127.0.0.1,2001:telnet:0:/dev/ttyS1:115200 EVEN 7DATABITS 2STOPBITS RTSCTS remctl \\",
+    "    kickolduser max-connections=2",
+    "DEFAULT:speed:19200",
+    "ipv4,udp,2002:raw:30:/dev/ttyS2:4800 tb=t1 hexdump",
+    "2003:rawlp:0:/dev/lp0:",
+    "2004:off:0:usb:b2 o1 c1 co1 HANGUP_WHEN_DONE NOBREAK max-connections=3",
+    "2005:telnet:0:/dev/ttyS5:chardelay-scale=15 telnet_brk_on_sync led-tx=rx sig1 bogus odd",
+    "2006:raw:0:sol.lan -U admin -P x host:115200",
+    "2007:raw:0:/dev/ttyS0:9600 rs485=conf1 remaddr=ipv4,10.1.2.3,0",
+    "2000:telnet:0:/dev/ttyS9:9600",
+    "this is not a ser2net line",
+])
+
+
+def test_v3():
+    maps, warns = parse(CONF3, "ser2net.conf")
+    assert list(maps) == ["ser2net-2000", "ser2net-2001", "ser2net-udp-2002", "ser2net-2003",
+                          "ser2net-2004", "ser2net-2005", "ser2net-2007"], list(maps)
+    m0 = maps["ser2net-2000"]
+    assert m0["serial"]["flowcontrol"] == "xonxoff" and m0["options"]["idle_timeout_s"] == 600
+    assert m0["options"]["banner"] == "Welcome to \\p on \\d [9600N81] N\\r\\n", m0["options"]
+    m1 = maps["ser2net-2001"]  # continued line
+    assert m1["network"]["bind_ip"] == "127.0.0.1" and m1["network"]["protocol"] == "rfc2217"
+    assert m1["network"]["max_connections"] == 1 and m1["network"]["kick_old_user"] is True
+    assert (m1["serial"]["parity"], m1["serial"]["bytesize"], m1["serial"]["stopbits"],
+            m1["serial"]["flowcontrol"]) == ("E", 7, 2, "rtscts")
+    u = maps["ser2net-udp-2002"]
+    assert u["network"]["mode"] == "udp" and u["serial"]["baudrate"] == 4800
+    assert u["options"]["trace_both"] == "/var/log/s2n/2002.log" and u["options"]["trace_hexdump"]
+    assert has(warns, "ser2net-udp-2002", r"\Y \M \D", "file name")
+    assert maps["ser2net-2003"]["serial"]["baudrate"] == 19200  # DEFAULT:speed from here on
+    assert has(warns, "ser2net-2003", "rawlp")
+    off = maps["ser2net-2004"]
+    assert off["enabled"] is False
+    assert off["serial"]["port"] == "/dev/serial/by-id/usb-FTDI_1:2-if00"  # DEVICE: alias
+    assert off["options"]["banner"] == "line one\\r\\nline two\\r\\n"
+    assert (off["options"]["openstr"], off["options"]["closestr"], off["options"]["closeon"]) == \
+        ("AT\r", "ATH\r", "\x04")
+    assert off["serial"]["advanced"] == {"hangup_when_done": True, "nobreak": True}
+    assert off["network"]["max_connections"] == 3
+    t5 = maps["ser2net-2005"]
+    assert t5["network"]["protocol"] == "telnet" and t5["serial"]["parity"] == "O"
+    assert has(warns, "ser2net-2005", "unknown option 'bogus'")
+    assert has(warns, "ser2net-2005", "not imported", "chardelay-scale", "telnet-brk-on-sync")
+    assert has(warns, "ser2net-2006", "IPMI") and "ser2net-2006" not in maps
+    m7 = maps["ser2net-2007"]
+    assert m7["network"]["allowed_client_ips"] == ["10.1.2.3"]
+    assert has(warns, "ser2net-2007", "rs485")
+    assert m7["enabled"] is False and has(warns, "ser2net-2007", "/dev/ttyS0", "ser2net-2000")
+    assert has(warns, "line 24", "TCP port 2000 is already used")
+    for what in ("CONTROLPORT", "LED rx", "SIGNATURE sig1"):
+        assert has(warns, what, "not imported"), what
+    assert has(warns, "line 25", "not a ser2net.conf line")
+    print("ser2net.conf (3.x): every state, BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/"
+          "DEFAULT, continuation; CONTROLPORT/LED/SIGNATURE warned  OK")
+
+
+def test_names_and_clashes():
+    text = r"""
+connection: &dup
+  accepter: tcp,7001
+  connector: serialdev,/dev/ttyS1
+connection: &dup
+  accepter: tcp,7002
+  connector: serialdev,/dev/ttyS2
+connection: &sameport
+  accepter: tcp,127.0.0.1,7001
+  connector: serialdev,/dev/ttyS3
+connection: &udpsame
+  accepter: udp,7001
+  connector: serialdev,/dev/ttyS4
+"""
+    maps, warns = parse(text)
+    assert list(maps) == ["dup", "dup (2)", "udpsame"], list(maps)
+    assert has(warns, "renamed to 'dup (2)'")
+    assert has(warns, "sameport: skipped", "TCP port 7001", "'dup'")
+    print("duplicate names get (2); a port already listened on is skipped (UDP may share)  OK")
+
+
+def test_errors():
+    for bad in ("hello world\nthis is not a config\n", '{"mappings": []}', "", "  \n\n",
+                "[general]\nport = 2000\n"):
+        try:
+            parse_ser2net_config(bad, "x.conf")
+        except ConfigError as e:
+            assert str(e), bad
+        else:
+            raise AssertionError(f"accepted: {bad!r}")
+    for bad, want in (("---\nservices:\n  web:\n    image: nginx\n", "not a ser2net"),
+                      ("connection: &a\n  accepter: tcp,1\n connector: x\n", "line 3"),
+                      ('connection: &a\n  accepter: "tcp,1\n', "unterminated"),
+                      ("connection: &a\n  options: *missing\n", "unknown alias")):
+        try:
+            parse_ser2net_config(bad, "ser2net.yaml")
+        except ConfigError as e:
+            assert want in str(e) and "ser2net.yaml" in str(e), (want, str(e))
+        else:
+            raise AssertionError(f"accepted: {bad!r}")
+    maps, warns = parse_ser2net_config("%YAML 1.1\n---\n# all commented out\n"
+                                       "define: &confver 1.0\n# connection: &con0\n")
+    assert maps == [] and has(warns, "no ser2net connections"), warns
+    print("garbage, JSON, empty, non-ser2net and broken YAML -> ConfigError; an all-comments "
+          "file -> no mappings + a warning  OK")
+
+
+def main():
+    test_debian_default()
+    test_accepters()
+    test_connectors()
+    test_options()
+    test_substitution()
+    test_defaults()
+    test_yaml_syntax()
+    test_v3()
+    test_names_and_clashes()
+    test_errors()
+    print("\nPASS: ser2net.yaml / ser2net.conf import (every mapping validates)")
+
+
+if __name__ == "__main__":
+    main()

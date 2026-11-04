@@ -18,7 +18,7 @@ from starlette.routing import Route
 
 from ... import __version__
 from ...config import MappingConfig
-from ...engine import netinfo
+from ...engine import netinfo, portlist
 from . import ops
 from .common import Ctx
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
@@ -234,7 +234,7 @@ def routes(ctx: Ctx) -> list:
         mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
                       modbus_points_json=_modbus_points_json(mapping),
-                      ports=data.get("ports", []), ips=data.get("ips", []),
+                      ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
                       remote={"scheme": scheme, "host": host, "port": port}, error=None)
 
     async def cluster_peer_save(request):
@@ -265,7 +265,7 @@ def routes(ctx: Ctx) -> list:
             mapping = MappingConfig(name=form.get("name", ""))
         return render(request, "_mapping_form.html", status_code=400, mapping=mapping, is_new=False,
                       modbus_points_json=_modbus_points_json(mapping),
-                      ports=(data or {}).get("ports", []), ips=(data or {}).get("ips", []),
+                      ports=portlist.visible((data or {}).get("ports", [])), ips=(data or {}).get("ips", []),
                       remote={"scheme": scheme, "host": host, "port": port}, error=msg)
 
     return [

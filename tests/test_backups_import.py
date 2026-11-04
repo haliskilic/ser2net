@@ -7,6 +7,8 @@ up, so a wrong import or edit could not be undone. Checks:
   * the import form first previews (nothing changes), then merges — same name =
     update keeping the id, new = add, others untouched — or replaces;
   * a 2.7-style one-step POST still replaces everything (scripts keep working);
+  * a classic ser2net.yaml goes through the same preview (named as such) and merge; a
+    file with nothing to import is refused instead of emptying the mappings;
   * an admin can download and restore a backup; the restore is undoable, keeps the
     session working, and a backup without users is refused;
   * viewers/operators can't reach backups.
@@ -130,6 +132,26 @@ def main():
         assert "Imported 2 mappings (replaced the existing ones)" in page, page[:300]
         assert sorted(m["name"] for m in srv.saved_config()["mappings"]) == ["A", "C"]
         print("legacy one-step import (no preview step) still replaces everything  OK")
+
+        port = free_port()
+        classic = ("connection: &plc\n"
+                   f"  accepter: telnet(rfc2217),tcp,127.0.0.1,{port}\n"
+                   "  connector: serialdev,/dev/ser2net-test-missing,19200n81,local\n").encode()
+        st, _, page = admin.post("/settings/config/import", {"step": "preview", "mode": "merge"},
+                                 files={"file": ("ser2net.yaml", classic)})
+        assert st == 200 and "from a ser2net.yaml (ser2net 4.x)" in page, page[page.find("banner"):][:300]
+        token = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+        st, _, page = admin.post("/settings/config/import/apply", {"token": token, "mode": "merge"})
+        assert "Imported: 1 added" in page, page[page.find("banner"):][:300]
+        plc = next(m for m in srv.saved_config()["mappings"] if m["name"] == "plc")
+        assert plc["serial"]["port"] == "/dev/ser2net-test-missing" and plc["serial"]["baudrate"] == 19200
+        assert plc["network"]["protocol"] == "rfc2217" and plc["network"]["port"] == port
+        st, _, page = admin.post("/settings/config/import", {"step": "preview", "mode": "replace"},
+                                 files={"file": ("ser2net.conf", b"# only comments\n")})
+        assert "is not a ser2net configuration" in page and "Import preview" not in page
+        assert "plc" in [m["name"] for m in srv.saved_config()["mappings"]], "a refused import changes nothing"
+        print("UI import of a classic ser2net.yaml: the preview names the format, merge adds it; "
+              "a file with nothing to import is refused  OK")
 
         st, _, page = admin.get("/settings")
         backups = ConfigStore(srv.config_path).backups()
