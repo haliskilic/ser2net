@@ -1,6 +1,6 @@
 # ser2net — Roadmap
 
-> Current release: **v2.7.1**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.8.0**. CI is green across Linux + Windows × Python 3.10–3.13.
 
 ## Shipped
 
@@ -150,11 +150,7 @@
   process loads, and clean AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04,
   openSUSE and Fedora containers; release assets are published only after that passes.
 
----
-
-## Planned
-
-### v2.8 — in progress (issues [#28](https://github.com/haliskilic/ser2net/issues/28)–[#32](https://github.com/haliskilic/ser2net/issues/32))
+### v2.8.0 — maintenance, security, distribution, features, Turkish UI (issues [#28](https://github.com/haliskilic/ser2net/issues/28)–[#32](https://github.com/haliskilic/ser2net/issues/32))
 - **Maintenance (#28):** `routes.py` split into per-area modules; mypy, coverage, pip-audit
   and Dependabot in CI; dependencies updated (Python 3.10 keeps its last compatible line);
   GitHub Actions on Node 24 and no duplicate push+PR runs; `SECURITY.md`,
@@ -170,7 +166,12 @@
 - **Features (#31):** bind a mapping to a USB device's identity, webhook / e-mail
   notifications, dashboard search/filter/bulk actions, trace download + live hex view,
   Modbus write (FC 5/6/15/16) + Sparkplug B, classic `ser2net.yaml` import.
-- **Turkish UI (#32):** the web UI in Turkish and English (reverses the v2.3 decision).
+- **Turkish UI (#32):** the web UI in Turkish and English (reverses the v2.3 decision); logs,
+  audit log and REST API stay English.
+
+---
+
+## Planned
 
 ### Later
 - Cluster hardening (from the v2.5 review): validate/curb peer-advertised IPs before the
