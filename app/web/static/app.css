@@ -214,3 +214,10 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .toolbar .bulk[hidden] { display: none; }
 .row-select { vertical-align: middle; margin: 0 4px 0 0; }
 .row-actions.start { justify-content: flex-start; }
+/* TR / EN switch in the top bar and on the sign-in pages */
+.lang-switch { display: inline-flex; gap: 2px; font-size: 11px; }
+.lang-switch a { padding: 1px 5px; border-radius: 4px; color: var(--muted); text-decoration: none; }
+.lang-switch a.on { background: var(--panel2); color: var(--text); font-weight: 600; }
+.auth-wrap .lang-switch { position: absolute; top: 12px; right: 16px; }
+.or-line { text-align: center; margin: .8rem 0; }
+.token-box { word-break: break-all; margin-top: .4rem; }

@@ -102,7 +102,7 @@ düzenlemeye gerek yok.
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları, parola değişince oturum iptali.
-  Güvenilir ağlar için giriş zorunluluğu **Ayarlar → Web UI access**'ten kapatılabilir
+  Güvenilir ağlar için giriş zorunluluğu **Ayarlar → Web arayüzü erişimi**'nden kapatılabilir
   (ziyaretçiler seçilen rolle parolasız kullanır; bkz. Güvenlik).
 - **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunur,
   operator eşlemeleri yönetir, admin her şey + kullanıcı yönetimi. Tek-parola kurulumları
@@ -130,6 +130,10 @@ düzenlemeye gerek yok.
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
   olarak gösterilir.
+- **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
+  seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
+  varsayılan dil.
+  Bildirimler varsayılan dille gider; log'lar, audit log ve REST API İngilizce kalır.
 - **Tamamen offline:** tüm bağımlılıklar wheel olarak birlikte gelir; internet gerekmez.
 
 ---
@@ -286,7 +290,7 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 `0.0.0.0`/`::` "herkes" demektir.
 
 **Parolasız erişim (isteğe bağlı):** yalnızca güvenilir ağlar için, bir admin
-**Ayarlar → Web UI access**'ten "Require login"i kapatıp ziyaretçilere bir rol
+**Ayarlar → Web arayüzü erişimi**'nden giriş zorunluluğunu kapatıp ziyaretçilere bir rol
 (`viewer` salt-okunur / `operator` / `admin`) verebilir. Oturum açmak yine mümkündür
 (kendi rolünüz geçerli olur), RBAC ve CSRF aynen uygulanır, **REST API her zaman
 token ister**. Parolasız erişim yalnızca arayüze **IP adresi, `localhost` veya makinenin
@@ -337,7 +341,7 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 `config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
 temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin).
 
-**Oturum süresi:** Ayarlar → *Web UI access* → *Session lifetime* (varsayılan 8 saat).
+**Oturum süresi:** Ayarlar → *Web arayüzü erişimi* → *Oturum süresi (dakika)* (varsayılan 8 saat).
 **İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,
 yenileri ekle) ya da *hepsini değiştir* seçilir.
 

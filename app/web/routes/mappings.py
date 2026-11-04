@@ -13,6 +13,7 @@ from starlette.routing import Route
 
 from ...config import ConfigError, MappingConfig
 from ...engine import netinfo, portlist
+from ...i18n import _
 from . import ops
 from .common import TRIGGER, Ctx
 from .forms import _form_error, _modbus_points_json
@@ -39,7 +40,7 @@ def routes(ctx: Ctx) -> list:
         async with state.config_lock:
             m = state.config.get_mapping(mid)
             if not m:
-                return PlainTextResponse("Mapping not found", status_code=404)
+                return PlainTextResponse(_("Mapping not found"), status_code=404)
             d = m.to_dict()
             d.pop("id", None)
             d["name"] = f"{m.name} (copy)"
@@ -55,7 +56,7 @@ def routes(ctx: Ctx) -> list:
                 await state.asave()
             except ConfigError as e:
                 state.config.mappings.remove(dup)
-                return PlainTextResponse(f"Duplicate failed: {e}", status_code=400)
+                return PlainTextResponse(_("Duplicate failed: {0}").format(e), status_code=400)
         ctx.audit(request, "mapping_duplicate", dup.name)
         return Response("", headers=TRIGGER)
 
@@ -79,10 +80,10 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         action = form.get("action", "")
         if action not in ("start", "stop", "restart"):
-            return PlainTextResponse("Unknown action", status_code=400)
+            return PlainTextResponse(_("Unknown action"), status_code=400)
         ids = [i for i in form.getlist("ids") if i]
         if not ids or len(ids) > 500:
-            return PlainTextResponse("Select one or more mappings.", status_code=400)
+            return PlainTextResponse(_("Select one or more mappings."), status_code=400)
         done = []
         for mid in ids:
             ok, name = await ops.apply_action(state, mid, action)
@@ -109,7 +110,7 @@ def routes(ctx: Ctx) -> list:
             return deny
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
-            return PlainTextResponse("Mapping not found", status_code=404)
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
         return render(request, "_mapping_form.html",
                       mapping=m, is_new=False, modbus_points_json=_modbus_points_json(m),
                       ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
@@ -119,7 +120,7 @@ def routes(ctx: Ctx) -> list:
         mid = request.path_params["mid"]
         m = state.config.get_mapping(mid)
         if not m:
-            return PlainTextResponse("Mapping not found", status_code=404)
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
         lines = await asyncio.to_thread(state.read_mapping_log, mid, 1000)
         return render(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
                       lines=lines)
@@ -142,7 +143,7 @@ def routes(ctx: Ctx) -> list:
         mid = request.path_params["mid"]
         m = state.config.get_mapping(mid)
         if not m:
-            return PlainTextResponse("Mapping not found", status_code=404)
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
         files = await asyncio.to_thread(_trace_files, mid)
         o = m.options
         return render(request, "_mapping_traces.html", mid=mid, mapping_name=m.name, files=files,
@@ -155,7 +156,7 @@ def routes(ctx: Ctx) -> list:
         m = state.config.get_mapping(mid)
         f = next((f for f in await asyncio.to_thread(_trace_files, mid) if f["name"] == name), None)
         if not m or f is None:
-            return PlainTextResponse("Trace file not found", status_code=404)
+            return PlainTextResponse(_("Trace file not found"), status_code=404)
         ctx.audit(request, "trace_download", f"{m.name}/{name}")
         return FileResponse(f["path"], media_type="text/plain; charset=utf-8", filename=name)
 
@@ -163,7 +164,7 @@ def routes(ctx: Ctx) -> list:
         mid = request.path_params["mid"]
         m = state.config.get_mapping(mid)
         if not m:
-            return PlainTextResponse("Mapping not found", status_code=404)
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
         interactive = (m.kind == "net" and not m.network.read_only)
         return render(request, "_console.html", mid=mid, mapping_name=m.name,
                       interactive=interactive, bridge=m.kind == "serialbridge")
@@ -194,7 +195,7 @@ def routes(ctx: Ctx) -> list:
         mid = request.path_params["mid"]
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
-            return PlainTextResponse("Unknown action", status_code=400)
+            return PlainTextResponse(_("Unknown action"), status_code=400)
         ok, name = await ops.apply_action(state, mid, action)
         if not ok:
             return PlainTextResponse(name, status_code=404)

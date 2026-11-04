@@ -1,16 +1,16 @@
 <div hx-get="/api/mappings/{{ mid }}/log" hx-trigger="every 5s" hx-target="#form-panel" hx-swap="innerHTML">
   <div class="form-head">
-    <h3>Log — {{ mapping_name|softbreak }}</h3>
+    <h3>{{ _("Log — %(name)s", name=mapping_name|softbreak) }}</h3>
     <div class="actions">
-      <button class="btn sm" hx-get="/api/mappings/{{ mid }}/log" hx-target="#form-panel" hx-swap="innerHTML">↻ Refresh</button>
-      <button type="button" class="btn sm" data-cancel>Close</button>
+      <button class="btn sm" hx-get="/api/mappings/{{ mid }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
+      <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
     </div>
   </div>
-  <p class="muted mb-sm">Newest first · auto-refreshes every 5s · persists across restarts.</p>
+  <p class="muted mb-sm">{{ _("Newest first · auto-refreshes every 5s · persists across restarts.") }}</p>
   {% if lines %}
   <pre class="logbox">{% for line in lines %}{{ line }}
 {% endfor %}</pre>
   {% else %}
-  <p class="muted">No log entries yet for this mapping.</p>
+  <p class="muted">{{ _("No log entries yet for this mapping.") }}</p>
   {% endif %}
 </div>
