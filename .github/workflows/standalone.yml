@@ -1,25 +1,40 @@
 name: Standalone
 
 # Builds the standalone executables and proves they need nothing else installed
-# (tests/test_standalone.py). Called by ci.yml for pull requests / main and by
-# release.yml on a v* tag — which publishes the binaries only after every check
-# here has passed.
+# (tests/test_standalone.py), on Linux x86_64 + arm64 and Windows x64, and uploads them
+# (+ license texts and SBOMs) as artifacts. Called by ci.yml for pull requests / main
+# and by release.yml on a v* tag, whose own publish job attaches them to the release
+# only after every check here has passed. With publish (release.yml) the Windows exe is
+# code-signed when a signing service is configured (docs/SIGNING.md). This workflow
+# only needs read access, so CI runs it with least privilege.
 on:
   workflow_call:
     inputs:
       publish:
-        description: Attach the executables to the GitHub Release of the pushed tag
+        description: A release build (sign the Windows exe when configured)
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 jobs:
   linux:
-    name: build linux (glibc 2.28 baseline)
-    runs-on: ubuntu-latest
+    # the x64 job keeps its original name: it is a required check on main
+    name: ${{ matrix.arch == 'x64' && 'build linux (glibc 2.28 baseline)' || 'build linux arm64 (glibc 2.28 baseline)' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v7
       - name: Build inside AlmaLinux 8 (glibc 2.28) with python-build-standalone
-        run: docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh
+          sudo chown -R "$(id -u):$(id -g)" dist build
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -31,37 +46,43 @@ jobs:
         run: python tests/test_standalone.py
       - uses: actions/upload-artifact@v7
         with:
-          name: ser2net-linux-x64
+          name: ser2net-linux-${{ matrix.arch }}
           path: dist/ser2net
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         with:
-          name: licenses-linux-x64
-          path: build/THIRD-PARTY-LICENSES.txt
+          name: meta-linux-${{ matrix.arch }}
+          path: |
+            build/THIRD-PARTY-LICENSES.txt
+            build/ser2net.cdx.json
           if-no-files-found: error
 
   linux-distros:
-    name: linux on ${{ matrix.image }}
+    name: linux ${{ matrix.arch }} on ${{ matrix.image }}
     needs: linux
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.arch == 'x64' && 'ubuntu-latest' || 'ubuntu-24.04-arm' }}
     strategy:
       fail-fast: false
       matrix:
-        include:  # oldest first; ca = the distribution's CA bundle path (used for base images that ship without ca-certificates)
-          - { image: "almalinux:8", ca: /etc/pki/tls/certs/ca-bundle.crt }          # glibc 2.28
-          - { image: "debian:11", ca: /etc/ssl/certs/ca-certificates.crt }          # 2.31
-          - { image: "ubuntu:20.04", ca: /etc/ssl/certs/ca-certificates.crt }       # 2.31
-          - { image: "almalinux:9", ca: /etc/pki/tls/certs/ca-bundle.crt }          # 2.34
-          - { image: "ubuntu:22.04", ca: /etc/ssl/certs/ca-certificates.crt }       # 2.35
-          - { image: "debian:12", ca: /etc/ssl/certs/ca-certificates.crt }          # 2.36
-          - { image: "opensuse/leap:15.6", ca: /etc/ssl/ca-bundle.pem }             # 2.38
-          - { image: "ubuntu:24.04", ca: /etc/ssl/certs/ca-certificates.crt }       # 2.39
-          - { image: "fedora:latest", ca: /etc/pki/tls/certs/ca-bundle.crt }        # newest
+        arch: [x64, arm64]
+        image: ["almalinux:8", "debian:11", "ubuntu:20.04", "almalinux:9", "ubuntu:22.04",
+                "debian:12", "opensuse/leap:15.6", "ubuntu:24.04", "fedora:latest"]  # glibc 2.28 -> newest
+        # the distribution's CA bundle path, for base images that ship without ca-certificates
+        include:
+          - { image: "almalinux:8", ca: /etc/pki/tls/certs/ca-bundle.crt }
+          - { image: "debian:11", ca: /etc/ssl/certs/ca-certificates.crt }
+          - { image: "ubuntu:20.04", ca: /etc/ssl/certs/ca-certificates.crt }
+          - { image: "almalinux:9", ca: /etc/pki/tls/certs/ca-bundle.crt }
+          - { image: "ubuntu:22.04", ca: /etc/ssl/certs/ca-certificates.crt }
+          - { image: "debian:12", ca: /etc/ssl/certs/ca-certificates.crt }
+          - { image: "opensuse/leap:15.6", ca: /etc/ssl/ca-bundle.pem }
+          - { image: "ubuntu:24.04", ca: /etc/ssl/certs/ca-certificates.crt }
+          - { image: "fedora:latest", ca: /etc/pki/tls/certs/ca-bundle.crt }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: ser2net-linux-x64
+          name: ser2net-linux-${{ matrix.arch }}
           path: dist
       - run: chmod +x dist/ser2net
       - uses: actions/setup-python@v7
@@ -85,14 +106,68 @@ jobs:
           python-version: "3.12"
       - name: Dependencies (incl. MQTT/LDAP/OIDC + cryptography), PyInstaller, test-side pefile
         run: pip install -r requirements.txt -r requirements-optional.txt pyinstaller==6.22.3 pefile
-      - name: Build (with the license texts of every bundled component)
+      - name: Build (with the license texts and SBOM of every bundled component)
         run: |
           python tools/third_party.py licenses build/THIRD-PARTY-LICENSES.txt --strict
+          python tools/third_party.py sbom build/ser2net.cdx.json --strict
           pyinstaller --clean --noconfirm ser2net.spec
+
+      # ---- code signing (releases only, when configured; docs/SIGNING.md) ----
+      - name: Sign with Azure Trusted Signing
+        if: inputs.publish && vars.WINDOWS_SIGNING == 'azure'
+        uses: azure/trusted-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\ser2net.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Upload the unsigned exe for SignPath
+        id: unsigned
+        if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ser2net-windows-x64-unsigned
+          path: dist/ser2net.exe
+          if-no-files-found: error
+      - name: Sign with SignPath
+        if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          connector-url: https://githubactions.connector.signpath.io
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+      - name: Use the SignPath-signed exe
+        if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
+        shell: pwsh
+        run: Copy-Item signed\ser2net.exe dist\ser2net.exe -Force
+      - name: Verify the Authenticode signature
+        if: inputs.publish && vars.WINDOWS_SIGNING != ''
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature dist\ser2net.exe
+          "$($sig.Status): $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "dist\ser2net.exe is not validly signed: $($sig.StatusMessage)" }
+
       - name: Bundle contents, empty-PATH run, loaded libraries
         env:
           SER2NET_STANDALONE_BIN: dist/ser2net.exe
         run: python tests/test_standalone.py
+      - name: Windows service — install, crash restart, stop, uninstall (the exe)
+        env:
+          SER2NET_STANDALONE_BIN: dist/ser2net.exe
+          SER2NET_SERVICE_TESTS: "1"
+        run: python tests/test_windows_service.py
       - uses: actions/upload-artifact@v7
         with:
           name: ser2net-windows-x64
@@ -100,31 +175,8 @@ jobs:
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         with:
-          name: licenses-windows-x64
-          path: build/THIRD-PARTY-LICENSES.txt
+          name: meta-windows-x64
+          path: |
+            build/THIRD-PARTY-LICENSES.txt
+            build/ser2net.cdx.json
           if-no-files-found: error
-
-  publish:
-    name: attach to the release
-    if: inputs.publish
-    needs: [linux, linux-distros, windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-      - name: Name the release assets
-        run: |
-          cp artifacts/ser2net-linux-x64/ser2net ser2net-linux-x64
-          chmod +x ser2net-linux-x64
-          cp artifacts/ser2net-windows-x64/ser2net.exe ser2net-windows-x64.exe
-          cp artifacts/licenses-linux-x64/THIRD-PARTY-LICENSES.txt ser2net-linux-x64.THIRD-PARTY-LICENSES.txt
-          cp artifacts/licenses-windows-x64/THIRD-PARTY-LICENSES.txt ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            ser2net-linux-x64
-            ser2net-windows-x64.exe
-            ser2net-linux-x64.THIRD-PARTY-LICENSES.txt
-            ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
-          fail_on_unmatched_files: true

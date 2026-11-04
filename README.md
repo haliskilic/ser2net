@@ -151,10 +151,17 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 |---|---|
 | `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 ve sonrası (x64) |
 | `ser2net-linux-x64` | glibc ≥ 2.28 olan x86_64 Linux: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (musl/Alpine değil — orada Docker kullanın) |
+| `ser2net-linux-arm64` | glibc ≥ 2.28 olan 64-bit ARM Linux: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ veya Ubuntu), ARM endüstriyel gateway'ler, AWS Graviton, aynı dağıtımlar |
+
+Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`) ve lisans
+metinleri yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
+doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
+`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si, bir imzalama
+servisi tanımlandığında sürümlerde imzalanır ([`docs/SIGNING.md`](docs/SIGNING.md)).
 
 Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
 - paketin içindekiler işletim sisteminin temel kütüphanelerinden (glibc ≤ 2.28 / Windows
-  sistem DLL'leri) başka bir şeye ihtiyaç duymamalı;
+  sistem DLL'leri) başka bir şeye ihtiyaç duymamalı (Linux'ta x86_64 ve arm64);
 - binary boş bir `PATH` ile (Python yok, `openssl` yok) çalışmalı;
 - Linux binary'si temiz AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04,
   openSUSE Leap 15.6 ve Fedora konteynerlerinde çalışmalı.
@@ -203,6 +210,8 @@ docker compose up -d        # docker-compose.yml içindeki `devices:` satırın�
 docker build -t ser2net . && docker run -d -p 8080:8080 \
   --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
 ```
+Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
+(ya da `:2.8`, `:2.8.0`); `docker-compose.yml` bunu kullanır.
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
 ayarlanır — başsız ortamda interaktif seçici çalışamaz). Süreç root olarak değil, `ser2net`
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
@@ -279,7 +288,15 @@ gösterilir ve açılışta loga yazılır.
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
   **root ile çalıştırmayın.**
-- **Windows:** [Shawl](https://github.com/mtkennerly/shawl) ile servis sarmalama.
+- **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
+  ```bat
+  ser2net-windows-x64.exe --install-service --data-dir C:\ser2net\data
+  ```
+  Servis açılışta başlar, kullanıcı oturumu gerektirmez (LocalSystem), çökerse ya da
+  hatayla çıkarsa 5 sn sonra yeniden başlar. İlk kurulumda arayüz adresi konsolda sorulur.
+  Kaldırmak: `--uninstall-service` (veri klasörü kalır). Farklı veri klasörleriyle birden
+  fazla örnek için `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net`
+  ya da *Hizmetler* (services.msc).
 
 ---
 

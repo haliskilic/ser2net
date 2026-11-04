@@ -59,6 +59,7 @@ PORTABLE = [
     "test_audit_log.py",
     "test_healthcheck.py",
     "test_upgrade_from_2_7.py",
+    "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

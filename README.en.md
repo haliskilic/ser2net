@@ -150,9 +150,17 @@ run; config/logs are written to `data/` next to the binary.
 |---|---|
 | `ser2net-windows-x64.exe` | Windows 10/11, Windows Server 2016 or newer (x64) |
 | `ser2net-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
+| `ser2net-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
+
+Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`) and
+the license texts, and the binaries carry GitHub build provenance:
+`sha256sum -c SHA256SUMS --ignore-missing`,
+`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is signed
+on releases once a signing service is configured ([`docs/SIGNING.md`](docs/SIGNING.md)).
 
 Every pull request and release proves it (`tests/test_standalone.py`): the bundle may
-need nothing but OS-base libraries (glibc ≤ 2.28 / Windows system DLLs), the binary must
+need nothing but OS-base libraries (glibc ≤ 2.28 / Windows system DLLs; Linux on x86_64
+and arm64), the binary must
 work with an empty `PATH` (no Python, no `openssl`), and the Linux one must run in clean
 AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04, openSUSE Leap 15.6 and Fedora
 containers.
@@ -198,6 +206,8 @@ docker compose up -d        # edit the `devices:` line in docker-compose.yml fir
 docker build -t ser2net . && docker run -d -p 8080:8080 \
   --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
 ```
+Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
+(or `:2.8`, `:2.8.0`); `docker-compose.yml` uses it.
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
 `SER2NET_PORT` — the interactive picker can't run headless). The process runs as the
 `ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
@@ -274,7 +284,15 @@ role changes. While it is on, the UI shows a warning and startup logs it.
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
   **Do not run as root.**
-- **Windows:** wrap with [Shawl](https://github.com/mtkennerly/shawl).
+- **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
+  ```bat
+  ser2net-windows-x64.exe --install-service --data-dir C:\ser2net\data
+  ```
+  The service starts at boot, needs no signed-in user (LocalSystem) and restarts 5 s after
+  it crashes or exits with an error. On the first install the console asks for the UI
+  address. Remove it with `--uninstall-service` (the data folder is kept); run several
+  instances with different data folders via `--service-name`. Stop/start: `sc stop ser2net`
+  / `sc start ser2net` or *Services* (services.msc).
 
 ---
 
