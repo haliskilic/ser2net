@@ -1,16 +1,17 @@
 name: Standalone
 
 # Builds the standalone executables and proves they need nothing else installed
-# (tests/test_standalone.py), on Linux x86_64 + arm64 and Windows x64. Called by ci.yml
-# for pull requests / main and by release.yml on a v* tag — which publishes the
-# binaries (+ SHA256SUMS, SBOMs, license texts, build provenance) only after every check
-# here has passed. On a release the Windows exe is code-signed when a signing service
-# is configured (docs/SIGNING.md).
+# (tests/test_standalone.py), on Linux x86_64 + arm64 and Windows x64, and uploads them
+# (+ license texts and SBOMs) as artifacts. Called by ci.yml for pull requests / main
+# and by release.yml on a v* tag, whose own publish job attaches them to the release
+# only after every check here has passed. With publish (release.yml) the Windows exe is
+# code-signed when a signing service is configured (docs/SIGNING.md). This workflow
+# only needs read access, so CI runs it with least privilege.
 on:
   workflow_call:
     inputs:
       publish:
-        description: Attach the executables to the GitHub Release of the pushed tag
+        description: A release build (sign the Windows exe when configured)
         type: boolean
         default: false
 
@@ -179,59 +180,3 @@ jobs:
             build/THIRD-PARTY-LICENSES.txt
             build/ser2net.cdx.json
           if-no-files-found: error
-
-  publish:
-    name: attach to the release
-    if: inputs.publish
-    needs: [linux, linux-distros, windows]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write        # the release assets
-      id-token: write        # build provenance / SBOM attestations
-      attestations: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-      - name: Name the release assets, SHA256SUMS
-        run: |
-          set -e
-          mkdir out
-          for arch in x64 arm64; do
-            cp "artifacts/ser2net-linux-$arch/ser2net" "out/ser2net-linux-$arch"
-            chmod +x "out/ser2net-linux-$arch"
-            cp "artifacts/meta-linux-$arch/THIRD-PARTY-LICENSES.txt" "out/ser2net-linux-$arch.THIRD-PARTY-LICENSES.txt"
-            cp "artifacts/meta-linux-$arch/ser2net.cdx.json" "out/ser2net-linux-$arch.cdx.json"
-          done
-          cp artifacts/ser2net-windows-x64/ser2net.exe out/ser2net-windows-x64.exe
-          cp artifacts/meta-windows-x64/THIRD-PARTY-LICENSES.txt out/ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
-          cp artifacts/meta-windows-x64/ser2net.cdx.json out/ser2net-windows-x64.cdx.json
-          cd out
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
-      - name: Build provenance attestation (gh attestation verify <file> -R ${{ github.repository }})
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: |
-            out/ser2net-linux-x64
-            out/ser2net-linux-arm64
-            out/ser2net-windows-x64.exe
-      - name: SBOM attestation (Linux x64)
-        uses: actions/attest-sbom@v4
-        with:
-          subject-path: out/ser2net-linux-x64
-          sbom-path: out/ser2net-linux-x64.cdx.json
-      - name: SBOM attestation (Linux arm64)
-        uses: actions/attest-sbom@v4
-        with:
-          subject-path: out/ser2net-linux-arm64
-          sbom-path: out/ser2net-linux-arm64.cdx.json
-      - name: SBOM attestation (Windows x64)
-        uses: actions/attest-sbom@v4
-        with:
-          subject-path: out/ser2net-windows-x64.exe
-          sbom-path: out/ser2net-windows-x64.cdx.json
-      - uses: softprops/action-gh-release@v3
-        with:
-          files: out/*
-          fail_on_unmatched_files: true
