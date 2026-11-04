@@ -58,8 +58,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
-  **Edge mode:** also polls registers on an interval and publishes the decoded values
-  to MQTT (uint/int/float 16/32, scaling).
+  **Edge mode:** also polls coils and registers on an interval and publishes the decoded
+  values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
+  values from MQTT (`<topic>/<point>/set` → FC5/FC15 coils, FC6/FC16 registers).
+  Optionally as a **Sparkplug B** edge node (NBIRTH/NDATA/NDEATH, `bdSeq`/`seq`, writes
+  and rebirth via NCMD).
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -67,9 +70,16 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open, and RS-485 hardware
   auto-RTS (Linux `TIOCSRS485`: enable + pre/post-TX delays + RTS-during-TX level).
 - **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
-  Windows WM_DEVICECHANGE), falling back to polling. **IP picker** from the machine's
-  own addresses (localhost / LAN / 0.0.0.0) or custom.
-- **Dozens of mappings:** add/edit/delete/start/stop from one screen, with live status.
+  Windows WM_DEVICECHANGE), falling back to polling. On Linux the kernel's placeholder
+  `ttyS` ports without hardware are hidden and the stable `/dev/serial/by-id` names are
+  shown and selectable. **IP picker** from the machine's own addresses (localhost / LAN /
+  0.0.0.0) or custom.
+- **Find a device by its USB identity:** tick the box in the mapping form and the adapter
+  is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
+  COM number still opens the right device.
+- **Dozens of mappings:** add/edit/delete/start/stop from one screen, with live status;
+  search, state filter, sorting and start/stop/restart of the selected mappings. The
+  table only redraws when it changed (no flicker, selections stay).
 - **Per-mapping access control:** allowed IP/CIDR list, **high-priority** client IPs
   (a priority client evicts the oldest when the port is full), max connections,
   kick-old-user, read-only, banner, open/close strings, `closeon`.
@@ -80,9 +90,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   also while the device keeps sending (Linux `TCP_USER_TIMEOUT`). Plus a **connect
   timeout** for connect-out (default 10 s), an **idle timeout** and a **max connection
   time** (e.g. 24 h); every disconnect is logged with its reason.
-- **Observability:** per-mapping traffic trace (hex/timestamp), Prometheus `/metrics`,
-  config-change audit log, live log viewer, and an in-browser **serial console**
-  (xterm.js over WebSocket — watch traffic or type to the device).
+- **Observability:** per-mapping traffic trace (hex/timestamp, rotated files, downloadable
+  from the UI), Prometheus `/metrics`, an audit log page, live log viewer, an in-browser
+  **serial console** (xterm.js over WebSocket — watch traffic or type to the device) and a
+  timestamped **live hex view** of both directions.
+- **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
+  e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
+  come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers, session revocation on password change.
   For trusted networks the login requirement can be switched off under **Settings → Web
@@ -111,6 +125,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
   broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status.
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
+- **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
+  import through Settings with a preview; options without an equivalent are listed as
+  warnings.
 - **Fully offline:** all dependencies bundled as wheels; no internet required.
 
 ---
