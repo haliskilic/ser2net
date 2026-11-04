@@ -1,0 +1,163 @@
+"""Configuration backups and the import preview (merge / replace).
+
+Before v2.8 "Import" replaced every mapping at once and config.json was never backed
+up, so a wrong import or edit could not be undone. Checks:
+  * every change keeps the replaced config.json in data/backups (no duplicates,
+    newest 50 kept; names that aren't ours are rejected);
+  * the import form first previews (nothing changes), then merges — same name =
+    update keeping the id, new = add, others untouched — or replaces;
+  * a 2.7-style one-step POST still replaces everything (scripts keep working);
+  * an admin can download and restore a backup; the restore is undoable, keeps the
+    session working, and a backup without users is refused;
+  * viewers/operators can't reach backups.
+
+Run: python3 tests/test_backups_import.py
+"""
+import json
+import os
+import tempfile
+
+from _server import Browser, Server, free_port
+
+from app.config import BACKUPS_KEPT, AppConfig, ConfigError, ConfigStore, MappingConfig
+from app.importer import apply_import, parse_mappings_file, plan_rows
+from app.web.auth import hash_password
+
+PW = "backup-pass-1"
+
+
+def mapping(mid, name, port, **net):
+    return {"id": mid, "name": name, "enabled": False, "kind": "net",
+            "serial": {"port": f"/dev/ser2net-test-{mid}"},
+            "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
+                        "port": port, **net}}
+
+
+def test_store_backups():
+    d = tempfile.mkdtemp(prefix="s2n_bk_")
+    store = ConfigStore(os.path.join(d, "config.json"))
+    cfg = AppConfig()
+    store.save(cfg)
+    assert store.backup_names() == [], "the first save has nothing to back up"
+    cfg.session_timeout_s = 3600
+    store.save(cfg)
+    store.save(cfg)  # same content again: no new file
+    names = store.backup_names()
+    assert len(names) == 1, names
+    assert json.loads(store.read_backup(names[0]))["session_timeout_s"] == 28800
+    for i in range(BACKUPS_KEPT + 5):
+        cfg.session_timeout_s = 600 + i
+        store.save(cfg)
+    names = store.backup_names()
+    assert len(names) == BACKUPS_KEPT, len(names)
+    newest = json.loads(store.read_backup(names[0]))["session_timeout_s"]
+    assert newest == 600 + BACKUPS_KEPT + 3, newest  # the version before the last save
+    for bad in ("../config.json", "config.json", "config-20260101T000000Z.json.x", ""):
+        try:
+            store.read_backup(bad)
+        except ConfigError:
+            pass
+        else:
+            raise AssertionError(f"read_backup accepted {bad!r}")
+    info = store.backups()[0]
+    assert info["mappings"] == 0 and info["users"] == 0 and len(info["time"]) == 19, info
+    print(f"store: each change backs up the old file, no duplicates, newest {BACKUPS_KEPT} kept  OK")
+
+
+def test_planner():
+    cur = [MappingConfig.from_dict(mapping("aaaaaaaaaaa1", "A", 5001)),
+           MappingConfig.from_dict(mapping("aaaaaaaaaaa2", "B", 5002))]
+    incoming = [MappingConfig.from_dict(mapping("ffffffffff01", "A", 6001)),   # same name
+                MappingConfig.from_dict(mapping("aaaaaaaaaaa2", "B", 5002)),   # identical
+                MappingConfig.from_dict(mapping("ffffffffff03", "C", 5003))]   # new
+    rows = {r["name"]: r["action"] for r in plan_rows(cur, incoming, "merge")}
+    assert rows == {"A": "update", "B": "same", "C": "add"}, rows
+    merged, touched = apply_import(cur, incoming, "merge")
+    by = {m.name: m for m in merged}
+    assert [m.name for m in merged] == ["A", "B", "C"]
+    assert by["A"].id == "aaaaaaaaaaa1" and by["A"].network.port == 6001, "update keeps the id"
+    assert sorted(m.name for m in touched) == ["A", "C"], "unchanged B is not restarted"
+    assert cur[0].network.port == 5001, "apply_import must not modify its input"
+    replaced, _ = apply_import(cur, incoming, "replace")
+    assert [m.name for m in replaced] == ["A", "B", "C"]
+    rows = [r["action"] for r in plan_rows(cur, incoming, "replace")]
+    assert rows.count("remove") == 2 and rows.count("add") == 3, rows
+    plan = parse_mappings_file(json.dumps({"users": [], "mappings": [mapping("x" * 12, "X", 1)]}).encode())
+    assert plan.source == "ser2net config.json" and plan.warnings
+    for raw in (b"\xff\xfe", b"not json", b'{"no": "mappings"}', b'{"mappings": [1]}'):
+        try:
+            parse_mappings_file(raw)
+        except ConfigError:
+            pass
+        else:
+            raise AssertionError(f"accepted {raw!r}")
+    print("planner: merge by id/name keeps ids, skips identical; replace lists removals  OK")
+
+
+def main():
+    test_store_backups()
+    test_planner()
+    users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
+             {"username": "op", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
+    p1, p2, p3 = free_port(), free_port(), free_port()
+    config = {"users": users, "mappings": [mapping("aaaaaaaaaaa1", "A", p1),
+                                           mapping("aaaaaaaaaaa2", "B", p2)]}
+    with Server(config) as srv:
+        admin = Browser(srv.base)
+        admin.login("admin", PW)
+        export = json.dumps({"version": 1, "mappings": [
+            mapping("ffffffffff01", "A", p3), mapping("ffffffffff03", "C", free_port())]}).encode()
+
+        st, _, page = admin.post("/settings/config/import", {"step": "preview", "mode": "merge"},
+                                 files={"file": ("m.json", export)})
+        assert st == 200 and "Import preview" in page, page[:300]
+        assert [m["name"] for m in srv.saved_config()["mappings"]] == ["A", "B"], "preview changed config"
+        token = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+        op = Browser(srv.base)
+        op.login("op", PW)
+        st, _, page = op.post("/settings/config/import/apply", {"token": token, "mode": "merge"})
+        assert "expired" in page, "another user must not apply someone else's preview"
+        st, _, page = admin.post("/settings/config/import/apply", {"token": token, "mode": "merge"})
+        assert "Imported: 1 added, 1 updated, 0 unchanged" in page, page[page.find("banner"):][:300]
+        maps = {m["name"]: m for m in srv.saved_config()["mappings"]}
+        assert sorted(maps) == ["A", "B", "C"] and maps["A"]["id"] == "aaaaaaaaaaa1"
+        assert maps["A"]["network"]["port"] == p3
+        st, _, page = admin.post("/settings/config/import/apply", {"token": token, "mode": "merge"})
+        assert "expired" in page, "a preview applies once"
+        print("UI import: preview changes nothing; merge updates A (same id), adds C, keeps B  OK")
+
+        st, _, page = admin.post("/settings/config/import", {}, files={"file": ("m.json", export)})
+        assert "Imported 2 mappings (replaced the existing ones)" in page, page[:300]
+        assert sorted(m["name"] for m in srv.saved_config()["mappings"]) == ["A", "C"]
+        print("legacy one-step import (no preview step) still replaces everything  OK")
+
+        st, _, page = admin.get("/settings")
+        backups = ConfigStore(srv.config_path).backups()
+        assert len(backups) >= 3 and backups[0]["name"] in page
+        target = next(b for b in backups if b["mappings"] == 2 and "B" in
+                      json.dumps(json.loads(ConfigStore(srv.config_path).read_backup(b["name"]))["mappings"]))
+        st, h, body = admin.get(f"/settings/backups/{target['name']}")
+        assert st == 200 and "attachment" in h.get("Content-Disposition", "") and '"mappings"' in body
+        assert op.get(f"/settings/backups/{target['name']}")[0] == 403
+        assert admin.get("/settings/backups/..%2Fconfig.json")[0] == 404
+        assert op.post("/settings/backups/restore", {"name": target["name"]})[0] == 403
+        st, _, page = admin.post("/settings/backups/restore", {"name": target["name"]})
+        assert "Restored" in page, page[page.find("banner"):][:300]
+        assert sorted(m["name"] for m in srv.saved_config()["mappings"]) == ["A", "B"]
+        assert admin.get("/settings")[0] == 200, "the admin's session must survive the restore"
+        assert any(b["mappings"] == 2 and b["name"] != target["name"]
+                   for b in ConfigStore(srv.config_path).backups()), "restore must be undoable"
+        print("backups: listed, download/restore admin-only, restore undoable, session kept  OK")
+
+        store = ConfigStore(srv.config_path)
+        empty = os.path.join(store.backup_dir, "config-20000101T000000Z.json")
+        with open(empty, "w") as fh:
+            json.dump(AppConfig().to_dict(), fh)
+        st, _, page = admin.post("/settings/backups/restore", {"name": "config-20000101T000000Z.json"})
+        assert "has no user accounts" in page and srv.saved_config()["users"], "pre-setup backup restored"
+        print("a backup without user accounts is refused (would reopen first-run setup)  OK")
+    print("\nPASS: configuration backups + import preview / merge / replace")
+
+
+if __name__ == "__main__":
+    main()

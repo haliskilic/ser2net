@@ -126,6 +126,7 @@ _OPTIONAL_FORM_FIELDS = {
                                              "keepalive_interval_s", "keepalive_count")),
     "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
+    "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
 }
 
 
@@ -171,6 +172,9 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_max_connection_time_s" in form:
         options["max_connection_time_s"] = _num(form, "opt_max_connection_time_s", 0,
                                                 strict=strict)
+    if "opt_trace_max_mb" in form:
+        options["trace_max_mb"] = _num(form, "opt_trace_max_mb", 10.0, strict=strict, cast=float)
+        options["trace_keep"] = _num(form, "opt_trace_keep", 3, strict=strict)
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),

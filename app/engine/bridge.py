@@ -24,8 +24,10 @@ import contextlib
 import errno
 import ipaddress
 import os
+import queue
 import socket
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
@@ -97,39 +99,154 @@ def fmt_duration(secs: float) -> str:
     return f"{s}s"
 
 
-class Tracer:
-    """Append serial traffic to a per-mapping trace file (optional hex + timestamp)."""
+def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
+    """Where a mapping's trace goes: <trace_dir>/<mapping id>-<file name>. The id
+    prefix keeps two mappings with the same file name apart (and makes a mapping's
+    files easy to find); the name is already sanitised by config.trace_file_name."""
+    return os.path.join(trace_dir, f"{mapping.id}-{mapping.options.trace_both}")
 
-    def __init__(self, options) -> None:
-        self.path = options.trace_both
+
+def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log) -> Optional["Tracer"]:
+    """The mapping's tracer when tracing is on (None when off or unavailable)."""
+    if not mapping.options.trace_both:
+        return None
+    if not trace_dir:
+        log("trace not written: no data directory to keep it in")
+        return None
+    tracer = Tracer(trace_path(trace_dir, mapping), mapping.options, log=log)
+    if not tracer.active:
+        return None
+    log(f"tracing traffic to {tracer.path}")
+    return tracer
+
+
+class Tracer:
+    """Append a mapping's traffic to its trace file (optional hex dump + timestamp)
+    without blocking the event loop.
+
+    ``write()`` only queues the chunk (with its arrival time); a writer thread formats,
+    writes and flushes in batches and rotates the file once it passes ``max_bytes``
+    (<file>.1 ... <file>.<keep>; keep=0 starts the file over). If the disk can't keep
+    up, at most QUEUE_MAX_BYTES wait in memory: newer chunks are dropped and the
+    trace says how many bytes are missing."""
+
+    QUEUE_MAX_BYTES = 8 * 1024 * 1024
+    BATCH = 256
+
+    def __init__(self, path: str, options, log=None) -> None:
+        self.path = path
         self._hex = options.trace_hexdump
         self._ts = options.trace_timestamp
+        self._max_bytes = max(1, int(options.trace_max_mb * 1024 * 1024))
+        self._keep = int(options.trace_keep)
+        self._log = log or (lambda _m: None)
+        self._q: queue.SimpleQueue = queue.SimpleQueue()
+        self._lock = threading.Lock()
+        self._queued = 0      # bytes waiting for the writer
+        self._dropped = 0     # bytes dropped since the last line written
         self._fh = None
         try:
-            d = os.path.dirname(os.path.abspath(self.path))
-            os.makedirs(d, exist_ok=True)
-            self._fh = open(self.path, "ab")
-        except OSError:
-            self._fh = None
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            self._fh = open(path, "ab")
+        except OSError as e:
+            self._log(f"trace disabled: cannot open {path}: {e}")
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=f"trace:{os.path.basename(path)}")
+        self._thread.start()
+
+    @property
+    def active(self) -> bool:
+        return self._fh is not None
 
     def write(self, direction: str, data: bytes) -> None:
-        if not self._fh:
+        if self._fh is None or not data:
             return
-        prefix = (time.strftime("%Y-%m-%d %H:%M:%S ") if self._ts else "")
-        try:
-            if self._hex:
-                self._fh.write(f"{prefix}{direction} [{len(data)}] {data.hex(' ')}\n".encode())
-            else:
-                self._fh.write(prefix.encode() + direction.encode() + b" " + data + b"\n")
-            self._fh.flush()
-        except Exception:
-            pass
+        with self._lock:
+            if self._queued + len(data) > self.QUEUE_MAX_BYTES:
+                self._dropped += len(data)
+                return
+            self._queued += len(data)
+        self._q.put((time.time(), direction, bytes(data)))
 
-    def close(self) -> None:
-        if self._fh:
-            with contextlib.suppress(Exception):
+    def _format(self, ts: float, direction: str, data: bytes) -> bytes:
+        prefix = time.strftime("%Y-%m-%d %H:%M:%S ", time.localtime(ts)) if self._ts else ""
+        if self._hex:
+            return f"{prefix}{direction} [{len(data)}] {data.hex(' ')}\n".encode()
+        return prefix.encode() + direction.encode() + b" " + data + b"\n"
+
+    def _run(self) -> None:
+        stop = False
+        while not stop:
+            batch = [self._q.get()]
+            while len(batch) < self.BATCH:
+                try:
+                    batch.append(self._q.get_nowait())
+                except queue.Empty:
+                    break
+            out = []
+            for item in batch:
+                if item is None:
+                    stop = True
+                    continue
+                ts, direction, data = item
+                with self._lock:
+                    self._queued -= len(data)
+                    dropped, self._dropped = self._dropped, 0
+                if dropped:
+                    out.append(self._format(ts, "!!", f"{dropped} bytes not traced "
+                                            "(the trace file could not keep up)".encode()))
+                out.append(self._format(ts, direction, data))
+            if out:
+                self._append(out)
+        with contextlib.suppress(Exception):
+            if self._fh is not None:
                 self._fh.close()
-            self._fh = None
+        self._fh = None
+
+    def _append(self, lines: list) -> None:
+        """Write a batch of lines; rotate as soon as the file reaches its size."""
+        try:
+            pending: list = []
+            size = self._fh.tell() if self._fh is not None else 0
+            for line in lines:
+                pending.append(line)
+                size += len(line)
+                if size >= self._max_bytes:
+                    self._write(pending)
+                    pending = []
+                    self._rotate()
+                    size = 0
+            if pending:
+                self._write(pending)
+        except OSError as e:
+            self._log(f"trace write failed ({self.path}): {e}")
+
+    def _write(self, lines: list) -> None:
+        if self._fh is not None:
+            self._fh.write(b"".join(lines))
+            self._fh.flush()
+
+    def _rotate(self) -> None:
+        if self._fh is not None:
+            self._fh.close()
+        try:
+            if self._keep > 0:
+                for i in range(self._keep, 0, -1):
+                    src = self.path if i == 1 else f"{self.path}.{i - 1}"
+                    if os.path.exists(src):
+                        os.replace(src, f"{self.path}.{i}")
+            self._fh = open(self.path, "wb" if self._keep == 0 else "ab")
+        except OSError as e:  # e.g. Windows: a rotated file is open for download
+            self._log(f"trace rotation failed ({self.path}): {e}; continuing in the same file")
+            self._fh = open(self.path, "ab")
+
+    async def aclose(self) -> None:
+        """Flush what is queued, close the file. Waits for the writer off the loop."""
+        if self._fh is None:
+            return
+        self._q.put(None)
+        await asyncio.to_thread(self._thread.join, 10)
 
 
 @dataclass
@@ -352,8 +469,9 @@ class _ClientConn:
 
 
 class MappingRunner:
-    def __init__(self, mapping: MappingConfig, logger=None):
+    def __init__(self, mapping: MappingConfig, logger=None, trace_dir: Optional[str] = None):
         self.mapping = mapping
+        self.trace_dir = trace_dir  # where traces go (data/traces); None = tracing unavailable
         self.status = RunnerStatus(state="stopped")
         self.log = logger
         self.serial_instance = None
@@ -404,8 +522,7 @@ class MappingRunner:
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
-        if self.mapping.options.trace_both:
-            self._tracer = Tracer(self.mapping.options)
+        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
 
         if self.mapping.kind == "serialbridge":
             self._main_task = asyncio.create_task(
@@ -482,7 +599,7 @@ class MappingRunner:
         self._serial_task = self._main_task = None
         await self._close_serial()
         if self._tracer:
-            self._tracer.close()
+            await self._tracer.aclose()
             self._tracer = None
         self.status.state = "stopped"
         self.status.client_count = 0

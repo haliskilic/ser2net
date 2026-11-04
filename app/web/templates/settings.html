@@ -58,8 +58,17 @@
         {% for r in roles %}<option value="{{ r }}" {% if r == admin.anonymous_role %}selected{% endif %}>{{ r }}{% if r == 'viewer' %} (read-only){% endif %}</option>{% endfor %}
       </select>
     </label>
+    <label>Session lifetime (minutes) <span class="muted">(how long a sign-in lasts · 5 min – 30 days · applies to new sign-ins)</span>
+      <input type="number" name="session_minutes" min="5" max="43200" value="{{ session_minutes }}" required>
+    </label>
     <button class="btn primary" type="submit">Save access</button>
   </form>
+</section>
+
+<section class="panel panel-narrow">
+  <div class="panel-head"><h2>Audit log</h2><a class="btn sm" href="/settings/audit">Open audit log →</a></div>
+  <p class="muted">Sign-ins and every configuration change: who, from where, what — with search,
+     filters and CSV export.</p>
 </section>
 
 <section class="panel panel-narrow">
@@ -265,16 +274,92 @@
 {% endif %}
 
 {% if is_operator %}
-<section class="panel panel-narrow">
-  <div class="panel-head"><h2>Mappings backup</h2></div>
+<section class="panel panel-narrow" id="import">
+  <div class="panel-head"><h2>Mappings export / import</h2></div>
   <p><a class="btn" href="/settings/config/export">⤓ Export mappings (JSON)</a></p>
+  {% if import_preview %}
+  {% set p = import_preview %}
+  <h3>Import preview <span class="muted">— {{ p.count }} mapping(s) from a {{ p.source }}, mode: <b>{{ p.mode }}</b></span></h3>
+  {% for w in p.warnings %}<div class="banner warn">{{ w }}</div>{% endfor %}
+  {% if p.problem %}<div class="banner error">This import can't be applied: {{ p.problem }}</div>{% endif %}
+  <div class="table-scroll">
+  <table class="grid">
+    <thead><tr><th>Mapping</th><th>Port / network</th><th>Change</th></tr></thead>
+    <tbody>
+    {% for r in p.rows %}
+      <tr>
+        <td>{{ r.name|softbreak }}</td>
+        <td class="mono">{{ r.kind|softbreak }}</td>
+        <td>
+          {% if r.action == 'add' %}<span class="tag">new</span>
+          {% elif r.action == 'update' %}<span class="tag">updates</span>{% if r.target != r.name %} <span class="muted">“{{ r.target }}”</span>{% endif %}
+          {% elif r.action == 'same' %}<span class="muted">unchanged</span>
+          {% else %}<span class="tag tag-danger">removed</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <form method="post" action="/settings/config/import/apply" class="inline mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="token" value="{{ p.token }}">
+    <input type="hidden" name="mode" value="{{ p.mode }}">
+    <button class="btn primary" type="submit" {% if p.problem %}disabled{% endif %}>Apply import</button>
+  </form>
+  <a class="btn mt-sm" href="/settings#import">Cancel</a>
+  {% else %}
   <form method="post" action="/settings/config/import" enctype="multipart/form-data" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label>Import mappings <span class="muted">(replaces all current mappings)</span>
+    <input type="hidden" name="step" value="preview">
+    <label>Mappings file <span class="muted">(a ser2net export or config.json)</span>
       <input type="file" name="file" accept="application/json,.json" required>
     </label>
-    <button class="btn" type="submit">Import</button>
+    <label class="chk"><input type="radio" name="mode" value="merge" checked> Merge — update mappings with the same name, add the others, keep the rest</label>
+    <label class="chk"><input type="radio" name="mode" value="replace"> Replace — the file's mappings replace all current ones</label>
+    <button class="btn" type="submit">Preview import</button>
   </form>
+  <p class="muted mt-sm">Nothing changes until you apply the preview. The current configuration is kept as a backup either way.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if is_admin %}
+<section class="panel panel-narrow" id="backups">
+  <div class="panel-head"><h2>Configuration backups</h2></div>
+  <p class="muted mb-sm">Every change keeps the previous <span class="mono">config.json</span> in the
+     data folder's <span class="mono">backups/</span> (the newest 50). Restoring one replaces the
+     whole configuration — mappings, users, settings — and is itself backed up first, so it can be
+     undone. Backups contain password hashes and secrets: only admins see them.</p>
+  {% if backups %}
+  <div class="table-scroll">
+  <table class="grid">
+    <thead><tr><th>Saved (UTC)</th><th>Mappings</th><th>Users</th><th class="col-actions"></th></tr></thead>
+    <tbody>
+    {% for bk in backups %}
+      <tr>
+        <td class="mono nowrap">{{ bk.time }}</td>
+        <td>{{ bk.mappings if bk.mappings is not none else '?' }}</td>
+        <td>{{ bk.users if bk.users is not none else '?' }}</td>
+        <td class="col-actions">
+          <div class="row-actions">
+            <a class="btn sm" href="/settings/backups/{{ bk.name }}">Download</a>
+            <form method="post" action="/settings/backups/restore" class="inline"
+                  data-confirm="Restore the configuration saved at {{ bk.time }} UTC? The current one is backed up first.">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="name" value="{{ bk.name }}">
+              <button class="btn sm" type="submit">Restore</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No backups yet — the first one is made at the next configuration change.</p>
+  {% endif %}
 </section>
 {% endif %}
 {% endblock %}

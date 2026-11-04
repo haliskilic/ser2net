@@ -65,7 +65,7 @@ def build_api_routes(state):
                 return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping created: {mapping.name}")
-        state.audit(_client_ip(request), "api_mapping_create", mapping.name)
+        state.audit(_client_ip(request), "api_mapping_create", mapping.name, user="api-token")
         return JSONResponse(_mapping_view(mapping, state), status_code=201)
 
     async def update_mapping(request):
@@ -96,7 +96,7 @@ def build_api_routes(state):
                 return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping updated: {mapping.name}")
-        state.audit(_client_ip(request), "api_mapping_update", mapping.name)
+        state.audit(_client_ip(request), "api_mapping_update", mapping.name, user="api-token")
         return JSONResponse(_mapping_view(mapping, state))
 
     async def delete_mapping(request):
@@ -105,7 +105,7 @@ def build_api_routes(state):
         if removed is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping deleted: {removed.name}")
-        state.audit(_client_ip(request), "api_mapping_delete", removed.name)
+        state.audit(_client_ip(request), "api_mapping_delete", removed.name, user="api-token")
         return JSONResponse({"deleted": mid})
 
     async def mapping_action(request):
@@ -117,7 +117,7 @@ def build_api_routes(state):
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping {action}: {name}")
-        state.audit(_client_ip(request), f"api_mapping_{action}", name)
+        state.audit(_client_ip(request), f"api_mapping_{action}", name, user="api-token")
         return JSONResponse({"id": mid, "action": action, "status": state.supervisor.status(mid)})
 
     async def status(request):
