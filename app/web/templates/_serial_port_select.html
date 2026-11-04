@@ -1,7 +1,7 @@
 <select name="serial_port" required>
   {% set devices = ports | map(attribute='device') | list %}
   {% if selected and selected not in devices %}
-    <option value="{{ selected }}" selected>{{ selected }} (not connected)</option>
+    <option value="{{ selected }}" selected>{{ _("%(port)s (not connected)", port=selected) }}</option>
   {% endif %}
   {% for p in ports %}
     <option value="{{ p.device }}" {% if p.device == selected %}selected{% endif %}>
@@ -9,6 +9,6 @@
     </option>
   {% endfor %}
   {% if not ports and not selected %}
-    <option value="">(no serial ports detected)</option>
+    <option value="">{{ _("(no serial ports detected)") }}</option>
   {% endif %}
 </select>

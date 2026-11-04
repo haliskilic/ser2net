@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass, field
 
 from .config import ConfigError, MappingConfig, _new_id
+from .i18n import _
 from .ser2net_import import looks_yaml, parse_ser2net_config
 
 MODES = ("merge", "replace")
@@ -33,27 +34,28 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        raise ConfigError("The file is not UTF-8 text.") from None
+        raise ConfigError(_("The file is not UTF-8 text.")) from None
     if not text.lstrip().startswith(("{", "[")):
         return _classic_ser2net(text, filename)
     try:
         doc = json.loads(text)
     except ValueError as e:
-        raise ConfigError(f"The file is not valid JSON ({e}).") from None
+        raise ConfigError(_("The file is not valid JSON ({0}).").format(e)) from None
     if not isinstance(doc, dict) or not isinstance(doc.get("mappings"), list):
-        raise ConfigError('Expected a ser2net export: a JSON object with a "mappings" list.')
+        raise ConfigError(_('Expected a ser2net export: a JSON object with a "mappings" list.'))
     mappings, warnings = [], []
     for i, item in enumerate(doc["mappings"], 1):
         if not isinstance(item, dict):
-            raise ConfigError(f"Mapping #{i} is not an object.")
+            raise ConfigError(_("Mapping #{0} is not an object.").format(i))
         try:
             mappings.append(MappingConfig.from_dict(item))
         except (TypeError, ValueError) as e:
-            raise ConfigError(f"Mapping #{i} ({item.get('name', '?')}): {e}") from None
-    source = "ser2net config.json" if "users" in doc or "admin_ui" in doc else "ser2net export"
-    if source == "ser2net config.json":
-        warnings.append("Only the mappings are imported from a config.json; users, "
-                        "passwords and settings stay as they are.")
+            raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
+    whole_config = "users" in doc or "admin_ui" in doc
+    source = _("ser2net config.json") if whole_config else _("ser2net export")
+    if whole_config:
+        warnings.append(_("Only the mappings are imported from a config.json; users, "
+                          "passwords and settings stay as they are."))
     return ImportPlan(source=source, mappings=mappings, warnings=warnings)
 
 
@@ -62,8 +64,8 @@ def _classic_ser2net(text: str, filename: str) -> ImportPlan:
     Nothing importable is an error, so a replace import cannot empty the mappings."""
     dicts, warnings = parse_ser2net_config(text, filename)
     if not dicts:
-        raise ConfigError(" ".join(warnings) or "The file has no ser2net connections to import.")
-    source = "ser2net.yaml (ser2net 4.x)" if looks_yaml(text) else "ser2net.conf (ser2net 3.x)"
+        raise ConfigError(" ".join(warnings) or _("The file has no ser2net connections to import."))
+    source = _("ser2net.yaml (ser2net 4.x)") if looks_yaml(text) else _("ser2net.conf (ser2net 3.x)")
     return ImportPlan(source=source, mappings=[MappingConfig.from_dict(d) for d in dicts],
                       warnings=warnings)
 
@@ -78,7 +80,7 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
     """(new mapping list, mappings that were added or changed). Pure: the inputs
     are not modified."""
     if mode not in MODES:
-        raise ConfigError(f"Import mode must be one of {MODES}.")
+        raise ConfigError(_("Import mode must be one of {0}.").format(MODES))
     if mode == "replace":
         seen: set[str] = set()
         out = []

@@ -23,21 +23,24 @@ from collections import deque
 from email.message import EmailMessage
 from typing import Optional
 
-from . import __version__
+from . import __version__, i18n
+from .i18n import _
 
 POLL_S = 2.0
 MAX_PER_MINUTE = 20
 TIMEOUT_S = 10.0
 
-TITLES = {
-    "device_lost": "serial device lost",
-    "device_back": "serial device back",
-    "start_failed": "mapping failed to start",
-    "client_connected": "client connected",
-    "client_disconnected": "client disconnected",
-    "login_failed": "failed sign-in",
-    "test": "test notification",
-}
+def title(event: str) -> str:
+    """The event's name in the notification language (see Notifier.deliver)."""
+    return {
+        "device_lost": _("serial device lost"),
+        "device_back": _("serial device back"),
+        "start_failed": _("mapping failed to start"),
+        "client_connected": _("client connected"),
+        "client_disconnected": _("client disconnected"),
+        "login_failed": _("failed sign-in"),
+        "test": _("test notification"),
+    }.get(event, event)
 _LOST = ("reconnecting", "device-missing")
 
 
@@ -76,14 +79,12 @@ def snapshot(statuses: dict) -> dict:
 def message(event: str, mapping: str, detail: str) -> tuple[str, str]:
     """(title, text) of a notification."""
     host = socket.gethostname()
-    what = TITLES.get(event, event)
-    title = f"ser2net {host}: {mapping + ' — ' if mapping else ''}{what}"
-    text = title + (f"\n{detail}" if detail else "")
-    return title, text
+    head = f"ser2net {host}: {mapping + ' — ' if mapping else ''}{title(event)}"
+    return head, head + (f"\n{detail}" if detail else "")
 
 
 def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str = "") -> dict:
-    title, text = message(event, mapping, detail)
+    head, text = message(event, mapping, detail)
     if fmt == "slack":
         return {"text": text}
     if fmt == "discord":
@@ -95,7 +96,7 @@ def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str =
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": {"type": "AdaptiveCard", "version": "1.4",
                         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                        "body": [{"type": "TextBlock", "text": title, "weight": "Bolder", "wrap": True},
+                        "body": [{"type": "TextBlock", "text": head, "weight": "Bolder", "wrap": True},
                                  {"type": "TextBlock", "text": detail or " ", "wrap": True}]}}]}
     return {"event": event, "mapping": mapping, "detail": detail, "text": text,
             "node": socket.gethostname(), "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -114,12 +115,15 @@ def send_webhook(settings, event: str, mapping: str, detail: str) -> None:
 
 
 def send_email(settings, event: str, mapping: str, detail: str) -> None:
-    title, text = message(event, mapping, detail)
+    head, text = message(event, mapping, detail)
     msg = EmailMessage()
-    msg["Subject"] = title
+    msg["Subject"] = head
     msg["From"] = settings.email_from.strip() or f"ser2net@{socket.gethostname()}"
     msg["To"] = ", ".join(settings.recipients)
-    msg.set_content(text + f"\n\n-- \nser2net {__version__} on {socket.gethostname()}\n")
+    # quoted-printable keeps the message 7-bit, so Turkish text and non-ASCII mapping names
+    # also pass servers without 8BITMIME
+    msg.set_content(text + "\n\n-- \n" + _("ser2net {0} on {1}").format(__version__, socket.gethostname())
+                    + "\n", cte="quoted-printable")
     ctx = ssl.create_default_context()
     if settings.smtp_security == "ssl":
         smtp: smtplib.SMTP = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port,
@@ -205,8 +209,17 @@ class Notifier:
 
     async def deliver(self, event: str, mapping: str, detail: str,
                       settings=None) -> list[str]:
-        """Send to every configured channel now; returns the errors (empty = all sent)."""
+        """Send to every configured channel now; returns the errors (empty = all sent).
+        Messages are in the UI's default language (Settings -> Web UI access), or
+        English when that is "the browser's"."""
         s = settings or self.settings
+        token = i18n.set_language(self.state.config.admin_ui.language)
+        try:
+            return await self._deliver(s, event, mapping, detail)
+        finally:
+            i18n.reset(token)
+
+    async def _deliver(self, s, event: str, mapping: str, detail: str) -> list[str]:
         errors = []
         if s.webhook_url.strip():
             try:

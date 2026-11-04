@@ -1,95 +1,90 @@
 {% extends "_shell.html" %}
-{% block title %}Settings — ser2net{% endblock %}
+{% block title %}{{ _("Settings") }} — ser2net{% endblock %}
 {% block main %}
 {% set is_admin = me and me.role == 'admin' %}
 {% set is_operator = me and me.role in ['operator', 'admin'] %}
 {% set is_anonymous = me and me.source == 'anonymous' %}
+{% set unchanged = _('•••••• (unchanged)') %}
 
 <section class="panel panel-narrow">
   {% if is_anonymous %}
-  <div class="panel-head"><h2>Signed out (open access)</h2></div>
+  <div class="panel-head"><h2>{{ _("Signed out (open access)") }}</h2></div>
   {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
-  <p>Login is switched off for this UI, so you are using it without an account, with the
-     <span class="mono">{{ me.role }}</span> role. <a href="/login">Sign in</a> for your own role
-     (or to change your password).</p>
+  <p>{{ _('Login is switched off for this UI, so you are using it without an account, with the <span class="mono">%(role)s</span> role. <a href="/login">Sign in</a> for your own role (or to change your password).', role=me.role) }}</p>
   {% else %}
-  <div class="panel-head"><h2>Change your password</h2></div>
+  <div class="panel-head"><h2>{{ _("Change your password") }}</h2></div>
   {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
   <form method="post" action="/settings/password" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label>Current password <input type="password" name="current" autocomplete="current-password" required></label>
-    <label>New password (min 8 chars) <input type="password" name="password" autocomplete="new-password" required></label>
-    <label>Confirm new password <input type="password" name="password2" autocomplete="new-password" required></label>
-    <button class="btn primary" type="submit">Update password</button>
+    <label>{{ _("Current password") }} <input type="password" name="current" autocomplete="current-password" required></label>
+    <label>{{ _("New password (min 8 chars)") }} <input type="password" name="password" autocomplete="new-password" required></label>
+    <label>{{ _("Confirm new password") }} <input type="password" name="password2" autocomplete="new-password" required></label>
+    <button class="btn primary" type="submit">{{ _("Update password") }}</button>
   </form>
   {% endif %}
 </section>
 
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>Admin interface</h2></div>
-  <p>Listening on <span class="mono">{{ admin.bind_ip }}:{{ admin.port }}</span>
+  <div class="panel-head"><h2>{{ _("Admin interface") }}</h2></div>
+  <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=admin.bind_ip ~ ':' ~ admin.port) }}
      {% if admin.tls_enabled %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
-  <p class="muted">To change the admin bind address, restart with
-     <span class="mono">python3 ser2net.py --reconfigure</span>.</p>
+  <p class="muted">{{ _('To change the admin bind address, restart with <span class="mono">python3 ser2net.py --reconfigure</span>.') }}</p>
 </section>
 
 {% if is_admin %}
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>Web UI access</h2></div>
-  <p class="muted mb-sm">By default every visitor must sign in. On a trusted network you can let
-     visitors use this UI <em>without a password</em>, with the role chosen below; signing in
-     still gives a user their own role. Open access is honoured only when the UI is reached by
-     IP address, <span class="mono">localhost</span> or this machine's host name (protection
-     against DNS rebinding — other names still ask for a login); behind a reverse proxy, have
-     it pass the original name in <span class="mono">X-Forwarded-Host</span>, or keep login on.
-     Other cluster nodes are only shown and managed after signing in, and the REST API always
-     needs its token.</p>
+  <div class="panel-head"><h2>{{ _("Web UI access") }}</h2></div>
+  <p class="muted mb-sm">{{ _('By default every visitor must sign in. On a trusted network you can let visitors use this UI <em>without a password</em>, with the role chosen below; signing in still gives a user their own role. Open access is honoured only when the UI is reached by IP address, <span class="mono">localhost</span> or this machine’s host name (protection against DNS rebinding — other names still ask for a login); behind a reverse proxy, have it pass the original name in <span class="mono">X-Forwarded-Host</span>, or keep login on. Other cluster nodes are only shown and managed after signing in, and the REST API always needs its token.') }}</p>
   {% if not admin.require_login %}
-  <div class="banner warn">Open access is <b>ON</b>: anyone who can reach this page gets the
-     <span class="mono">{{ admin.anonymous_role }}</span> role without a password{% if admin.bind_ip not in ['127.0.0.1', '::1'] %} — and the UI listens on <span class="mono">{{ admin.bind_ip }}</span>{% endif %}.</div>
+  <div class="banner warn">{{ _('Open access is <b>ON</b>: anyone who can reach this page gets the <span class="mono">%(role)s</span> role without a password.', role=admin.anonymous_role) }}{% if admin.bind_ip not in ['127.0.0.1', '::1'] %} {{ _('The UI listens on <span class="mono">%(ip)s</span>.', ip=admin.bind_ip) }}{% endif %}</div>
   {% endif %}
   <form method="post" action="/settings/access" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label class="chk"><input type="checkbox" name="require_login" {% if admin.require_login %}checked{% endif %}> Require login (password) for the web UI</label>
-    <label>Role for visitors without login <span class="muted">(used only when login is not required)</span>
+    <label class="chk"><input type="checkbox" name="require_login" {% if admin.require_login %}checked{% endif %}> {{ _("Require login (password) for the web UI") }}</label>
+    <label>{{ _("Role for visitors without login") }} <span class="muted">({{ _("used only when login is not required") }})</span>
       <select name="anonymous_role">
-        {% for r in roles %}<option value="{{ r }}" {% if r == admin.anonymous_role %}selected{% endif %}>{{ r }}{% if r == 'viewer' %} (read-only){% endif %}</option>{% endfor %}
+        {% for r in roles %}<option value="{{ r }}" {% if r == admin.anonymous_role %}selected{% endif %}>{{ r }}{% if r == 'viewer' %} ({{ _("read-only") }}){% endif %}</option>{% endfor %}
       </select>
     </label>
-    <label>Session lifetime (minutes) <span class="muted">(how long a sign-in lasts · 5 min – 30 days · applies to new sign-ins)</span>
+    <label>{{ _("Session lifetime (minutes)") }} <span class="muted">({{ _("how long a sign-in lasts · 5 min – 30 days · applies to new sign-ins") }})</span>
       <input type="number" name="session_minutes" min="5" max="43200" value="{{ session_minutes }}" required>
     </label>
-    <button class="btn primary" type="submit">Save access</button>
+    <label>{{ _("Default language") }} <span class="muted">({{ _("for visitors who haven’t picked one with TR / EN") }})</span>
+      <select name="default_language">
+        <option value="auto" {% if admin.language == 'auto' %}selected{% endif %}>{{ _("The browser’s language") }}</option>
+        {% for code, label in languages.items() %}<option value="{{ code }}" {% if admin.language == code %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn primary" type="submit">{{ _("Save access") }}</button>
   </form>
 </section>
 
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>Audit log</h2><a class="btn sm" href="/settings/audit">Open audit log →</a></div>
-  <p class="muted">Sign-ins and every configuration change: who, from where, what — with search,
-     filters and CSV export.</p>
+  <div class="panel-head"><h2>{{ _("Audit log") }}</h2><a class="btn sm" href="/settings/audit">{{ _("Open audit log →") }}</a></div>
+  <p class="muted">{{ _("Sign-ins and every configuration change: who, from where, what — with search, filters and CSV export.") }}</p>
 </section>
 
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>Users</h2></div>
+  <div class="panel-head"><h2>{{ _("Users") }}</h2></div>
   <div class="table-scroll">
   <table class="grid">
-    <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Username") }}</th><th>{{ _("Role") }}</th><th></th></tr></thead>
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">you</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}</td>
+        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}</td>
         <td>
           {% if u.source != 'local' %}
-            <span class="mono">{{ u.role }}</span> <span class="muted">(from {{ u.source|upper }})</span>
+            <span class="mono">{{ u.role }}</span> <span class="muted">({{ _("from %(source)s", source=u.source|upper) }})</span>
           {% else %}
           <form method="post" action="/settings/users/{{ u.username }}/role" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
             <select name="role">
               {% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>{% endfor %}
             </select>
-            <button class="btn sm" type="submit">Set</button>
+            <button class="btn sm" type="submit">{{ _("Set") }}</button>
           </form>
           {% endif %}
         </td>
@@ -97,7 +92,7 @@
           {% if me.username != u.username %}
           <form method="post" action="/settings/users/{{ u.username }}/delete" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-            <button class="btn sm danger" type="submit">Delete</button>
+            <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
           </form>
           {% endif %}
         </td>
@@ -106,229 +101,222 @@
     </tbody>
   </table>
   </div>
-  <p class="muted mb-sm">Roles: <span class="mono">admin</span> (everything),
-     <span class="mono">operator</span> (manage mappings), <span class="mono">viewer</span> (read-only).</p>
+  <p class="muted mb-sm">{{ _('Roles: <span class="mono">admin</span> (everything), <span class="mono">operator</span> (manage mappings), <span class="mono">viewer</span> (read-only).') }}</p>
   <form method="post" action="/settings/users" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <div class="grid2">
-      <label>Username <input type="text" name="username" placeholder="e.g. operator1" required></label>
-      <label>Role
+      <label>{{ _("Username") }} <input type="text" name="username" placeholder="{{ _('e.g. %(example)s', example='operator1') }}" required></label>
+      <label>{{ _("Role") }}
         <select name="role">{% for r in roles %}<option value="{{ r }}" {% if r == 'viewer' %}selected{% endif %}>{{ r }}</option>{% endfor %}</select>
       </label>
     </div>
     <div class="grid2">
-      <label>Password (min 8) <input type="password" name="password" autocomplete="new-password" required></label>
-      <label>Confirm <input type="password" name="password2" autocomplete="new-password" required></label>
+      <label>{{ _("Password (min 8)") }} <input type="password" name="password" autocomplete="new-password" required></label>
+      <label>{{ _("Confirm") }} <input type="password" name="password2" autocomplete="new-password" required></label>
     </div>
-    <button class="btn" type="submit">Add user</button>
+    <button class="btn" type="submit">{{ _("Add user") }}</button>
   </form>
 </section>
 
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>LDAP / Active Directory</h2></div>
-  <p class="muted mb-sm">Authenticate users against a directory; their group membership maps to a
-     ser2net role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).</p>
-  {% if ldap.enabled and not ldap_lib %}<div class="banner warn">LDAP is enabled but <span class="mono">ldap3</span> is not installed — LDAP login won't work until you <span class="mono">pip install ldap3</span> (local accounts still work).</div>{% endif %}
+  <p class="muted mb-sm">{{ _('Authenticate users against a directory; their group membership maps to a ser2net role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).') }}</p>
+  {% if ldap.enabled and not ldap_lib %}<div class="banner warn">{{ _('LDAP is enabled but <span class="mono">ldap3</span> is not installed — LDAP login won’t work until you <span class="mono">pip install ldap3</span> (local accounts still work).') }}</div>{% endif %}
   <form method="post" action="/settings/ldap" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label class="chk"><input type="checkbox" name="ldap_enabled" {% if ldap.enabled %}checked{% endif %}> Enable LDAP / AD login</label>
+    <label class="chk"><input type="checkbox" name="ldap_enabled" {% if ldap.enabled %}checked{% endif %}> {{ _("Enable LDAP / AD login") }}</label>
     <div class="grid2">
-      <label>Server URI <input type="text" name="ldap_server_uri" value="{{ ldap.server_uri }}" placeholder="ldaps://dc.corp.local:636"></label>
+      <label>{{ _("Server URI") }} <input type="text" name="ldap_server_uri" value="{{ ldap.server_uri }}" placeholder="ldaps://dc.corp.local:636"></label>
       <label class="chk chk-pad"><input type="checkbox" name="ldap_start_tls" {% if ldap.start_tls %}checked{% endif %}> StartTLS</label>
     </div>
-    <label>User DN template <span class="muted">(direct bind — AD: <span class="mono">{username}@corp.local</span>; LDAP: <span class="mono">uid={username},ou=people,dc=ex,dc=com</span>)</span>
-      <input type="text" name="ldap_user_dn_template" value="{{ ldap.user_dn_template }}" placeholder="optional">
+    <label>{{ _("User DN template") }} <span class="muted">({{ _("direct bind") }} — AD: <span class="mono">{username}@corp.local</span>; LDAP: <span class="mono">uid={username},ou=people,dc=ex,dc=com</span>)</span>
+      <input type="text" name="ldap_user_dn_template" value="{{ ldap.user_dn_template }}" placeholder="{{ _('optional') }}">
     </label>
-    <p class="muted">…or search + bind with a service account:</p>
+    <p class="muted">{{ _("…or search + bind with a service account:") }}</p>
     <div class="grid2">
       <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com"></label>
-      <label>Bind password <input type="password" name="ldap_bind_password" placeholder="{% if ldap.bind_password %}•••••• (unchanged){% endif %}"></label>
+      <label>{{ _("Bind password") }} <input type="password" name="ldap_bind_password" placeholder="{% if ldap.bind_password %}{{ unchanged }}{% endif %}"></label>
     </div>
     <div class="grid2">
-      <label>User search base <input type="text" name="ldap_user_search_base" value="{{ ldap.user_search_base }}" placeholder="ou=people,dc=ex,dc=com"></label>
-      <label>User search filter <input type="text" name="ldap_user_search_filter" value="{{ ldap.user_search_filter }}" placeholder="(sAMAccountName={username})"></label>
+      <label>{{ _("User search base") }} <input type="text" name="ldap_user_search_base" value="{{ ldap.user_search_base }}" placeholder="ou=people,dc=ex,dc=com"></label>
+      <label>{{ _("User search filter") }} <input type="text" name="ldap_user_search_filter" value="{{ ldap.user_search_filter }}" placeholder="(sAMAccountName={username})"></label>
     </div>
     <div class="grid2">
-      <label>Group attribute <input type="text" name="ldap_group_attr" value="{{ ldap.group_attr }}" placeholder="memberOf"></label>
-      <label>Default role <span class="muted">(if in no mapped group)</span>
+      <label>{{ _("Group attribute") }} <input type="text" name="ldap_group_attr" value="{{ ldap.group_attr }}" placeholder="memberOf"></label>
+      <label>{{ _("Default role") }} <span class="muted">({{ _("if in no mapped group") }})</span>
         <select name="ldap_default_role">
-          <option value="" {% if not ldap.default_role %}selected{% endif %}>— deny login —</option>
+          <option value="" {% if not ldap.default_role %}selected{% endif %}>{{ _("— deny login —") }}</option>
           {% for r in roles %}<option value="{{ r }}" {% if r == ldap.default_role %}selected{% endif %}>{{ r }}</option>{% endfor %}
         </select>
       </label>
     </div>
     <div class="grid3">
-      <label>Admin group <input type="text" name="ldap_admin_group" value="{{ ldap.admin_group }}" placeholder="ser2net-admins"></label>
-      <label>Operator group <input type="text" name="ldap_operator_group" value="{{ ldap.operator_group }}" placeholder="ser2net-operators"></label>
-      <label>Viewer group <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2net-viewers"></label>
+      <label>{{ _("Admin group") }} <input type="text" name="ldap_admin_group" value="{{ ldap.admin_group }}" placeholder="ser2net-admins"></label>
+      <label>{{ _("Operator group") }} <input type="text" name="ldap_operator_group" value="{{ ldap.operator_group }}" placeholder="ser2net-operators"></label>
+      <label>{{ _("Viewer group") }} <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2net-viewers"></label>
     </div>
-    <button class="btn primary" type="submit">Save LDAP</button>
+    <button class="btn primary" type="submit">{{ _("Save LDAP") }}</button>
   </form>
 </section>
 
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>Single sign-on (OIDC)</h2></div>
-  <p class="muted mb-sm">OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a
-     ser2net role. Redirect URI: <span class="mono">&lt;this-url&gt;/auth/oidc/callback</span>.
-     Needs <span class="mono">authlib</span> (optional).</p>
-  {% if oidc.enabled and not oidc_lib %}<div class="banner warn">OIDC is enabled but <span class="mono">authlib</span> is not installed — SSO won't work until you <span class="mono">pip install authlib</span>.</div>{% endif %}
+  <div class="panel-head"><h2>{{ _("Single sign-on (OIDC)") }}</h2></div>
+  <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Redirect URI: <span class="mono">&lt;this-url&gt;/auth/oidc/callback</span>. Needs <span class="mono">authlib</span> (optional).') }}</p>
+  {% if oidc.enabled and not oidc_lib %}<div class="banner warn">{{ _('OIDC is enabled but <span class="mono">authlib</span> is not installed — SSO won’t work until you <span class="mono">pip install authlib</span>.') }}</div>{% endif %}
   <form method="post" action="/settings/oidc" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label class="chk"><input type="checkbox" name="oidc_enabled" {% if oidc.enabled %}checked{% endif %}> Enable SSO login</label>
-    <label>Issuer URL <input type="text" name="oidc_issuer" value="{{ oidc.issuer }}" placeholder="https://keycloak.example.com/realms/main"></label>
+    <label class="chk"><input type="checkbox" name="oidc_enabled" {% if oidc.enabled %}checked{% endif %}> {{ _("Enable SSO login") }}</label>
+    <label>{{ _("Issuer URL") }} <input type="text" name="oidc_issuer" value="{{ oidc.issuer }}" placeholder="https://keycloak.example.com/realms/main"></label>
     <div class="grid2">
       <label>Client ID <input type="text" name="oidc_client_id" value="{{ oidc.client_id }}"></label>
-      <label>Client secret <input type="password" name="oidc_client_secret" placeholder="{% if oidc.client_secret %}•••••• (unchanged){% endif %}"></label>
+      <label>Client secret <input type="password" name="oidc_client_secret" placeholder="{% if oidc.client_secret %}{{ unchanged }}{% endif %}"></label>
     </div>
     <div class="grid2">
-      <label>Redirect URI <span class="muted">(blank = auto)</span><input type="text" name="oidc_redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="auto from request"></label>
+      <label>Redirect URI <span class="muted">({{ _("blank = auto") }})</span><input type="text" name="oidc_redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="{{ _('auto from request') }}"></label>
       <label>Scopes <input type="text" name="oidc_scopes" value="{{ oidc.scopes }}" placeholder="openid email profile"></label>
     </div>
     <div class="grid2">
-      <label>Username claim <input type="text" name="oidc_username_claim" value="{{ oidc.username_claim }}" placeholder="preferred_username"></label>
-      <label>Groups/roles claim <input type="text" name="oidc_groups_claim" value="{{ oidc.groups_claim }}" placeholder="groups"></label>
+      <label>{{ _("Username claim") }} <input type="text" name="oidc_username_claim" value="{{ oidc.username_claim }}" placeholder="preferred_username"></label>
+      <label>{{ _("Groups/roles claim") }} <input type="text" name="oidc_groups_claim" value="{{ oidc.groups_claim }}" placeholder="groups"></label>
     </div>
     <div class="grid3">
-      <label>Admin group <input type="text" name="oidc_admin_group" value="{{ oidc.admin_group }}" placeholder="ser2net-admins"></label>
-      <label>Operator group <input type="text" name="oidc_operator_group" value="{{ oidc.operator_group }}"></label>
-      <label>Viewer group <input type="text" name="oidc_viewer_group" value="{{ oidc.viewer_group }}"></label>
+      <label>{{ _("Admin group") }} <input type="text" name="oidc_admin_group" value="{{ oidc.admin_group }}" placeholder="ser2net-admins"></label>
+      <label>{{ _("Operator group") }} <input type="text" name="oidc_operator_group" value="{{ oidc.operator_group }}"></label>
+      <label>{{ _("Viewer group") }} <input type="text" name="oidc_viewer_group" value="{{ oidc.viewer_group }}"></label>
     </div>
-    <label>Default role <span class="muted">(if no group matched)</span>
+    <label>{{ _("Default role") }} <span class="muted">({{ _("if no group matched") }})</span>
       <select name="oidc_default_role">
-        <option value="" {% if not oidc.default_role %}selected{% endif %}>— deny login —</option>
+        <option value="" {% if not oidc.default_role %}selected{% endif %}>{{ _("— deny login —") }}</option>
         {% for r in roles %}<option value="{{ r }}" {% if r == oidc.default_role %}selected{% endif %}>{{ r }}</option>{% endfor %}
       </select>
     </label>
-    <button class="btn primary" type="submit">Save SSO</button>
+    <button class="btn primary" type="submit">{{ _("Save SSO") }}</button>
   </form>
 </section>
 
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>LAN cluster</h2></div>
-  <p class="muted mb-sm">Discover other ser2net nodes on the local network (signed UDP
-     broadcast — no mDNS) and show every node's mappings in one table on the dashboard,
-     each row tagged with its host (name + IP). Set the <em>same shared key</em> on every
-     node so they trust each other; with the key, operators can start/stop/restart a
-     peer's mappings from the unified view. This node's ID:
-     <span class="mono">{{ instance_id[:8] }}</span>.</p>
+  <div class="panel-head"><h2>{{ _("LAN cluster") }}</h2></div>
+  <p class="muted mb-sm">{{ _('Discover other ser2net nodes on the local network (signed UDP broadcast — no mDNS) and show every node’s mappings in one table on the dashboard, each row tagged with its host (name + IP). Set the <em>same shared key</em> on every node so they trust each other; with the key, operators can start/stop/restart a peer’s mappings from the unified view. This node’s ID: <span class="mono">%(id)s</span>.', id=instance_id[:8]) }}</p>
   <form method="post" action="/settings/cluster" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label class="chk"><input type="checkbox" name="enabled" {% if cluster.enabled %}checked{% endif %}> Enable LAN cluster</label>
-    <label>Shared cluster key <input type="password" name="key" value="{{ cluster.key }}" placeholder="same on every node — e.g. a long random string"></label>
+    <label class="chk"><input type="checkbox" name="enabled" {% if cluster.enabled %}checked{% endif %}> {{ _("Enable LAN cluster") }}</label>
+    <label>{{ _("Shared cluster key") }} <input type="password" name="key" value="{{ cluster.key }}" placeholder="{{ _('same on every node — e.g. a long random string') }}"></label>
     <div class="grid2">
-      <label>Discovery UDP port <input type="number" name="discovery_port" value="{{ cluster.discovery_port }}" min="1" max="65535"></label>
-      <label>Advertise IP <span class="muted">(blank = auto-detect)</span><input type="text" name="advertise_ip" value="{{ cluster.advertise_ip }}" placeholder="this node's LAN IP others reach"></label>
+      <label>{{ _("Discovery UDP port") }} <input type="number" name="discovery_port" value="{{ cluster.discovery_port }}" min="1" max="65535"></label>
+      <label>{{ _("Advertise IP") }} <span class="muted">({{ _("blank = auto-detect") }})</span><input type="text" name="advertise_ip" value="{{ cluster.advertise_ip }}" placeholder="{{ _('this node’s LAN IP others reach') }}"></label>
     </div>
-    <label>Manual peers <span class="muted">(one <span class="mono">host:port</span> per line — for routed/L3 networks broadcast can't reach)</span>
+    <label>{{ _("Manual peers") }} <span class="muted">({{ _('one <span class="mono">host:port</span> per line — for routed/L3 networks broadcast can’t reach') }})</span>
       <textarea name="peers" rows="3" placeholder="10.0.5.12:8080&#10;https://plc-gw.example:8443">{{ cluster_peers_text }}</textarea></label>
-    <button class="btn primary" type="submit">Save cluster</button>
+    <button class="btn primary" type="submit">{{ _("Save cluster") }}</button>
   </form>
 </section>
 
 <section class="panel panel-narrow" id="notifications">
-  <div class="panel-head"><h2>Notifications</h2></div>
-  <p class="muted mb-sm">Get a message when something needs attention — to a chat (Slack, Microsoft
-     Teams, Discord, Telegram, or any service that accepts a JSON webhook) and/or by e-mail.
-     The same event for the same mapping is sent at most once per repeat interval.</p>
+  <div class="panel-head"><h2>{{ _("Notifications") }}</h2></div>
+  <p class="muted mb-sm">{{ _("Get a message when something needs attention — to a chat (Slack, Microsoft Teams, Discord, Telegram, or any service that accepts a JSON webhook) and/or by e-mail. The same event for the same mapping is sent at most once per repeat interval.") }}</p>
   <form method="post" action="/settings/notifications" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label class="chk"><input type="checkbox" name="notify_enabled" {% if notify.enabled %}checked{% endif %}> Send notifications</label>
+    <label class="chk"><input type="checkbox" name="notify_enabled" {% if notify.enabled %}checked{% endif %}> {{ _("Send notifications") }}</label>
     <fieldset>
-      <legend>Events</legend>
-        <label class="chk"><input type="checkbox" name="notify_event_device_lost" {% if 'device_lost' in notify.events %}checked{% endif %}> Serial device lost (unplugged, error, reconnecting)</label>
-        <label class="chk"><input type="checkbox" name="notify_event_device_back" {% if 'device_back' in notify.events %}checked{% endif %}> Serial device back</label>
-        <label class="chk"><input type="checkbox" name="notify_event_start_failed" {% if 'start_failed' in notify.events %}checked{% endif %}> Mapping failed to start (e.g. port in use)</label>
-        <label class="chk"><input type="checkbox" name="notify_event_client_connected" {% if 'client_connected' in notify.events %}checked{% endif %}> Client connected</label>
-        <label class="chk"><input type="checkbox" name="notify_event_client_disconnected" {% if 'client_disconnected' in notify.events %}checked{% endif %}> Client disconnected</label>
-        <label class="chk"><input type="checkbox" name="notify_event_login_failed" {% if 'login_failed' in notify.events %}checked{% endif %}> Failed sign-in to this UI</label>
-      <label>Repeat interval (minutes) <span class="muted">(0 = every time)</span>
+      <legend>{{ _("Events") }}</legend>
+      {% set event_labels = {
+        'device_lost': _("Serial device lost (unplugged, error, reconnecting)"),
+        'device_back': _("Serial device back"),
+        'start_failed': _("Mapping failed to start (e.g. port in use)"),
+        'client_connected': _("Client connected"),
+        'client_disconnected': _("Client disconnected"),
+        'login_failed': _("Failed sign-in to this UI"),
+      } %}
+      {% for e in notify_events %}
+      <label class="chk"><input type="checkbox" name="notify_event_{{ e }}" {% if e in notify.events %}checked{% endif %}> {{ event_labels[e] }}</label>
+      {% endfor %}
+      <label>{{ _("Repeat interval (minutes)") }} <span class="muted">({{ _("0 = every time") }})</span>
         <input type="number" name="notify_repeat_min" min="0" max="1440" step="any" value="{{ '%g'|format(notify.repeat_s / 60) }}"></label>
     </fieldset>
     <fieldset>
       <legend>Webhook</legend>
       <div class="grid2">
-        <label>URL <span class="muted">(kept secret{% if notify.webhook_url %}; blank = unchanged{% endif %})</span>
-          <input type="password" name="notify_webhook_url" autocomplete="off" placeholder="{% if notify.webhook_url %}•••••• (unchanged){% else %}https://hooks.slack.com/services/…{% endif %}"></label>
-        <label>Format
+        <label>URL <span class="muted">({{ _("kept secret") }}{% if notify.webhook_url %}; {{ _("blank = unchanged") }}{% endif %})</span>
+          <input type="password" name="notify_webhook_url" autocomplete="off" placeholder="{% if notify.webhook_url %}{{ unchanged }}{% else %}https://hooks.slack.com/services/…{% endif %}"></label>
+        <label>{{ _("Format") }}
           <select name="notify_webhook_format">
-            {% for f in webhook_formats %}<option value="{{ f }}" {% if f == notify.webhook_format %}selected{% endif %}>{{ {'json': 'JSON (generic)', 'slack': 'Slack / Mattermost', 'teams': 'Microsoft Teams (Workflows)', 'discord': 'Discord', 'telegram': 'Telegram bot'}[f] }}</option>{% endfor %}
+            {% set formats = {'json': _('JSON (generic)'), 'slack': 'Slack / Mattermost', 'teams': 'Microsoft Teams (Workflows)', 'discord': 'Discord', 'telegram': _('Telegram bot')} %}
+            {% for f in webhook_formats %}<option value="{{ f }}" {% if f == notify.webhook_format %}selected{% endif %}>{{ formats[f] }}</option>{% endfor %}
           </select></label>
       </div>
       <div class="grid2">
-        <label>Telegram chat ID <span class="muted">(Telegram only; URL: https://api.telegram.org/bot&lt;token&gt;/sendMessage)</span>
+        <label>{{ _("Telegram chat ID") }} <span class="muted">({{ _("Telegram only; URL: https://api.telegram.org/bot&lt;token&gt;/sendMessage") }})</span>
           <input type="text" name="notify_telegram_chat_id" value="{{ notify.telegram_chat_id }}"></label>
-        {% if notify.webhook_url %}<label class="chk chk-pad"><input type="checkbox" name="notify_webhook_clear"> Remove the stored URL</label>{% endif %}
+        {% if notify.webhook_url %}<label class="chk chk-pad"><input type="checkbox" name="notify_webhook_clear"> {{ _("Remove the stored URL") }}</label>{% endif %}
       </div>
     </fieldset>
     <fieldset>
-      <legend>E-mail</legend>
+      <legend>{{ _("E-mail") }}</legend>
       <div class="grid2">
-        <label>To <span class="muted">(comma-separated)</span><input type="text" name="notify_email_to" value="{{ notify.email_to }}" placeholder="ops@example.com"></label>
-        <label>From <span class="muted">(blank = ser2net@&lt;host&gt;)</span><input type="text" name="notify_email_from" value="{{ notify.email_from }}"></label>
+        <label>{{ _("To") }} <span class="muted">({{ _("comma-separated") }})</span><input type="text" name="notify_email_to" value="{{ notify.email_to }}" placeholder="ops@example.com"></label>
+        <label>{{ _("From") }} <span class="muted">({{ _("blank = ser2net@&lt;host&gt;") }})</span><input type="text" name="notify_email_from" value="{{ notify.email_from }}"></label>
       </div>
       <div class="grid3">
-        <label>SMTP server <input type="text" name="notify_smtp_host" value="{{ notify.smtp_host }}" placeholder="smtp.example.com"></label>
-        <label>Port <input type="number" name="notify_smtp_port" min="1" max="65535" value="{{ notify.smtp_port }}"></label>
-        <label>Security
+        <label>{{ _("SMTP server") }} <input type="text" name="notify_smtp_host" value="{{ notify.smtp_host }}" placeholder="smtp.example.com"></label>
+        <label>{{ _("Port") }} <input type="number" name="notify_smtp_port" min="1" max="65535" value="{{ notify.smtp_port }}"></label>
+        <label>{{ _("Security") }}
           <select name="notify_smtp_security">
-            {% for x in smtp_security %}<option value="{{ x }}" {% if x == notify.smtp_security %}selected{% endif %}>{{ {'starttls': 'STARTTLS (587)', 'ssl': 'TLS (465)', 'none': 'none (trusted network only)'}[x] }}</option>{% endfor %}
+            {% set securities = {'starttls': 'STARTTLS (587)', 'ssl': 'TLS (465)', 'none': _('none (trusted network only)')} %}
+            {% for x in smtp_security %}<option value="{{ x }}" {% if x == notify.smtp_security %}selected{% endif %}>{{ securities[x] }}</option>{% endfor %}
           </select></label>
       </div>
       <div class="grid2">
-        <label>Username <span class="muted">(optional)</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off"></label>
-        <label>Password <input type="password" name="notify_smtp_password" autocomplete="new-password" placeholder="{% if notify.smtp_password %}•••••• (unchanged){% endif %}"></label>
+        <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off"></label>
+        <label>{{ _("Password") }} <input type="password" name="notify_smtp_password" autocomplete="new-password" placeholder="{% if notify.smtp_password %}{{ unchanged }}{% endif %}"></label>
       </div>
     </fieldset>
     <div class="row-actions start">
-      <button class="btn primary" type="submit">Save notifications</button>
-      <button class="btn" type="submit" name="then" value="test">Save and send a test</button>
+      <button class="btn primary" type="submit">{{ _("Save notifications") }}</button>
+      <button class="btn" type="submit" name="then" value="test">{{ _("Save and send a test") }}</button>
     </div>
   </form>
 </section>
 
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>Admin TLS (HTTPS)</h2></div>
-  <p class="muted mb-sm">Encrypts this management UI. Changes take effect after a restart.</p>
+  <div class="panel-head"><h2>{{ _("Admin TLS (HTTPS)") }}</h2></div>
+  <p class="muted mb-sm">{{ _("Encrypts this management UI. Changes take effect after a restart.") }}</p>
   <form method="post" action="/settings/tls" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label>Certificate path <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>
-    <label>Key path <input type="text" name="tls_key" value="{{ admin.tls_key }}" placeholder="/path/key.pem"></label>
-    <button class="btn primary" type="submit">Save TLS</button>
+    <label>{{ _("Certificate path") }} <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>
+    <label>{{ _("Key path") }} <input type="text" name="tls_key" value="{{ admin.tls_key }}" placeholder="/path/key.pem"></label>
+    <button class="btn primary" type="submit">{{ _("Save TLS") }}</button>
   </form>
   <form method="post" action="/settings/tls/generate" class="inline mt-sm">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <button class="btn" type="submit">Generate self-signed (needs openssl)</button>
+    <button class="btn" type="submit">{{ _("Generate a self-signed certificate") }}</button>
   </form>
 </section>
 
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>REST API token</h2></div>
-  <p class="muted mb-sm">A bearer token for the JSON API at <span class="mono">/api/v1</span>
-     (automation, Ansible, fleet tools). Send it as
-     <span class="mono">Authorization: Bearer &lt;token&gt;</span>. Spec:
-     <a href="/api/v1/openapi.json">openapi.json</a>.</p>
+  <div class="panel-head"><h2>{{ _("REST API token") }}</h2></div>
+  <p class="muted mb-sm">{{ _('A bearer token for the JSON API at <span class="mono">/api/v1</span> (automation, Ansible, fleet tools). Send it as <span class="mono">Authorization: Bearer &lt;token&gt;</span>. Spec: <a href="/api/v1/openapi.json">openapi.json</a>.') }}</p>
   {% if new_api_token %}
-  <div class="banner ok">New token (copy now — shown only once):
-    <div class="mono" style="word-break:break-all;margin-top:.4rem">{{ new_api_token }}</div>
+  <div class="banner ok">{{ _("New token (copy now — shown only once):") }}
+    <div class="mono token-box">{{ new_api_token }}</div>
   </div>
   {% endif %}
-  <p>Status:
-    {% if api_token_set %}<span class="tag">enabled</span> <span class="muted">role: <span class="mono">{{ api_token_role }}</span></span>{% else %}<span class="tag">disabled</span>{% endif %}
+  <p>{{ _("Status:") }}
+    {% if api_token_set %}<span class="tag">{{ _("enabled") }}</span> <span class="muted">{{ _('role: <span class="mono">%(role)s</span>', role=api_token_role) }}</span>{% else %}<span class="tag">{{ _("disabled") }}</span>{% endif %}
   </p>
   <form method="post" action="/settings/api-token" class="inline">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label>Role <span class="muted">(viewer = read-only)</span>
+    <label>{{ _("Role") }} <span class="muted">({{ _("viewer = read-only") }})</span>
       <select name="api_token_role">
         {% set cur = api_token_role if api_token_set else 'admin' %}
         {% for r in roles %}<option value="{{ r }}" {% if r == cur %}selected{% endif %}>{{ r }}</option>{% endfor %}
       </select>
     </label>
-    <button class="btn primary" type="submit">{{ 'Regenerate token' if api_token_set else 'Generate token' }}</button>
+    <button class="btn primary" type="submit">{{ _("Regenerate token") if api_token_set else _("Generate token") }}</button>
   </form>
   {% if api_token_set %}
   <form method="post" action="/settings/api-token/revoke" class="inline mt-sm">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <button class="btn" type="submit">Revoke</button>
+    <button class="btn" type="submit">{{ _("Revoke") }}</button>
   </form>
   {% endif %}
 </section>
@@ -336,26 +324,26 @@
 
 {% if is_operator %}
 <section class="panel panel-narrow" id="import">
-  <div class="panel-head"><h2>Mappings export / import</h2></div>
-  <p><a class="btn" href="/settings/config/export">⤓ Export mappings (JSON)</a></p>
+  <div class="panel-head"><h2>{{ _("Mappings export / import") }}</h2></div>
+  <p><a class="btn" href="/settings/config/export">{{ _("⤓ Export mappings (JSON)") }}</a></p>
   {% if import_preview %}
   {% set p = import_preview %}
-  <h3>Import preview <span class="muted">— {{ p.count }} mapping(s) from a {{ p.source }}, mode: <b>{{ p.mode }}</b></span></h3>
+  <h3>{{ _("Import preview") }} <span class="muted">— {{ _("%(n)s mapping(s) from a %(source)s, mode: %(mode)s", n=p.count, source=p.source, mode=_("merge") if p.mode == 'merge' else _("replace")) }}</span></h3>
   {% for w in p.warnings %}<div class="banner warn">{{ w }}</div>{% endfor %}
-  {% if p.problem %}<div class="banner error">This import can't be applied: {{ p.problem }}</div>{% endif %}
+  {% if p.problem %}<div class="banner error">{{ _("This import can’t be applied: %(problem)s", problem=p.problem) }}</div>{% endif %}
   <div class="table-scroll">
   <table class="grid">
-    <thead><tr><th>Mapping</th><th>Port / network</th><th>Change</th></tr></thead>
+    <thead><tr><th>{{ _("Mapping") }}</th><th>{{ _("Port / network") }}</th><th>{{ _("Change") }}</th></tr></thead>
     <tbody>
     {% for r in p.rows %}
       <tr>
         <td>{{ r.name|softbreak }}</td>
         <td class="mono">{{ r.kind|softbreak }}</td>
         <td>
-          {% if r.action == 'add' %}<span class="tag">new</span>
-          {% elif r.action == 'update' %}<span class="tag">updates</span>{% if r.target != r.name %} <span class="muted">“{{ r.target }}”</span>{% endif %}
-          {% elif r.action == 'same' %}<span class="muted">unchanged</span>
-          {% else %}<span class="tag tag-danger">removed</span>{% endif %}
+          {% if r.action == 'add' %}<span class="tag">{{ _("new") }}</span>
+          {% elif r.action == 'update' %}<span class="tag">{{ _("updates") }}</span>{% if r.target != r.name %} <span class="muted">“{{ r.target }}”</span>{% endif %}
+          {% elif r.action == 'same' %}<span class="muted">{{ _("unchanged") }}</span>
+          {% else %}<span class="tag tag-danger">{{ _("removed") }}</span>{% endif %}
         </td>
       </tr>
     {% endfor %}
@@ -366,36 +354,33 @@
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <input type="hidden" name="token" value="{{ p.token }}">
     <input type="hidden" name="mode" value="{{ p.mode }}">
-    <button class="btn primary" type="submit" {% if p.problem %}disabled{% endif %}>Apply import</button>
+    <button class="btn primary" type="submit" {% if p.problem %}disabled{% endif %}>{{ _("Apply import") }}</button>
   </form>
-  <a class="btn mt-sm" href="/settings#import">Cancel</a>
+  <a class="btn mt-sm" href="/settings#import">{{ _("Cancel") }}</a>
   {% else %}
   <form method="post" action="/settings/config/import" enctype="multipart/form-data" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <input type="hidden" name="step" value="preview">
-    <label>Mappings file <span class="muted">(a ser2net export or config.json — or a classic ser2net <span class="mono">ser2net.yaml</span> / <span class="mono">ser2net.conf</span> to migrate from)</span>
+    <label>{{ _("Mappings file") }} <span class="muted">({{ _('a ser2net export or config.json — or a classic ser2net <span class="mono">ser2net.yaml</span> / <span class="mono">ser2net.conf</span> to migrate from') }})</span>
       <input type="file" name="file" accept="application/json,.json,.yaml,.yml,.conf,text/plain" required>
     </label>
-    <label class="chk"><input type="radio" name="mode" value="merge" checked> Merge — update mappings with the same name, add the others, keep the rest</label>
-    <label class="chk"><input type="radio" name="mode" value="replace"> Replace — the file's mappings replace all current ones</label>
-    <button class="btn" type="submit">Preview import</button>
+    <label class="chk"><input type="radio" name="mode" value="merge" checked> {{ _("Merge — update mappings with the same name, add the others, keep the rest") }}</label>
+    <label class="chk"><input type="radio" name="mode" value="replace"> {{ _("Replace — the file’s mappings replace all current ones") }}</label>
+    <button class="btn" type="submit">{{ _("Preview import") }}</button>
   </form>
-  <p class="muted mt-sm">Nothing changes until you apply the preview. The current configuration is kept as a backup either way.</p>
+  <p class="muted mt-sm">{{ _("Nothing changes until you apply the preview. The current configuration is kept as a backup either way.") }}</p>
   {% endif %}
 </section>
 {% endif %}
 
 {% if is_admin %}
 <section class="panel panel-narrow" id="backups">
-  <div class="panel-head"><h2>Configuration backups</h2></div>
-  <p class="muted mb-sm">Every change keeps the previous <span class="mono">config.json</span> in the
-     data folder's <span class="mono">backups/</span> (the newest 50). Restoring one replaces the
-     whole configuration — mappings, users, settings — and is itself backed up first, so it can be
-     undone. Backups contain password hashes and secrets: only admins see them.</p>
+  <div class="panel-head"><h2>{{ _("Configuration backups") }}</h2></div>
+  <p class="muted mb-sm">{{ _('Every change keeps the previous <span class="mono">config.json</span> in the data folder’s <span class="mono">backups/</span> (the newest 50). Restoring one replaces the whole configuration — mappings, users, settings — and is itself backed up first, so it can be undone. Backups contain password hashes and secrets: only admins see them.') }}</p>
   {% if backups %}
   <div class="table-scroll">
   <table class="grid">
-    <thead><tr><th>Saved (UTC)</th><th>Mappings</th><th>Users</th><th class="col-actions"></th></tr></thead>
+    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Mappings") }}</th><th>{{ _("Users") }}</th><th class="col-actions"></th></tr></thead>
     <tbody>
     {% for bk in backups %}
       <tr>
@@ -404,12 +389,12 @@
         <td>{{ bk.users if bk.users is not none else '?' }}</td>
         <td class="col-actions">
           <div class="row-actions">
-            <a class="btn sm" href="/settings/backups/{{ bk.name }}">Download</a>
+            <a class="btn sm" href="/settings/backups/{{ bk.name }}">{{ _("Download") }}</a>
             <form method="post" action="/settings/backups/restore" class="inline"
-                  data-confirm="Restore the configuration saved at {{ bk.time }} UTC? The current one is backed up first.">
+                  data-confirm="{{ _('Restore the configuration saved at %(time)s UTC? The current one is backed up first.', time=bk.time) }}">
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
               <input type="hidden" name="name" value="{{ bk.name }}">
-              <button class="btn sm" type="submit">Restore</button>
+              <button class="btn sm" type="submit">{{ _("Restore") }}</button>
             </form>
           </div>
         </td>
@@ -419,7 +404,7 @@
   </table>
   </div>
   {% else %}
-  <p class="muted">No backups yet — the first one is made at the next configuration change.</p>
+  <p class="muted">{{ _("No backups yet — the first one is made at the next configuration change.") }}</p>
   {% endif %}
 </section>
 {% endif %}

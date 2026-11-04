@@ -8,20 +8,25 @@ Checks:
   * real delivery to a local webhook and a local SMTP server; a failing endpoint is
     reported, not raised;
   * Settings -> Notifications saves (secrets kept when left blank), validates, and
-    "Save and send a test" delivers; a failed sign-in is notified.
+    "Save and send a test" delivers; a failed sign-in is notified;
+  * with Turkish as the UI's default language the messages are Turkish, and an e-mail
+    with non-ASCII text stays 7-bit (quoted-printable, encoded subject).
 
 Run: python3 tests/test_notifications.py
 """
 import asyncio
+import email
+import email.policy
 import json
+import os
 import socketserver
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from _server import Browser, Server
+from _server import ROOT, Browser, Server
 
 from app import notify
-from app.config import ConfigError, NotificationSettings
+from app.config import AdminUI, ConfigError, NotificationSettings
 from app.web.auth import hash_password
 
 RECEIVED: list = []
@@ -132,7 +137,7 @@ async def test_delivery(hook_port, smtp_port):
         "webhook_url": f"http://127.0.0.1:{hook_port}/hook", "webhook_format": "json",
         "email_to": "ops@example.com, lead@example.com", "smtp_host": "127.0.0.1",
         "smtp_port": smtp_port, "smtp_security": "none"})
-    st.config = type("C", (), {"notifications": s, "mappings": []})()
+    st.config = type("C", (), {"notifications": s, "mappings": [], "admin_ui": AdminUI()})()
     n = notify.Notifier(st)
     assert n.emit("device_lost", "m1", "PLC", "gone") is True
     assert n.emit("device_lost", "m1", "PLC", "gone") is False, "repeat within repeat_s"
@@ -143,10 +148,21 @@ async def test_delivery(hook_port, smtp_port):
     assert path == "/hook" and body["event"] == "device_lost" and body["mapping"] == "PLC"
     rcpt, data = MAILS[-1]
     assert rcpt == ["ops@example.com", "lead@example.com"] and "serial device lost" in data
+    st.config.admin_ui.language = "tr"
+    errors = await n.deliver("device_lost", "Kazan dairesi ğüşıöç", "gone")
+    lost = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))["serial device lost"]
+    assert errors == [] and lost in RECEIVED[-1][1]["text"], RECEIVED[-1:]
+    raw = MAILS[-1][1]
+    mail = email.message_from_string(raw, policy=email.policy.default)
+    assert raw.isascii(), "the e-mail must stay 7-bit"
+    assert "Kazan dairesi ğüşıöç" in mail["Subject"] and lost in mail["Subject"], mail["Subject"]
+    assert "Kazan dairesi ğüşıöç" in mail.get_content()
+    st.config.admin_ui.language = "auto"
     s.webhook_url = f"http://127.0.0.1:{hook_port}/fail"
     errors = await n.deliver("device_lost", "PLC", "gone")
     assert errors and "HTTP 500" in errors[0], errors
-    print("delivery: webhook + SMTP received; a failing webhook is reported, not raised  OK")
+    print("delivery: webhook + SMTP received (Turkish, 7-bit e-mail); a failing webhook is "
+          "reported, not raised  OK")
 
 
 def test_settings_ui(hook_port):

@@ -128,6 +128,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as
   warnings.
+- **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
+  otherwise the browser's language or the admin's default (Settings → Web UI access), which
+  notifications use as well. Logs, the audit log and the REST API stay English.
 - **Fully offline:** all dependencies bundled as wheels; no internet required.
 
 ---

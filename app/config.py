@@ -25,6 +25,7 @@ import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
+from .i18n import _
 
 # ---------------------------------------------------------------------------
 # Allowed value sets (mirror pyserial; kept here so config validation has no
@@ -194,22 +195,22 @@ class SerialSettings:
 
     def validate(self) -> None:
         if not self.port:
-            raise ConfigError("Serial port is required.")
+            raise ConfigError(_("Serial port is required."))
         if not isinstance(self.baudrate, int) or self.baudrate <= 0:
-            raise ConfigError("Baud rate must be a positive integer.")
+            raise ConfigError(_("Baud rate must be a positive integer."))
         if self.bytesize not in BYTESIZES:
-            raise ConfigError(f"Data bits must be one of {BYTESIZES}.")
+            raise ConfigError(_("Data bits must be one of {0}.").format(BYTESIZES))
         if self.parity not in PARITIES:
-            raise ConfigError(f"Parity must be one of {PARITIES}.")
+            raise ConfigError(_("Parity must be one of {0}.").format(PARITIES))
         if self.stopbits not in STOPBITS:
-            raise ConfigError(f"Stop bits must be one of {STOPBITS}.")
+            raise ConfigError(_("Stop bits must be one of {0}.").format(STOPBITS))
         if self.flowcontrol not in FLOWCONTROLS:
-            raise ConfigError(f"Flow control must be one of {FLOWCONTROLS}.")
+            raise ConfigError(_("Flow control must be one of {0}.").format(FLOWCONTROLS))
         if self.rts_on_open not in LINE_STATES or self.dtr_on_open not in LINE_STATES:
-            raise ConfigError("RTS/DTR on open must be on|off|keep.")
+            raise ConfigError(_("RTS/DTR on open must be on|off|keep."))
         # rtscts (hardware) flow control conflicts with RS-485 RTS direction toggling.
         if self.advanced.rs485_enabled and self.flowcontrol == "rtscts":
-            raise ConfigError("RS-485 RTS toggling conflicts with RTS/CTS flow control.")
+            raise ConfigError(_("RS-485 RTS toggling conflicts with RTS/CTS flow control."))
 
     def compact(self) -> str:
         """ser2net-style compact descriptor, e.g. '9600N81'."""
@@ -273,63 +274,64 @@ class NetworkSettings:
 
     def validate(self) -> None:
         if self.mode not in NET_MODES:
-            raise ConfigError(f"Network mode must be one of {NET_MODES}.")
+            raise ConfigError(_("Network mode must be one of {0}.").format(NET_MODES))
         if self.protocol not in PROTOCOLS:
-            raise ConfigError(f"Protocol must be one of {PROTOCOLS}.")
+            raise ConfigError(_("Protocol must be one of {0}.").format(PROTOCOLS))
 
         if self.listens:
             try:
                 ip = ipaddress.ip_address(self.bind_ip)
             except ValueError:
-                raise ConfigError(f"Invalid bind IP: {self.bind_ip!r}.") from None
+                raise ConfigError(_("Invalid bind IP: {0}.").format(repr(self.bind_ip))) from None
             # 0.0.0.0 and :: are the "all interfaces" wildcards and must be allowed
             # even though :: reports is_reserved=True.
             if ip.is_multicast or (ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
-                raise ConfigError("Bind IP cannot be a multicast/reserved address.")
+                raise ConfigError(_("Bind IP cannot be a multicast/reserved address."))
             if not isinstance(self.port, int) or not (1 <= self.port <= 65535):
-                raise ConfigError("TCP/UDP port must be between 1 and 65535.")
+                raise ConfigError(_("TCP/UDP port must be between 1 and 65535."))
         else:  # client (connect-out)
             if not self.remote_host.strip():
-                raise ConfigError("Connect-out mode requires a remote host.")
+                raise ConfigError(_("Connect-out mode requires a remote host."))
             if not isinstance(self.remote_port, int) or not (1 <= self.remote_port <= 65535):
-                raise ConfigError("Remote port must be between 1 and 65535.")
+                raise ConfigError(_("Remote port must be between 1 and 65535."))
 
         if not isinstance(self.max_connections, int) or self.max_connections < 1:
-            raise ConfigError("Max connections must be >= 1.")
+            raise ConfigError(_("Max connections must be >= 1."))
         if not isinstance(self.client_queue_max, int) or self.client_queue_max < 16:
-            raise ConfigError("Client queue size must be an integer >= 16.")
+            raise ConfigError(_("Client queue size must be an integer >= 16."))
         # OS limits: Linux caps TCP_KEEPIDLE/TCP_KEEPINTVL at 32767 s and TCP_KEEPCNT at 127.
-        for label, value, high in (("Keepalive idle time", self.keepalive_idle_s, 32767),
-                                   ("Keepalive probe interval", self.keepalive_interval_s, 32767),
-                                   ("Keepalive probe count", self.keepalive_count, 127)):
+        for label, value, high in ((_("Keepalive idle time"), self.keepalive_idle_s, 32767),
+                                   (_("Keepalive probe interval"), self.keepalive_interval_s, 32767),
+                                   (_("Keepalive probe count"), self.keepalive_count, 127)):
             if not _is_int(value) or not (1 <= value <= high):
-                raise ConfigError(f"{label} must be an integer between 1 and {high}.")
+                raise ConfigError(_("{0} must be an integer between 1 and {1}.").format(label, high))
         if not _is_number(self.connect_timeout_s) or not (0 <= self.connect_timeout_s <= 3600):
-            raise ConfigError("Connect timeout must be between 0 and 3600 seconds (0 = OS default).")
+            raise ConfigError(_("Connect timeout must be between 0 and 3600 seconds (0 = OS "
+                                "default)."))
         if self.protocol == "rfc2217" and self.mode == "udp":
-            raise ConfigError("RFC2217 requires a TCP (server/client) connection, not UDP.")
+            raise ConfigError(_("RFC2217 requires a TCP (server/client) connection, not UDP."))
         if self.protocol == "modbus" and self.mode != "server":
-            raise ConfigError("Modbus gateway requires TCP server mode (masters connect in).")
+            raise ConfigError(_("Modbus gateway requires TCP server mode (masters connect in)."))
         if self.protocol == "rfc2217" and self.max_connections > 1:
             raise ConfigError(
-                "RFC2217 supports a single connection (clients share one serial "
-                "port's settings). Set Max connections = 1."
+                _("RFC2217 supports a single connection (clients share one serial port's "
+                  "settings). Set Max connections = 1.")
             )
         if self.tls:
             if self.mode == "udp":
-                raise ConfigError("TLS is not applicable to UDP mappings.")
+                raise ConfigError(_("TLS is not applicable to UDP mappings."))
             if not (self.tls_cert and self.tls_key):
-                raise ConfigError("Enable TLS requires both a certificate and a key.")
+                raise ConfigError(_("Enable TLS requires both a certificate and a key."))
             for p in (self.tls_cert, self.tls_key):
                 if not os.path.isfile(p):
-                    raise ConfigError(f"TLS file not found: {p}")
-        for label, lst in (("allowed", self.allowed_client_ips),
-                           ("priority", self.priority_client_ips)):
+                    raise ConfigError(_("TLS file not found: {0}").format(p))
+        for label, lst in ((_("allowed"), self.allowed_client_ips),
+                           (_("priority"), self.priority_client_ips)):
             for cidr in lst:
                 try:
                     ipaddress.ip_network(normalize_cidr(cidr), strict=False)
                 except ValueError:
-                    raise ConfigError(f"Invalid {label} client IP/CIDR: {cidr!r}.") from None
+                    raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(label, repr(cidr))) from None
 
 
 # ---------------------------------------------------------------------------
@@ -370,14 +372,14 @@ class MappingOptions:
         return opts
 
     def validate(self) -> None:
-        for label, value in (("Idle timeout", self.idle_timeout_s),
-                             ("Max connection time", self.max_connection_time_s)):
+        for label, value in ((_("Idle timeout"), self.idle_timeout_s),
+                             (_("Max connection time"), self.max_connection_time_s)):
             if not _is_number(value) or not (0 <= value <= MAX_TIMER_S):
-                raise ConfigError(f"{label} must be between 0 (off) and {MAX_TIMER_S} seconds.")
+                raise ConfigError(_("{0} must be between 0 (off) and {1} seconds.").format(label, MAX_TIMER_S))
         if not _is_number(self.trace_max_mb) or not (0.1 <= self.trace_max_mb <= 1024):
-            raise ConfigError("Trace file size must be between 0.1 and 1024 MB.")
+            raise ConfigError(_("Trace file size must be between 0.1 and 1024 MB."))
         if not _is_int(self.trace_keep) or not (0 <= self.trace_keep <= 50):
-            raise ConfigError("Rotated trace files kept must be between 0 and 50.")
+            raise ConfigError(_("Rotated trace files kept must be between 0 and 50."))
 
 
 # ---------------------------------------------------------------------------
@@ -413,22 +415,22 @@ class MqttSettings:
         if not self.enabled:
             return
         if not self.host.strip():
-            raise ConfigError("MQTT is enabled but no broker host is set.")
+            raise ConfigError(_("MQTT is enabled but no broker host is set."))
         if not self.base_topic.strip():
-            raise ConfigError("MQTT is enabled but no base topic is set.")
+            raise ConfigError(_("MQTT is enabled but no base topic is set."))
         if not isinstance(self.port, int) or not (1 <= self.port <= 65535):
-            raise ConfigError("MQTT port must be between 1 and 65535.")
+            raise ConfigError(_("MQTT port must be between 1 and 65535."))
         if self.qos not in (0, 1, 2):
-            raise ConfigError("MQTT QoS must be 0, 1 or 2.")
+            raise ConfigError(_("MQTT QoS must be 0, 1 or 2."))
         if self.payload_format not in MQTT_FORMATS:
-            raise ConfigError(f"MQTT payload format must be one of {MQTT_FORMATS}.")
+            raise ConfigError(_("MQTT payload format must be one of {0}.").format(MQTT_FORMATS))
         if self.payload_format == "sparkplug_b":
-            for label, value in (("group ID", self.sparkplug_group_id),
-                                 ("edge node ID", self.sparkplug_node_id)):
+            for label, value in ((_("group ID"), self.sparkplug_group_id),
+                                 (_("edge node ID"), self.sparkplug_node_id)):
                 if any(c in value for c in "/+#"):
-                    raise ConfigError(f"Sparkplug {label} must not contain '/', '+' or '#'.")
+                    raise ConfigError(_("Sparkplug {0} must not contain '/', '+' or '#'.").format(label))
             if not self.sparkplug_group_id.strip():
-                raise ConfigError("Sparkplug B needs a group ID.")
+                raise ConfigError(_("Sparkplug B needs a group ID."))
 
 
 # ---------------------------------------------------------------------------
@@ -473,29 +475,29 @@ class ModbusPoll:
         if not self.points:
             return
         if self.interval_s <= 0:
-            raise ConfigError("Modbus poll interval must be > 0 seconds.")
+            raise ConfigError(_("Modbus poll interval must be > 0 seconds."))
         seen = set()
         for p in self.points:
             if not p.name.strip():
-                raise ConfigError("Each Modbus poll point needs a name.")
+                raise ConfigError(_("Each Modbus poll point needs a name."))
             if p.name in seen:
-                raise ConfigError(f"Duplicate Modbus poll point name: {p.name!r}.")
+                raise ConfigError(_("Duplicate Modbus poll point name: {0}.").format(repr(p.name)))
             seen.add(p.name)
             if not (0 <= p.unit <= 255):
-                raise ConfigError(f"Point {p.name!r}: unit must be 0-255.")
+                raise ConfigError(_("Point {0}: unit must be 0-255.").format(repr(p.name)))
             if p.fn not in (1, 2, 3, 4):
-                raise ConfigError(f"Point {p.name!r}: function must be 1 (coils), 2 (discrete "
-                                  "inputs), 3 (holding registers) or 4 (input registers).")
+                raise ConfigError(_("Point {0}: function must be 1 (coils), 2 (discrete "
+                                    "inputs), 3 (holding registers) or 4 (input registers).").format(repr(p.name)))
             if not (0 <= p.address <= 65535):
-                raise ConfigError(f"Point {p.name!r}: address must be 0-65535.")
+                raise ConfigError(_("Point {0}: address must be 0-65535.").format(repr(p.name)))
             if p.dtype not in MODBUS_DTYPES:
-                raise ConfigError(f"Point {p.name!r}: dtype must be one of {MODBUS_DTYPES}.")
+                raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), MODBUS_DTYPES))
             if (p.fn in (1, 2)) != (p.dtype == "bool"):
-                raise ConfigError(f"Point {p.name!r}: coils / discrete inputs (fn 1, 2) use "
-                                  "dtype 'bool'; registers (fn 3, 4) a numeric dtype.")
+                raise ConfigError(_("Point {0}: coils / discrete inputs (fn 1, 2) use dtype "
+                                    "'bool'; registers (fn 3, 4) a numeric dtype.").format(repr(p.name)))
             if p.writable and p.fn not in (1, 3):
-                raise ConfigError(f"Point {p.name!r}: only coils (fn 1) and holding registers "
-                                  "(fn 3) can be written.")
+                raise ConfigError(_("Point {0}: only coils (fn 1) and holding registers (fn 3) "
+                                    "can be written.").format(repr(p.name)))
 
 
 # ---------------------------------------------------------------------------
@@ -538,26 +540,26 @@ class MappingConfig:
 
     def validate(self) -> None:
         if not self.name.strip():
-            raise ConfigError("Mapping name is required.")
+            raise ConfigError(_("Mapping name is required."))
         if self.kind not in MAPPING_KINDS:
-            raise ConfigError(f"Mapping kind must be one of {MAPPING_KINDS}.")
+            raise ConfigError(_("Mapping kind must be one of {0}.").format(MAPPING_KINDS))
         self.serial.validate()
         if self.kind == "serialbridge":
             self.serial_b.validate()
             if self.serial_b.port == self.serial.port:
-                raise ConfigError("Serial-to-serial bridge needs two different ports.")
+                raise ConfigError(_("Serial-to-serial bridge needs two different ports."))
         else:
             self.network.validate()
         self.options.validate()
         self.mqtt.validate()
         self.modbus_poll.validate()
         if self.modbus_poll.points and not (self.kind == "net" and self.network.protocol == "modbus"):
-            raise ConfigError("Modbus register polling requires a Modbus-gateway mapping "
-                              "(protocol = modbus).")
+            raise ConfigError(_("Modbus register polling requires a Modbus-gateway mapping "
+                                "(protocol = modbus)."))
         if (self.mqtt.enabled and self.mqtt.payload_format == "sparkplug_b"
                 and not self.modbus_poll.points):
-            raise ConfigError("Sparkplug B publishes Modbus poll points: add points (and use "
-                              "protocol = modbus), or use the plain MQTT format.")
+            raise ConfigError(_("Sparkplug B publishes Modbus poll points: add points (and use "
+                                "protocol = modbus), or use the plain MQTT format."))
 
 
 # ---------------------------------------------------------------------------
@@ -574,12 +576,15 @@ class AdminUI:
     # REST API keeps its bearer token.
     require_login: bool = True
     anonymous_role: str = "viewer"
+    # web UI language when a visitor hasn't picked one: auto (the browser's), en, tr
+    language: str = "auto"
 
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
 
 
+UI_LANGUAGES = ("auto", "en", "tr")
 ROLES = ("admin", "operator", "viewer")
 # higher rank = more privilege; a route requires >= some rank
 ROLE_RANK = {"viewer": 1, "operator": 2, "admin": 3}
@@ -619,13 +624,13 @@ class LdapSettings:
         if not self.enabled:
             return
         if not self.server_uri.strip():
-            raise ConfigError("LDAP is enabled but no server URI is set.")
+            raise ConfigError(_("LDAP is enabled but no server URI is set."))
         if not (self.user_dn_template.strip() or
                 (self.bind_dn.strip() and self.user_search_base.strip())):
-            raise ConfigError("LDAP needs either a user DN template (direct bind) or a "
-                              "bind DN + user search base (search+bind).")
+            raise ConfigError(_("LDAP needs either a user DN template (direct bind) or a bind "
+                                "DN + user search base (search+bind)."))
         if self.default_role and self.default_role not in ROLES:
-            raise ConfigError(f"LDAP default role must be one of {ROLES} or blank.")
+            raise ConfigError(_("LDAP default role must be one of {0} or blank.").format(ROLES))
 
 
 @dataclass
@@ -656,11 +661,11 @@ class OidcSettings:
         if not self.enabled:
             return
         if not (self.issuer.strip() and self.client_id.strip() and self.client_secret.strip()):
-            raise ConfigError("OIDC needs an issuer, client ID and client secret.")
+            raise ConfigError(_("OIDC needs an issuer, client ID and client secret."))
         if not self.issuer.strip().lower().startswith("https://"):
-            raise ConfigError("OIDC issuer must be an https:// URL.")
+            raise ConfigError(_("OIDC issuer must be an https:// URL."))
         if self.default_role and self.default_role not in ROLES:
-            raise ConfigError(f"OIDC default role must be one of {ROLES} or blank.")
+            raise ConfigError(_("OIDC default role must be one of {0} or blank.").format(ROLES))
 
 
 def parse_cluster_peer(entry: str) -> tuple[str, str, int]:
@@ -672,16 +677,16 @@ def parse_cluster_peer(entry: str) -> tuple[str, str, int]:
         scheme, s = s.split("://", 1)
         scheme = scheme.lower()
     if scheme not in ("http", "https"):
-        raise ConfigError(f"Cluster peer scheme must be http or https: {entry}")
+        raise ConfigError(_("Cluster peer scheme must be http or https: {0}").format(entry))
     host, sep, port_s = s.rpartition(":")
     if not sep or not host:
-        raise ConfigError(f"Cluster peer must be host:port — got: {entry}")
+        raise ConfigError(_("Cluster peer must be host:port — got: {0}").format(entry))
     try:
         port = int(port_s)
     except ValueError:
-        raise ConfigError(f"Cluster peer port is not a number: {entry}") from None
+        raise ConfigError(_("Cluster peer port is not a number: {0}").format(entry)) from None
     if not (1 <= port <= 65535):
-        raise ConfigError(f"Cluster peer port must be 1..65535: {entry}")
+        raise ConfigError(_("Cluster peer port must be 1..65535: {0}").format(entry))
     return scheme, host, port
 
 
@@ -717,19 +722,19 @@ class ClusterSettings:
         if not self.enabled:
             return
         if not self.key.strip():
-            raise ConfigError("Cluster is enabled but no shared key is set.")
+            raise ConfigError(_("Cluster is enabled but no shared key is set."))
         try:
             port = int(self.discovery_port)
         except (TypeError, ValueError):
-            raise ConfigError("Cluster discovery port must be a number.") from None
+            raise ConfigError(_("Cluster discovery port must be a number.")) from None
         if not (1 <= port <= 65535):
-            raise ConfigError("Cluster discovery port must be 1..65535.")
+            raise ConfigError(_("Cluster discovery port must be 1..65535."))
         if self.advertise_ip.strip():
             try:
                 ipaddress.ip_address(self.advertise_ip.strip())
             except ValueError:
                 raise ConfigError(
-                    f"Cluster advertise IP is not a valid address: {self.advertise_ip}") from None
+                    _("Cluster advertise IP is not a valid address: {0}").format(self.advertise_ip)) from None
         for entry in self.peers:
             parse_cluster_peer(entry)  # raises ConfigError on a bad entry
 
@@ -777,25 +782,25 @@ class NotificationSettings:
         if not self.enabled:
             return
         if not (self.webhook_url.strip() or self.recipients):
-            raise ConfigError("Notifications need a webhook URL or e-mail recipients.")
+            raise ConfigError(_("Notifications need a webhook URL or e-mail recipients."))
         if self.webhook_url.strip():
             if not self.webhook_url.strip().lower().startswith(("https://", "http://")):
-                raise ConfigError("The webhook URL must start with https:// (or http://).")
+                raise ConfigError(_("The webhook URL must start with https:// (or http://)."))
             if self.webhook_format not in WEBHOOK_FORMATS:
-                raise ConfigError(f"Webhook format must be one of {WEBHOOK_FORMATS}.")
+                raise ConfigError(_("Webhook format must be one of {0}.").format(WEBHOOK_FORMATS))
             if self.webhook_format == "telegram" and not str(self.telegram_chat_id).strip():
-                raise ConfigError("Telegram needs a chat ID.")
+                raise ConfigError(_("Telegram needs a chat ID."))
         if self.recipients:
             if not self.smtp_host.strip():
-                raise ConfigError("E-mail notifications need an SMTP server.")
+                raise ConfigError(_("E-mail notifications need an SMTP server."))
             if not _is_int(self.smtp_port) or not (1 <= self.smtp_port <= 65535):
-                raise ConfigError("SMTP port must be between 1 and 65535.")
+                raise ConfigError(_("SMTP port must be between 1 and 65535."))
             if self.smtp_security not in SMTP_SECURITY:
-                raise ConfigError(f"SMTP security must be one of {SMTP_SECURITY}.")
+                raise ConfigError(_("SMTP security must be one of {0}.").format(SMTP_SECURITY))
             if any("@" not in a for a in self.recipients):
-                raise ConfigError("Each e-mail recipient needs an @.")
+                raise ConfigError(_("Each e-mail recipient needs an @."))
         if not _is_int(self.repeat_s) or not (0 <= self.repeat_s <= 86400):
-            raise ConfigError("The repeat interval must be between 0 and 86400 seconds.")
+            raise ConfigError(_("The repeat interval must be between 0 and 86400 seconds."))
 
 
 @dataclass
@@ -931,10 +936,10 @@ class AppConfig:
         # bad path fails fast at save time instead of crashing uvicorn at startup.
         cert, key = self.admin_ui.tls_cert, self.admin_ui.tls_key
         if bool(cert) != bool(key):
-            raise ConfigError("Set both TLS certificate and key, or neither.")
+            raise ConfigError(_("Set both TLS certificate and key, or neither."))
         for path in (p for p in (cert, key) if p):
             if not os.path.isfile(path):
-                raise ConfigError(f"TLS file not found or not readable: {path}")
+                raise ConfigError(_("TLS file not found or not readable: {0}").format(path))
 
         # Admin UI bind IP (set via the console / --reconfigure, or a hand-edited
         # config). Catch a bad value here with a clear error instead of letting
@@ -944,13 +949,14 @@ class AppConfig:
                 ipaddress.ip_address(self.admin_ui.bind_ip)
             except ValueError:
                 raise ConfigError(
-                    f"Invalid admin UI bind IP: {self.admin_ui.bind_ip}") from None
+                    _("Invalid admin UI bind IP: {0}").format(self.admin_ui.bind_ip)) from None
+        if self.admin_ui.language not in UI_LANGUAGES:
+            raise ConfigError(_("The default language must be one of {0}.").format(UI_LANGUAGES))
         if self.admin_ui.anonymous_role not in ROLES:
-            raise ConfigError(f"Role for visitors without login must be one of {ROLES}.")
+            raise ConfigError(_("Role for visitors without login must be one of {0}.").format(ROLES))
         if not _is_int(self.session_timeout_s) or not (
                 SESSION_TIMEOUT_MIN_S <= self.session_timeout_s <= SESSION_TIMEOUT_MAX_S):
-            raise ConfigError(f"Session lifetime must be between {SESSION_TIMEOUT_MIN_S // 60} "
-                              f"minutes and {SESSION_TIMEOUT_MAX_S // 86400} days.")
+            raise ConfigError(_("Session lifetime must be between {0} minutes and {1} days.").format(SESSION_TIMEOUT_MIN_S // 60, SESSION_TIMEOUT_MAX_S // 86400))
 
         self.ldap.validate()
         self.oidc.validate()
@@ -975,8 +981,8 @@ class AppConfig:
                     prev = serial_owner.get(dev)
                     if prev is not None and prev[0] != m.id:
                         raise ConfigError(
-                            f"Mappings '{prev[1]}' and '{m.name}' both use serial port "
-                            f"{dev} — a serial port can only be opened by one mapping."
+                            _("Mappings '{0}' and '{1}' both use serial port {2} — a serial "
+                              "port can only be opened by one mapping.").format(prev[1], m.name, dev)
                         )
                     serial_owner[dev] = (m.id, m.name)
 
@@ -990,8 +996,8 @@ class AppConfig:
             for (sproto, bip, bport), other in seen.items():
                 if sproto == proto and bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
                     raise ConfigError(
-                        f"Mappings '{other}' and '{m.name}' both use {proto.upper()} port "
-                        f"{m.network.port} on overlapping addresses ({bip} / {m.network.bind_ip})."
+                        _("Mappings '{0}' and '{1}' both use {2} port {3} on overlapping "
+                          "addresses ({4} / {5}).").format(other, m.name, proto.upper(), m.network.port, bip, m.network.bind_ip)
                     )
             seen[(proto, m.network.bind_ip, m.network.port)] = m.name
 
@@ -1140,7 +1146,7 @@ class ConfigStore:
         """The text of one backup. Raises ConfigError for an unknown / invalid name
         (only names this store generated are accepted: no path tricks)."""
         if not _BACKUP_NAME.match(name or "") or name not in self.backup_names():
-            raise ConfigError("No such backup.")
+            raise ConfigError(_("No such backup."))
         with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
             return fh.read()
 

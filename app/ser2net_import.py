@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .config import MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, trace_file_name
+from .i18n import _
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +38,7 @@ from .config import MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, trace
 # ---------------------------------------------------------------------------
 class _YamlError(Exception):
     def __init__(self, line: int, msg: str) -> None:
-        super().__init__(f"line {line}: {msg}")
+        super().__init__(_("line {0}: {1}").format(line, msg))
 
 
 @dataclass
@@ -201,7 +202,7 @@ class _Flow:
         if c in ("'", '"'):
             end = _close_quote(self.s[self.j + 1:], c)
             if end < 0:
-                raise ValueError("unterminated quoted string")
+                raise ValueError(_("unterminated quoted string"))
             raw = self.s[self.j + 1:self.j + 1 + end]
             self.j += end + 2
             return _fold_quoted(raw.split("\n"), c)
@@ -209,7 +210,7 @@ class _Flow:
             m = _ALIAS_NAME.match(self.s, self.j + 1)
             name = m.group(0) if m else ""
             if name not in self.anchors:
-                raise ValueError(f"unknown alias *{name}")
+                raise ValueError(_("unknown alias *{0}").format(name))
             self.j += 1 + len(name)
             return copy.deepcopy(self.anchors[name])
         start = self.j
@@ -247,7 +248,7 @@ class _Flow:
             if self.s.startswith(",", self.j):
                 self.j += 1
             elif not self.s.startswith(close, self.j):
-                raise ValueError(f"expected ',' or '{close}'")
+                raise ValueError(_("expected ',' or '{0}'").format(close))
 
 
 class _YamlReader:
@@ -283,7 +284,7 @@ class _YamlReader:
                 continue
             docs.append(self._node(-1))
             if self._peek() is not None:  # dedented below a nested block: not YAML
-                raise self._err("unexpected indentation", self.i)
+                raise self._err(_("unexpected indentation"), self.i)
         return docs
 
     def _node(self, parent: int) -> Any:
@@ -309,7 +310,7 @@ class _YamlReader:
             if kv is None:
                 if nxt[0] == ind and _is_item(nxt[1]):
                     return m  # a list at its key's indentation ended; the caller goes on
-                raise self._err("expected 'key: value' here", self.i)
+                raise self._err(_("expected 'key: value' here"), self.i)
             self._take()
             value, anchor = self._value(kv[1], ind, in_map=True)
             if root and anchor and isinstance(value, (_YMap, list)):
@@ -324,7 +325,7 @@ class _YamlReader:
             if nxt is None or nxt[0] < ind or (nxt[0] == ind and not _is_item(nxt[1])):
                 return items
             if nxt[0] > ind:
-                raise self._err("unexpected indentation", self.i)
+                raise self._err(_("unexpected indentation"), self.i)
             rest = nxt[1][1:]
             inner = rest.lstrip(" \t")
             if inner and not inner.startswith("#") and (_is_item(inner) or _key(inner)):
@@ -356,7 +357,7 @@ class _YamlReader:
             m2 = _ALIAS_NAME.match(s, 1)
             name = m2.group(0) if m2 else ""
             if name not in self.anchors:
-                raise self._err(f"unknown alias *{name}")
+                raise self._err(_("unknown alias *{0}").format(name))
             node = copy.deepcopy(self.anchors[name])
         elif s[0] in "\"'":
             node = self._quoted(s)
@@ -391,11 +392,11 @@ class _YamlReader:
         quote, parts = s[0], [s[1:]]
         while (end := _close_quote(parts[-1], quote)) < 0:
             if self.i >= len(self.lines):
-                raise self._err("unterminated quoted string")
+                raise self._err(_("unterminated quoted string"))
             parts.append(self._take())
         tail = parts[-1][end + 1:].strip()
         if tail and not tail.startswith("#"):
-            raise self._err("unexpected text after a quoted string")
+            raise self._err(_("unexpected text after a quoted string"))
         parts[-1] = parts[-1][:end]
         return _fold_quoted(parts, quote)
 
@@ -403,11 +404,11 @@ class _YamlReader:
         text = s
         while (end := _flow_end(text)) < 0:
             if self.i >= len(self.lines):
-                raise self._err("unterminated [...] or {...}")
+                raise self._err(_("unterminated [...] or {...}"))
             text += "\n" + self._take()
         tail = text[end:].strip()
         if tail and not tail.startswith("#"):
-            raise self._err("unexpected text after ] or }")
+            raise self._err(_("unexpected text after ] or }"))
         try:
             return _Flow(text[:end], self.anchors).value()
         except ValueError as e:
@@ -416,7 +417,7 @@ class _YamlReader:
     def _block_scalar(self, header: str, parent: int) -> str:
         m = re.match(r"([|>])([+-]?)([1-9]?)([+-]?)\s*(?:#.*)?$", header)
         if m is None:
-            raise self._err("bad | or > block header")
+            raise self._err(_("bad | or > block header"))
         chomp = m.group(2) or m.group(4)
         indent = max(parent, 0) + int(m.group(3)) if m.group(3) else -1
         lines: list[str] = []
@@ -477,10 +478,18 @@ class _Conn:
     remctl: bool = False                                         # 3.x RFC2217 flag
     dropped: list[str] = field(default_factory=list)             # options with no equivalent
     notes: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)             # why it is not imported
 
     def note(self, msg: str) -> None:
         if msg not in self.notes:
             self.notes.append(msg)
+
+    def skip(self, why: str) -> None:
+        """Note why the connection is not imported (then the only notes shown for it)."""
+        msg = _("skipped: {0}").format(why)
+        if msg not in self.skipped:
+            self.skipped.append(msg)
+        self.note(msg)
 
     def drop(self, option: str) -> None:
         if option not in self.dropped:
@@ -563,14 +572,14 @@ def _listen_address(c: _Conn, fields: list[str]) -> bool:
     while fields and fields[0].lower() in ("ipv4", "ipv6", "ipv6n4"):
         family = fields.pop(0).lower()
     if not fields:
-        c.note("skipped: the accepter has no port")
+        c.skip(_("the accepter has no port"))
         return False
     host, port_s = ("", fields[0]) if len(fields) == 1 else (fields[0], fields[1])
     if len(fields) > 2:
-        c.note("only the first listen address is imported: " + ",".join(fields[:2]))
+        c.note(_("only the first listen address is imported: {0}").format(",".join(fields[:2])))
     port = _port_number(port_s)
     if port is None:
-        c.note(f"skipped: listen port '{port_s}' is not a port number between 1 and 65535")
+        c.skip(_("listen port '{0}' is not a port number between 1 and 65535").format(port_s))
         return False
     c.network["port"] = port
     c.network["bind_ip"] = _bind_ip(c, host, family)
@@ -591,14 +600,14 @@ def _bind_ip(c: _Conn, host: str, family: str) -> str:
     except ValueError:
         ip = None
     if ip is not None and ip.version == 6 and ip.is_loopback:
-        c.note(f"listen address {host} (IPv6 loopback) is not accepted as a bind IP here: "
-               "the mapping listens on 127.0.0.1")
+        c.note(_("listen address {0} (IPv6 loopback) is not accepted as a bind IP here: the "
+                 "mapping listens on 127.0.0.1").format(host))
         return "127.0.0.1"
     if ip is not None and not ip.is_multicast and not (
             ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
         return str(ip)
-    c.hold = (f"listen address '{host}' cannot be used as a bind IP here: the mapping "
-              "listens on 0.0.0.0 and is imported disabled; set its bind IP, then enable it")
+    c.hold = (_("listen address '{0}' cannot be used as a bind IP here: the mapping listens on "
+                "0.0.0.0 and is imported disabled; set its bind IP, then enable it").format(host))
     return "0.0.0.0"
 
 
@@ -619,25 +628,25 @@ def _accepter(c: _Conn, spec: str) -> bool:
             if low == "udp":
                 c.network["mode"] = "udp"
             elif low == "sctp":
-                c.note("SCTP is not supported here: the mapping listens on TCP instead")
+                c.note(_("SCTP is not supported here: the mapping listens on TCP instead"))
             return _listen_address(c, layers[idx + 1:])
         if low == "telnet":
             rfc = any(o.split("=", 1)[0].strip().lower() == "rfc2217"
                       and _bool(o.split("=", 1)[1] if "=" in o else "true") for o in opts)
             c.network["protocol"] = "rfc2217" if rfc else "telnet"
         elif low == "ssl":
-            c.note("TLS (ssl) is not imported: the mapping listens without TLS; enable TLS "
-                   "on it with a certificate and key if clients expect it")
+            c.note(_("TLS (ssl) is not imported: the mapping listens without TLS; enable TLS "
+                     "on it with a certificate and key if clients expect it"))
         elif low == "certauth":
-            c.note("certauth (gtlssh login) is not imported: clients connect without "
-                   "authentication")
+            c.note(_("certauth (gtlssh login) is not imported: clients connect without "
+                     "authentication"))
         elif low == "mux":
             pass  # gtlssh's channel layer, comes with certauth
         elif low in _OTHER_TERMINALS:
             break
         else:
-            c.note(f"accepter layer '{name}' is not imported")
-    c.note(f"skipped: accepter '{spec}' is not a TCP/UDP port")
+            c.note(_("accepter layer '{0}' is not imported").format(name))
+    c.skip(_("accepter '{0}' is not a TCP/UDP port").format(spec))
     return False
 
 
@@ -658,19 +667,19 @@ def _connector(c: _Conn, spec: str, defaults: list[str]) -> bool:
         if low in ("serialdev", "sdev", "dev"):
             tokens = [t for f in layers[idx + 1:] for t in f.split()]
             if not tokens:
-                c.note("skipped: the connector names no device")
+                c.skip(_("the connector names no device"))
                 return False
             c.device = _windows_device(tokens[0])
             if low == "dev":
-                c.note("'dev' (a device without serial settings) is imported as a serial "
-                       "port; it may not open if it is not a tty")
+                c.note(_("'dev' (a device without serial settings) is imported as a serial "
+                         "port; it may not open if it is not a tty"))
             for tok in defaults + opts + tokens[1:]:
                 _serial_option(c, tok)
             return True
         if low in _NET_TERMINALS or low in _OTHER_TERMINALS:
             break
-        c.note(f"connector layer '{name}' is not imported")
-    c.note(f"skipped: connector '{spec}' is not a local serial port")
+        c.note(_("connector layer '{0}' is not imported").format(name))
+    c.skip(_("connector '{0}' is not a local serial port").format(spec))
     return False
 
 
@@ -698,7 +707,7 @@ def _serial_option(c: _Conn, tok: str) -> None:
     if eq and flag and low in _SERIAL_FLAGS:
         flag = _bool(value)
         if flag is None:
-            c.note(f"serial option '{tok}' has no true/false value, ignored")
+            c.note(_("serial option '{0}' has no true/false value, ignored").format(tok))
             return
     if low in ("xonxoff", "rtscts"):
         setattr(c, low, bool(flag))
@@ -711,15 +720,16 @@ def _serial_option(c: _Conn, tok: str) -> None:
         if state in ("on", "off"):
             c.serial[f"{low}_on_open"] = state
         else:
-            c.note(f"serial option '{tok}' is not on/off, ignored")
+            c.note(_("serial option '{0}' is not on/off, ignored").format(tok))
     elif low == "rs485":
         if value.strip().lower() not in ("", "off"):
-            c.note(f"{tok} is not imported: set RS-485 in the mapping's serial settings")
+            c.note(_("{0} is not imported: set RS-485 in the mapping's serial settings")
+                   .format(tok))
     elif low == "rdonly":
         if flag:
             c.network["read_only"] = True
     elif low == "local" and not flag:
-        c.note("local=false (watching the modem control lines) is not imported")
+        c.note(_("local=false (watching the modem control lines) is not imported"))
 
 
 _SERIAL_FLAGS = ("xonxoff", "rtscts", "hangup-when-done", "hangup_when_done", "hupcl",
@@ -777,13 +787,13 @@ def _convert(c: _Conn, text: str, kind: str, what: str) -> str:
     # a dropped part of a file name takes its separator along: tr-\p-\Y-\M -> tr-2000
     out = re.sub(f"[-_.: ]?{_GONE}" if kind == "file" else _GONE, "", out)
     if fixed:
-        c.note(f"{what}: {'/'.join(dict.fromkeys(fixed))} (serial parameters) is written as "
-               f"the fixed text {c.serial_text()}")
+        c.note(_("{0}: {1} (serial parameters) is written as the fixed text {2}")
+               .format(what, "/".join(dict.fromkeys(fixed)), c.serial_text()))
     if dropped:
         parts = " ".join(dict.fromkeys(dropped))
-        c.note(f"{what}: {parts} in the file name left out (one trace file per mapping here, "
-               "rotated by size)" if kind == "file" else
-               f"{what}: {parts} not supported here, left out")
+        c.note(_("{0}: {1} in the file name left out (one trace file per mapping here, rotated "
+                 "by size)").format(what, parts) if kind == "file" else
+               _("{0}: {1} not supported here, left out").format(what, parts))
     return out
 
 
@@ -796,7 +806,7 @@ _TRACE_MOD = re.compile(r"trace-(?:(both|read|write)-)?(hexdump|timestamp)")
 def _flag(c: _Conn, key: str, value: str) -> Optional[bool]:
     b = _bool(value)
     if b is None:
-        c.note(f"{key}: '{value}' is not true/false, ignored")
+        c.note(_("{0}: '{1}' is not true/false, ignored").format(key, value))
     return b
 
 
@@ -813,7 +823,7 @@ def _option(c: _Conn, key: str, value: str) -> None:
         if n.isdigit() and int(n) >= 1:
             c.network["max_connections"] = int(n)
         else:
-            c.note(f"max-connections '{value}' is not a number >= 1, ignored")
+            c.note(_("max-connections '{0}' is not a number >= 1, ignored").format(value))
     elif k in ("banner", "openstr", "closestr", "closeon"):
         c.strings[k] = value
     elif k in ("trace-both", "trace-read", "trace-write"):
@@ -842,9 +852,10 @@ def _idle_timeout(c: _Conn, value: str) -> None:
     if v.isdigit():
         c.options["idle_timeout_s"] = min(int(v), MAX_TIMER_S)
         if int(v) > MAX_TIMER_S:
-            c.note(f"timeout {v} s is longer than the maximum here: set to {MAX_TIMER_S} s")
+            c.note(_("timeout {0} s is longer than the maximum here: set to {1} s")
+                   .format(v, MAX_TIMER_S))
     elif v:
-        c.note(f"timeout '{value}' is not a number of seconds, ignored")
+        c.note(_("timeout '{0}' is not a number of seconds, ignored").format(value))
 
 
 def _remaddr(c: _Conn, value: str) -> None:
@@ -856,7 +867,7 @@ def _remaddr(c: _Conn, value: str) -> None:
         if not entry:
             continue
         if entry.startswith("!"):
-            c.note(f"remaddr {entry}: connect-back addresses are not imported")
+            c.note(_("remaddr {0}: connect-back addresses are not imported").format(entry))
             continue
         fields = [f.strip() for f in entry.split(",") if f.strip()]
         while fields and fields[0].lower() in ("ipv4", "ipv6", "ipv6n4", "tcp", "udp", "sctp"):
@@ -865,10 +876,11 @@ def _remaddr(c: _Conn, value: str) -> None:
         try:
             ipaddress.ip_network(host, strict=False)
         except ValueError:
-            c.note(f"remaddr {entry}: only IP addresses and subnets can be imported")
+            c.note(_("remaddr {0}: only IP addresses and subnets can be imported").format(entry))
             continue
         if len(fields) > 1 and fields[1] != "0":
-            c.note(f"remaddr {entry}: only the client address is checked here, not its port")
+            c.note(_("remaddr {0}: only the client address is checked here, not its port")
+                   .format(entry))
         if host not in allowed:
             allowed.append(host)
 
@@ -877,14 +889,14 @@ def _finish(c: _Conn) -> None:
     """Resolve what depends on the whole connection; collect the warnings."""
     net = c.network
     if c.rtscts and c.xonxoff:
-        c.note("both RTS/CTS and XON/XOFF are on: only RTS/CTS is imported (one flow "
-               "control per port here)")
+        c.note(_("both RTS/CTS and XON/XOFF are on: only RTS/CTS is imported (one flow control "
+                 "per port here)"))
     c.serial["flowcontrol"] = "rtscts" if c.rtscts else "xonxoff" if c.xonxoff else "none"
     if net["mode"] == "udp" and net["protocol"] != "raw":
-        c.note(f"{net['protocol']} over UDP is not supported here: imported as raw UDP")
+        c.note(_("{0} over UDP is not supported here: imported as raw UDP").format(net['protocol']))
         net["protocol"] = "raw"
     if net["protocol"] == "rfc2217" and net.get("max_connections", 1) > 1:
-        c.note("RFC2217 allows a single client here: max-connections set to 1")
+        c.note(_("RFC2217 allows a single client here: max-connections set to 1"))
         net["max_connections"] = 1
     for key in ("banner", "openstr", "closestr", "closeon"):
         if key in c.strings:
@@ -899,30 +911,30 @@ def _finish(c: _Conn) -> None:
         if name:
             c.options["trace_both"] = path
             if kind != "both":
-                c.note(f"{labels[kind]}: both directions are traced into one file here")
+                c.note(_("{0}: both directions are traced into one file here").format(labels[kind]))
             if name != path:
-                c.note(f"trace file: written as traces/<mapping id>-{name} in the data "
-                       f"directory ({path} is not used)")
+                c.note(_("trace file: written as traces/<mapping id>-{0} in the data directory "
+                         "({1} is not used)").format(name, path))
         for other in c.traces:
             if other != kind:
-                c.note(f"{labels[other]} is not imported: one trace file per mapping")
+                c.note(_("{0} is not imported: one trace file per mapping").format(labels[other]))
         for mod in ("hexdump", "timestamp"):
             b = c.trace_mods.get((kind, mod), c.trace_mods.get(("all", mod)))
             if b is not None:
                 c.options[f"trace_{mod}"] = b
     if c.access_given and not net.get("allowed_client_ips"):
-        c.hold = ("remaddr could not be imported: the mapping is imported disabled rather "
-                  "than open to every client")
+        c.hold = (_("remaddr could not be imported: the mapping is imported disabled rather "
+                    "than open to every client"))
     if c.hold:
         c.enabled = False
         c.note(c.hold)
     if c.dropped:
-        c.note("not imported (no equivalent here): " + ", ".join(c.dropped))
+        c.note(_("not imported (no equivalent here): {0}").format(", ".join(c.dropped)))
 
 
 def _notes(c: _Conn, imported: bool) -> list[str]:
     """A connection's warnings; for a skipped one only why it was skipped."""
-    return [f"{c.label}: {n}" for n in c.notes if imported or n.startswith("skipped")]
+    return [f"{c.label}: {n}" for n in (c.notes if imported else c.skipped)]
 
 
 # ---------------------------------------------------------------------------
@@ -962,7 +974,8 @@ def _substitute(s: str, aliases: dict[str, str], act: str, notes: list[str]) -> 
             if close > 0:
                 ref = s[i + 2:close]
                 if nxt == "{":
-                    notes.append(f"{ch}{{{ref}}} (a file on the ser2net host) is left out")
+                    notes.append(_("{0}{{{1}}} (a file on the ser2net host) is left out")
+                                 .format(ch, ref))
                     i = close + 1
                     continue
                 if ref in aliases:
@@ -970,7 +983,7 @@ def _substitute(s: str, aliases: dict[str, str], act: str, notes: list[str]) -> 
                     i = close + 1
                     continue
                 if ours:
-                    notes.append(f"unknown reference {ch}({ref}) left as it is")
+                    notes.append(_("unknown reference {0}({1}) left as it is").format(ch, ref))
         out.append(ch)
         i += 1
     return "".join(out)
@@ -987,7 +1000,7 @@ class _Yaml:
 
     def text(self, node: Any, notes: list[str], what: str) -> str:
         if isinstance(node, (_YMap, list)):
-            notes.append(f"{what} is not a single value, ignored")
+            notes.append(_("{0} is not a single value, ignored").format(what))
             return ""
         return _substitute(str(node), self.aliases, self.act, notes)
 
@@ -1028,17 +1041,17 @@ class _Yaml:
             names = ([anchor] if k == "rotator" else
                      [n for n, _v, _a in value.entries] if isinstance(value, _YMap) else [])
             for name in names or ["(unnamed)"]:
-                self.warnings.append(f"rotator {name}: not imported (rotators are not "
-                                     "supported here)")
+                self.warnings.append(_("rotator {0}: not imported (rotators are not supported "
+                                       "here)").format(name))
         elif k in ("admin", "admins"):
-            self.warnings.append("the ser2net admin interface is not imported (the web UI "
-                                 "and REST API take its place)")
+            self.warnings.append(_("the ser2net admin interface is not imported (the web UI "
+                                   "and REST API take its place)"))
         elif k == "include":
-            self.warnings.append(f"include {self.gtext(value, 'include')}: included files are "
-                                 "not read; import each of them as well")
+            self.warnings.append(_("include {0}: included files are not read; import each of "
+                                   "them as well").format(self.gtext(value, 'include')))
         elif k not in ("led", "leds", "defines", "connections", "defaults", "delete_default",
                        "delete_defaults", "default"):
-            self.warnings.append(f"unknown top-level entry '{key}' ignored")
+            self.warnings.append(_("unknown top-level entry '{0}' ignored").format(key))
 
     def default(self, name: str, value: str, cls: str) -> None:
         n, cls = name.strip().lower(), cls.strip().lower()
@@ -1049,7 +1062,8 @@ class _Yaml:
         elif n in _OPTION_DEFAULTS and cls in ("", "ser2net"):
             self.option_defaults[n] = value.strip()
         else:
-            self.warnings.append(f"default {name}: {value} is not imported (no equivalent here)")
+            self.warnings.append(_("default {0}: {1} is not imported (no equivalent here)")
+                                 .format(name, value))
 
     def delete_default(self, name: str) -> None:
         self.serial_defaults.pop(name.strip().lower(), None)
@@ -1058,14 +1072,14 @@ class _Yaml:
     def connection(self, name: str, body: Any) -> None:
         if name:
             self.aliases[name] = name  # ser2net: *(con0) is the connection's name
-        c = _Conn(name=name, label=name or "a connection without a name")
+        c = _Conn(name=name, label=name or _("a connection without a name"))
         if not isinstance(body, _YMap):
-            c.note("skipped: not a mapping")
+            c.skip(_("not a mapping"))
         else:
             accepter = self.text(body.get("accepter", ""), c.notes, "accepter").strip()
             connector = self.text(body.get("connector", ""), c.notes, "connector").strip()
             if not accepter or not connector:
-                c.note("skipped: it needs both an accepter and a connector")
+                c.skip(_("it needs both an accepter and a connector"))
             elif _accepter(c, accepter):
                 if not name:
                     c.name = c.label = f"ser2net-{c.network['port']}"
@@ -1080,7 +1094,7 @@ class _Yaml:
         enable = self.text(body.get("enable", "on"), c.notes, "enable")
         b = _bool(enable)
         if b is None:
-            c.note(f"enable '{enable}' is not on/off: imported disabled")
+            c.note(_("enable '{0}' is not on/off: imported disabled").format(enable))
         c.enabled = bool(b)
         for k, v in self.option_defaults.items():
             _option(c, k, v)
@@ -1091,7 +1105,7 @@ class _Yaml:
                     for okey, oval, _oa in value.entries:
                         _option(c, okey, self.text(oval, c.notes, okey))
                 elif str(value).strip():
-                    c.note("options is not a mapping, ignored")
+                    c.note(_("options is not a mapping, ignored"))
             elif k not in ("accepter", "connector", "enable"):
                 _option(c, key, self.text(value, c.notes, key))  # timeout (and stray options)
 
@@ -1105,11 +1119,11 @@ def _from_yaml(text: str, label: str) -> tuple[list[_Conn], list[str]]:
     keys = {k.lower() for k, _v, _a in entries}
     v1, v2 = bool(keys & _V1_KEYS), bool(keys & _V2_KEYS)
     if not (v1 or v2):
-        raise ConfigError(f"{label} is not a ser2net configuration: it has no "
-                          "connection, define or default entries.")
+        raise ConfigError(_("{0} is not a ser2net configuration: it has no connection, define "
+                            "or default entries.").format(label))
     y = _Yaml("=" if v2 and not v1 else "*=" if v2 else "*")
     if v1 and v2:
-        y.warnings.append("the file mixes ser2net version 1 and version 2 YAML entries")
+        y.warnings.append(_("the file mixes ser2net version 1 and version 2 YAML entries"))
     for key, value, anchor in entries:
         y.entry(key, value, anchor)
     return y.conns, y.warnings
@@ -1157,10 +1171,10 @@ class _V3:
         self.conns: list[_Conn] = []
 
     def directive(self, n: int, kind: str, rest: str) -> None:
-        name, _, value = rest.partition(":")
+        name, _sep, value = rest.partition(":")
         if kind == "CONTROLPORT":
-            self.warnings.append(f"line {n}: CONTROLPORT {rest.strip()} is not imported (the "
-                                 "web UI and REST API take its place)")
+            self.warnings.append(_("line {0}: CONTROLPORT {1} is not imported (the web UI and "
+                                   "REST API take its place)").format(n, rest.strip()))
         elif kind == "DEFAULT":
             if name in _V3_IGNORED_DEFAULTS or name in (
                     "speed", "databits", "stopbits", "parity", "xonxoff", "rtscts",
@@ -1168,25 +1182,25 @@ class _V3:
                     "remaddr"):
                 self.defaults[name] = value.strip()
             else:
-                self.warnings.append(f"line {n}: DEFAULT {name} is not imported")
+                self.warnings.append(_("line {0}: DEFAULT {1} is not imported").format(n, name))
         elif kind == "DEVICE":
             self.devices[name] = value.strip()
         elif kind == "TRACEFILE":
             self.tracefiles[name] = value.strip()
         elif kind in ("LED", "SIGNATURE", "ROTATOR"):
-            what = {"LED": "LEDs", "SIGNATURE": "RFC2217 signatures", "ROTATOR": "rotators"}
-            self.warnings.append(f"line {n}: {kind} {name} is not imported ({what[kind]} are "
-                                 "not supported here)")
+            what = {"LED": _("LEDs"), "SIGNATURE": _("RFC2217 signatures"), "ROTATOR": _("rotators")}
+            self.warnings.append(_("line {0}: {1} {2} is not imported ({3} are not supported "
+                                   "here)").format(n, kind, name, what[kind]))
             self.strings[name] = (kind, value)
         else:  # BANNER OPENSTR CLOSESTR CLOSEON RS485CONF
             self.strings[name] = (kind, value)
 
     def port(self, n: int, line: str, m: re.Match[str]) -> None:
         state = m.group(1)
-        timeout, _, rest = line[m.end():].partition(":")
-        device, _, options = rest.partition(":")
+        timeout, _sep, rest = line[m.end():].partition(":")
+        device, _sep, options = rest.partition(":")
         device = self.devices.get(device.strip(), device.strip())
-        c = _Conn(name="", label=f"line {n}", v3=True)
+        c = _Conn(name="", label=_("line {0}").format(n), v3=True)
         fields = []
         for f in line[: m.start()].split(","):
             if f.strip().lower() == "udp":
@@ -1196,11 +1210,11 @@ class _V3:
         if _listen_address(c, fields):
             port = c.network["port"]
             c.name = f"ser2net-udp-{port}" if c.network["mode"] == "udp" else f"ser2net-{port}"
-            c.label = f"{c.name} (line {n})"
+            c.label = _("{0} (line {1})").format(c.name, n)
             if not device:
-                c.note("skipped: no device")
+                c.skip(_("no device"))
             elif device.startswith("sol.") or " " in device:
-                c.note("skipped: IPMI serial-over-LAN connections are not imported")
+                c.skip(_("IPMI serial-over-LAN connections are not imported"))
             else:
                 self.settings(c, state, timeout, device, options)
                 _finish(c)
@@ -1212,8 +1226,8 @@ class _V3:
         c.enabled = state != "off"
         c.network["protocol"] = "telnet" if state == "telnet" else "raw"
         if state == "rawlp":
-            c.note("rawlp (a printer port without serial settings) is imported as raw; the "
-                   "device is opened as a serial port")
+            c.note(_("rawlp (a printer port without serial settings) is imported as raw; the "
+                     "device is opened as a serial port"))
         _idle_timeout(c, timeout)
         for name, value in self.defaults.items():
             self.default(c, name, value)
@@ -1223,7 +1237,7 @@ class _V3:
             if state == "telnet":
                 c.network["protocol"] = "rfc2217"
             else:
-                c.note("remctl (RFC2217) needs a telnet port: ignored")
+                c.note(_("remctl (RFC2217) needs a telnet port: ignored"))
 
     def default(self, c: _Conn, name: str, value: str) -> None:
         if name in _V3_IGNORED_DEFAULTS:
@@ -1256,11 +1270,11 @@ class _V3:
             if kind in ("BANNER", "OPENSTR", "CLOSESTR", "CLOSEON"):
                 c.strings[kind.lower()] = value
             elif kind == "RS485CONF":
-                c.note(f"RS485CONF {tok} is not imported: set RS-485 in the mapping's serial "
-                       "settings")
+                c.note(_("RS485CONF {0} is not imported: set RS-485 in the mapping's serial "
+                         "settings").format(tok))
             return  # LED / SIGNATURE: reported where they are defined
         if not self.serial(c, tok.upper()):
-            c.note(f"unknown option '{tok}' ignored")
+            c.note(_("unknown option '{0}' ignored").format(tok))
 
     @staticmethod
     def serial(c: _Conn, tok: str) -> bool:
@@ -1280,7 +1294,7 @@ class _V3:
             c.advanced[base.lower()] = on
         elif base == "LOCAL":
             if not on:
-                c.note("-LOCAL (watching the modem control lines) is not imported")
+                c.note(_("-LOCAL (watching the modem control lines) is not imported"))
         else:
             return False
         return True
@@ -1307,9 +1321,10 @@ class _V3:
             if value in self.tracefiles:
                 c.traces[_V3_TRACE[name]] = self.tracefiles[value]
             else:
-                c.note(f"{tok}: there is no TRACEFILE named {value}")
+                c.note(_("{0}: there is no TRACEFILE named {1}").format(tok, value))
         elif name == "rs485":
-            c.note(f"{tok} is not imported: set RS-485 in the mapping's serial settings")
+            c.note(_("{0} is not imported: set RS-485 in the mapping's serial settings")
+                   .format(tok))
         elif name == "max-connections":
             _option(c, name, value)
         elif name == "remaddr":
@@ -1332,7 +1347,7 @@ def _from_v3(lines: list[tuple[int, str]]) -> tuple[list[_Conn], list[str]]:
         elif m is not None:
             p.port(n, line, m)
         else:
-            p.warnings.append(f"line {n}: not a ser2net.conf line, ignored")
+            p.warnings.append(_("line {0}: not a ser2net.conf line, ignored").format(n))
     return p.conns, p.warnings
 
 
@@ -1347,7 +1362,7 @@ def _assemble(conns: list[_Conn], warnings: list[str]) -> list[dict]:
         try:
             MappingConfig.from_dict(c.to_dict()).validate()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
-            warnings.append(f"{c.label}: skipped: {e}")
+            warnings.append(_("{0}: skipped: {1}").format(c.label, e))
             continue
         net = c.network
         proto = "udp" if net["mode"] == "udp" else "tcp"
@@ -1355,8 +1370,8 @@ def _assemble(conns: list[_Conn], warnings: list[str]) -> list[dict]:
                       and ("udp" if o.network["mode"] == "udp" else "tcp") == proto
                       and _ip_overlaps(o.network["bind_ip"], net["bind_ip"])), None)
         if other is not None:
-            warnings.append(f"{c.label}: skipped: {proto.upper()} port {net['port']} is "
-                            f"already used by '{other.name}'")
+            warnings.append(_("{0}: skipped: {1} port {2} is already used by '{3}'")
+                            .format(c.label, proto.upper(), net["port"], other.name))
             continue
         kept.append(c)
     used: set[str] = set()
@@ -1368,12 +1383,13 @@ def _assemble(conns: list[_Conn], warnings: list[str]) -> list[dict]:
             c.name = f"{base} ({k})"
         used.add(c.name)
         if c.name != base:
-            warnings.append(f"{c.label}: renamed to '{c.name}' (the name is used twice)")
+            warnings.append(_("{0}: renamed to '{1}' (the name is used twice)")
+                            .format(c.label, c.name))
         if c.enabled and c.device in owner:
             c.enabled = False
-            warnings.append(f"{c.label}: imported disabled: {c.device} is also used by "
-                            f"'{owner[c.device]}', and a serial port can be open in only one "
-                            "active mapping here")
+            warnings.append(_("{0}: imported disabled: {1} is also used by '{2}', and a serial "
+                              "port can be open in only one active mapping here")
+                            .format(c.label, c.device, owner[c.device]))
         elif c.enabled:
             owner[c.device] = c.name
     return [c.to_dict() for c in kept]
@@ -1399,17 +1415,18 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
     text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
     label = re.split(r"[\\/]", filename)[-1] if filename else ""
     if not text.strip():
-        raise ConfigError("The file is empty.")
+        raise ConfigError(_("The file is empty."))
     if looks_yaml(text):
         conns, warnings = _from_yaml(text, label or "ser2net.yaml")
     else:
         lines = _v3_lines(text)
         if not any(_V3_DIRECTIVE.match(ln) or _V3_STATE.search(ln) for _n, ln in lines):
-            raise ConfigError(f"{label or 'The file'} is not a ser2net configuration: expected "
-                              "a ser2net.yaml (ser2net 4.x) or ser2net.conf (ser2net 3.x) file.")
+            raise ConfigError(_("{0} is not a ser2net configuration: expected a ser2net.yaml "
+                                "(ser2net 4.x) or ser2net.conf (ser2net 3.x) file.").format(
+                                    label or _("The file")))
         conns, warnings = _from_v3(lines)
     mappings = _assemble(conns, warnings)
     if not mappings:
-        warnings.append("No connection could be imported." if conns else
-                        "The file has no ser2net connections to import.")
+        warnings.append(_("No connection could be imported.") if conns else
+                        _("The file has no ser2net connections to import."))
     return mappings, warnings

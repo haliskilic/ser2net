@@ -8,6 +8,7 @@ from __future__ import annotations
 from starlette.responses import PlainTextResponse
 
 from ...config import ROLE_RANK
+from ...i18n import _
 from .. import auth
 
 # HTMX response header: tells the dashboard to re-fetch the mappings table now
@@ -28,7 +29,7 @@ def current_user(request):
 
 
 def csrf_failed() -> PlainTextResponse:
-    return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+    return PlainTextResponse(_("CSRF validation failed. Reload the page."), status_code=403)
 
 
 class Ctx:
@@ -60,7 +61,7 @@ class Ctx:
         """Return a 403 response if the session user's role is below `role`, else None."""
         u = current_user(request)
         if u is None or ROLE_RANK.get(u.role, 0) < ROLE_RANK[role]:
-            return PlainTextResponse(f"Forbidden: requires {role} role.", status_code=403)
+            return PlainTextResponse(_("Forbidden: requires the {0} role.").format(role), status_code=403)
         return None
 
     @staticmethod
@@ -86,5 +87,5 @@ class Ctx:
         signed-in operator: open access on this node must not open every peer (which
         may well require a login of its own)."""
         if self.is_anonymous(request):
-            return PlainTextResponse("Sign in to manage other cluster nodes.", status_code=403)
+            return PlainTextResponse(_("Sign in to manage other cluster nodes."), status_code=403)
         return self.require_role(request, "operator")

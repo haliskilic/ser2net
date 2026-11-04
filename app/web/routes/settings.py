@@ -17,11 +17,12 @@ from starlette.routing import Route
 
 from ... import importer
 from ...config import (
-    NOTIFY_EVENTS, ROLES, SMTP_SECURITY, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
+    NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
     ConfigError, NotificationSettings, User,
 )
+from ...i18n import _
 from .. import auth, selfsigned
-from .common import Ctx
+from .common import Ctx, csrf_failed
 from .forms import (
     _checkbox, _ldap_from_form, _module_present, _oidc_from_form, _password_problem,
     _username_problem,
@@ -54,19 +55,19 @@ def routes(ctx: Ctx) -> list:
     async def settings_password_post(request):
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         user = current_user(request)
         if user is not None and user.source == "anonymous":
-            return await settings_get(request, error="Sign in to change your password.")
+            return await settings_get(request, error=_("Sign in to change your password."))
         if user is not None and user.source != "local":
             return await settings_get(request,
-                                      error=f"Your account is managed by {user.source.upper()}; "
-                                            "change your password there.")
+                                      error=_("Your account is managed by {0}; change your "
+                                              "password there.").format(user.source.upper()))
         cur = form.get("current", "")
         new = form.get("password", "")
         new2 = form.get("password2", "")
         if user is None or not await asyncio.to_thread(auth.verify_password, cur, user.password_hash):
-            return await settings_get(request, error="Current password is incorrect.")
+            return await settings_get(request, error=_("Current password is incorrect."))
         err = _password_problem(new, new2)
         if err:
             return await settings_get(request, error=err)
@@ -78,7 +79,8 @@ def routes(ctx: Ctx) -> list:
         state.log(f"password changed for {user.username}; their other sessions signed out")
         ctx.audit(request, "password_change", user.username)
         # refresh THIS session so the user isn't logged out by their own change
-        resp = await settings_get(request, ok="Password updated. Your other sessions were signed out.")
+        resp = await settings_get(request, ok=_("Password updated. Your other sessions were "
+                                                "signed out."))
         set_session(resp, request, user)
         return resp
 
@@ -87,7 +89,7 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
         async with state.config_lock:
             old = (state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key)
@@ -99,27 +101,28 @@ def routes(ctx: Ctx) -> list:
                 state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key = old
                 return await settings_get(request, error=str(e))
         ctx.audit(request, "admin_tls_set", cert)
-        return await settings_get(request, ok="Admin TLS saved. Restart to apply.")
+        return await settings_get(request, ok=_("Admin TLS saved. Restart to apply."))
 
     async def settings_tls_generate(request):
         if deny := require_role(request, "admin"):
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         tdir = os.path.join(state.data_dir, "tls")
         os.makedirs(tdir, exist_ok=True)
         cert, key = os.path.join(tdir, "cert.pem"), os.path.join(tdir, "key.pem")
         try:
             await asyncio.to_thread(selfsigned.generate, cert, key)
         except (selfsigned.CertError, OSError) as e:
-            return await settings_get(request, error=f"Could not generate a certificate: {e}")
+            return await settings_get(request, error=_("Could not generate a certificate: {0}").format(e))
         async with state.config_lock:
             state.config.admin_ui.tls_cert = cert
             state.config.admin_ui.tls_key = key
             await state.asave()
         ctx.audit(request, "admin_tls_generate", "")
-        return await settings_get(request, ok="Self-signed certificate generated. Restart to apply TLS.")
+        return await settings_get(request, ok=_("Self-signed certificate generated. Restart to "
+                                                "apply TLS."))
 
     # ---------------- web-UI access (login requirement) ----------------
     async def settings_access_post(request):
@@ -127,37 +130,42 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         require_login = _checkbox(form, "require_login")
         role = form.get("anonymous_role", "viewer")
         if role not in ROLES:
-            return await settings_get(request, error="Invalid role for visitors without login.")
+            return await settings_get(request, error=_("Invalid role for visitors without login."))
+        language = form.get("default_language") or state.config.admin_ui.language
+        if language not in UI_LANGUAGES:
+            language = state.config.admin_ui.language
         timeout = state.config.session_timeout_s
         if "session_minutes" in form:
             try:
                 timeout = int(float(form.get("session_minutes") or "") * 60)
             except ValueError:
-                return await settings_get(request, error="Session lifetime must be a number of minutes.")
+                return await settings_get(request, error=_("Session lifetime must be a number "
+                                                           "of minutes."))
         ui = state.config.admin_ui
         async with state.config_lock:
-            old = (ui.require_login, ui.anonymous_role, state.config.session_timeout_s)
+            old = (ui.require_login, ui.anonymous_role, state.config.session_timeout_s, ui.language)
             ui.require_login, ui.anonymous_role = require_login, role
-            state.config.session_timeout_s = timeout
+            state.config.session_timeout_s, ui.language = timeout, language
             try:
                 await state.asave()
             except ConfigError as e:
-                ui.require_login, ui.anonymous_role, state.config.session_timeout_s = old
+                (ui.require_login, ui.anonymous_role, state.config.session_timeout_s,
+                 ui.language) = old
                 return await settings_get(request, error=str(e))
         if timeout != old[2]:
             state.log(f"web UI session lifetime set to {timeout // 60} min (new sign-ins)")
         if require_login:
             state.log("web UI login requirement ENABLED (every visitor must sign in)")
-            ok = "Login is required again for the web UI."
+            ok = _("Login is required again for the web UI.")
         else:
             state.log(f"WARNING: web UI login requirement DISABLED — visitors without a "
                       f"session get the '{role}' role (by IP / localhost / host name)")
-            ok = (f"Open access enabled: visitors without a login now get the '{role}' role. "
-                  "Use this only on a trusted network.")
+            ok = _("Open access enabled: visitors without a login now get the '{0}' role. "
+                   "Use this only on a trusted network.").format(role)
         ctx.audit(request, "web_access",
                     "login-required" if require_login else f"open:{role}")
         return await settings_get(request, ok=ok)
@@ -168,7 +176,7 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         role = form.get("api_token_role", "admin")
         if role not in ROLES:
             role = "admin"
@@ -181,21 +189,21 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "api_token_generate", role)
         # show the token exactly once — only its hash is stored
         return await settings_get(request, new_api_token=token,
-                                  ok=f"New API token generated (role: {role}). "
-                                     "Copy it now — it is not shown again.")
+                                  ok=_("New API token generated (role: {0}). Copy it now — it "
+                                       "is not shown again.").format(role))
 
     async def settings_api_token_revoke(request):
         if deny := require_role(request, "admin"):
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         async with state.config_lock:
             state.config.api_token_hash = ""
             await state.asave()
         state.log("REST API token revoked")
         ctx.audit(request, "api_token_revoke", "")
-        return await settings_get(request, ok="API token revoked. The REST API is now disabled.")
+        return await settings_get(request, ok=_("API token revoked. The REST API is now disabled."))
 
     # ---------------- LDAP / AD settings (admin only) ----------------
     async def settings_ldap_post(request):
@@ -203,7 +211,7 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         async with state.config_lock:
             old = state.config.ldap
             state.config.ldap = _ldap_from_form(form, old)
@@ -215,14 +223,14 @@ def routes(ctx: Ctx) -> list:
         state.log(f"LDAP settings updated (enabled={state.config.ldap.enabled})")
         ctx.audit(request, "ldap_settings",
                     "enabled" if state.config.ldap.enabled else "disabled")
-        return await settings_get(request, ok="LDAP settings saved.")
+        return await settings_get(request, ok=_("LDAP settings saved."))
 
     async def settings_oidc_post(request):
         if deny := require_role(request, "admin"):
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         async with state.config_lock:
             old = state.config.oidc
             state.config.oidc = _oidc_from_form(form, old)
@@ -234,7 +242,7 @@ def routes(ctx: Ctx) -> list:
         state.log(f"OIDC settings updated (enabled={state.config.oidc.enabled})")
         ctx.audit(request, "oidc_settings",
                     "enabled" if state.config.oidc.enabled else "disabled")
-        return await settings_get(request, ok="OIDC (SSO) settings saved.")
+        return await settings_get(request, ok=_("OIDC (SSO) settings saved."))
 
     # ---------------- user management (admin only) ----------------
     async def settings_users_create(request):
@@ -242,15 +250,15 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         username = (form.get("username") or "").strip()
         role = form.get("role", "viewer")
         pw, pw2 = form.get("password", ""), form.get("password2", "")
         err = (_username_problem(username)
-               or (None if role in ROLES else "Invalid role.")
+               or (None if role in ROLES else _("Invalid role."))
                or _password_problem(pw, pw2))
         if not err and state.config.get_user(username):
-            err = f"User '{username}' already exists."
+            err = _("User '{0}' already exists.").format(username)
         if err:
             return await settings_get(request, error=err)
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
@@ -260,52 +268,52 @@ def routes(ctx: Ctx) -> list:
             await state.asave()
         state.log(f"user created: {username} ({role})")
         ctx.audit(request, "user_create", f"{username}:{role}")
-        return await settings_get(request, ok=f"User '{username}' created.")
+        return await settings_get(request, ok=_("User '{0}' created.").format(username))
 
     async def settings_users_role(request):
         if deny := require_role(request, "admin"):
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         username = request.path_params["username"]
         role = form.get("role", "viewer")
         target = state.config.get_user(username)
         if target is None:
-            return await settings_get(request, error="User not found.")
+            return await settings_get(request, error=_("User not found."))
         if role not in ROLES:
-            return await settings_get(request, error="Invalid role.")
+            return await settings_get(request, error=_("Invalid role."))
         if target.role == "admin" and role != "admin" and state.config.admin_count() <= 1:
-            return await settings_get(request, error="Cannot demote the last admin.")
+            return await settings_get(request, error=_("Cannot demote the last admin."))
         async with state.config_lock:
             target.role = role
             target.pwd_version += 1  # force re-login so the new role applies everywhere
             await state.asave()
         state.log(f"user role changed: {username} -> {role}")
         ctx.audit(request, "user_role", f"{username}:{role}")
-        return await settings_get(request, ok=f"Role updated for '{username}'. They must sign in again.")
+        return await settings_get(request, ok=_("Role updated for '{0}'. They must sign in again.").format(username))
 
     async def settings_users_delete(request):
         if deny := require_role(request, "admin"):
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         username = request.path_params["username"]
         target = state.config.get_user(username)
         if target is None:
-            return await settings_get(request, error="User not found.")
+            return await settings_get(request, error=_("User not found."))
         me = current_user(request)
         if me and me.username == username:
-            return await settings_get(request, error="You cannot delete your own account.")
+            return await settings_get(request, error=_("You cannot delete your own account."))
         if target.role == "admin" and state.config.admin_count() <= 1:
-            return await settings_get(request, error="Cannot delete the last admin.")
+            return await settings_get(request, error=_("Cannot delete the last admin."))
         async with state.config_lock:
             state.config.users = [u for u in state.config.users if u.username != username]
             await state.asave()
         state.log(f"user deleted: {username}")
         ctx.audit(request, "user_delete", username)
-        return await settings_get(request, ok=f"User '{username}' deleted.")
+        return await settings_get(request, ok=_("User '{0}' deleted.").format(username))
 
     # ---------------- config export / import ----------------
     async def config_export(request):
@@ -349,20 +357,20 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         upload = form.get("file")
         try:
             raw = await upload.read() if hasattr(upload, "read") else str(upload or "").encode()
             plan = importer.parse_mappings_file(raw, getattr(upload, "filename", "") or "")
         except ConfigError as e:
-            return await settings_get(request, error=f"Import failed: {e}")
+            return await settings_get(request, error=_("Import failed: {0}").format(e))
         mode = form.get("mode", "merge")
         if form.get("step") == "preview":
             if mode not in importer.MODES:
-                return await settings_get(request, error="Unknown import mode.")
+                return await settings_get(request, error=_("Unknown import mode."))
             current = state.config.mappings
             rows = importer.plan_rows(current, plan.mappings, mode)
-            candidate, _ = importer.apply_import(current, plan.mappings, mode)
+            candidate, _touched = importer.apply_import(current, plan.mappings, mode)
             problem = None
             try:
                 dataclasses.replace(state.config, mappings=candidate).validate()
@@ -380,14 +388,15 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         token = form.get("token", "")
         item = _pending_get(token, _who(request))
         if item is None:
-            return await settings_get(request, error="This import preview has expired. Upload the file again.")
+            return await settings_get(request, error=_("This import preview has expired. "
+                                                       "Upload the file again."))
         mode = form.get("mode", "merge")
         if mode not in importer.MODES:
-            return await settings_get(request, error="Unknown import mode.")
+            return await settings_get(request, error=_("Unknown import mode."))
         state.pending_imports.pop(token, None)
         return await _apply_import(request, item["plan"], mode)
 
@@ -401,7 +410,7 @@ def routes(ctx: Ctx) -> list:
                 await state.asave()
             except ConfigError as e:
                 state.config.mappings = old
-                return await settings_get(request, error=f"Import rejected: {e}")
+                return await settings_get(request, error=_("Import rejected: {0}").format(e))
         if mode == "replace":
             await state.supervisor.stop_all()
             await state.supervisor.start_all(state.config)
@@ -414,11 +423,12 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, f"config_import_{mode}",
                     f"{len(plan.mappings)} mappings ({plan.source})")
         if mode == "replace":
-            ok = f"Imported {len(new_maps)} mappings (replaced the existing ones)."
+            ok = _("Imported {0} mappings (replaced the existing ones).").format(len(new_maps))
         else:
-            ok = (f"Imported: {count['add']} added, {count['update']} updated, "
-                  f"{count['same']} unchanged.")
-        return await settings_get(request, ok=ok + " The previous configuration was kept as a backup.")
+            ok = _("Imported: {0} added, {1} updated, {2} unchanged.").format(
+                count["add"], count["update"], count["same"])
+        return await settings_get(request, ok=ok + " " + _("The previous configuration was kept "
+                                                         "as a backup."))
 
     # ---------------- event notifications (admin) ----------------
     def _notify_from_form(form, old: NotificationSettings) -> NotificationSettings:
@@ -426,7 +436,7 @@ def routes(ctx: Ctx) -> list:
             port = int(form.get("notify_smtp_port") or 587)
             repeat = int(float(form.get("notify_repeat_min") or 5) * 60)
         except ValueError:
-            raise ConfigError("SMTP port and repeat interval must be numbers.") from None
+            raise ConfigError(_("SMTP port and repeat interval must be numbers.")) from None
         url, pw = form.get("notify_webhook_url", "").strip(), form.get("notify_smtp_password", "")
         return NotificationSettings.from_dict({
             "enabled": _checkbox(form, "notify_enabled"),
@@ -449,7 +459,7 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         async with state.config_lock:
             old = state.config.notifications
             try:
@@ -462,12 +472,13 @@ def routes(ctx: Ctx) -> list:
         state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)})")
         ctx.audit(request, "notification_settings", "enabled" if new.enabled else "disabled")
         if form.get("then") == "test":
-            errors = await state.notifier.deliver("test", "", "If you can read this, "
-                                                  "ser2net can reach you.")
+            errors = await state.notifier.deliver("test", "", _("If you can read this, "
+                                                    "ser2net can reach you."))
             if errors:
-                return await settings_get(request, error="Saved, but the test failed: " + "; ".join(errors))
-            return await settings_get(request, ok="Saved; the test notification was sent.")
-        return await settings_get(request, ok="Notification settings saved.")
+                return await settings_get(request, error=_("Saved, but the test failed: {0}").format(
+                    "; ".join(errors)))
+            return await settings_get(request, ok=_("Saved; the test notification was sent."))
+        return await settings_get(request, ok=_("Notification settings saved."))
 
     # ---------------- audit log viewer (admin) ----------------
     AUDIT_PAGE = 100
@@ -524,7 +535,7 @@ def routes(ctx: Ctx) -> list:
         try:
             text = await asyncio.to_thread(state.store.read_backup, name)
         except (ConfigError, OSError):
-            return PlainTextResponse("No such backup.", status_code=404)
+            return PlainTextResponse(_("No such backup."), status_code=404)
         ctx.audit(request, "config_backup_download", name)
         return Response(text, media_type="application/json",
                         headers={"Content-Disposition": f"attachment; filename={name}"})
@@ -534,16 +545,17 @@ def routes(ctx: Ctx) -> list:
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         name = form.get("name", "")
         try:
             restored = AppConfig.from_dict(json.loads(await asyncio.to_thread(state.store.read_backup, name)))
         except (ConfigError, OSError, ValueError, TypeError, AttributeError) as e:
-            return await settings_get(request, error=f"Could not read the backup: {e}")
+            return await settings_get(request, error=_("Could not read the backup: {0}").format(e))
         if not restored.users:
-            return await settings_get(request, error="This backup has no user accounts (it was made "
-                                                     "before the first-run setup); restoring it would "
-                                                     "open the setup page to anyone. Not restored.")
+            return await settings_get(request, error=_("This backup has no user accounts (it "
+                                                       "was made before the first-run setup); "
+                                                       "restoring it would open the setup page "
+                                                       "to anyone. Not restored."))
         keep = {"secret_key", "instance_id", "load_notes"}  # sessions + this node's cluster id
         async with state.config_lock:
             cur = state.config
@@ -556,27 +568,27 @@ def routes(ctx: Ctx) -> list:
             except ConfigError as e:
                 for k, v in previous.items():
                     setattr(cur, k, v)
-                return await settings_get(request, error=f"Restore rejected: {e}")
+                return await settings_get(request, error=_("Restore rejected: {0}").format(e))
         await state.supervisor.stop_all()
         await state.supervisor.start_all(state.config)
         await state.cluster.stop()
         await state.cluster.start()
         state.log(f"configuration restored from backup {name}")
         ctx.audit(request, "config_backup_restore", name)
-        return await settings_get(request, ok=f"Restored {name}; the configuration it replaced was "
-                                              "backed up too. A changed admin UI address or TLS "
-                                              "takes effect after a restart.")
+        return await settings_get(request, ok=_("Restored {0}; the configuration it replaced "
+                                                "was backed up too. A changed admin UI address "
+                                                "or TLS takes effect after a restart.").format(name))
 
     async def settings_cluster_post(request):
         if deny := require_role(request, "admin"):
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         try:
             port = int(form.get("discovery_port") or 41750)
         except ValueError:
-            return await settings_get(request, error="Cluster discovery port must be a number.")
+            return await settings_get(request, error=_("Cluster discovery port must be a number."))
         peers = [ln.strip() for ln in (form.get("peers") or "").splitlines() if ln.strip()]
         new = ClusterSettings(
             enabled=form.get("enabled") == "on",
@@ -599,7 +611,7 @@ def routes(ctx: Ctx) -> list:
         state.log(f"cluster settings updated (enabled={new.enabled}, manual_peers={len(peers)})")
         ctx.audit(request, "cluster_settings",
                     "enabled" if new.active else "disabled")
-        return await settings_get(request, ok="Cluster settings saved.")
+        return await settings_get(request, ok=_("Cluster settings saved."))
 
     return [
         Route("/settings", settings_get, methods=["GET"]),

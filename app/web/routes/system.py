@@ -1,9 +1,10 @@
 """Health, Prometheus metrics and the serial port list."""
 from __future__ import annotations
 
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Route
 
+from ... import i18n
 from ...engine import portlist
 from .common import Ctx
 
@@ -52,7 +53,21 @@ def routes(ctx: Ctx) -> list:
                       hidden=len(ports) - len(portlist.visible(ports)),
                       in_use=state.supervisor.devices_in_use())
 
+    async def set_language(request):
+        """/lang/tr?next=/settings: remember the visitor's UI language (a cookie), then
+        go back. Only a local path is followed (no open redirect)."""
+        code = request.path_params["code"]
+        nxt = request.query_params.get("next") or "/"
+        if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
+            nxt = "/"
+        resp = RedirectResponse(nxt, status_code=303)
+        if code in i18n.LANGUAGES:
+            resp.set_cookie(i18n.COOKIE, code, max_age=365 * 86400, httponly=True,
+                            samesite="lax", secure=state.config.admin_ui.tls_enabled, path="/")
+        return resp
+
     return [
+        Route("/lang/{code}", set_language),
         Route("/healthz", healthz),
         Route("/metrics", metrics),
         Route("/api/ports.json", api_ports_json),

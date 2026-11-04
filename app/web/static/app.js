@@ -1,5 +1,15 @@
 // ser2net admin UI — minimal vanilla JS (no framework, CSP-friendly).
 
+// UI texts in the page's language (base.html puts them on <body data-i18n>)
+var I18N = (function () {
+  try { return JSON.parse(document.body.getAttribute("data-i18n") || "{}"); } catch (e) { return {}; }
+})();
+function tr(key, fallback) {
+  var s = I18N[key] || fallback;
+  for (var i = 2; i < arguments.length; i++) s = s.replace("{" + (i - 2) + "}", arguments[i]);
+  return s;
+}
+
 // 0) Theme: apply the saved light/dark preference as early as possible, and toggle
 //    it (persisted in localStorage) when a [data-theme-toggle] control is clicked.
 (function () {
@@ -191,12 +201,14 @@ function connectTerm(el, mode) {
     term.write(hexLines(dv.getUint8(0), dv.getFloat64(1, false),
                         new Uint8Array(ev.data, 9), bridge));
   };
-  ws.onclose = function () { term.write("\r\n\x1b[33m[console disconnected]\x1b[0m\r\n"); };
+  ws.onclose = function () {
+    term.write("\r\n\x1b[33m[" + tr("disconnected", "console disconnected") + "]\x1b[0m\r\n");
+  };
   var btn = el.closest("#form-panel") ? el.closest("#form-panel").querySelector("[data-term-mode]") : null;
-  if (btn) btn.textContent = mode === "hex" ? "Text view" : "Hex view";
+  if (btn) btn.textContent = mode === "hex" ? tr("text_view", "Text view") : tr("hex_view", "Hex view");
   if (mode === "hex")
-    term.write("\x1b[90m time          direction   offset  bytes" +
-               "                                            text\x1b[0m\r\n");
+    term.write("\x1b[90m " + tr("hex_header", "time          direction   offset  bytes" +
+               "                                            text") + "\x1b[0m\r\n");
 }
 
 function hexLines(dir, ts, bytes, bridge) {
@@ -204,8 +216,9 @@ function hexLines(dir, ts, bytes, bridge) {
   function pad(n, w) { n = String(n); while (n.length < w) n = "0" + n; return n; }
   var stamp = pad(d.getHours(), 2) + ":" + pad(d.getMinutes(), 2) + ":" + pad(d.getSeconds(), 2) +
               "." + pad(d.getMilliseconds(), 3);
+  function col(s) { while (s.length < 11) s += " "; return s; }
   var label = bridge ? (dir === 0 ? "A → B      " : "B → A      ")
-                     : (dir === 0 ? "◀ device   " : "▶ device   ");
+                     : col(dir === 0 ? tr("from_device", "◀ device") : tr("to_device", "▶ device"));
   var color = dir === 0 ? "\x1b[32m" : "\x1b[33m";
   var out = "";
   for (var off = 0; off < bytes.length; off += 16) {
@@ -284,7 +297,7 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     rows.sort(function (a, b) { var x = key(a), y = key(b); return x < y ? -1 : x > y ? 1 : 0; });
     rows.forEach(function (r) { body.appendChild(r); });
     var count = t.querySelector("[data-filter-count]");
-    if (count) count.textContent = (text || st) ? shown + " of " + rows.length + " shown" : "";
+    if (count) count.textContent = (text || st) ? tr("shown", "{0} of {1} shown", shown, rows.length) : "";
     // forget selections of mappings that no longer exist
     var ids = new Set(rows.map(function (r) { return r.getAttribute("data-mid"); }));
     selected.forEach(function (id) { if (!ids.has(id)) selected.delete(id); });
@@ -295,7 +308,7 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     var t = tools(); if (!t) return;
     var bar = t.querySelector("[data-bulk]"); if (!bar) return;
     bar.hidden = selected.size === 0;
-    t.querySelector("[data-bulk-count]").textContent = selected.size + " selected";
+    t.querySelector("[data-bulk-count]").textContent = tr("selected", "{0} selected", selected.size);
   }
 
   document.addEventListener("input", function (e) {

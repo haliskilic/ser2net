@@ -1,0 +1,17 @@
+{# shared bits of markup; import with {% from "_macros.html" import ... %} #}
+{% macro state_label(s) -%}
+  {%- if s == 'running' -%}{{ _("running") }}
+  {%- elif s == 'stopped' -%}{{ _("stopped") }}
+  {%- elif s == 'reconnecting' -%}{{ _("reconnecting") }}
+  {%- elif s == 'device-missing' -%}{{ _("device missing") }}
+  {%- elif s == 'error' -%}{{ _("error") }}
+  {%- else -%}{{ s }}{%- endif -%}
+{%- endmacro %}
+
+{% macro lang_switch(request, lang) -%}
+<span class="lang-switch" role="group" aria-label="{{ _('Language') }}">
+  {%- for code, label in languages.items() -%}
+  <a href="/lang/{{ code }}?next={{ request.url.path|urlencode }}" hreflang="{{ code }}" lang="{{ code }}" title="{{ label }}"{% if code == lang %} aria-current="true" class="on"{% endif %}>{{ code|upper }}</a>
+  {%- endfor -%}
+</span>
+{%- endmacro %}
