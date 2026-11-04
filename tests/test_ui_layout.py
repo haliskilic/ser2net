@@ -6,7 +6,8 @@ row buttons (Start/Stop/Restart/Edit/Log/Monitor/Copy/Delete) ended up outside i
 and the whole page scrolled sideways. This drives a real browser (Playwright +
 Chromium) against two real nodes — A shows B through a manual cluster peer — whose
 mappings use such values, at desktop, half-screen, tablet and phone widths, and
-checks the dashboard, the log / console / edit views and the settings page:
+checks the dashboard, the log / console / edit views and the settings page — in
+English and again in Turkish, whose texts are longer:
 
   * the page never scrolls sideways and no table needs horizontal scrolling
     (wide windows: the table fits; narrow ones: its rows become cards);
@@ -40,6 +41,9 @@ from app.web.auth import hash_password  # noqa: E402
 REQUIRED = os.environ.get("SER2NET_UI_TESTS") == "1"
 ARTIFACTS = os.environ.get("SER2NET_UI_ARTIFACTS", "")
 WIDTHS = (1440, 1280, 1024, 960, 768, 390)  # desktop … half-screen … tablet … phone
+
+with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as _fh:
+    TR = json.load(_fh)
 
 LONG_NAME = "PRODUCTION_LINE_3_PLC_SIEMENS_S7_1500_MAIN_CONTROLLER_BUILDING_B_EAST_WING"
 LONG_WORDS = "Packaging line 2 weighing scale near the north loading dock (Mettler Toledo IND780)"
@@ -222,25 +226,27 @@ def main():
                 page.wait_for_selector("#form-panel .form-head")
                 page.wait_for_timeout(300)
 
-            for w in WIDTHS:
-                page.set_viewport_size({"width": w, "height": 900})
-                dashboard()
-                check(f"dashboard @{w}")
-            for w in (1024, 390):
-                page.set_viewport_size({"width": w, "height": 900})
-                for view in ("Log", "Monitor", "Edit"):
+            for lang in ("en", "tr"):
+                page.goto(f"{base}/lang/{lang}?next=/")
+                for w in WIDTHS:
+                    page.set_viewport_size({"width": w, "height": 900})
                     dashboard()
-                    open_view(view)
-                    check(f"{view.lower()} view @{w}")
-                page.goto(f"{base}/settings")
-                page.wait_for_selector("section.panel")
-                check(f"settings @{w}")
+                    check(f"{lang} dashboard @{w}")
+                for w in (1024, 390):
+                    page.set_viewport_size({"width": w, "height": 900})
+                    for view in ("Log", "Monitor", "Edit"):
+                        dashboard()
+                        open_view(TR[view] if lang == "tr" else view)
+                        check(f"{lang} {view.lower()} view @{w}")
+                    page.goto(f"{base}/settings")
+                    page.wait_for_selector("section.panel")
+                    check(f"{lang} settings @{w}")
             browser.close()
 
         assert not problems, "layout problems:\n  " + "\n  ".join(problems)
         assert not browser_errors, "browser errors:\n  " + "\n  ".join(browser_errors)
         print("\nPASS: long names, paths and errors stay inside their panels at "
-              f"{', '.join(map(str, WIDTHS))} px")
+              f"{', '.join(map(str, WIDTHS))} px, in English and Turkish")
     finally:
         for c in clients:
             c.close()

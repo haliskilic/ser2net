@@ -11,13 +11,14 @@ import re
 
 from ...config import LdapSettings, MappingConfig, OidcSettings
 from ...engine import netinfo, portlist
+from ...i18n import _
 
 
 def _password_problem(pw: str, pw2: str) -> str | None:
     if len(pw) < 8:
-        return "Password must be at least 8 characters."
+        return _("Password must be at least 8 characters.")
     if pw != pw2:
-        return "Passwords do not match."
+        return _("Passwords do not match.")
     return None
 
 
@@ -65,9 +66,9 @@ def _oidc_from_form(form, old) -> OidcSettings:
 
 def _username_problem(username: str) -> str | None:
     if not username:
-        return "Username is required."
+        return _("Username is required.")
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", username):
-        return "Username must be 1-32 characters: letters, digits, '.', '_' or '-'."
+        return _("Username must be 1-32 characters: letters, digits, '.', '_' or '-'.")
     return None
 
 
@@ -222,7 +223,7 @@ def _parse_modbus_points(raw: str, strict: bool) -> list:
         points = json.loads(raw)
     except (ValueError, TypeError):
         if strict:
-            raise ValueError("Modbus poll points must be a valid JSON array of objects.") from None
+            raise ValueError(_("Modbus poll points must be a valid JSON array of objects.")) from None
         return []
     return points if isinstance(points, list) else []
 

@@ -1,15 +1,16 @@
+{% from "_macros.html" import state_label %}
 {% if peers_hidden %}
-<div class="banner warn">Open access: only this node is shown. <a href="/login">Sign in</a> to see and manage the other cluster nodes.</div>
+<div class="banner warn">{{ _('Open access: only this node is shown. <a href="/login">Sign in</a> to see and manage the other cluster nodes.') }}</div>
 {% endif %}
 {% if discovery_error %}
-<div class="banner warn">UDP auto-discovery is off: {{ discovery_error }}. Manually-added peers still work (Settings → LAN cluster).</div>
+<div class="banner warn">{{ _("UDP auto-discovery is off: %(error)s. Manually-added peers still work (Settings → LAN cluster).", error=discovery_error) }}</div>
 {% endif %}
 <div class="table-scroll">
 <table class="grid list cluster stackable">
   <thead>
     <tr>
-      <th>Mapping</th><th>Serial</th><th>Network</th>
-      <th>State</th><th>Clients</th><th>In / Out</th><th class="col-actions"></th>
+      <th>{{ _("Mapping") }}</th><th>{{ _("Serial") }}</th><th>{{ _("Network") }}</th>
+      <th>{{ _("State") }}</th><th>{{ _("Clients") }}</th><th>{{ _("In / Out") }}</th><th class="col-actions"></th>
     </tr>
   </thead>
   <tbody>
@@ -18,49 +19,49 @@
     <tr class="node-row{% if not n.online %} node-offline{% endif %}">
       <td colspan="7">
         <strong>{{ n.name }}</strong>
-        {% if n.self %}<span class="tag">this node</span>{% endif %}
-        {% if n.source == 'manual' %}<span class="tag">manual</span>{% endif %}
+        {% if n.self %}<span class="tag">{{ _("this node") }}</span>{% endif %}
+        {% if n.source == 'manual' %}<span class="tag">{{ _("manual") }}</span>{% endif %}
         <span class="peer mono">{{ n.ip }}:{{ n.port }}</span>
         {% if n.online %}
-          <span class="muted"> · up {{ n.uptime }}{% if n.version %} · v{{ n.version }}{% endif %} · {{ n.running_count }}/{{ n.mapping_count }} running</span>
+          <span class="muted"> · {{ _("up %(uptime)s", uptime=n.uptime) }}{% if n.version %} · v{{ n.version }}{% endif %} · {{ _("%(running)s/%(total)s running", running=n.running_count, total=n.mapping_count) }}</span>
         {% else %}
-          <span class="state state-error">offline / unreachable</span>
+          <span class="state state-error">{{ _("offline / unreachable") }}</span>
         {% endif %}
-        {% if not n.self and n.online %}<a class="btn sm" href="{{ hosturl }}" target="_blank" rel="noopener">Open</a>{% endif %}
+        {% if not n.self and n.online %}<a class="btn sm" href="{{ hosturl }}" target="_blank" rel="noopener">{{ _("Open") }}</a>{% endif %}
       </td>
     </tr>
     {% for m in n.mappings %}
     <tr>
-      <td class="indent col-name">{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
-      <td class="mono" data-label="Serial">{{ m.serial|softbreak }}</td>
-      <td data-label="Network">
+      <td class="indent col-name">{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">{{ _("disabled") }}</span>{% endif %}</td>
+      <td class="mono" data-label="{{ _('Serial') }}">{{ m.serial|softbreak }}</td>
+      <td data-label="{{ _('Network') }}">
         <div class="mono">{{ m.endpoint|softbreak }}</div>
         <div class="sub mono">{{ m.kind }}</div>
       </td>
-      <td data-label="State"><span class="state state-{{ m.state }}">{{ m.state }}</span></td>
-      <td data-label="Clients">{{ m.client_count }}</td>
-      <td class="mono nowrap" data-label="In / Out">{{ m.bytes_in }} / {{ m.bytes_out }}</td>
+      <td data-label="{{ _('State') }}"><span class="state state-{{ m.state }}">{{ state_label(m.state) }}</span></td>
+      <td data-label="{{ _('Clients') }}">{{ m.client_count }}</td>
+      <td class="mono nowrap" data-label="{{ _('In / Out') }}">{{ m.bytes_in }} / {{ m.bytes_out }}</td>
       <td class="col-actions">
         {% if can_edit and not n.self %}
         <div class="row-actions"><div class="btn-group">
           {% set vals = '{"scheme":"' ~ n.scheme ~ '","host":"' ~ n.ip ~ '","port":"' ~ n.port ~ '","mid":"' ~ m.id ~ '","action":"' %}
           {% if m.enabled %}
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}stop"}' hx-swap="none">Stop</button>
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}restart"}' hx-swap="none">Restart</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}stop"}' hx-swap="none">{{ _("Stop") }}</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}restart"}' hx-swap="none">{{ _("Restart") }}</button>
           {% else %}
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}start"}' hx-swap="none">Start</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}start"}' hx-swap="none">{{ _("Start") }}</button>
           {% endif %}
-          <button class="btn sm" hx-get="/api/cluster/peer-form?scheme={{ n.scheme }}&host={{ n.ip }}&port={{ n.port }}&mid={{ m.id }}" hx-target="#form-panel" hx-swap="innerHTML">Edit</button>
+          <button class="btn sm" hx-get="/api/cluster/peer-form?scheme={{ n.scheme }}&host={{ n.ip }}&port={{ n.port }}&mid={{ m.id }}" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
         </div></div>
         {% endif %}
       </td>
     </tr>
     {% endfor %}
     {% if n.online and not n.mappings %}
-    <tr><td class="indent muted" colspan="7">no mappings on this node</td></tr>
+    <tr><td class="indent muted" colspan="7">{{ _("no mappings on this node") }}</td></tr>
     {% endif %}
   {% else %}
-    <tr><td colspan="7" class="muted">No cluster nodes yet. Auto-discovery beacons run every few seconds; add manual peers under Settings → LAN cluster for routed networks.</td></tr>
+    <tr><td colspan="7" class="muted">{{ _("No cluster nodes yet. Auto-discovery beacons run every few seconds; add manual peers under Settings → LAN cluster for routed networks.") }}</td></tr>
   {% endfor %}
   </tbody>
 </table>

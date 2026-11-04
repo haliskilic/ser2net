@@ -1,25 +1,27 @@
 {% extends "base.html" %}
-{% block title %}Sign in — ser2net{% endblock %}
+{% from "_macros.html" import lang_switch %}
+{% block title %}{{ _("Sign in") }} — ser2net{% endblock %}
 {% block body %}
 <div class="auth-wrap">
+  {{ lang_switch(request, request.state.lang) }}
   <div class="panel">
     <h1>⇄ ser2net</h1>
-    <p class="muted">Sign in to manage serial-to-network mappings.</p>
+    <p class="muted">{{ _("Sign in to manage serial-to-network mappings.") }}</p>
     {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
     {% if oidc_error %}<div class="banner error">{{ oidc_error }}</div>{% endif %}
     {% if oidc_enabled %}
-    <a class="btn primary w-full" href="/auth/oidc/login">Sign in with SSO</a>
-    <p class="muted" style="text-align:center;margin:.8rem 0">— or —</p>
+    <a class="btn primary w-full" href="/auth/oidc/login">{{ _("Sign in with SSO") }}</a>
+    <p class="muted or-line">{{ _("— or —") }}</p>
     {% endif %}
     <form method="post" action="/login" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-      <label>Username
+      <label>{{ _("Username") }}
         <input type="text" name="username" value="admin" autocomplete="username" required>
       </label>
-      <label>Password
+      <label>{{ _("Password") }}
         <input type="password" name="password" autocomplete="current-password" required>
       </label>
-      <button class="btn primary w-full" type="submit">Sign in</button>
+      <button class="btn primary w-full" type="submit">{{ _("Sign in") }}</button>
     </form>
   </div>
 </div>

@@ -4,13 +4,14 @@ from __future__ import annotations
 import asyncio
 import secrets
 
-from starlette.responses import PlainTextResponse, RedirectResponse
+from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
 from ...config import User
 from ...engine import netinfo
+from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth
-from .common import Ctx
+from .common import Ctx, csrf_failed
 from .forms import _password_problem, _username_problem
 
 OIDC_COOKIE = "ser2net_oidc"
@@ -44,7 +45,7 @@ def routes(ctx: Ctx) -> list:
         except Exception as e:
             state.log(f"OIDC login init failed: {e}")
             return render(request, "login.html", status_code=502, error=None,
-                          oidc_enabled=True, oidc_error="SSO provider is unreachable.")
+                          oidc_enabled=True, oidc_error=_("SSO provider is unreachable."))
         resp = RedirectResponse(url, status_code=303)
         resp.set_cookie(OIDC_COOKIE,
                         auth.sign_payload(state.config.secret_key,
@@ -62,17 +63,17 @@ def routes(ctx: Ctx) -> list:
         st = request.query_params.get("state", "")
         if not data or not code or not secrets.compare_digest(st, data.get("s", "")):
             return render(request, "login.html", status_code=400, error=None, oidc_enabled=True,
-                          oidc_error="SSO state mismatch — please try again.")
+                          oidc_error=_("SSO state mismatch — please try again."))
         claims = await asyncio.to_thread(oidc_auth.complete, oidc, data["r"], code, data["n"], state.log)
         if claims is None:
             return render(request, "login.html", status_code=401, error=None, oidc_enabled=True,
-                          oidc_error="SSO sign-in failed.")
+                          oidc_error=_("SSO sign-in failed."))
         username = oidc_auth.username_from_claims(claims, oidc)
         role = oidc_auth.role_from_claims(claims, oidc)
         if not username or not role:
             state.log(f"OIDC login denied: user={username!r} role={role!r} (no mapped group)")
             return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
-                          oidc_error="Your account isn't mapped to a role.")
+                          oidc_error=_("Your account isn't mapped to a role."))
         async with state.config_lock:
             user = state.config.upsert_external_user(username, role, "oidc")
             await state.asave()
@@ -87,10 +88,10 @@ def routes(ctx: Ctx) -> list:
         ip = client_ip(request)
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         if state.rate_limiter.blocked(ip):
             return render(request, "login.html", status_code=429,
-                          error="Too many attempts. Wait a few minutes and try again.",
+                          error=_("Too many attempts. Wait a few minutes and try again."),
                           oidc_enabled=state.config.oidc.enabled)
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
@@ -124,13 +125,14 @@ def routes(ctx: Ctx) -> list:
         state.log(f"failed login for {username!r} from {ip}")
         ctx.audit(request, "login_failed", "", user=username)
         state.notifier.emit("login_failed", ip, "", f"user {username!r} from {ip}")
-        return render(request, "login.html", status_code=401, error="Invalid username or password.",
+        return render(request, "login.html", status_code=401,
+                      error=_("Invalid username or password."),
                       oidc_enabled=state.config.oidc.enabled)
 
     async def logout_post(request):
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         ctx.audit(request, "logout")
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(auth.SESSION_COOKIE, path="/")
@@ -144,7 +146,7 @@ def routes(ctx: Ctx) -> list:
     async def setup_post(request):
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
-            return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+            return csrf_failed()
         username = (form.get("username") or "admin").strip() or "admin"
         pw = form.get("password", "")
         pw2 = form.get("password2", "")

@@ -1,25 +1,26 @@
 {% extends "base.html" %}
-{% block title %}First-run setup — ser2net{% endblock %}
+{% from "_macros.html" import lang_switch %}
+{% block title %}{{ _("First-run setup") }} — ser2net{% endblock %}
 {% block body %}
 <div class="auth-wrap">
+  {{ lang_switch(request, request.state.lang) }}
   <div class="panel">
-    <h1>Welcome to ser2net</h1>
-    <p class="muted">Set an admin password to protect this interface. The admin UI is reachable
-      at <span class="mono">{{ admin.bind_ip }}:{{ admin.port }}</span> from the network.</p>
+    <h1>{{ _("Welcome to ser2net") }}</h1>
+    <p class="muted">{{ _('Set an admin password to protect this interface. The admin UI is reachable at <span class="mono">%(address)s</span> from the network.', address=admin.bind_ip ~ ':' ~ admin.port) }}</p>
     {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
-    <div class="banner warn">This interface is network-exposed. Choose a strong password.</div>
+    <div class="banner warn">{{ _("This interface is network-exposed. Choose a strong password.") }}</div>
     <form method="post" action="/setup" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-      <label>Admin username
+      <label>{{ _("Admin username") }}
         <input type="text" name="username" value="admin" autocomplete="username" autofocus required>
       </label>
-      <label>New password (min 8 chars)
+      <label>{{ _("New password (min 8 chars)") }}
         <input type="password" name="password" autocomplete="new-password" required>
       </label>
-      <label>Confirm password
+      <label>{{ _("Confirm password") }}
         <input type="password" name="password2" autocomplete="new-password" required>
       </label>
-      <button class="btn primary w-full" type="submit">Set password &amp; continue</button>
+      <button class="btn primary w-full" type="submit">{{ _("Set password & continue") }}</button>
     </form>
   </div>
 </div>

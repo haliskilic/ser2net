@@ -67,6 +67,7 @@ PORTABLE = [
     "test_modbus_write.py",
     "test_sparkplug.py",
     "test_ser2net_import.py",
+    "test_i18n.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
