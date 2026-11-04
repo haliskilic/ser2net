@@ -12,3 +12,9 @@ __pycache__/
 # PyInstaller build output (release binaries are built in CI)
 /build/
 /dist/
+
+# coverage (tests/coverage_run.py)
+.coverage
+.coverage.*
+coverage.txt
+coverage-html/
