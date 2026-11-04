@@ -1,61 +1,61 @@
 {% macro serial_fields(s, prefix, ports) %}
-  <label>Device
+  <label>{{ _("Device") }}
     <select name="{{ prefix }}port"{% if prefix == 'serial_' %} required{% endif %}>
       {% set devs = ports | map(attribute='device') | list %}
       {% set stable = ports | selectattr('by_id') | list %}
-      {% if s.port and s.port not in devs and s.port not in (stable | map(attribute='by_id') | list) %}<option value="{{ s.port }}" selected>{{ s.port }} (not connected)</option>{% endif %}
+      {% if s.port and s.port not in devs and s.port not in (stable | map(attribute='by_id') | list) %}<option value="{{ s.port }}" selected>{{ _("%(port)s (not connected)", port=s.port) }}</option>{% endif %}
       {% for p in ports %}<option value="{{ p.device }}" {% if p.device == s.port %}selected{% endif %}>{{ p.device }}{% if p.description %} — {{ p.description }}{% endif %}{% if p.serial_number %} [{{ p.serial_number }}]{% endif %}</option>{% endfor %}
-      {% if stable %}<optgroup label="Stable names (/dev/serial/by-id — survive re-plugging)">
+      {% if stable %}<optgroup label="{{ _('Stable names (/dev/serial/by-id — survive re-plugging)') }}">
         {% for p in stable %}<option value="{{ p.by_id }}" {% if p.by_id == s.port %}selected{% endif %}>{{ p.by_id | replace('/dev/serial/by-id/', '') }}</option>{% endfor %}
       </optgroup>{% endif %}
-      {% if not ports and not s.port %}<option value="">(no serial ports detected)</option>{% endif %}
+      {% if not ports and not s.port %}<option value="">{{ _("(no serial ports detected)") }}</option>{% endif %}
     </select>
   </label>
   <input type="hidden" name="{{ prefix }}usb_match_shown" value="1">
-  <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.match %}checked{% endif %}> Find this device by its USB identity if its name changes <span class="muted">(COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number{% if s.match %} · bound to <span class="mono">{{ s.match.vid }}:{{ s.match.pid }}{% if s.match.serial_number %} [{{ s.match.serial_number }}]{% endif %}</span>{% endif %})</span></label>
+  <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.match %}checked{% endif %}> {{ _("Find this device by its USB identity if its name changes") }} <span class="muted">({{ _("COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number") }}{% if s.match %} · {{ _("bound to") }} <span class="mono">{{ s.match.vid }}:{{ s.match.pid }}{% if s.match.serial_number %} [{{ s.match.serial_number }}]{% endif %}</span>{% endif %})</span></label>
   <div class="grid3">
-    <label>Baud rate
+    <label>{{ _("Baud rate") }}
       <select name="{{ prefix }}baudrate" data-custom="{{ prefix }}custom_baud">
         {% for b in baudrates %}<option value="{{ b }}" {% if b == s.baudrate %}selected{% endif %}>{{ b }}</option>{% endfor %}
-        <option value="custom" {% if s.baudrate not in baudrates %}selected{% endif %}>Custom…</option>
+        <option value="custom" {% if s.baudrate not in baudrates %}selected{% endif %}>{{ _("Custom…") }}</option>
       </select>
       <input type="number" name="{{ prefix }}custom_baud" class="custom-input" min="1"
              value="{{ s.baudrate if s.baudrate not in baudrates else '' }}"
-             placeholder="e.g. 250000" {% if s.baudrate in baudrates %}hidden disabled{% endif %}>
+             placeholder="{{ _('e.g. %(example)s', example='250000') }}" {% if s.baudrate in baudrates %}hidden disabled{% endif %}>
     </label>
-    <label>Data bits
+    <label>{{ _("Data bits") }}
       <select name="{{ prefix }}bytesize">{% for n in bytesizes %}<option value="{{ n }}" {% if n == s.bytesize %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
     </label>
-    <label>Parity
-      <select name="{{ prefix }}parity">{% for p in parities %}<option value="{{ p }}" {% if p == s.parity %}selected{% endif %}>{{ parity_labels[p] }}</option>{% endfor %}</select>
+    <label>{{ _("Parity") }}
+      <select name="{{ prefix }}parity">{% for p in parities %}<option value="{{ p }}" {% if p == s.parity %}selected{% endif %}>{{ {"N": _("None"), "E": _("Even"), "O": _("Odd"), "M": _("Mark"), "S": _("Space")}[p] }}</option>{% endfor %}</select>
     </label>
   </div>
   <div class="grid3">
-    <label>Stop bits
+    <label>{{ _("Stop bits") }}
       <select name="{{ prefix }}stopbits">{% for st in stopbits %}<option value="{{ st }}" {% if st == s.stopbits %}selected{% endif %}>{{ st }}</option>{% endfor %}</select>
     </label>
-    <label>Flow control
+    <label>{{ _("Flow control") }}
       <select name="{{ prefix }}flowcontrol">{% for f in flowcontrols %}<option value="{{ f }}" {% if f == s.flowcontrol %}selected{% endif %}>{{ f }}</option>{% endfor %}</select>
     </label>
-    <label class="chk chk-pad"><input type="checkbox" name="{{ prefix }}exclusive" {% if s.exclusive %}checked{% endif %}> Exclusive open</label>
+    <label class="chk chk-pad"><input type="checkbox" name="{{ prefix }}exclusive" {% if s.exclusive %}checked{% endif %}> {{ _("Exclusive open") }}</label>
   </div>
   <div class="grid2">
-    <label>RTS on open
+    <label>{{ _("RTS on open") }}
       <select name="{{ prefix }}rts_on_open">{% for x in line_states %}<option value="{{ x }}" {% if x == s.rts_on_open %}selected{% endif %}>{{ x }}</option>{% endfor %}</select>
     </label>
-    <label>DTR on open
+    <label>{{ _("DTR on open") }}
       <select name="{{ prefix }}dtr_on_open">{% for x in line_states %}<option value="{{ x }}" {% if x == s.dtr_on_open %}selected{% endif %}>{{ x }}</option>{% endfor %}</select>
     </label>
   </div>
   <details class="rs485"{% if s.advanced.rs485_enabled %} open{% endif %}>
-    <summary>RS-485 (half-duplex, hardware auto-RTS)</summary>
-    <label class="chk"><input type="checkbox" name="{{ prefix }}rs485_enabled" {% if s.advanced.rs485_enabled %}checked{% endif %}> Enable RS-485 mode <span class="muted">(Linux <span class="mono">TIOCSRS485</span>; driver must support it)</span></label>
+    <summary>{{ _("RS-485 (half-duplex, hardware auto-RTS)") }}</summary>
+    <label class="chk"><input type="checkbox" name="{{ prefix }}rs485_enabled" {% if s.advanced.rs485_enabled %}checked{% endif %}> {{ _("Enable RS-485 mode") }} <span class="muted">({{ _('Linux <span class="mono">TIOCSRS485</span>; the driver must support it') }})</span></label>
     <div class="grid3">
-      <label>RTS delay before TX (ms)
+      <label>{{ _("RTS delay before TX (ms)") }}
         <input type="number" step="0.1" min="0" name="{{ prefix }}rs485_delay_before_tx_ms" value="{{ s.advanced.rs485_delay_before_tx_ms }}"></label>
-      <label>RTS delay after TX (ms)
+      <label>{{ _("RTS delay after TX (ms)") }}
         <input type="number" step="0.1" min="0" name="{{ prefix }}rs485_delay_after_tx_ms" value="{{ s.advanced.rs485_delay_after_tx_ms }}"></label>
-      <label class="chk chk-pad"><input type="checkbox" name="{{ prefix }}rs485_rts_level_for_tx" {% if s.advanced.rs485_rts_level_for_tx %}checked{% endif %}> RTS high during TX</label>
+      <label class="chk chk-pad"><input type="checkbox" name="{{ prefix }}rs485_rts_level_for_tx" {% if s.advanced.rs485_rts_level_for_tx %}checked{% endif %}> {{ _("RTS high during TX") }}</label>
     </div>
   </details>
 {% endmacro %}
@@ -72,172 +72,172 @@
   {% if not is_new %}<input type="hidden" name="id" value="{{ mapping.id }}">{% endif %}
 
   <div class="form-head">
-    <h3>{{ 'New mapping' if is_new else 'Edit mapping' }}{% if remote %} <span class="tag">on {{ remote.host }}:{{ remote.port }}</span>{% endif %}</h3>
-    <button type="button" class="btn sm" data-cancel>Cancel</button>
+    <h3>{{ _("New mapping") if is_new else _("Edit mapping") }}{% if remote %} <span class="tag">{{ _("on %(host)s", host=remote.host ~ ':' ~ remote.port) }}</span>{% endif %}</h3>
+    <button type="button" class="btn sm" data-cancel>{{ _("Cancel") }}</button>
   </div>
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
 
   <div class="grid3">
-    <label>Name <input type="text" name="name" value="{{ mapping.name }}" placeholder="e.g. PLC-1" required></label>
-    <label>Type
+    <label>{{ _("Name") }} <input type="text" name="name" value="{{ mapping.name }}" placeholder="{{ _('e.g. %(example)s', example='PLC-1') }}" required></label>
+    <label>{{ _("Type") }}
       <select name="kind">
-        <option value="net" {% if mapping.kind == 'net' %}selected{% endif %}>Serial ↔ Network</option>
-        <option value="serialbridge" {% if mapping.kind == 'serialbridge' %}selected{% endif %}>Serial ↔ Serial</option>
+        <option value="net" {% if mapping.kind == 'net' %}selected{% endif %}>{{ _("Serial ↔ Network") }}</option>
+        <option value="serialbridge" {% if mapping.kind == 'serialbridge' %}selected{% endif %}>{{ _("Serial ↔ Serial") }}</option>
       </select>
     </label>
-    <label class="chk chk-pad"><input type="checkbox" name="enabled" {% if mapping.enabled %}checked{% endif %}> Enabled</label>
+    <label class="chk chk-pad"><input type="checkbox" name="enabled" {% if mapping.enabled %}checked{% endif %}> {{ _("Enabled") }}</label>
   </div>
 
   <fieldset>
-    <legend>Serial port{% if mapping.kind == 'serialbridge' %} A{% endif %}</legend>
+    <legend>{{ _("Serial port") }}{% if mapping.kind == 'serialbridge' %} A{% endif %}</legend>
     {{ serial_fields(mapping.serial, "serial_", ports) }}
   </fieldset>
 
   <fieldset data-show-when="kind=serialbridge">
-    <legend>Serial port B</legend>
+    <legend>{{ _("Serial port") }} B</legend>
     {{ serial_fields(mapping.serial_b, "serial_b_", ports) }}
   </fieldset>
 
   <fieldset data-show-when="kind=net">
-    <legend>Network</legend>
+    <legend>{{ _("Network") }}</legend>
     <div class="grid3">
-      <label>Mode
+      <label>{{ _("Mode") }}
         <select name="network_mode">
-          <option value="server" {% if mapping.network.mode == 'server' %}selected{% endif %}>TCP server (listen)</option>
-          <option value="client" {% if mapping.network.mode == 'client' %}selected{% endif %}>TCP client (connect out)</option>
+          <option value="server" {% if mapping.network.mode == 'server' %}selected{% endif %}>{{ _("TCP server (listen)") }}</option>
+          <option value="client" {% if mapping.network.mode == 'client' %}selected{% endif %}>{{ _("TCP client (connect out)") }}</option>
           <option value="udp" {% if mapping.network.mode == 'udp' %}selected{% endif %}>UDP</option>
         </select>
       </label>
-      <label>Protocol
+      <label>{{ _("Protocol") }}
         <select name="network_protocol">{% for pr in protocols %}<option value="{{ pr }}" {% if pr == mapping.network.protocol %}selected{% endif %}>{{ pr }}</option>{% endfor %}</select>
       </label>
-      <label class="chk chk-pad"><input type="checkbox" name="network_read_only" {% if mapping.network.read_only %}checked{% endif %}> Read-only</label>
+      <label class="chk chk-pad"><input type="checkbox" name="network_read_only" {% if mapping.network.read_only %}checked{% endif %}> {{ _("Read-only") }}</label>
     </div>
 
     <div class="grid2" data-show-when="network_mode=server,udp">
-      <label>Bind IP
+      <label>{{ _("Bind IP") }}
         <select name="network_bind_ip" data-custom="network_bind_ip_custom">
           {% for ip in ips %}<option value="{{ ip.value }}" {% if ip.value == mapping.network.bind_ip %}selected{% endif %}>{{ ip.label }}</option>{% endfor %}
-          <option value="custom" {% if bind_is_custom %}selected{% endif %}>Custom…</option>
+          <option value="custom" {% if bind_is_custom %}selected{% endif %}>{{ _("Custom…") }}</option>
         </select>
         <input type="text" name="network_bind_ip_custom" class="custom-input"
                value="{{ mapping.network.bind_ip if bind_is_custom else '' }}"
-               placeholder="e.g. 10.0.0.5" {% if not bind_is_custom %}hidden disabled{% endif %}>
+               placeholder="{{ _('e.g. %(example)s', example='10.0.0.5') }}" {% if not bind_is_custom %}hidden disabled{% endif %}>
       </label>
-      <label>Listen port <input type="number" name="network_port" min="1" max="65535" value="{{ mapping.network.port }}"></label>
+      <label>{{ _("Listen port") }} <input type="number" name="network_port" min="1" max="65535" value="{{ mapping.network.port }}"></label>
     </div>
 
     <div class="grid3" data-show-when="network_mode=client">
-      <label>Remote host <input type="text" name="network_remote_host" value="{{ mapping.network.remote_host }}" placeholder="e.g. 192.168.1.20"></label>
-      <label>Remote port <input type="number" name="network_remote_port" min="1" max="65535" value="{{ mapping.network.remote_port or '' }}"></label>
-      <label>Connect timeout (s) <span class="muted">(0 = OS default)</span>
+      <label>{{ _("Remote host") }} <input type="text" name="network_remote_host" value="{{ mapping.network.remote_host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.20') }}"></label>
+      <label>{{ _("Remote port") }} <input type="number" name="network_remote_port" min="1" max="65535" value="{{ mapping.network.remote_port or '' }}"></label>
+      <label>{{ _("Connect timeout (s)") }} <span class="muted">({{ _("0 = OS default") }})</span>
         <input type="number" name="network_connect_timeout_s" min="0" max="3600" step="any" value="{{ '%g'|format(mapping.network.connect_timeout_s) }}"></label>
     </div>
 
     <div data-show-when="network_mode=server">
       <div class="grid3">
-        <label>Max connections <input type="number" name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
-        <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> Kick old client</label>
-        <label>Client buffer (chunks) <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
+        <label>{{ _("Max connections") }} <input type="number" name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
+        <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> {{ _("Kick old client") }}</label>
+        <label>{{ _("Client buffer (chunks)") }} <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
       </div>
-      <label>High-priority client IPs / CIDRs <span class="muted">(kick an existing client when full)</span>
-        <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.10">
+      <label>{{ _("High-priority client IPs / CIDRs") }} <span class="muted">({{ _("kick an existing client when full") }})</span>
+        <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.10') }}">
       </label>
     </div>
 
     <div data-show-when="network_mode=server,udp">
-      <label>Allowed client IPs / CIDRs <span class="muted">(blank = any; enforced for TCP server and UDP)</span>
-        <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="e.g. 192.168.1.0/24">
+      <label>{{ _("Allowed client IPs / CIDRs") }} <span class="muted">({{ _("blank = any; enforced for TCP server and UDP") }})</span>
+        <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.0/24') }}">
       </label>
     </div>
 
     <div data-show-when="network_mode=server,client">
-      <label class="chk"><input type="checkbox" name="network_tls" {% if mapping.network.tls %}checked{% endif %}> TLS (encrypt the data bridge)</label>
+      <label class="chk"><input type="checkbox" name="network_tls" {% if mapping.network.tls %}checked{% endif %}> {{ _("TLS (encrypt the data bridge)") }}</label>
       <div class="grid2">
-        <label>TLS certificate path <input type="text" name="network_tls_cert" value="{{ mapping.network.tls_cert }}" placeholder="/path/cert.pem"></label>
-        <label>TLS key path <input type="text" name="network_tls_key" value="{{ mapping.network.tls_key }}" placeholder="/path/key.pem"></label>
+        <label>{{ _("TLS certificate path") }} <input type="text" name="network_tls_cert" value="{{ mapping.network.tls_cert }}" placeholder="/path/cert.pem"></label>
+        <label>{{ _("TLS key path") }} <input type="text" name="network_tls_key" value="{{ mapping.network.tls_key }}" placeholder="/path/key.pem"></label>
       </div>
     </div>
 
     <div data-show-when="network_mode=server,client">
-      <label class="chk"><input type="checkbox" name="network_tcp_keepalive" {% if mapping.network.tcp_keepalive %}checked{% endif %}> TCP keepalive <span class="muted">(detect a peer that vanished without closing — power loss, cable pull, VPN/NAT drop — and free its slot after ≈ idle + interval × count)</span></label>
+      <label class="chk"><input type="checkbox" name="network_tcp_keepalive" {% if mapping.network.tcp_keepalive %}checked{% endif %}> TCP keepalive <span class="muted">({{ _("detect a peer that vanished without closing — power loss, cable pull, VPN/NAT drop — and free its slot after ≈ idle + interval × count") }})</span></label>
       <div class="grid3">
-        <label>Keepalive idle (s) <input type="number" name="network_keepalive_idle_s" min="1" max="32767" value="{{ mapping.network.keepalive_idle_s }}"></label>
-        <label>Probe interval (s) <input type="number" name="network_keepalive_interval_s" min="1" max="32767" value="{{ mapping.network.keepalive_interval_s }}"></label>
-        <label>Probe count <input type="number" name="network_keepalive_count" min="1" max="127" value="{{ mapping.network.keepalive_count }}"></label>
+        <label>{{ _("Keepalive idle (s)") }} <input type="number" name="network_keepalive_idle_s" min="1" max="32767" value="{{ mapping.network.keepalive_idle_s }}"></label>
+        <label>{{ _("Probe interval (s)") }} <input type="number" name="network_keepalive_interval_s" min="1" max="32767" value="{{ mapping.network.keepalive_interval_s }}"></label>
+        <label>{{ _("Probe count") }} <input type="number" name="network_keepalive_count" min="1" max="127" value="{{ mapping.network.keepalive_count }}"></label>
       </div>
     </div>
   </fieldset>
 
   <fieldset>
-    <legend>Options</legend>
+    <legend>{{ _("Options") }}</legend>
     <div class="grid2">
-      <label>Connect banner <span class="muted">(\d device, \I IP, \N name, \p port)</span>
-        <input type="text" name="opt_banner" value="{{ mapping.options.banner }}" placeholder="optional">
+      <label>{{ _("Connect banner") }} <span class="muted">(\d {{ _("device") }}, \I IP, \N {{ _("name") }}, \p {{ _("port") }})</span>
+        <input type="text" name="opt_banner" value="{{ mapping.options.banner }}" placeholder="{{ _('optional') }}">
       </label>
-      <label>Close-on string <span class="muted">(disconnect clients when device sends this)</span>
-        <input type="text" name="opt_closeon" value="{{ mapping.options.closeon }}" placeholder="optional">
+      <label>{{ _("Close-on string") }} <span class="muted">({{ _("disconnect clients when the device sends this") }})</span>
+        <input type="text" name="opt_closeon" value="{{ mapping.options.closeon }}" placeholder="{{ _('optional') }}">
       </label>
     </div>
     <div class="grid2">
-      <label>Idle timeout (s) <span class="muted">(TCP; no traffic either way · 0 = off)</span>
+      <label>{{ _("Idle timeout (s)") }} <span class="muted">({{ _("TCP; no traffic either way · 0 = off") }})</span>
         <input type="number" name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
-      <label>Max connection time (s) <span class="muted">(TCP; 0 = unlimited · 86400 = 24 h)</span>
+      <label>{{ _("Max connection time (s)") }} <span class="muted">({{ _("TCP; 0 = unlimited · 86400 = 24 h") }})</span>
         <input type="number" name="opt_max_connection_time_s" min="0" value="{{ mapping.options.max_connection_time_s }}"></label>
     </div>
     <div class="grid2">
-      <label>Trace file name <span class="muted">(record the traffic; kept in the data folder's <span class="mono">traces/</span> · empty = off)</span>
-        <input type="text" name="opt_trace_both" value="{{ mapping.options.trace_both }}" placeholder="optional, e.g. plc1.trace">
+      <label>{{ _("Trace file name") }} <span class="muted">({{ _('record the traffic; kept in the data folder’s <span class="mono">traces/</span> · empty = off') }})</span>
+        <input type="text" name="opt_trace_both" value="{{ mapping.options.trace_both }}" placeholder="{{ _('optional, e.g. %(example)s', example='plc1.trace') }}">
       </label>
-      <label class="chk chk-pad"><input type="checkbox" name="opt_trace_hexdump" {% if mapping.options.trace_hexdump %}checked{% endif %}> Trace as hex dump</label>
+      <label class="chk chk-pad"><input type="checkbox" name="opt_trace_hexdump" {% if mapping.options.trace_hexdump %}checked{% endif %}> {{ _("Trace as hex dump") }}</label>
     </div>
     <div class="grid2">
-      <label>Trace file size (MB) <span class="muted">(then it is rotated)</span>
+      <label>{{ _("Trace file size (MB)") }} <span class="muted">({{ _("then it is rotated") }})</span>
         <input type="number" name="opt_trace_max_mb" min="0.1" max="1024" step="any" value="{{ '%g'|format(mapping.options.trace_max_mb) }}"></label>
-      <label>Rotated trace files kept <span class="muted">(0 = start over)</span>
+      <label>{{ _("Rotated trace files kept") }} <span class="muted">({{ _("0 = start over") }})</span>
         <input type="number" name="opt_trace_keep" min="0" max="50" value="{{ mapping.options.trace_keep }}"></label>
     </div>
   </fieldset>
 
   <fieldset data-show-when="kind=net">
-    <legend>MQTT publishing <span class="muted">(serial lines → broker; needs paho-mqtt)</span></legend>
-    <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> Publish serial lines to MQTT</label>
+    <legend>{{ _("MQTT publishing") }} <span class="muted">({{ _("serial lines → broker; needs paho-mqtt") }})</span></legend>
+    <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> {{ _("Publish serial lines to MQTT") }}</label>
     <div class="grid3">
-      <label>Broker host <input type="text" name="mqtt_host" value="{{ mapping.mqtt.host }}" placeholder="e.g. 192.168.1.5"></label>
-      <label>Port <input type="number" name="mqtt_port" min="1" max="65535" value="{{ mapping.mqtt.port }}"></label>
+      <label>{{ _("Broker host") }} <input type="text" name="mqtt_host" value="{{ mapping.mqtt.host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.5') }}"></label>
+      <label>{{ _("Port") }} <input type="number" name="mqtt_port" min="1" max="65535" value="{{ mapping.mqtt.port }}"></label>
       <label>QoS
         <select name="mqtt_qos">{% for q in [0, 1, 2] %}<option value="{{ q }}" {% if q == mapping.mqtt.qos %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
       </label>
     </div>
-    <label>Base topic <span class="muted">(lines publish here; status at &lt;topic&gt;/status)</span>
-      <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="e.g. ser2net/plc1">
+    <label>{{ _("Base topic") }} <span class="muted">({{ _("lines publish here; status at &lt;topic&gt;/status") }})</span>
+      <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
     </label>
     <div class="grid3">
-      <label>Username <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="optional"></label>
-      <label>Password <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="optional"></label>
+      <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}"></label>
+      <label>{{ _("Password") }} <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="{{ _('optional') }}"></label>
       <label class="chk chk-pad"><input type="checkbox" name="mqtt_tls" {% if mapping.mqtt.tls %}checked{% endif %}> TLS</label>
     </div>
     <div class="grid3" data-show-when="network_protocol=modbus">
-      <label>Payload format <span class="muted">(Modbus points)</span>
+      <label>{{ _("Payload format") }} <span class="muted">({{ _("Modbus points") }})</span>
         <select name="mqtt_payload_format">
-          <option value="plain" {% if mapping.mqtt.payload_format == 'plain' %}selected{% endif %}>Plain: &lt;topic&gt;/&lt;point&gt;</option>
-          <option value="sparkplug_b" {% if mapping.mqtt.payload_format == 'sparkplug_b' %}selected{% endif %}>Sparkplug B (edge node)</option>
+          <option value="plain" {% if mapping.mqtt.payload_format == 'plain' %}selected{% endif %}>{{ _("Plain: &lt;topic&gt;/&lt;point&gt;") }}</option>
+          <option value="sparkplug_b" {% if mapping.mqtt.payload_format == 'sparkplug_b' %}selected{% endif %}>{{ _("Sparkplug B (edge node)") }}</option>
         </select></label>
-      <label>Sparkplug group ID <input type="text" name="mqtt_sparkplug_group_id" value="{{ mapping.mqtt.sparkplug_group_id }}" placeholder="ser2net"></label>
-      <label>Sparkplug edge node ID <span class="muted">(blank = mapping name)</span>
-        <input type="text" name="mqtt_sparkplug_node_id" value="{{ mapping.mqtt.sparkplug_node_id }}" placeholder="e.g. line-3-plc"></label>
+      <label>{{ _("Sparkplug group ID") }} <input type="text" name="mqtt_sparkplug_group_id" value="{{ mapping.mqtt.sparkplug_group_id }}" placeholder="ser2net"></label>
+      <label>{{ _("Sparkplug edge node ID") }} <span class="muted">({{ _("blank = mapping name") }})</span>
+        <input type="text" name="mqtt_sparkplug_node_id" value="{{ mapping.mqtt.sparkplug_node_id }}" placeholder="{{ _('e.g. %(example)s', example='line-3-plc') }}"></label>
     </div>
   </fieldset>
 
   <fieldset data-show-when="network_protocol=modbus">
-    <legend>Modbus register polling → MQTT <span class="muted">(edge mode; also enable MQTT above)</span></legend>
-    <label>Poll interval (s) <input type="number" name="modbus_poll_interval_s" min="0.1" step="0.1" value="{{ mapping.modbus_poll.interval_s }}"></label>
-    <label>Points — JSON array
-      <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|bool","scale","writable":true}] — writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug DCMD to their unit’s device (<span class="mono">unit&lt;N&gt;</span>)</span>
+    <legend>{{ _("Modbus register polling → MQTT") }} <span class="muted">({{ _("edge mode; also enable MQTT above") }})</span></legend>
+    <label>{{ _("Poll interval (s)") }} <input type="number" name="modbus_poll_interval_s" min="0.1" step="0.1" value="{{ mapping.modbus_poll.interval_s }}"></label>
+    <label>{{ _("Points — JSON array") }}
+      <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|bool","scale","writable":true}] — {{ _('writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug DCMD to their unit’s device (<span class="mono">unit&lt;N&gt;</span>)') }}</span>
       <textarea name="modbus_points" rows="5" spellcheck="false"
                 placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}, {"name":"setpoint","unit":1,"fn":3,"address":10,"dtype":"int16","writable":true}]'>{{ modbus_points_json }}</textarea>
     </label>
   </fieldset>
 
-  <button class="btn primary" type="submit">{{ 'Create mapping' if is_new else 'Save changes' }}</button>
+  <button class="btn primary" type="submit">{{ _("Create mapping") if is_new else _("Save changes") }}</button>
 </form>

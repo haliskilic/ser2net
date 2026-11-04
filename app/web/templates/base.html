@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ request.state.lang|default('en') }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,7 +13,16 @@
   <script src="/static/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
 </head>
-<body>
+<body data-i18n="{{ {
+  'disconnected': _('console disconnected'),
+  'selected': _('{0} selected'),
+  'shown': _('{0} of {1} shown'),
+  'hex_header': _('time          direction   offset  bytes                                            text'),
+  'from_device': _('◀ device'),
+  'to_device': _('▶ device'),
+  'hex_view': _('Hex view'),
+  'text_view': _('Text view'),
+} | tojson | forceescape }}">
   {% block body %}{% endblock %}
 </body>
 </html>

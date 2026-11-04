@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ...config import ConfigError, MappingConfig
 from ...engine import portlist
+from ...i18n import _
 from .forms import _checkbox, _mapping_from_form, _preserve_unmanaged_fields
 
 
@@ -26,8 +27,8 @@ def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) ->
         elif port is None and old is not None and old.match:
             settings.match = dict(old.match)  # unplugged now: keep what it was bound to
         else:
-            raise ValueError(f"{settings.port or 'This port'} has no USB identity (VID/PID) to "
-                             "find it by; untick “Find this device by its USB identity”.")
+            raise ValueError(_("{0} has no USB identity (VID/PID) to find it by; untick “Find "
+                               "this device by its USB identity”.").format(settings.port or _("This port")))
 
 
 async def save_mapping_from_form(state, form) -> tuple[bool, str]:

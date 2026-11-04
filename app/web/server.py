@@ -19,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
+from .. import i18n
 from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
@@ -36,7 +37,7 @@ def softbreak(value) -> Markup:
     return Markup(_SOFT_BREAK_AFTER.sub(r"\1<wbr>", str(escape(value))))
 
 
-PUBLIC_PREFIXES = ("/static", "/auth/")  # /auth/oidc/* is the unauthenticated SSO flow
+PUBLIC_PREFIXES = ("/static", "/auth/", "/lang/")  # /auth/oidc/*: the SSO flow; /lang/xx: UI language
 # The peer-facing cluster endpoints are authenticated by the shared cluster KEY
 # (checked in the handler), not a user session — so they skip the session gate.
 # (The *-peer / peer-* proxies are browser-facing and keep the normal session + CSRF.)
@@ -62,9 +63,21 @@ class GuardMiddleware(BaseHTTPMiddleware):
         cfg = state.config
         path = request.url.path
 
-        # JSON REST API (/api/v1): bearer-token auth, no cookie session, no CSRF.
+        # JSON REST API (/api/v1): bearer-token auth, no cookie session, no CSRF — and
+        # English, like the logs (only the web UI is translated).
         if path.startswith("/api/v1"):
             return await self._dispatch_api(request, call_next, cfg)
+
+        lang = i18n.negotiate(request.cookies.get(i18n.COOKIE),
+                              request.headers.get("accept-language"), cfg.admin_ui.language)
+        request.state.lang = lang
+        token = i18n.set_language(lang)
+        try:
+            return await self._dispatch_ui(request, call_next, state, cfg, path)
+        finally:
+            i18n.reset(token)
+
+    async def _dispatch_ui(self, request, call_next, state, cfg, path):
 
         is_public = path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES)
 
@@ -83,12 +96,13 @@ class GuardMiddleware(BaseHTTPMiddleware):
         if request.method in ("POST", "PUT", "DELETE", "PATCH") and path.startswith("/api/") \
                 and path not in _CLUSTER_PEER_PATHS:  # peer-to-peer calls: key-authed, no cookie
             if not auth.csrf_token_matches(request, request.headers.get("x-csrf-token")):
-                return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+                return PlainTextResponse(i18n.gettext("CSRF validation failed. Reload the page."),
+                                         status_code=403)
 
         # first-run: force password setup (the health probe still answers, so a fresh
         # container isn't reported unhealthy while it waits for its admin password)
         if not cfg.password_set:
-            if path not in ("/setup", "/healthz") and not path.startswith("/static"):
+            if path not in ("/setup", "/healthz") and not path.startswith(("/static", "/lang/")):
                 return RedirectResponse("/setup", status_code=303)
         else:
             # password is set: /setup is no longer available
@@ -178,6 +192,11 @@ def make_templates() -> Jinja2Templates:
         asset_version=__version__,
     )
     templates.env.filters["softbreak"] = softbreak
+    # _("...") in every template, translated for the request's language (app/i18n.py);
+    # newstyle: _("Hello %(name)s", name=x) formats and escapes x
+    templates.env.add_extension("jinja2.ext.i18n")
+    templates.env.install_gettext_callables(i18n.gettext, i18n.ngettext, newstyle=True)  # type: ignore[attr-defined]
+    templates.env.globals["languages"] = i18n.LANGUAGES
     return templates
 
 

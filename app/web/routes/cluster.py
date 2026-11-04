@@ -19,6 +19,7 @@ from starlette.routing import Route
 from ... import __version__
 from ...config import MappingConfig
 from ...engine import netinfo, portlist
+from ...i18n import _
 from . import ops
 from .common import Ctx
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
@@ -42,7 +43,7 @@ def _fmt_uptime(seconds: float) -> str:
     s = int(max(0, seconds))
     d, s = divmod(s, 86400)
     h, s = divmod(s, 3600)
-    m, _ = divmod(s, 60)
+    m, _sec = divmod(s, 60)
     if d:
         return f"{d}d {h}h"
     if h:
@@ -162,15 +163,15 @@ def routes(ctx: Ctx) -> list:
         try:
             port = int(form.get("port", "0"))
         except ValueError:
-            return PlainTextResponse("Bad port", status_code=400)
+            return PlainTextResponse(_("Bad port"), status_code=400)
         if action not in ("start", "stop", "restart"):
-            return PlainTextResponse("Unknown action", status_code=400)
+            return PlainTextResponse(_("Unknown action"), status_code=400)
         if (host, port) not in state.cluster.known_addresses():
-            return PlainTextResponse("Unknown cluster peer", status_code=403)
+            return PlainTextResponse(_("Unknown cluster peer"), status_code=403)
         res = await state.cluster.control_peer(scheme, host, port, mid, action)
         if not res or not res.get("ok"):
-            return PlainTextResponse("Peer did not accept the command "
-                                     "(unreachable or rejected).", status_code=502)
+            return PlainTextResponse(_("Peer did not accept the command "
+                                       "(unreachable or rejected)."), status_code=502)
         state.log(f"cluster: sent {action} to {host}:{port} for '{res.get('name', mid)}'")
         ctx.audit(request, f"cluster_control_{action}", f"{host}:{port}/{res.get('name', mid)}")
         return Response("", headers={"HX-Trigger": "refreshCluster"})
@@ -213,9 +214,9 @@ def routes(ctx: Ctx) -> list:
         try:
             port = int(getter("port", "0"))
         except ValueError:
-            return None, PlainTextResponse("Bad peer port", status_code=400)
+            return None, PlainTextResponse(_("Bad peer port"), status_code=400)
         if (host, port) not in state.cluster.known_addresses():
-            return None, PlainTextResponse("Unknown cluster peer", status_code=403)
+            return None, PlainTextResponse(_("Unknown cluster peer"), status_code=403)
         return (scheme, host, port), None
 
     async def cluster_peer_form(request):
@@ -230,7 +231,7 @@ def routes(ctx: Ctx) -> list:
         mid = request.query_params.get("mid", "")
         data = await state.cluster.get_peer(scheme, host, port, f"/api/cluster/mapping-data?mid={mid}")
         if not data or "mapping" not in data:
-            return PlainTextResponse("Could not load the peer's mapping.", status_code=502)
+            return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
         mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
                       modbus_points_json=_modbus_points_json(mapping),
@@ -254,7 +255,7 @@ def routes(ctx: Ctx) -> list:
             state.log(f"cluster: edited '{res.get('name', '')}' on {host}:{port}")
             ctx.audit(request, "cluster_edit", f"{host}:{port}/{res.get('name', '')}")
             return Response("", headers={"HX-Trigger": "refreshCluster"})
-        msg = (res or {}).get("error") or "The peer rejected the change or was unreachable."
+        msg = (res or {}).get("error") or _("The peer rejected the change or was unreachable.")
         data = await state.cluster.get_peer(scheme, host, port,
                                             f"/api/cluster/mapping-data?mid={form.get('id', '')}")
         try:

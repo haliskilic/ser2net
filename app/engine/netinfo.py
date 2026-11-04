@@ -11,6 +11,8 @@ import ipaddress
 import socket
 from typing import Any
 
+from ..i18n import _
+
 try:
     import psutil
 except Exception:  # pragma: no cover - optional
@@ -69,8 +71,8 @@ def list_ip_candidates() -> list[dict[str, Any]]:
     """
     primary = primary_lan_ip()
     items: list[dict[str, Any]] = [
-        {"value": "0.0.0.0", "label": "All interfaces (0.0.0.0)", "kind": "all"},
-        {"value": "127.0.0.1", "label": "Localhost (127.0.0.1)", "kind": "loopback"},
+        {"value": "0.0.0.0", "label": _("All interfaces (0.0.0.0)"), "kind": "all"},
+        {"value": "127.0.0.1", "label": _("Localhost (127.0.0.1)"), "kind": "loopback"},
     ]
     seen = {"0.0.0.0", "127.0.0.1"}
     for ifname, ip in sorted(set(_nic_addresses())):
@@ -79,7 +81,7 @@ def list_ip_candidates() -> list[dict[str, Any]]:
         seen.add(ip)
         label = f"{ifname} — {ip}" if ifname else ip
         if ip == primary:
-            label += "  (primary)"
+            label += "  " + _("(primary)")
         items.append({"value": ip, "label": label, "kind": "lan"})
     return items
 

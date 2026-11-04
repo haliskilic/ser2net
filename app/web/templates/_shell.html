@@ -1,20 +1,22 @@
 {% extends "base.html" %}
+{% from "_macros.html" import lang_switch %}
 {% block body %}
 <header class="topbar">
   <div class="brand">⇄ ser2net</div>
   <nav>
-    <a href="/">Mappings</a>
-    <a href="/settings">Settings</a>
+    <a href="/">{{ _("Mappings") }}</a>
+    <a href="/settings">{{ _("Settings") }}</a>
     {% set u = request.state.user %}
-    {% if u and u.source == 'anonymous' %}<span class="muted mono who" title="login is switched off — open access">no login · {{ u.role }}</span>
-    {% elif u %}<span class="muted mono who" title="signed in as {{ u.username }} · {{ u.role }}">{{ u.username }} · {{ u.role }}</span>{% endif %}
-    <button class="link" type="button" data-theme-toggle title="Toggle light / dark theme" aria-label="Toggle theme">◐</button>
+    {% if u and u.source == 'anonymous' %}<span class="muted mono who" title="{{ _('login is switched off — open access') }}">{{ _("no login · %(role)s", role=u.role) }}</span>
+    {% elif u %}<span class="muted mono who" title="{{ _('signed in as %(user)s · %(role)s', user=u.username, role=u.role) }}">{{ u.username }} · {{ u.role }}</span>{% endif %}
+    {{ lang_switch(request, request.state.lang) }}
+    <button class="link" type="button" data-theme-toggle title="{{ _('Toggle light / dark theme') }}" aria-label="{{ _('Toggle theme') }}">◐</button>
     {% if u and u.source == 'anonymous' %}
-    <a href="/login">Sign in</a>
+    <a href="/login">{{ _("Sign in") }}</a>
     {% else %}
     <form method="post" action="/logout" class="inline">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-      <button class="link" type="submit">Logout</button>
+      <button class="link" type="submit">{{ _("Logout") }}</button>
     </form>
     {% endif %}
   </nav>
