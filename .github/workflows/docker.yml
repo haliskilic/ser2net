@@ -1,16 +1,11 @@
 name: Docker image
 
-# Builds the image for linux/amd64 and linux/arm64, smoke-tests each natively
-# (tests/docker_smoke.sh: non-root, HEALTHCHECK, upgrade from a root-owned volume) and,
-# on a release (push: true), pushes it to ghcr.io/<owner>/ser2net as X.Y.Z, X.Y and
-# latest with build provenance and an SBOM. Called by ci.yml and release.yml.
+# Builds the image for linux/amd64 and linux/arm64 and smoke-tests each natively
+# (tests/docker_smoke.sh: non-root, HEALTHCHECK, upgrade from a root-owned volume).
+# Called by ci.yml and release.yml; release.yml then pushes the multi-arch image to
+# GHCR (its own job, with the write permissions this one doesn't need).
 on:
   workflow_call:
-    inputs:
-      push:
-        description: Push the multi-arch image to GHCR (release)
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -29,50 +24,3 @@ jobs:
       - uses: actions/checkout@v7
       - run: docker build -t ser2net:test .
       - run: tests/docker_smoke.sh ser2net:test
-
-  push:
-    name: push to GHCR (amd64 + arm64)
-    if: inputs.push
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/ser2net
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-          labels: |
-            org.opencontainers.image.title=ser2net
-            org.opencontainers.image.description=Serial-to-network bridge with a web UI
-            org.opencontainers.image.licenses=AGPL-3.0-only
-      - id: push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: mode=max
-          sbom: true
-      - uses: actions/attest-build-provenance@v4
-        with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/ser2net
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
