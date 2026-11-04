@@ -1,0 +1,25 @@
+# Dependabot: weekly version-update PRs (grouped, one per ecosystem) plus security
+# updates. A requirements.txt bump also needs the offline wheels refreshed — run
+# `python tools/refresh_wheels.py` on the Dependabot branch (CI job "offline wheels
+# match requirements.txt" stays red until then). See CONTRIBUTING.md.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"

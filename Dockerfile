@@ -10,9 +10,10 @@ WORKDIR /app
 # Install dependencies first for better layer caching. We install straight from
 # PyPI (the bundled vendor/wheels offline path is for air-gapped hosts, not the
 # image build), so the app runs with --no-bootstrap. The optional feature deps
-# (MQTT / LDAP / OIDC) are included so those work in the container out of the box.
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt paho-mqtt ldap3 authlib
+# (MQTT / LDAP / OIDC, requirements-optional.txt) are included so those work in the
+# container out of the box.
+COPY requirements.txt requirements-optional.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-optional.txt
 
 COPY . .
 
