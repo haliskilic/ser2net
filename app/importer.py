@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass, field
 
 from .config import ConfigError, MappingConfig, _new_id
+from .ser2net_import import looks_yaml, parse_ser2net_config
 
 MODES = ("merge", "replace")
 
@@ -26,12 +27,15 @@ class ImportPlan:
 
 
 def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
-    """A ser2net mappings export ({"mappings": [...]}) or a whole config.json.
+    """A ser2net mappings export ({"mappings": [...]}), a whole config.json, or a
+    classic ser2net configuration (ser2net.yaml of ser2net 4.x / ser2net.conf of 3.x).
     Raises ConfigError with a user-facing message."""
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise ConfigError("The file is not UTF-8 text.") from None
+    if not text.lstrip().startswith(("{", "[")):
+        return _classic_ser2net(text, filename)
     try:
         doc = json.loads(text)
     except ValueError as e:
@@ -51,6 +55,17 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
         warnings.append("Only the mappings are imported from a config.json; users, "
                         "passwords and settings stay as they are.")
     return ImportPlan(source=source, mappings=mappings, warnings=warnings)
+
+
+def _classic_ser2net(text: str, filename: str) -> ImportPlan:
+    """A configuration file of the classic C ser2net, converted (app/ser2net_import).
+    Nothing importable is an error, so a replace import cannot empty the mappings."""
+    dicts, warnings = parse_ser2net_config(text, filename)
+    if not dicts:
+        raise ConfigError(" ".join(warnings) or "The file has no ser2net connections to import.")
+    source = "ser2net.yaml (ser2net 4.x)" if looks_yaml(text) else "ser2net.conf (ser2net 3.x)"
+    return ImportPlan(source=source, mappings=[MappingConfig.from_dict(d) for d in dicts],
+                      warnings=warnings)
 
 
 def _match(existing: list[MappingConfig], m: MappingConfig):
