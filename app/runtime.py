@@ -102,8 +102,8 @@ async def _serve(store: ConfigStore, config) -> int:
         ssl_keyfile=admin.tls_key or None,
     )
     server = uvicorn.Server(uconfig)
-    # we manage signals ourselves (don't let uvicorn install its own handlers)
-    server.install_signal_handlers = lambda: None
+    # uvicorn (>= 0.29) also traps SIGINT/SIGTERM while it serves, from the main
+    # thread only; both its handler and ours below just ask the server to exit.
 
     loop = asyncio.get_running_loop()
     serve_task = asyncio.create_task(server.serve())

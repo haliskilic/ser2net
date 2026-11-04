@@ -1,0 +1,50 @@
+name: Hata bildirimi / Bug report
+description: Bir şey çalışmıyor ya da beklenenden farklı çalışıyor. / Something doesn't work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Güvenlik açığı bildirmek için bu formu **kullanmayın**; bkz. [SECURITY.md](https://github.com/haliskilic/ser2net/blob/main/SECURITY.md).
+        Do **not** use this form for security vulnerabilities — see [SECURITY.md](https://github.com/haliskilic/ser2net/blob/main/SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: Ne oldu? / What happened?
+      description: Beklenen ve gerçekleşen davranış. / Expected vs. actual behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Nasıl tekrarlanır? / Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: about
+    attributes:
+      label: "`ser2net --about` çıktısı / output"
+      description: Sürüm, işletim sistemi ve bileşenler. / Version, OS and components.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Kurulum / Installation
+      options:
+        - Standalone binary (Windows .exe)
+        - Standalone binary (Linux)
+        - Docker
+        - Kaynak / source (python ser2net.py)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: "`data/all.log` ve ilgili eşlemenin log'undan ilgili satırlar (şifreleri çıkarın). / Relevant lines from data/all.log and the mapping's log (remove secrets)."
+      render: text

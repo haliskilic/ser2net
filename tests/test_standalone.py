@@ -282,10 +282,13 @@ class Launch:
         env.update(PATH=self.empty, SSL_CERT_FILE=self.pki["ca.pem"])  # native: CA given explicitly
         return env
 
+    def output(self, args, extra_env=None):
+        env = dict(self.env(), **(extra_env or {}))
+        out = subprocess.run(self.command(args), env=env, capture_output=True, timeout=300)
+        return (out.stdout + out.stderr).decode("utf-8", "replace").strip()
+
     def version(self):
-        out = subprocess.run(self.command(["--version"]), env=self.env(), capture_output=True,
-                             text=True, timeout=300)
-        return (out.stdout + out.stderr).strip()
+        return self.output(["--version"])
 
     def start(self, data_dir):
         self.log = open(os.path.join(self.work, "stdout.log"), "wb")  # never an unread pipe
@@ -495,6 +498,27 @@ def test_binary():
         assert version == f"ser2net {__version__}", f"--version printed {version!r}"
         print(f"{where}: --version -> {version}  OK")
 
+        licenses = run.output(["--licenses"])
+        for needle in ("AGPL-3.0-only", "CPython", "OpenSSL", "ldap3 2.", "LGPL", "paho-mqtt",
+                       "cryptography", "pyinstaller", "starlette", "pyserial"):
+            assert needle in licenses, f"--licenses does not cover {needle!r}"
+        if not WINDOWS:  # python-build-standalone's statically linked native libraries
+            for lib in ("openssl-3", "libffi", "zlib", "mpdecimal"):
+                assert f"LICENSE.{lib} " in licenses, f"--licenses misses {lib}"
+        print(f"{where}: --licenses covers ser2net, CPython/OpenSSL and every bundled package  OK")
+
+        if not IMAGE:  # LGPL: the bundled ldap3 can be replaced without rebuilding
+            override = os.path.join(work, "override")
+            os.makedirs(os.path.join(override, "ldap3"))
+            with open(os.path.join(override, "ldap3", "__init__.py"), "w") as fh:
+                fh.write('__version__ = "0.0-override-test"\n')
+            about = run.output(["--about"])
+            assert re.search(r"ldap3\s+2\.\d", about), f"bundled ldap3 not found:\n{about}"
+            about = run.output(["--about"], {"SER2NET_LIB_OVERRIDE": override})
+            assert re.search(r"ldap3\s+0\.0-override-test", about), \
+                f"SER2NET_LIB_OVERRIDE did not replace ldap3:\n{about}"
+            print(f"{where}: SER2NET_LIB_OVERRIDE loads a replacement ldap3 (LGPL)  OK")
+
         run.start(data)
         if not wait_port(ui, 90):
             raise AssertionError(f"UI did not come up {where}:\n" + read(run.log.name)[-3000:])
@@ -537,6 +561,8 @@ def test_binary():
         if not IMAGE:
             import psutil
             bundle = extraction_dir(run.tmp)
+            assert os.path.isfile(os.path.join(bundle, "ldap3", "__init__.py")), \
+                "ldap3 must be bundled as replaceable source files, not inside the archive"
             problems, summary = (bundle_problems_windows if WINDOWS else bundle_problems_linux)(bundle)
             assert not problems, "bundle needs things from outside:\n  " + "\n  ".join(problems)
             print(f"bundle: {summary}; everything they need is bundled or part of the OS  OK")

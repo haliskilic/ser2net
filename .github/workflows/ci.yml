@@ -1,29 +1,80 @@
 name: CI
 
+# Pull requests (to any branch, so stacked PRs are tested too) and pushes to main.
+# A branch push without a PR no longer runs the suite a second time.
 on:
   push:
-    branches: [main, "**"]
-  pull_request:
     branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # a new commit on a PR supersedes the running check; every main commit is tested
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
     name: ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      - run: pip install ruff==0.17.3
       - run: ruff check . --output-format github
+
+  typecheck:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt mypy==2.4.1
+      - run: mypy
+
+  audit:
+    name: dependency audit py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 resolves the older pins its markers select; 3.12 the current ones
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pip-audit==2.10.1
+      - name: Known vulnerabilities in the pinned runtime dependencies
+        run: pip-audit --strict -r requirements.txt
+      - name: Known vulnerabilities in the optional packages the binaries / image bundle (3.12)
+        if: matrix.python-version == '3.12'
+        run: pip-audit --strict -r requirements-optional.txt
+
+  vendor:
+    name: offline wheels match requirements.txt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python tests/test_vendor_wheels.py
 
   ui:
     name: ui layout (Chromium)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dependencies + Playwright Chromium
@@ -35,7 +86,7 @@ jobs:
           SER2NET_UI_TESTS: "1"          # a missing browser fails here instead of skipping
           SER2NET_UI_ARTIFACTS: ui-screenshots
         run: python tests/test_ui_layout.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ui-screenshots
@@ -56,8 +107,8 @@ jobs:
       # as Administrator on Windows). Set in CI, a missing backend fails, not skips.
       SER2NET_BLACKHOLE_TESTS: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies (+ cryptography for the in-process certificate tests)
@@ -75,8 +126,35 @@ jobs:
         if: runner.os == 'Linux'
         run: python tests/run_all.py --socat -v
 
+  coverage:
+    name: coverage (Linux, full suite)
+    runs-on: ubuntu-latest
+    env:
+      SER2NET_BLACKHOLE_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt cryptography coverage==7.17.1
+      - run: sudo apt-get update && sudo apt-get install -y socat
+      - name: Run the suite under coverage (servers the tests spawn are measured too)
+        run: python tests/coverage_run.py
+      - name: Report
+        run: |
+          coverage report --skip-empty --sort=cover > coverage.txt
+          tail -1 coverage.txt
+          { echo '### Coverage'; echo '```'; tail -40 coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          coverage html --skip-empty -d coverage-html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: |
+            coverage.txt
+            coverage-html
+          retention-days: 14
+
   # Build the standalone executables and prove they need nothing else installed
   # (same workflow the release uses). Heavy, so: pull requests and main only.
   standalone:
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     uses: ./.github/workflows/standalone.yml

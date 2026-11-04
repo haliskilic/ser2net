@@ -1,0 +1,13 @@
+# Optional feature packages — NOT needed to run ser2net (each feature degrades
+# gracefully without its package), but bundled into the standalone binaries and the
+# Docker image (both Python 3.12) so MQTT / LDAP / OIDC / in-process certificates work
+# out of the box. Pinned (with their dependencies) so those builds are reproducible
+# and CI can audit them (pip-audit).
+paho-mqtt==2.1.0      # MQTT publishing / Sparkplug B
+ldap3==2.9.1          # LDAP / Active Directory sign-in (LGPL-3.0, see THIRD-PARTY-NOTICES.md)
+pyasn1==0.6.5         # ldap3 dependency
+authlib==1.9.3        # OIDC single sign-on
+joserfc==1.8.0        # authlib dependency
+cryptography==50.0.2  # OIDC id_token checks, self-signed certificate generation
+cffi==2.1.1           # cryptography dependency
+pycparser==3.12       # cffi dependency

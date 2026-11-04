@@ -29,6 +29,15 @@ tar -xzf /tmp/python.tar.gz -C /opt
 PY=/opt/python/bin/python3
 
 "$PY" -m pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore -q \
-  -r requirements.txt paho-mqtt ldap3 authlib cryptography "pyinstaller==${PYINSTALLER}"
+  -r requirements.txt -r requirements-optional.txt "pyinstaller==${PYINSTALLER}"
+# license texts of the native libraries python-build-standalone links into the
+# interpreter (OpenSSL, libffi, zlib, …), from the same release tag
+mkdir -p build/licenses-native
+for lic in bzip2 cpython expat libX11 libXau libedit libffi liblzma libuuid libxcb mpdecimal \
+           ncurses openssl-3 sqlite tcl tix zlib zlib-ng zstd; do
+  curl -fsSL --retry 3 -o "build/licenses-native/LICENSE.${lic}.txt" \
+    "https://raw.githubusercontent.com/astral-sh/python-build-standalone/${PBS_RELEASE}/LICENSE.${lic}.txt"
+done
+"$PY" tools/third_party.py licenses build/THIRD-PARTY-LICENSES.txt --strict --extra build/licenses-native
 "$PY" -m PyInstaller --clean --noconfirm ser2net.spec
 dist/ser2net --version

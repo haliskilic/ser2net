@@ -1,0 +1,15 @@
+# coverage.py settings for tests/coverage_run.py (CI job "coverage").
+[run]
+source = app
+parallel = True
+# the servers the tests spawn stop on SIGTERM; save their data then too
+sigterm = True
+# one absolute data path for every process, whatever its working directory
+data_file = ${SER2NET_COV_DATA-.coverage}
+
+[report]
+precision = 1
+exclude_also =
+    if TYPE_CHECKING:
+    pragma: no cover
+    raise NotImplementedError

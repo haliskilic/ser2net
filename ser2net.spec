@@ -9,6 +9,9 @@ import os
 from PyInstaller.utils.hooks import collect_all
 
 datas = [("app/web/templates", "app/web/templates"), ("app/web/static", "app/web/static")]
+# every bundled component's license (tools/third_party.py; `ser2net --licenses` prints it)
+if os.path.isfile("build/THIRD-PARTY-LICENSES.txt"):
+    datas.append(("build/THIRD-PARTY-LICENSES.txt", "."))
 binaries = []
 hiddenimports = ["app", "app.runtime"]
 
@@ -34,6 +37,9 @@ a = Analysis(
     hiddenimports=hiddenimports,
     excludes=["bootstrap"],  # the frozen build skips the offline bootstrap (deps are inside)
     noarchive=False,
+    # LGPL: ldap3 goes in as plain .py files (not into the archive), so a user can load a
+    # modified version instead with SER2NET_LIB_OVERRIDE=<dir> (see THIRD-PARTY-NOTICES.md)
+    module_collection_mode={"ldap3": "py"},
 )
 # libgcc_s (wanted by cryptography's Rust module) is part of every glibc system, and
 # manylinux wheels expect the system's copy; bundling the build machine's would only
