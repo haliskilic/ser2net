@@ -38,8 +38,18 @@ docker run -d --name ser2net \
   (`--group-add`) so the process may open it. USB passthrough into containers is only
   reliable on Linux hosts (not Docker Desktop on Windows/macOS — there, run ser2net
   natively or bridge via RFC2217).
-- **Persistence.** `config.json`, logs and any generated TLS material live in the
-  `/data` volume; back that up to preserve mappings and the admin password.
+- **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
+  as root. The entrypoint starts as root only to choose the account: a `/data` owned by
+  root — a volume written by an image before v2.8, which ran as root — is handed to
+  `ser2net` once (logged), so **upgrading needs no manual step**; a bind-mounted folder
+  owned by another user is used as that user, leaving the host files' owner alone. The
+  groups given with `--group-add` (serial device access) are kept, root's group is not.
+  With `docker run --user …` the entrypoint just runs as that user.
+- **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`):
+  `docker ps` shows `healthy` once the UI answers — also before the first-run setup.
+- **Persistence.** `config.json`, its automatic backups (`backups/`), logs, traces
+  (`traces/`) and any generated TLS material live in the `/data` volume; back that up to
+  preserve mappings and the admin password.
 - **TLS.** Put a reverse proxy (or set `admin_ui.tls_*`) in front for LAN/Internet
   exposure; raw data bridges are plaintext unless per-mapping TLS is enabled.
 - **Dependencies** are installed from PyPI into the image, so the container runs with

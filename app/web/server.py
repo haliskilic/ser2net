@@ -85,9 +85,10 @@ class GuardMiddleware(BaseHTTPMiddleware):
             if not auth.csrf_token_matches(request, request.headers.get("x-csrf-token")):
                 return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
 
-        # first-run: force password setup
+        # first-run: force password setup (the health probe still answers, so a fresh
+        # container isn't reported unhealthy while it waits for its admin password)
         if not cfg.password_set:
-            if path != "/setup" and not path.startswith("/static"):
+            if path not in ("/setup", "/healthz") and not path.startswith("/static"):
                 return RedirectResponse("/setup", status_code=303)
         else:
             # password is set: /setup is no longer available

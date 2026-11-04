@@ -154,6 +154,14 @@ jobs:
             coverage-html
           retention-days: 14
 
+  docker:
+    name: docker image (non-root, healthcheck, upgrade)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t ser2net:ci .
+      - run: tests/docker_smoke.sh ser2net:ci
+
   # Build the standalone executables and prove they need nothing else installed
   # (same workflow the release uses). Heavy, so: pull requests and main only.
   standalone:
