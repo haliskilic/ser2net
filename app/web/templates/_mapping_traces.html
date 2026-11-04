@@ -1,0 +1,32 @@
+<div class="form-head">
+  <h3>Traces — {{ mapping_name|softbreak }}</h3>
+  <div class="actions">
+    <button class="btn sm" hx-get="/api/mappings/{{ mid }}/traces" hx-target="#form-panel" hx-swap="innerHTML">↻ Refresh</button>
+    <button type="button" class="btn sm" data-cancel>Close</button>
+  </div>
+</div>
+{% if tracing %}
+<p class="muted mb-sm">Recording to <span class="mono">traces/{{ current|softbreak }}</span> in the data folder
+  ({{ max_mb }} MB per file, {{ keep }} older file(s) kept{{ ', hex dump' if hexdump else '' }}).</p>
+{% else %}
+<p class="muted mb-sm">Tracing is off for this mapping (set a trace file name in its options). Files recorded earlier are listed below.</p>
+{% endif %}
+{% if files %}
+<div class="table-scroll">
+<table class="grid">
+  <thead><tr><th>File</th><th>Size</th><th>Last written</th><th class="col-actions"></th></tr></thead>
+  <tbody>
+  {% for f in files %}
+    <tr>
+      <td class="mono">{{ f.name|softbreak }}</td>
+      <td class="mono nowrap">{{ f.size_text }}</td>
+      <td class="mono nowrap">{{ f.time }}</td>
+      <td class="col-actions"><a class="btn sm" href="/api/mappings/{{ mid }}/traces/{{ f.name|urlencode }}">⤓ Download</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No trace files yet.</p>
+{% endif %}

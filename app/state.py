@@ -25,6 +25,7 @@ from .config import AppConfig, ConfigStore, lock_down_dir
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
+from .notify import Notifier
 from .web.auth import LoginRateLimiter
 
 # Per-mapping log retention (automatic maintenance).
@@ -112,6 +113,7 @@ class AppState:
         self.rate_limiter = LoginRateLimiter()
         # uploaded imports waiting for the user to confirm the preview: token -> item
         self.pending_imports: dict[str, dict] = {}
+        self.notifier = Notifier(self)
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()
         self._maint_task: asyncio.Task | None = None
@@ -344,6 +346,7 @@ class AppState:
         await self.ports.start()
         await self.supervisor.start_all(self.config)
         await self.cluster.start()  # no-op unless the LAN cluster is enabled + keyed
+        await self.notifier.start()
         # run an immediate pass, then hourly, to enforce log retention
         self._maint_task = asyncio.create_task(self._log_maintenance_loop(), name="log-maintenance")
 
@@ -353,6 +356,7 @@ class AppState:
             with _suppress(asyncio.CancelledError):
                 await self._maint_task
             self._maint_task = None
+        await self.notifier.stop()
         await self.cluster.stop()
         await self.supervisor.stop_all()
         await self.ports.stop()

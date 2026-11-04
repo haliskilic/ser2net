@@ -4,6 +4,7 @@ from __future__ import annotations
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
+from ...engine import portlist
 from .common import Ctx
 
 
@@ -44,8 +45,11 @@ def routes(ctx: Ctx) -> list:
         return render(request, "_serial_port_select.html", ports=ports, selected=selected)
 
     async def api_ports_table(request):
-        return render(request, "_ports_table.html",
-                      ports=state.ports.get(),
+        ports = state.ports.get()
+        show_all = request.query_params.get("all") == "1"
+        shown = portlist.visible(ports, show_all)
+        return render(request, "_ports_table.html", ports=shown, show_all=show_all,
+                      hidden=len(ports) - len(portlist.visible(ports)),
                       in_use=state.supervisor.devices_in_use())
 
     return [

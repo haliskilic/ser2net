@@ -7,6 +7,31 @@
     {% if can_edit %}<button class="btn primary" hx-get="/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML">+ Add mapping</button>{% endif %}
   </div>
   <div id="form-panel"></div>
+  <div class="toolbar" data-mapping-tools>
+    <input type="search" data-filter-text placeholder="Search name, port, address…" aria-label="Search mappings">
+    <select data-filter-state aria-label="Show">
+      <option value="">All states</option>
+      <option value="running">Running</option>
+      <option value="stopped">Stopped</option>
+      <option value="problem">Problems</option>
+    </select>
+    <select data-sort aria-label="Sort by">
+      <option value="">Configured order</option>
+      <option value="name">Name</option>
+      <option value="state">State</option>
+      <option value="port">Network port</option>
+    </select>
+    {% if can_edit %}
+    <span class="bulk" data-bulk hidden>
+      <span class="muted" data-bulk-count></span>
+      <button class="btn sm" type="button" data-bulk-action="start">Start</button>
+      <button class="btn sm" type="button" data-bulk-action="stop">Stop</button>
+      <button class="btn sm" type="button" data-bulk-action="restart">Restart</button>
+      <button class="link" type="button" data-bulk-clear>clear</button>
+    </span>
+    {% endif %}
+    <span class="muted" data-filter-count></span>
+  </div>
   <div id="mappings"
        hx-get="/api/status"
        hx-trigger="load, every 2s, refreshMappings from:body"
@@ -32,7 +57,7 @@
     <h2>Detected serial ports</h2>
     <button class="btn" hx-get="/api/ports/table" hx-target="#ports-table" hx-swap="innerHTML">↻ Refresh</button>
   </div>
-  <div id="ports-table" hx-get="/api/ports/table" hx-trigger="load, every 5s" hx-swap="innerHTML">
+  <div id="ports-table" hx-get="/api/ports/table" hx-trigger="load, every 5s, refreshPorts" hx-swap="innerHTML">
     <p class="muted">Scanning…</p>
   </div>
 </section>

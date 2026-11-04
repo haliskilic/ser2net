@@ -2,11 +2,17 @@
   <label>Device
     <select name="{{ prefix }}port"{% if prefix == 'serial_' %} required{% endif %}>
       {% set devs = ports | map(attribute='device') | list %}
-      {% if s.port and s.port not in devs %}<option value="{{ s.port }}" selected>{{ s.port }} (not connected)</option>{% endif %}
-      {% for p in ports %}<option value="{{ p.device }}" {% if p.device == s.port %}selected{% endif %}>{{ p.device }}{% if p.description %} — {{ p.description }}{% endif %}</option>{% endfor %}
+      {% set stable = ports | selectattr('by_id') | list %}
+      {% if s.port and s.port not in devs and s.port not in (stable | map(attribute='by_id') | list) %}<option value="{{ s.port }}" selected>{{ s.port }} (not connected)</option>{% endif %}
+      {% for p in ports %}<option value="{{ p.device }}" {% if p.device == s.port %}selected{% endif %}>{{ p.device }}{% if p.description %} — {{ p.description }}{% endif %}{% if p.serial_number %} [{{ p.serial_number }}]{% endif %}</option>{% endfor %}
+      {% if stable %}<optgroup label="Stable names (/dev/serial/by-id — survive re-plugging)">
+        {% for p in stable %}<option value="{{ p.by_id }}" {% if p.by_id == s.port %}selected{% endif %}>{{ p.by_id | replace('/dev/serial/by-id/', '') }}</option>{% endfor %}
+      </optgroup>{% endif %}
       {% if not ports and not s.port %}<option value="">(no serial ports detected)</option>{% endif %}
     </select>
   </label>
+  <input type="hidden" name="{{ prefix }}usb_match_shown" value="1">
+  <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.match %}checked{% endif %}> Find this device by its USB identity if its name changes <span class="muted">(COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number{% if s.match %} · bound to <span class="mono">{{ s.match.vid }}:{{ s.match.pid }}{% if s.match.serial_number %} [{{ s.match.serial_number }}]{% endif %}</span>{% endif %})</span></label>
   <div class="grid3">
     <label>Baud rate
       <select name="{{ prefix }}baudrate" data-custom="{{ prefix }}custom_baud">
@@ -211,15 +217,25 @@
       <label>Password <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="optional"></label>
       <label class="chk chk-pad"><input type="checkbox" name="mqtt_tls" {% if mapping.mqtt.tls %}checked{% endif %}> TLS</label>
     </div>
+    <div class="grid3" data-show-when="network_protocol=modbus">
+      <label>Payload format <span class="muted">(Modbus points)</span>
+        <select name="mqtt_payload_format">
+          <option value="plain" {% if mapping.mqtt.payload_format == 'plain' %}selected{% endif %}>Plain: &lt;topic&gt;/&lt;point&gt;</option>
+          <option value="sparkplug_b" {% if mapping.mqtt.payload_format == 'sparkplug_b' %}selected{% endif %}>Sparkplug B (edge node)</option>
+        </select></label>
+      <label>Sparkplug group ID <input type="text" name="mqtt_sparkplug_group_id" value="{{ mapping.mqtt.sparkplug_group_id }}" placeholder="ser2net"></label>
+      <label>Sparkplug edge node ID <span class="muted">(blank = mapping name)</span>
+        <input type="text" name="mqtt_sparkplug_node_id" value="{{ mapping.mqtt.sparkplug_node_id }}" placeholder="e.g. line-3-plc"></label>
+    </div>
   </fieldset>
 
   <fieldset data-show-when="network_protocol=modbus">
     <legend>Modbus register polling → MQTT <span class="muted">(edge mode; also enable MQTT above)</span></legend>
     <label>Poll interval (s) <input type="number" name="modbus_poll_interval_s" min="0.1" step="0.1" value="{{ mapping.modbus_poll.interval_s }}"></label>
     <label>Points — JSON array
-      <span class="muted">[{"name","unit","fn":3|4,"address","dtype":"uint16|int16|uint32|int32|float32","scale"}]</span>
+      <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|bool","scale","writable":true}] — writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug NCMD</span>
       <textarea name="modbus_points" rows="5" spellcheck="false"
-                placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}]'>{{ modbus_points_json }}</textarea>
+                placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}, {"name":"setpoint","unit":1,"fn":3,"address":10,"dtype":"int16","writable":true}]'>{{ modbus_points_json }}</textarea>
     </label>
   </fieldset>
 

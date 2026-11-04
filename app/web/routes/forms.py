@@ -10,7 +10,7 @@ import json
 import re
 
 from ...config import LdapSettings, MappingConfig, OidcSettings
-from ...engine import netinfo
+from ...engine import netinfo, portlist
 
 
 def _password_problem(pw: str, pw2: str) -> str | None:
@@ -127,6 +127,7 @@ _OPTIONAL_FORM_FIELDS = {
     "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
+    "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
 }
 
 
@@ -194,6 +195,10 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             "username": form.get("mqtt_username", "").strip(),
             "password": form.get("mqtt_password", ""),
             "client_id": form.get("mqtt_client_id", "").strip(),
+            **({"payload_format": form.get("mqtt_payload_format", "plain"),
+                "sparkplug_group_id": form.get("mqtt_sparkplug_group_id", "").strip() or "ser2net",
+                "sparkplug_node_id": form.get("mqtt_sparkplug_node_id", "").strip()}
+               if "mqtt_payload_format" in form else {}),
         },
         "modbus_poll": {
             "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),
@@ -204,7 +209,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
 
 def _modbus_points_json(mapping) -> str:
     pts = [{"name": p.name, "unit": p.unit, "fn": p.fn, "address": p.address,
-            "dtype": p.dtype, "scale": p.scale} for p in mapping.modbus_poll.points]
+            "dtype": p.dtype, "scale": p.scale, **({"writable": True} if p.writable else {})}
+           for p in mapping.modbus_poll.points]
     return json.dumps(pts, indent=2) if pts else ""
 
 
@@ -227,7 +233,8 @@ def _mapping_from_form(form) -> dict:
 
 def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     """Carry over config fields the mapping form does not expose, so editing an
-    existing mapping never silently discards them: the stable-id `match`, the two
+    existing mapping never silently discards them: the stable-id `match` (when the
+    form has no USB-identity field), the two
     advanced serial flags the form omits (`hangup_when_done`, `nobreak`), open/close
     strings, the trace-timestamp flag and the RFC2217 interop knobs. The RS-485 fields
     ARE in the form now, so they're taken from the submission. Given the submitted
@@ -241,9 +248,12 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
                 for attr in attrs:
                     setattr(getattr(new_map, section), attr,
                             getattr(getattr(existing, section), attr))
-    for cur, old in ((new_map.serial, existing.serial),
-                     (new_map.serial_b, existing.serial_b)):
-        cur.match = old.match
+    for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
+                             ("serial_b_", new_map.serial_b, existing.serial_b)):
+        # the USB-identity binding is in the form now (ops.apply_usb_match); a form
+        # without it (an older cluster peer's) keeps the stored one
+        if form is None or f"{prefix}usb_match_shown" not in form:
+            cur.match = old.match
         cur.advanced.hangup_when_done = old.advanced.hangup_when_done
         cur.advanced.nobreak = old.advanced.nobreak
     o, prev = new_map.options, existing.options
@@ -268,5 +278,5 @@ def _form_error(render, request, state, form, message: str):
     return render(request, "_mapping_form.html", status_code=400,
                   mapping=mapping, is_new=is_new,
                   modbus_points_json=_modbus_points_json(mapping),
-                  ports=state.ports.get(), ips=netinfo.list_ip_candidates(),
+                  ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
                   error=message)
