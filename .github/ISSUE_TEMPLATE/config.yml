@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Güvenlik açığı bildirimi / Report a security vulnerability
+    url: https://github.com/haliskilic/ser2net/security/advisories/new
+    about: Özel olarak bildirin; herkese açık issue açmayın. / Report privately, not as a public issue.
+  - name: Ticari lisans / Commercial license
+    url: https://github.com/haliskilic/ser2net/blob/main/COMMERCIAL_LICENSE.md
+    about: mail@haliskilic.com.tr

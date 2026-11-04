@@ -154,28 +154,31 @@
 
 ## Planned
 
-### v2.6.x — cluster hardening (from the v2.5 review)
-- Validate/curb peer-advertised IPs before the server-side fetch (SSRF defense-in-depth)
-- Optional TLS certificate pinning for peer fetch/control; a light rate-limit on the
-  key-guarded peer endpoints; optional IPv6 (multicast) discovery
+### v2.8 — in progress (issues [#28](https://github.com/haliskilic/ser2net/issues/28)–[#32](https://github.com/haliskilic/ser2net/issues/32))
+- **Maintenance (#28):** `routes.py` split into per-area modules; mypy, coverage, pip-audit
+  and Dependabot in CI; dependencies updated (Python 3.10 keeps its last compatible line);
+  GitHub Actions on Node 24 and no duplicate push+PR runs; `SECURITY.md`,
+  `CONTRIBUTING.md`, `CHANGELOG.md`, templates; complete third-party license texts in the
+  executables (`--licenses`) and a replaceable LGPL ldap3.
+- **Security & reliability (#29):** trace files confined to `data/traces/` with a size
+  limit, rotation and off-loop writes; the session timeout setting takes effect;
+  automatic config backups with restore; import preview with merge; audit log viewer;
+  Docker image runs as a non-root user with a HEALTHCHECK.
+- **Distribution (#30):** Linux arm64 executable, Windows service mode
+  (`--install-service`), multi-arch GHCR image, optional Authenticode signing,
+  `SHA256SUMS` + build provenance + SBOM.
+- **Features (#31):** bind a mapping to a USB device's identity, webhook / e-mail
+  notifications, dashboard search/filter/bulk actions, trace download + live hex view,
+  Modbus write (FC 5/6/15/16) + Sparkplug B, classic `ser2net.yaml` import.
+- **Turkish UI (#32):** the web UI in Turkish and English (reverses the v2.3 decision).
 
-### v2.8 — industrial/IIoT depth
-- **Sparkplug B** edge payloads (Modbus register + MQTT plumbing already in place)
-- **Modbus write** support (FC 5/6/15/16), per-point MQTT→register control, RTU
-  inter-frame tuning
-
-### v2.9 — packaging & migration
-- Windows service installer (Shawl); `.deb` / `.rpm` packages
-- Automated multi-platform offline wheelhouse (cp310–cp313 × OS) for source installs
-- Classic `ser2net.yaml` import for migration
-
-### Maintenance
-- Bump pinned GitHub Actions off Node 20 (`checkout@v4`, `setup-python@v5`,
-  `action-gh-release@v2`) to the current Node-24 majors to clear the deprecation
-  warnings. Non-breaking — GitHub force-runs them on Node 24 from 2026-06-16, so this
-  is cosmetic; bump only after confirming the new tags exist.
-- Test backlog: confirm RFC2217 read-only also blocks control (baud/RTS/DTR) commands,
-  and add a UDP `allowed_client_ips` reject case if not already explicit.
+### Later
+- Cluster hardening (from the v2.5 review): validate/curb peer-advertised IPs before the
+  server-side fetch (SSRF defense-in-depth), optional TLS certificate pinning for peer
+  fetch/control, a light rate-limit on the key-guarded peer endpoints, optional IPv6
+  (multicast) discovery
+- `.deb` / `.rpm` packages and an install script for the Linux executable
+- RTU inter-frame tuning for the Modbus gateway
 
 ### Icebox / conditional
 - Thread-per-port serial backend — only if a real Windows high-throughput /
