@@ -397,7 +397,7 @@ async def test_modbus_gateway_socket_keepalive():
     try:
         _r, w = await asyncio.open_connection("127.0.0.1", port)
         assert await _wait_for(lambda: len(gw._clients) == 1, 5), "master did not register"
-        _assert_keepalive(_keepalive_state(next(iter(gw._clients)).get_extra_info("socket")),
+        _assert_keepalive(_keepalive_state(next(iter(gw._clients)).writer.get_extra_info("socket")),
                           1, 1, 2, "modbus gateway")
         await _close(w)
     finally:
