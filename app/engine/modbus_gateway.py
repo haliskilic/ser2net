@@ -17,11 +17,15 @@ import asyncio
 import contextlib
 import ipaddress
 import time
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, normalize_cidr
 from . import modbus, serial_io, sockopts
 from .bridge import RunnerStatus, describe_disconnect, fmt_duration
+
+if TYPE_CHECKING:
+    from .mqtt_pub import MqttPublisher
 
 READ_CHUNK = 512
 
@@ -53,6 +57,14 @@ def _ip_in_nets(ip: str, nets) -> bool:
     return False
 
 
+@dataclass(eq=False)
+class _Master:
+    """A connected Modbus/TCP master (identity-hashed, so it can live in a set)."""
+    writer: asyncio.StreamWriter
+    peer: str
+    connected_at: float = field(default_factory=time.time)
+
+
 class ModbusGatewayRunner:
     def __init__(self, mapping: MappingConfig, logger=None):
         self.mapping = mapping
@@ -62,13 +74,13 @@ class ModbusGatewayRunner:
         self._sreader: Optional[asyncio.StreamReader] = None
         self._swriter: Optional[asyncio.StreamWriter] = None
         self._serial_task: Optional[asyncio.Task] = None
-        self._server = None
+        self._server: Optional[asyncio.Server] = None
         self._stop = asyncio.Event()
         self._serial_ready = asyncio.Event()
         self._bus_lock = asyncio.Lock()      # RTU is single-master: one txn at a time
-        self._clients: set = set()
+        self._clients: set[_Master] = set()
         self._monitors: set = set()           # browser console observers (read the bus)
-        self._mqtt = None                      # optional MQTT publisher for register polling
+        self._mqtt: Optional[MqttPublisher] = None  # optional MQTT publisher for register polling
         self._poll_task: Optional[asyncio.Task] = None
         self._allowed = _parse_nets(mapping.network.allowed_client_ips)
         # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
@@ -125,7 +137,7 @@ class ModbusGatewayRunner:
             self._server.close()
         for c in list(self._clients):
             with contextlib.suppress(Exception):
-                c.transport.abort()
+                c.writer.transport.abort()
         for mon in list(self._monitors):
             mon.close()
         self._monitors.clear()
@@ -310,9 +322,8 @@ class ModbusGatewayRunner:
 
         if err := sockopts.apply_keepalive(writer, net):
             self._log(f"TCP keepalive not enabled for {peer}: {err}")
-        writer.connected_at = time.time()
-        writer.peer = peer
-        self._clients.add(writer)
+        master = _Master(writer, peer)
+        self._clients.add(master)
         self._refresh_clients()
         self._log(f"modbus master connected: {peer} ({len(self._clients)} total)")
         opts = self.mapping.options
@@ -353,12 +364,12 @@ class ModbusGatewayRunner:
         except (ConnectionError, asyncio.IncompleteReadError, OSError) as e:
             reason = describe_disconnect(e)
         finally:
-            self._clients.discard(writer)
+            self._clients.discard(master)
             self._refresh_clients()
             with contextlib.suppress(Exception):
                 writer.close()
             if self._stop.is_set():
                 reason = "gateway stopped"
-            held = fmt_duration(time.time() - getattr(writer, "connected_at", time.time()))
+            held = fmt_duration(time.time() - master.connected_at)
             self._log(f"modbus master disconnected: {peer} after {held} — {reason} "
                       f"({len(self._clients)} total)")

@@ -57,8 +57,8 @@ def _patch_serial_asyncio_fast() -> None:
         if not self._write_buffer and not self._closing:
             self._remove_writer()
 
-    T._write_ready = _write_ready
-    T._ser2net_write_ready_patched = True
+    T._write_ready = _write_ready  # type: ignore[method-assign]
+    T._ser2net_write_ready_patched = True  # type: ignore[attr-defined]
     _patched = True
 
 
@@ -122,9 +122,10 @@ async def open_serial(settings: SerialSettings):
     # upstream reads only 1024 bytes per readiness event (it even has a TODO to
     # raise this); a larger read drains the OS buffer faster and lowers CPU/latency
     # under sustained or full-duplex load.
+    transport: Any = writer.transport  # serial_asyncio_fast.SerialTransport
     with contextlib.suppress(Exception):
-        writer.transport._max_read_size = 65536
-    ser = writer.transport.serial
+        transport._max_read_size = 65536
+    ser = transport.serial
 
     # apply RTS/DTR start state (only when explicitly on/off). Some backends/adapters
     # don't support explicit line control (ENOTTY etc.) — that's expected; anything
