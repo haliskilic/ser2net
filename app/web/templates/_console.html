@@ -1,12 +1,15 @@
 <div class="form-head">
   <h3>Console — {{ mapping_name|softbreak }}</h3>
   <div class="actions">
-    {% if interactive %}<span class="muted">type to send to the device</span>
+    {% if interactive %}<span class="muted" data-text-only>type to send to the device</span>
     {% else %}<span class="muted">read-only</span>{% endif %}
+    <button type="button" class="btn sm" data-term-mode>Hex view</button>
     <button type="button" class="btn sm" data-cancel>Close</button>
   </div>
 </div>
-<p class="muted mb-sm">Live serial traffic. Shows bytes in both directions.</p>
+<p class="muted mb-sm" data-mode-help>Text view: what the device sends{% if interactive %}; what you type goes to the device{% endif %}. Hex view: both directions with timestamps ({{ 'A → B / B → A' if bridge else 'from / to the device' }}).</p>
 <div id="term" class="term"
      data-ws="/api/mappings/{{ mid }}/console"
+     data-ws-hex="/api/mappings/{{ mid }}/traffic"
+     data-bridge="{{ '1' if bridge else '0' }}"
      data-interactive="{{ '1' if interactive else '0' }}"></div>

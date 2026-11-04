@@ -112,9 +112,40 @@ def main():
             except Exception:
                 return True
 
+        # hex view: both directions, timestamped frames [dir u8][time f64][bytes]
+        async def traffic_test():
+            import struct
+            uri = f"ws://127.0.0.1:{UI}/api/mappings/{mid}/traffic"
+            async with websockets.connect(uri, additional_headers={"Cookie": f"ser2net_session={session}"}) as ws:
+                _r, w = await asyncio.open_connection("127.0.0.1", 47350)
+                await asyncio.sleep(0.3)
+                w.write(b"from-net"); await w.drain()
+                await asyncio.to_thread(device.write, b"from-dev"); await asyncio.to_thread(device.flush)
+                seen = {}
+                t0 = time.time()
+                while len(seen) < 2 and time.time() - t0 < 10:
+                    frame = await asyncio.wait_for(ws.recv(), timeout=10)
+                    d, ts = struct.unpack(">Bd", frame[:9])
+                    assert abs(ts - time.time()) < 30, ts
+                    seen.setdefault(d, b"")
+                    seen[d] += frame[9:]
+                assert b"from-net" in seen.get(1, b""), seen   # to the device
+                assert b"from-dev" in seen.get(0, b""), seen   # from the device
+                w.close()
+            print("hex view: both directions over the traffic WS, timestamped  OK")
+            try:
+                async with websockets.connect(uri) as ws:
+                    await asyncio.wait_for(ws.recv(), timeout=2)
+                raise AssertionError("unauthenticated traffic WS accepted")
+            except AssertionError:
+                raise
+            except Exception:
+                pass
+
         asyncio.run(ws_test())
         assert asyncio.run(ws_noauth()), "unauthenticated WS should be rejected"
         print("console: unauthenticated WS rejected  OK")
+        asyncio.run(traffic_test())
 
         device.close()
         print("\nPASS: WebSocket console (auth + bidirectional)")

@@ -1,8 +1,12 @@
-"""Interactive console: live serial traffic in the browser (xterm.js over a WebSocket)."""
+"""Live traffic in the browser over WebSockets: the interactive console (xterm.js;
+what the device sends, and typing to it) and the read-only traffic feed of the hex
+view (both directions, timestamped)."""
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import struct
+import time
 from urllib.parse import urlparse
 
 from starlette.routing import WebSocketRoute
@@ -17,19 +21,23 @@ CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
 def routes(ctx: Ctx) -> list:
     state = ctx.state
 
+    async def _authorize(websocket):
+        """The user a WebSocket acts as, or None (after closing it). BaseHTTPMiddleware
+        does NOT run for the WebSocket scope, so authenticate here; a cross-origin
+        WebSocket is rejected (CSWSH guard)."""
+        token = websocket.cookies.get(auth.SESSION_COOKIE)
+        ws_user = auth.request_user(state.config, token, websocket.headers)
+        origin = websocket.headers.get("origin")
+        if ws_user is None or (origin and urlparse(origin).netloc != websocket.headers.get("host")):
+            await websocket.close(code=1008)
+            return None, token
+        return ws_user, token
+
     # ---------------- console (xterm over WebSocket) ----------------
     async def console_ws(websocket):
         cfg = state.config
-        # BaseHTTPMiddleware does NOT run for WebSocket scope, so authenticate here.
-        token = websocket.cookies.get(auth.SESSION_COOKIE)
-        ws_user = auth.request_user(cfg, token, websocket.headers)
+        ws_user, token = await _authorize(websocket)
         if ws_user is None:
-            await websocket.close(code=1008)
-            return
-        # CSWSH guard: cross-origin WebSocket is rejected.
-        origin = websocket.headers.get("origin")
-        if origin and urlparse(origin).netloc != websocket.headers.get("host"):
-            await websocket.close(code=1008)
             return
         mid = websocket.path_params["mid"]
         runner = state.supervisor.get_runner(mid)
@@ -94,8 +102,62 @@ def routes(ctx: Ctx) -> list:
                 await websocket.close()
             state.log(f"[{mapping.name}] console closed ({peer})")
 
+    # ---------------- traffic feed for the hex view (read-only) ----------------
+    async def traffic_ws(websocket):
+        """Both directions of a mapping's traffic, as binary frames
+        [direction: 1 byte (0 = from the device, 1 = to it)][time: float64 BE][bytes].
+        Read-only for everyone who may open the console."""
+        ws_user, token = await _authorize(websocket)
+        if ws_user is None:
+            return
+        mid = websocket.path_params["mid"]
+        runner = state.supervisor.get_runner(mid)
+        mapping = state.config.get_mapping(mid)
+        if runner is None or mapping is None or not hasattr(runner, "add_traffic_monitor"):
+            await websocket.close(code=1011)
+            return
+        await websocket.accept()
+        mon = _TrafficMonitor()
+        runner.add_traffic_monitor(mon)
+        peer = websocket.client.host if websocket.client else "?"
+        state.log(f"[{mapping.name}] hex view opened by {ws_user.username} ({peer})")
+
+        async def sender():
+            while True:
+                item = await mon.queue.get()
+                if item is None:  # mapping stopped
+                    return
+                direction, ts, data = item
+                await websocket.send_bytes(struct.pack(">Bd", direction, ts) + data)
+
+        async def receiver():  # nothing is accepted from the browser; notice a close
+            while (await websocket.receive()).get("type") != "websocket.disconnect":
+                pass
+
+        async def access_watch():
+            while True:
+                await asyncio.sleep(CONSOLE_ACCESS_RECHECK_S)
+                now = auth.request_user(state.config, token, websocket.headers)
+                if now is None or now.role != ws_user.role:
+                    return
+
+        tasks = [asyncio.create_task(c()) for c in (sender, receiver, access_watch)]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in tasks:
+                t.cancel()
+            for t in tasks:
+                with contextlib.suppress(BaseException):
+                    await t
+            runner.discard_traffic_monitor(mon)
+            with contextlib.suppress(Exception):
+                await websocket.close()
+            state.log(f"[{mapping.name}] hex view closed ({peer})")
+
     return [
         WebSocketRoute("/api/mappings/{mid}/console", console_ws),
+        WebSocketRoute("/api/mappings/{mid}/traffic", traffic_ws),
     ]
 
 
@@ -118,3 +180,24 @@ class _Monitor:
         with contextlib.suppress(Exception):
             self.queue.put_nowait(None)  # sentinel: tells the sender to close
 
+
+
+class _TrafficMonitor:
+    """A hex-view observer: (direction, time, bytes) items, best-effort like _Monitor
+    (the oldest item is dropped on overflow so a slow browser never stalls a bridge)."""
+
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=4096)
+
+    def feed_traffic(self, direction: int, data: bytes) -> None:
+        item = (direction, time.time(), bytes(data))
+        try:
+            self.queue.put_nowait(item)
+        except asyncio.QueueFull:
+            with contextlib.suppress(Exception):
+                self.queue.get_nowait()
+                self.queue.put_nowait(item)
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self.queue.put_nowait(None)

@@ -10,10 +10,14 @@
   {% for m in mappings %}
     {% set st = statuses.get(m.id) %}
     {% set state = st.state if st else ('stopped' if not m.enabled else 'stopped') %}
-    <tr>
-      <td class="col-name">{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
+    {% set problem = state in ('error', 'device-missing', 'reconnecting') %}
+    <tr data-mid="{{ m.id }}" data-name="{{ m.name|lower }}" data-state="{{ 'problem' if problem else state }}"
+        data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
+        data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}">
+      <td class="col-name">{% if can_edit %}<input type="checkbox" class="row-select" value="{{ m.id }}" aria-label="select {{ m.name }}"> {% endif %}{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">disabled</span>{% endif %}</td>
       <td data-label="Serial">
-        <div class="mono">{{ m.serial.port|softbreak }}</div>
+        <div class="mono">{{ m.serial.port|softbreak }}{% if m.serial.match %} <span class="tag" title="found by its USB identity {{ m.serial.match.vid }}:{{ m.serial.match.pid }}{% if m.serial.match.serial_number %} [{{ m.serial.match.serial_number }}]{% endif %}">USB-ID</span>{% endif %}</div>
+        {% if st and st.device and st.device != m.serial.port %}<div class="sub mono" title="device opened now">→ {{ st.device|softbreak }}</div>{% endif %}
         <div class="sub mono">{{ m.serial.compact() }}{% if m.serial.flowcontrol != 'none' %} · {{ m.serial.flowcontrol }}{% endif %}</div>
       </td>
       <td data-label="Network">
@@ -62,6 +66,7 @@
           <div class="btn-group">
             <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">Log</button>
             <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">Monitor</button>
+            {% if m.options.trace_both %}<button class="btn sm" hx-get="/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML">Trace</button>{% endif %}
             {% if can_edit %}
             <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none">Copy</button>
             <button class="btn sm danger" hx-delete="/api/mappings/{{ m.id }}"
@@ -72,7 +77,7 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="7" class="muted">No mappings yet. Click “Add mapping” to create one.</td></tr>
+    <tr class="empty"><td colspan="7" class="muted">No mappings yet. Click “Add mapping” to create one.</td></tr>
   {% endfor %}
   </tbody>
 </table>

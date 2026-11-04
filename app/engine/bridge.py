@@ -51,6 +51,10 @@ if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
 
 READ_CHUNK = 4096
+# directions for traffic monitors (the live hex view): bytes read from the serial
+# device / bytes written to it (serial<->serial bridge: port A -> B / B -> A)
+FROM_DEVICE = 0
+TO_DEVICE = 1
 CLIENT_QUEUE_MAX = 2048  # outbound chunks buffered per client before it's dropped
 # errno/winerror values for "the peer stopped answering" (keepalive or retransmission
 # timeout): ETIMEDOUT, plus on Windows WSAETIMEDOUT, WSAENETRESET and the overlapped-I/O
@@ -483,6 +487,7 @@ class MappingRunner:
         self._tracer: Optional[Tracer] = None
         self._clients: set = set()
         self._monitors: set = set()  # browser console observers (read traffic)
+        self._traffic: set = set()   # live hex view observers: both directions
         self._mqtt: Optional[MqttPublisher] = None  # optional MQTT publisher (serial -> broker)
         self._serial_ready = asyncio.Event()
         self._stop = asyncio.Event()
@@ -518,6 +523,16 @@ class MappingRunner:
     def _feed_monitors(self, data: bytes) -> None:
         for mon in list(self._monitors):
             mon.feed(data)
+
+    def add_traffic_monitor(self, mon) -> None:
+        self._traffic.add(mon)
+
+    def discard_traffic_monitor(self, mon) -> None:
+        self._traffic.discard(mon)
+
+    def _feed_traffic(self, direction: int, data: bytes) -> None:
+        for mon in list(self._traffic):
+            mon.feed_traffic(direction, data)
 
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
@@ -581,9 +596,10 @@ class MappingRunner:
         # deadlock a stop() while clients are still connected.
         for c in list(self._clients):
             c.kick("mapping stopped")
-        for mon in list(self._monitors):
+        for mon in list(self._monitors) + list(self._traffic):
             mon.close()
         self._monitors.clear()
+        self._traffic.clear()
         if self._mqtt is not None:
             self._mqtt.close()
             self._mqtt = None
@@ -634,6 +650,7 @@ class MappingRunner:
             return  # serial not currently open; drop (status shows reconnecting)
         if self._tracer:
             self._tracer.write("net>ser", data)
+        self._feed_traffic(TO_DEVICE, data)
         self._swriter.write(data)
         await self._swriter.drain()
 
@@ -697,6 +714,7 @@ class MappingRunner:
             if self._tracer:
                 self._tracer.write("ser>net", data)
             self._feed_monitors(data)
+            self._feed_traffic(FROM_DEVICE, data)
             if self._mqtt is not None:
                 self._mqtt.feed(data)
             for c in list(self._clients):
@@ -940,6 +958,7 @@ class MappingRunner:
             if self._tracer:
                 self._tracer.write(tag, data)
             self._feed_monitors(data)
+            self._feed_traffic(FROM_DEVICE if tag.startswith("A") else TO_DEVICE, data)
             writer.write(data)
             await writer.drain()
             self.status.bytes_in += len(data)
@@ -998,6 +1017,7 @@ class _UdpBridge(asyncio.DatagramProtocol):
             return
         if r._tracer:
             r._tracer.write("net>ser", data)
+        r._feed_traffic(TO_DEVICE, data)
         if r._swriter is not None:
             with contextlib.suppress(Exception):
                 r._swriter.write(data)  # datagram_received is sync; transport buffers

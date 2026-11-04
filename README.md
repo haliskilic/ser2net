@@ -60,8 +60,12 @@ düzenlemeye gerek yok.
   baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway).
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
-  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. **Edge modu:** register'ları
-  periyodik okuyup MQTT'ye yayınlar (uint/int/float 16/32, ölçek).
+  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. **Edge modu:** coil ve
+  register'ları periyodik okuyup MQTT'ye yayınlar (bool, uint/int/float 16/32, ölçek);
+  `"writable": true` noktalar MQTT'den yazılır (`<topic>/<nokta>/set` → FC5/FC15 coil,
+  FC6/FC16 register). İstenirse **Sparkplug B** edge node olarak, her Modbus unit'i bir
+  cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH, `seq` ile DBIRTH/DDATA, DCMD ile yazma,
+  NCMD ile rebirth.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -69,9 +73,16 @@ düzenlemeye gerek yok.
   kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open ve RS-485
   donanım auto-RTS (Linux `TIOCSRS485`: aç + TX öncesi/sonrası gecikme + TX'te RTS seviyesi).
 - **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
-  hotplug (Linux pyudev / Windows WM_DEVICECHANGE), yoksa polling'e düşer.
+  hotplug (Linux pyudev / Windows WM_DEVICECHANGE), yoksa polling'e düşer. Linux'ta
+  arkasında donanım olmayan `ttyS` portları gizlenir, `/dev/serial/by-id` kalıcı adları
+  gösterilir ve seçilebilir.
+- **Cihazı USB kimliğiyle bulma:** eşleme formundaki kutu işaretlenince adaptör VID:PID
+  (+ seri no) ile bağlanır; çıkarılıp takılınca `ttyUSB0`→`ttyUSB1` ya da COM numarası
+  değişse de eşleme doğru cihazı açar.
 - **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
-- **Onlarca eşleme:** tek ekrandan ekle/düzenle/sil/başlat/durdur, canlı durum.
+- **Onlarca eşleme:** tek ekrandan ekle/düzenle/sil/başlat/durdur, canlı durum; arama,
+  durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat.
+  Tablo yalnızca değiştiğinde yenilenir (titreme yok, seçimler korunur).
 - **Erişim kontrolü (eşleme başına):** izinli IP/CIDR listesi, **yüksek-öncelikli**
   istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at,
   salt-okunur, banner, open/close string, `closeon`.
@@ -82,9 +93,13 @@ düzenlemeye gerek yok.
   düşürülür ve yuvası boşalır — cihaz veri gönderirken de (Linux `TCP_USER_TIMEOUT`).
   Ayrıca dışa bağlanmada **bağlantı zaman aşımı** (varsayılan 10 sn), **idle timeout**
   ve **maksimum bağlantı süresi** (ör. 24 sa); her kopuş nedeniyle loglanır.
-- **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp), Prometheus
-  `/metrics`, config-değişiklik audit log, canlı log görüntüleyici, ve **tarayıcı-içi
-  seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz).
+- **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp, döner dosyalar,
+  arayüzden indirilir), Prometheus `/metrics`, audit log ekranı, canlı log görüntüleyici,
+  **tarayıcı-içi seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz) ve
+  iki yönlü, zaman damgalı **canlı hex görünümü**.
+- **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
+  bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
+  Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları, parola değişince oturum iptali.
   Güvenilir ağlar için giriş zorunluluğu **Ayarlar → Web UI access**'ten kapatılabilir
@@ -112,6 +127,9 @@ düzenlemeye gerek yok.
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
   yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla. `paho-mqtt`
   gerektirir (opsiyonel; yoksa köprü normal çalışır).
+- **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
+  Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
+  olarak gösterilir.
 - **Tamamen offline:** tüm bağımlılıklar wheel olarak birlikte gelir; internet gerekmez.
 
 ---

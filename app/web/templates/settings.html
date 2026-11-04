@@ -225,6 +225,67 @@
   </form>
 </section>
 
+<section class="panel panel-narrow" id="notifications">
+  <div class="panel-head"><h2>Notifications</h2></div>
+  <p class="muted mb-sm">Get a message when something needs attention — to a chat (Slack, Microsoft
+     Teams, Discord, Telegram, or any service that accepts a JSON webhook) and/or by e-mail.
+     The same event for the same mapping is sent at most once per repeat interval.</p>
+  <form method="post" action="/settings/notifications" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label class="chk"><input type="checkbox" name="notify_enabled" {% if notify.enabled %}checked{% endif %}> Send notifications</label>
+    <fieldset>
+      <legend>Events</legend>
+        <label class="chk"><input type="checkbox" name="notify_event_device_lost" {% if 'device_lost' in notify.events %}checked{% endif %}> Serial device lost (unplugged, error, reconnecting)</label>
+        <label class="chk"><input type="checkbox" name="notify_event_device_back" {% if 'device_back' in notify.events %}checked{% endif %}> Serial device back</label>
+        <label class="chk"><input type="checkbox" name="notify_event_start_failed" {% if 'start_failed' in notify.events %}checked{% endif %}> Mapping failed to start (e.g. port in use)</label>
+        <label class="chk"><input type="checkbox" name="notify_event_client_connected" {% if 'client_connected' in notify.events %}checked{% endif %}> Client connected</label>
+        <label class="chk"><input type="checkbox" name="notify_event_client_disconnected" {% if 'client_disconnected' in notify.events %}checked{% endif %}> Client disconnected</label>
+        <label class="chk"><input type="checkbox" name="notify_event_login_failed" {% if 'login_failed' in notify.events %}checked{% endif %}> Failed sign-in to this UI</label>
+      <label>Repeat interval (minutes) <span class="muted">(0 = every time)</span>
+        <input type="number" name="notify_repeat_min" min="0" max="1440" step="any" value="{{ '%g'|format(notify.repeat_s / 60) }}"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Webhook</legend>
+      <div class="grid2">
+        <label>URL <span class="muted">(kept secret{% if notify.webhook_url %}; blank = unchanged{% endif %})</span>
+          <input type="password" name="notify_webhook_url" autocomplete="off" placeholder="{% if notify.webhook_url %}•••••• (unchanged){% else %}https://hooks.slack.com/services/…{% endif %}"></label>
+        <label>Format
+          <select name="notify_webhook_format">
+            {% for f in webhook_formats %}<option value="{{ f }}" {% if f == notify.webhook_format %}selected{% endif %}>{{ {'json': 'JSON (generic)', 'slack': 'Slack / Mattermost', 'teams': 'Microsoft Teams (Workflows)', 'discord': 'Discord', 'telegram': 'Telegram bot'}[f] }}</option>{% endfor %}
+          </select></label>
+      </div>
+      <div class="grid2">
+        <label>Telegram chat ID <span class="muted">(Telegram only; URL: https://api.telegram.org/bot&lt;token&gt;/sendMessage)</span>
+          <input type="text" name="notify_telegram_chat_id" value="{{ notify.telegram_chat_id }}"></label>
+        {% if notify.webhook_url %}<label class="chk chk-pad"><input type="checkbox" name="notify_webhook_clear"> Remove the stored URL</label>{% endif %}
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>E-mail</legend>
+      <div class="grid2">
+        <label>To <span class="muted">(comma-separated)</span><input type="text" name="notify_email_to" value="{{ notify.email_to }}" placeholder="ops@example.com"></label>
+        <label>From <span class="muted">(blank = ser2net@&lt;host&gt;)</span><input type="text" name="notify_email_from" value="{{ notify.email_from }}"></label>
+      </div>
+      <div class="grid3">
+        <label>SMTP server <input type="text" name="notify_smtp_host" value="{{ notify.smtp_host }}" placeholder="smtp.example.com"></label>
+        <label>Port <input type="number" name="notify_smtp_port" min="1" max="65535" value="{{ notify.smtp_port }}"></label>
+        <label>Security
+          <select name="notify_smtp_security">
+            {% for x in smtp_security %}<option value="{{ x }}" {% if x == notify.smtp_security %}selected{% endif %}>{{ {'starttls': 'STARTTLS (587)', 'ssl': 'TLS (465)', 'none': 'none (trusted network only)'}[x] }}</option>{% endfor %}
+          </select></label>
+      </div>
+      <div class="grid2">
+        <label>Username <span class="muted">(optional)</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off"></label>
+        <label>Password <input type="password" name="notify_smtp_password" autocomplete="new-password" placeholder="{% if notify.smtp_password %}•••••• (unchanged){% endif %}"></label>
+      </div>
+    </fieldset>
+    <div class="row-actions start">
+      <button class="btn primary" type="submit">Save notifications</button>
+      <button class="btn" type="submit" name="then" value="test">Save and send a test</button>
+    </div>
+  </form>
+</section>
+
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>Admin TLS (HTTPS)</h2></div>
   <p class="muted mb-sm">Encrypts this management UI. Changes take effect after a restart.</p>
@@ -312,8 +373,8 @@
   <form method="post" action="/settings/config/import" enctype="multipart/form-data" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <input type="hidden" name="step" value="preview">
-    <label>Mappings file <span class="muted">(a ser2net export or config.json)</span>
-      <input type="file" name="file" accept="application/json,.json" required>
+    <label>Mappings file <span class="muted">(a ser2net export or config.json — or a classic ser2net <span class="mono">ser2net.yaml</span> / <span class="mono">ser2net.conf</span> to migrate from)</span>
+      <input type="file" name="file" accept="application/json,.json,.yaml,.yml,.conf,text/plain" required>
     </label>
     <label class="chk"><input type="radio" name="mode" value="merge" checked> Merge — update mappings with the same name, add the others, keep the rest</label>
     <label class="chk"><input type="radio" name="mode" value="replace"> Replace — the file's mappings replace all current ones</label>
