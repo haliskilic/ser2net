@@ -61,8 +61,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   **Edge mode:** also polls coils and registers on an interval and publishes the decoded
   values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
   values from MQTT (`<topic>/<point>/set` → FC5/FC15 coils, FC6/FC16 registers).
-  Optionally as a **Sparkplug B** edge node (NBIRTH/NDATA/NDEATH, `bdSeq`/`seq`, writes
-  and rebirth via NCMD).
+  Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
+  NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).

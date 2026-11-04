@@ -42,9 +42,10 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 - **Modbus write from MQTT:** points with `"writable": true` take values from
   `<topic>/<point>/set` (coils FC5/FC15, holding registers FC6/FC16; the result goes to
   `.../set/result`); coils and discrete inputs (FC1/FC2) can be polled too (#31).
-- **Sparkplug B:** a Modbus-polling mapping can publish as a Sparkplug B edge node
-  (NBIRTH/NDATA/NDEATH with `bdSeq`/`seq`, writes and rebirth through NCMD), without a
-  protobuf dependency (#31).
+- **Sparkplug B:** a Modbus-polling mapping can publish as a Sparkplug B edge node whose
+  devices are the Modbus units it polls (`unit1`, `unit2`, …): NBIRTH/NDEATH with `bdSeq`,
+  DBIRTH/DDATA with `seq`, writes through DCMD, rebirth through NCMD; without a protobuf
+  dependency (#31).
 - **Import from the classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) go
   through the import preview; options without an equivalent are listed as warnings. ser2net
   opens a device only while a client is connected, a mapping here keeps it open: of several
