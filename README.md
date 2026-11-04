@@ -204,7 +204,10 @@ docker build -t ser2net . && docker run -d -p 8080:8080 \
   --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
 ```
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
-ayarlanır — başsız ortamda interaktif seçici çalışamaz). Ayrıntılar:
+ayarlanır — başsız ortamda interaktif seçici çalışamaz). Süreç root olarak değil, `ser2net`
+kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
+volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapmak gerekmez.
+İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Ayrıntılar:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
 ---
@@ -286,11 +289,22 @@ Tüm durum **veri dizininde** (varsayılan `data/`). Veri dizini yalnızca sahib
 kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), böylece
 içindeki dosyalar başka kullanıcılarca okunamaz:
 - `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
-- `all.log` — global etkinlik/audit (boyutla döner); `audit.log` — config değişiklikleri (döner).
+- `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
+  *Configuration backups*'tan indirilir ya da geri yüklenir; geri yükleme de geri alınabilir.
+- `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler ve config değişiklikleri,
+  kim/nereden/ne (döner). Ayarlar → *Audit log*'da aranabilir, CSV olarak indirilebilir.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
+- `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
+  tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
+  yollar dosya adına indirgenir ve açılışta log'a yazılır.
 - `tls/` — self-signed üretilirse sertifika/anahtar.
 
-`config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik temizlenir).
+`config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
+temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin).
+
+**Oturum süresi:** Ayarlar → *Web UI access* → *Session lifetime* (varsayılan 8 saat).
+**İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,
+yenileri ekle) ya da *hepsini değiştir* seçilir.
 
 ---
 

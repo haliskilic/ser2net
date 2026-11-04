@@ -16,7 +16,7 @@ from .forms import _form_error, _modbus_points_json
 
 
 def routes(ctx: Ctx) -> list:
-    state, render, client_ip = ctx.state, ctx.render, ctx.client_ip
+    state, render = ctx.state, ctx.render
     current_user, require_role, can_edit = ctx.current_user, ctx.require_role, ctx.can_edit
 
     async def dashboard(request):
@@ -53,7 +53,7 @@ def routes(ctx: Ctx) -> list:
             except ConfigError as e:
                 state.config.mappings.remove(dup)
                 return PlainTextResponse(f"Duplicate failed: {e}", status_code=400)
-        state.audit(client_ip(request), "mapping_duplicate", dup.name)
+        ctx.audit(request, "mapping_duplicate", dup.name)
         return Response("", headers=TRIGGER)
 
     async def api_status(request):
@@ -111,7 +111,7 @@ def routes(ctx: Ctx) -> list:
         if not ok:
             return _form_error(render, request, state, form, msg)
         state.log(f"mapping saved: {msg}")
-        state.audit(client_ip(request), "mapping_save", msg)
+        ctx.audit(request, "mapping_save", msg)
         return Response("", headers=TRIGGER)
 
     async def mapping_delete(request):
@@ -120,7 +120,7 @@ def routes(ctx: Ctx) -> list:
         removed = await ops.delete_mapping(state, request.path_params["mid"])
         if removed is not None:
             state.log(f"mapping deleted: {removed.name}")
-            state.audit(client_ip(request), "mapping_delete", removed.name)
+            ctx.audit(request, "mapping_delete", removed.name)
         return Response("", headers=TRIGGER)
 
     async def mapping_action(request):
@@ -134,7 +134,7 @@ def routes(ctx: Ctx) -> list:
         if not ok:
             return PlainTextResponse(name, status_code=404)
         state.log(f"mapping {action}: {name}")
-        state.audit(client_ip(request), f"mapping_{action}", name)
+        ctx.audit(request, f"mapping_{action}", name)
         return Response("", headers=TRIGGER)
 
     return [

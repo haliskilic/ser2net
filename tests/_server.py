@@ -1,0 +1,172 @@
+"""Shared helpers for the end-to-end tests that boot a real ser2net server.
+
+    from _server import Server, Browser, free_port
+    with Server(config_dict) as srv:          # data dir in a temp folder, UI on 127.0.0.1
+        b = Browser(srv.base)
+        b.login("admin", "pw")
+        status, headers, body = b.post("/settings/access", {...})
+
+The server runs as a subprocess (`ser2net.py --no-bootstrap`) with SER2NET_BIND_IP set,
+like a Docker / headless boot, and logs to a file (never an unread pipe).
+"""
+from __future__ import annotations
+
+import http.cookiejar
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+sys.path.insert(0, os.path.join(ROOT, "lib"))
+sys.path.insert(0, ROOT)
+
+
+def free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def wait_port(port: int, timeout: float = 20) -> bool:
+    end = time.time() + timeout
+    while time.time() < end:
+        with socket.socket() as s:
+            s.settimeout(0.3)
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                return True
+        time.sleep(0.2)
+    return False
+
+
+class Server:
+    def __init__(self, config: dict | None = None, data_dir: str | None = None, env=None):
+        self.tmp = tempfile.mkdtemp(prefix="s2n_e2e_")
+        self.data = data_dir or os.path.join(self.tmp, "data")
+        os.makedirs(self.data, exist_ok=True)
+        self.config_path = os.path.join(self.data, "config.json")
+        self.port = free_port()
+        if config is not None:
+            with open(self.config_path, "w", encoding="utf-8") as fh:
+                json.dump(config, fh, indent=2)
+        self.env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(self.port),
+                        **(env or {}))
+        self.base = f"http://127.0.0.1:{self.port}"
+
+    def start(self) -> "Server":
+        self.log_path = os.path.join(self.tmp, "server.log")
+        self._log = open(self.log_path, "wb")
+        self.proc = subprocess.Popen(
+            [sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", self.data],
+            cwd=ROOT, env=self.env, stdin=subprocess.DEVNULL, stdout=self._log,
+            stderr=subprocess.STDOUT)
+        if not wait_port(self.port):
+            raise AssertionError("server did not start:\n" + self.output()[-2000:])
+        return self
+
+    def output(self) -> str:
+        self._log.flush()
+        with open(self.log_path, "rb") as fh:
+            return fh.read().decode("utf-8", "replace")
+
+    def saved_config(self) -> dict:
+        with open(self.config_path, encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def stop(self) -> None:
+        if getattr(self, "proc", None) is None:
+            return
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=10)
+        self._log.close()
+        self.proc = None
+
+    def __enter__(self) -> "Server":
+        return self.start()
+
+    def __exit__(self, *exc) -> None:
+        self.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+class Browser:
+    """A cookie-keeping client that speaks the UI's CSRF scheme (form field + header)."""
+
+    def __init__(self, base: str):
+        self.base = base
+        self.jar = http.cookiejar.CookieJar()
+        self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar),
+                                              _NoRedirect())
+
+    def cookie(self, name: str):
+        return next((c for c in self.jar if c.name == name), None)
+
+    def csrf(self) -> str:
+        for page in ("/login", "/setup"):  # before first-run setup only /setup sets it
+            if self.cookie("ser2net_csrf") is None:
+                self.get(page)
+        return self.cookie("ser2net_csrf").value
+
+    def _open(self, req):
+        try:
+            r = self.op.open(req, timeout=20)
+        except urllib.error.HTTPError as e:
+            r = e
+        body = r.read()
+        # headers: an http.client.HTTPMessage (get / get_all, e.g. every Set-Cookie)
+        return r.status if hasattr(r, "status") else r.code, r.headers, body
+
+    def get(self, path: str, raw: bool = False):
+        st, headers, body = self._open(urllib.request.Request(self.base + path))
+        return st, headers, (body if raw else body.decode("utf-8", "replace"))
+
+    def post(self, path: str, fields=None, files=None, htmx: bool = False, method: str = "POST"):
+        fields = dict(fields or {})
+        fields.setdefault("_csrf", self.csrf())
+        headers = {"X-CSRF-Token": self.csrf()}
+        if htmx:
+            headers["HX-Request"] = "true"
+        if files:
+            boundary = "s2nboundary7c1f"
+            parts = []
+            for k, v in fields.items():
+                parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+            for k, (fname, content) in files.items():
+                parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"; '
+                             f'filename="{fname}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode()
+                             + content + b"\r\n")
+            data = b"".join(parts) + f"--{boundary}--\r\n".encode()
+            headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+        else:
+            data = urllib.parse.urlencode(fields, doseq=True).encode()
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        st, h, body = self._open(urllib.request.Request(self.base + path, data=data,
+                                                        headers=headers, method=method))
+        return st, h, body.decode("utf-8", "replace")
+
+    def login(self, username: str, password: str) -> None:
+        st, h, _ = self.post("/login", {"username": username, "password": password})
+        assert st == 303 and h.get("Location") == "/", f"login as {username} failed ({st})"
+
+    def setup(self, username: str = "admin", password: str = "admin-pass-1") -> None:
+        st, _, _ = self.post("/setup", {"username": username, "password": password,
+                                        "password2": password})
+        assert st == 303, f"first-run setup failed ({st})"

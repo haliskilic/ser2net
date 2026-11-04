@@ -1,0 +1,57 @@
+{% extends "_shell.html" %}
+{% block title %}Audit log — ser2net{% endblock %}
+{% block main %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Audit log</h2>
+    <div class="actions">
+      <a class="btn sm" href="/settings/audit.csv{% if qs %}?{{ qs }}{% endif %}">⤓ CSV</a>
+      <a class="btn sm" href="/settings">← Settings</a>
+    </div>
+  </div>
+  <p class="muted mb-sm">Sign-ins and every change to the configuration, newest first: who
+     (user), from where (IP), what (action) and on what (detail). Times are the server's local
+     time. Kept in the data folder's <span class="mono">audit.log</span> (rotated at 5 MB, one
+     older file kept).</p>
+  <form method="get" action="/settings/audit" class="filters">
+    <input type="search" name="q" value="{{ filters.q }}" placeholder="Search (name, IP, detail…)">
+    <select name="action">
+      <option value="">All actions</option>
+      {% for a in actions %}<option value="{{ a }}" {% if a == filters.action %}selected{% endif %}>{{ a }}</option>{% endfor %}
+    </select>
+    <select name="user">
+      <option value="">All users</option>
+      {% for u in users %}<option value="{{ u }}" {% if u == filters.user %}selected{% endif %}>{{ u }}</option>{% endfor %}
+    </select>
+    <button class="btn" type="submit">Filter</button>
+    {% if qs %}<a class="btn" href="/settings/audit">Reset</a>{% endif %}
+  </form>
+  <p class="muted">{{ total }} record(s){% if pages > 1 %} · page {{ page }} of {{ pages }}{% endif %}</p>
+  {% if rows %}
+  <div class="table-scroll">
+  <table class="grid audit stackable">
+    <thead><tr><th>Time</th><th>User</th><th>IP</th><th>Action</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="mono nowrap col-name">{{ r.time }}</td>
+        <td data-label="User">{{ r.user or '—' }}</td>
+        <td class="mono" data-label="IP">{{ r.ip }}</td>
+        <td class="mono" data-label="Action">{{ r.action }}</td>
+        <td data-label="Detail">{{ r.detail|softbreak }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a class="btn sm" href="/settings/audit?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page - 1 }}">← Newer</a>{% endif %}
+    {% if page < pages %}<a class="btn sm" href="/settings/audit?{{ qs }}{% if qs %}&amp;{% endif %}page={{ page + 1 }}">Older →</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <p class="muted">No audit records{% if qs %} match the filter{% endif %}.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -101,6 +101,7 @@ table.ports { min-width: 40rem; }
 .state-device-missing { background: rgba(210,153,34,.18); color: #e3b341; }
 .state-error { background: rgba(248,81,73,.18); color: #ff6b64; }
 .tag { font-size: 10.5px; background: var(--panel2); color: var(--muted); padding: 1px 6px; border-radius: 10px; white-space: nowrap; }
+.tag-danger { color: var(--red); }
 /* at most 3 lines; the full message is in the title tooltip and the mapping log */
 .err-small {
   color: var(--red); font-size: 11px; margin-top: 3px; max-width: 16rem;
@@ -200,3 +201,8 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
   }
   table.stackable .row-actions { justify-content: flex-start; margin-top: 4px; }
 }
+
+/* audit log page */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.filters input[type=search] { flex: 1 1 16rem; min-width: 0; }
+.pager { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }

@@ -53,6 +53,12 @@ PORTABLE = [
     "test_tls_selfsigned.py",
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",
+    "test_trace.py",
+    "test_session_timeout.py",
+    "test_backups_import.py",
+    "test_audit_log.py",
+    "test_healthcheck.py",
+    "test_upgrade_from_2_7.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

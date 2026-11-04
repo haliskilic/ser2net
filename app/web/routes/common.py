@@ -10,7 +10,6 @@ from starlette.responses import PlainTextResponse
 from ...config import ROLE_RANK
 from .. import auth
 
-SESSION_TTL = 8 * 3600
 # HTMX response header: tells the dashboard to re-fetch the mappings table now
 TRIGGER = {"HX-Trigger": "refreshMappings"}
 
@@ -47,12 +46,13 @@ class Ctx:
                                                status_code=status_code, headers=headers)
 
     def set_session(self, response, request, user) -> None:
-        state = self.state
+        cfg = self.state.config
+        ttl = cfg.session_timeout_s  # Settings -> Web UI access -> session lifetime
         response.set_cookie(
             auth.SESSION_COOKIE,
-            auth.issue_session(state.config.secret_key, SESSION_TTL, user.username, user.pwd_version),
-            max_age=SESSION_TTL, httponly=True, samesite="lax",
-            secure=state.config.admin_ui.tls_enabled, path="/",
+            auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),
+            max_age=ttl, httponly=True, samesite="lax",
+            secure=cfg.admin_ui.tls_enabled, path="/",
         )
 
     @staticmethod
@@ -72,6 +72,14 @@ class Ctx:
     def is_anonymous(request) -> bool:
         u = current_user(request)
         return u is not None and u.source == "anonymous"
+
+    def audit(self, request, action: str, detail: str = "", user: str | None = None) -> None:
+        """An audit record for this request: client IP plus the acting user (the
+        signed-in user unless given)."""
+        if user is None:
+            u = current_user(request)
+            user = (u.username if u.source != "anonymous" else "(no login)") if u is not None else ""
+        self.state.audit(client_ip(request), action, detail, user=user)
 
     def require_peer_access(self, request):
         """Cluster peer actions act on OTHER nodes with the shared key, so they need a

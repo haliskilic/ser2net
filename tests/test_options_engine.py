@@ -25,8 +25,8 @@ async def socat():
     return p, devs[0], devs[1]
 
 
-async def start(dev, port, network=None, options=None, name="m"):
-    sup = Supervisor(logger=lambda s: None)
+async def start(dev, port, network=None, options=None, name="m", trace_dir=None):
+    sup = Supervisor(logger=lambda s: None, trace_dir=trace_dir)
     m = MappingConfig.from_dict({
         "name": name, "enabled": True,
         "serial": {"port": dev, "baudrate": 115200},
@@ -88,9 +88,9 @@ async def test_closeon():
 async def test_trace():
     import serial, tempfile
     p, a, b = await socat()
-    tf = tempfile.NamedTemporaryFile(prefix="trace_", suffix=".log", delete=False)
-    tf.close()
-    sup, m = await start(a, 47305, options={"trace_both": tf.name, "trace_hexdump": True})
+    tdir = tempfile.mkdtemp(prefix="trace_")
+    sup, m = await start(a, 47305, options={"trace_both": "trace.log", "trace_hexdump": True},
+                         trace_dir=tdir)
     dev = serial.Serial(b, 115200, timeout=0)
     r, w = await asyncio.open_connection("127.0.0.1", 47305)
     await asyncio.sleep(0.2)
@@ -102,8 +102,10 @@ async def test_trace():
     await asyncio.wait_for(r.read(16), 2)
     w.close(); dev.close()
     await sup.stop_all()
-    content = open(tf.name).read()
-    os.remove(tf.name)
+    path = os.path.join(tdir, f"{m.id}-trace.log")
+    content = open(path).read()
+    os.remove(path)
+    os.rmdir(tdir)
     assert "net>ser" in content and "ser>net" in content, content
     assert "68 65 6c 6c 6f" in content, content  # 'hello' hex
     print("trace: hex dump captured both directions  OK")
