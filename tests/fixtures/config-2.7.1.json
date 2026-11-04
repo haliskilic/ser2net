@@ -1,0 +1,804 @@
+{
+  "version": 1,
+  "admin_ui": {
+    "bind_ip": "127.0.0.1",
+    "port": 8080,
+    "tls_cert": "",
+    "tls_key": "",
+    "require_login": true,
+    "anonymous_role": "viewer"
+  },
+  "secret_key": "5555555555555555555555555555555555555555555555555555555555555555",
+  "api_token_hash": "36807ec851124085ee9810046335d3bec6df33db45542eb3afac823552c11ae7",
+  "api_token_role": "operator",
+  "session_timeout_s": 28800,
+  "users": [
+    {
+      "username": "admin",
+      "password_hash": "scrypt$b7b990f1546ef8d54aa9866396baddbd$b3021a467d85d7282ec775b0a6f54f70a28497a0bf37d236566000a1c9446d5e",
+      "role": "admin",
+      "pwd_version": 3,
+      "source": "local"
+    },
+    {
+      "username": "op1",
+      "password_hash": "scrypt$eeb83cfe0bed7ca23443011d3339403c$07fd6323f8f2654dbc457e450c2c6c89fe1bef506400c08406f902c682a03596",
+      "role": "operator",
+      "pwd_version": 1,
+      "source": "local"
+    },
+    {
+      "username": "viewer1",
+      "password_hash": "scrypt$798a8bec0015706fb7b333962d746a6c$d117936277a591f50a59f0cc74c2b36db6e19ae4960819db7f87a0cd2054635f",
+      "role": "viewer",
+      "pwd_version": 1,
+      "source": "local"
+    },
+    {
+      "username": "jdoe",
+      "password_hash": "",
+      "role": "operator",
+      "pwd_version": 2,
+      "source": "ldap"
+    },
+    {
+      "username": "sso.user",
+      "password_hash": "",
+      "role": "viewer",
+      "pwd_version": 1,
+      "source": "oidc"
+    }
+  ],
+  "ldap": {
+    "enabled": false,
+    "server_uri": "ldaps://dc.corp.local:636",
+    "start_tls": false,
+    "user_dn_template": "",
+    "bind_dn": "cn=svc,dc=corp,dc=local",
+    "bind_password": "ldap-secret",
+    "user_search_base": "ou=people,dc=corp,dc=local",
+    "user_search_filter": "(sAMAccountName={username})",
+    "group_attr": "memberOf",
+    "admin_group": "ser2net-admins",
+    "operator_group": "ser2net-ops",
+    "viewer_group": "",
+    "default_role": "viewer"
+  },
+  "oidc": {
+    "enabled": false,
+    "issuer": "https://sso.example.com/realms/main",
+    "client_id": "ser2net",
+    "client_secret": "oidc-secret",
+    "redirect_uri": "",
+    "scopes": "openid email profile",
+    "username_claim": "preferred_username",
+    "groups_claim": "groups",
+    "admin_group": "admins",
+    "operator_group": "",
+    "viewer_group": "",
+    "default_role": ""
+  },
+  "cluster": {
+    "enabled": false,
+    "key": "cluster-psk-1234567890",
+    "discovery_port": 41750,
+    "advertise_ip": "",
+    "peers": [
+      "10.0.5.12:8080",
+      "https://plc-gw.example:8443"
+    ]
+  },
+  "instance_id": "a1b2c3d4e5f60718",
+  "defaults": {
+    "baudrate": 9600
+  },
+  "mappings": [
+    {
+      "id": "aaaa00000001",
+      "name": "PLC-1 raw",
+      "enabled": true,
+      "kind": "net",
+      "serial": {
+        "port": "/dev/ttyUSB0",
+        "match": {
+          "vid": "0403",
+          "pid": "6001",
+          "serial_number": "A12345"
+        },
+        "baudrate": 19200,
+        "bytesize": 8,
+        "parity": "E",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "on",
+        "dtr_on_open": "off",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": true,
+          "rs485_delay_before_tx_ms": 0.5,
+          "rs485_delay_after_tx_ms": 1.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": true,
+          "nobreak": true
+        }
+      },
+      "serial_b": {
+        "port": "",
+        "match": {},
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "network": {
+        "mode": "server",
+        "protocol": "raw",
+        "bind_ip": "127.0.0.1",
+        "port": 4001,
+        "remote_host": "",
+        "remote_port": 0,
+        "max_connections": 3,
+        "kick_old_user": true,
+        "allowed_client_ips": [
+          "192.168.1.0/24",
+          "0.0.0.0"
+        ],
+        "priority_client_ips": [
+          "192.168.1.10"
+        ],
+        "read_only": false,
+        "client_queue_max": 4096,
+        "tcp_keepalive": true,
+        "keepalive_idle_s": 45,
+        "keepalive_interval_s": 7,
+        "keepalive_count": 5,
+        "connect_timeout_s": 10.0,
+        "tls": false,
+        "tls_cert": "",
+        "tls_key": ""
+      },
+      "options": {
+        "banner": "\\r\\nser2net \\N on \\d\\r\\n",
+        "openstr": "INIT\\r\\n",
+        "closestr": "BYE\\r\\n",
+        "closeon": "LOGOUT",
+        "idle_timeout_s": 600,
+        "max_connection_time_s": 86400,
+        "trace_both": "/var/log/ser2net/plc1.trace",
+        "trace_hexdump": true,
+        "trace_timestamp": true,
+        "rfc2217_poll_modem_interval_s": 1.0,
+        "rfc2217_net_timeout_s": 3.0,
+        "modbus_response_timeout_s": 1.0
+      },
+      "mqtt": {
+        "enabled": true,
+        "host": "10.0.0.5",
+        "port": 8883,
+        "base_topic": "plant/plc1",
+        "qos": 1,
+        "tls": true,
+        "username": "mq",
+        "password": "mq-secret",
+        "client_id": "s2n-plc1"
+      },
+      "modbus_poll": {
+        "interval_s": 5.0,
+        "points": []
+      }
+    },
+    {
+      "id": "aaaa00000002",
+      "name": "Telnet console",
+      "enabled": false,
+      "kind": "net",
+      "serial": {
+        "port": "COM3",
+        "match": {},
+        "baudrate": 115200,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "serial_b": {
+        "port": "",
+        "match": {},
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "network": {
+        "mode": "server",
+        "protocol": "telnet",
+        "bind_ip": "0.0.0.0",
+        "port": 4002,
+        "remote_host": "",
+        "remote_port": 0,
+        "max_connections": 1,
+        "kick_old_user": false,
+        "allowed_client_ips": [],
+        "priority_client_ips": [],
+        "read_only": true,
+        "client_queue_max": 2048,
+        "tcp_keepalive": true,
+        "keepalive_idle_s": 60,
+        "keepalive_interval_s": 10,
+        "keepalive_count": 3,
+        "connect_timeout_s": 10.0,
+        "tls": false,
+        "tls_cert": "",
+        "tls_key": ""
+      },
+      "options": {
+        "banner": "",
+        "openstr": "",
+        "closestr": "",
+        "closeon": "",
+        "idle_timeout_s": 0,
+        "max_connection_time_s": 0,
+        "trace_both": "C:\\\\ser2net\\\\traces\\\\console.log",
+        "trace_hexdump": false,
+        "trace_timestamp": true,
+        "rfc2217_poll_modem_interval_s": 1.0,
+        "rfc2217_net_timeout_s": 3.0,
+        "modbus_response_timeout_s": 1.0
+      },
+      "mqtt": {
+        "enabled": false,
+        "host": "",
+        "port": 1883,
+        "base_topic": "",
+        "qos": 0,
+        "tls": false,
+        "username": "",
+        "password": "",
+        "client_id": ""
+      },
+      "modbus_poll": {
+        "interval_s": 5.0,
+        "points": []
+      }
+    },
+    {
+      "id": "aaaa00000003",
+      "name": "RFC2217 lab",
+      "enabled": true,
+      "kind": "net",
+      "serial": {
+        "port": "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A10K1ABC-if00-port0",
+        "match": {},
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "serial_b": {
+        "port": "",
+        "match": {},
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "network": {
+        "mode": "server",
+        "protocol": "rfc2217",
+        "bind_ip": "127.0.0.1",
+        "port": 4003,
+        "remote_host": "",
+        "remote_port": 0,
+        "max_connections": 1,
+        "kick_old_user": false,
+        "allowed_client_ips": [],
+        "priority_client_ips": [],
+        "read_only": false,
+        "client_queue_max": 2048,
+        "tcp_keepalive": true,
+        "keepalive_idle_s": 60,
+        "keepalive_interval_s": 10,
+        "keepalive_count": 3,
+        "connect_timeout_s": 10.0,
+        "tls": false,
+        "tls_cert": "",
+        "tls_key": ""
+      },
+      "options": {
+        "banner": "",
+        "openstr": "",
+        "closestr": "",
+        "closeon": "",
+        "idle_timeout_s": 0,
+        "max_connection_time_s": 0,
+        "trace_both": "",
+        "trace_hexdump": false,
+        "trace_timestamp": true,
+        "rfc2217_poll_modem_interval_s": 2.0,
+        "rfc2217_net_timeout_s": 5.0,
+        "modbus_response_timeout_s": 1.0
+      },
+      "mqtt": {
+        "enabled": false,
+        "host": "",
+        "port": 1883,
+        "base_topic": "",
+        "qos": 0,
+        "tls": false,
+        "username": "",
+        "password": "",
+        "client_id": ""
+      },
+      "modbus_poll": {
+        "interval_s": 5.0,
+        "points": []
+      }
+    },
+    {
+      "id": "aaaa00000004",
+      "name": "Connect-out to SCADA",
+      "enabled": true,
+      "kind": "net",
+      "serial": {
+        "port": "/dev/ttyS1",
+        "match": {},
+        "baudrate": 38400,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "serial_b": {
+        "port": "",
+        "match": {},
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "network": {
+        "mode": "client",
+        "protocol": "raw",
+        "bind_ip": "0.0.0.0",
+        "port": 4001,
+        "remote_host": "scada.example.local",
+        "remote_port": 5020,
+        "max_connections": 1,
+        "kick_old_user": false,
+        "allowed_client_ips": [],
+        "priority_client_ips": [],
+        "read_only": false,
+        "client_queue_max": 2048,
+        "tcp_keepalive": false,
+        "keepalive_idle_s": 60,
+        "keepalive_interval_s": 10,
+        "keepalive_count": 3,
+        "connect_timeout_s": 7.5,
+        "tls": false,
+        "tls_cert": "",
+        "tls_key": ""
+      },
+      "options": {
+        "banner": "",
+        "openstr": "",
+        "closestr": "",
+        "closeon": "",
+        "idle_timeout_s": 0,
+        "max_connection_time_s": 0,
+        "trace_both": "",
+        "trace_hexdump": false,
+        "trace_timestamp": true,
+        "rfc2217_poll_modem_interval_s": 1.0,
+        "rfc2217_net_timeout_s": 3.0,
+        "modbus_response_timeout_s": 1.0
+      },
+      "mqtt": {
+        "enabled": false,
+        "host": "",
+        "port": 1883,
+        "base_topic": "",
+        "qos": 0,
+        "tls": false,
+        "username": "",
+        "password": "",
+        "client_id": ""
+      },
+      "modbus_poll": {
+        "interval_s": 5.0,
+        "points": []
+      }
+    },
+    {
+      "id": "aaaa00000005",
+      "name": "UDP sensor",
+      "enabled": true,
+      "kind": "net",
+      "serial": {
+        "port": "/dev/ttyS2",
+        "match": {},
+        "baudrate": 4800,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "serial_b": {
+        "port": "",
+        "match": {},
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "network": {
+        "mode": "udp",
+        "protocol": "raw",
+        "bind_ip": "127.0.0.1",
+        "port": 4005,
+        "remote_host": "10.0.0.9",
+        "remote_port": 6000,
+        "max_connections": 1,
+        "kick_old_user": false,
+        "allowed_client_ips": [
+          "10.0.0.0/8"
+        ],
+        "priority_client_ips": [],
+        "read_only": false,
+        "client_queue_max": 2048,
+        "tcp_keepalive": true,
+        "keepalive_idle_s": 60,
+        "keepalive_interval_s": 10,
+        "keepalive_count": 3,
+        "connect_timeout_s": 10.0,
+        "tls": false,
+        "tls_cert": "",
+        "tls_key": ""
+      },
+      "options": {
+        "banner": "",
+        "openstr": "",
+        "closestr": "",
+        "closeon": "",
+        "idle_timeout_s": 0,
+        "max_connection_time_s": 0,
+        "trace_both": "",
+        "trace_hexdump": false,
+        "trace_timestamp": true,
+        "rfc2217_poll_modem_interval_s": 1.0,
+        "rfc2217_net_timeout_s": 3.0,
+        "modbus_response_timeout_s": 1.0
+      },
+      "mqtt": {
+        "enabled": false,
+        "host": "",
+        "port": 1883,
+        "base_topic": "",
+        "qos": 0,
+        "tls": false,
+        "username": "",
+        "password": "",
+        "client_id": ""
+      },
+      "modbus_poll": {
+        "interval_s": 5.0,
+        "points": []
+      }
+    },
+    {
+      "id": "aaaa00000006",
+      "name": "Modbus gateway",
+      "enabled": true,
+      "kind": "net",
+      "serial": {
+        "port": "/dev/ttyUSB1",
+        "match": {},
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "serial_b": {
+        "port": "",
+        "match": {},
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "network": {
+        "mode": "server",
+        "protocol": "modbus",
+        "bind_ip": "127.0.0.1",
+        "port": 5502,
+        "remote_host": "",
+        "remote_port": 0,
+        "max_connections": 4,
+        "kick_old_user": false,
+        "allowed_client_ips": [],
+        "priority_client_ips": [],
+        "read_only": false,
+        "client_queue_max": 2048,
+        "tcp_keepalive": true,
+        "keepalive_idle_s": 60,
+        "keepalive_interval_s": 10,
+        "keepalive_count": 3,
+        "connect_timeout_s": 10.0,
+        "tls": false,
+        "tls_cert": "",
+        "tls_key": ""
+      },
+      "options": {
+        "banner": "",
+        "openstr": "",
+        "closestr": "",
+        "closeon": "",
+        "idle_timeout_s": 300,
+        "max_connection_time_s": 0,
+        "trace_both": "modbus.log",
+        "trace_hexdump": false,
+        "trace_timestamp": true,
+        "rfc2217_poll_modem_interval_s": 1.0,
+        "rfc2217_net_timeout_s": 3.0,
+        "modbus_response_timeout_s": 0.8
+      },
+      "mqtt": {
+        "enabled": true,
+        "host": "10.0.0.5",
+        "port": 1883,
+        "base_topic": "plant/mb",
+        "qos": 0,
+        "tls": false,
+        "username": "",
+        "password": "",
+        "client_id": ""
+      },
+      "modbus_poll": {
+        "interval_s": 2.5,
+        "points": [
+          {
+            "name": "temp",
+            "unit": 1,
+            "fn": 4,
+            "address": 0,
+            "dtype": "float32",
+            "scale": 0.1
+          },
+          {
+            "name": "count",
+            "unit": 2,
+            "fn": 3,
+            "address": 10,
+            "dtype": "uint32",
+            "scale": 1.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "aaaa00000007",
+      "name": "Serial bridge",
+      "enabled": true,
+      "kind": "serialbridge",
+      "serial": {
+        "port": "/dev/ttyUSB2",
+        "match": {},
+        "baudrate": 57600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "none",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "serial_b": {
+        "port": "/dev/ttyUSB3",
+        "match": {},
+        "baudrate": 57600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "flowcontrol": "rtscts",
+        "rts_on_open": "keep",
+        "dtr_on_open": "keep",
+        "exclusive": true,
+        "advanced": {
+          "rs485_enabled": false,
+          "rs485_delay_before_tx_ms": 0.0,
+          "rs485_delay_after_tx_ms": 0.0,
+          "rs485_rts_level_for_tx": true,
+          "hangup_when_done": false,
+          "nobreak": false
+        }
+      },
+      "network": {
+        "mode": "server",
+        "protocol": "raw",
+        "bind_ip": "0.0.0.0",
+        "port": 4001,
+        "remote_host": "",
+        "remote_port": 0,
+        "max_connections": 1,
+        "kick_old_user": false,
+        "allowed_client_ips": [],
+        "priority_client_ips": [],
+        "read_only": false,
+        "client_queue_max": 2048,
+        "tcp_keepalive": true,
+        "keepalive_idle_s": 60,
+        "keepalive_interval_s": 10,
+        "keepalive_count": 3,
+        "connect_timeout_s": 10.0,
+        "tls": false,
+        "tls_cert": "",
+        "tls_key": ""
+      },
+      "options": {
+        "banner": "",
+        "openstr": "",
+        "closestr": "",
+        "closeon": "",
+        "idle_timeout_s": 0,
+        "max_connection_time_s": 0,
+        "trace_both": "",
+        "trace_hexdump": false,
+        "trace_timestamp": true,
+        "rfc2217_poll_modem_interval_s": 1.0,
+        "rfc2217_net_timeout_s": 3.0,
+        "modbus_response_timeout_s": 1.0
+      },
+      "mqtt": {
+        "enabled": false,
+        "host": "",
+        "port": 1883,
+        "base_topic": "",
+        "qos": 0,
+        "tls": false,
+        "username": "",
+        "password": "",
+        "client_id": ""
+      },
+      "modbus_poll": {
+        "interval_s": 5.0,
+        "points": []
+      }
+    }
+  ]
+}

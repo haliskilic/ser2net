@@ -6,6 +6,35 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 
 ## [Unreleased]
 
+### Security
+- **Traces can no longer write outside the data directory.** A mapping's trace was a free
+  file path, so an operator (not only an admin) could have raw network bytes appended to
+  any file the service may write — `config.json`, a startup script; as root in Docker.
+  Traces now always go to `<data>/traces/<mapping id>-<file name>`; a path in an older
+  config keeps only its file name, and the move is logged at start-up (#29).
+- The Docker image runs as an unprivileged user (uid 10001) instead of root. A `/data`
+  volume written by an older image is taken over automatically on the first start (#29).
+- Audit records can't be forged with control characters in a user-supplied name (#29).
+
+### Fixed
+- The session lifetime setting (`session_timeout_s`) now takes effect; it was stored but
+  sessions always lasted 8 hours. Settings → Web UI access → Session lifetime (#29).
+- Writing a trace no longer blocks the event loop (a writer thread batches and flushes);
+  trace files rotate at a size limit (default 10 MB, 3 old files kept) (#29).
+- The Docker HEALTHCHECK no longer reports a fresh container unhealthy while it waits for
+  the first-run setup (`/healthz` answers then too) (#29).
+
+### Added
+- Automatic configuration backups: each change keeps the previous `config.json` in
+  `data/backups/` (newest 50); admins can download or restore them in Settings, and a
+  restore is itself backed up (#29).
+- Import preview: the import shows what will be added / updated / removed first and then
+  merges (same name = update, keeping the mapping's id, log and traces) or replaces all.
+  A one-step POST without the preview step still replaces everything, as before (#29).
+- Settings → Audit log: sign-ins and every change with user, IP, action and detail;
+  search, filters, paging and CSV export. Records now carry the acting user (#29).
+- `ser2net --healthcheck`, used by the Docker image's `HEALTHCHECK` (#29).
+
 ### Changed
 - Dependencies updated: starlette 1.10.0, uvicorn 0.54.0, websockets 17.4,
   python-multipart 0.0.33, anyio 4.16.0, click 8.5.0, idna 3.20, typing_extensions 4.16.0,
