@@ -49,7 +49,10 @@ docker run --rm --user 0 --entrypoint sh -v s2n-smoke-b:/data -v "$HERE/fixtures
 docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
     -v s2n-smoke-b:/data "$IMAGE" >/dev/null
 wait_healthy
-docker logs s2n-smoke 2>&1 | grep -q "handing it to user ser2net" || fail "no takeover message"
+# read the whole log first: with pipefail, `docker logs | grep -q` fails when grep exits at the
+# match while docker logs is still writing (SIGPIPE), which made this check flaky
+logs=$(docker logs s2n-smoke 2>&1)
+grep -q "handing it to user ser2net" <<<"$logs" || fail "no takeover message"
 docker exec s2n-smoke sh -c 'find /data ! -uid 10001 | head -5'
 docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "root-owned files left"
 jar=$(mktemp)
