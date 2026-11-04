@@ -12,16 +12,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from ..config import ConfigError, MappingConfig
+from .routes import ops
+from .routes.common import client_ip as _client_ip
 
 API_PREFIX = "/api/v1"
-
-
-def _client_ip(request) -> str:
-    ip = request.client.host if request.client else "?"
-    if ip.startswith("::ffff:") and "." in ip:
-        ip = ip[len("::ffff:"):]
-    return ip
-
 
 REDACTED = "********"
 
@@ -107,17 +101,9 @@ def build_api_routes(state):
 
     async def delete_mapping(request):
         mid = request.path_params["mid"]
-        removed = None
-        async with state.config_lock:
-            m = state.config.get_mapping(mid)
-            if m:
-                state.config.mappings.remove(m)
-                await state.asave()
-                removed = m
+        removed = await ops.delete_mapping(state, mid)
         if removed is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        await state.supervisor.remove_mapping(mid)
-        state.delete_mapping_log(mid)
         state.log(f"api: mapping deleted: {removed.name}")
         state.audit(_client_ip(request), "api_mapping_delete", removed.name)
         return JSONResponse({"deleted": mid})
@@ -127,20 +113,11 @@ def build_api_routes(state):
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
             return JSONResponse({"error": "unknown_action"}, status_code=400)
-        async with state.config_lock:
-            m = state.config.get_mapping(mid)
-            if not m:
-                return JSONResponse({"error": "not_found"}, status_code=404)
-            m.enabled = action != "stop"
-            await state.asave()
-        if action == "stop":
-            await state.supervisor.stop_mapping(mid)
-        elif action == "restart":
-            await state.supervisor.restart_mapping(m)
-        else:
-            await state.supervisor.apply_mapping(m)
-        state.log(f"api: mapping {action}: {m.name}")
-        state.audit(_client_ip(request), f"api_mapping_{action}", m.name)
+        ok, name = await ops.apply_action(state, mid, action)
+        if not ok:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        state.log(f"api: mapping {action}: {name}")
+        state.audit(_client_ip(request), f"api_mapping_{action}", name)
         return JSONResponse({"id": mid, "action": action, "status": state.supervisor.status(mid)})
 
     async def status(request):
@@ -176,7 +153,7 @@ def openapi_spec(admin) -> dict:
     mapping_obj = {"type": "object", "description": "A serial<->network mapping (see config model)."}
     error_obj = {"type": "object", "properties": {"error": {"type": "string"},
                                                   "detail": {"type": "string"}}}
-    bearer = [{"bearerAuth": []}]
+    bearer: list[dict[str, list[str]]] = [{"bearerAuth": []}]
     return {
         "openapi": "3.0.3",
         "info": {
