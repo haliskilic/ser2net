@@ -10,9 +10,18 @@ on:
 
 permissions:
   contents: write
+  id-token: write       # build provenance + SBOM attestations
+  attestations: write
+  packages: write       # the GHCR image
 
 jobs:
   standalone:
     uses: ./.github/workflows/standalone.yml
     with:
       publish: true
+    secrets: inherit      # optional code-signing credentials (docs/SIGNING.md)
+
+  image:
+    uses: ./.github/workflows/docker.yml
+    with:
+      push: true
