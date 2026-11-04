@@ -137,9 +137,9 @@ jobs:
           if-no-files-found: error
       - name: Sign with SignPath
         if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: signpath/github-action-submit-signing-request@v3
         with:
-          connector-url: https://githubactions.connector.signpath.io
+          # connector-url: the action's default, which v3 moved to SignPath's Pipeline Connector
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
