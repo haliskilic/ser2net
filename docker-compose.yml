@@ -3,8 +3,8 @@
 # Edit `devices` to match the serial port(s) you are bridging.
 services:
   ser2net:
-    build: .
-    # image: ghcr.io/haliskilic/ser2net:latest   # or pull a published image
+    image: ghcr.io/haliskilic/ser2net:latest   # published for amd64 + arm64 with every release
+    # build: .                                 # or build it from this checkout
     container_name: ser2net
     restart: unless-stopped
     ports:
