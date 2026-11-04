@@ -3,7 +3,31 @@ validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
 from ...config import ConfigError, MappingConfig
-from .forms import _mapping_from_form, _preserve_unmanaged_fields
+from ...engine import portlist
+from .forms import _checkbox, _mapping_from_form, _preserve_unmanaged_fields
+
+
+def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) -> None:
+    """Set each serial side's stable USB identity (serial.match) from the form's
+    "find this device by its USB identity" box: the selected port's VID/PID (+ serial
+    number when it has one), so the engine re-finds the adapter after COMx / ttyUSBx
+    renumbering. A device that is not plugged in right now keeps its stored identity.
+    Raises ValueError when the box is set for a port without a USB identity."""
+    for prefix, settings, old in (("serial_", mapping.serial, existing.serial if existing else None),
+                                  ("serial_b_", mapping.serial_b, existing.serial_b if existing else None)):
+        if f"{prefix}usb_match_shown" not in form or (prefix == "serial_b_" and mapping.kind != "serialbridge"):
+            continue
+        if not _checkbox(form, prefix + "usb_match"):
+            settings.match = {}
+            continue
+        port = portlist.find(ports, settings.port)
+        if port is not None and port.get("vid") and port.get("pid"):
+            settings.match = {k: port[k] for k in ("vid", "pid", "serial_number") if port.get(k)}
+        elif port is None and old is not None and old.match:
+            settings.match = dict(old.match)  # unplugged now: keep what it was bound to
+        else:
+            raise ValueError(f"{settings.port or 'This port'} has no USB identity (VID/PID) to "
+                             "find it by; untick “Find this device by its USB identity”.")
 
 
 async def save_mapping_from_form(state, form) -> tuple[bool, str]:
@@ -15,7 +39,9 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         # The form doesn't expose (or always post) every field; when editing, carry
         # those over so a save never silently wipes them (get_mapping is a sync
         # read — safe outside the config lock).
-        _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id), form)
+        existing = state.config.get_mapping(mapping.id)
+        _preserve_unmanaged_fields(mapping, existing, form)
+        apply_usb_match(mapping, form, state.ports.get(), existing)
         mapping.validate()
     except (ValueError, ConfigError) as e:
         return False, str(e)

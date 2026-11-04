@@ -383,6 +383,9 @@ class MappingOptions:
 # ---------------------------------------------------------------------------
 # Per-mapping MQTT publishing (optional northbound to an IIoT broker)
 # ---------------------------------------------------------------------------
+MQTT_FORMATS = ("plain", "sparkplug_b")
+
+
 @dataclass
 class MqttSettings:
     enabled: bool = False
@@ -394,6 +397,11 @@ class MqttSettings:
     username: str = ""
     password: str = ""
     client_id: str = ""         # blank => auto
+    # Modbus polling only: "plain" topics per point, or Eclipse Sparkplug B (this mapping
+    # is an edge node spBv1.0/<group>/N*/<node>; blank node id = the mapping's name)
+    payload_format: str = "plain"
+    sparkplug_group_id: str = "ser2net"
+    sparkplug_node_id: str = ""
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MqttSettings":
@@ -412,22 +420,34 @@ class MqttSettings:
             raise ConfigError("MQTT port must be between 1 and 65535.")
         if self.qos not in (0, 1, 2):
             raise ConfigError("MQTT QoS must be 0, 1 or 2.")
+        if self.payload_format not in MQTT_FORMATS:
+            raise ConfigError(f"MQTT payload format must be one of {MQTT_FORMATS}.")
+        if self.payload_format == "sparkplug_b":
+            for label, value in (("group ID", self.sparkplug_group_id),
+                                 ("edge node ID", self.sparkplug_node_id)):
+                if any(c in value for c in "/+#"):
+                    raise ConfigError(f"Sparkplug {label} must not contain '/', '+' or '#'.")
+            if not self.sparkplug_group_id.strip():
+                raise ConfigError("Sparkplug B needs a group ID.")
 
 
 # ---------------------------------------------------------------------------
 # Modbus register polling (gateway edge mode: read registers -> MQTT)
 # ---------------------------------------------------------------------------
-MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32")
+MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32", "bool")
 
 
 @dataclass
 class ModbusPoint:
     name: str = ""
     unit: int = 1               # RTU slave id
-    fn: int = 3                 # 3 = holding registers, 4 = input registers
-    address: int = 0            # 0-based register address
-    dtype: str = "uint16"       # uint16 | int16 | uint32 | int32 | float32
-    scale: float = 1.0          # published value = raw * scale
+    fn: int = 3                 # 1 = coils, 2 = discrete inputs, 3 = holding, 4 = input registers
+    address: int = 0            # 0-based coil / register address
+    dtype: str = "uint16"       # uint16 | int16 | uint32 | int32 | float32 (registers), bool (bits)
+    scale: float = 1.0          # published value = raw * scale (0 = no scaling, as before)
+    # MQTT may write it: <base_topic>/<name>/set, or a Sparkplug B NCMD (coils: FC5 /
+    # FC15, holding registers: FC6 / FC16). Only coils and holding registers.
+    writable: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "ModbusPoint":
@@ -463,12 +483,19 @@ class ModbusPoll:
             seen.add(p.name)
             if not (0 <= p.unit <= 255):
                 raise ConfigError(f"Point {p.name!r}: unit must be 0-255.")
-            if p.fn not in (3, 4):
-                raise ConfigError(f"Point {p.name!r}: function must be 3 (holding) or 4 (input).")
+            if p.fn not in (1, 2, 3, 4):
+                raise ConfigError(f"Point {p.name!r}: function must be 1 (coils), 2 (discrete "
+                                  "inputs), 3 (holding registers) or 4 (input registers).")
             if not (0 <= p.address <= 65535):
                 raise ConfigError(f"Point {p.name!r}: address must be 0-65535.")
             if p.dtype not in MODBUS_DTYPES:
                 raise ConfigError(f"Point {p.name!r}: dtype must be one of {MODBUS_DTYPES}.")
+            if (p.fn in (1, 2)) != (p.dtype == "bool"):
+                raise ConfigError(f"Point {p.name!r}: coils / discrete inputs (fn 1, 2) use "
+                                  "dtype 'bool'; registers (fn 3, 4) a numeric dtype.")
+            if p.writable and p.fn not in (1, 3):
+                raise ConfigError(f"Point {p.name!r}: only coils (fn 1) and holding registers "
+                                  "(fn 3) can be written.")
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +554,10 @@ class MappingConfig:
         if self.modbus_poll.points and not (self.kind == "net" and self.network.protocol == "modbus"):
             raise ConfigError("Modbus register polling requires a Modbus-gateway mapping "
                               "(protocol = modbus).")
+        if (self.mqtt.enabled and self.mqtt.payload_format == "sparkplug_b"
+                and not self.modbus_poll.points):
+            raise ConfigError("Sparkplug B publishes Modbus poll points: add points (and use "
+                              "protocol = modbus), or use the plain MQTT format.")
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +734,70 @@ class ClusterSettings:
             parse_cluster_peer(entry)  # raises ConfigError on a bad entry
 
 
+NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed",
+                 "client_connected", "client_disconnected", "login_failed")
+NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed")
+WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
+SMTP_SECURITY = ("starttls", "ssl", "none")
+
+
+@dataclass
+class NotificationSettings:
+    """Event notifications (app/notify.py): a webhook and/or e-mail when a serial
+    device disappears or comes back, a mapping fails to start, clients connect or
+    disconnect, or a sign-in fails. Off by default; the same event for the same
+    mapping is sent at most once per repeat_s."""
+    enabled: bool = False
+    events: list[str] = field(default_factory=lambda: list(NOTIFY_DEFAULT_EVENTS))
+    repeat_s: int = 300
+    webhook_url: str = ""            # may carry a token (Slack/Teams/Discord/Telegram)
+    webhook_format: str = "json"     # json | slack | teams | discord | telegram
+    telegram_chat_id: str = ""
+    email_to: str = ""               # comma-separated recipients
+    email_from: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_security: str = "starttls"  # starttls | ssl | none
+    smtp_username: str = ""
+    smtp_password: str = ""
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "NotificationSettings":
+        d = dict(d or {})
+        known = {f.name for f in dataclasses.fields(NotificationSettings)}
+        n = NotificationSettings(**{k: v for k, v in d.items() if k in known})
+        n.events = [e for e in (n.events or []) if e in NOTIFY_EVENTS]
+        return n
+
+    @property
+    def recipients(self) -> list[str]:
+        return [a.strip() for a in self.email_to.replace(";", ",").split(",") if a.strip()]
+
+    def validate(self) -> None:
+        if not self.enabled:
+            return
+        if not (self.webhook_url.strip() or self.recipients):
+            raise ConfigError("Notifications need a webhook URL or e-mail recipients.")
+        if self.webhook_url.strip():
+            if not self.webhook_url.strip().lower().startswith(("https://", "http://")):
+                raise ConfigError("The webhook URL must start with https:// (or http://).")
+            if self.webhook_format not in WEBHOOK_FORMATS:
+                raise ConfigError(f"Webhook format must be one of {WEBHOOK_FORMATS}.")
+            if self.webhook_format == "telegram" and not str(self.telegram_chat_id).strip():
+                raise ConfigError("Telegram needs a chat ID.")
+        if self.recipients:
+            if not self.smtp_host.strip():
+                raise ConfigError("E-mail notifications need an SMTP server.")
+            if not _is_int(self.smtp_port) or not (1 <= self.smtp_port <= 65535):
+                raise ConfigError("SMTP port must be between 1 and 65535.")
+            if self.smtp_security not in SMTP_SECURITY:
+                raise ConfigError(f"SMTP security must be one of {SMTP_SECURITY}.")
+            if any("@" not in a for a in self.recipients):
+                raise ConfigError("Each e-mail recipient needs an @.")
+        if not _is_int(self.repeat_s) or not (0 <= self.repeat_s <= 86400):
+            raise ConfigError("The repeat interval must be between 0 and 86400 seconds.")
+
+
 @dataclass
 class User:
     """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
@@ -742,6 +837,7 @@ class AppConfig:
     ldap: LdapSettings = field(default_factory=LdapSettings)
     oidc: OidcSettings = field(default_factory=OidcSettings)
     cluster: ClusterSettings = field(default_factory=ClusterSettings)
+    notifications: NotificationSettings = field(default_factory=NotificationSettings)
     # Stable per-node identity for the LAN cluster (generated once, persisted).
     instance_id: str = field(default_factory=lambda: secrets.token_hex(8))
     defaults: dict[str, Any] = field(default_factory=dict)  # serial defaults
@@ -771,6 +867,7 @@ class AppConfig:
             ldap=LdapSettings.from_dict(d.get("ldap", {})),
             oidc=OidcSettings.from_dict(d.get("oidc", {})),
             cluster=ClusterSettings.from_dict(d.get("cluster", {})),
+            notifications=NotificationSettings.from_dict(d.get("notifications", {})),
             instance_id=d.get("instance_id") or secrets.token_hex(8),
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
@@ -796,6 +893,7 @@ class AppConfig:
             "ldap": asdict(self.ldap),
             "oidc": asdict(self.oidc),
             "cluster": asdict(self.cluster),
+            "notifications": asdict(self.notifications),
             "instance_id": self.instance_id,
             "defaults": self.defaults,
             "mappings": [m.to_dict() for m in self.mappings],
@@ -857,6 +955,7 @@ class AppConfig:
         self.ldap.validate()
         self.oidc.validate()
         self.cluster.validate()
+        self.notifications.validate()
 
         seen: dict[tuple[str, str, int], str] = {}   # (proto, bind_ip, port) -> name
         serial_owner: dict[str, tuple[str, str]] = {}  # device -> (mapping_id, name)

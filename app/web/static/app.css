@@ -206,3 +206,11 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .filters input[type=search] { flex: 1 1 16rem; min-width: 0; }
 .pager { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+
+/* dashboard toolbar: search / filter / sort / bulk actions */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; }
+.toolbar input[type=search] { flex: 1 1 14rem; min-width: 0; max-width: 24rem; }
+.toolbar .bulk { display: inline-flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.toolbar .bulk[hidden] { display: none; }
+.row-select { vertical-align: middle; margin: 0 4px 0 0; }
+.row-actions.start { justify-content: flex-start; }

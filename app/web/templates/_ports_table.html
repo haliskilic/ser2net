@@ -5,12 +5,13 @@
   <tbody>
   {% for p in ports %}
     <tr>
-      <td class="mono col-name">{{ p.device|softbreak }}</td>
+      <td class="mono col-name">{{ p.device|softbreak }}{% if p.hardware is false %} <span class="tag">no hardware</span>{% endif %}
+        {% if p.by_id %}<div class="sub mono" title="stable name: survives re-plugging">{{ p.by_id|softbreak }}</div>{% endif %}</td>
       <td data-label="Description">{{ p.description or '—' }}</td>
       <td class="mono" data-label="VID:PID">{% if p.vid %}{{ p.vid }}:{{ p.pid }}{% else %}—{% endif %}</td>
       <td class="mono" data-label="Serial">{{ p.serial_number or '—' }}</td>
       <td data-label="Manufacturer">{{ p.manufacturer or '—' }}</td>
-      <td data-label="In use">{% if p.device in in_use %}<span class="dot on"></span>yes{% else %}<span class="dot off"></span>no{% endif %}</td>
+      <td data-label="In use">{% if p.device in in_use or (p.by_id and p.by_id in in_use) %}<span class="dot on"></span>yes{% else %}<span class="dot off"></span>no{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -18,4 +19,9 @@
 </div>
 {% else %}
   <p class="muted">No serial ports detected. Plug in a device and click Refresh.</p>
+{% endif %}
+{% if show_all %}
+  <p class="muted mt-sm"><button type="button" class="link" data-ports-all="0">Hide the ports without hardware</button></p>
+{% elif hidden %}
+  <p class="muted mt-sm">{{ hidden }} port(s) without hardware behind them are hidden (the kernel's placeholder <span class="mono">ttyS</span> devices). <button type="button" class="link" data-ports-all="1">Show them</button></p>
 {% endif %}

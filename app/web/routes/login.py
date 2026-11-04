@@ -123,6 +123,7 @@ def routes(ctx: Ctx) -> list:
         state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {username!r} from {ip}")
         ctx.audit(request, "login_failed", "", user=username)
+        state.notifier.emit("login_failed", ip, "", f"user {username!r} from {ip}")
         return render(request, "login.html", status_code=401, error="Invalid username or password.",
                       oidc_enabled=state.config.oidc.enabled)
 

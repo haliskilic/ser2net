@@ -22,10 +22,13 @@ from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, normalize_cidr
 from . import modbus, serial_io, sockopts
-from .bridge import RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer
+from .bridge import (
+    FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
+)
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
+    from .sparkplug_node import SparkplugNode
 
 READ_CHUNK = 512
 
@@ -82,7 +85,10 @@ class ModbusGatewayRunner:
         self._bus_lock = asyncio.Lock()      # RTU is single-master: one txn at a time
         self._clients: set[_Master] = set()
         self._monitors: set = set()           # browser console observers (read the bus)
+        self._traffic: set = set()            # live hex view observers
         self._mqtt: Optional[MqttPublisher] = None  # optional MQTT publisher for register polling
+        self._sparkplug: Optional[SparkplugNode] = None  # payload format sparkplug_b
+        self._write_tasks: set = set()
         self._poll_task: Optional[asyncio.Task] = None
         self._allowed = _parse_nets(mapping.network.allowed_client_ips)
         # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
@@ -105,6 +111,16 @@ class ModbusGatewayRunner:
         for mon in list(self._monitors):
             mon.feed(data)
 
+    def add_traffic_monitor(self, mon) -> None:
+        self._traffic.add(mon)
+
+    def discard_traffic_monitor(self, mon) -> None:
+        self._traffic.discard(mon)
+
+    def _feed_traffic(self, direction: int, data: bytes) -> None:
+        for mon in list(self._traffic):
+            mon.feed_traffic(direction, data)
+
     async def serial_write(self, data: bytes) -> None:
         # the modbus console is observe-only (injecting raw bytes would corrupt
         # the request/response framing on the shared bus)
@@ -126,9 +142,19 @@ class ModbusGatewayRunner:
             await self.stop()
             raise
         # optional edge mode: poll Modbus registers off the bus and publish to MQTT
+        # (plain topics, or as a Sparkplug B edge node); writable points take values back
         if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:
-            from .mqtt_pub import MqttPublisher
-            self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log)
+            mq = self.mapping.mqtt
+            if mq.payload_format == "sparkplug_b":
+                from .sparkplug_node import SparkplugNode
+                self._sparkplug = SparkplugNode(self.mapping, self._log, self._write_soon)
+                self._mqtt = self._sparkplug.publisher()
+            else:
+                from .mqtt_pub import MqttPublisher
+                base = mq.base_topic.rstrip("/")
+                subs = {f"{base}/{p.name}/set": self._on_set_message
+                        for p in self.mapping.modbus_poll.points if p.writable}
+                self._mqtt = MqttPublisher(mq, logger=self._log, subscriptions=subs)
             self._mqtt.connect()
             self._poll_task = asyncio.create_task(
                 self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
@@ -141,15 +167,22 @@ class ModbusGatewayRunner:
         for c in list(self._clients):
             with contextlib.suppress(Exception):
                 c.writer.transport.abort()
-        for mon in list(self._monitors):
+        for mon in list(self._monitors) + list(self._traffic):
             mon.close()
         self._monitors.clear()
+        self._traffic.clear()
         if self._poll_task is not None:
             self._poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_task
             self._poll_task = None
-        if self._mqtt is not None:
+        for t in list(self._write_tasks):
+            t.cancel()
+        if self._sparkplug is not None:
+            self._sparkplug.close()  # NDEATH, then disconnect
+            self._sparkplug = None
+            self._mqtt = None
+        elif self._mqtt is not None:
             self._mqtt.close()
             self._mqtt = None
         if self._server is not None:
@@ -247,6 +280,7 @@ class ModbusGatewayRunner:
             self._feed_monitors(b"\xbb tx " + rtu_req)
             if self._tracer:
                 self._tracer.write("net>ser", rtu_req)
+            self._feed_traffic(TO_DEVICE, rtu_req)
             try:
                 writer.write(rtu_req)
                 await writer.drain()
@@ -257,6 +291,7 @@ class ModbusGatewayRunner:
             self._feed_monitors(b"\xaa rx " + rtu_resp)
             if self._tracer:
                 self._tracer.write("ser>net", rtu_resp)
+            self._feed_traffic(FROM_DEVICE, rtu_resp)
             self.status.bytes_in += len(rtu_resp)
             try:
                 runit, rpdu = modbus.rtu_unwrap(rtu_resp)
@@ -266,27 +301,97 @@ class ModbusGatewayRunner:
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
             return rpdu
 
+    async def _read_point(self, p):
+        """One poll point's current value off the bus (bool for coils / discrete
+        inputs, a number for registers). Raises ValueError / OSError."""
+        if p.fn in (modbus.READ_COILS, modbus.READ_DISCRETE_INPUTS):
+            rpdu = await self._transaction(p.unit, modbus.read_bits_pdu(p.fn, p.address, 1))
+            return modbus.decode_bits(modbus.response_data(rpdu, p.fn), 1)[0]
+        req = modbus.read_pdu(p.fn, p.address, modbus.dtype_registers(p.dtype))
+        rpdu = await self._transaction(p.unit, req)
+        return modbus.decode_value(modbus.response_data(rpdu, p.fn), p.dtype, p.scale)
+
+    def _publish_values(self, values: dict) -> None:
+        if self._sparkplug is not None:
+            self._sparkplug.update(values)
+        elif self._mqtt is not None:
+            for name, v in values.items():
+                text = ("1" if v else "0") if isinstance(v, bool) else str(v)
+                self._mqtt.publish_value(name, text.encode())
+
     async def _poll_loop(self) -> None:
-        """Edge mode: read configured registers off the RTU bus on an interval and
-        publish each decoded value to <base_topic>/<point name> over MQTT."""
+        """Edge mode: read the configured points off the RTU bus on an interval and
+        publish the decoded values (to <base_topic>/<point name>, or as Sparkplug B)."""
         poll = self.mapping.modbus_poll
         while not self._stop.is_set():
+            values = {}
             for p in poll.points:
                 try:
-                    req = modbus.read_pdu(p.fn, p.address, modbus.dtype_registers(p.dtype))
-                    rpdu = await self._transaction(p.unit, req)
-                    data = modbus.response_data(rpdu, p.fn)
-                    value = modbus.decode_value(data, p.dtype, p.scale)
+                    values[p.name] = await self._read_point(p)
                 except Exception as e:  # one bad point must not stop the loop
                     self._log(f"poll '{p.name}': {e}")
-                    continue
-                if self._mqtt is not None:
-                    self._mqtt.publish_value(p.name, str(value).encode())
+            if values:
+                self._publish_values(values)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=poll.interval_s)
                 break
             except asyncio.TimeoutError:
                 pass
+
+    # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug NCMD) ----
+    async def write_point(self, point, value) -> None:
+        """Write a value to a writable point (coils: FC5, or FC15 for a list of
+        states; holding registers: FC6 for 16-bit types, FC16 for 32-bit), check the
+        slave's reply, then read the point back and publish it."""
+        if not point.writable:
+            raise ValueError(f"point {point.name!r} is not writable")
+        if point.fn == modbus.READ_COILS:
+            # passed through unchanged: the PDU builders accept only bool / 0 / 1, so a
+            # stray value (a Sparkplug String "false", an Int 2) can't switch a coil ON
+            if isinstance(value, (list, tuple)):
+                pdu = modbus.write_multiple_coils_pdu(point.address, list(value))
+            else:
+                pdu = modbus.write_single_coil_pdu(point.address, value)
+        else:
+            regs = modbus.encode_value(value, point.dtype, point.scale or 1.0)
+            pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
+                   else modbus.write_multiple_registers_pdu(point.address, regs))
+        rpdu = await self._transaction(point.unit, pdu)
+        modbus.check_write_response(rpdu, pdu)
+        self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]})")
+        with contextlib.suppress(Exception):
+            self._publish_values({point.name: await self._read_point(point)})
+
+    def _write_soon(self, point, value, done=None) -> None:
+        """Schedule write_point from an MQTT callback (already on the loop); ``done``
+        gets None or the error message."""
+        async def run():
+            err = None
+            try:
+                await self.write_point(point, value)
+            except Exception as e:
+                err = str(e) or type(e).__name__
+                self._log(f"write '{point.name}' = {value!r} failed: {err}")
+            if done is not None:
+                done(err)
+        task = asyncio.create_task(run(), name=f"modbus-write:{point.name}")
+        self._write_tasks.add(task)
+        task.add_done_callback(self._write_tasks.discard)
+
+    def _on_set_message(self, topic: str, payload: bytes) -> None:
+        name = topic.rsplit("/", 2)[-2]
+        point = next((p for p in self.mapping.modbus_poll.points if p.name == name), None)
+        if point is None or self._mqtt is None:
+            return
+        result = topic + "/result"
+        try:
+            value = parse_write_payload(payload, point)
+        except ValueError as e:
+            self._mqtt.publish_raw(result, f"error: {e}".encode())
+            return
+        mqtt = self._mqtt
+        self._write_soon(point, value, lambda err: mqtt.publish_raw(
+            result, b"ok" if err is None else f"error: {err}".encode()))
 
     async def _read_rtu_response(self, reader) -> bytes:
         # wait for the first byte(s) within the response timeout
@@ -383,3 +488,30 @@ class ModbusGatewayRunner:
             held = fmt_duration(time.time() - master.connected_at)
             self._log(f"modbus master disconnected: {peer} after {held} — {reason} "
                       f"({len(self._clients)} total)")
+
+
+def parse_write_payload(payload: bytes, point):
+    """An MQTT write request's value: coils take 1/0, true/false, on/off (or a JSON
+    list of those for consecutive coils, FC15); registers a number."""
+    text = payload.decode("utf-8", "replace").strip()
+    if point.fn == modbus.READ_COILS:
+        if text.startswith("["):
+            import json
+            items = json.loads(text)
+            if not isinstance(items, list) or not items:
+                raise ValueError("expected a JSON list of coil states")
+            return [_coil(str(v)) for v in items]
+        return _coil(text)
+    try:
+        return float(text) if any(c in text for c in ".eE") else int(text, 0)
+    except ValueError:
+        raise ValueError(f"not a number: {text!r}") from None
+
+
+def _coil(text: str) -> bool:
+    t = text.strip().lower()
+    if t in ("1", "true", "on"):
+        return True
+    if t in ("0", "false", "off"):
+        return False
+    raise ValueError(f"a coil takes 1/0, true/false or on/off, not {text!r}")

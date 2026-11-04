@@ -12,8 +12,12 @@ the always-correct source of truth.
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 import threading
 from typing import Any, Callable, Optional
+
+BY_ID_DIR = "/dev/serial/by-id"
 
 
 def _normalize(p: Any) -> dict[str, Any]:
@@ -39,13 +43,59 @@ def _normalize(p: Any) -> dict[str, Any]:
     }
 
 
+def _by_id_links(by_id_dir: str = BY_ID_DIR) -> dict[str, str]:
+    """Linux: real device path -> its stable /dev/serial/by-id/... name (udev)."""
+    try:
+        names = sorted(os.listdir(by_id_dir))
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for n in names:
+        link = os.path.join(by_id_dir, n)
+        out.setdefault(os.path.realpath(link), link)
+    return out
+
+
+def has_hardware(device: str, sys_class: str = "/sys/class/tty") -> Optional[bool]:
+    """Linux 8250 ports: the kernel registers /dev/ttyS0..31 whether or not a UART is
+    there; sysfs 'type' is 0 (PORT_UNKNOWN) when none is. False = no hardware behind
+    the name, True = a UART answered, None = can't tell (not a ttyS port, not Linux)."""
+    name = os.path.basename(device)
+    if not sys.platform.startswith("linux") or not name.startswith("ttyS"):
+        return None
+    try:
+        with open(os.path.join(sys_class, name, "type"), encoding="ascii") as fh:
+            return fh.read().strip() != "0"
+    except OSError:
+        return None
+
+
 def snapshot() -> list[dict[str, Any]]:
-    """Synchronous one-shot enumeration (blocking; call via executor in async code)."""
+    """Synchronous one-shot enumeration (blocking; call via executor in async code).
+    Each port also gets ``by_id`` (Linux udev stable name, else None) and ``hardware``
+    (see has_hardware)."""
     from serial.tools import list_ports
 
-    ports = [_normalize(p) for p in list_ports.comports()]
+    links = _by_id_links() if sys.platform.startswith("linux") else {}
+    ports = []
+    for p in list_ports.comports():
+        d = _normalize(p)
+        d["by_id"] = links.get(os.path.realpath(d["device"]))
+        d["hardware"] = has_hardware(d["device"])
+        ports.append(d)
     ports.sort(key=lambda d: d["device"])
     return ports
+
+
+def visible(ports: list[dict[str, Any]], show_all: bool = False) -> list[dict[str, Any]]:
+    """Ports worth offering in the UI: without the kernel's placeholder ttyS ports
+    that have no UART behind them (unless show_all)."""
+    return list(ports) if show_all else [p for p in ports if p.get("hardware") is not False]
+
+
+def find(ports: list[dict[str, Any]], device: str) -> Optional[dict[str, Any]]:
+    """The port whose device path or by-id name is ``device``."""
+    return next((p for p in ports if device and device in (p.get("device"), p.get("by_id"))), None)
 
 
 async def async_snapshot() -> list[dict[str, Any]]:
@@ -110,8 +160,6 @@ class PortWatcher:
     def _start_event_watcher(self) -> None:
         """Best-effort hotplug events; silently no-op (polling continues) if the
         platform library is missing or the source can't be created."""
-        import sys
-
         if sys.platform.startswith("linux"):
             try:
                 import pyudev  # optional
