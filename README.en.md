@@ -199,8 +199,10 @@ docker build -t ser2net . && docker run -d -p 8080:8080 \
   --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
 ```
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
-`SER2NET_PORT` — the interactive picker can't run headless). Details:
-[`docs/DOCKER.md`](docs/DOCKER.md).
+`SER2NET_PORT` — the interactive picker can't run headless). The process runs as the
+`ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
+image is taken over on the first start, so upgrading needs no manual step. The image has
+a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCKER.md).
 
 ---
 
@@ -282,11 +284,22 @@ All state lives in the **data dir** (default `data/`). The data directory is loc
 owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the files
 inside aren't readable by other users:
 - `config.json` — admin IP, password hash, all mappings (atomic write).
-- `all.log` — global activity/audit (size-rotated); `audit.log` — config changes (rotated).
+- `backups/` — the previous `config.json` before every change (newest 50). Download or
+  restore one under Settings → *Configuration backups*; a restore can be undone too.
+- `all.log` — global activity (size-rotated); `audit.log` — sign-ins and config changes,
+  who/from where/what (rotated). Searchable under Settings → *Audit log*, CSV export.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
+- `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
+  rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
+  are reduced to the file name, which is logged at start-up.
 - `tls/` — certificate/key if self-signed is generated.
 
-Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned).
+Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
+`backups/` is never restored by itself — delete it too if you want it gone).
+
+**Session lifetime:** Settings → *Web UI access* → *Session lifetime* (default 8 hours).
+**Import:** shows a preview first; choose *merge* (update mappings with the same name, add
+the new ones) or *replace all*.
 
 ---
 
