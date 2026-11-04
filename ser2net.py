@@ -73,6 +73,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the licenses of ser2net and every bundled third-party component, then exit.",
     )
+    p.add_argument(
+        "--healthcheck",
+        action="store_true",
+        help="Exit 0 if this data directory's running instance answers on /healthz, else 1 "
+             "(Docker HEALTHCHECK, monitoring).",
+    )
     return p.parse_args(argv)
 
 
@@ -145,6 +151,12 @@ def main(argv: list[str] | None = None) -> int:
     apply_lib_override()
     if args.licenses:
         return print_licenses()
+    if args.healthcheck:  # stdlib only: no bootstrap needed
+        from app import healthcheck
+
+        ok, msg = healthcheck.check(args.config or os.path.join(args.data_dir, "config.json"))
+        print(msg)
+        return 0 if ok else 1
 
     # 1. dependencies — a frozen build has everything bundled, so skip the bootstrap
     if not FROZEN:

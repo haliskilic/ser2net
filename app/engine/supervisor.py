@@ -15,19 +15,21 @@ from ..config import AppConfig, MappingConfig
 from .bridge import MappingRunner
 
 
-def make_runner(mapping: MappingConfig, logger):
+def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None):
     """Pick the runner for a mapping: the Modbus RTU<->TCP gateway when the network
     protocol is 'modbus', otherwise the transparent serial<->network bridge."""
     if mapping.kind == "net" and mapping.network.protocol == "modbus":
         from .modbus_gateway import ModbusGatewayRunner
-        return ModbusGatewayRunner(mapping, logger=logger)
-    return MappingRunner(mapping, logger=logger)
+        return ModbusGatewayRunner(mapping, logger=logger, trace_dir=trace_dir)
+    return MappingRunner(mapping, logger=logger, trace_dir=trace_dir)
 
 
 class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
-                 logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None):
+                 logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
+                 trace_dir: Optional[str] = None):
         self._runners: dict[str, MappingRunner] = {}
+        self.trace_dir = trace_dir  # data/traces: the only place traces are written
         self._order: list[str] = []
         self.log = logger or (lambda m: None)
         # per-mapping logger: defaults to the global logger with a "[name]" prefix
@@ -57,7 +59,7 @@ class Supervisor:
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:
         """Register a non-running runner so status is queryable for disabled mappings."""
         if mapping.id not in self._runners:
-            r = make_runner(mapping, self._logger_factory(mapping))
+            r = make_runner(mapping, self._logger_factory(mapping), self.trace_dir)
             r.status.state = "stopped"
             self._runners[mapping.id] = r
             if mapping.id not in self._order:
@@ -71,7 +73,7 @@ class Supervisor:
             with contextlib.suppress(Exception):
                 await old.stop()
 
-        runner = make_runner(mapping, self._logger_factory(mapping))
+        runner = make_runner(mapping, self._logger_factory(mapping), self.trace_dir)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
         async with self._lock:

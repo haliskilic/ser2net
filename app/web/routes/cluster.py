@@ -146,7 +146,7 @@ def routes(ctx: Ctx) -> list:
             return JSONResponse({"error": name}, status_code=404)
         ip = client_ip(request)
         state.log(f"cluster: remote {action} of '{name}' from {ip}")
-        state.audit(ip, f"cluster_remote_{action}", name)
+        state.audit(ip, f"cluster_remote_{action}", name, user="cluster-peer")
         return JSONResponse({"ok": True, "name": name})
 
     async def cluster_control_peer(request):
@@ -172,7 +172,7 @@ def routes(ctx: Ctx) -> list:
             return PlainTextResponse("Peer did not accept the command "
                                      "(unreachable or rejected).", status_code=502)
         state.log(f"cluster: sent {action} to {host}:{port} for '{res.get('name', mid)}'")
-        state.audit(client_ip(request), f"cluster_control_{action}", f"{host}:{port}/{res.get('name', mid)}")
+        ctx.audit(request, f"cluster_control_{action}", f"{host}:{port}/{res.get('name', mid)}")
         return Response("", headers={"HX-Trigger": "refreshCluster"})
 
     # ---- remote EDIT: peer renders no UI; THIS node renders the form (so the CSRF
@@ -203,7 +203,7 @@ def routes(ctx: Ctx) -> list:
             return JSONResponse({"ok": False, "error": msg}, status_code=400)
         ip = client_ip(request)
         state.log(f"cluster: remote edit of '{msg}' from {ip}")
-        state.audit(ip, "cluster_remote_save", msg)
+        state.audit(ip, "cluster_remote_save", msg, user="cluster-peer")
         return JSONResponse({"ok": True, "name": msg})
 
     def _peer_from_request(getter):
@@ -252,7 +252,7 @@ def routes(ctx: Ctx) -> list:
         res = await state.cluster.post_peer(scheme, host, port, "/api/cluster/mapping-save", fields)
         if res and res.get("ok"):
             state.log(f"cluster: edited '{res.get('name', '')}' on {host}:{port}")
-            state.audit(client_ip(request), "cluster_edit", f"{host}:{port}/{res.get('name', '')}")
+            ctx.audit(request, "cluster_edit", f"{host}:{port}/{res.get('name', '')}")
             return Response("", headers={"HX-Trigger": "refreshCluster"})
         msg = (res or {}).get("error") or "The peer rejected the change or was unreachable."
         data = await state.cluster.get_peer(scheme, host, port,

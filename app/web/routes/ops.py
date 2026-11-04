@@ -58,7 +58,7 @@ async def apply_action(state, mid, action) -> tuple[bool, str]:
 
 
 async def delete_mapping(state, mid):
-    """Remove a mapping from the config, stop it and drop its log. Returns the removed
+    """Remove a mapping from the config, stop it and drop its log and traces. Returns the removed
     MappingConfig, or None when no mapping has that id."""
     removed = None
     async with state.config_lock:
@@ -70,4 +70,5 @@ async def delete_mapping(state, mid):
     if removed is not None:
         await state.supervisor.remove_mapping(mid)
         state.delete_mapping_log(mid)
+        state.delete_mapping_traces(mid)
     return removed

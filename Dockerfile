@@ -15,7 +15,15 @@ WORKDIR /app
 COPY requirements.txt requirements-optional.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-optional.txt
 
+# ser2net runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
+# it also takes over a /data volume that an older, root-running image wrote).
+RUN groupadd --system --gid 10001 ser2net \
+ && useradd --system --uid 10001 --gid ser2net --home-dir /data --no-create-home \
+      --shell /usr/sbin/nologin ser2net \
+ && mkdir -p /data && chown ser2net:ser2net /data
+
 COPY . .
+RUN chmod 0755 /app/tools/docker-entrypoint.sh
 
 # Config + logs live on a volume so they survive container recreation.
 VOLUME ["/data"]
@@ -27,4 +35,8 @@ EXPOSE 8080
 ENV SER2NET_BIND_IP=0.0.0.0 \
     SER2NET_PORT=8080
 
-ENTRYPOINT ["python", "ser2net.py", "--no-bootstrap", "--data-dir", "/data"]
+# "healthy" once the web UI answers on /healthz (also before the first-run setup)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["python", "/app/ser2net.py", "--no-bootstrap", "--data-dir", "/data", "--healthcheck"]
+
+ENTRYPOINT ["/app/tools/docker-entrypoint.sh"]

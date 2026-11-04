@@ -77,7 +77,7 @@ def routes(ctx: Ctx) -> list:
             user = state.config.upsert_external_user(username, role, "oidc")
             await state.asave()
         state.log(f"login: {username} ({role}, oidc) from {client_ip(request)}")
-        state.audit(client_ip(request), "oidc_login", username)
+        ctx.audit(request, "oidc_login", username, user=username)
         resp = RedirectResponse("/", status_code=303)
         set_session(resp, request, user)
         resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
@@ -116,11 +116,13 @@ def routes(ctx: Ctx) -> list:
         if authed is not None:
             state.rate_limiter.reset(ip)
             state.log(f"login: {username} ({authed.role}, {authed.source}) from {ip}")
+            ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=username)
             resp = RedirectResponse("/", status_code=303)
             set_session(resp, request, authed)
             return resp
         state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {username!r} from {ip}")
+        ctx.audit(request, "login_failed", "", user=username)
         return render(request, "login.html", status_code=401, error="Invalid username or password.",
                       oidc_enabled=state.config.oidc.enabled)
 
@@ -128,6 +130,7 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return PlainTextResponse("CSRF validation failed. Reload the page.", status_code=403)
+        ctx.audit(request, "logout")
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(auth.SESSION_COOKIE, path="/")
         return resp
@@ -155,7 +158,7 @@ def routes(ctx: Ctx) -> list:
             await state.asave()
         user = state.config.get_user(username)
         state.log(f"first-run setup complete; admin user '{username}' created")
-        state.audit(client_ip(request), "first_run_setup", username)
+        ctx.audit(request, "first_run_setup", username, user=username)
         resp = RedirectResponse("/", status_code=303)
         set_session(resp, request, user)
         return resp

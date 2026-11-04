@@ -6,8 +6,9 @@ present every option directly and validate it.
 
 Persistence is plain stdlib JSON with an atomic write (tempfile -> fsync ->
 os.replace -> parent-dir fsync) so a crash mid-write can never truncate dozens of
-mappings. config.json is the single source of truth (no .bak); deleting it resets
-all config.
+mappings. config.json is the single source of truth; earlier versions are kept in
+backups/ (ConfigStore) but never read back unless an admin restores one, so deleting
+config.json still resets all config.
 """
 from __future__ import annotations
 
@@ -17,8 +18,10 @@ import ipaddress
 import json
 import math
 import os
+import re
 import secrets
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
@@ -39,6 +42,10 @@ COMMON_BAUDRATES = (
     115200, 230400, 460800, 921600,
 )
 MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year)
+# web-UI sign-in session lifetime (AppConfig.session_timeout_s)
+SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
+SESSION_TIMEOUT_MIN_S = 5 * 60
+SESSION_TIMEOUT_MAX_S = 30 * 86400
 
 
 class ConfigError(ValueError):
@@ -115,6 +122,25 @@ def _legacy_seconds(value: Any) -> Any:
     if not _is_number(value) or not math.isfinite(value) or value < 0:
         return 0
     return min(value, MAX_TIMER_S)
+
+
+TRACE_DEFAULT_NAME = "trace.log"
+# letters/digits of any script, "_", "." and "-"; path separators and the characters
+# Windows forbids become "_" (the <id>- prefix also rules out reserved names like CON)
+_TRACE_NAME_BAD = re.compile(r"[^\w.-]+")
+
+
+def trace_file_name(value: Any) -> str:
+    """The file name a mapping's trace is written to, inside the data directory's
+    traces/ folder. Before v2.8 ``trace_both`` was a free path that any operator could
+    point at any file the service could write (config.json, a startup script...);
+    such a value now only contributes its last path component, sanitised. '' = off."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    name = re.split(r"[\\/]", raw)[-1]
+    name = _TRACE_NAME_BAD.sub("_", name).strip(". ")[:80].rstrip(". ")
+    return name or TRACE_DEFAULT_NAME
 
 
 def normalize_cidr(value: str) -> str:
@@ -320,9 +346,13 @@ class MappingOptions:
     # (a connect-out mapping then reconnects).
     idle_timeout_s: int = 0
     max_connection_time_s: int = 0
-    trace_both: str = ""  # file path; empty = disabled
+    # Traffic trace: a file NAME (empty = off), written as data/traces/<id>-<name>
+    # (see trace_file_name). Rotated past trace_max_mb, keeping trace_keep old files.
+    trace_both: str = ""
     trace_hexdump: bool = False
     trace_timestamp: bool = True
+    trace_max_mb: float = 10.0
+    trace_keep: int = 3
     # RFC2217 interop knobs for non-compliant peers:
     rfc2217_poll_modem_interval_s: float = 1.0
     rfc2217_net_timeout_s: float = 3.0
@@ -336,6 +366,7 @@ class MappingOptions:
         known = {f.name for f in dataclasses.fields(MappingOptions)}
         opts = MappingOptions(**{k: v for k, v in d.items() if k in known})
         opts.idle_timeout_s = _legacy_seconds(opts.idle_timeout_s)
+        opts.trace_both = trace_file_name(opts.trace_both)
         return opts
 
     def validate(self) -> None:
@@ -343,6 +374,10 @@ class MappingOptions:
                              ("Max connection time", self.max_connection_time_s)):
             if not _is_number(value) or not (0 <= value <= MAX_TIMER_S):
                 raise ConfigError(f"{label} must be between 0 (off) and {MAX_TIMER_S} seconds.")
+        if not _is_number(self.trace_max_mb) or not (0.1 <= self.trace_max_mb <= 1024):
+            raise ConfigError("Trace file size must be between 0.1 and 1024 MB.")
+        if not _is_int(self.trace_keep) or not (0 <= self.trace_keep <= 50):
+            raise ConfigError("Rotated trace files kept must be between 0 and 50.")
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +734,8 @@ class AppConfig:
     secret_key: str = field(default_factory=lambda: secrets.token_hex(32))
     api_token_hash: str = ""  # sha256 of the REST API bearer token (empty => API disabled)
     api_token_role: str = "admin"  # role granted by the API token (viewer = read-only)
-    session_timeout_s: int = 8 * 3600
+    # lifetime of a web-UI sign-in (cookie + signed token); Settings -> Web UI access
+    session_timeout_s: int = SESSION_TIMEOUT_DEFAULT_S
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
     users: list[User] = field(default_factory=list)
@@ -710,6 +746,8 @@ class AppConfig:
     instance_id: str = field(default_factory=lambda: secrets.token_hex(8))
     defaults: dict[str, Any] = field(default_factory=dict)  # serial defaults
     mappings: list[MappingConfig] = field(default_factory=list)
+    # What loading changed in an older config (logged at startup; never persisted).
+    load_notes: list[str] = field(default_factory=list, repr=False, compare=False)
 
     # ----- (de)serialization -----
     @staticmethod
@@ -728,7 +766,7 @@ class AppConfig:
             secret_key=d.get("secret_key") or secrets.token_hex(32),
             api_token_hash=d.get("api_token_hash", ""),
             api_token_role=d.get("api_token_role", "admin") if d.get("api_token_role", "admin") in ROLES else "admin",
-            session_timeout_s=int(d.get("session_timeout_s", 8 * 3600)),
+            session_timeout_s=_session_timeout(d.get("session_timeout_s")),
             users=users,
             ldap=LdapSettings.from_dict(d.get("ldap", {})),
             oidc=OidcSettings.from_dict(d.get("oidc", {})),
@@ -737,6 +775,13 @@ class AppConfig:
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
+        for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
+            old = str(((raw or {}).get("options") or {}).get("trace_both") or "").strip()
+            if old and old != m.options.trace_both:
+                cfg.load_notes.append(
+                    f"mapping '{m.name}': its trace file is now traces/{m.id}-{m.options.trace_both} "
+                    f"in the data directory (configured: {old!r}; traces are no longer written "
+                    "outside it)")
         return cfg
 
     def to_dict(self) -> dict[str, Any]:
@@ -804,6 +849,10 @@ class AppConfig:
                     f"Invalid admin UI bind IP: {self.admin_ui.bind_ip}") from None
         if self.admin_ui.anonymous_role not in ROLES:
             raise ConfigError(f"Role for visitors without login must be one of {ROLES}.")
+        if not _is_int(self.session_timeout_s) or not (
+                SESSION_TIMEOUT_MIN_S <= self.session_timeout_s <= SESSION_TIMEOUT_MAX_S):
+            raise ConfigError(f"Session lifetime must be between {SESSION_TIMEOUT_MIN_S // 60} "
+                              f"minutes and {SESSION_TIMEOUT_MAX_S // 86400} days.")
 
         self.ldap.validate()
         self.oidc.validate()
@@ -848,6 +897,17 @@ class AppConfig:
             seen[(proto, m.network.bind_ip, m.network.port)] = m.name
 
 
+def _session_timeout(value: Any) -> int:
+    """session_timeout_s from a config file. Before v2.8 it was stored but never used
+    (sessions always lasted 8 h), so an odd hand-edited value must not stop a start:
+    unreadable -> the default, anything else clamped into the supported range."""
+    try:
+        seconds = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return SESSION_TIMEOUT_DEFAULT_S
+    return min(max(seconds, SESSION_TIMEOUT_MIN_S), SESSION_TIMEOUT_MAX_S)
+
+
 def _ip_overlaps(a: str, b: str) -> bool:
     if a == b:
         return True
@@ -858,7 +918,18 @@ def _ip_overlaps(a: str, b: str) -> bool:
 # ---------------------------------------------------------------------------
 # Atomic store
 # ---------------------------------------------------------------------------
+BACKUPS_KEPT = 50
+_BACKUP_NAME = re.compile(r"^config-\d{8}T\d{6}Z(-\d+)?\.json$")
+
+
 class ConfigStore:
+    """config.json with atomic writes, plus automatic backups of earlier versions.
+
+    Every save that changes config.json first copies the version it replaces to
+    <data>/backups/config-<UTC time>.json (identical content is not copied twice; the
+    newest BACKUPS_KEPT are kept). Backups are never read back on their own: deleting
+    config.json still resets the system; restoring one is an explicit admin action."""
+
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
         directory = os.path.dirname(self.path)
@@ -866,6 +937,7 @@ class ConfigStore:
         # config.json holds the password hash + secret_key; keep the dir private on
         # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).
         lock_down_dir(directory)
+        self.backup_dir = os.path.join(directory, "backups")
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)
@@ -880,13 +952,13 @@ class ConfigStore:
     def save(self, config: AppConfig) -> None:
         """Atomically persist config to a single file (validates first).
 
-        Uses a temp file + os.replace so config.json is never partially written.
-        No .bak is kept: config.json (and all.log) are the only state files, so
-        deleting them fully resets the system.
+        Uses a temp file + os.replace so config.json is never partially written; the
+        version being replaced is kept in backups/ first (see the class docstring).
         """
         config.validate()
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
+        self._backup_current(data)
 
         fd, tmp = tempfile.mkstemp(dir=directory, prefix=".cfg.", suffix=".tmp")
         try:
@@ -898,12 +970,94 @@ class ConfigStore:
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
-        # fsync the directory so the rename is durable
+        _fsync_dir(directory)
+
+    # ----- backups -----
+    def _backup_current(self, new_data: str) -> None:
+        """Copy config.json into backups/ before it is replaced by new_data. Best
+        effort: a failing backup must never stop the save itself."""
         try:
-            dfd = os.open(directory, os.O_RDONLY)
+            with open(self.path, "r", encoding="utf-8") as fh:
+                current = fh.read()
+        except OSError:
+            return  # first save: nothing to keep
+        if current == new_data:
+            return
+        try:
+            os.makedirs(self.backup_dir, exist_ok=True)
+            lock_down_dir(self.backup_dir)
+            names = self.backup_names()
+            if names:
+                with open(os.path.join(self.backup_dir, names[0]), encoding="utf-8") as fh:
+                    if fh.read() == current:
+                        return  # this version is already the newest backup
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            # several saves in one second: -2, -3 ... (never reuse a pruned lower number,
+            # or the newest backup would sort as the oldest)
+            same = [_backup_order(n)[1] for n in names if n.startswith(f"config-{stamp}")]
+            n = max(same) + 1 if same else 1
+            name = f"config-{stamp}.json" if n == 1 else f"config-{stamp}-{n}.json"
+            fd, tmp = tempfile.mkstemp(dir=self.backup_dir, prefix=".bak.", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(current)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, os.path.join(self.backup_dir, name))
+            for old in self.backup_names()[BACKUPS_KEPT:]:
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(self.backup_dir, old))
+        except OSError:
+            pass
+
+    def backup_names(self) -> list[str]:
+        """Backup file names, newest first."""
+        try:
+            names = [n for n in os.listdir(self.backup_dir) if _BACKUP_NAME.match(n)]
+        except OSError:
+            return []
+        return sorted(names, key=_backup_order, reverse=True)
+
+    def backups(self) -> list[dict]:
+        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users}], newest first."""
+        out = []
+        for name in self.backup_names():
+            path = os.path.join(self.backup_dir, name)
+            info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None}
+            stamp = name[len("config-"):len("config-") + 15]
+            info["time"] = (f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} "
+                            f"{stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}")
             try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
-        except (OSError, AttributeError):
-            pass  # not supported on some platforms (e.g. Windows dirs)
+                info["size"] = os.path.getsize(path)
+                with open(path, encoding="utf-8") as fh:
+                    doc = json.load(fh)
+                info["mappings"] = len(doc.get("mappings") or [])
+                info["users"] = len(doc.get("users") or [])
+            except (OSError, ValueError, AttributeError):
+                pass
+            out.append(info)
+        return out
+
+    def read_backup(self, name: str) -> str:
+        """The text of one backup. Raises ConfigError for an unknown / invalid name
+        (only names this store generated are accepted: no path tricks)."""
+        if not _BACKUP_NAME.match(name or "") or name not in self.backup_names():
+            raise ConfigError("No such backup.")
+        with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
+            return fh.read()
+
+
+def _backup_order(name: str) -> tuple:
+    m = re.match(r"^config-(\d{8}T\d{6})Z(?:-(\d+))?\.json$", name)
+    return (m.group(1), int(m.group(2) or 1)) if m else ("", 0)
+
+
+def _fsync_dir(directory: str) -> None:
+    """fsync a directory so a rename into it is durable (not on Windows)."""
+    try:
+        dfd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except (OSError, AttributeError):
+        pass  # not supported on some platforms (e.g. Windows dirs)
