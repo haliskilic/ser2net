@@ -17,10 +17,10 @@ jobs:
     name: build linux (glibc 2.28 baseline)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build inside AlmaLinux 8 (glibc 2.28) with python-build-standalone
         run: docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Test-side dependencies
@@ -29,10 +29,15 @@ jobs:
         env:
           SER2NET_STANDALONE_BIN: dist/ser2net
         run: python tests/test_standalone.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ser2net-linux-x64
           path: dist/ser2net
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: licenses-linux-x64
+          path: build/THIRD-PARTY-LICENSES.txt
           if-no-files-found: error
 
   linux-distros:
@@ -53,13 +58,13 @@ jobs:
           - { image: "ubuntu:24.04", ca: /etc/ssl/certs/ca-certificates.crt }       # 2.39
           - { image: "fedora:latest", ca: /etc/pki/tls/certs/ca-bundle.crt }        # newest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ser2net-linux-x64
           path: dist
       - run: chmod +x dist/ser2net
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt cryptography
@@ -74,22 +79,29 @@ jobs:
     name: build windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Dependencies (incl. MQTT/LDAP/OIDC + cryptography), PyInstaller, test-side pefile
-        run: pip install -r requirements.txt paho-mqtt ldap3 authlib cryptography pyinstaller==6.22.3 pefile
-      - name: Build
-        run: pyinstaller --clean --noconfirm ser2net.spec
+        run: pip install -r requirements.txt -r requirements-optional.txt pyinstaller==6.22.3 pefile
+      - name: Build (with the license texts of every bundled component)
+        run: |
+          python tools/third_party.py licenses build/THIRD-PARTY-LICENSES.txt --strict
+          pyinstaller --clean --noconfirm ser2net.spec
       - name: Bundle contents, empty-PATH run, loaded libraries
         env:
           SER2NET_STANDALONE_BIN: dist/ser2net.exe
         run: python tests/test_standalone.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ser2net-windows-x64
           path: dist/ser2net.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: licenses-windows-x64
+          path: build/THIRD-PARTY-LICENSES.txt
           if-no-files-found: error
 
   publish:
@@ -98,7 +110,7 @@ jobs:
     needs: [linux, linux-distros, windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Name the release assets
@@ -106,9 +118,13 @@ jobs:
           cp artifacts/ser2net-linux-x64/ser2net ser2net-linux-x64
           chmod +x ser2net-linux-x64
           cp artifacts/ser2net-windows-x64/ser2net.exe ser2net-windows-x64.exe
-      - uses: softprops/action-gh-release@v2
+          cp artifacts/licenses-linux-x64/THIRD-PARTY-LICENSES.txt ser2net-linux-x64.THIRD-PARTY-LICENSES.txt
+          cp artifacts/licenses-windows-x64/THIRD-PARTY-LICENSES.txt ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             ser2net-linux-x64
             ser2net-windows-x64.exe
+            ser2net-linux-x64.THIRD-PARTY-LICENSES.txt
+            ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
           fail_on_unmatched_files: true

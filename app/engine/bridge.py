@@ -28,7 +28,7 @@ import socket
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 # asyncio.TaskGroup and exception groups are native on Python 3.11+. On 3.10 we
 # use the pure-Python backports (bundled in vendor/wheels: taskgroup +
@@ -43,6 +43,10 @@ else:  # pragma: no cover - exercised only on Python 3.10
 from ..config import MappingConfig
 from . import serial_io, sockopts
 from .protocols import make_session
+from .protocols.base import ProtocolSession
+
+if TYPE_CHECKING:
+    from .mqtt_pub import MqttPublisher
 
 READ_CHUNK = 4096
 CLIENT_QUEUE_MAX = 2048  # outbound chunks buffered per client before it's dropped
@@ -188,8 +192,9 @@ class _ClientConn:
         self.priority = priority
         self.connected_at = time.time()
         self._queue_max = runner.mapping.network.client_queue_max or CLIENT_QUEUE_MAX
-        self._out: asyncio.Queue[bytes] = asyncio.Queue(maxsize=self._queue_max)
-        self._session = None
+        # None = graceful-close sentinel (see request_graceful_close)
+        self._out: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=self._queue_max)
+        self._session: Optional[ProtocolSession] = None
         self._last_activity = time.monotonic()
         self._closing = False
         self.close_reason = ""  # why the session ended (first cause wins; for the log)
@@ -272,13 +277,15 @@ class _ClientConn:
 
     async def _pump_net_to_serial(self) -> None:
         m = self.runner.mapping
+        session = self._session
+        assert session is not None  # the pumps start after run() created it
         while not self._closing:
             data = await self.reader.read(READ_CHUNK)
             if not data:
                 break  # client closed
             self._last_activity = time.monotonic()
-            serial_bound = self._session.from_network(data)
-            ctrl = self._session.take_net_out()
+            serial_bound = session.from_network(data)
+            ctrl = session.take_net_out()
             if ctrl:
                 with contextlib.suppress(asyncio.QueueFull):
                     self._out.put_nowait(ctrl)
@@ -304,10 +311,12 @@ class _ClientConn:
             self.runner.status.bytes_in += len(data)
 
     async def _pump_poll(self) -> None:
-        interval = self._session.poll_interval or 1.0
+        session = self._session
+        assert session is not None
+        interval = session.poll_interval or 1.0
         while not self._closing:
             await asyncio.sleep(interval)
-            extra = self._session.poll()
+            extra = session.poll()
             if extra:
                 with contextlib.suppress(asyncio.QueueFull):
                     self._out.put_nowait(extra)
@@ -352,11 +361,11 @@ class MappingRunner:
         self._server: Optional[asyncio.base_events.Server] = None
         self._serial_task: Optional[asyncio.Task] = None
         self._main_task: Optional[asyncio.Task] = None       # client/udp/serialbridge driver
-        self._udp_transport = None
+        self._udp_transport: Optional[asyncio.DatagramTransport] = None
         self._tracer: Optional[Tracer] = None
         self._clients: set = set()
         self._monitors: set = set()  # browser console observers (read traffic)
-        self._mqtt = None            # optional MQTT publisher (serial -> broker)
+        self._mqtt: Optional[MqttPublisher] = None  # optional MQTT publisher (serial -> broker)
         self._serial_ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._allowed_nets = self._parse_allowed(mapping.network.allowed_client_ips)
@@ -713,7 +722,7 @@ class MappingRunner:
             try:
                 return await asyncio.wait_for(
                     asyncio.open_connection(
-                        sockaddr[0], sockaddr[1], family=family, ssl=ssl_ctx,
+                        str(sockaddr[0]), int(sockaddr[1]), family=family, ssl=ssl_ctx,
                         server_hostname=net.remote_host if ssl_ctx else None),
                     timeout=net.connect_timeout_s or None)
             except asyncio.TimeoutError as e:

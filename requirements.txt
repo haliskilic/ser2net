@@ -1,19 +1,26 @@
 # ser2net — runtime dependencies (pinned). All wheels are bundled in vendor/wheels/
-# for fully offline installation (see bootstrap.py).
+# for fully offline installation (see bootstrap.py); after changing a pin, run
+# `python tools/refresh_wheels.py` (tests/test_vendor_wheels.py checks they match).
+#
+# starlette / websockets / python-multipart: their current releases need Python 3.11+,
+# so Python 3.10 keeps the last release line that supports it.
 #
 # Pure-Python (work on every OS/Python):
 pyserial==3.5
 pyserial-asyncio-fast==0.16
-starlette==1.2.1
-uvicorn==0.49.0
-websockets==16.0
-python-multipart==0.0.32
+starlette==1.10.0 ; python_version >= "3.11"
+starlette==1.7.0 ; python_version < "3.11"
+uvicorn==0.54.0
+websockets==17.4 ; python_version >= "3.11"
+websockets==16.1.1 ; python_version < "3.11"
+python-multipart==0.0.33 ; python_version >= "3.11"
+python-multipart==0.0.32 ; python_version < "3.11"
 jinja2==3.1.6
-anyio==4.13.0
-click==8.4.1
+anyio==4.16.0
+click==8.5.0
 h11==0.16.0
-idna==3.18
-typing_extensions==4.15.0
+idna==3.20
+typing_extensions==4.16.0
 # Python 3.10 backports (pure-Python, only installed on < 3.11). anyio needs
 # exceptiongroup there; ser2net additionally uses exceptiongroup + taskgroup as
 # backports of asyncio.TaskGroup / asyncio.Runner / except* so app/engine/bridge.py
@@ -27,7 +34,7 @@ colorama==0.4.6 ; platform_system == "Windows"
 # offline on ANY Python (e.g. 3.10/3.13/3.14): without a matching _speedups
 # .pyd it falls back to its native Python escaper. psutil's cp3x-abi3 wheel
 # already covers Python 3.7+.
-markupsafe==3.0.3
+markupsafe==3.0.4
 psutil==7.2.2
 
 # --- Optional, NOT required (graceful fallback if absent) ---

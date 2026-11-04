@@ -1,14 +1,15 @@
 # Third-Party Notices
 
-ser2net bundles the following third-party components (Python wheels in
-`vendor/wheels/` and vendored browser assets in `app/web/static/`). Each remains
-governed by its own license. All are **permissive** open-source licenses that allow
-commercial redistribution provided their copyright/license notices are preserved.
+ser2net is licensed under the AGPL-3.0-only or a commercial license (see `NOTICE`). It
+ships with the third-party components below, each under its own license. These
+components are not covered by ser2net's license.
 
-These components are not covered by ser2net's own license (AGPL-3.0 or commercial —
-see `NOTICE`).
+**Full license texts:** every standalone executable carries the texts of everything it
+contains — run `ser2net --licenses` — and each release attaches the same file as
+`ser2net-<platform>.THIRD-PARTY-LICENSES.txt`. It is generated at build time from the
+build environment (`tools/third_party.py`), so it always matches the bundled versions.
 
-## Python dependencies (vendor/wheels/)
+## Python dependencies (`requirements.txt`, wheels in `vendor/wheels/`)
 
 | Component | License |
 |---|---|
@@ -21,35 +22,55 @@ see `NOTICE`).
 | Jinja2 | BSD-3-Clause |
 | MarkupSafe | BSD-3-Clause |
 | anyio | MIT |
-| sniffio | MIT / Apache-2.0 |
 | click | BSD-3-Clause |
 | h11 | MIT |
 | idna | BSD-3-Clause |
-| typing_extensions | PSF |
+| typing_extensions | PSF-2.0 |
 | psutil | BSD-3-Clause |
+| exceptiongroup, taskgroup (Python 3.10 only) | MIT |
+| colorama (Windows only) | BSD-3-Clause |
 
-### Optional feature dependencies
+## Optional feature packages (`requirements-optional.txt`)
 
-Not installed by the offline bootstrap, but used when the corresponding feature is
-enabled and **bundled into the standalone binary and the Docker image**. Each is used
-as a library via its public API (no source modification), and shipped unmodified:
+Not installed by the offline bootstrap; bundled into the standalone executables and the
+Docker image. Used unmodified, through their public APIs.
 
 | Component | Feature | License |
 |---|---|---|
-| paho-mqtt | MQTT publishing | EPL-2.0 / EDL-1.0 (dual) |
-| ldap3 | LDAP / AD auth | **LGPL-3.0** (dynamically linked library; replaceable) |
-| pyasn1 (ldap3 dep) | LDAP / AD auth | BSD-2-Clause |
-| Authlib | OIDC SSO | BSD-3-Clause |
-| cryptography (Authlib dep) | OIDC SSO | Apache-2.0 OR BSD-3-Clause |
-| pyudev | hotplug (Linux) | LGPL-2.1 (library via public API) |
-| pywin32 | hotplug (Windows) | PSF-style |
+| paho-mqtt | MQTT publishing | EPL-2.0 OR BSD-3-Clause (EDL-1.0) |
+| ldap3 | LDAP / AD sign-in | **LGPL-3.0-or-later** — see below |
+| pyasn1 (ldap3 dependency) | LDAP / AD sign-in | BSD-2-Clause |
+| Authlib | OIDC single sign-on | BSD-3-Clause |
+| joserfc (Authlib dependency) | OIDC single sign-on | BSD-3-Clause |
+| cryptography | OIDC, self-signed certificates | Apache-2.0 OR BSD-3-Clause |
+| cffi, pycparser (cryptography dependencies) | | MIT-0 / BSD-3-Clause |
+| pyudev (if installed; not bundled) | hotplug events (Linux) | LGPL-2.1-or-later |
+| pywin32 (if installed; not bundled) | hotplug events (Windows) | PSF-2.0 |
 
-> ldap3 and pyudev are LGPL: they are used unmodified as separate, replaceable
-> libraries through their public APIs, which their licenses permit under both the
-> AGPL-3.0 and the commercial license. To honor the LGPL's relinking right, the standalone binary's ldap3/pyudev
-> can be swapped by installing a different version alongside it.
+## Inside the standalone executables
 
-## Browser assets (app/web/static/)
+| Component | License |
+|---|---|
+| CPython 3.12 interpreter and standard library | PSF-2.0 |
+| OpenSSL 3 (statically linked into the interpreter) | Apache-2.0 |
+| libffi, expat, libX11/libXau/libxcb (Linux) | MIT |
+| zlib / zlib-ng | Zlib |
+| bzip2 | bzip2-1.0.6 |
+| XZ Utils (liblzma) | 0BSD / public domain |
+| SQLite | public domain |
+| mpdecimal, libuuid, libedit, zstd (Linux) | BSD-2-Clause / BSD-3-Clause |
+| ncurses (Linux) | X11-style |
+| Tcl / Tk / Tix | TCL (BSD-style) |
+| Microsoft Visual C++ runtime, Universal CRT (Windows) | Microsoft redistributable license |
+| PyInstaller bootloader | GPL-2.0-or-later **with the bootloader exception**, which allows distributing it inside programs under any license |
+| PyInstaller and pyinstaller-hooks-contrib runtime hooks | GPL-2.0-or-later with the bootloader exception / Apache-2.0 |
+
+The Linux executable uses a [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
+interpreter (the native libraries above are linked into it); the Windows executable
+uses the python.org build, whose `LICENSE.txt` (included in `ser2net --licenses`) covers
+the libraries it ships.
+
+## Browser assets (`app/web/static/`)
 
 | Component | License |
 |---|---|
@@ -57,7 +78,21 @@ as a library via its public API (no source modification), and shipped unmodified
 | xterm.js (xterm.js, xterm.css) | MIT |
 | xterm-addon-fit | MIT |
 
+## LGPL components
+
+ldap3 (and pyudev, when installed) are LGPL libraries. ser2net uses them unmodified
+through their public APIs. The LGPL lets you run the program with a modified version of
+the library; that right holds for every distribution of ser2net — AGPL or commercial:
+
+- **Source and Docker installs:** ldap3 is a normal Python package; install another
+  version with `pip`.
+- **Standalone executables:** ldap3 is stored as plain source files (`.py`), not inside
+  the executable's compressed archive. Point `SER2NET_LIB_OVERRIDE` at a directory that
+  contains your version (`<dir>/ldap3/...`) and ser2net loads it instead of the bundled
+  copy; `ser2net --about` shows which one is in use. The bundled source is the
+  Corresponding Source of the library; the project is at https://github.com/cannatag/ldap3.
+
 ---
 
-Full license texts are available from each project's distribution and homepage.
-Preserve this file when redistributing ser2net.
+Preserve this file (and the `--licenses` text of a binary you redistribute) when
+redistributing ser2net.

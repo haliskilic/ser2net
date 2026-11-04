@@ -12,7 +12,7 @@ import socket
 from typing import Any
 
 try:
-    import psutil  # type: ignore
+    import psutil
 except Exception:  # pragma: no cover - optional
     psutil = None
 

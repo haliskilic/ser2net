@@ -12,6 +12,7 @@ the always-correct source of truth.
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any, Callable, Optional
 
 
@@ -85,7 +86,7 @@ class PortWatcher:
         # optional event-driven layer (just triggers an immediate rescan); polling
         # above remains the always-correct source of truth if this can't start.
         self._loop = asyncio.get_running_loop()
-        self._event_thread = None
+        self._event_thread: Optional[threading.Thread] = None
         self._start_event_watcher()
 
     async def stop(self) -> None:
@@ -110,7 +111,6 @@ class PortWatcher:
         """Best-effort hotplug events; silently no-op (polling continues) if the
         platform library is missing or the source can't be created."""
         import sys
-        import threading
 
         if sys.platform.startswith("linux"):
             try:
@@ -126,8 +126,9 @@ class PortWatcher:
                         if _dev is not None:
                             self._loop.call_soon_threadsafe(self._trigger_rescan)
 
-                self._event_thread = threading.Thread(target=run, daemon=True)
-                self._event_thread.start()
+                thread = threading.Thread(target=run, daemon=True)
+                thread.start()
+                self._event_thread = thread
             except Exception:
                 pass  # libudev/pyudev unavailable or blocked -> polling only
         elif sys.platform == "win32":

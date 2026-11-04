@@ -52,6 +52,7 @@ PORTABLE = [
     "test_ui_layout.py",      # browser layout check; skips without Playwright (CI 'ui' job runs it)
     "test_tls_selfsigned.py",
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
+    "test_vendor_wheels.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
