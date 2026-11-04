@@ -373,8 +373,8 @@
   <form method="post" action="/settings/config/import" enctype="multipart/form-data" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <input type="hidden" name="step" value="preview">
-    <label>Mappings file <span class="muted">(a ser2net export or config.json)</span>
-      <input type="file" name="file" accept="application/json,.json" required>
+    <label>Mappings file <span class="muted">(a ser2net export or config.json — or a classic ser2net <span class="mono">ser2net.yaml</span> / <span class="mono">ser2net.conf</span> to migrate from)</span>
+      <input type="file" name="file" accept="application/json,.json,.yaml,.yml,.conf,text/plain" required>
     </label>
     <label class="chk"><input type="radio" name="mode" value="merge" checked> Merge — update mappings with the same name, add the others, keep the rest</label>
     <label class="chk"><input type="radio" name="mode" value="replace"> Replace — the file's mappings replace all current ones</label>
