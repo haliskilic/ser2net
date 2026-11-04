@@ -1,4 +1,4 @@
-"""Modbus write from MQTT (plain topics and Sparkplug B NCMD) + coil/discrete polling.
+"""Modbus write from MQTT (plain topics and Sparkplug B DCMD) + coil/discrete polling.
 
 A Modbus-gateway mapping polls a fake RTU slave (TCP loopback, a real register/coil
 map answering FC1/2/3/4/5/6/15/16) and talks to a fake MQTT client, so this runs
@@ -7,9 +7,11 @@ anywhere without a broker or hardware. Checks:
   * <topic>/<point>/set writes a holding register (FC6, signed int16; FC16 for 32-bit)
     or a coil (FC5, or FC15 for a JSON list), answers ok / error on .../set/result and
     republishes the read-back value; read-only points get no subscription;
-  * Sparkplug B: NDEATH as the Will (bdSeq), NBIRTH after connect (bdSeq, Rebirth,
-    every metric), NDATA only for changed values with seq counting, NCMD writes a point
-    and asks for a rebirth, the next session gets bdSeq + 1, NDEATH on stop.
+  * Sparkplug B: NDEATH as the Will (bdSeq), NBIRTH after connect (bdSeq, Rebirth) and
+    a DBIRTH per Modbus unit (devices unit1, unit2) with its points, DDATA per device
+    only for changed values with seq counting on, a DCMD writes a point of that device
+    (not of another, and NCMD writes nothing), NCMD asks for a rebirth, the next session
+    gets bdSeq + 1, NDEATH on stop.
 
 Run: python3 tests/test_modbus_mqtt_write.py
 """
@@ -105,15 +107,17 @@ POINTS = [
     {"name": "pump", "unit": 1, "fn": 1, "address": 0, "dtype": "bool", "writable": True},
     {"name": "alarm", "unit": 1, "fn": 2, "address": 5, "dtype": "bool"},
 ]
+# Sparkplug: a second unit on the bus is a second device of the edge node
+SP_POINTS = POINTS + [{"name": "level", "unit": 2, "fn": 3, "address": 30, "dtype": "uint16"}]
 
 
-async def gateway(fmt, slave_port, fake):
+async def gateway(fmt, slave_port, fake, points=POINTS):
     m = MappingConfig.from_dict({
         "name": "Line 3 PLC", "kind": "net", "serial": {"port": "fake", "baudrate": 9600},
         "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
                     "port": free_port()},
         "mqtt": {"enabled": True, "host": "broker", "base_topic": "plant/a", "payload_format": fmt},
-        "modbus_poll": {"interval_s": 0.1, "points": POINTS}})
+        "modbus_poll": {"interval_s": 0.1, "points": points}})
     m.validate()
     r = ModbusGatewayRunner(m, logger=lambda _m: None)
     r._resp_timeout = 0.5
@@ -126,7 +130,7 @@ async def gateway(fmt, slave_port, fake):
         r._mqtt = r._sparkplug.publisher()
     else:
         from app.engine.mqtt_pub import MqttPublisher
-        subs = {f"plant/a/{p['name']}/set": r._on_set_message for p in POINTS if p.get("writable")}
+        subs = {f"plant/a/{p['name']}/set": r._on_set_message for p in points if p.get("writable")}
         r._mqtt = MqttPublisher(m.mqtt, logger=lambda _m: None, client=fake, subscriptions=subs)
     if fmt == "sparkplug_b":
         r._mqtt._client = fake
@@ -185,72 +189,92 @@ async def test_plain(slave_port):
 
 async def test_sparkplug(slave_port):
     fake = FakeMqtt()
-    REGS[10] = 5
-    r, sw = await gateway("sparkplug_b", slave_port, fake)
-    t = lambda kind: sparkplug.topic("ser2net", kind, "Line_3_PLC")  # noqa: E731
+    REGS[10], REGS[30] = 5, 42
+    r, sw = await gateway("sparkplug_b", slave_port, fake, SP_POINTS)
+    t = lambda kind, dev=None: sparkplug.topic("ser2net", kind, "Line_3_PLC", dev)  # noqa: E731
+
+    def decoded(kind, dev=None):
+        return [sparkplug.decode_payload(p) for tp, p in fake.published if tp == t(kind, dev)]
+
+    def writes(cmd_topic, metric):
+        r._mqtt.handle_message(cmd_topic, sparkplug.encode_payload(
+            sparkplug.Payload(timestamp=0, seq=None, metrics=[metric])))
+
     try:
         will_topic, will_payload, will_qos, will_retain = fake.wills[-1]
         death = sparkplug.decode_payload(will_payload)
         assert will_topic == t("NDEATH") and will_qos == 1 and not will_retain
         assert death.metrics[0].name == "bdSeq" and death.metrics[0].value == 0
-        assert t("NCMD") in fake.subscribed
-        birth = sparkplug.decode_payload(last(fake, t("NBIRTH")))
-        names = {m.name: m for m in birth.metrics}
-        assert birth.seq == 0 and names["bdSeq"].value == 0 and names["Node Control/Rebirth"].value is False
-        assert {"temp", "setpoint", "total", "pump", "alarm"} <= set(names) and names["temp"].is_null
+        assert t("NCMD") in fake.subscribed and "spBv1.0/ser2net/DCMD/Line_3_PLC/+" in fake.subscribed
+        nbirth = decoded("NBIRTH")[-1]
+        node = {m.name: m for m in nbirth.metrics}
+        assert nbirth.seq == 0 and node["bdSeq"].value == 0 and node["Node Control/Rebirth"].value is False
+        assert set(node) == {"bdSeq", "Node Control/Rebirth"}, "the points are device metrics"
+        unit1, unit2 = decoded("DBIRTH", "unit1")[-1], decoded("DBIRTH", "unit2")[-1]
+        names = {m.name: m for m in unit1.metrics}
+        assert (unit1.seq, unit2.seq) == (1, 2)
+        assert set(names) == {"temp", "setpoint", "total", "pump", "alarm"} and names["temp"].is_null
         assert names["pump"].datatype == sparkplug.DataType.Boolean
-        print("sparkplug: NDEATH Will (bdSeq 0, QoS 1), NBIRTH seq 0 with bdSeq/Rebirth/all metrics  OK")
+        assert [m.name for m in unit2.metrics] == ["level"]
+        print("sparkplug: NDEATH Will (bdSeq 0, QoS 1), NBIRTH seq 0 (bdSeq, Rebirth), "
+              "a DBIRTH per Modbus unit with its points  OK")
 
         poll = asyncio.create_task(r._poll_loop())
-        assert await wait(lambda: last(fake, t("NDATA")) is not None)
+        assert await wait(lambda: decoded("DDATA", "unit1") and decoded("DDATA", "unit2"))
         await asyncio.sleep(0.4)
-        datas = [sparkplug.decode_payload(p) for tp, p in fake.published if tp == t("NDATA")]
-        first = {m.name: m.value for m in datas[0].metrics}
-        assert first["temp"] == 23.5 and first["setpoint"] == 5 and datas[0].seq == 1
-        assert len(datas) == 1, "no NDATA when nothing changed"
+        d1, d2 = decoded("DDATA", "unit1"), decoded("DDATA", "unit2")
+        first = {m.name: m.value for m in d1[0].metrics}
+        assert first["temp"] == 23.5 and first["setpoint"] == 5
+        assert [(m.name, m.value) for m in d2[0].metrics] == [("level", 42)]
+        assert len(d1) == 1 and len(d2) == 1, "no DDATA when nothing changed"
+        assert (d1[0].seq, d2[0].seq) == (3, 4), "seq counts on from the births"
 
-        cmd = sparkplug.encode_payload(sparkplug.Payload(timestamp=0, seq=None, metrics=[
-            sparkplug.Metric(name="setpoint", datatype=sparkplug.DataType.Int16, value=7)]))
-        r._mqtt.handle_message(t("NCMD"), cmd)
+        setpoint = sparkplug.Metric(name="setpoint", datatype=sparkplug.DataType.Int16, value=7)
+        writes(t("DCMD", "unit2"), setpoint)    # not a point of unit2
+        writes(t("NCMD"), setpoint)             # points are written with a DCMD
+        writes(t("DCMD", "unit9"), setpoint)    # no such device
+        await asyncio.sleep(0.3)
+        assert REGS[10] == 5, "the write reached the bus without a DCMD to its device"
+        writes(t("DCMD", "unit1"), setpoint)
         assert await wait(lambda: REGS[10] == 7)
         assert await wait(lambda: any(m.name == "setpoint" and m.value == 7
-                                      for tp, p in fake.published if tp == t("NDATA")
-                                      for m in sparkplug.decode_payload(p).metrics))
-        last_data = sparkplug.decode_payload(last(fake, t("NDATA")))
-        assert last_data.seq == 2, last_data.seq
+                                      for d in decoded("DDATA", "unit1") for m in d.metrics))
+        assert decoded("DDATA", "unit1")[-1].seq == 5, decoded("DDATA", "unit1")[-1].seq
         # a command without a datatype (allowed in Sparkplug 3.0): -3 arrives as 2**32 - 3
-        untyped = sparkplug.encode_payload(sparkplug.Payload(timestamp=0, seq=None, metrics=[
-            sparkplug.Metric(name="setpoint", datatype=sparkplug.DataType.Int16, value=-3)]),
-            include_datatype=False)
-        r._mqtt.handle_message(t("NCMD"), untyped)
+        r._mqtt.handle_message(t("DCMD", "unit1"), sparkplug.encode_payload(sparkplug.Payload(
+            timestamp=0, seq=None, metrics=[sparkplug.Metric(
+                name="setpoint", datatype=sparkplug.DataType.Int16, value=-3)]),
+            include_datatype=False))
         assert await wait(lambda: REGS[10] == 0xFFFD), REGS[10]
         # a coil can't be switched on by a value that isn't a boolean (String "false")
-        bogus = sparkplug.encode_payload(sparkplug.Payload(timestamp=0, seq=None, metrics=[
-            sparkplug.Metric(name="pump", datatype=sparkplug.DataType.String, value="false")]))
         COILS[0] = False
-        r._mqtt.handle_message(t("NCMD"), bogus)
+        writes(t("DCMD", "unit1"), sparkplug.Metric(name="pump", datatype=sparkplug.DataType.String,
+                                                    value="false"))
         await asyncio.sleep(0.3)
         assert COILS[0] is False, "a String 'false' switched the coil on"
-        rebirth = sparkplug.encode_payload(sparkplug.Payload(timestamp=0, seq=None, metrics=[
-            sparkplug.Metric(name="Node Control/Rebirth", datatype=sparkplug.DataType.Boolean, value=True)]))
-        births = sum(1 for tp, _ in fake.published if tp == t("NBIRTH"))
-        r._mqtt.handle_message(t("NCMD"), rebirth)
-        assert sum(1 for tp, _ in fake.published if tp == t("NBIRTH")) == births + 1
-        print("sparkplug: NDATA by exception (seq 1, 2), NCMD write -> FC6, rebirth -> NBIRTH  OK")
+        births = len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")), len(decoded("DBIRTH", "unit2"))
+        writes(t("NCMD"), sparkplug.Metric(name="Node Control/Rebirth",
+                                           datatype=sparkplug.DataType.Boolean, value=True))
+        again = len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")), len(decoded("DBIRTH", "unit2"))
+        assert again == tuple(n + 1 for n in births), (births, again)
+        assert {m.name: m.value for m in decoded("DBIRTH", "unit2")[-1].metrics} == {"level": 42}
+        print("sparkplug: DDATA by exception per device (seq on), DCMD write -> FC6 only to its "
+              "device, rebirth -> NBIRTH + DBIRTHs with the last values  OK")
 
         r._mqtt._paho_on_disconnect(None, None)  # connection lost: next session = bdSeq 1
         assert sparkplug.decode_payload(fake.wills[-1][1]).metrics[0].value == 1
         r._mqtt.handle_connect()
-        birth = sparkplug.decode_payload(last(fake, t("NBIRTH")))
+        birth = decoded("NBIRTH")[-1]
         assert {m.name: m.value for m in birth.metrics}["bdSeq"] == 1 and birth.seq == 0
+        assert decoded("DBIRTH", "unit2")[-1].seq == 2
         r._stop.set()
         poll.cancel()
         with suppress(BaseException):
             await poll
         await r.stop()
-        death = sparkplug.decode_payload(last(fake, t("NDEATH")))
+        death = decoded("NDEATH")[-1]
         assert death.metrics[0].value == 1
-        print("sparkplug: reconnect -> bdSeq 1 in Will + NBIRTH; stop -> NDEATH  OK")
+        print("sparkplug: reconnect -> bdSeq 1 in Will + NBIRTH + DBIRTHs; stop -> NDEATH  OK")
     finally:
         sw.close()
 
