@@ -92,6 +92,13 @@ document.addEventListener("DOMContentLoaded", function () {
   applyShowWhen(document);
 });
 
+// 2c) <form data-confirm="question">: ask before submitting (plain forms; htmx
+//     elements use hx-confirm). Delegated, so no inline JS is needed (CSP).
+document.addEventListener("submit", function (e) {
+  var f = e.target.closest ? e.target.closest("form[data-confirm]") : null;
+  if (f && !window.confirm(f.getAttribute("data-confirm"))) e.preventDefault();
+});
+
 // 3) Cancel/Close buttons clear the form/log panel. Done via a delegated
 //    listener (not inline onclick, which the Content-Security-Policy blocks).
 document.addEventListener("click", function (e) {

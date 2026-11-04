@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
 from collections import deque
@@ -34,6 +35,10 @@ LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at star
 ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
 ALL_LOG_BACKUPS = 5                    # keep 5 rotations (~60 MB total worst case)
 AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup kept)
+
+
+# control characters (incl. tab / CR / LF) that must not reach an audit record
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _parse_log_ts(line: str) -> float | None:
@@ -96,20 +101,26 @@ class AppState:
         # all.log lives next to config.json; per-mapping logs live in data/logs/
         self.log_path = os.path.join(self.data_dir, "all.log")
         self.logs_dir = os.path.join(self.data_dir, "logs")
+        # traffic traces: the ONLY place a trace is written (see config.trace_file_name)
+        self.traces_dir = os.path.join(self.data_dir, "traces")
         self._logger = self._setup_logging(self.log_path)
         self._mapping_loggers: dict[str, logging.Logger] = {}
-        self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger)
+        self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger,
+                                     trace_dir=self.traces_dir)
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
+        # uploaded imports waiting for the user to confirm the preview: token -> item
+        self.pending_imports: dict[str, dict] = {}
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()
         self._maint_task: asyncio.Task | None = None
         # per-mapping logs can contain raw serial traffic; keep the logs dir private
         # on both platforms (POSIX 0700 / Windows owner-only ACL).
-        with _suppress(OSError):
-            os.makedirs(self.logs_dir, exist_ok=True)
-        lock_down_dir(self.logs_dir)
+        for d in (self.logs_dir, self.traces_dir):
+            with _suppress(OSError):
+                os.makedirs(d, exist_ok=True)
+            lock_down_dir(d)
 
     @staticmethod
     def _setup_logging(log_path: str) -> logging.Logger:
@@ -140,10 +151,18 @@ class AppState:
         self._logger.info(msg)
         self.logs.append(msg)
 
-    def audit(self, actor_ip: str, action: str, detail: str = "") -> None:
-        """Append a config-change audit record (who/what), separate from all.log."""
-        line = f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{actor_ip}\t{action}\t{detail}"
-        apath = os.path.join(self.data_dir, "audit.log")
+    @property
+    def audit_path(self) -> str:
+        return os.path.join(self.data_dir, "audit.log")
+
+    def audit(self, actor_ip: str, action: str, detail: str = "", user: str = "") -> None:
+        """Append a config-change audit record, separate from all.log. One line per
+        record, tab-separated: time, client IP, action, detail, user (the user column
+        was added in v2.8 — older lines have four fields). Control characters in any
+        field become spaces, so a crafted mapping name can't forge an extra record."""
+        fields = [time.strftime("%Y-%m-%d %H:%M:%S"), actor_ip, action, detail[:500], user]
+        line = "\t".join(_CONTROL.sub(" ", str(f)) for f in fields)
+        apath = self.audit_path
         try:
             # size-based rotation (keep one backup) so audit.log can't grow forever
             if os.path.getsize(apath) > AUDIT_LOG_MAX_BYTES:
@@ -156,7 +175,28 @@ class AppState:
                 fh.write(line + "\n")
         except OSError:
             pass
-        self._logger.info(f"AUDIT {actor_ip} {action} {detail}".rstrip())
+        who = f" by {user}" if user else ""
+        self._logger.info(_CONTROL.sub(" ", f"AUDIT {actor_ip} {action} {detail}{who}").rstrip())
+
+    def read_audit(self) -> list[dict]:
+        """Every audit record (audit.log.1 + audit.log), newest first. Blocking file
+        I/O: call via asyncio.to_thread."""
+        records = []
+        for path in (self.audit_path + ".1", self.audit_path):
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    lines = fh.read().splitlines()
+            except OSError:
+                continue
+            for ln in lines:
+                parts = ln.split("\t")
+                if len(parts) < 3:
+                    continue
+                parts += [""] * (5 - len(parts))
+                records.append({"time": parts[0], "ip": parts[1], "action": parts[2],
+                                "detail": parts[3], "user": parts[4]})
+        records.reverse()
+        return records
 
     # ---------------- per-mapping logs ----------------
     def mapping_log_path(self, mapping_id: str) -> str:
@@ -224,6 +264,23 @@ class AppState:
                 lg.removeHandler(h)
         with _suppress(OSError):  # log file may never have been created (FileNotFoundError)
             os.remove(self.mapping_log_path(mapping_id))
+
+    # ---------------- per-mapping traces ----------------
+    def trace_files(self, mapping_id: str) -> list[str]:
+        """A mapping's trace files in data/traces (current + rotated), newest first."""
+        prefix = f"{mapping_id}-"
+        try:
+            names = [n for n in os.listdir(self.traces_dir) if n.startswith(prefix)]
+        except OSError:
+            return []
+        paths = [os.path.join(self.traces_dir, n) for n in names]
+        return sorted((p for p in paths if os.path.isfile(p)),
+                      key=lambda p: os.path.getmtime(p), reverse=True)
+
+    def delete_mapping_traces(self, mapping_id: str) -> None:
+        for path in self.trace_files(mapping_id):
+            with _suppress(OSError):
+                os.remove(path)
 
     def prune_mapping_logs(self) -> None:
         """Delete per-mapping log files whose mapping no longer exists. This keeps

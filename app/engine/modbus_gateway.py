@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, normalize_cidr
 from . import modbus, serial_io, sockopts
-from .bridge import RunnerStatus, describe_disconnect, fmt_duration
+from .bridge import RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -66,8 +66,10 @@ class _Master:
 
 
 class ModbusGatewayRunner:
-    def __init__(self, mapping: MappingConfig, logger=None):
+    def __init__(self, mapping: MappingConfig, logger=None, trace_dir: Optional[str] = None):
         self.mapping = mapping
+        self.trace_dir = trace_dir
+        self._tracer: Optional[Tracer] = None
         self.status = RunnerStatus(state="stopped")
         self.log = logger
         self.serial_instance = None
@@ -111,6 +113,7 @@ class ModbusGatewayRunner:
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
+        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
         net = self.mapping.network
         self._serial_task = asyncio.create_task(
             self._serial_supervisor(), name=f"modbus-serial:{self.mapping.name}")
@@ -159,6 +162,9 @@ class ModbusGatewayRunner:
                 await self._serial_task
             self._serial_task = None
         await self._close_serial()
+        if self._tracer:
+            await self._tracer.aclose()
+            self._tracer = None
         self.status.state = "stopped"
         self.status.client_count = 0
         self.status.clients = []
@@ -239,6 +245,8 @@ class ModbusGatewayRunner:
                         break
             rtu_req = modbus.rtu_wrap(unit, pdu)
             self._feed_monitors(b"\xbb tx " + rtu_req)
+            if self._tracer:
+                self._tracer.write("net>ser", rtu_req)
             try:
                 writer.write(rtu_req)
                 await writer.drain()
@@ -247,6 +255,8 @@ class ModbusGatewayRunner:
             except (asyncio.TimeoutError, ConnectionError, OSError):
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
             self._feed_monitors(b"\xaa rx " + rtu_resp)
+            if self._tracer:
+                self._tracer.write("ser>net", rtu_resp)
             self.status.bytes_in += len(rtu_resp)
             try:
                 runit, rpdu = modbus.rtu_unwrap(rtu_resp)

@@ -76,7 +76,7 @@ async def _serve(store: ConfigStore, config) -> int:
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
     state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
-    for note in standalone.notes:
+    for note in standalone.notes + config.load_notes:
         state.log(note)
     if not config.password_set:
         state.log("no admin password set yet — open the UI to complete first-run setup")
