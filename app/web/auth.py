@@ -89,7 +89,7 @@ def decode_session(secret: str, token: str | None) -> dict | None:
     ({"u": username, "v": pwd_version}), or None if invalid/expired. The caller
     must still confirm the user exists and that pwd_version matches (so a password
     change revokes only that user's sessions)."""
-    if not token or "." not in token:
+    if not token or "." not in token or not token.isascii():  # ours are ASCII
         return None
     payload, sig = token.rsplit(".", 1)
     if not hmac.compare_digest(sig, _sign(secret, payload)):
@@ -111,7 +111,7 @@ def sign_payload(secret: str, data: dict, ttl_seconds: int = 600) -> str:
 
 
 def read_payload(secret: str, token: str | None) -> dict | None:
-    if not token or "." not in token:
+    if not token or "." not in token or not token.isascii():  # ours are ASCII
         return None
     payload, sig = token.rsplit(".", 1)
     if not hmac.compare_digest(sig, _sign(secret, payload)):
@@ -270,7 +270,9 @@ def csrf_token_matches(request, token) -> bool:
     cookie = request.cookies.get(CSRF_COOKIE)
     if not cookie or not token:
         return False
-    return hmac.compare_digest(str(token), cookie)
+    token = str(token)
+    # tokens are ASCII; compare_digest raises on other text, which is just a mismatch
+    return token.isascii() and cookie.isascii() and hmac.compare_digest(token, cookie)
 
 
 # --------------------------------------------------------------------------
