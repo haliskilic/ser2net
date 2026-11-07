@@ -7,6 +7,8 @@
     bare % in a template string, a stray brace in a Python one);
   * the language is chosen from the visitor's choice (cookie), the admin's default or
     the browser (Accept-Language), and English is the fallback;
+  * a language whose catalog can't be loaded (left out of a build) is reported for the
+    start-up warning instead of silently showing English;
   * pages really render in Turkish (and English), the language switch works, and the
     REST API, logs and audit log stay English.
 
@@ -17,6 +19,7 @@ import glob
 import json
 import os
 import re
+import tempfile
 
 import markupsafe
 from _server import ROOT, Browser, Server
@@ -108,6 +111,21 @@ def test_negotiation():
     print("language: cookie > admin default > Accept-Language > English  OK")
 
 
+def test_missing_catalog_reported():
+    assert i18n.missing_catalogs() == [], "every offered language has its catalog"
+    real = i18n.LOCALE_DIR
+    with tempfile.TemporaryDirectory() as empty:  # a build that left app/locale out
+        i18n.LOCALE_DIR = empty
+        i18n.catalog.cache_clear()
+        try:
+            assert i18n.missing_catalogs() == ["tr"]
+        finally:
+            i18n.LOCALE_DIR = real
+            i18n.catalog.cache_clear()
+    assert i18n.catalog("tr"), "the real catalog loads again"
+    print("a language without its catalog is reported (start-up warning)  OK")
+
+
 def esc(text):
     """As the template autoescape writes it."""
     return str(markupsafe.escape(text))
@@ -147,6 +165,7 @@ def test_pages():
         out = srv.output()
         assert tr["Invalid username or password."] not in out and "failed login for 'admin'" in out, \
             "logs must stay English"
+        assert "UI translation is missing" not in out, out[:1500]
         print("pages: Turkish by Accept-Language (login, errors, dashboard, settings, audit, "
               "ser2net.yaml import warnings), switch to English sticks, API/logs English  OK")
 
@@ -154,6 +173,7 @@ def test_pages():
 def main():
     test_catalog_complete()
     test_negotiation()
+    test_missing_catalog_reported()
     test_pages()
     print("\nPASS: TR/EN web UI")
 

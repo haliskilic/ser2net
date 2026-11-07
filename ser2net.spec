@@ -8,7 +8,9 @@ import os
 
 from PyInstaller.utils.hooks import collect_all
 
-datas = [("app/web/templates", "app/web/templates"), ("app/web/static", "app/web/static")]
+# the files the app reads at run time: page templates, static assets, UI translations
+# (tests/test_standalone.py fails when a data file under app/ is left out)
+datas = [(d, d) for d in ("app/web/templates", "app/web/static", "app/locale")]
 # every bundled component's license (tools/third_party.py; `ser2net --licenses` prints it)
 if os.path.isfile("build/THIRD-PARTY-LICENSES.txt"):
     datas.append(("build/THIRD-PARTY-LICENSES.txt", "."))

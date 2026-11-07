@@ -4,6 +4,8 @@ Portable part (always runs): app.standalone points a frozen Linux build's
 bundled OpenSSL at the distribution's CA bundle (Debian/Ubuntu, RHEL/Fedora,
 openSUSE, Alpine layouts), leaves an admin's SSL_CERT_FILE / SSL_CERT_DIR alone,
 warns when there is none, and does nothing for source runs or on Windows.
+ser2net.spec bundles every data file the app reads at run time (each non-Python
+file under app/: templates, static assets, translations), read without PyInstaller.
 
 Binary part — opt-in: SER2NET_STANDALONE_BIN=<built ser2net or ser2net.exe> (the
 CI 'standalone' jobs build the executables and set it):
@@ -17,7 +19,8 @@ CI 'standalone' jobs build the executables and set it):
      Settings → Generate self-signed certificate works (no openssl program); OIDC
      sign-in over certificate-checked HTTPS works (bundled OpenSSL + CA certificates):
      discovery, then the callback with the token exchange and the RS256 id_token
-     check (bundled authlib), which signs the user in;
+     check (bundled authlib), which signs the user in; TR / EN → Türkçe really shows
+     the Turkish UI;
   3. every shared library the running processes mapped comes from the bundle or
      the OS base (Linux /proc/<pid>/maps, Windows module list);
   4. SER2NET_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
@@ -31,6 +34,7 @@ Run: python3 tests/test_standalone.py
 """
 import base64
 import datetime
+import glob
 import http.cookiejar
 import http.server
 import ipaddress
@@ -45,6 +49,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -123,6 +128,85 @@ def test_ca_bundle_choice():
     assert notes_for(True, "linux", {}, lambda p: False)[0].startswith("WARNING: no system CA")
     standalone.notes.clear()
     print("frozen Linux build finds the CA bundle on Debian/RHEL/openSUSE/Alpine layouts  OK")
+
+
+def posix_path(path):
+    return os.path.normpath(path).replace(os.sep, "/")
+
+
+def spec_datas():
+    """The data entries ser2net.spec hands PyInstaller, without PyInstaller: the spec
+    runs with stand-ins for collect_all() and the build steps."""
+    hooks = types.ModuleType("PyInstaller.utils.hooks")
+    hooks.collect_all = lambda package: ([], [], [])
+    fakes = {"PyInstaller": types.ModuleType("PyInstaller"),
+             "PyInstaller.utils": types.ModuleType("PyInstaller.utils"),
+             "PyInstaller.utils.hooks": hooks}
+    seen = {}
+
+    def analysis(scripts, **kw):
+        seen.update(kw)
+        return types.SimpleNamespace(scripts=scripts, pure=[], binaries=list(kw["binaries"]),
+                                     datas=list(kw["datas"]))
+
+    saved = {name: sys.modules.get(name) for name in fakes}
+    sys.modules.update(fakes)
+    try:
+        with open(os.path.join(ROOT, "ser2net.spec"), encoding="utf-8") as fh:
+            exec(compile(fh.read(), "ser2net.spec", "exec"),
+                 {"Analysis": analysis, "PYZ": lambda *a, **k: None, "EXE": lambda *a, **k: None})
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                del sys.modules[name]
+            else:
+                sys.modules[name] = module
+    return seen["datas"]
+
+
+def bundled_files(datas):
+    """Where every file of the (source, destination) entries lands in the bundle. As in
+    PyInstaller, a relative source is relative to the spec and a directory brings
+    everything below it."""
+    out = set()
+    for src, dest in datas:
+        for match in glob.glob(os.path.join(ROOT, src)):
+            if not os.path.isdir(match):
+                out.add(posix_path(os.path.join(dest, os.path.basename(match))))
+                continue
+            for d, _, files in os.walk(match):
+                for f in files:
+                    out.add(posix_path(os.path.join(dest, os.path.relpath(os.path.join(d, f), match))))
+    return out
+
+
+def app_data_files():
+    """Every file under app/ that isn't Python source or bytecode — what the code reads
+    next to itself at run time (in a frozen build: inside the bundle)."""
+    out = set()
+    for d, dirs, files in os.walk(os.path.join(ROOT, "app")):
+        dirs[:] = [x for x in dirs if x != "__pycache__" and not x.startswith(".")]
+        out.update(posix_path(os.path.relpath(os.path.join(d, f), ROOT)) for f in files
+                   if not f.startswith(".") and not f.endswith((".py", ".pyc", ".pyo")))
+    return out
+
+
+def test_spec_bundles_app_data():
+    from app import i18n
+    from app.web import server
+
+    datas = spec_datas()
+    for src, _ in datas:
+        assert glob.glob(os.path.join(ROOT, src)), f"ser2net.spec bundles {src}, which doesn't exist"
+    needed = app_data_files()
+    for d in (server.TEMPLATES_DIR, server.STATIC_DIR, i18n.LOCALE_DIR):
+        rel = posix_path(os.path.relpath(d, ROOT))
+        assert any(p.startswith(rel + "/") for p in needed), f"no files found in {rel}"
+    missing = sorted(needed - bundled_files(datas))
+    assert not missing, ("the app reads these at run time, but ser2net.spec leaves them out of "
+                         "the executables:\n  " + "\n  ".join(missing))
+    print(f"ser2net.spec bundles all {len(needed)} data files under app/ "
+          "(templates, static assets, translations)  OK")
 
 
 # ---------------------------------------------------------------- helpers
@@ -604,6 +688,21 @@ def test_binary():
         assert st == 200 and "sso.user" in page, f"no session after the OIDC callback ({st})"
         assert "login: sso.user (admin, oidc)" in read(os.path.join(data, "all.log"))
         print(f"{where}: OIDC callback: token exchange, RS256 id_token check, signed in  OK")
+
+        # (before the certificate below: once TLS is configured, new cookies are Secure-only)
+        import markupsafe
+        with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as fh:
+            tr = json.load(fh)
+        st, headers, _ = s.request("/lang/tr?next=/settings")
+        assert st == 303 and headers and headers.get("Location") == "/settings", f"/lang/tr: {st}"
+        st, _, page = s.request("/settings")
+        english = [en for en in ("Settings", "Web UI access", "Change your password", "Default language")
+                   if str(markupsafe.escape(tr[en])) not in page]
+        assert st == 200 and 'lang="tr"' in page and not english, \
+            f"Turkish chosen, yet these stay English (translations not bundled?): {english} ({st})"
+        s.request("/lang/en?next=/settings")
+        print(f"{where}: TR / EN -> the Settings page is in Turkish (translations bundled)  OK")
+
         st, _, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
         assert "Self-signed certificate generated" in page, \
             re.sub(r"\s+", " ", page[page.find("banner"):][:300])
@@ -621,6 +720,7 @@ def test_binary():
         assert "client connected: 127.0.0.1" in log, log[-1500:]
         assert "MQTT publishing serial lines to 127.0.0.1" in log, "paho-mqtt missing from the bundle?"
         assert "not installed" not in log and "failed to import" not in log, log[-1500:]
+        assert "UI translation is missing" not in log, log[:1500]
         if IMAGE:
             assert f"TLS: using the system CA bundle {run.ca_path}" in log, \
                 f"binary did not pick {run.ca_path}:\n" + log[:1500]
@@ -651,6 +751,7 @@ def test_binary():
 
 def main():
     test_ca_bundle_choice()
+    test_spec_bundles_app_data()
     test_binary()
 
 
