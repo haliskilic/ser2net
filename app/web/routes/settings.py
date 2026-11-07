@@ -33,6 +33,13 @@ def routes(ctx: Ctx) -> list:
     state, render = ctx.state, ctx.render
     current_user, require_role, set_session = ctx.current_user, ctx.require_role, ctx.set_session
 
+    def _cluster_view() -> dict:
+        """What the LAN cluster panel shows."""
+        c = state.config.cluster
+        return {"cluster": c, "instance_id": state.config.instance_id,
+                "cluster_peers_text": "\n".join(c.peers),
+                "cluster_legacy": state.cluster.legacy_nodes() if c.active else []}
+
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None):
         me = current_user(request)
         backups = state.store.backups() if me is not None and me.role == "admin" else []
@@ -45,8 +52,7 @@ def routes(ctx: Ctx) -> list:
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
                       oidc=state.config.oidc, oidc_lib=_module_present("authlib"),
-                      cluster=state.config.cluster, instance_id=state.config.instance_id,
-                      cluster_peers_text="\n".join(state.config.cluster.peers),
+                      **_cluster_view(),
                       session_minutes=state.config.session_timeout_s // 60,
                       notify=state.config.notifications, notify_events=NOTIFY_EVENTS,
                       webhook_formats=WEBHOOK_FORMATS, smtp_security=SMTP_SECURITY,
@@ -599,15 +605,21 @@ def routes(ctx: Ctx) -> list:
                 parse_cluster_peer(entry, strict=True)
         except ConfigError as e:
             return await settings_get(request, error=str(e))
-        new = ClusterSettings(
-            enabled=form.get("enabled") == "on",
-            key=(form.get("key") or "").strip(),
-            discovery_port=port,
-            advertise_ip=(form.get("advertise_ip") or "").strip(),
-            peers=peers,
-        )
         async with state.config_lock:
             old = state.config.cluster
+            # a form from before these switches existed (an open tab during an upgrade, a
+            # script) leaves them as they are; an unticked box is only "off" in this form
+            current_form = form.get("cluster_form") == "2"
+            new = ClusterSettings(
+                enabled=form.get("enabled") == "on",
+                key=(form.get("key") or "").strip(),
+                discovery_port=port,
+                advertise_ip=(form.get("advertise_ip") or "").strip(),
+                peers=peers,
+                previous_key=old.previous_key, previous_until=old.previous_until,
+                legacy_auth=_checkbox(form, "legacy_auth") if current_form else old.legacy_auth,
+                discovery=_checkbox(form, "discovery") if current_form else old.discovery,
+            )
             state.config.cluster = new
             try:
                 await state.asave()
@@ -617,7 +629,8 @@ def routes(ctx: Ctx) -> list:
         # apply live: restart discovery so a key/port/enable change takes effect now
         await state.cluster.stop()
         await state.cluster.start()
-        state.log(f"cluster settings updated (enabled={new.enabled}, manual_peers={len(peers)})")
+        state.log(f"cluster settings updated (enabled={new.enabled}, manual_peers={len(peers)}, "
+                  f"legacy_auth={new.legacy_auth}, discovery={new.discovery})")
         ctx.audit(request, "cluster_settings",
                     "enabled" if new.active else "disabled")
         return await settings_get(request, ok=_("Cluster settings saved."))

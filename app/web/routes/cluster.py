@@ -2,10 +2,12 @@
 
 Two kinds of endpoint live here. Peer-facing ones (``/api/cluster/local``,
 ``/control``, ``/mapping-data``, ``/mapping-save``) are called by OTHER nodes and are
-authenticated by the shared cluster key, not a session. Browser-facing ones (status,
-``control-peer``, ``peer-form``, ``peer-save``) need a signed-in operator and proxy to
-a peer the browser names by host + port: it must be a discovered or configured peer,
-and the call goes to that peer's own address and scheme.
+authenticated by the shared cluster key, not a session: a request signed with it (or,
+from a node running 2.8.0 or older while legacy authentication is on, the raw key), and
+their replies are signed for that request. Browser-facing ones (status, ``control-peer``,
+``peer-form``, ``peer-save``) need a signed-in operator and proxy to a peer the
+browser names by host + port: it must be a discovered or configured peer, and the
+call goes to that peer's own address and scheme.
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from starlette.routing import Route
 from ... import __version__
 from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
 from ...engine import netinfo, portlist
-from ...engine.cluster import key_header_matches, peer_addr, peer_port, peer_url
+from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_url
 from ...i18n import _
 from .. import auth
 from . import ops
@@ -33,6 +35,9 @@ from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged
 # relayed with the shared key.
 _PEER_FORM_FIELDS = {"id", "name", "kind", "enabled"}
 _PEER_FORM_PREFIXES = ("serial_", "network_", "opt_", "mqtt_", "modbus_")
+# A peer request's body (at most a mapping form) is far smaller; a larger one is refused
+# (413) before it is read.
+PEER_MAX_BODY = 1024 * 1024
 
 
 def _peer_below_2_8(version: str) -> bool:
@@ -148,23 +153,47 @@ def routes(ctx: Ctx) -> list:
                 "version": __version__, "uptime_s": int(time.time() - state.started_at),
                 "mapping_count": len(maps), "running_count": running, "mappings": maps}
 
-    def _peer_authorized(request) -> bool:
-        """Whether a peer-facing request carries this node's cluster key: the one check
-        every key-guarded endpoint makes (compared as bytes, so any key works)."""
-        cfg = state.config
-        return cfg.cluster.active and key_header_matches(
-            cfg.cluster.key, request.headers.get("x-cluster-key"))
+    async def _peer_auth(request):
+        """The one check every key-guarded endpoint makes: (auth, None) when the request
+        is signed with this node's cluster key for this node (or carries the raw key of a
+        node running 2.8.0 or older while that is allowed), else (None, the 403 to answer). A refusal
+        is logged and audited, and raw-key use logged, once per change per address - a
+        peer with another key polls every few seconds."""
+        ip = client_ip(request)
+        # only a signed request's body is read here (its signature covers it): any other
+        # request is decided on its headers, before its body is read
+        body = await request.body() if request.headers.get(AUTH_HEADER) is not None else b""
+        a = state.cluster.check_request(
+            request.method, request.scope.get("path", ""),
+            request.scope.get("query_string", b"").decode("latin-1"), body, request.headers, ip)
+        where = f"{request.method} {request.url.path}"
+        if a.ok:
+            if a.again:
+                state.log(f"cluster: requests from {ip} are accepted again")
+            if a.legacy and a.first:
+                state.log(f"cluster: {ip} sent the cluster key unsigned (a node running 2.8.0 or older) "
+                          "— upgrade it, then turn legacy authentication off")
+            return a, None
+        if a.first:
+            state.log(f"cluster: refused {where} from {ip}: {REFUSALS.get(a.reason, a.reason)}")
+            state.audit(ip, "cluster_auth_failed", f"{where}: {a.reason}", user="cluster-peer")
+        return None, _peer_json(a, {"error": "forbidden", "reason": a.reason}, 403)
 
-    def _forbidden():
-        return JSONResponse({"error": "forbidden"}, status_code=403)
+    def _peer_json(a, payload, status_code=200):
+        """A peer-facing JSON answer; for a signed request (also a refusal of one with a
+        valid signature) signed for that request, so the caller can trust it."""
+        resp = JSONResponse(payload, status_code=status_code)
+        resp.headers[AUTH_HEADER] = state.cluster.reply_auth(a, status_code, resp.body)
+        return resp
 
     async def cluster_local(request):
         """Peer-facing: returns this node's mappings to another cluster node that
         presents the matching shared key. Guarded by the key, not a user session
         (added to PUBLIC_PATHS) — read-only, exposes no credentials."""
-        if not _peer_authorized(request):
-            return _forbidden()
-        return JSONResponse(local_node_payload())
+        a, deny = await _peer_auth(request)
+        if deny:
+            return deny
+        return _peer_json(a, local_node_payload())
 
     def _node_from(target, data) -> dict:
         """Build a fleet-table node entry from a fetch target + the peer's payload
@@ -175,7 +204,8 @@ def routes(ctx: Ctx) -> list:
         not tell its LAN address; it is shown only as information."""
         ip, port, scheme = target["ip"], target["port"], target["scheme"]
         base = {"self": False, "source": target.get("source", "auto"),
-                "ip": ip, "port": port, "scheme": scheme, "addr": peer_addr(ip, port)}
+                "ip": ip, "port": port, "scheme": scheme, "addr": peer_addr(ip, port),
+                **state.cluster.peer_state(target)}   # auth / problem / previous_key
         with contextlib.suppress(ValueError):
             base["url"] = peer_url(scheme, ip, port)
         if not data:
@@ -212,25 +242,29 @@ def routes(ctx: Ctx) -> list:
             if targets else []
         for t, data in zip(targets, results, strict=False):
             nodes.append(_node_from(t, data))
+        c = state.cluster
+        notes = {"copies": c.copies(), "shared": c.shared_ids(), "other_key": c.other_key_nodes(),
+                 "legacy": c.legacy_nodes()}
         return render(request, "_cluster_body.html", nodes=nodes, can_edit=can_edit(request),
-                      discovery_error=state.cluster.discovery_error)
+                      discovery_error=state.cluster.discovery_error, notes=notes)
 
     async def cluster_control(request):
         """Peer-facing remote control: another cluster node (presenting the shared key)
         asks us to start/stop/restart one of OUR mappings. Key-guarded, no session."""
-        if not _peer_authorized(request):
-            return _forbidden()
+        a, deny = await _peer_auth(request)
+        if deny:
+            return deny
         form = await request.form()
         mid, action = form.get("mapping_id", ""), form.get("action", "")
         if action not in ("start", "stop", "restart"):
-            return JSONResponse({"error": "bad_action"}, status_code=400)
+            return _peer_json(a, {"error": "bad_action"}, 400)
         ok, name = await ops.apply_action(state, mid, action)
         if not ok:
-            return JSONResponse({"error": name}, status_code=404)
+            return _peer_json(a, {"error": name}, 404)
         ip = client_ip(request)
         state.log(f"cluster: remote {action} of '{name}' from {ip}")
         state.audit(ip, f"cluster_remote_{action}", name, user="cluster-peer")
-        return JSONResponse({"ok": True, "name": name})
+        return _peer_json(a, {"ok": True, "name": name})
 
     async def cluster_control_peer(request):
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
@@ -260,28 +294,30 @@ def routes(ctx: Ctx) -> list:
     async def cluster_mapping_data(request):
         """Peer-facing: a mapping's full config + this node's serial ports + IP
         candidates, so the controlling node can render the edit form. Key-guarded."""
-        if not _peer_authorized(request):
-            return _forbidden()
+        a, deny = await _peer_auth(request)
+        if deny:
+            return deny
         cfg = state.config
         m = cfg.get_mapping(request.query_params.get("mid", ""))
         if not m:
-            return JSONResponse({"error": "not_found"}, status_code=404)
-        return JSONResponse({"mapping": m.to_dict(), "ports": state.ports.get(),
-                             "ips": netinfo.list_ip_candidates()})
+            return _peer_json(a, {"error": "not_found"}, 404)
+        return _peer_json(a, {"mapping": m.to_dict(), "ports": state.ports.get(),
+                              "ips": netinfo.list_ip_candidates()})
 
     async def cluster_mapping_save(request):
         """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
         from the same form the controlling node rendered. Key-guarded."""
-        if not _peer_authorized(request):
-            return _forbidden()
+        a, deny = await _peer_auth(request)
+        if deny:
+            return deny
         form = await request.form()
         ok, msg = await ops.save_mapping_from_form(state, form)
         if not ok:
-            return JSONResponse({"ok": False, "error": msg}, status_code=400)
+            return _peer_json(a, {"ok": False, "error": msg}, 400)
         ip = client_ip(request)
         state.log(f"cluster: remote edit of '{msg}' from {ip}")
         state.audit(ip, "cluster_remote_save", msg, user="cluster-peer")
-        return JSONResponse({"ok": True, "name": msg})
+        return _peer_json(a, {"ok": True, "name": msg})
 
     def _peer_target(getter):
         """The peer a browser request names by host + port (as the fleet view shows them)
@@ -370,11 +406,13 @@ def routes(ctx: Ctx) -> list:
 
     return [
         Route("/api/cluster/status", cluster_status),
-        Route("/api/cluster/local", cluster_local),
-        Route("/api/cluster/control", cluster_control, methods=["POST"]),
+        Route("/api/cluster/local", cluster_local, max_body_size=PEER_MAX_BODY),
+        Route("/api/cluster/control", cluster_control, methods=["POST"],
+              max_body_size=PEER_MAX_BODY),
         Route("/api/cluster/control-peer", cluster_control_peer, methods=["POST"]),
-        Route("/api/cluster/mapping-data", cluster_mapping_data),
-        Route("/api/cluster/mapping-save", cluster_mapping_save, methods=["POST"]),
+        Route("/api/cluster/mapping-data", cluster_mapping_data, max_body_size=PEER_MAX_BODY),
+        Route("/api/cluster/mapping-save", cluster_mapping_save, methods=["POST"],
+              max_body_size=PEER_MAX_BODY),
         Route("/api/cluster/peer-form", cluster_peer_form),
         Route("/api/cluster/peer-save", cluster_peer_save, methods=["POST"]),
     ]

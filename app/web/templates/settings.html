@@ -194,13 +194,19 @@
   </form>
 </section>
 
-<section class="panel panel-narrow">
+<section class="panel panel-narrow" id="cluster-settings">
   <div class="panel-head"><h2>{{ _("LAN cluster") }}</h2></div>
   <p class="muted mb-sm">{{ _('Discover other ser2net nodes on the local network (signed UDP broadcast — no mDNS) and show every node’s mappings in one table on the dashboard, each row tagged with its host (name + IP). Set the <em>same shared key</em> on every node so they trust each other; with the key, operators can start/stop/restart a peer’s mappings from the unified view. This node’s ID: <span class="mono">%(id)s</span>.', id=instance_id[:8]) }}</p>
   <form method="post" action="/settings/cluster" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="cluster_form" value="2">
     <label class="chk"><input type="checkbox" name="enabled" {% if cluster.enabled %}checked{% endif %}> {{ _("Enable LAN cluster") }}</label>
     <label>{{ _("Shared cluster key") }} <input type="password" name="key" value="{{ cluster.key }}" placeholder="{{ _('same on every node — e.g. a long random string') }}"></label>
+    <label class="chk"><input type="checkbox" name="legacy_auth" {% if cluster.legacy_auth %}checked{% endif %}> {{ _("Legacy authentication: also accept and use the unsigned key with nodes running 2.8.0 or older") }}</label>
+    {% if cluster.legacy_auth %}
+    <p class="muted">{% if cluster_legacy %}{{ _("In use with: %(nodes)s.", nodes=cluster_legacy|join(", ")) }}{% else %}{{ _("No node has used it recently.") }}{% endif %} {{ _("Nodes running 2.8.0 or older send the key itself in every request, readable on the network; once every node is upgraded, turn this off.") }}</p>
+    {% endif %}
+    <label class="chk"><input type="checkbox" name="discovery" {% if cluster.discovery %}checked{% endif %}> {{ _("Find other nodes automatically (UDP broadcast); off = manual peers only") }}</label>
     <div class="grid2">
       <label>{{ _("Discovery UDP port") }} <input type="number" name="discovery_port" value="{{ cluster.discovery_port }}" min="1" max="65535"></label>
       <label>{{ _("Advertise IP") }} <span class="muted">({{ _("blank = auto-detect") }})</span><input type="text" name="advertise_ip" value="{{ cluster.advertise_ip }}" placeholder="{{ _('this node’s LAN IP others reach') }}"></label>

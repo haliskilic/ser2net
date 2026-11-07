@@ -49,6 +49,11 @@ def _nic_addresses() -> list[tuple[str, str]]:
     return results
 
 
+def own_ipv4() -> list[str]:
+    """This host's non-loopback IPv4 addresses, sorted and unique (best effort)."""
+    return sorted({ip for _ifname, ip in _nic_addresses()})
+
+
 def primary_lan_ip() -> str | None:
     """Best-effort primary outbound IPv4 (no traffic actually sent)."""
     try:

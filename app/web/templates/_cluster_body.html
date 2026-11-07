@@ -5,6 +5,20 @@
 {% if discovery_error %}
 <div class="banner warn">{{ _("UDP auto-discovery is off: %(error)s. Manually-added peers still work (Settings → LAN cluster).", error=discovery_error) }}</div>
 {% endif %}
+{% if notes %}
+{% for c in notes.copies %}
+<div class="banner warn">{{ _("Another node uses this node’s identity: %(name)s at %(addr)s — probably a copy of this installation (its data folder, disk or VM image). Give one of the two a new identity under Settings → LAN cluster.", name=c.name, addr=c.addr) }}</div>
+{% endfor %}
+{% for d in notes.shared %}
+<div class="banner warn">{{ _("Several nodes use the identity of %(name)s (%(addrs)s) — probably copies of one installation. Give each copy a new identity under Settings → LAN cluster on that node.", name=d.name, addrs=d.addrs|join(", ")) }}</div>
+{% endfor %}
+{% if notes.other_key %}
+<div class="banner warn">{{ _("Nodes on this network broadcast with a different cluster key, so they are not shown or contacted: %(addrs)s. Set the same key on every node (Settings → LAN cluster).", addrs=notes.other_key|join(", ")) }}</div>
+{% endif %}
+{% if notes.legacy %}
+<div class="banner warn">{{ _("Nodes running 2.8.0 or older get the cluster key unsigned in every request: %(addrs)s. Upgrade them, then turn off legacy authentication under Settings → LAN cluster.", addrs=notes.legacy|join(", ")) }}</div>
+{% endif %}
+{% endif %}
 <div class="table-scroll">
 <table class="grid list cluster stackable">
   <thead>
@@ -24,6 +38,20 @@
         {% if n.reported %}<span class="muted">({{ _("its own address: %(addr)s", addr=n.reported) }})</span>{% endif %}
         {% if n.online %}
           <span class="muted"> · {{ _("up %(uptime)s", uptime=n.uptime) }}{% if n.version %} · v{{ n.version }}{% endif %} · {{ _("%(running)s/%(total)s running", running=n.running_count, total=n.mapping_count) }}</span>
+          {% if n.auth == 'legacy' %}<span class="tag tag-warn" title="{{ _('A node running 2.8.0 or older: it gets the cluster key unsigned in every request. Upgrade it.') }}">{{ _("unsigned key") }}</span>{% endif %}
+          {% if n.previous_key %}<span class="tag tag-warn" title="{{ _('It accepts only the previous cluster key: set the new key on it.') }}">{{ _("previous key") }}</span>{% endif %}
+        {% elif n.problem == 'key' %}
+          <span class="state state-error">{{ _("cluster key rejected — check the key on that node") }}</span>
+        {% elif n.problem == 'cluster-off' %}
+          <span class="state state-error">{{ _("its cluster is switched off") }}</span>
+        {% elif n.problem == 'legacy-off' %}
+          <span class="state state-error">{{ _("2.8.0 or older — legacy authentication is off on this node") }}</span>
+        {% elif n.problem == 'confirm' %}
+          <span class="state state-reconnecting">{{ _("2.8.0 or older — confirming its address…") }}</span>
+        {% elif n.problem == 'unsigned' %}
+          <span class="state state-error">{{ _("its answer is not signed with the cluster key") }}</span>
+        {% elif n.problem == 'clock' %}
+          <span class="state state-error">{{ _("its clock could not be matched") }}</span>
         {% else %}
           <span class="state state-error">{{ _("offline / unreachable") }}</span>
         {% endif %}
