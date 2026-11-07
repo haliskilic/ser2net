@@ -26,7 +26,7 @@ def target(config_path: str) -> str:
     ip = (os.environ.get("SER2NET_BIND_IP") or "").strip() or admin.get("bind_ip") or "127.0.0.1"
     try:
         port = int((os.environ.get("SER2NET_PORT") or "").strip())
-    except ValueError:  # unset, or not a number: ignored at start-up too
+    except ValueError:  # unset, or not a number (which start-up ignores as well)
         port = admin.get("port") or 8080
     host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(ip, ip)
     if ":" in host:
