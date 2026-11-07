@@ -9,8 +9,8 @@ up, so a wrong import or edit could not be undone. Checks:
   * a 2.7-style one-step POST still replaces everything (scripts keep working);
   * a classic ser2net.yaml goes through the same preview (named as such) and merge; a
     file with nothing to import is refused instead of emptying the mappings;
-  * an admin can download and restore a backup; the restore is undoable, keeps the
-    session working, and a backup without users is refused;
+  * an admin can download (without the session key) and restore a backup; the restore
+    is undoable, keeps the session working, and a backup without users is refused;
   * viewers/operators can't reach backups.
 
 Run: python3 tests/test_backups_import.py
@@ -160,6 +160,8 @@ def main():
                       json.dumps(json.loads(ConfigStore(srv.config_path).read_backup(b["name"]))["mappings"]))
         st, h, body = admin.get(f"/settings/backups/{target['name']}")
         assert st == 200 and "attachment" in h.get("Content-Disposition", "") and '"mappings"' in body
+        downloaded = json.loads(body)
+        assert "secret_key" not in downloaded and downloaded["users"], "a download leaves out the session key"
         assert op.get(f"/settings/backups/{target['name']}")[0] == 403
         assert admin.get("/settings/backups/..%2Fconfig.json")[0] == 404
         assert op.post("/settings/backups/restore", {"name": target["name"]})[0] == 403

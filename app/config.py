@@ -1091,6 +1091,9 @@ class AppConfig:
     mappings: list[MappingConfig] = field(default_factory=list)
     # What loading changed in an older config (logged at startup; never persisted).
     load_notes: list[str] = field(default_factory=list, repr=False, compare=False)
+    # Loading had to create secret_key / instance_id (config.json lacked them); the
+    # start-up saves them once (runtime.prepare_config). Never persisted.
+    ids_created: bool = field(default=False, repr=False, compare=False)
 
     # ----- (de)serialization -----
     @staticmethod
@@ -1120,6 +1123,7 @@ class AppConfig:
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
+        cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
         for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
             old_id = (raw or {}).get("id")
             if old_id and old_id != m.id:

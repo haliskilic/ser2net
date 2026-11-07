@@ -218,6 +218,32 @@ def routes(ctx: Ctx) -> list:
                     "login-required" if require_login else f"open:{role}")
         return await settings_get(request, ok=ok)
 
+    async def settings_sessions_revoke_all(request):
+        """A new session key: every web UI session ends at once, including sessions
+        signed with the key in an old copy of config.json or of a backup."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        async with state.config_lock:
+            old = state.config.secret_key
+            state.config.secret_key = secrets.token_hex(32)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                state.config.secret_key = old
+                return await settings_get(request, error=str(e))
+        state.revoked_sessions.clear()  # signed with the old key: dead anyway
+        state.log("new session key: every web UI session was signed out")
+        ctx.audit(request, "sessions_revoke_all", "")
+        resp = await settings_get(request, ok=_("Everyone was signed out. You stay signed in "
+                                                "here."))
+        me = current_user(request)
+        if me is not None and me.source != "anonymous":
+            set_session(resp, request, me)
+        return resp
+
     # ---------------- REST API token ----------------
     async def settings_api_token_post(request):
         if deny := require_role(request, "admin"):
@@ -675,7 +701,7 @@ def routes(ctx: Ctx) -> list:
         except (ConfigError, OSError):
             return PlainTextResponse(_("No such backup."), status_code=404)
         ctx.audit(request, "config_backup_download", name)
-        return Response(text, media_type="application/json",
+        return Response(_without_session_key(text), media_type="application/json",
                         headers={"Content-Disposition": f"attachment; filename={name}"})
 
     async def backup_restore(request):
@@ -841,6 +867,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
         Route("/settings/access", settings_access_post, methods=["POST"]),
+        Route("/settings/sessions/revoke-all", settings_sessions_revoke_all, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
         Route("/settings/users", settings_users_create, methods=["POST"]),
@@ -874,6 +901,20 @@ def _key_hint(key: str) -> str:
     if len(k) < 16 or len(set(k)) < 8:
         return "weak"
     return "" if k.isascii() else "ascii"
+
+
+def _without_session_key(text: str) -> str:
+    """A downloaded backup leaves out secret_key, which signs the session cookies.
+    Restoring never takes the key from a backup, and a config.json without one gets a
+    new key at the next start."""
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return text
+    if not isinstance(doc, dict) or "secret_key" not in doc:
+        return text
+    del doc["secret_key"]
+    return json.dumps(doc, indent=2, ensure_ascii=False)
 
 
 def _csv_cell(value: str) -> str:

@@ -9,10 +9,18 @@ an ended one back.
     would leave no admin who can sign in;
   * an admin can sign a user out everywhere, or set a local user's new password (which
     signs them out too); anyone can sign out their own other sessions;
+  * "Sign out everyone" makes a new session key: every session ends — also one made
+    with the key from an old copy of config.json — except the admin's own;
+  * a config.json without a session key (written by hand, or a downloaded backup, which
+    leaves the key out) gets one at the first start, and keeps it.
 
 Run: python3 tests/test_session_revocation.py
 """
 import http.cookiejar
+import json
+import os
+import shutil
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -177,6 +185,45 @@ def test_set_password(srv, admin):
     print("admin: Set password for another local user (signs them out; not self / LDAP)  OK")
 
 
+def test_revoke_all(srv, admin):
+    other = Browser(srv.base)
+    other.login("admin", PW)
+    before = srv.saved_config()
+    version = next(u["pwd_version"] for u in before["users"] if u["username"] == "admin")
+    from_copy = auth.issue_session(before["secret_key"], 3600, "admin", version)  # e.g. from an old config copy
+    assert signed_in(srv, from_copy)
+    st, _, page = admin.post("/settings/sessions/revoke-all")
+    assert st == 200 and "Everyone was signed out" in page, page[page.find("banner"):][:200]
+    assert srv.saved_config()["secret_key"] != before["secret_key"]
+    assert signed_in(srv, cookie_of(admin)), "the admin who did it stays signed in"
+    assert not signed_in(srv, cookie_of(other)) and not signed_in(srv, from_copy)
+    print("Sign out everyone: new session key, every other session (incl. one signed with the old key) ends  OK")
+
+
+def test_key_saved_at_start():
+    from app import runtime
+
+    d = tempfile.mkdtemp(prefix="s2n_key_")
+    path = os.path.join(d, "config.json")
+    with open(path, "w") as fh:
+        json.dump({"users": [user("admin", "admin")]}, fh)  # no secret_key / instance_id
+    env = os.environ.pop("SER2NET_BIND_IP", None)
+    try:
+        runtime.prepare_config(path)
+        with open(path) as fh:
+            first = json.load(fh)
+        runtime.prepare_config(path)
+        with open(path) as fh:
+            second = json.load(fh)
+    finally:
+        if env is not None:
+            os.environ["SER2NET_BIND_IP"] = env
+        shutil.rmtree(d, ignore_errors=True)
+    assert first["secret_key"] and first["instance_id"], first
+    assert (second["secret_key"], second["instance_id"]) == (first["secret_key"], first["instance_id"])
+    print("config.json without a session key: one is made at the first start and kept  OK")
+
+
 def test_signout_others(srv):
     a, b = Browser(srv.base), Browser(srv.base)
     a.login("admin", PW)
@@ -207,6 +254,7 @@ def main():
     test_versions()
     test_revoked_list()
     test_directory_switch()
+    test_key_saved_at_start()
     config = {"users": [user("admin", "admin"), user("bob", "viewer"),
                         directory_user("dir.user", "viewer")], "ldap": LDAP_ON}
     with Server(config) as srv:
@@ -217,7 +265,8 @@ def main():
         test_ldap_off(srv, admin)
         test_user_signout(srv, admin)
         test_set_password(srv, admin)
-        test_signout_others(srv)
+        test_revoke_all(srv, admin)
+        test_signout_others(srv)  # last: it signs the admin's other sessions out
     test_last_directory_admin()
     print("\nPASS: session revocation")
 
