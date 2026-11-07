@@ -743,5 +743,7 @@
   "Give this node a new identity": "Bu düğüme yeni bir kimlik ver",
   "Give this node a new identity? Everyone signed in to it is signed out (you stay signed in), and other nodes see it as a new node.": "Bu düğüme yeni bir kimlik verilsin mi? Bu düğümde oturum açmış herkesin oturumu kapanır (seninki açık kalır) ve diğer düğümler onu yeni bir düğüm olarak görür.",
   "This node has a new identity (cluster ID {0}). Everyone else signed in to it was signed out.": "Bu düğümün artık yeni bir kimliği var (cluster ID'si {0}). Bu düğümde oturum açmış diğer herkesin oturumu kapatıldı.",
-  "2.8.0 or older and doesn’t advertise its LAN address — add it as a manual peer (Settings → LAN cluster) to manage it": "2.8.0 ya da daha eski ve LAN adresini bildirmiyor — yönetmek için manuel eş olarak ekle (Ayarlar → LAN cluster)"
+  "2.8.0 or older and doesn’t advertise its LAN address — add it as a manual peer (Settings → LAN cluster) to manage it": "2.8.0 ya da daha eski ve LAN adresini bildirmiyor — yönetmek için manuel eş olarak ekle (Ayarlar → LAN cluster)",
+  "Not saved: no admin could sign in any more, because every admin account comes from {0}. Add a local admin account first (Users), or keep {0} sign-in on.": "Kaydedilmedi: tüm admin hesapları {0} üzerinden geldiği için hiçbir admin artık giriş yapamazdı. Önce bir yerel admin hesabı ekle (Kullanıcılar) ya da {0} girişini açık tut.",
+  "{0} accounts are signed out and can't sign in while {0} is off.": "{0} kapalıyken {0} hesapları giriş yapamaz; açık oturumları kapatıldı."
 }
