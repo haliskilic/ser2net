@@ -12,7 +12,9 @@ only applies when every host name the request claims (Host, and X-Forwarded-Host
 Forwarded from a reverse proxy) is an IP literal, ``localhost`` or this machine's
 own name — a page on an attacker's domain that DNS-rebinds to this UI carries the
 attacker's host name, so it never gets anonymous access (CSRF still applies to
-everything, and cluster peer actions always need a real login).
+everything, and cluster peer actions always need a real login). The first-run setup
+page has the same guard (claims_own_host); through another name it needs the one-time
+setup code (AppState.prepare_first_run).
 """
 from __future__ import annotations
 
@@ -248,6 +250,17 @@ def _claimed_hosts(headers) -> list:
     return hosts
 
 
+def claims_own_host(headers) -> bool:
+    """Every host name the request claims is this machine (is_own_host): the
+    DNS-rebinding guard of open access and first-run setup."""
+    return all(is_own_host(h) for h in _claimed_hosts(headers))
+
+
+def foreign_host(headers) -> str:
+    """The first claimed host name that is not this machine ('' if there is none)."""
+    return next((h for h in _claimed_hosts(headers) if not is_own_host(h)), "")
+
+
 def anonymous_user(cfg, headers):
     """The pseudo-user for a visitor without a session, or None when login is
     required (the default), setup isn't done yet, or a claimed host isn't this
@@ -256,7 +269,7 @@ def anonymous_user(cfg, headers):
     ui = cfg.admin_ui
     if ui.require_login or not cfg.password_set:
         return None
-    if not all(is_own_host(h) for h in _claimed_hosts(headers)):
+    if not claims_own_host(headers):
         return None
     from ..config import User
 

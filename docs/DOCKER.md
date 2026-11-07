@@ -15,7 +15,10 @@ ser2net ships an official `Dockerfile` and an example `docker-compose.yml`.
    docker compose up -d
    ```
 3. Open `http://<host>:8080` and set the admin password on first access — or create the
-   first admin without the browser (next section).
+   first admin without the browser (next section). Inside the container `<host>` is not the
+   machine's own name, so opened by a host name (not an IP address) the setup page asks for
+   a one-time code, which keeps other web pages from claiming the new install:
+   `docker exec ser2net cat /data/setup-code.txt`.
 
 ## First admin and account recovery
 

@@ -346,6 +346,13 @@ def routes(ctx: Ctx) -> list:
                                                         "oidc", "OIDC"))
 
     # ---------------- user management (admin only) ----------------
+    def _last_admin(target) -> bool:
+        """Would demoting / deleting this admin leave no admin, or none who can sign in
+        (an LDAP/OIDC admin can't while that method is off)?"""
+        cfg = state.config
+        return cfg.admin_count() <= 1 or (cfg.source_enabled(target)
+                                          and cfg.usable_admin_count() <= 1)
+
     async def settings_users_create(request):
         if deny := require_role(request, "admin"):
             return deny
@@ -379,14 +386,14 @@ def routes(ctx: Ctx) -> list:
             return csrf_failed()
         username = request.path_params["username"]
         role = form.get("role", "viewer")
-        target = state.config.get_user(username)
-        if target is None:
-            return await settings_get(request, error=_("User not found."))
-        if role not in ROLES:
-            return await settings_get(request, error=_("Invalid role."))
-        if target.role == "admin" and role != "admin" and state.config.admin_count() <= 1:
-            return await settings_get(request, error=_("Cannot demote the last admin."))
-        async with state.config_lock:
+        async with state.config_lock:  # checked under the lock: two admins at once
+            target = state.config.get_user(username)
+            if target is None:
+                return await settings_get(request, error=_("User not found."))
+            if role not in ROLES:
+                return await settings_get(request, error=_("Invalid role."))
+            if target.role == "admin" and role != "admin" and _last_admin(target):
+                return await settings_get(request, error=_("Cannot demote the last admin."))
             target.role = role
             target.pwd_version += 1  # force re-login so the new role applies everywhere
             await state.asave()
@@ -401,15 +408,15 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         username = request.path_params["username"]
-        target = state.config.get_user(username)
-        if target is None:
-            return await settings_get(request, error=_("User not found."))
         me = current_user(request)
-        if me and me.username == username:
-            return await settings_get(request, error=_("You cannot delete your own account."))
-        if target.role == "admin" and state.config.admin_count() <= 1:
-            return await settings_get(request, error=_("Cannot delete the last admin."))
-        async with state.config_lock:
+        async with state.config_lock:  # checked under the lock: two admins at once
+            target = state.config.get_user(username)
+            if target is None:
+                return await settings_get(request, error=_("User not found."))
+            if me and me.username == username:
+                return await settings_get(request, error=_("You cannot delete your own account."))
+            if target.role == "admin" and _last_admin(target):
+                return await settings_get(request, error=_("Cannot delete the last admin."))
             state.config.users = [u for u in state.config.users if u.username != username]
             await state.asave()
         state.log(f"user deleted: {username}")

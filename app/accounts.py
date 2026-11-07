@@ -112,6 +112,13 @@ def _set_password(config, username: str, password_hash: str) -> Change:
                   "signed out", "user_password_set", username, restore)
 
 
+def provision_requested(environ) -> bool:
+    """SER2NET_ADMIN_PASSWORD_FILE / SER2NET_ADMIN_USER is set: the first admin comes
+    from the environment, never from the setup page."""
+    return bool((environ.get("SER2NET_ADMIN_PASSWORD_FILE") or "").strip()
+                or (environ.get("SER2NET_ADMIN_USER") or "").strip())
+
+
 def provision_from_env(config, environ) -> tuple[Optional[str], Optional[str]]:
     """SER2NET_ADMIN_PASSWORD_FILE (+ SER2NET_ADMIN_USER): add the first admin to an
     install that has no account yet. Returns (the name created, a line for the log);

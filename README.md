@@ -254,7 +254,11 @@ Kendin derlemek için:
 İlk çalıştırmada:
 1. **Konsolda** arayüzün hangi IP'den erişileceği sorulur (makine IP'leri veya custom)
    ve port (varsayılan 8080). Başsız/servis ortamında güvenli varsayılan **127.0.0.1**.
-2. Tarayıcıda açılan adrese gidin; **ilk ekranda admin parolasını belirleyin**.
+2. Tarayıcıda açılan adrese gidin; **ilk ekranda admin parolasını belirleyin**. Sayfayı
+   makinenin IP adresiyle ya da `localhost` ile açın: başka bir host adıyla (reverse proxy,
+   Docker host'unun adı) gelindiğinde kurulum sayfası ayrıca `data/setup-code.txt`
+   içindeki tek kullanımlık kodu ister; böylece başka bir web sayfası yeni bir kurulumu ele
+   geçiremez (DNS rebinding). Tarayıcı yoksa: `ser2net --set-password admin` (bkz. Güvenlik).
 3. Panodan **+ Eşleme ekle** ile COM/tty seçip IP:port'a eşleyin.
 
 Bind IP'yi sonradan değiştirmek:
@@ -517,6 +521,8 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
   yollar dosya adına indirgenir ve açılışta log'a yazılır.
 - `tls/` — self-signed üretilirse sertifika/anahtar.
+- `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
+  ilk admin hesabı oluşana kadar durur.
 
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş

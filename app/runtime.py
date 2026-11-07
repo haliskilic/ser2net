@@ -180,8 +180,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
-    if not config.password_set:
-        state.log("no admin password set yet — open the UI to complete first-run setup")
+    state.prepare_first_run()
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:
         state.log("WARNING: admin UI is bound to a network address over plain HTTP — "
                   "the password and session cookies travel unencrypted. Configure TLS "
