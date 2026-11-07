@@ -722,7 +722,6 @@
   "its answer is not signed with the cluster key": "yanıtı cluster anahtarıyla imzalı değil",
   "its clock could not be matched": "saati eşleştirilemedi",
   "its cluster is switched off": "cluster'ı kapalı",
-  "2.8.0 or older — confirming its address…": "2.8.0 ya da daha eski — adresi doğrulanıyor…",
   "2.8.0 or older — legacy authentication is off on this node": "2.8.0 ya da daha eski — bu düğümde eski kimlik doğrulama kapalı",
   "previous key": "önceki anahtar",
   "unsigned key": "imzasız anahtar",
@@ -743,5 +742,6 @@
   "For a node copied from another installation (its data folder, disk or VM image): a new cluster ID and a new session key, so the copies no longer hide each other in the cluster and a sign-in to one is not valid on the other.": "Başka bir kurulumdan kopyalanmış bir düğüm için (veri klasörü, diski ya da VM imajı): yeni bir cluster ID'si ve yeni bir oturum anahtarı verir; böylece kopyalar cluster'da birbirini gizlemez ve birinde açılan oturum diğerinde geçerli olmaz.",
   "Give this node a new identity": "Bu düğüme yeni bir kimlik ver",
   "Give this node a new identity? Everyone signed in to it is signed out (you stay signed in), and other nodes see it as a new node.": "Bu düğüme yeni bir kimlik verilsin mi? Bu düğümde oturum açmış herkesin oturumu kapanır (seninki açık kalır) ve diğer düğümler onu yeni bir düğüm olarak görür.",
-  "This node has a new identity (cluster ID {0}). Everyone else signed in to it was signed out.": "Bu düğümün artık yeni bir kimliği var (cluster ID'si {0}). Bu düğümde oturum açmış diğer herkesin oturumu kapatıldı."
+  "This node has a new identity (cluster ID {0}). Everyone else signed in to it was signed out.": "Bu düğümün artık yeni bir kimliği var (cluster ID'si {0}). Bu düğümde oturum açmış diğer herkesin oturumu kapatıldı.",
+  "2.8.0 or older and doesn’t advertise its LAN address — add it as a manual peer (Settings → LAN cluster) to manage it": "2.8.0 ya da daha eski ve LAN adresini bildirmiyor — yönetmek için manuel eş olarak ekle (Ayarlar → LAN cluster)"
 }

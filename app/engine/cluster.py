@@ -25,11 +25,12 @@ its reply for that request. So a request seen on the network can't be sent again
 this node or to another one, and a reply can't be forged or altered. Releases up to
 2.8.0 only know ``X-Cluster-Key``, the raw key: while ``legacy_auth`` is on, a node
 accepts it, and sends it only to such peers - one whose signed beacon says it is
-older, or a manual peer that refused a signed request the way older releases do
-(never one that has answered a signed request since this node started). Beacons
-carry the protocol version, a random id of the sending process (two processes with
-one node id are copies of one installation) and the sender's own addresses; a beacon
-not newer than the last one from its sender is dropped.
+older, at the address that beacon advertises (never at the address a beacon came from:
+beacons can be replayed from anywhere), or a manual peer that refused a signed request
+the way older releases do (never one that has answered a signed request since this
+node started). Beacons carry the protocol version, a random id of the sending process
+(two processes with one node id are copies of one installation) and the sender's own
+addresses; a beacon not newer than the last one from its sender is dropped.
 """
 from __future__ import annotations
 
@@ -72,8 +73,6 @@ CLOCK_WINDOW_S = 60.0            # a signed request's time may differ this much 
 NONCES_KEPT = 10000              # signed requests remembered against a replay, at most
 KEY_OVERLAP_S = 7 * 86400        # a replaced key stays accepted this long (a planned change)
 BOOT_SKEW_S = 300.0              # a new run of a node may be dated this much before its last beacon
-CONFIRM_S = BEACON_INTERVAL + 1  # the raw key only goes to an address taken from a beacon's
-                                 # packet once beacons from it this far apart agree on it
 NOTE_TTL = 30.0                  # how long a node seen with another key / this node's id is shown
 LEGACY_SEEN_S = 600.0            # how long a node that sent the raw key counts as using it
 _FIELD = re.compile(r"[A-Za-z0-9_.-]{0,128}")
@@ -99,8 +98,9 @@ _PROBLEMS = {
     "cluster-off": "its cluster is off",
     "legacy-off": ("it is a node running 2.8.0 or older (or answers like one), which only "
                    "knows the unsigned key, and legacy authentication is off on this node"),
-    "confirm": ("waiting for a second beacon before sending it the unsigned key (its "
-                "address is the one its beacon came from)"),
+    "manual-only": ("it is a node running 2.8.0 or older that doesn't advertise its LAN "
+                    "address; the unsigned key only goes to an address a node advertises or "
+                    "to a manual peer, so add it as a manual peer to manage it from here"),
     "unsigned": "its reply is not signed with the cluster key",
     "clock": "its clock and this node's could not be matched",
 }
@@ -452,17 +452,11 @@ class ClusterDiscovery:
         if row is None:
             return  # not newer than what this node has from that sender: a replay
         now = time.time()
-        old = self._peers.get(row)
-        if old is None or (old["ip"], old["port"]) != (ip, port):
-            since, count = now, 1          # (how long it has been at this address)
-        else:
-            since, count = old["since"], old["count"] + 1
         scheme = p.get("scheme") if p.get("scheme") in ("http", "https") else "http"
         self._peers[row] = {
             "id": pid, "name": str(p.get("name", "?")), "ip": ip,
             "port": port, "scheme": scheme, "last_seen": now,
             "v": v, "key": kidx, "offset": t - now, "from_packet": from_packet,
-            "since": since, "count": count,
         }
         self._other_key.pop(src, None)
 
@@ -557,9 +551,11 @@ class ClusterDiscovery:
 
     def all_targets(self) -> list[dict]:
         """Auto-discovered peers + manual peers, deduped by (ip, port). When a manual
-        peer is also auto-discovered the richer auto entry wins (and of two auto entries
-        at one address, e.g. a node that just took a new id, the one heard from last)."""
-        now, live = time.time(), self.peers()
+        peer is also auto-discovered the richer auto entry wins, marked "configured" (and
+        of two auto entries at one address, e.g. a node that just took a new id, the one
+        heard from last)."""
+        live, manual = self.peers(), self.manual_targets()
+        configured = {(m["ip"], m["port"]) for m in manual}
         newest: dict[tuple, dict] = {}
         for p in live:
             k = (p["ip"], p["port"])
@@ -571,9 +567,8 @@ class ClusterDiscovery:
             if newest[k] is not p:
                 continue
             seen.add(k)
-            confirmed = not p["from_packet"] or (p["count"] >= 2 and now - p["since"] >= CONFIRM_S)
-            targets.append({**p, "source": "auto", "confirmed": confirmed})
-        for m in self.manual_targets():
+            targets.append({**p, "source": "auto", "configured": k in configured})
+        for m in manual:
             if (m["ip"], m["port"]) not in seen:
                 seen.add((m["ip"], m["port"]))
                 targets.append(m)
@@ -685,8 +680,7 @@ class ClusterDiscovery:
             with contextlib.suppress(Exception):
                 self._transport.close()
             self._transport = None
-        self._peers.clear()
-        self._ids.clear()
+        self._peers.clear()   # (not _ids: old beacons must stay old after a settings save)
         self._problems.clear()
         self._links.clear()        # the keys may have changed (what a peer signed up for has not)
         self._other_key.clear()
@@ -919,8 +913,11 @@ class ClusterDiscovery:
         if older:
             if not self.cluster.legacy_auth:
                 return "legacy-off"
-            if not t.get("confirmed", True):
-                return "confirm"
+            if t.get("from_packet") and not t.get("configured"):
+                # its beacon names no address of its own (127.0.0.1: no default route), and
+                # the address a beacon came from proves nothing - a beacon can be replayed
+                # from anywhere: the raw key goes only where it says it is, or to a manual peer
+                return "manual-only"
         idx = min(idx, len(keys) - 1)
         offset = link.offset if link.offset is not None else float(t.get("offset") or 0.0)
         return {"mode": "legacy" if older else "v2", "key": keys[idx], "idx": idx, "to": to,

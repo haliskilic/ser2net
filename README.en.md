@@ -400,10 +400,13 @@ role changes. While it is on, the UI shows a warning and startup logs it.
 - **Older nodes (legacy authentication):** nodes running 2.8.0 or older only know the raw
   key, sent in every request. While *Legacy authentication* is ticked (Settings → LAN
   cluster; on by default, so a rolling upgrade doesn't split the fleet) a node accepts it and
-  uses it with exactly those nodes: ones whose beacon says they are older, and manual peers that refuse a
-  signed request the way older releases do (never one that has answered a signed request).
-  The fleet view tags them **unsigned key** and lists them in a banner. **Once every node is
-  upgraded, untick it on every node.**
+  uses it with exactly those nodes: ones whose beacon says they are older (at the address the
+  beacon advertises), and manual peers that refuse a signed request the way older releases do
+  (never one that has answered a signed request). An older node that advertises no LAN
+  address (no default route: its beacon says 127.0.0.1) is only managed from other nodes once
+  it is added there as a manual peer; the fleet view says so. The fleet view tags these nodes
+  **unsigned key** and lists them in a banner. **Once every node is upgraded, untick it on
+  every node.**
 - **The key:** anyone on the network can try to guess a weak key offline from the beacons,
   and the key lets a node start, stop and change the mappings of every other node: use at
   least 16 random characters (*Generate a new key and save* makes one, shown once). The
