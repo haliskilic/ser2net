@@ -856,9 +856,39 @@ class OidcSettings:
             raise ConfigError(_("OIDC default role must be one of {0} or blank.").format(ROLES))
 
 
-def parse_cluster_peer(entry: str) -> tuple[str, str, int]:
+_PEER_ZONE = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def peer_host(host: str) -> str | None:
+    """A cluster peer's host in canonical form: an IP address (IPv6 without brackets,
+    with an optional %zone) or a host name. None when it is neither — a value with
+    anything in it that could change the URL built from it."""
+    h = str(host or "").strip()
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    addr, sep, zone = h.partition("%")
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if sep and not (ip.version == 6 and _PEER_ZONE.fullmatch(zone)):
+            return None
+        return f"{ip}%{zone}" if sep else str(ip)
+    labels = (h[:-1] if h.endswith(".") else h).split(".")
+    if len(h) <= 253 and all(
+            0 < len(lb) <= 63 and lb[0].isalnum() and lb[-1].isalnum()
+            and all(c.isalnum() or c in "-_" for c in lb) for lb in labels):
+        return h
+    return None
+
+
+def parse_cluster_peer(entry: str, strict: bool = False) -> tuple[str, str, int]:
     """Parse a manual cluster-peer entry into (scheme, host, port). Accepts
-    'host:port' (defaults to http) or 'http(s)://host:port'. Raises ConfigError."""
+    'host:port' (defaults to http) or 'http(s)://host:port'. Raises ConfigError.
+    strict (when an entry is edited) also requires the host to be an IP address or a
+    host name; validate() stays lenient, so an entry an older release accepted still
+    loads (one that is no address is just never contacted)."""
     s = (entry or "").strip()
     scheme = "http"
     if "://" in s:
@@ -867,7 +897,7 @@ def parse_cluster_peer(entry: str) -> tuple[str, str, int]:
     if scheme not in ("http", "https"):
         raise ConfigError(_("Cluster peer scheme must be http or https: {0}").format(entry))
     host, sep, port_s = s.rpartition(":")
-    if not sep or not host:
+    if not sep or not host or (strict and peer_host(host) is None):
         raise ConfigError(_("Cluster peer must be host:port — got: {0}").format(entry))
     try:
         port = int(port_s)

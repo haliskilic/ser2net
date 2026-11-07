@@ -194,6 +194,24 @@ def test_endpoints():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def trap_listener():
+    """A listening socket nothing should ever connect to (the kernel queues a connection
+    attempt even if it is never accepted, so trapped() sees it)."""
+    trap = socket.socket()
+    trap.bind(("127.0.0.1", 0))
+    trap.listen(8)
+    trap.setblocking(False)
+    return trap
+
+
+def trapped(trap) -> bool:
+    try:
+        trap.accept()[0].close()
+        return True
+    except BlockingIOError:
+        return False
+
+
 def start_node(cfg_obj):
     tmp = tempfile.mkdtemp(prefix="ser2net_cl_")
     cfg = os.path.join(tmp, "config.json")
@@ -248,6 +266,16 @@ def test_manual_peer_and_remote_control():
             except urllib.error.HTTPError as e:
                 return e.code
 
+        def get_a(path, header=True):
+            req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}")
+            if header:  # what htmx sends with every request
+                req.add_header("X-CSRF-Token", csrf())
+            try:
+                r = op.open(req, timeout=10)
+            except urllib.error.HTTPError as e:
+                r = e
+            return r.status if hasattr(r, "status") else r.code, r.read().decode()
+
         op.open(f"http://127.0.0.1:{ui_a}/setup")
         post_a("/setup", {"username": "admin", "password": "adminpass123",
                           "password2": "adminpass123", "_csrf": csrf()})
@@ -269,7 +297,7 @@ def test_manual_peer_and_remote_control():
         assert code == 403, f"control without key must be 403, got {code}"
 
         # remote START via A's proxy -> B's mapping becomes enabled
-        ctrl = {"scheme": "http", "host": "127.0.0.1", "port": str(ui_b), "mid": mid, "action": "start"}
+        ctrl = {"host": "127.0.0.1", "port": str(ui_b), "mid": mid, "action": "start"}
         assert post_a("/api/cluster/control-peer", ctrl) == 200, "remote start should be accepted"
         for _ in range(20):
             _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
@@ -279,8 +307,11 @@ def test_manual_peer_and_remote_control():
         assert json.loads(body)["mappings"][0]["enabled"] is True, "remote start did not take effect"
         print("remote start of a peer's mapping via the unified view  OK")
 
-        # remote STOP via A's proxy -> B's mapping becomes disabled
-        ctrl["action"] = "stop"
+        # remote STOP via A's proxy -> B's mapping becomes disabled. A scheme in the
+        # request is not used: the call goes to the peer's own address, never elsewhere.
+        trap = trap_listener()
+        crafted = f"http://127.0.0.1:{trap.getsockname()[1]}/?x="
+        ctrl.update(action="stop", scheme=crafted)
         assert post_a("/api/cluster/control-peer", ctrl) == 200
         for _ in range(20):
             _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
@@ -288,7 +319,8 @@ def test_manual_peer_and_remote_control():
                 break
             time.sleep(0.1)
         assert json.loads(body)["mappings"][0]["enabled"] is False, "remote stop did not take effect"
-        print("remote stop of a peer's mapping via the unified view  OK")
+        assert not trapped(trap), "a scheme from the request must not choose where the call goes"
+        print("remote stop of a peer's mapping via the unified view (request scheme unused)  OK")
 
         # the proxy refuses an address that isn't a known cluster peer (anti-SSRF)
         bad = {"scheme": "http", "host": "9.9.9.9", "port": "1", "mid": mid, "action": "start"}
@@ -296,18 +328,23 @@ def test_manual_peer_and_remote_control():
         print("control proxy rejects an unknown (non-peer) address  OK")
 
         # ---- remote EDIT: load the peer's mapping into the form, change it, save ----
-        form_url = (f"/api/cluster/peer-form?scheme=http&host=127.0.0.1"
-                    f"&port={ui_b}&mid={mid}")
-        html = op.open(f"http://127.0.0.1:{ui_a}{form_url}", timeout=10).read().decode()
+        form_url = "/api/cluster/peer-form?" + urllib.parse.urlencode(
+            {"host": "127.0.0.1", "port": ui_b, "mid": mid, "scheme": crafted})
+        code, html = get_a(form_url)
+        assert code == 200, (code, html[:300])
         assert "/api/cluster/peer-save" in html and 'name="host"' in html, html[:400]
+        assert 'name="scheme"' not in html, "the form must not carry a scheme back"
         assert "Edit mapping" in html and "/dev/ttyTEST" in html, "form should show peer's values"
+        assert not trapped(trap), "the form must be loaded from the peer itself"
+        # a GET without the token header (a link from another site) makes no peer call
+        assert get_a(form_url, header=False)[0] == 403, "peer-form needs the CSRF header"
         print("remote edit: peer's mapping loads into the form (routed to peer-save)  OK")
 
         # peer-facing save is key-guarded
         code, _ = raw_request(ui_b, "/api/cluster/mapping-save", method="POST")
         assert code == 403, f"mapping-save without key must be 403, got {code}"
 
-        edit = {"_csrf": csrf(), "scheme": "http", "host": "127.0.0.1", "port": str(ui_b),
+        edit = {"_csrf": csrf(), "host": "127.0.0.1", "port": str(ui_b), "scheme": crafted,
                 "id": mid, "name": "REMOTE1", "enabled": "on", "kind": "net",
                 "serial_port": "/dev/ttyEDITED", "serial_baudrate": "19200",
                 "serial_bytesize": "8", "serial_parity": "N", "serial_stopbits": "1",
@@ -322,6 +359,8 @@ def test_manual_peer_and_remote_control():
             time.sleep(0.1)
         assert json.loads(body)["mappings"][0]["serial"] == "/dev/ttyEDITED", \
             "remote edit did not change the peer's mapping"
+        assert not trapped(trap), "the edit must be saved on the peer itself"
+        trap.close()
         print("remote edit of a peer's mapping took effect on the peer  OK")
 
         # the proxy forwards only known, validated fields: a URL serial port is refused
