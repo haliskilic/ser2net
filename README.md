@@ -243,7 +243,10 @@ Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
 Linux notları:
 - `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
-  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin.
+  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin. Çalıştığı sürece bu kopyayı
+  kilitli tutar ve erişim zamanlarını tazeler; böylece systemd-tmpfiles, tmpreaper gibi
+  geçici dosya temizleyicileri uzun süre çalışan bir binary'nin dosyalarını silmez.
+  Öldürülen bir sürecin geride bıraktığı kopya ise her zamanki gibi temizlenir.
 - Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
   paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır.
 
