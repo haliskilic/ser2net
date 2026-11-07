@@ -745,5 +745,17 @@
   "This node has a new identity (cluster ID {0}). Everyone else signed in to it was signed out.": "Bu düğümün artık yeni bir kimliği var (cluster ID'si {0}). Bu düğümde oturum açmış diğer herkesin oturumu kapatıldı.",
   "2.8.0 or older and doesn’t advertise its LAN address — add it as a manual peer (Settings → LAN cluster) to manage it": "2.8.0 ya da daha eski ve LAN adresini bildirmiyor — yönetmek için manuel eş olarak ekle (Ayarlar → LAN cluster)",
   "Not saved: no admin could sign in any more, because every admin account comes from {0}. Add a local admin account first (Users), or keep {0} sign-in on.": "Kaydedilmedi: tüm admin hesapları {0} üzerinden geldiği için hiçbir admin artık giriş yapamazdı. Önce bir yerel admin hesabı ekle (Kullanıcılar) ya da {0} girişini açık tut.",
-  "{0} accounts are signed out and can't sign in while {0} is off.": "{0} kapalıyken {0} hesapları giriş yapamaz; açık oturumları kapatıldı."
+  "{0} accounts are signed out and can't sign in while {0} is off.": "{0} kapalıyken {0} hesapları giriş yapamaz; açık oturumları kapatıldı.",
+  "Sign in to manage your sessions.": "Oturumlarını yönetmek için giriş yap.",
+  "Your other sessions were signed out.": "Diğer oturumların kapatıldı.",
+  "'{0}' was signed out everywhere.": "'{0}' kullanıcısının tüm oturumları kapatıldı.",
+  "'{0}' signs in with {1}; their password is managed there.": "'{0}' {1} ile giriş yapıyor; parolası orada yönetilir.",
+  "To change your own password, use the form at the top (it asks for the current one).": "Kendi parolanı değiştirmek için en üstteki formu kullan (mevcut parolanı sorar).",
+  "New password set for '{0}'; they were signed out everywhere.": "'{0}' için yeni parola belirlendi; kullanıcının tüm oturumları kapatıldı.",
+  "Ends your sign-ins in other browsers and on other devices; this one stays signed in.": "Diğer tarayıcılardaki ve cihazlardaki girişlerini kapatır; bu oturum açık kalır.",
+  "Sign out my other sessions": "Diğer oturumlarımı kapat",
+  "Sign out": "Oturumları kapat",
+  "Set another user’s password": "Başka bir kullanıcının parolasını belirle",
+  "For someone who forgot theirs; it also signs that user out everywhere. “Sign out” in the table ends a user’s sessions without changing anything else.": "Parolasını unutan biri için; kullanıcının tüm oturumları da kapatılır. Tablodaki “Oturumları kapat” ise başka hiçbir şeyi değiştirmeden yalnızca oturumları kapatır.",
+  "Set password": "Parolayı belirle"
 }

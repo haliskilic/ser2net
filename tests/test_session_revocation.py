@@ -7,6 +7,8 @@ an ended one back.
     user's other sessions stay;
   * switching LDAP (or OIDC) off ends its accounts' sessions — but is refused while it
     would leave no admin who can sign in;
+  * an admin can sign a user out everywhere, or set a local user's new password (which
+    signs them out too); anyone can sign out their own other sessions;
 
 Run: python3 tests/test_session_revocation.py
 """
@@ -138,6 +140,55 @@ def test_logout(srv):
     print("logout: a copy of that cookie is refused; the user's other session stays  OK")
 
 
+def test_user_signout(srv, admin):
+    bob = Browser(srv.base)
+    bob.login("bob", PW)
+    token = cookie_of(bob)
+    st, _, page = admin.post("/settings/users/bob/signout")
+    assert st == 200 and "was signed out everywhere" in page, page[page.find("banner"):][:200]
+    assert not signed_in(srv, token)
+    Browser(srv.base).login("bob", PW)  # signing in again works
+    print("admin: Sign out ends all of a user's sessions  OK")
+
+
+def test_set_password(srv, admin):
+    bob = Browser(srv.base)
+    bob.login("bob", PW)
+    token = cookie_of(bob)
+    new = "reset-pass-2"
+    for who, problem in (("admin", "use the form at the top"), ("dir.user", "signs in with LDAP"),
+                         ("nobody", "User not found")):
+        st, _, page = admin.post("/settings/users/password", {"username": who, "password": new,
+                                                              "password2": new})
+        assert problem in page, (who, page[page.find("banner"):][:200])
+    st, _, page = admin.post("/settings/users/password", {"username": "bob", "password": new,
+                                                          "password2": "other-pass"})
+    assert "do not match" in page
+    st, _, page = admin.post("/settings/users/password", {"username": "bob", "password": new,
+                                                          "password2": new})
+    assert st == 200 and "New password set for &#39;bob&#39;" in page, page[page.find("banner"):][:200]
+    assert not signed_in(srv, token), "the user's sessions must end with the new password"
+    st, _, _ = Browser(srv.base).post("/login", {"username": "bob", "password": PW})
+    assert st == 401, "the old password still works"
+    Browser(srv.base).login("bob", new)
+    st, _, page = admin.get("/settings")
+    assert 'action="/settings/users/password"' in page and '<option value="bob">' in page
+    assert '<option value="admin">' not in page and '<option value="dir.user">' not in page
+    print("admin: Set password for another local user (signs them out; not self / LDAP)  OK")
+
+
+def test_signout_others(srv):
+    a, b = Browser(srv.base), Browser(srv.base)
+    a.login("admin", PW)
+    b.login("admin", PW)
+    tb = cookie_of(b)
+    st, _, page = a.post("/settings/sessions/signout-others")
+    assert st == 200 and "Your other sessions were signed out" in page
+    assert signed_in(srv, cookie_of(a)), "this session must stay signed in"
+    assert not signed_in(srv, tb)
+    print("Sign out my other sessions: the others end, this one stays  OK")
+
+
 def test_recreated_user(srv, admin):
     bob = Browser(srv.base)
     bob.login("bob", PW)
@@ -164,6 +215,9 @@ def main():
         test_recreated_user(srv, admin)
         test_logout(srv)
         test_ldap_off(srv, admin)
+        test_user_signout(srv, admin)
+        test_set_password(srv, admin)
+        test_signout_others(srv)
     test_last_directory_admin()
     print("\nPASS: session revocation")
 
