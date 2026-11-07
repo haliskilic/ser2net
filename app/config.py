@@ -971,6 +971,9 @@ class ClusterSettings:
         known = {f.name for f in dataclasses.fields(ClusterSettings)}
         c = ClusterSettings(**{k: v for k, v in d.items() if k in known})
         c.peers = [str(p).strip() for p in (c.peers or []) if str(p).strip()]
+        # a hand-edited key of null or a number: "" (cluster off, which start-up reports) or
+        # the number as text, instead of failing wherever the key is used
+        c.key = "" if c.key is None else str(c.key)
         # the fields added after 2.8.0: a hand-edited value of the wrong type takes the default
         c.previous_key = c.previous_key if isinstance(c.previous_key, str) else ""
         c.previous_until = _epoch(c.previous_until)

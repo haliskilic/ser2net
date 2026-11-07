@@ -49,6 +49,39 @@ def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None)
     return MappingRunner(mapping, logger=logger, trace_dir=trace_dir)
 
 
+class _Unbuildable:
+    """Stands in for a mapping whose runner can't be built from its settings (a hand-edited
+    value of the wrong type), so its status says why and the rest keeps running; starting
+    it fails with that error."""
+
+    def __init__(self, error: Exception):
+        self.error = f"its settings can't be used: {error}"
+        self.status = RunnerStatus(state="stopped")
+
+    async def start(self) -> None:
+        raise RuntimeError(self.error)
+
+    async def stop(self) -> None:
+        pass
+
+    # the console attaches to any runner: there is nothing to watch or write to here
+    def add_monitor(self, mon) -> None:
+        pass
+
+    def discard_monitor(self, mon) -> None:
+        pass
+
+    async def serial_write(self, data: bytes) -> None:
+        pass
+
+
+def _build_runner(mapping: MappingConfig, logger, trace_dir: Optional[str]):
+    try:
+        return make_runner(mapping, logger, trace_dir)
+    except Exception as e:  # only this mapping is down
+        return _Unbuildable(e)
+
+
 class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
@@ -84,10 +117,7 @@ class Supervisor:
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:
         """Register a non-running runner so status is queryable for disabled mappings."""
         if mapping.id not in self._runners:
-            try:
-                r = make_runner(mapping, self._logger_factory(mapping), self.trace_dir)
-            except Exception:  # see apply_mapping; start-up already warned about it
-                return
+            r = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir)
             r.status.state = "stopped"
             self._runners[mapping.id] = r
             if mapping.id not in self._order:
@@ -101,11 +131,7 @@ class Supervisor:
             with contextlib.suppress(Exception):
                 await old.stop()
 
-        try:
-            runner = make_runner(mapping, self._logger_factory(mapping), self.trace_dir)
-        except Exception as e:  # a hand-edited value of the wrong type: only this one is down
-            self.log(f"[{mapping.name}] start failed: {e}")
-            return False, str(e)
+        runner = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
         async with self._lock:

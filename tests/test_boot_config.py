@@ -215,6 +215,12 @@ def test_problems_listed():
     else:
         raise AssertionError("validate() accepted a clash")
     assert AppConfig().problems() == []
+    for key in (None, 1234):  # a hand-edited key that is not text must not break the start
+        odd = AppConfig.from_dict({"cluster": {"enabled": True, "key": key}})
+        assert odd.cluster.key == ("" if key is None else "1234") and \
+            odd.cluster.active is (key is not None), odd.cluster
+    assert AppConfig.from_dict({"cluster": {"enabled": True, "key": None}}).problems() == [
+        "LAN cluster: Cluster is enabled but no shared key is set."]
     print("problems(): every rejected part (section or mapping) by name, every clash  OK")
 
 
@@ -340,7 +346,10 @@ def test_invalid_settings_still_start():
         st, _h, _body = b.get("/")
         assert st == 200, st
         st, _h, table = b.get("/api/status")  # the dashboard's mapping table
-        assert st == 200 and "baud-typo" in table and "state-error" in table, (st, table[-1500:])
+        assert st == 200, st
+        row = table[table.index('data-mid="b00000000004"'):]
+        row = row[:row.index("</tr>")]  # the mapping its runner can't even be built for
+        assert "state-error" in row and "its settings can&#39;t be used" in row, row
         with socket.create_connection(("127.0.0.1", ports["acl"]), timeout=5):
             pass
         print("rejected settings: logged per part, accepted, saved as they were; UI up, the "
@@ -473,6 +482,9 @@ def test_fatal_with_one_line():
             msg = exits_with(runtime._require_admin_tls, AdminUI(tls_cert=key, tls_key=key))
             os.chmod(key, stat.S_IRUSR | stat.S_IWUSR)
             assert "(mode 0000)" in msg and "make it readable for that account" in msg, msg
+        msg = exits_with(runtime._require_admin_tls, AdminUI(tls_cert=True, tls_key=True))
+        assert "admin_ui.tls_cert in config.json must be a file name, not True" in msg, msg
+        os.fstat(1)  # stdout is still open (open(True) would have closed it)
         runtime._require_admin_tls(AdminUI())  # no TLS: nothing to check
         print("unreadable admin UI certificate: stop with one line (no fallback to HTTP)  OK")
     finally:

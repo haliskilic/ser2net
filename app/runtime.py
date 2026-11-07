@@ -235,7 +235,11 @@ def _require_admin_tls(admin) -> None:
     No fallback to plain HTTP: it would send passwords in clear where TLS was set up."""
     if not admin.tls_enabled:
         return
-    for what, path in (("certificate", admin.tls_cert), ("key", admin.tls_key)):
+    for field, what, path in (("tls_cert", "certificate", admin.tls_cert),
+                              ("tls_key", "key", admin.tls_key)):
+        if not isinstance(path, str):  # a hand edit: open(True) would open (and close) stdout
+            raise SystemExit(f"ser2net: admin_ui.{field} in config.json must be a file name, "
+                             f"not {path!r}")
         try:
             with open(path, "rb"):
                 pass
