@@ -17,6 +17,9 @@ permissions:
 
 jobs:
   standalone:
+    permissions:
+      contents: read
+      actions: read       # the reusable workflow requests it (SignPath); the caller must grant it
     uses: ./.github/workflows/standalone.yml
     with:
       publish: true
@@ -34,6 +37,7 @@ jobs:
       id-token: write        # build provenance / SBOM attestations
       attestations: write
     steps:
+      - uses: actions/checkout@v7   # first, so the clean checkout doesn't wipe the artifacts below
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -53,6 +57,8 @@ jobs:
           cd out
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
+      - name: Every platform ships the same supported CPython/OpenSSL
+        run: python3 tools/release_guard.py sboms out/*.cdx.json --min-openssl 3.5
       - name: Build provenance attestation (gh attestation verify <file> -R ${{ github.repository }})
         uses: actions/attest-build-provenance@v4
         with:
@@ -82,7 +88,9 @@ jobs:
 
   image:
     name: push the image to GHCR (amd64 + arm64)
-    needs: docker-test
+    # also needs the standalone build (incl. Windows signing) to pass, so a failed exe
+    # release doesn't still push the image and leave a split release
+    needs: [docker-test, standalone]
     runs-on: ubuntu-latest
     permissions:
       contents: read
