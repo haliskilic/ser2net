@@ -27,7 +27,7 @@ from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
 from .notify import Notifier
-from .web.auth import LoginRateLimiter
+from .web.auth import LoginRateLimiter, RevokedSessions
 
 # Per-mapping log retention (automatic maintenance).
 LOG_MAX_BYTES = 100 * 1024 * 1024     # cap each mapping log at 100 MB
@@ -112,6 +112,7 @@ class AppState:
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
+        self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
         # uploaded imports waiting for the user to confirm the preview: token -> item
         self.pending_imports: dict[str, dict] = {}
         self.notifier = Notifier(self)

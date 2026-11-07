@@ -134,6 +134,10 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
+        # the cookie is a signed token: end it on the server too, so a copy of it is
+        # refused from now on (not just deleted in this browser)
+        state.revoked_sessions.add(state.config.secret_key,
+                                   request.cookies.get(auth.SESSION_COOKIE))
         ctx.audit(request, "logout")
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(auth.SESSION_COOKIE, path="/")

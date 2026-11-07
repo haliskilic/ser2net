@@ -2,7 +2,9 @@
 an ended one back.
 
   * a new account starts at a random session version, so deleting a user and creating
-    the same name again (even with another role) does not revive the old cookies.
+    the same name again (even with another role) does not revive the old cookies;
+  * logout ends that session on the server: a copy of its cookie is refused, the same
+    user's other sessions stay;
 
 Run: python3 tests/test_session_revocation.py
 """
@@ -11,7 +13,8 @@ import urllib.request
 
 from _server import Browser, Server
 
-from app.config import new_pwd_version
+from app.config import AppConfig, new_pwd_version
+from app.web import auth
 from app.web.auth import hash_password
 
 PW = "revoke-pass-1"
@@ -51,6 +54,37 @@ def test_versions():
     print("new accounts start at a random session version  OK")
 
 
+def test_revoked_list():
+    cfg = AppConfig.from_dict({"users": [user("admin", "admin")]})
+    revoked = auth.RevokedSessions()
+    token = auth.issue_session(cfg.secret_key, 600, "admin", 1)
+    other = auth.issue_session(cfg.secret_key, 600, "admin", 1)  # another sign-in, same second
+    assert other != token
+    assert auth.session_user(cfg, token, revoked) is not None
+    assert not revoked.add(cfg.secret_key, "garbage") and not revoked.add("other-key", token)
+    assert revoked.add(cfg.secret_key, token)
+    assert auth.session_user(cfg, token, revoked) is None
+    assert auth.session_user(cfg, token) is not None, "without the list: the old behaviour"
+    old_max, revoked.MAX_ENTRIES = revoked.MAX_ENTRIES, 1
+    try:
+        assert revoked.add(cfg.secret_key, other) and token not in revoked and other in revoked
+    finally:
+        revoked.MAX_ENTRIES = old_max
+    print("revocation list: only valid sessions are added, bounded, checked by session_user  OK")
+
+
+def test_logout(srv):
+    a, b = Browser(srv.base), Browser(srv.base)
+    a.login("bob", PW)
+    b.login("bob", PW)
+    ta, tb = cookie_of(a), cookie_of(b)
+    st, h, _ = a.post("/logout")
+    assert st == 303 and h.get("Location") == "/login", st
+    assert not signed_in(srv, ta), "a copy of a logged-out session cookie still works"
+    assert signed_in(srv, tb), "logout must end only its own session"
+    print("logout: a copy of that cookie is refused; the user's other session stays  OK")
+
+
 def test_recreated_user(srv, admin):
     bob = Browser(srv.base)
     bob.login("bob", PW)
@@ -67,11 +101,13 @@ def test_recreated_user(srv, admin):
 
 def main():
     test_versions()
+    test_revoked_list()
     config = {"users": [user("admin", "admin"), user("bob", "viewer")]}
     with Server(config) as srv:
         admin = Browser(srv.base)
         admin.login("admin", PW)
         test_recreated_user(srv, admin)
+        test_logout(srv)
     print("\nPASS: session revocation")
 
 
