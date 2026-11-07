@@ -10,16 +10,17 @@ import json
 import os
 import secrets
 import time
+import types
 import unicodedata
 from urllib.parse import urlencode
 
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from ... import importer
+from ... import i18n, importer
 from ...config import (
     NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
-    ConfigError, NotificationSettings, User, new_pwd_version, parse_cluster_peer,
+    ConfigError, NotificationSettings, User, backup_time, new_pwd_version, parse_cluster_peer,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -50,11 +51,12 @@ def routes(ctx: Ctx) -> list:
                 "cluster_legacy": state.cluster.legacy_nodes() if c.active else []}
 
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
-                           new_cluster_key=None):
+                           new_cluster_key=None, restore_preview=None):
         me = current_user(request)
         backups = state.store.backups() if me is not None and me.role == "admin" else []
         return render(request, "settings.html", ok=ok, error=error,
-                      import_preview=import_preview, backups=backups,
+                      import_preview=import_preview, restore_preview=restore_preview,
+                      backups=backups,
                       admin=state.config.admin_ui,
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
@@ -67,6 +69,19 @@ def routes(ctx: Ctx) -> list:
                       notify=state.config.notifications, notify_events=NOTIFY_EVENTS,
                       webhook_formats=WEBHOOK_FORMATS, smtp_security=SMTP_SECURITY,
                       uptime=int(state.started_at))
+
+    async def settings_page(request):
+        """GET /settings; ?restore=<backup> shows what restoring that backup would change."""
+        name = request.query_params.get("restore")
+        if name is None or require_role(request, "admin"):
+            return await settings_get(request)
+        try:
+            backup = AppConfig.from_dict(json.loads(
+                await asyncio.to_thread(state.store.read_backup, name)))
+        except (ConfigError, OSError, ValueError, TypeError, AttributeError) as e:
+            return await settings_get(request, error=_("Could not read the backup: {0}").format(e))
+        return await settings_get(request, restore_preview=_restore_preview(
+            name, state.config, backup, current_user(request)))
 
     async def settings_password_post(request):
         form = await request.form()
@@ -539,20 +554,24 @@ def routes(ctx: Ctx) -> list:
         if form.get("step") == "preview":
             if mode not in importer.MODES:
                 return await settings_get(request, error=_("Unknown import mode."))
-            current = state.config.mappings
-            rows = importer.plan_rows(current, plan.mappings, mode)
-            candidate, _touched = importer.apply_import(current, plan.mappings, mode)
-            problem = None
-            try:
-                dataclasses.replace(state.config, mappings=candidate).validate()
-            except ConfigError as e:
-                problem = str(e)
-            preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
-                       "source": plan.source, "warnings": plan.warnings, "problem": problem,
-                       "count": len(plan.mappings)}
-            return await settings_get(request, import_preview=preview)
+            return await _import_preview(request, plan, mode)
         # legacy one-step import: replace all mappings
         return await _apply_import(request, plan, "replace")
+
+    async def _import_preview(request, plan, mode):
+        """Show what importing `plan` would change; nothing changes until it is applied."""
+        current = state.config.mappings
+        rows = importer.plan_rows(current, plan.mappings, mode)
+        candidate, _touched = importer.apply_import(current, plan.mappings, mode)
+        problem = None
+        try:
+            dataclasses.replace(state.config, mappings=candidate).validate()
+        except ConfigError as e:
+            problem = str(e)
+        preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
+                   "source": plan.source, "warnings": plan.warnings, "problem": problem,
+                   "count": len(plan.mappings)}
+        return await settings_get(request, import_preview=preview)
 
     async def config_import_apply(request):
         if deny := require_role(request, "operator"):
@@ -712,6 +731,101 @@ def routes(ctx: Ctx) -> list:
                         headers={"Content-Disposition": f"attachment; filename={name}"})
 
     async def backup_restore(request):
+        """Restore a backup's mappings and settings. User accounts, the REST API token
+        and the cluster key stay as they are unless `accounts` is ticked: a backup from
+        before a password change, a deleted account or a revoked token would otherwise
+        bring those back. With `accounts`, they come from the backup too and a new
+        session key ends every session made since (the admin restoring stays signed in
+        if the backup has their account). A POST without the box (a script written for
+        2.8) restores everything else, as before."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        name = form.get("name", "")
+        with_accounts = _checkbox(form, "accounts")
+        try:
+            restored = AppConfig.from_dict(json.loads(await asyncio.to_thread(state.store.read_backup, name)))
+        except (ConfigError, OSError, ValueError, TypeError, AttributeError) as e:
+            return await settings_get(request, error=_("Could not read the backup: {0}").format(e))
+        if with_accounts and not restored.users:
+            return await settings_get(request, error=_("This backup has no user accounts (it "
+                                                       "was made before the first-run setup); "
+                                                       "restoring it would open the setup page "
+                                                       "to anyone. Not restored."))
+        if with_accounts and not restored.admin_count():
+            return await settings_get(request, error=_("This backup has no admin account, so its "
+                                                       "accounts can't be restored. Not restored."))
+        # never from the backup: the session key (renewed below with the accounts) and
+        # this node's cluster id; and unless asked, the accounts and credentials
+        keep = {"secret_key", "instance_id", "load_notes", "ids_created"}
+        if not with_accounts:
+            keep |= {"users", "api_token_hash", "api_token_role"}
+        notes = []
+        async with state.config_lock:
+            cur = state.config
+            previous = {f.name: getattr(cur, f.name) for f in dataclasses.fields(AppConfig)}
+            usable_before = cur.usable_admin_count()
+            for f in dataclasses.fields(AppConfig):
+                if f.name not in keep:
+                    setattr(cur, f.name, getattr(restored, f.name))
+            if with_accounts:
+                cur.secret_key = secrets.token_hex(32)
+            else:
+                cur.cluster = dataclasses.replace(cur.cluster, key=previous["cluster"].key)
+                if cur.cluster.enabled and not cur.cluster.key.strip():
+                    cur.cluster.enabled = False
+                    notes.append(_("The cluster stays off: this backup had it on, but its key "
+                                   "was not restored."))
+            problem = None
+            if usable_before and not cur.usable_admin_count():
+                problem = _("no admin could sign in afterwards (LDAP/OIDC accounts need their "
+                            "sign-in method on)")
+            else:
+                try:
+                    await state.asave()
+                except ConfigError as e:
+                    problem = str(e)
+            if problem:
+                for k, v in previous.items():
+                    setattr(cur, k, v)
+                return await settings_get(request, error=_("Restore rejected: {0}").format(problem))
+        if with_accounts:
+            state.revoked_sessions.clear()  # signed with the old key: dead anyway
+        await state.supervisor.stop_all()
+        await state.supervisor.start_all(state.config)
+        await state.cluster.stop()
+        await state.cluster.start()
+        before = types.SimpleNamespace(**previous)
+        changes = _restore_changes(before, cur, with_accounts)
+        tok = i18n.set_language("en")  # the log and the audit log stay English
+        try:
+            audit_changes = _restore_changes(before, cur, with_accounts)
+        finally:
+            i18n.reset(tok)
+        state.log(f"configuration restored from backup {name} "
+                  f"({'with' if with_accounts else 'without'} its accounts)")
+        for note in restored.load_notes:  # what loading the backup changed, as at start-up
+            state.log(note)
+        ctx.audit(request, "config_backup_restore",
+                  "; ".join([name, "accounts restored" if with_accounts else "accounts kept",
+                             *audit_changes]))
+        ok = [_("Restored {0}; the configuration it replaced was backed up too. A changed admin "
+                "UI address or TLS takes effect after a restart.").format(name)]
+        ok.append(_("Everyone else was signed out.") if with_accounts else
+                  _("User accounts, the REST API token and the cluster key were kept."))
+        if changes:
+            ok.append(_("Access-related changes: {0}.").format("; ".join(changes)))
+        resp = await settings_get(request, ok=" ".join(ok + notes))
+        me = current_user(request)
+        mine = cur.get_user(me.username) if with_accounts and me is not None else None
+        if mine is not None:
+            set_session(resp, request, mine)
+        return resp
+
+    async def backup_restore_mappings(request):
+        """Restore only a backup's mappings, through the import preview (replace)."""
         if deny := require_role(request, "admin"):
             return deny
         form = await request.form()
@@ -719,38 +833,12 @@ def routes(ctx: Ctx) -> list:
             return csrf_failed()
         name = form.get("name", "")
         try:
-            restored = AppConfig.from_dict(json.loads(await asyncio.to_thread(state.store.read_backup, name)))
-        except (ConfigError, OSError, ValueError, TypeError, AttributeError) as e:
+            raw = await asyncio.to_thread(state.store.read_backup, name)
+            plan = importer.parse_mappings_file(raw.encode("utf-8"), name)
+        except (ConfigError, OSError) as e:
             return await settings_get(request, error=_("Could not read the backup: {0}").format(e))
-        if not restored.users:
-            return await settings_get(request, error=_("This backup has no user accounts (it "
-                                                       "was made before the first-run setup); "
-                                                       "restoring it would open the setup page "
-                                                       "to anyone. Not restored."))
-        keep = {"secret_key", "instance_id", "load_notes"}  # sessions + this node's cluster id
-        async with state.config_lock:
-            cur = state.config
-            previous = {f.name: getattr(cur, f.name) for f in dataclasses.fields(AppConfig)}
-            for f in dataclasses.fields(AppConfig):
-                if f.name not in keep:
-                    setattr(cur, f.name, getattr(restored, f.name))
-            try:
-                await state.asave()
-            except ConfigError as e:
-                for k, v in previous.items():
-                    setattr(cur, k, v)
-                return await settings_get(request, error=_("Restore rejected: {0}").format(e))
-        await state.supervisor.stop_all()
-        await state.supervisor.start_all(state.config)
-        await state.cluster.stop()
-        await state.cluster.start()
-        state.log(f"configuration restored from backup {name}")
-        for note in restored.load_notes:  # what loading the backup changed, as at start-up
-            state.log(note)
-        ctx.audit(request, "config_backup_restore", name)
-        return await settings_get(request, ok=_("Restored {0}; the configuration it replaced "
-                                                "was backed up too. A changed admin UI address "
-                                                "or TLS takes effect after a restart.").format(name))
+        plan.source = _("configuration backup ({0} UTC)").format(backup_time(name))
+        return await _import_preview(request, plan, "replace")
 
     async def settings_cluster_post(request):
         if deny := require_role(request, "admin"):
@@ -868,7 +956,7 @@ def routes(ctx: Ctx) -> list:
         return resp
 
     return [
-        Route("/settings", settings_get, methods=["GET"]),
+        Route("/settings", settings_page, methods=["GET"]),
         Route("/settings/password", settings_password_post, methods=["POST"]),
         Route("/settings/sessions/signout-others", settings_signout_others, methods=["POST"]),
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
@@ -895,6 +983,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/audit", audit_page),
         Route("/settings/audit.csv", audit_csv),
         Route("/settings/backups/restore", backup_restore, methods=["POST"]),
+        Route("/settings/backups/restore-mappings", backup_restore_mappings, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
 
@@ -908,6 +997,75 @@ def _key_hint(key: str) -> str:
     if len(k) < 16 or len(set(k)) < 8:
         return "weak"
     return "" if k.isascii() else "ascii"
+
+
+# ---------------- what a restore changes for sign-in and access ----------------
+def _setting_changes(old, new) -> list[str]:
+    """Sign-in / access settings that differ between two configurations (AppConfig or
+    the same fields), as lines for the user (and, in English, the audit log)."""
+    def onoff(value) -> str:
+        return _("enabled") if value else _("disabled")
+
+    def role(value) -> str:
+        return value or _("— deny login —")
+
+    out = []
+
+    def diff(label, a, b) -> None:
+        if a != b:
+            out.append(f"{label}: {a} → {b}")
+
+    o, n = old.admin_ui, new.admin_ui
+    diff(_("Login required"), onoff(o.require_login), onoff(n.require_login))
+    diff(_("Role for visitors without login"), o.anonymous_role, n.anonymous_role)
+    diff(_("Admin UI address"), f"{o.bind_ip}:{o.port}", f"{n.bind_ip}:{n.port}")
+    diff(_("Admin TLS (HTTPS)"), onoff(o.tls_enabled), onoff(n.tls_enabled))
+    for label, a, b in (("LDAP", old.ldap, new.ldap), ("OIDC", old.oidc, new.oidc)):
+        diff(label, onoff(a.enabled), onoff(b.enabled))
+        diff(f"{label} · {_('Default role')}", role(a.default_role), role(b.default_role))
+        diff(f"{label} · {_('Admin group')}", a.admin_group or "—", b.admin_group or "—")
+    return out
+
+
+def _account_changes(old, new) -> list[str]:
+    """What restoring a backup's accounts and credentials would change."""
+    before = {u.username: u for u in old.users}
+    after = {u.username: u for u in new.users}
+    out = []
+    if added := [n for n in after if n not in before]:
+        out.append(_("Accounts it brings back: {0}").format(", ".join(added)))
+    if removed := [n for n in before if n not in after]:
+        out.append(_("Accounts it removes: {0}").format(", ".join(removed)))
+    if changed := [n for n in after if n in before and
+                   (after[n].password_hash, after[n].role, after[n].source)
+                   != (before[n].password_hash, before[n].role, before[n].source)]:
+        out.append(_("Accounts with another password or role: {0}").format(", ".join(changed)))
+    if (old.api_token_hash, old.api_token_role) != (new.api_token_hash, new.api_token_role):
+        out.append(_("The REST API token as it was then (the current one stops working)"))
+    if old.cluster.key != new.cluster.key:
+        out.append(_("The cluster key as it was then"))
+    return out
+
+
+def _restore_changes(old, new, with_accounts: bool) -> list[str]:
+    return _setting_changes(old, new) + (_account_changes(old, new) if with_accounts else [])
+
+
+def _restore_preview(name: str, cur, backup, me) -> dict:
+    notes = []
+    accounts_ok = bool(backup.users) and backup.admin_count() > 0
+    if not accounts_ok:
+        notes.append(_("This backup has no admin account, so its accounts can't be restored."))
+    elif me is not None and me.source != "anonymous":
+        mine = backup.get_user(me.username)
+        if mine is None:
+            notes.append(_("Your account “{0}” is not in this backup: restoring its accounts signs "
+                           "you out.").format(me.username))
+        elif mine.role != me.role:
+            notes.append(_("In this backup your account “{0}” has the role {1}.").format(
+                me.username, mine.role))
+    return {"name": name, "time": backup_time(name), "settings": _setting_changes(cur, backup),
+            "accounts": _account_changes(cur, backup), "accounts_ok": accounts_ok, "notes": notes}
 
 
 def _without_session_key(text: str) -> str:

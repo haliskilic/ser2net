@@ -513,7 +513,12 @@ kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), 
 içindeki dosyalar başka kullanıcılarca okunamaz:
 - `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
 - `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
-  *Configuration backups*'tan indirilir ya da geri yüklenir; geri yükleme de geri alınabilir.
+  *Yapılandırma yedekleri*'nden indirilir ya da geri yüklenir. Geri yükleme önce giriş ve
+  erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
+  kullanıcı hesapları ve parolaları, REST API token'ı ve cluster anahtarı, onları da geri
+  yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
+  oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
+  de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
 - `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler ve config değişiklikleri,
   kim/nereden/ne (döner). Ayarlar → *Audit log*'da aranabilir, CSV olarak indirilebilir.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).

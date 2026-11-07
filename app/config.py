@@ -1415,10 +1415,8 @@ class ConfigStore:
         out = []
         for name in self.backup_names():
             path = os.path.join(self.backup_dir, name)
-            info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None}
-            stamp = name[len("config-"):len("config-") + 15]
-            info["time"] = (f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} "
-                            f"{stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}")
+            info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
+                                    "time": backup_time(name)}
             try:
                 info["size"] = os.path.getsize(path)
                 with open(path, encoding="utf-8") as fh:
@@ -1437,6 +1435,13 @@ class ConfigStore:
             raise ConfigError(_("No such backup."))
         with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
             return fh.read()
+
+
+def backup_time(name: str) -> str:
+    """'config-20260101T120000Z.json' -> '2026-01-01 12:00:00' (UTC)."""
+    stamp = name[len("config-"):len("config-") + 15]
+    return (f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} "
+            f"{stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}")
 
 
 def _backup_order(name: str) -> tuple:

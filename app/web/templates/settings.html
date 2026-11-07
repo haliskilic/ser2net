@@ -80,7 +80,7 @@
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Users") }}</h2></div>
   <div class="table-scroll">
-  <table class="grid">
+  <table class="grid th-wrap">
     <thead><tr><th>{{ _("Username") }}</th><th>{{ _("Role") }}</th><th></th></tr></thead>
     <tbody>
     {% for u in users %}
@@ -446,26 +446,43 @@
 {% if is_admin %}
 <section class="panel panel-narrow" id="backups">
   <div class="panel-head"><h2>{{ _("Configuration backups") }}</h2></div>
-  <p class="muted mb-sm">{{ _('Every change keeps the previous <span class="mono">config.json</span> in the data folder’s <span class="mono">backups/</span> (the newest 50). Restoring one replaces the whole configuration — mappings, users, settings — and is itself backed up first, so it can be undone. Backups contain password hashes and secrets: only admins see them.') }}</p>
+  <p class="muted mb-sm">{{ _('Every change keeps the previous <span class="mono">config.json</span> in the data folder’s <span class="mono">backups/</span> (the newest 50). Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. The configuration it replaces is backed up first, so a restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
+  {% if restore_preview %}
+  {% set rp = restore_preview %}
+  <h3 class="mt-sm">{{ _("Restore the configuration saved at %(time)s UTC", time=rp.time) }}</h3>
+  {% if rp.settings %}
+  <p class="mb-sm">{{ _("Sign-in and access settings it changes:") }}</p>
+  <ul>{% for line in rp.settings %}<li>{{ line }}</li>{% endfor %}</ul>
+  {% else %}
+  <p class="muted mb-sm">{{ _("It changes no sign-in or access setting.") }}</p>
+  {% endif %}
+  <form method="post" action="/settings/backups/restore" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="name" value="{{ rp.name }}">
+    <label class="chk"><input type="checkbox" name="accounts" {% if not rp.accounts_ok %}disabled{% endif %}> {{ _("Also restore its user accounts, REST API token and cluster key (everyone else is signed out)") }}</label>
+    {% if rp.accounts %}<ul class="muted">{% for line in rp.accounts %}<li>{{ line }}</li>{% endfor %}</ul>
+    {% elif rp.accounts_ok %}<p class="muted">{{ _("Its accounts and credentials are the same as now.") }}</p>{% endif %}
+    {% for note in rp.notes %}<div class="banner warn">{{ note }}</div>{% endfor %}
+    <div class="row-actions start">
+      <button class="btn primary" type="submit">{{ _("Restore") }}</button>
+      <button class="btn" type="submit" formaction="/settings/backups/restore-mappings">{{ _("Only its mappings…") }}</button>
+      <a class="btn" href="/settings#backups">{{ _("Cancel") }}</a>
+    </div>
+  </form>
+  {% endif %}
   {% if backups %}
   <div class="table-scroll">
-  <table class="grid">
-    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Mappings") }}</th><th>{{ _("Users") }}</th><th class="col-actions"></th></tr></thead>
+  <table class="grid th-wrap">
+    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Contents") }}</th><th class="col-actions"></th></tr></thead>
     <tbody>
     {% for bk in backups %}
       <tr>
-        <td class="mono nowrap">{{ bk.time }}</td>
-        <td>{{ bk.mappings if bk.mappings is not none else '?' }}</td>
-        <td>{{ bk.users if bk.users is not none else '?' }}</td>
+        <td class="mono">{{ bk.time }}</td>
+        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}</td>
         <td class="col-actions">
           <div class="row-actions">
             <a class="btn sm" href="/settings/backups/{{ bk.name }}">{{ _("Download") }}</a>
-            <form method="post" action="/settings/backups/restore" class="inline"
-                  data-confirm="{{ _('Restore the configuration saved at %(time)s UTC? The current one is backed up first.', time=bk.time) }}">
-              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-              <input type="hidden" name="name" value="{{ bk.name }}">
-              <button class="btn sm" type="submit">{{ _("Restore") }}</button>
-            </form>
+            <a class="btn sm" href="/settings?restore={{ bk.name }}#backups">{{ _("Restore…") }}</a>
           </div>
         </td>
       </tr>
