@@ -78,17 +78,20 @@ def _sign(secret: str, payload: str) -> str:
 
 
 def issue_session(secret: str, ttl_seconds: int, username: str, pwd_version: int = 0) -> str:
+    # "n": two sign-ins in the same second still get different tokens, so a logout
+    # (RevokedSessions) ends exactly one of them
     payload = _b64e(json.dumps(
-        {"exp": int(time.time()) + ttl_seconds, "u": username, "v": int(pwd_version)}
+        {"exp": int(time.time()) + ttl_seconds, "u": username, "v": int(pwd_version),
+         "n": secrets.token_urlsafe(6)}
     ).encode("utf-8"))
     return f"{payload}.{_sign(secret, payload)}"
 
 
 def decode_session(secret: str, token: str | None) -> dict | None:
     """Verify a session cookie's signature + expiry and return its payload
-    ({"u": username, "v": pwd_version}), or None if invalid/expired. The caller
-    must still confirm the user exists and that pwd_version matches (so a password
-    change revokes only that user's sessions)."""
+    ({"u": username, "v": pwd_version, "exp": expiry}), or None if invalid/expired.
+    The caller must still confirm the user exists and that pwd_version matches (so a
+    password change revokes only that user's sessions)."""
     if not token or "." not in token or not token.isascii():  # ours are ASCII
         return None
     payload, sig = token.rsplit(".", 1)
@@ -100,7 +103,43 @@ def decode_session(secret: str, token: str | None) -> dict | None:
         return None
     if int(data.get("exp", 0)) <= int(time.time()):
         return None
-    return {"u": str(data.get("u", "")), "v": int(data.get("v", 0))}
+    return {"u": str(data.get("u", "")), "v": int(data.get("v", 0)), "exp": int(data["exp"])}
+
+
+class RevokedSessions:
+    """Session cookies ended by a logout, remembered until they would expire anyway.
+
+    A cookie is a stateless signed token: the browser deleting it at logout would leave
+    a copy of it valid for the rest of its lifetime. Held in memory (a restart forgets
+    the list) and never written to config.json, where a save on every logout would
+    push real changes out of the 50 backups. Keyed by the token's signature."""
+
+    MAX_ENTRIES = 10000
+
+    def __init__(self) -> None:
+        self._until: dict[str, int] = {}  # signature -> the token's expiry (epoch seconds)
+
+    def add(self, secret: str, token: str | None) -> bool:
+        """Refuse this token from now on (if it is a valid session at all)."""
+        data = decode_session(secret, token)
+        if data is None or token is None:
+            return False
+        now = int(time.time())
+        for sig in [s for s, exp in self._until.items() if exp <= now]:
+            del self._until[sig]
+        while len(self._until) >= self.MAX_ENTRIES:  # full: drop the one closest to expiry
+            del self._until[min(self._until, key=self._until.__getitem__)]
+        self._until[token.rsplit(".", 1)[1]] = data["exp"]
+        return True
+
+    def __contains__(self, token: object) -> bool:
+        if not isinstance(token, str) or "." not in token:
+            return False
+        exp = self._until.get(token.rsplit(".", 1)[1])
+        return exp is not None and exp > time.time()
+
+    def clear(self) -> None:
+        self._until.clear()
 
 
 def sign_payload(secret: str, data: dict, ttl_seconds: int = 600) -> str:
@@ -125,11 +164,12 @@ def read_payload(secret: str, token: str | None) -> dict | None:
     return data
 
 
-def session_user(cfg, token: str | None):
+def session_user(cfg, token: str | None, revoked: RevokedSessions | None = None):
     """Resolve a session cookie to the live User it authenticates, or None.
-    Confirms the signed username still exists and its pwd_version is current."""
+    Confirms the signed username still exists and its pwd_version is current, and
+    that the session was not ended by a logout (``revoked``)."""
     data = decode_session(cfg.secret_key, token)
-    if data is None:
+    if data is None or (revoked is not None and token in revoked):
         return None
     user = cfg.get_user(data["u"])
     if user is None or user.pwd_version != data["v"]:
@@ -209,11 +249,11 @@ def anonymous_user(cfg, headers):
     return User(username=ANONYMOUS_USERNAME, role=ui.anonymous_role, source="anonymous")
 
 
-def request_user(cfg, token: str | None, headers):
+def request_user(cfg, token: str | None, headers, revoked: RevokedSessions | None = None):
     """The user a request acts as: its session's user, else the anonymous pseudo-user
     when the login requirement is off, else None (must sign in). ``headers`` is the
-    request's (or WebSocket's) header mapping."""
-    return session_user(cfg, token) or anonymous_user(cfg, headers)
+    request's (or WebSocket's) header mapping; ``revoked`` the logged-out sessions."""
+    return session_user(cfg, token, revoked) or anonymous_user(cfg, headers)
 
 
 # --------------------------------------------------------------------------

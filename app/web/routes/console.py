@@ -26,7 +26,8 @@ def routes(ctx: Ctx) -> list:
         does NOT run for the WebSocket scope, so authenticate here; a cross-origin
         WebSocket is rejected (CSWSH guard)."""
         token = websocket.cookies.get(auth.SESSION_COOKIE)
-        ws_user = auth.request_user(state.config, token, websocket.headers)
+        ws_user = auth.request_user(state.config, token, websocket.headers,
+                                    state.revoked_sessions)
         origin = websocket.headers.get("origin")
         if ws_user is None or (origin and urlparse(origin).netloc != websocket.headers.get("host")):
             await websocket.close(code=1008)
@@ -81,7 +82,8 @@ def routes(ctx: Ctx) -> list:
             # changed) instead of letting it keep watching — or writing to — the device.
             while True:
                 await asyncio.sleep(CONSOLE_ACCESS_RECHECK_S)
-                now = auth.request_user(state.config, token, websocket.headers)
+                now = auth.request_user(state.config, token, websocket.headers,
+                                        state.revoked_sessions)
                 if now is None or now.role != ws_user.role:
                     state.log(f"[{mapping.name}] console closed: access changed ({peer})")
                     return
@@ -137,7 +139,8 @@ def routes(ctx: Ctx) -> list:
         async def access_watch():
             while True:
                 await asyncio.sleep(CONSOLE_ACCESS_RECHECK_S)
-                now = auth.request_user(state.config, token, websocket.headers)
+                now = auth.request_user(state.config, token, websocket.headers,
+                                        state.revoked_sessions)
                 if now is None or now.role != ws_user.role:
                     return
 
