@@ -143,9 +143,11 @@ düzenlemeye gerek yok.
   sıfırlanır (bkz. Güvenlik).
   Güvenilir ağlar için giriş zorunluluğu **Ayarlar → Web arayüzü erişimi**'nden kapatılabilir
   (ziyaretçiler seçilen rolle parolasız kullanır; bkz. Güvenlik).
-- **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunur,
-  operator eşlemeleri yönetir, admin her şey + kullanıcı yönetimi. Tek-parola kurulumları
-  otomatik olarak bir `admin` kullanıcısına geçer.
+- **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunurdur
+  ve cihazların gönderdiklerini izler; operator eşlemeleri yönetir, cihazlara gönderilenleri
+  de görür (hex görünümü, trace dosyaları: cihaz isteminde yazılan bir parola da buraya
+  düşer); admin her şey + kullanıcı yönetimi. Tek-parola kurulumları otomatik olarak bir
+  `admin` kullanıcısına geçer.
 - **LDAP / Active Directory auth (opsiyonel):** kullanıcılar dizine bind ederek doğrulanır;
   LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
   LDAPS / StartTLS'te sunucunun sertifikası denetlenir (sistemin CA'ları ya da kendi CA
@@ -303,7 +305,10 @@ volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapm
   ağ modu (server/client/udp), protokol, bind/remote IP:port, erişim kuralları.
 - **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
-- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde cihaza yazılabilir.
+- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
+  cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
+  gönderdiklerini görür.
+- **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.

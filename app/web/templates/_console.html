@@ -7,7 +7,7 @@
     <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
   </div>
 </div>
-<p class="muted mb-sm" data-mode-help>{% if interactive %}{{ _("Text view: what the device sends; what you type goes to the device.") }}{% else %}{{ _("Text view: what the device sends.") }}{% endif %} {% if bridge %}{{ _("Hex view: both directions with timestamps (A → B / B → A).") }}{% else %}{{ _("Hex view: both directions with timestamps (from / to the device).") }}{% endif %}</p>
+<p class="muted mb-sm" data-mode-help>{% if interactive %}{{ _("Text view: what the device sends; what you type goes to the device.") }}{% else %}{{ _("Text view: what the device sends.") }}{% endif %} {% if bridge %}{{ _("Hex view: both directions with timestamps (A → B / B → A).") }}{% elif to_device %}{{ _("Hex view: both directions with timestamps (from / to the device).") }}{% else %}{{ _("Hex view: what the device sends, with timestamps.") }}{% endif %}</p>
 <div id="term" class="term"
      data-ws="/api/mappings/{{ mid }}/console"
      data-ws-hex="/api/mappings/{{ mid }}/traffic"

@@ -138,9 +138,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `ser2net --set-password` (see Security).
   For trusted networks the login requirement can be switched off under **Settings → Web
   UI access** (visitors then use the UI with a chosen role; see Security).
-- **Multi-user / RBAC:** `admin` / `operator` / `viewer` roles — viewer is read-only,
-  operator manages mappings, admin does everything plus user management. Existing
-  single-password setups migrate automatically to one `admin` user.
+- **Multi-user / RBAC:** `admin` / `operator` / `viewer` roles — viewer is read-only and
+  watches what the devices send; operator manages mappings and also sees what is sent to
+  the devices (hex view, trace files: where a password typed at a device prompt ends up);
+  admin does everything plus user management. Existing single-password setups migrate
+  automatically to one `admin` user.
 - **LDAP / Active Directory auth (optional):** users authenticate by binding to the
   directory; LDAP group membership maps to a role. Works alongside local accounts;
   needs `ldap3`. LDAPS / StartTLS check the server's certificate (the system's CAs or
@@ -293,8 +295,10 @@ a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCK
   rules.
 - **Start/Stop/Restart/Copy/Delete:** per row.
 - **Log:** the mapping's history (newest first, persists across restarts).
-- **Monitor:** live serial terminal in the browser (xterm.js); type to the device on
-  network mappings.
+- **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
+  device on network mappings. The hex view shows both directions; viewers see only what
+  the device sends.
+- **Trace** (operators): the mapping's trace files, to list and download.
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.

@@ -7,6 +7,8 @@ Checks:
     (operator+; viewers 403; bad input 400) and audits each;
   * the trace panel lists a mapping's files and downloads only those (no other
     mapping's file, no path tricks); the table offers Trace only when tracing is on;
+    traces record what is sent to the device, so viewers neither get the button nor
+    the files (403);
   * the dashboard has the search / filter / sort / bulk toolbar.
 
 Run: python3 tests/test_dashboard.py
@@ -69,13 +71,21 @@ def main():
                            ("aaaaaaaaaaa2-secret.log", "other mapping\n")):
             with open(os.path.join(tdir, name), "w", encoding="utf-8", newline="") as fh:
                 fh.write(text)  # byte-exact (no \r\n on Windows): the download must match
-        st, _, page = v.get("/api/mappings/aaaaaaaaaaa1/traces")
+        st, _, page = b.get("/api/mappings/aaaaaaaaaaa1/traces")
         assert st == 200 and "aaaaaaaaaaa1-alpha.log.1" in page and "secret" not in page, page[:400]
-        st, h, body = v.get("/api/mappings/aaaaaaaaaaa1/traces/aaaaaaaaaaa1-alpha.log")
+        st, h, body = b.get("/api/mappings/aaaaaaaaaaa1/traces/aaaaaaaaaaa1-alpha.log")
         assert st == 200 and body == "line now\n" and "attachment" in h.get("Content-Disposition", "")
         for bad in ("aaaaaaaaaaa2-secret.log", "..%2Fconfig.json", "%2E%2E%2F%2E%2E%2Fall.log"):
-            assert v.get(f"/api/mappings/aaaaaaaaaaa1/traces/{bad}")[0] == 404, bad
+            assert b.get(f"/api/mappings/aaaaaaaaaaa1/traces/{bad}")[0] == 404, bad
         print("traces: listed per mapping, downloadable, other files / traversal 404  OK")
+        st, _, body = v.get("/api/status")
+        assert st == 200 and ">Trace</button>" not in body and ">Monitor</button>" in body
+        for path in ("/api/mappings/aaaaaaaaaaa1/traces",
+                     "/api/mappings/aaaaaaaaaaa1/traces/aaaaaaaaaaa1-alpha.log",
+                     "/api/mappings/aaaaaaaaaaa1/traces/no-such-file"):
+            st, _, body = v.get(path)
+            assert st == 403 and "requires the operator role" in body, (path, st, body[:80])
+        print("traces: viewers get no Trace button, and the list and files answer 403  OK")
     print("\nPASS: dashboard (204 refresh, bulk actions, trace files)")
 
 
