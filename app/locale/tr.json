@@ -738,5 +738,10 @@
   "The previous key is still accepted until {0} UTC, so the nodes not changed yet keep working; set the new key on each of them.": "Önceki anahtar {0} UTC'ye kadar kabul edilmeye devam ediyor; böylece henüz değiştirilmemiş düğümler çalışmayı sürdürür. Yeni anahtarı her birinde ayarla.",
   "When the key changes, keep accepting the current one for 7 days, until every node has the new one (untick it if the key leaked)": "Anahtar değişince, tüm düğümlere yeni anahtar girilene kadar mevcut anahtarı 7 gün daha kabul et (anahtar sızdıysa bu işareti kaldır)",
   "a long random string — or use “Generate a new key and save”": "uzun, rastgele bir metin — ya da “Yeni anahtar üret ve kaydet” düğmesini kullan",
-  "the same on every node": "her düğümde aynı"
+  "the same on every node": "her düğümde aynı",
+  "Another node uses this node’s identity: %(name)s at %(addr)s — probably a copy of this installation (its data folder, disk or VM image). Give one of the two a new identity (below).": "Başka bir düğüm bu düğümün kimliğini kullanıyor: %(addr)s adresindeki %(name)s — büyük olasılıkla bu kurulumun bir kopyası (veri klasörü, diski ya da VM imajı). İkisinden birine yeni bir kimlik ver (aşağıda).",
+  "For a node copied from another installation (its data folder, disk or VM image): a new cluster ID and a new session key, so the copies no longer hide each other in the cluster and a sign-in to one is not valid on the other.": "Başka bir kurulumdan kopyalanmış bir düğüm için (veri klasörü, diski ya da VM imajı): yeni bir cluster ID'si ve yeni bir oturum anahtarı verir; böylece kopyalar cluster'da birbirini gizlemez ve birinde açılan oturum diğerinde geçerli olmaz.",
+  "Give this node a new identity": "Bu düğüme yeni bir kimlik ver",
+  "Give this node a new identity? Everyone signed in to it is signed out (you stay signed in), and other nodes see it as a new node.": "Bu düğüme yeni bir kimlik verilsin mi? Bu düğümde oturum açmış herkesin oturumu kapanır (seninki açık kalır) ve diğer düğümler onu yeni bir düğüm olarak görür.",
+  "This node has a new identity (cluster ID {0}). Everyone else signed in to it was signed out.": "Bu düğümün artık yeni bir kimliği var (cluster ID'si {0}). Bu düğümde oturum açmış diğer herkesin oturumu kapatıldı."
 }

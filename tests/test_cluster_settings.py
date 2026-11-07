@@ -1,4 +1,5 @@
-"""Settings -> LAN cluster: the key is write-only and a key change keeps the fleet together.
+"""Settings -> LAN cluster: the key is write-only, a key change keeps the fleet together,
+and a copy of this installation is reported and can be given a new identity.
 
   * the stored key never appears in the page (a blank field keeps it); a short or
     simple key is flagged; removing the key while the cluster is on is refused;
@@ -8,17 +9,24 @@
   * legacy authentication and auto-discovery are switches; a form without them (a
     tab opened before the upgrade, a script) leaves them as they are;
   * a beacon signed with another key is noted in the fleet view (never contacted);
+  * a beacon with this node's own id from another process (a copy of its data folder,
+    disk or VM image) is reported in Settings, the fleet view and the log; "Give this
+    node a new identity" changes the cluster id and the session key: the admin doing
+    it stays signed in, every other session ends.
 
 Run: python3 tests/test_cluster_settings.py
 """
+import json
+import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.engine.cluster import key_header
+from app.engine.cluster import _sign, key_header
 from app.web.auth import hash_password
 
 PW = "cluster-settings-1"
@@ -35,14 +43,32 @@ def local_status(srv, key) -> int:
         return e.code
 
 
+def beacon(key, **fields) -> bytes:
+    payload = {"v": 2, "name": "copy-of-me", "ip": "127.0.0.1", "port": 8080,
+               "scheme": "http", "t": round(time.time(), 3), "b": "a0ther0run0000ff",
+               "ips": [], **fields}
+    body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    return json.dumps({"d": body, "s": _sign(key, body)}).encode()
+
+
+def wait_for(fn, timeout=5.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        if fn():
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def main():
     disc = free_port()
     cfg = {"users": [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
                       "pwd_version": 1}],
            "cluster": {"enabled": True, "key": KEY, "discovery_port": disc}}
     with Server(cfg) as srv:
-        admin = Browser(srv.base)
+        admin, other = Browser(srv.base), Browser(srv.base)
         admin.login("admin", PW)
+        other.login("admin", PW)
 
         def cluster():
             return srv.saved_config()["cluster"]
@@ -109,7 +135,40 @@ def main():
         save()
         assert (cluster()["legacy_auth"], cluster()["discovery"]) == (True, True)
         print("legacy authentication / auto-discovery switches; older forms keep them  OK")
-    print("\nPASS: cluster settings (write-only key, key change, switches)")
+
+        # ---- a node with another key, and a copy of this node, on the network ----
+        node_id = srv.saved_config()["instance_id"]
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            def broadcast():
+                udp.sendto(beacon("some-other-fleet-key-000", id="stranger1"), ("127.0.0.1", disc))
+                udp.sendto(beacon(gen, id=node_id), ("127.0.0.1", disc))
+                return "Another node uses this node’s identity" in admin.get("/settings")[2]
+            assert wait_for(broadcast), "a copy of this node must be reported in Settings"
+            st, _, fleet = admin.get("/api/cluster/status")
+            assert "Another node uses this node’s identity" in fleet and "copy-of-me" in fleet
+            assert "broadcast with a different cluster key" in fleet and "127.0.0.1" in fleet
+            assert "stranger1" not in fleet, "a node with another key is not listed"
+            assert "another node uses this node's identity" in srv.output()
+        finally:
+            udp.close()
+        print("a copy of this node and a node with another key are reported  OK")
+
+        # ---- a new identity: new cluster id + session key, the admin stays signed in ----
+        old_secret = srv.saved_config()["secret_key"]
+        st, _, page = admin.post("/settings/cluster/identity", {})
+        saved = srv.saved_config()
+        assert st == 200 and "This node has a new identity" in page
+        assert saved["instance_id"] != node_id and saved["secret_key"] != old_secret
+        assert "Another node uses this node’s identity" not in page
+        assert admin.get("/settings")[0] == 200, "the admin who did it stays signed in"
+        st, headers, _ = other.get("/settings")
+        assert st == 303 and headers.get("Location") == "/login", "other sessions end"
+        audit = open(os.path.join(srv.data, "audit.log"), encoding="utf-8").read()
+        assert "\tnode_new_identity\t" in audit and "\tcluster_key_change\t" in audit
+        print("new identity: new cluster id and session key; this admin stays, others are "
+              "signed out  OK")
+    print("\nPASS: cluster settings (write-only key, key change, switches, copies, identity)")
 
 
 if __name__ == "__main__":
