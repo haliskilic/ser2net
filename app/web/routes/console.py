@@ -113,7 +113,7 @@ def routes(ctx: Ctx) -> list:
         mid = websocket.path_params["mid"]
         runner = state.supervisor.get_runner(mid)
         mapping = state.config.get_mapping(mid)
-        if runner is None or mapping is None or not hasattr(runner, "add_traffic_monitor"):
+        if runner is None or mapping is None:
             await websocket.close(code=1011)
             return
         await websocket.accept()

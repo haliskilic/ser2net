@@ -9,14 +9,37 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 
 from ..config import AppConfig, MappingConfig
 from . import serial_io
-from .bridge import MappingRunner
+from .bridge import MappingRunner, RunnerStatus
 
 
-def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None):
+class Runner(Protocol):
+    """What the supervisor and the web layer use of a mapping's runner: the transparent
+    bridge (bridge.MappingRunner) or the Modbus gateway (modbus_gateway.ModbusGatewayRunner)."""
+
+    mapping: MappingConfig
+    status: RunnerStatus
+
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    # browser console (what the device sends) and live hex view (both directions)
+    def add_monitor(self, mon: Any) -> None: ...
+
+    def discard_monitor(self, mon: Any) -> None: ...
+
+    def add_traffic_monitor(self, mon: Any) -> None: ...
+
+    def discard_traffic_monitor(self, mon: Any) -> None: ...
+
+    async def serial_write(self, data: bytes) -> None: ...
+
+
+def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None) -> Runner:
     """Pick the runner for a mapping: the Modbus RTU<->TCP gateway when the network
     protocol is 'modbus', otherwise the transparent serial<->network bridge."""
     if mapping.kind == "net" and mapping.network.protocol == "modbus":
@@ -29,7 +52,7 @@ class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
                  trace_dir: Optional[str] = None):
-        self._runners: dict[str, MappingRunner] = {}
+        self._runners: dict[str, Runner] = {}
         self.trace_dir = trace_dir  # data/traces: the only place traces are written
         self._order: list[str] = []
         self.log = logger or (lambda m: None)
@@ -119,7 +142,7 @@ class Supervisor:
                 await runner.stop()
 
     # ---------------- status ----------------
-    def get_runner(self, mapping_id: str):
+    def get_runner(self, mapping_id: str) -> Optional[Runner]:
         return self._runners.get(mapping_id)
 
     def status(self, mapping_id: str) -> Optional[dict]:

@@ -39,7 +39,7 @@ def _make_runner(*, allowed, read_only=False):
         },
     })
     runner = MappingRunner(m)
-    runner._swriter = _FakeWriter()
+    runner._link.writer = _FakeWriter()
     return runner
 
 
@@ -52,7 +52,7 @@ def test_disallowed_source_is_dropped():
     bridge = _UdpBridge(runner)
 
     bridge.datagram_received(b"attack", ("203.0.113.7", 5000))  # outside allow-list
-    assert bytes(runner._swriter.written) == b"", "disallowed datagram reached the serial port"
+    assert bytes(runner._link.writer.written) == b"", "disallowed datagram reached the serial port"
     assert _udp_peer(runner) is None, "disallowed sender was registered as the UDP peer"
     print("disallowed UDP source dropped (no serial write, no peer)  OK")
 
@@ -62,7 +62,7 @@ def test_allowed_source_passes():
     bridge = _UdpBridge(runner)
 
     bridge.datagram_received(b"hello", ("10.0.0.5", 5000))      # inside allow-list
-    assert bytes(runner._swriter.written) == b"hello", "allowed datagram did not reach serial"
+    assert bytes(runner._link.writer.written) == b"hello", "allowed datagram did not reach serial"
     peer = _udp_peer(runner)
     assert peer is not None and peer.addr == ("10.0.0.5", 5000)
     print("allowed UDP source accepted (serial write + peer)  OK")
@@ -84,7 +84,7 @@ def test_read_only_blocks_serial_write_but_keeps_peer():
     bridge = _UdpBridge(runner)
 
     bridge.datagram_received(b"data", ("10.0.0.5", 5000))       # allowed, but read-only
-    assert bytes(runner._swriter.written) == b"", "read-only mapping wrote client data to serial"
+    assert bytes(runner._link.writer.written) == b"", "read-only mapping wrote client data to serial"
     assert _udp_peer(runner) is not None, "read-only peer not tracked (would get no serial output)"
     print("read-only UDP: peer tracked for output, but no client->serial write  OK")
 
@@ -94,7 +94,7 @@ def test_empty_allowlist_allows_any():
     bridge = _UdpBridge(runner)
 
     bridge.datagram_received(b"x", ("203.0.113.7", 5000))
-    assert bytes(runner._swriter.written) == b"x", "empty allow-list should accept any source"
+    assert bytes(runner._link.writer.written) == b"x", "empty allow-list should accept any source"
     print("empty allow-list accepts any source (documented 'any' semantics)  OK")
 
 
