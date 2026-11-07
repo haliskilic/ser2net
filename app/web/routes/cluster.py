@@ -249,6 +249,7 @@ def routes(ctx: Ctx) -> list:
         if not res or not res.get("ok"):
             return PlainTextResponse(_("Peer did not accept the command "
                                        "(unreachable or rejected)."), status_code=502)
+        state.cluster.forget(target)   # the refresh this triggers shows the new state
         addr = peer_addr(target["ip"], target["port"])
         state.log(f"cluster: sent {action} to {addr} for '{res.get('name', mid)}'")
         ctx.audit(request, f"cluster_control_{action}", f"{addr}/{res.get('name', mid)}")
@@ -359,6 +360,7 @@ def routes(ctx: Ctx) -> list:
             return _reload(ferr)
         res = await state.cluster.post_peer(target, "/api/cluster/mapping-save", fields)
         if res and res.get("ok"):
+            state.cluster.forget(target)   # the refresh this triggers shows the change
             addr = peer_addr(target["ip"], target["port"])
             state.log(f"cluster: edited '{res.get('name', '')}' on {addr}")
             ctx.audit(request, "cluster_edit", f"{addr}/{res.get('name', '')}")
