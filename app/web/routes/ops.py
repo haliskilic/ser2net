@@ -87,8 +87,13 @@ async def apply_action(state, mid, action) -> tuple[bool, str]:
         m = state.config.get_mapping(mid)
         if not m:
             return False, "Mapping not found"
+        was = m.enabled
         m.enabled = action != "stop"
-        await state.asave()
+        try:
+            await state.asave()
+        except Exception:  # not saved, so nothing changed (e.g. starting it shares a serial port)
+            m.enabled = was
+            raise
     if action == "stop":
         await state.supervisor.stop_mapping(mid)
     elif action == "restart":
@@ -105,8 +110,13 @@ async def delete_mapping(state, mid):
     async with state.config_lock:
         m = state.config.get_mapping(mid)
         if m:
+            index = state.config.mappings.index(m)
             state.config.mappings.remove(m)
-            await state.asave()
+            try:
+                await state.asave()
+            except Exception:  # not saved, so not deleted
+                state.config.mappings.insert(index, m)
+                raise
             removed = m
     if removed is not None:  # by the stored id, never the id from the request
         await state.supervisor.remove_mapping(removed.id)

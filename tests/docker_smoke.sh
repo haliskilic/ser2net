@@ -2,13 +2,14 @@
 # Smoke test of the Docker image (CI job "docker"; needs Docker):
 #   tests/docker_smoke.sh <image>
 # 1. a fresh volume: the container gets healthy, runs as uid 10001, keeps a
-#    --group-add group but not root's group, and the first-run setup works;
+#    --group-add group but not root's group, and the first-run setup works; a restart
+#    rewrites nothing;
 # 2. upgrade: a volume written as root (as by the images before v2.8) holding a
 #    v2.7.1 config.json is taken over by the ser2net user and the old admin
 #    password still signs in;
 # 3. a bind mount owned by another uid keeps its owner (the server runs as it);
 # 4. a config.json with a setting this version rejects still starts: the setting is
-#    logged, the file is left as it is, the UI works (a restart rewrites nothing either);
+#    logged and kept, and other changes can still be saved from the UI;
 # 5. an unusable SER2NET_BIND_IP stops the start with one line, not a traceback;
 # 6. a host user's folder that a 2.7 image wrote to as root (bind mount): the files
 #    the image left are handed to the folder's owner and the old config signs in;
@@ -25,8 +26,16 @@ set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PORT=18080
+JAR=$(mktemp)
+host_dir=""
+dev_dir=""
 fail() { echo "FAIL: $*"; docker logs s2n-smoke 2>&1 | tail -40 || true; exit 1; }
-cleanup() { docker rm -f s2n-smoke >/dev/null 2>&1 || true; docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d >/dev/null 2>&1 || true; }
+cleanup() {
+    docker rm -f s2n-smoke >/dev/null 2>&1 || true
+    docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d >/dev/null 2>&1 || true
+    for d in "$host_dir" "$dev_dir"; do [ -n "$d" ] && sudo rm -rf "$d"; done
+    rm -f "$JAR"
+}
 trap cleanup EXIT
 cleanup
 
@@ -40,16 +49,20 @@ wait_healthy() {
     fail "not healthy after 60 s (status: $s)"
 }
 proc_status() { docker exec s2n-smoke sh -c 'grep -E "^(Uid|Gid|Groups):" /proc/1/status'; }
-# sign in through the form; prints the HTTP status (303 = signed in)
+# sign in through the form (the session stays in $JAR); prints the HTTP status (303 = signed in)
 sign_in() {
-    local jar csrf
-    jar=$(mktemp)
-    curl -fsS -c "$jar" -b "$jar" -o /dev/null "http://127.0.0.1:$PORT/login"
-    csrf=$(awk '$6=="ser2net_csrf"{print $7}' "$jar")
-    curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{http_code}' \
+    local csrf
+    : > "$JAR"
+    curl -fsS -c "$JAR" -b "$JAR" -o /dev/null "http://127.0.0.1:$PORT/login"
+    csrf=$(awk '$6=="ser2net_csrf"{print $7}' "$JAR")
+    curl -sS -c "$JAR" -b "$JAR" -o /dev/null -w '%{http_code}' \
         --data-urlencode "username=$1" --data-urlencode "password=$2" \
         --data-urlencode "_csrf=$csrf" "http://127.0.0.1:$PORT/login"
-    rm -f "$jar"
+}
+# an HTMX-style POST in that session; prints the HTTP status
+ui_post() {
+    curl -sS -c "$JAR" -b "$JAR" -o /dev/null -w '%{http_code}' -X POST \
+        -H "X-CSRF-Token: $(awk '$6=="ser2net_csrf"{print $7}' "$JAR")" "http://127.0.0.1:$PORT$1"
 }
 
 echo "== 1. fresh volume"
@@ -107,6 +120,7 @@ proc_status | grep -q -E "^Uid:\s+4321\s" || fail "should run as the folder's ow
 [ "$(sudo stat -c %u "$host_dir")" = 4321 ] || fail "host folder owner changed"
 docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$host_dir"
+host_dir=""
 echo "bind mount: runs as the folder's owner, host ownership untouched  OK"
 
 echo "== 4. a config.json with a setting this version rejects"
@@ -125,13 +139,22 @@ wait_healthy
 logs=$(docker logs s2n-smoke 2>&1)
 grep -F "WARNING: config.json: mapping 'Telnet console': TLS file not found: /certs/console.pem" <<<"$logs" \
     || fail "the rejected setting was not logged"
-grep -q "config.json was not updated at start-up" <<<"$logs" || fail "no 'not updated' note"
 grep -q "Traceback" <<<"$logs" && fail "traceback in the log"
-[ "$(docker exec s2n-smoke sha256sum /data/config.json)" = "$sum_before" ] || fail "config.json was rewritten"
+# the upgrade was saved as usual: the old file backed up, the rejected value kept as it was
+sums=$(docker exec s2n-smoke sh -c 'sha256sum /data/backups/config-*.json')
+grep -q "${sum_before%% *}" <<<"$sums" || fail "the original config.json was not backed up"
+docker exec s2n-smoke grep -q '"tls_cert": "/certs/console.pem"' /data/config.json \
+    || fail "the rejected setting was not kept"
 code=$(sign_in admin old-admin-pass-1)
-[ "$code" = 303 ] || fail "could not sign in to fix it ($code)"
+[ "$code" = 303 ] || fail "could not sign in ($code)"
+code=$(ui_post /api/mappings/aaaa00000001/stop)
+[ "$code" = 200 ] || fail "stopping a mapping was not saved ($code)"
+docker exec s2n-smoke python -c 'import json, sys
+m = json.load(open("/data/config.json"))["mappings"][0]
+sys.exit(0 if m["id"] == "aaaa00000001" and m["enabled"] is False else 1)' \
+    || fail "the stopped mapping is not saved as disabled"
 docker rm -f s2n-smoke >/dev/null
-echo "rejected setting: logged, config.json untouched, healthy, the UI signs in  OK"
+echo "rejected setting: logged and kept, healthy, the UI signs in and saves other changes  OK"
 
 echo "== 5. an unusable SER2NET_BIND_IP"
 docker run -d --name s2n-smoke -e SER2NET_BIND_IP=not-an-ip "$IMAGE" >/dev/null
@@ -184,6 +207,7 @@ sudo grep -q "AUDIT .* login" "$host_dir/all.log" || fail "all.log not written a
 [ "$(sudo grep -c login "$host_dir/audit.log")" = 2 ] || fail "audit.log not written after the takeover"
 docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$host_dir"
+host_dir=""
 echo "bind mount upgrade: root / ser2net files handed to the folder's owner, old password, logs and audit work  OK"
 
 echo "== 7. serial device groups"
@@ -203,6 +227,7 @@ grep -q "can't open /dev/ttyACM9" <<<"$logs" || fail "no warning for the node it
 grep -q "can't open /dev/ttyUSB7" <<<"$logs" && fail "false warning for /dev/ttyUSB7"
 docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$dev_dir"
+dev_dir=""
 echo "serial devices: the node's host group is added, an unusable node is reported  OK"
 
 echo "== 8. image contents"

@@ -697,7 +697,7 @@ def routes(ctx: Ctx) -> list:
         candidate, _touched = importer.apply_import(current, plan.mappings, mode)
         problem = None
         try:
-            dataclasses.replace(state.config, mappings=candidate).validate()
+            dataclasses.replace(state.config, mappings=candidate).validate_for_save()
         except ConfigError as e:
             problem = str(e)
         preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
@@ -889,9 +889,11 @@ def routes(ctx: Ctx) -> list:
         if with_accounts and not restored.admin_count():
             return await settings_get(request, error=_("This backup has no admin account, so its "
                                                        "accounts can't be restored. Not restored."))
-        # never from the backup: the session key (renewed below with the accounts) and
-        # this node's cluster id; and unless asked, the accounts and credentials
-        keep = {"secret_key", "instance_id", "load_notes", "ids_created"}
+        # never from the backup: the session key (renewed below with the accounts), this
+        # node's cluster id and what start-up accepted while broken, so a restore is refused
+        # only for what it changes or adds (AppConfig.validate_for_save); and unless asked,
+        # the accounts and credentials
+        keep = {"secret_key", "instance_id", "load_notes", "ids_created", "tolerated"}
         if not with_accounts:
             keep |= {"users", "api_token_hash", "api_token_role"}
         notes = []

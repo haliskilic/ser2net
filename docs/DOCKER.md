@@ -148,10 +148,11 @@ docker run -d --name ser2net --restart unless-stopped \
 - **A setting the image rejects doesn't stop it.** If `config.json` holds a value this
   version refuses (a mapping's TLS file that isn't mounted, a hand edit), the container
   still starts: the log names each one (`WARNING: config.json: mapping '…': …`), the
-  mappings that can start run, and the file is left as it is. Saving any change is
-  refused until it is fixed — sign in and edit or remove that part. An unusable
-  `SER2NET_BIND_IP` / `SER2NET_PORT`, an unreadable or broken `config.json` and a missing
-  admin UI certificate still stop the start, with a one-line message.
+  mappings that can start run, and the value is kept as it is. Other changes can still be
+  saved — a save is refused only for what it changes or adds — so sign in and fix or
+  remove that part when you can. An unusable `SER2NET_BIND_IP` / `SER2NET_PORT`, an
+  unreadable or broken `config.json` and a missing admin UI certificate still stop the
+  start, with a one-line message.
 - **TLS.** Put a reverse proxy (or set `admin_ui.tls_*`) in front for LAN/Internet
   exposure; raw data bridges are plaintext unless per-mapping TLS is enabled.
 - **Dependencies** are installed from PyPI into the image, so the container runs with
