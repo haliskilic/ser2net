@@ -166,13 +166,16 @@ def read_payload(secret: str, token: str | None) -> dict | None:
 
 def session_user(cfg, token: str | None, revoked: RevokedSessions | None = None):
     """Resolve a session cookie to the live User it authenticates, or None.
-    Confirms the signed username still exists and its pwd_version is current, and
-    that the session was not ended by a logout (``revoked``)."""
+    Confirms the signed username still exists, its pwd_version is current and its
+    sign-in method (LDAP/OIDC) is still on, and that the session was not ended by a
+    logout (``revoked``)."""
     data = decode_session(cfg.secret_key, token)
     if data is None or (revoked is not None and token in revoked):
         return None
     user = cfg.get_user(data["u"])
     if user is None or user.pwd_version != data["v"]:
+        return None
+    if not cfg.source_enabled(user):  # LDAP/OIDC switched off: its accounts are signed out
         return None
     return user
 

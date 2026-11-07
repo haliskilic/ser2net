@@ -1170,6 +1170,20 @@ class AppConfig:
     def admin_count(self) -> int:
         return sum(1 for u in self.users if u.role == "admin")
 
+    def source_enabled(self, user: User) -> bool:
+        """False for an LDAP/OIDC account while that sign-in method is switched off:
+        its sessions end and it can't sign in until the method is on again."""
+        if user.source == "ldap":
+            return self.ldap.enabled
+        if user.source == "oidc":
+            return self.oidc.enabled
+        return True
+
+    def usable_admin_count(self) -> int:
+        """Admins who can sign in with the current settings (local accounts, and
+        LDAP/OIDC ones while their sign-in method is on)."""
+        return sum(1 for u in self.users if u.role == "admin" and self.source_enabled(u))
+
     def upsert_external_user(self, username: str, role: str, source: str) -> User:
         """Create or refresh a shadow account for an externally-authenticated user
         (LDAP/OIDC). Bumps pwd_version when the role or source changes."""

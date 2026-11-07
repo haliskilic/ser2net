@@ -222,6 +222,21 @@ def routes(ctx: Ctx) -> list:
         return await settings_get(request, ok=_("API token revoked. The REST API is now disabled."))
 
     # ---------------- LDAP / AD settings (admin only) ----------------
+    def _directory_off_problem(before: int, name: str) -> str | None:
+        """Switching LDAP/OIDC off signs its accounts out (auth.session_user): refuse
+        when that would leave no admin who can sign in."""
+        if before and not state.config.usable_admin_count():
+            return _("Not saved: no admin could sign in any more, because every admin account "
+                     "comes from {0}. Add a local admin account first (Users), or keep {0} "
+                     "sign-in on.").format(name)
+        return None
+
+    def _directory_off_note(was_on: bool, now_on: bool, source: str, name: str) -> str:
+        if was_on and not now_on and any(u.source == source for u in state.config.users):
+            return " " + _("{0} accounts are signed out and can't sign in while {0} is "
+                           "off.").format(name)
+        return ""
+
     async def settings_ldap_post(request):
         if deny := require_role(request, "admin"):
             return deny
@@ -230,7 +245,11 @@ def routes(ctx: Ctx) -> list:
             return csrf_failed()
         async with state.config_lock:
             old = state.config.ldap
+            before = state.config.usable_admin_count()
             state.config.ldap = _ldap_from_form(form, old)
+            if problem := _directory_off_problem(before, "LDAP"):
+                state.config.ldap = old
+                return await settings_get(request, error=problem)
             try:
                 await state.asave()
             except ConfigError as e:
@@ -239,7 +258,9 @@ def routes(ctx: Ctx) -> list:
         state.log(f"LDAP settings updated (enabled={state.config.ldap.enabled})")
         ctx.audit(request, "ldap_settings",
                     "enabled" if state.config.ldap.enabled else "disabled")
-        return await settings_get(request, ok=_("LDAP settings saved."))
+        return await settings_get(request, ok=_("LDAP settings saved.")
+                                  + _directory_off_note(old.enabled, state.config.ldap.enabled,
+                                                        "ldap", "LDAP"))
 
     async def settings_oidc_post(request):
         if deny := require_role(request, "admin"):
@@ -249,7 +270,11 @@ def routes(ctx: Ctx) -> list:
             return csrf_failed()
         async with state.config_lock:
             old = state.config.oidc
+            before = state.config.usable_admin_count()
             state.config.oidc = _oidc_from_form(form, old)
+            if problem := _directory_off_problem(before, "OIDC"):
+                state.config.oidc = old
+                return await settings_get(request, error=problem)
             try:
                 await state.asave()
             except ConfigError as e:
@@ -258,7 +283,9 @@ def routes(ctx: Ctx) -> list:
         state.log(f"OIDC settings updated (enabled={state.config.oidc.enabled})")
         ctx.audit(request, "oidc_settings",
                     "enabled" if state.config.oidc.enabled else "disabled")
-        return await settings_get(request, ok=_("OIDC (SSO) settings saved."))
+        return await settings_get(request, ok=_("OIDC (SSO) settings saved.")
+                                  + _directory_off_note(old.enabled, state.config.oidc.enabled,
+                                                        "oidc", "OIDC"))
 
     # ---------------- user management (admin only) ----------------
     async def settings_users_create(request):
