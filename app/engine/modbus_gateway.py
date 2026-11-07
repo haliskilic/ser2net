@@ -7,8 +7,9 @@ the shared serial bus (one transaction at a time, since RTU is a single-master
 bus), reads the slave's RTU reply, and returns it to that master as Modbus/TCP —
 echoing the transaction id so concurrent masters don't get crossed wires.
 
-Shares the lifecycle shape (and the H3/H4 fixes) of MappingRunner: a supervised,
-auto-reconnecting serial endpoint plus an asyncio TCP server, both torn down
+Shares the lifecycle shape (and the H3/H4 fixes) of MappingRunner: the same
+supervised serial port (serial_link.SerialLink: reopened, and its USB identity
+re-resolved, whenever it is lost) plus an asyncio TCP server, both torn down
 cleanly on stop().
 """
 from __future__ import annotations
@@ -21,11 +22,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, normalize_cidr
-from . import modbus, serial_io, sockopts
+from . import modbus, sockopts
 from .access import server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
 )
+from .serial_link import SerialLink
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -76,13 +78,11 @@ class ModbusGatewayRunner:
         self._tracer: Optional[Tracer] = None
         self.status = RunnerStatus(state="stopped")
         self.log = logger
-        self.serial_instance = None
-        self._sreader: Optional[asyncio.StreamReader] = None
-        self._swriter: Optional[asyncio.StreamWriter] = None
         self._serial_task: Optional[asyncio.Task] = None
         self._server: Optional[asyncio.Server] = None
         self._stop = asyncio.Event()
-        self._serial_ready = asyncio.Event()
+        # the RTU bus; is_open / ready say whether requests can reach it right now
+        self._link = SerialLink(mapping.serial, self.status, self._stop, self._log)
         self._bus_lock = asyncio.Lock()      # RTU is single-master: one txn at a time
         self._clients: set[_Master] = set()
         self._monitors: set = set()           # browser console observers (read the bus)
@@ -132,8 +132,9 @@ class ModbusGatewayRunner:
         self._stop.clear()
         self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
         net = self.mapping.network
+        # the port is read per transaction; the link only watches for it going away
         self._serial_task = asyncio.create_task(
-            self._serial_supervisor(), name=f"modbus-serial:{self.mapping.name}")
+            self._link.run(self._link.hold_open), name=f"modbus-serial:{self.mapping.name}")
         try:
             self._server = await asyncio.start_server(
                 self._on_client, host=net.bind_ip, port=net.port, ssl=server_ssl(net))
@@ -159,7 +160,8 @@ class ModbusGatewayRunner:
             self._mqtt.connect()
             self._poll_task = asyncio.create_task(
                 self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
-        self.status.state = "running"
+        if self.status.state == "stopped":  # the serial side has not reported yet
+            self.status.state = "running"
 
     async def stop(self) -> None:
         self._stop.set()
@@ -195,7 +197,7 @@ class ModbusGatewayRunner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._serial_task
             self._serial_task = None
-        await self._close_serial()
+        await self._link.close()
         if self._tracer:
             await self._tracer.aclose()
             self._tracer = None
@@ -204,59 +206,14 @@ class ModbusGatewayRunner:
         self.status.clients = []
         self._log("modbus gateway stopped")
 
-    # ---------------- serial side ----------------
-    async def _close_serial(self) -> None:
-        self._serial_ready.clear()
-        w = self._swriter
-        self._sreader = self._swriter = None
-        self.serial_instance = None
-        if w is not None:
-            with contextlib.suppress(Exception):
-                w.close()
-                await w.wait_closed()
-
-    async def _serial_supervisor(self) -> None:
-        backoff, attempt = 0.5, 0
-        while not self._stop.is_set():
-            try:
-                reader, writer, ser, device = await serial_io.open_serial(self.mapping.serial)
-                self._sreader, self._swriter, self.serial_instance = reader, writer, ser
-                self.status.device = device
-                self.status.last_error = ""
-                self.status.state = "running"
-                self._serial_ready.set()
-                backoff, attempt = 0.5, 0
-                self._log(f"serial open: {device} @ {self.mapping.serial.compact()}")
-                await self._stop.wait()       # hold the port open; reads happen per-transaction
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                self.status.last_error = str(e)
-                self.status.state = "device-missing" if attempt == 0 else "reconnecting"
-                self._log(f"serial error: {e}")
-            finally:
-                await self._close_serial()
-            if self._stop.is_set():
-                break
-            attempt += 1
-            self.status.reconnects += 1
-            self.status.state = "reconnecting"
-            delay = min(backoff, 10.0) + (attempt % 5) * 0.1
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                break
-            except asyncio.TimeoutError:
-                pass
-            backoff = min(backoff * 2, 10.0)
-
     # ---------------- one RTU transaction on the shared bus ----------------
     async def _transaction(self, unit: int, pdu: bytes) -> bytes:
         function = pdu[0] if pdu else 0
         async with self._bus_lock:
-            if not self._serial_ready.is_set():
+            if not self._link.is_open:
                 with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self._serial_ready.wait(), timeout=self._resp_timeout)
-            reader, writer = self._sreader, self._swriter
+                    await asyncio.wait_for(self._link.ready.wait(), timeout=self._resp_timeout)
+            reader, writer = self._link.reader, self._link.writer
             if reader is None or writer is None:
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
             # discard any stale bytes left on the bus, then send the RTU request

@@ -122,8 +122,7 @@ async def gateway(fmt, slave_port, fake, points=POINTS):
     r = ModbusGatewayRunner(m, logger=lambda _m: None)
     r._resp_timeout = 0.5
     sr, sw = await asyncio.open_connection("127.0.0.1", slave_port)
-    r._sreader, r._swriter, r.serial_instance = sr, sw, object()
-    r._serial_ready.set()
+    r._link.attach(sr, sw)
     if fmt == "sparkplug_b":
         from app.engine.sparkplug_node import SparkplugNode
         r._sparkplug = SparkplugNode(m, lambda _m: None, r._write_soon)

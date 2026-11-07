@@ -589,7 +589,9 @@ class MappingRunner:
         except BaseException:
             await self.stop()
             raise
-        self.status.state = "running"
+        # the serial port may already have failed to open while the listener came up
+        if self.status.state == "stopped":  # the serial side has not reported yet
+            self.status.state = "running"
 
     async def stop(self) -> None:
         self._stop.set()

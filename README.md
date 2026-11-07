@@ -60,12 +60,14 @@ düzenlemeye gerek yok.
   baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway).
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
-  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. **Edge modu:** coil ve
-  register'ları periyodik okuyup MQTT'ye yayınlar (bool, uint/int/float 16/32, ölçek);
-  `"writable": true` noktalar MQTT'den yazılır (`<topic>/<nokta>/set` → FC5/FC15 coil,
-  FC6/FC16 register). İstenirse **Sparkplug B** edge node olarak, her Modbus unit'i bir
-  cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH, `seq` ile DBIRTH/DDATA, DCMD ile yazma,
-  NCMD ile rebirth.
+  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
+  adaptör çıkarıldığında) master'lar bu sürede `0x0B` alır ve port, her eşlemede olduğu
+  gibi yeniden açılır (durum `reconnecting`, cihaz kayboldu/geri geldi bildirimleri).
+  **Edge modu:** coil ve register'ları periyodik okuyup MQTT'ye yayınlar (bool,
+  uint/int/float 16/32, ölçek); `"writable": true` noktalar MQTT'den yazılır
+  (`<topic>/<nokta>/set` → FC5/FC15 coil, FC6/FC16 register). İstenirse **Sparkplug B**
+  edge node olarak, her Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH,
+  `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
