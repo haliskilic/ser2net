@@ -511,6 +511,16 @@ def test_oidc():
                                                  "groups": ["/Fabrika/BAKIM"]})
             assert st == 303 and user_of(srv, "tekniker")["role"] == "operator", st
             print("OIDC: a path's last part and Turkish İ/ı names match  OK")
+
+        # the provider takes the only admin's role away: it decides, and all.log warns
+        config["users"] = [shadow("boss", "oidc", 3)]
+        with Server(config, env={"SSL_CERT_FILE": os.path.join(tmp, "ca.pem")}) as srv:
+            st, _ = oidc_sign_in(srv, provider, {"preferred_username": "boss",
+                                                 "groups": ["ser2net-viewers"]})
+            assert st == 303 and user_of(srv, "boss")["role"] == "viewer", st
+            assert ("WARNING: OIDC gives 'boss' the role viewer, so no admin account can sign "
+                    "in any more. `ser2net --set-password NAME`") in all_log(srv), all_log(srv)[-800:]
+            print("OIDC: the provider demoting the only admin is logged as a warning  OK")
     finally:
         provider.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)

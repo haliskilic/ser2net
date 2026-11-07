@@ -148,13 +148,20 @@ def routes(ctx: Ctx) -> list:
 
     async def _save_external(source: str, username: str, role: str) -> User | None:
         """The saved shadow account of an LDAP/OIDC user who signed in; None when a local
-        account got this name while the sign-in waited for the lock."""
+        account got this name while the sign-in waited for the lock. The directory decides
+        the role, also when it takes the last admin role away (refusing that would keep
+        a removed admin's rights): that is logged as a warning."""
         async with state.config_lock:
+            before = state.config.usable_admin_count()
             try:
                 user = state.config.upsert_external_user(username, role, source)
             except AccountNameError:
                 return None
             await state.asave()
+            if before and not state.config.usable_admin_count():
+                state.log(f"WARNING: {source.upper()} gives {user.username!r} the role {role}, so "
+                          f"no admin account can sign in any more. `ser2net --set-password "
+                          f"NAME` with a new NAME creates a local admin account.")
         return user
 
     # ---------------- OIDC single sign-on ----------------
