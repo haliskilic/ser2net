@@ -425,7 +425,6 @@
   "RTS/DTR on open must be on|off|keep.": "Açılışta RTS/DTR on, off ya da keep olmalı.",
   "Running": "Çalışıyor",
   "running": "çalışıyor",
-  "same on every node — e.g. a long random string": "her düğümde aynı — ör. uzun, rastgele bir dize",
   "Save access": "Erişim ayarlarını kaydet",
   "Save and send a test": "Kaydet ve test gönder",
   "Save changes": "Değişiklikleri kaydet",
@@ -726,5 +725,18 @@
   "2.8.0 or older — confirming its address…": "2.8.0 ya da daha eski — adresi doğrulanıyor…",
   "2.8.0 or older — legacy authentication is off on this node": "2.8.0 ya da daha eski — bu düğümde eski kimlik doğrulama kapalı",
   "previous key": "önceki anahtar",
-  "unsigned key": "imzasız anahtar"
+  "unsigned key": "imzasız anahtar",
+  "Generate a new key and save": "Yeni anahtar üret ve kaydet",
+  "New cluster key (copy it now — it is not shown again). Set the same key on every node:": "Yeni cluster anahtarı (şimdi kopyala — bir daha gösterilmez). Aynı anahtarı her düğümde ayarla:",
+  "Only the new key is accepted now: set it on every node.": "Artık yalnızca yeni anahtar kabul ediliyor: bu anahtarı her düğümde ayarla.",
+  "Remove the stored key": "Kayıtlı anahtarı sil",
+  "Stop accepting the previous key now": "Önceki anahtarı artık kabul etme",
+  "The cluster key has letters outside ASCII: nodes running 2.8.0 or older can’t use it. Upgrade them or use an ASCII key.": "Cluster anahtarında ASCII dışı harfler var: 2.8.0 ya da daha eski sürümle çalışan düğümler bu anahtarı kullanamaz. O düğümleri yükselt ya da yalnızca ASCII karakterlerden oluşan bir anahtar kullan.",
+  "The cluster key is short or simple. Any host on this network can try to guess it offline from the beacons every node broadcasts, and the key lets a node start, stop and change the mappings of every other node: use at least 16 random characters, or generate one.": "Cluster anahtarı kısa ya da basit. Bu ağdaki herhangi bir host, her düğümün yayınladığı keşif paketlerinden anahtarı çevrimdışı tahmin etmeyi deneyebilir; anahtar ise bir düğüme diğer tüm düğümlerin eşlemelerini başlatma, durdurma ve değiştirme yetkisi verir: en az 16 rastgele karakter kullan ya da yeni bir anahtar üret.",
+  "The previous key is also accepted, until %(until)s UTC.": "Önceki anahtar da %(until)s UTC'ye kadar kabul ediliyor.",
+  "The previous key is also accepted.": "Önceki anahtar da kabul ediliyor.",
+  "The previous key is still accepted until {0} UTC, so the nodes not changed yet keep working; set the new key on each of them.": "Önceki anahtar {0} UTC'ye kadar kabul edilmeye devam ediyor; böylece henüz değiştirilmemiş düğümler çalışmayı sürdürür. Yeni anahtarı her birinde ayarla.",
+  "When the key changes, keep accepting the current one for 7 days, until every node has the new one (untick it if the key leaked)": "Anahtar değişince, tüm düğümlere yeni anahtar girilene kadar mevcut anahtarı 7 gün daha kabul et (anahtar sızdıysa bu işareti kaldır)",
+  "a long random string — or use “Generate a new key and save”": "uzun, rastgele bir metin — ya da “Yeni anahtar üret ve kaydet” düğmesini kullan",
+  "the same on every node": "her düğümde aynı"
 }

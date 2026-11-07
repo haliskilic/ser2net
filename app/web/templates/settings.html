@@ -197,11 +197,30 @@
 <section class="panel panel-narrow" id="cluster-settings">
   <div class="panel-head"><h2>{{ _("LAN cluster") }}</h2></div>
   <p class="muted mb-sm">{{ _('Discover other ser2net nodes on the local network (signed UDP broadcast — no mDNS) and show every node’s mappings in one table on the dashboard, each row tagged with its host (name + IP). Set the <em>same shared key</em> on every node so they trust each other; with the key, operators can start/stop/restart a peer’s mappings from the unified view. This node’s ID: <span class="mono">%(id)s</span>.', id=instance_id[:8]) }}</p>
+  {% if new_cluster_key %}
+  <div class="banner ok">{{ _("New cluster key (copy it now — it is not shown again). Set the same key on every node:") }}
+    <div class="mono token-box">{{ new_cluster_key }}</div>
+  </div>
+  {% endif %}
+  {% if cluster_key_hint == 'weak' %}
+  <div class="banner warn">{{ _("The cluster key is short or simple. Any host on this network can try to guess it offline from the beacons every node broadcasts, and the key lets a node start, stop and change the mappings of every other node: use at least 16 random characters, or generate one.") }}</div>
+  {% elif cluster_key_hint == 'ascii' and cluster.legacy_auth %}
+  <div class="banner warn">{{ _("The cluster key has letters outside ASCII: nodes running 2.8.0 or older can’t use it. Upgrade them or use an ASCII key.") }}</div>
+  {% endif %}
   <form method="post" action="/settings/cluster" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <input type="hidden" name="cluster_form" value="2">
     <label class="chk"><input type="checkbox" name="enabled" {% if cluster.enabled %}checked{% endif %}> {{ _("Enable LAN cluster") }}</label>
-    <label>{{ _("Shared cluster key") }} <input type="password" name="key" value="{{ cluster.key }}" placeholder="{{ _('same on every node — e.g. a long random string') }}"></label>
+    <label>{{ _("Shared cluster key") }} <span class="muted">({{ _("the same on every node") }}{% if cluster_key_set %}; {{ _("blank = unchanged") }}{% endif %})</span>
+      <input type="password" name="key" autocomplete="new-password" placeholder="{% if cluster_key_set %}{{ unchanged }}{% else %}{{ _('a long random string — or use “Generate a new key and save”') }}{% endif %}"></label>
+    {% if cluster_key_set %}
+    <label class="chk"><input type="checkbox" name="keep_old_key" checked> {{ _("When the key changes, keep accepting the current one for 7 days, until every node has the new one (untick it if the key leaked)") }}</label>
+    {% if cluster_previous %}
+    <p class="muted">{% if cluster_previous_until %}{{ _("The previous key is also accepted, until %(until)s UTC.", until=cluster_previous_until) }}{% else %}{{ _("The previous key is also accepted.") }}{% endif %}</p>
+    <label class="chk"><input type="checkbox" name="clear_previous_key"> {{ _("Stop accepting the previous key now") }}</label>
+    {% endif %}
+    <label class="chk"><input type="checkbox" name="clear_key"> {{ _("Remove the stored key") }}</label>
+    {% endif %}
     <label class="chk"><input type="checkbox" name="legacy_auth" {% if cluster.legacy_auth %}checked{% endif %}> {{ _("Legacy authentication: also accept and use the unsigned key with nodes running 2.8.0 or older") }}</label>
     {% if cluster.legacy_auth %}
     <p class="muted">{% if cluster_legacy %}{{ _("In use with: %(nodes)s.", nodes=cluster_legacy|join(", ")) }}{% else %}{{ _("No node has used it recently.") }}{% endif %} {{ _("Nodes running 2.8.0 or older send the key itself in every request, readable on the network; once every node is upgraded, turn this off.") }}</p>
@@ -213,7 +232,10 @@
     </div>
     <label>{{ _("Manual peers") }} <span class="muted">({{ _('one <span class="mono">host:port</span> per line — for routed/L3 networks broadcast can’t reach') }})</span>
       <textarea name="peers" rows="3" placeholder="10.0.5.12:8080&#10;https://plc-gw.example:8443">{{ cluster_peers_text }}</textarea></label>
-    <button class="btn primary" type="submit">{{ _("Save cluster") }}</button>
+    <div class="row-actions start">
+      <button class="btn primary" type="submit">{{ _("Save cluster") }}</button>
+      <button class="btn" type="submit" name="then" value="generate">{{ _("Generate a new key and save") }}</button>
+    </div>
   </form>
 </section>
 
