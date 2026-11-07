@@ -23,6 +23,11 @@
     <label>{{ _("Confirm new password") }} <input type="password" name="password2" autocomplete="new-password" required></label>
     <button class="btn primary" type="submit">{{ _("Update password") }}</button>
   </form>
+  <form method="post" action="/settings/sessions/signout-others" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _("Ends your sign-ins in other browsers and on other devices; this one stays signed in.") }}</p>
+    <button class="btn" type="submit">{{ _("Sign out my other sessions") }}</button>
+  </form>
   {% endif %}
 </section>
 
@@ -90,10 +95,16 @@
         </td>
         <td>
           {% if me.username != u.username %}
-          <form method="post" action="/settings/users/{{ u.username }}/delete" class="inline">
-            <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-            <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
-          </form>
+          <div class="row-actions">
+            <form method="post" action="/settings/users/{{ u.username }}/signout" class="inline">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <button class="btn sm" type="submit">{{ _("Sign out") }}</button>
+            </form>
+            <form method="post" action="/settings/users/{{ u.username }}/delete" class="inline">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
+            </form>
+          </div>
           {% endif %}
         </td>
       </tr>
@@ -116,6 +127,22 @@
     </div>
     <button class="btn" type="submit">{{ _("Add user") }}</button>
   </form>
+  {% set resettable = users|selectattr("source", "equalto", "local")|rejectattr("username", "equalto", me.username)|list %}
+  {% if resettable %}
+  <h3 class="mt-sm">{{ _("Set another user’s password") }}</h3>
+  <p class="muted mb-sm">{{ _("For someone who forgot theirs; it also signs that user out everywhere. “Sign out” in the table ends a user’s sessions without changing anything else.") }}</p>
+  <form method="post" action="/settings/users/password" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("User") }}
+      <select name="username">{% for u in resettable %}<option value="{{ u.username }}">{{ u.username }}</option>{% endfor %}</select>
+    </label>
+    <div class="grid2">
+      <label>{{ _("New password (min 8 chars)") }} <input type="password" name="password" autocomplete="new-password" required></label>
+      <label>{{ _("Confirm") }} <input type="password" name="password2" autocomplete="new-password" required></label>
+    </div>
+    <button class="btn" type="submit">{{ _("Set password") }}</button>
+  </form>
+  {% endif %}
 </section>
 
 <section class="panel panel-narrow">

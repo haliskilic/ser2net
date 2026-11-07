@@ -100,6 +100,38 @@ def routes(ctx: Ctx) -> list:
         set_session(resp, request, user)
         return resp
 
+    async def _bump_sessions(username: str):
+        """Sign every session of `username` out (pwd_version + 1). Returns the user, or
+        an error text. Caller holds config_lock."""
+        target = state.config.get_user(username)
+        if target is None:
+            return None, _("User not found.")
+        target.pwd_version += 1
+        try:
+            await state.asave()
+        except ConfigError as e:
+            target.pwd_version -= 1
+            return None, str(e)
+        return target, None
+
+    async def settings_signout_others(request):
+        """Any signed-in user: end their own sessions elsewhere, keep this one."""
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        me = current_user(request)
+        if me is None or me.source == "anonymous":
+            return await settings_get(request, error=_("Sign in to manage your sessions."))
+        async with state.config_lock:
+            user, err = await _bump_sessions(me.username)
+        if err:
+            return await settings_get(request, error=err)
+        state.log(f"{me.username} signed out their other sessions")
+        ctx.audit(request, "sessions_signout_others", me.username)
+        resp = await settings_get(request, ok=_("Your other sessions were signed out."))
+        set_session(resp, request, user)
+        return resp
+
     async def settings_tls_post(request):
         if deny := require_role(request, "admin"):
             return deny
@@ -357,6 +389,67 @@ def routes(ctx: Ctx) -> list:
         state.log(f"user deleted: {username}")
         ctx.audit(request, "user_delete", username)
         return await settings_get(request, ok=_("User '{0}' deleted.").format(username))
+
+    async def settings_users_signout(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        username = request.path_params["username"]
+        async with state.config_lock:
+            target, err = await _bump_sessions(username)
+        if err:
+            return await settings_get(request, error=err)
+        state.log(f"all sessions of {username} signed out")
+        ctx.audit(request, "user_signout", username)
+        resp = await settings_get(request, ok=_("'{0}' was signed out everywhere.").format(username))
+        me = current_user(request)
+        if me is not None and me.username == username:
+            set_session(resp, request, target)  # your own row: you stay signed in here
+        return resp
+
+    async def settings_users_password(request):
+        """An admin sets another local account's password (it forgot it, or it must
+        be taken away from someone): the account is signed out everywhere."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        username = (form.get("username") or "").strip()
+        pw, pw2 = form.get("password", ""), form.get("password2", "")
+
+        def problem():
+            target, me = state.config.get_user(username), current_user(request)
+            if target is None:
+                return _("User not found.")
+            if target.source != "local":
+                return _("'{0}' signs in with {1}; their password is managed there.").format(
+                    username, target.source.upper())
+            if me is not None and me.username == username:
+                return _("To change your own password, use the form at the top (it asks for "
+                         "the current one).")
+            return None
+
+        if err := problem() or _password_problem(pw, pw2):
+            return await settings_get(request, error=err)
+        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
+        async with state.config_lock:
+            if err := problem():  # changed while the password was hashed
+                return await settings_get(request, error=err)
+            target = state.config.get_user(username)
+            old = (target.password_hash, target.pwd_version)
+            target.password_hash, target.pwd_version = pw_hash, target.pwd_version + 1
+            try:
+                await state.asave()
+            except ConfigError as e:
+                target.password_hash, target.pwd_version = old
+                return await settings_get(request, error=str(e))
+        state.log(f"password of {username} set by an admin; their sessions were signed out")
+        ctx.audit(request, "user_password_set", username)
+        return await settings_get(request, ok=_("New password set for '{0}'; they were signed out "
+                                                "everywhere.").format(username))
 
     # ---------------- config export / import ----------------
     async def config_export(request):
@@ -744,14 +837,17 @@ def routes(ctx: Ctx) -> list:
     return [
         Route("/settings", settings_get, methods=["GET"]),
         Route("/settings/password", settings_password_post, methods=["POST"]),
+        Route("/settings/sessions/signout-others", settings_signout_others, methods=["POST"]),
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
         Route("/settings/access", settings_access_post, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
         Route("/settings/users", settings_users_create, methods=["POST"]),
+        Route("/settings/users/password", settings_users_password, methods=["POST"]),
         Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
+        Route("/settings/users/{username}/signout", settings_users_signout, methods=["POST"]),
         Route("/settings/ldap", settings_ldap_post, methods=["POST"]),
         Route("/settings/oidc", settings_oidc_post, methods=["POST"]),
         Route("/settings/cluster", settings_cluster_post, methods=["POST"]),
