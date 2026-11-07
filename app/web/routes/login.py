@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
@@ -23,6 +24,65 @@ def routes(ctx: Ctx) -> list:
     async def login_get(request):
         return render(request, "login.html", error=None,
                       oidc_enabled=state.config.oidc.enabled)
+
+    # ---------------- LDAP / OIDC groups -> role ----------------
+    # (source, user name) whose sessions a refused sign-in already ended, so that more
+    # refused tries don't save config.json (and push out a backup) each time; their next
+    # successful sign-in takes them off again
+    refused: set[tuple[str, str]] = set()
+
+    def _directory_role(source: str, username: str, groups, settings) -> str | None:
+        """The role the groups reported by the directory (LDAP) or the identity provider
+        (OIDC) give `username`. Logs which groups they have when no group setting
+        matched, and warns when a setting matched one only as part of its name."""
+        name = source.upper()
+        d = ldap_auth.role_decision(groups, settings)
+        if d.partial is not None:
+            _warn_partial(source, username, d)
+        if not d.setting:
+            why = f"no group setting matches their groups: {ldap_auth.group_names(groups)}"
+            if d.role:
+                state.log(f"{name} login for {username!r}: {why}; default role {d.role}")
+            else:
+                state.log(f"{name} login denied for {username!r}: {why}")
+        return d.role
+
+    def _warn_partial(source: str, username: str, d: ldap_auth.RoleDecision) -> None:
+        if d.partial is None:
+            return
+        setting, value, group = d.partial
+        section, whole = (("LDAP / Active Directory", "its full DN") if source == "ldap" else
+                          ("Single sign-on (OIDC)", "the whole value"))
+        state.log(f"WARNING: {source.upper()} {setting} {value!r} is only part of the name of "
+                  f"the group {group!r}, which no longer counts as a match: {username!r} gets "
+                  f"{d.role or 'no access'} instead of {d.partial_role}. A group setting has to "
+                  f"name the whole group: set it to {ldap_auth.group_name(group)!r} or {whole} "
+                  f"under Settings → {section} ({source}.{setting} in config.json). If no "
+                  f"admin can sign in any more, `ser2net --set-password NAME` with a new NAME "
+                  f"creates a local admin account.")
+        state.group_warnings[(source, setting)] = {
+            "setting": setting, "value": value, "group": group,
+            "name": ldap_auth.group_name(group), "user": username, "got": d.role or "",
+            "was": d.partial_role, "time": time.strftime("%Y-%m-%d %H:%M")}
+
+    async def _end_refused_sessions(source: str, username: str) -> None:
+        """The directory or identity provider confirmed who this is, but their groups
+        give no role any more: end the sessions their shadow account still has, which
+        would otherwise keep the role saved with it until they expire."""
+        if (source, username) in refused:
+            return
+        async with state.config_lock:
+            user = state.config.get_user(username)
+            if user is None or user.source != source:
+                return
+            user.pwd_version += 1
+            refused.add((source, username))
+            try:
+                await state.asave()
+            except (ConfigError, OSError) as e:  # still ended in memory, until a restart
+                state.log(f"could not save the sign-out of {username!r}: {e}")
+        state.log(f"{source.upper()}: {username!r} signed out everywhere: their groups give "
+                  f"no role any more")
 
     # ---------------- OIDC single sign-on ----------------
     def _oidc_redirect_uri(request) -> str:
@@ -70,14 +130,19 @@ def routes(ctx: Ctx) -> list:
             return render(request, "login.html", status_code=401, error=None, oidc_enabled=True,
                           oidc_error=_("SSO sign-in failed."))
         username = oidc_auth.username_from_claims(claims, oidc)
-        role = oidc_auth.role_from_claims(claims, oidc)
+        if not username:
+            state.log("OIDC login denied: the ID token names no user")
+        role = username and _directory_role("oidc", username,
+                                            oidc_auth.groups_from_claims(claims, oidc), oidc)
         if not username or not role:
-            state.log(f"OIDC login denied: user={username!r} role={role!r} (no mapped group)")
+            if username:
+                await _end_refused_sessions("oidc", username)
             return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
                           oidc_error=_("Your account isn't mapped to a role."))
         async with state.config_lock:
             user = state.config.upsert_external_user(username, role, "oidc")
             await state.asave()
+        refused.discard(("oidc", username))
         state.log(f"login: {username} ({role}, oidc) from {client_ip(request)}")
         ctx.audit(request, "oidc_login", username, user=username)
         resp = RedirectResponse("/", status_code=303)
@@ -108,13 +173,14 @@ def routes(ctx: Ctx) -> list:
             groups = await asyncio.to_thread(
                 ldap_auth.authenticate, state.config.ldap, username, password, state.log)
             if groups is not None:
-                role = ldap_auth.role_for_groups(groups, state.config.ldap)
+                role = _directory_role("ldap", username, groups, state.config.ldap)
                 if role:
                     async with state.config_lock:
                         authed = ldap_auth.upsert_ldap_user(state.config, username, role)
                         await state.asave()
+                    refused.discard(("ldap", username))
                 else:
-                    state.log(f"LDAP login denied for {username!r}: in no mapped group")
+                    await _end_refused_sessions("ldap", username)
         if authed is not None:
             state.rate_limiter.reset(ip)
             state.log(f"login: {username} ({authed.role}, {authed.source}) from {ip}")

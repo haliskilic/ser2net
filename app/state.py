@@ -141,6 +141,10 @@ class AppState:
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
+        # LDAP/OIDC group settings that matched a sign-in's group only as part of its name,
+        # which no longer counts: (source, setting) -> details, shown in Settings until
+        # that section is saved (in memory only)
+        self.group_warnings: dict[tuple[str, str], dict] = {}
         # uploaded imports waiting for the user to confirm the preview: token -> item
         self.pending_imports: dict[str, dict] = {}
         self.notifier = Notifier(self)

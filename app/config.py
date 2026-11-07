@@ -787,7 +787,9 @@ class LdapSettings:
       - search+bind: bind as the service account (bind_dn/bind_password), find the user
         with user_search_filter under user_search_base, then re-bind as that DN.
     Group->role: a user in admin_group gets admin, operator_group -> operator, etc.;
-    default_role applies when authenticated but in no mapped group (empty => deny)."""
+    default_role applies when authenticated but in no mapped group (empty => deny). A
+    group setting is a group's whole name (its CN) or DN, compared without regard to
+    letter case (ldap_auth.group_matches)."""
     enabled: bool = False
     server_uri: str = ""             # ldap://host:389 or ldaps://host:636
     start_tls: bool = False
@@ -825,7 +827,8 @@ class LdapSettings:
 class OidcSettings:
     """OpenID Connect single sign-on (authorization-code flow). Endpoints are
     discovered from the issuer's /.well-known/openid-configuration. A claim
-    (groups_claim) maps to a ser2net role, like the LDAP group mapping."""
+    (groups_claim) maps to a ser2net role, like the LDAP group mapping: a group setting
+    is the whole value, or its last part (/team/name, DOMAIN\\name)."""
     enabled: bool = False
     issuer: str = ""                 # e.g. https://accounts.google.com or a Keycloak realm URL
     client_id: str = ""

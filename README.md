@@ -413,6 +413,20 @@ dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yede
 olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
 kapalıyken o hesapların oturumları geçersizdir.
 
+**LDAP / OIDC grupları → roller:** bir grup ayarı (admin / operator / viewer grubu) tek bir
+grubu adlandırır ve yalnızca o grubun adının tamamıyla eşleşir, asla bir parçasıyla değil.
+LDAP'ta bu grubun adı (CN'i, ör. `ser2net-admins`), DN'inin baş kısmı
+(`cn=ser2net-admins,ou=groups`) ya da tam DN'idir; OIDC'de sağlayıcının gönderdiği değer
+ya da onun son parçasıdır (`ser2net-admins`, Keycloak'un `/team/ser2net-admins` değeriyle
+ve `CORP\ser2net-admins` ile eşleşir). Büyük/küçük harf fark etmez, Türkçe İ/I/ı/i dahil
+(`Bilgi İşlem` = `BİLGİ İŞLEM`). Bir grubun adının yalnızca bir parçası olan ayar
+(`ser2net-admins` için `admins` ya da DN'indeki yalnızca bir OU) rol vermez: o kullanıcı
+giriş yaptığında all.log'a ayarı ve grubu belirten bir WARNING yazılır, Ayarlar da o bölümü
+kaydedene kadar bunu gösterir. Admin'leriniz yalnızca böyle bir gruptan geliyorsa
+`ser2net --set-password AD` ile oluşturulan yerel bir admin'le girin (aşağıya bakın) ve
+ayarı düzeltin. Grupları artık rol vermeyen bir dizin kullanıcısının bir sonraki girişi,
+hâlâ açık olan oturumlarını da kapatır.
+
 **Parola unutuldu, giriş yapılamıyor, tarayıcı yok (hesap kurtarma):**
 `ser2net --set-password AD`, yerel `AD` hesabına yeni parola verir (terminalde iki kez
 sorulur; pipe ile verilirse stdin'in ilk satırı okunur) ve o hesabın tüm oturumlarını

@@ -3,7 +3,8 @@
 Endpoints are discovered from the issuer's /.well-known/openid-configuration. The
 returned id_token is validated — signature via the issuer's JWKS, plus iss / aud /
 exp / nonce — using authlib.jose (do NOT hand-roll JWT validation). A claim
-(groups_claim) maps to a ser2net role, reusing the LDAP group→role logic.
+(groups_claim) maps to a ser2net role, reusing the LDAP group→role logic (whole group
+names only: ldap_auth.group_matches).
 
 authlib is an OPTIONAL dependency (lazy import): absent => OIDC login is disabled
 and local accounts keep working. HTTP uses stdlib urllib; the fetch/post calls are
@@ -103,8 +104,13 @@ def username_from_claims(claims: dict, settings) -> str:
     return ""
 
 
-def role_from_claims(claims: dict, settings):
+def groups_from_claims(claims: dict, settings) -> list[str]:
+    """The values of the groups claim (a list, or one value)."""
     groups = claims.get(settings.groups_claim) or []
-    if isinstance(groups, str):
+    if not isinstance(groups, (list, tuple)):
         groups = [groups]
-    return role_for_groups(groups, settings)
+    return [str(g) for g in groups]
+
+
+def role_from_claims(claims: dict, settings):
+    return role_for_groups(groups_from_claims(claims, settings), settings)
