@@ -422,27 +422,30 @@ sAMAccountName under the user search base (blank: its whole domain) to read its 
 
 **LDAP / OIDC accounts:** someone who signs in through the directory (LDAP) or the identity
 provider (OIDC) for the first time gets an account here without a password; its role is
-worked out from their groups at every sign-in. Local accounts come first: an LDAP/OIDC
-sign-in under the name of a local account (letter case aside) is refused and written to
-all.log and the audit log (`ldap_login_denied` / `oidc_login_denied`); it never takes over
-the local account, turns it into an SSO account or demotes it. To move someone from a local
-account to SSO, delete the local account first (another admin must remain). Like
-directories, ser2net ignores letter case in LDAP names (Turkish İ/ı too): `hkilic`, `Hkilic`
-and `HKILIC` are one account; the accounts earlier versions made for each spelling merge at
-that person's next sign-in (the other spellings' sessions end), and *Sign out* and *Delete*
-cover all of them. OIDC names are compared exactly. A new local account's name can't differ
-from an existing one only in letter case. An LDAP/OIDC
-name can be any printable text (`CORP\jdoe`, `jdoe@corp.local`, names with `/` or `#`;
-such accounts can be signed out and deleted in the Users panel too); a sign-in under a name
-with control or invisible characters, longer than 255 characters or in parentheses is
-refused (all.log says why). **Settings → Users** shows each account's last sign-in (from the
-audit log and the sign-ins since; not written to config.json). LDAP/OIDC accounts that have
-not signed in for **90 days** are removed at start-up and every hour, and written to all.log
-and the audit log (`user_expired`); the period is set there too
+worked out from their groups at every sign-in — also when that takes the last admin role
+away (all.log then warns; `ser2net --set-password NAME` makes a local admin). Local accounts
+come first: an LDAP/OIDC sign-in under the name of a local account (letter case aside) is
+refused and written to all.log and the audit log (`ldap_login_denied` /
+`oidc_login_denied`); it never takes over the local account, turns it into an SSO account or
+demotes it. To move someone from a local account to SSO, delete the local account first
+(another admin must remain). Like directories, ser2net ignores letter case in LDAP names
+(Turkish İ/ı too): `hkilic`, `Hkilic` and `HKILIC` are one account; the accounts earlier
+versions made for each spelling merge at that person's next sign-in (the other spellings'
+sessions end), and *Sign out* and *Delete* cover all of them. OIDC names are compared
+exactly. A new local account's name can't differ from an existing one only in letter case.
+An LDAP/OIDC name can be any printable text (`CORP\jdoe`, `jdoe@corp.local`, names with `/`
+or `#`; such accounts can be signed out and deleted in the Users panel too); a sign-in under
+a name with control or invisible characters, longer than 255 characters or in parentheses is
+refused (all.log says why).
+
+**Unused LDAP / OIDC accounts:** **Settings → Users** shows each account's last sign-in
+(from the audit log and the sign-ins since; not written to config.json). LDAP/OIDC accounts
+that have not signed in for **90 days** are removed at start-up and every hour, and written
+to all.log and the audit log (`user_expired`); the period is set there too
 (`external_users_expire_days`: 0 = never, or 30–3650 days). Admins, local accounts and the
-last remaining accounts are never removed; an account with no sign-in in the audit log at
-all only when the log goes back that far for that kind of sign-in. Deleting (or removing)
-an LDAP/OIDC account ends its sessions at once, but access is up to the directory: while a
+last remaining accounts are never removed, and an account without any sign-in in the audit
+log only when the log goes back that far for its kind of sign-in. Deleting (or removing) an
+LDAP/OIDC account ends its sessions at once, but access is up to the directory: while a
 mapped group or the default role still applies, the person's next sign-in makes a new
 account.
 

@@ -436,28 +436,32 @@ da ekler.
 
 **LDAP / OIDC hesapları:** dizinden (LDAP) ya da kimlik sağlayıcıdan (OIDC) ilk kez giriş
 yapan kişiye burada parolasız bir hesap açılır; rolü her girişte gruplarından yeniden
-belirlenir. Yerel hesaplar önce gelir: adı (büyük/küçük harf fark etmeksizin) bir yerel
-hesabın adı olan bir LDAP/OIDC girişi reddedilir, all.log'a ve denetim kaydına
-(`ldap_login_denied` / `oidc_login_denied`) yazılır; böyle bir giriş yerel hesabı asla
-devralmaz, SSO hesabına çevirmez ya da rolünü düşürmez. Birini yerel hesaptan SSO'ya
-taşımak için önce yerel hesabını silin (başka bir admin kalmalı). Dizinler gibi ser2net de
-LDAP adlarında büyük/küçük harfe bakmaz (Türkçe İ/ı dahil): `hkilic`, `Hkilic` ve `HKILIC` tek
-hesaptır; eski sürümlerin her yazılış için açtığı hesaplar o kişinin bir sonraki girişinde
-birleşir (diğer yazılışların oturumları kapanır), *Oturumları kapat* ve *Sil* hepsine
-uygulanır. OIDC adları birebir karşılaştırılır. Yeni bir yerel hesabın adı mevcut bir adla
-yalnızca büyük/küçük harfte ayrılamaz. LDAP/OIDC adı yazdırılabilir
-her metin olabilir (`CORP\jdoe`, `jdoe@corp.local`, `/` ya da `#` içeren adlar; bu hesaplar
-da Kullanıcılar panelinden kapatılıp silinebilir); denetim karakteri ya da görünmez karakter
-içeren, 255 karakterden uzun ya da parantez içindeki bir adla giriş reddedilir (nedeni
-all.log'da). **Ayarlar → Kullanıcılar** her hesabın son girişini gösterir (denetim kaydından ve
-o andan sonraki girişlerden; config.json'a yazılmaz). **90 gündür** giriş yapmamış LDAP/OIDC
-hesapları açılışta ve her saat kaldırılır, all.log'a ve denetim kaydına (`user_expired`)
-yazılır; süre aynı yerden değiştirilir (`external_users_expire_days`: 0 = hiçbir zaman, ya
-da 30–3650 gün). Admin'ler, yerel hesaplar ve son kalan hesaplar hiçbir zaman kaldırılmaz;
-denetim kaydında hiç girişi olmayan bir hesap ise ancak kayıt o türden girişler için o kadar
-geriye gidiyorsa kaldırılır. Bir LDAP/OIDC hesabını silmek ya da kaldırmak oturumlarını
-hemen kapatır, ama erişime dizin karar verir: eşlenen bir grup ya da varsayılan rol geçerli
-oldukça kişinin bir sonraki girişi yeni bir hesap oluşturur.
+belirlenir — son admin rolünü elinden alsa bile (all.log o zaman uyarır; `ser2net
+--set-password AD` yerel bir admin oluşturur). Yerel hesaplar önce gelir: adı (büyük/küçük
+harf fark etmeksizin) bir yerel hesabın adı olan bir LDAP/OIDC girişi reddedilir, all.log'a
+ve denetim kaydına (`ldap_login_denied` / `oidc_login_denied`) yazılır; böyle bir giriş
+yerel hesabı asla devralmaz, SSO hesabına çevirmez ya da rolünü düşürmez. Birini yerel
+hesaptan SSO'ya taşımak için önce yerel hesabını silin (başka bir admin kalmalı). Dizinler
+gibi ser2net de LDAP adlarında büyük/küçük harfe bakmaz (Türkçe İ/ı dahil): `hkilic`,
+`Hkilic` ve `HKILIC` tek hesaptır; eski sürümlerin her yazılış için açtığı hesaplar o
+kişinin bir sonraki girişinde birleşir (diğer yazılışların oturumları kapanır), *Oturumları
+kapat* ve *Sil* hepsine uygulanır. OIDC adları birebir karşılaştırılır. Yeni bir yerel
+hesabın adı mevcut bir adla yalnızca büyük/küçük harfte ayrılamaz. LDAP/OIDC adı
+yazdırılabilir her metin olabilir (`CORP\jdoe`, `jdoe@corp.local`, `/` ya da `#` içeren
+adlar; bu hesaplar da Kullanıcılar panelinden kapatılıp silinebilir); denetim karakteri ya
+da görünmez karakter içeren, 255 karakterden uzun ya da parantez içindeki bir adla giriş
+reddedilir (nedeni all.log'da).
+
+**Kullanılmayan LDAP / OIDC hesapları:** **Ayarlar → Kullanıcılar** her hesabın son girişini
+gösterir (denetim kaydından ve o andan sonraki girişlerden; config.json'a yazılmaz). **90
+gündür** giriş yapmamış LDAP/OIDC hesapları açılışta ve her saat kaldırılır, all.log'a ve
+denetim kaydına (`user_expired`) yazılır; süre aynı yerden değiştirilir
+(`external_users_expire_days`: 0 = hiçbir zaman, ya da 30–3650 gün). Admin'ler, yerel
+hesaplar ve son kalan hesaplar hiçbir zaman kaldırılmaz; denetim kaydında hiç girişi olmayan
+bir hesap ise ancak kayıt o türden girişler için o kadar geriye gidiyorsa kaldırılır. Bir
+LDAP/OIDC hesabının silinmesi ya da kaldırılması oturumlarını hemen kapatır, ama erişime dizin
+karar verir: eşlenen bir grup ya da varsayılan rol geçerli oldukça kişinin bir sonraki
+girişi yeni bir hesap oluşturur.
 
 **OIDC (SSO):** kod isteği PKCE (S256) taşır. Sağlayıcının keşif belgesinde verdiği tüm
 adresler (yetkilendirme, token, JWKS) ve yoldaki yönlendirmeler https:// olmalıdır (http://
