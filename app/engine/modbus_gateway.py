@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, normalize_cidr
 from . import modbus, serial_io, sockopts
+from .access import server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
 )
@@ -135,7 +136,7 @@ class ModbusGatewayRunner:
             self._serial_supervisor(), name=f"modbus-serial:{self.mapping.name}")
         try:
             self._server = await asyncio.start_server(
-                self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
+                self._on_client, host=net.bind_ip, port=net.port, ssl=server_ssl(net))
             self._log(f"modbus gateway listening on {net.bind_ip}:{net.port}"
                       f" ({'TLS, ' if net.tls else ''}{sockopts.describe(net)})")
         except BaseException:
@@ -202,15 +203,6 @@ class ModbusGatewayRunner:
         self.status.client_count = 0
         self.status.clients = []
         self._log("modbus gateway stopped")
-
-    def _server_ssl(self):
-        net = self.mapping.network
-        if not net.tls:
-            return None
-        import ssl
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(net.tls_cert, net.tls_key)
-        return ctx
 
     # ---------------- serial side ----------------
     async def _close_serial(self) -> None:

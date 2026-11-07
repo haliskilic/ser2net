@@ -2,7 +2,8 @@
 
 One ``MappingRunner`` per configured mapping owns:
   - an asyncio TCP server bound to the mapping's IP:port,
-  - a supervised serial endpoint (opened and kept open, auto-reconnecting),
+  - a supervised serial endpoint (serial_link.SerialLink: opened and kept open,
+    auto-reconnecting),
   - a set of connected ``_ClientConn`` objects.
 
 Data model: a single serial port is shared by up to ``max_connections`` TCP
@@ -22,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
-import ipaddress
 import os
 import queue
 import socket
@@ -44,8 +44,10 @@ else:  # pragma: no cover - exercised only on Python 3.10
 
 from ..config import MappingConfig, mapping_file
 from . import serial_io, sockopts
+from .access import AccessPolicy, server_ssl
 from .protocols import make_session
 from .protocols.base import ProtocolSession
+from .serial_link import Backoff, SerialLink
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -273,6 +275,15 @@ class RunnerStatus:
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
     last_error: str = ""
 
+    def set_clients(self, clients) -> None:
+        """Publish the connected clients (each has peer, connected_at and priority)."""
+        self.client_count = len(clients)
+        self.clients = sorted(
+            ({"peer": c.peer, "connected_at": c.connected_at, "priority": c.priority}
+             for c in clients),
+            key=lambda d: d["connected_at"],
+        )
+
     def as_dict(self) -> dict:
         now = time.time()
         clients = [
@@ -484,8 +495,6 @@ class MappingRunner:
         self.trace_dir = trace_dir  # where traces go (data/traces); None = tracing unavailable
         self.status = RunnerStatus(state="stopped")
         self.log = logger
-        self.serial_instance = None
-        self._swriter: Optional[asyncio.StreamWriter] = None
         self._server: Optional[asyncio.base_events.Server] = None
         self._serial_task: Optional[asyncio.Task] = None
         self._main_task: Optional[asyncio.Task] = None       # client/udp/serialbridge driver
@@ -495,23 +504,18 @@ class MappingRunner:
         self._monitors: set = set()  # browser console observers (read traffic)
         self._traffic: set = set()   # live hex view observers: both directions
         self._mqtt: Optional[MqttPublisher] = None  # optional MQTT publisher (serial -> broker)
-        self._serial_ready = asyncio.Event()
         self._stop = asyncio.Event()
-        self._allowed_nets = self._parse_allowed(mapping.network.allowed_client_ips)
-        self._priority_nets = self._parse_allowed(mapping.network.priority_client_ips)
+        # the serial port shared by server/client/udp (a serial<->serial bridge opens its own)
+        self._link = SerialLink(mapping.serial, self.status, self._stop, self._log)
+        self._access = AccessPolicy(mapping.network)
         co = mapping.options.closeon
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
 
-    @staticmethod
-    def _parse_allowed(cidrs: list[str]):
-        from ..config import normalize_cidr
-
-        nets = []
-        for c in cidrs:
-            with contextlib.suppress(ValueError):
-                nets.append(ipaddress.ip_network(normalize_cidr(c), strict=False))
-        return nets
+    @property
+    def serial_instance(self):
+        """The open pyserial object (None while the port is closed)."""
+        return self._link.serial
 
     def _log(self, msg: str) -> None:
         # The logger (a per-mapping logger from AppState) adds the "[name]" prefix
@@ -561,7 +565,7 @@ class MappingRunner:
         net = self.mapping.network
         # serial side is shared by server/client/udp
         self._serial_task = asyncio.create_task(
-            self._serial_supervisor(), name=f"serial:{self.mapping.name}")
+            self._link.run(self._serial_session), name=f"serial:{self.mapping.name}")
 
         # If the network side fails to come up (address-in-use, bad TLS cert, ...),
         # tear everything down — otherwise the serial supervisor task is orphaned and
@@ -569,7 +573,7 @@ class MappingRunner:
         try:
             if net.mode == "server":
                 self._server = await asyncio.start_server(
-                    self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
+                    self._on_client, host=net.bind_ip, port=net.port, ssl=server_ssl(net))
                 self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
                           f"{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
             elif net.mode == "client":
@@ -619,7 +623,7 @@ class MappingRunner:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         self._serial_task = self._main_task = None
-        await self._close_serial()
+        await self._link.close()
         if self._tracer:
             await self._tracer.aclose()
             self._tracer = None
@@ -628,16 +632,7 @@ class MappingRunner:
         self.status.clients = []
         self._log("stopped")
 
-    # ssl contexts for per-mapping TLS data bridges
-    def _server_ssl(self):
-        net = self.mapping.network
-        if not net.tls:
-            return None
-        import ssl
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(net.tls_cert, net.tls_key)
-        return ctx
-
+    # ssl context for a connect-out TLS data bridge (a listener's: access.server_ssl)
     def _client_ssl(self):
         net = self.mapping.network
         if not net.tls:
@@ -652,65 +647,23 @@ class MappingRunner:
 
     # ---------------- serial side ----------------
     async def serial_write(self, data: bytes) -> None:
-        if self._swriter is None:
+        w = self._link.writer
+        if w is None:
             return  # serial not currently open; drop (status shows reconnecting)
         if self._tracer:
             self._tracer.write("net>ser", data)
         self._feed_traffic(TO_DEVICE, data)
-        self._swriter.write(data)
-        await self._swriter.drain()
+        w.write(data)
+        await w.drain()
 
-    async def _close_serial(self) -> None:
-        self._serial_ready.clear()
-        w = self._swriter
-        self._swriter = None
-        self.serial_instance = None
-        if w is not None:
-            with contextlib.suppress(Exception):
-                w.close()
-                await w.wait_closed()
-
-    async def _serial_supervisor(self) -> None:
-        backoff = 0.5
-        attempt = 0
-        while not self._stop.is_set():
-            try:
-                reader, writer, ser, device = await serial_io.open_serial(self.mapping.serial)
-                self._swriter = writer
-                self.serial_instance = ser
-                self.status.device = device
-                self.status.last_error = ""
-                self.status.state = "running"
-                self._serial_ready.set()
-                backoff = 0.5
-                attempt = 0
-                self._log(f"serial open: {device} @ {self.mapping.serial.compact()}")
-                # optional open string to device
-                if self.mapping.options.openstr:
-                    writer.write(self.mapping.options.openstr.encode("utf-8", "replace"))
-                    await writer.drain()
-                await self._serial_read_loop(reader)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # SerialException, OSError, etc.
-                self.status.last_error = str(e)
-                self.status.state = "device-missing" if attempt == 0 else "reconnecting"
-                self._log(f"serial error: {e}")
-            finally:
-                await self._close_serial()
-            if self._stop.is_set():
-                break
-            attempt += 1
-            self.status.reconnects += 1
-            self.status.state = "reconnecting"
-            # backoff with light jitter (derived from attempt, not RNG)
-            delay = min(backoff, 10.0) + (attempt % 5) * 0.1
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                break  # stop requested during backoff
-            except asyncio.TimeoutError:
-                pass
-            backoff = min(backoff * 2, 10.0)
+    async def _serial_session(self, reader: asyncio.StreamReader,
+                              writer: asyncio.StreamWriter) -> None:
+        """While the port is open (SerialLink.run): send the open string, then relay what
+        the device sends until the port goes away."""
+        if self.mapping.options.openstr:
+            writer.write(self.mapping.options.openstr.encode("utf-8", "replace"))
+            await writer.drain()
+        await self._serial_read_loop(reader)
 
     async def _serial_read_loop(self, reader: asyncio.StreamReader) -> None:
         while not self._stop.is_set():
@@ -739,38 +692,8 @@ class MappingRunner:
             self._closeon_tail = window[-(len(self._closeon) - 1):]
 
     # ---------------- network side ----------------
-    @staticmethod
-    def _ip_in_nets(ip: str, nets) -> bool:
-        if not nets:
-            return False
-        with contextlib.suppress(ValueError):
-            addr = ipaddress.ip_address(ip)
-            # treat IPv4-mapped IPv6 (::ffff:1.2.3.4) as the underlying IPv4
-            if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
-                addr = addr.ipv4_mapped
-            return any(addr in net for net in nets)
-        return False
-
-    def _client_allowed(self, ip: str) -> bool:
-        # empty allow-list = allow everyone
-        return True if not self._allowed_nets else self._ip_in_nets(ip, self._allowed_nets)
-
-    def _pick_victim(self):
-        """Choose a client to evict when making room: oldest non-priority first,
-        falling back to the oldest client overall."""
-        if not self._clients:
-            return None
-        non_priority = [c for c in self._clients if not c.priority]
-        pool = non_priority or list(self._clients)
-        return min(pool, key=lambda c: c.connected_at)
-
     def _refresh_clients(self) -> None:
-        self.status.client_count = len(self._clients)
-        self.status.clients = sorted(
-            ({"peer": c.peer, "connected_at": c.connected_at, "priority": c.priority}
-             for c in self._clients),
-            key=lambda d: d["connected_at"],
-        )
+        self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peername = writer.get_extra_info("peername") or ("?", 0)
@@ -781,36 +704,24 @@ class MappingRunner:
         peer_label = f"{peer_ip}:{peer_port}" if peer_port else peer_ip
         net = self.mapping.network
 
-        if not self._client_allowed(peer_ip):
-            self._log(f"rejected {peer_label}: not in allowed list")
-            writer.close()
-            return
-
-        is_priority = self._ip_in_nets(peer_ip, self._priority_nets)
-
-        if len(self._clients) >= net.max_connections:
-            # A priority client always gets in (kick to make room); a normal client
-            # gets in only if kick_old_user is set; otherwise it's refused.
-            if is_priority or net.kick_old_user:
-                victim = self._pick_victim()
-                if victim is not None:
-                    why = "priority client" if is_priority else "new client"
-                    self._log(f"kicking {victim.peer} for {why} {peer_label}")
-                    victim.kick(f"kicked for {why} {peer_label}")
-            else:
-                self._log(f"rejected {peer_label}: max connections reached")
+        # allow-list, then max connections (a priority client / kick_old_user makes room)
+        admission = self._access.admit(peer_ip, peer_label, self._clients, self._log)
+        if not admission.admitted:
+            if admission.at_capacity:
                 with contextlib.suppress(Exception):
                     writer.write(b"Busy: maximum connections reached.\r\n")
                     await writer.drain()
-                writer.close()
-                return
+            writer.close()
+            return
+        is_priority = admission.priority
 
         # For RFC2217 we need the live serial instance; wait briefly for it.
-        if net.protocol == "rfc2217" and not self._serial_ready.is_set():
+        ready = self._link.ready
+        if net.protocol == "rfc2217" and not ready.is_set():
             with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._serial_ready.wait(),
+                await asyncio.wait_for(ready.wait(),
                                        timeout=self.mapping.options.rfc2217_net_timeout_s)
-            if not self._serial_ready.is_set():
+            if not ready.is_set():
                 self._log(f"rejected {peer_label}: serial not ready for RFC2217")
                 writer.close()
                 return
@@ -831,10 +742,11 @@ class MappingRunner:
             self._log(f"client disconnected: {peer_label} after {held}{why} "
                       f"({len(self._clients)} total)")
             # closestr to device when the last client leaves
-            if not self._clients and self.mapping.options.closestr and self._swriter:
+            sw = self._link.writer
+            if not self._clients and self.mapping.options.closestr and sw:
                 with contextlib.suppress(Exception):
-                    self._swriter.write(self.mapping.options.closestr.encode("utf-8", "replace"))
-                    await self._swriter.drain()
+                    sw.write(self.mapping.options.closestr.encode("utf-8", "replace"))
+                    await sw.drain()
 
     def _enable_keepalive(self, writer: asyncio.StreamWriter, peer: str) -> None:
         net = self.mapping.network
@@ -878,7 +790,7 @@ class MappingRunner:
     async def _client_supervisor(self) -> None:
         net = self.mapping.network
         target = f"{net.remote_host}:{net.remote_port}"
-        backoff, attempt = 0.5, 0
+        backoff = Backoff()
         while not self._stop.is_set():
             try:
                 reader, writer = await self._connect_out()
@@ -887,7 +799,7 @@ class MappingRunner:
                 self._clients.add(client)
                 self._refresh_clients()
                 self._log(f"connected out to {target}")
-                backoff, attempt = 0.5, 0
+                backoff.reset()
                 try:
                     await client.run()
                 finally:
@@ -903,18 +815,14 @@ class MappingRunner:
                 self._log(f"connect-out failed: {e}")
             if self._stop.is_set():
                 break
-            attempt += 1
-            delay = min(backoff, 10.0) + (attempt % 5) * 0.1
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=delay)
+            if not await backoff.wait(self._stop):
                 break
-            except asyncio.TimeoutError:
-                pass
-            backoff = min(backoff * 2, 10.0)
 
     # ---------------- serial <-> serial bridge ----------------
     async def _serialbridge_supervisor(self) -> None:
-        backoff, attempt = 0.5, 0
+        # both ports open and close together, so this keeps its own loop (SerialLink
+        # supervises one port)
+        backoff = Backoff()
         while not self._stop.is_set():
             wa = wb = None
             try:
@@ -923,7 +831,7 @@ class MappingRunner:
                 self.status.device = f"{da} <-> {db}"
                 self.status.last_error = ""
                 self.status.state = "running"
-                backoff, attempt = 0.5, 0
+                backoff.reset()
                 self._log(f"serial bridge open: {da} <-> {db}")
                 async with TaskGroup() as tg:
                     tg.create_task(self._pump_serial_pair(ra, wb, "A>B"))
@@ -935,7 +843,7 @@ class MappingRunner:
                 inner = getattr(e, "exceptions", None)
                 self.status.last_error = ("; ".join(str(x) for x in inner)
                                           if inner else str(e))
-                self.status.state = "reconnecting" if attempt else "device-missing"
+                self.status.state = "reconnecting" if backoff.attempt else "device-missing"
                 self._log(f"serial bridge error: {self.status.last_error}")
             finally:
                 for w in (wa, wb):
@@ -945,16 +853,10 @@ class MappingRunner:
                             await w.wait_closed()
             if self._stop.is_set():
                 break
-            attempt += 1
             self.status.reconnects += 1
             self.status.state = "reconnecting"
-            delay = min(backoff, 10.0) + (attempt % 5) * 0.1
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=delay)
+            if not await backoff.wait(self._stop):
                 break
-            except asyncio.TimeoutError:
-                pass
-            backoff = min(backoff * 2, 10.0)
 
     async def _pump_serial_pair(self, reader, writer, tag: str) -> None:
         while not self._stop.is_set():
@@ -1003,11 +905,11 @@ class _UdpBridge(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr) -> None:
         r = self.runner
-        # Access control: a TCP listener checks _client_allowed() in _on_client, but
+        # Access control: a TCP listener checks the allow-list in _on_client, but
         # UDP has no accept hook — enforce the allow-list HERE. An unlisted source is
         # dropped entirely, so a stray or spoofed datagram cannot become "the peer"
         # and hijack the serial->net stream (this also protects read-only mappings).
-        if not r._client_allowed(addr[0]):
+        if not r._access.allowed(addr[0]):
             return
         peer = next((c for c in r._clients if isinstance(c, _UdpPeer)), None)
         if peer is None:
@@ -1024,7 +926,8 @@ class _UdpBridge(asyncio.DatagramProtocol):
         if r._tracer:
             r._tracer.write("net>ser", data)
         r._feed_traffic(TO_DEVICE, data)
-        if r._swriter is not None:
+        sw = r._link.writer
+        if sw is not None:
             with contextlib.suppress(Exception):
-                r._swriter.write(data)  # datagram_received is sync; transport buffers
+                sw.write(data)  # datagram_received is sync; transport buffers
             r.status.bytes_out += len(data)
