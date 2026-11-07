@@ -13,7 +13,8 @@
 #     ser2net — are handed to that owner first, or the server couldn't read them.
 # Handing files over is best effort: when it fails (a read-only mount, NFS with
 # root_squash), the start goes on and ser2net names the file it can't read. Nothing
-# below a mount point inside /data (a volume or host folder mounted there) is touched.
+# below a mount point inside /data (a volume or host folder mounted there) is touched,
+# and nothing at all when the mount points can't be read from /proc/self/mountinfo.
 # The supplementary groups given with --group-add are kept; root's own group is not.
 # The group of each serial device passed in (--device, compose `devices:`) is added
 # too: the node keeps the host's numeric group, which need not be the image's
@@ -21,32 +22,52 @@
 # Started as another user (docker run --user ...), it runs as that user unchanged.
 set -eu
 DATA=/data
+MOUNTINFO=/proc/self/mountinfo
 SERIAL="/dev/tty[A-Z]* /dev/ttymxc* /dev/rfcomm* /dev/serial/by-id/* /dev/serial/by-path/*"
 run() { exec python /app/ser2net.py --no-bootstrap --data-dir "$DATA" "$@"; }
 say() { echo "[ser2net] $*"; }
 # in_data <find expression>: find in $DATA, but not below a mount point inside it
+# ($mounts, read once below; mountinfo writes " " as \040)
 in_data() {
-    mounts=$(awk -v d="$DATA/" 'index($5, d) == 1 { print $5 }' /proc/self/mountinfo) || mounts=""
     while IFS= read -r mp; do
         if [ -n "$mp" ]; then
-            set -- -path "$(printf '%b' "$mp")" -prune -o "$@"  # mountinfo writes " " as \040
+            set -- -path "$(printf '%b' "$mp")" -prune -o "$@"
         fi
     done <<EOF
 $mounts
 EOF
     find "$DATA" "$@"
 }
-# take_over <uid:gid> [find tests]: hand the matching entries of $DATA to that owner
+# take_over <uid:gid> [find tests]: hand the matching entries of $DATA to that owner.
+# chown runs through find's -execdir, from the directory holding each entry, so a
+# folder swapped for a symbolic link while find walks can't lead it outside $DATA; and
+# nothing is changed when the mount points inside $DATA aren't known.
 take_over() {
     owner=$1
     shift
-    in_data "$@" -print0 | xargs -0 -r chown -h "$owner"
+    if [ "$mounts_known" != 1 ]; then
+        say "warning: $MOUNTINFO can't be read, so folders mounted inside $DATA can't be" \
+            "told apart: not changing the owner of anything in $DATA"
+        return 1
+    fi
+    if [ -L "$DATA" ] || [ ! -d "$DATA" ]; then
+        say "warning: $DATA is not a plain directory: not changing the owner of anything in it"
+        return 1
+    fi
+    in_data "$@" -execdir chown -h "$owner" {} +
 }
 
 if [ "$(id -u)" != "0" ]; then
     run "$@"
 fi
 mkdir -p "$DATA"
+# the mount points inside $DATA (a volume or host folder mounted there): never taken over
+if mounts=$(awk -v d="$DATA/" 'index($5, d) == 1 { print $5 }' "$MOUNTINFO" 2>/dev/null); then
+    mounts_known=1
+else
+    mounts=""
+    mounts_known=0
+fi
 uid=$(stat -c %u "$DATA")
 gid=$(stat -c %g "$DATA")
 if [ "$uid" = "0" ]; then
