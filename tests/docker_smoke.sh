@@ -10,7 +10,10 @@
 # 4. a config.json with a setting this version rejects still starts: the setting is
 #    logged, the file is left as it is, the UI works (a restart rewrites nothing either);
 # 5. an unusable SER2NET_BIND_IP stops the start with one line, not a traceback;
-# 6. the first admin without the browser: `docker exec ... --set-password` on the running
+# 6. a host user's folder that a 2.7 image wrote to as root (bind mount): the files
+#    the image left are handed to the folder's owner and the old config signs in;
+#    mounted read-only, the start stops with the chown command to run on the host;
+# 7. the first admin without the browser: `docker exec ... --set-password` on the running
 #    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
@@ -135,7 +138,49 @@ grep -q "Traceback" <<<"$logs" && fail "traceback instead of a message"
 docker rm -f -v s2n-smoke >/dev/null
 echo "bad SER2NET_BIND_IP: exit 1 with one line, no traceback  OK"
 
-echo "== 6. first admin from SER2NET_ADMIN_PASSWORD_FILE"
+echo "== 6. bind mount of a host user's folder that a 2.7 image wrote to as root"
+host_dir=$(mktemp -d)
+sudo cp "$HERE/fixtures/config-2.7.1.json" "$host_dir/config.json"
+sudo mkdir -p "$host_dir/logs" "$host_dir/tls"
+echo "2026-01-01 00:00:00 old" | sudo tee "$host_dir/all.log" "$host_dir/logs/aaaa00000001.log" >/dev/null
+printf '2026-01-01 00:00:00\t127.0.0.1\tlogin\tadmin, local\n' | sudo tee "$host_dir/audit.log" >/dev/null
+echo "not a real key" | sudo tee "$host_dir/tls/key.pem" >/dev/null
+sudo chmod 600 "$host_dir/config.json" "$host_dir/all.log" "$host_dir/audit.log" "$host_dir/tls/key.pem"
+sudo chmod 700 "$host_dir/logs" "$host_dir/tls"
+sudo touch "$host_dir/left-by-2.8.0" && sudo chown 10001:10001 "$host_dir/left-by-2.8.0"
+sudo chown 4321:4321 "$host_dir"  # the folder is the host user's, the files root's (2.7 ran as root)
+docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
+    -v "$host_dir:/data:ro" "$IMAGE" >/dev/null
+code=$(timeout 60 docker wait s2n-smoke) || fail "did not stop"
+logs=$(docker logs s2n-smoke 2>&1)
+echo "$logs" | tail -3
+[ "$code" = 1 ] || fail "read-only: exit code $code"
+grep -q "cannot read the configuration: /data/config.json: Permission denied" <<<"$logs" \
+    || fail "read-only: no clear message"
+grep -q "sudo chown -R 4321:4321 /data (in a container: on the host folder mounted there)" <<<"$logs" \
+    || fail "read-only: no chown hint"
+grep -q "Traceback" <<<"$logs" && fail "read-only: traceback instead of a message"
+docker rm -f s2n-smoke >/dev/null
+echo "read-only: stops with one line and the chown to run on the host  OK"
+docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
+    -v "$host_dir:/data" "$IMAGE" >/dev/null
+wait_healthy
+logs=$(docker logs s2n-smoke 2>&1)
+grep -q "handing the files an image wrote there (owned by root or ser2net) to 4321:4321" <<<"$logs" \
+    || fail "no takeover message"
+proc_status | grep -q -E "^Uid:\s+4321\s" || fail "should run as the folder's owner 4321"
+left=$(sudo find "$host_dir" \( -uid 0 -o -uid 10001 \) -print)
+[ -z "$left" ] || fail "files still owned by root / ser2net: $left"
+[ "$(sudo stat -c %u "$host_dir")" = 4321 ] || fail "host folder owner changed"
+code=$(sign_in admin old-admin-pass-1)
+[ "$code" = 303 ] || fail "old admin password did not sign in ($code)"
+sudo grep -q "AUDIT .* login" "$host_dir/all.log" || fail "all.log not written after the takeover"
+[ "$(sudo grep -c login "$host_dir/audit.log")" = 2 ] || fail "audit.log not written after the takeover"
+docker rm -f s2n-smoke >/dev/null
+sudo rm -rf "$host_dir"
+echo "bind mount upgrade: root / ser2net files handed to the folder's owner, old password, logs and audit work  OK"
+
+echo "== 7. first admin from SER2NET_ADMIN_PASSWORD_FILE"
 secret_dir=$(mktemp -d)
 printf 'env-pass-123\n' > "$secret_dir/pw"
 chmod 644 "$secret_dir/pw"

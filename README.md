@@ -296,7 +296,8 @@ Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
 ayarlanır — başsız ortamda interaktif seçici çalışamaz). Süreç root olarak değil, `ser2net`
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
-volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapmak gerekmez.
+volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
+olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez.
 İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Ayrıntılar:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 

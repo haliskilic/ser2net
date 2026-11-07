@@ -72,10 +72,20 @@ docker run -d --name ser2net \
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to
-  `ser2net` once (logged), so **upgrading needs no manual step**; a bind-mounted folder
-  owned by another user is used as that user, leaving the host files' owner alone. The
-  groups given with `--group-add` (serial device access) are kept, root's group is not.
-  With `docker run --user …` the entrypoint just runs as that user.
+  `ser2net` once (logged), so **upgrading needs no manual step**. A bind-mounted folder
+  owned by another user is used as that user, so the folder keeps its owner; files in it
+  that an image wrote (owned by root, as with the images before v2.8, or by uid 10001)
+  are handed to the folder's owner first (logged). The groups given with `--group-add`
+  are kept, root's group is not. With `docker run --user …` the entrypoint just runs as
+  that user.
+- **When the files can't be taken over** (a read-only mount, NFS with `root_squash`),
+  the start stops with one line naming the file, its owner and mode, the account
+  ser2net runs as and the fix: run `sudo chown -R <uid>:<gid> <folder>` on the host,
+  for the folder mounted at `/data`.
+- **Rootless Podman** maps your own user to root inside the container: your
+  bind-mounted folder looks root-owned there and would be handed to uid 10001 (a
+  sub-uid on the host). Start it with `--userns=keep-id` (plus `--group-add keep-groups`
+  with crun, to keep your serial device group); ser2net then runs as you.
 - **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`):
   `docker ps` shows `healthy` once the UI answers — also before the first-run setup. The
   probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
