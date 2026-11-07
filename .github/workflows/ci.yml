@@ -101,6 +101,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+        # The py3.12 legs (the binaries' and the image's Python) also install the pinned
+        # optional packages, so the LDAP / OIDC / MQTT code paths run with ldap3, authlib
+        # and paho-mqtt; the other legs keep testing ser2net without them.
+        include:
+          - python-version: "3.12"
+            optional: true
     env:
       # tests/test_dead_peer.py: run the real half-open-connection scenarios (they
       # blackhole a loopback flow — iptables via passwordless sudo on Linux, WinDivert
@@ -109,6 +115,9 @@ jobs:
       # tests/test_windows_service.py: install / restart / remove a real service
       # (python + ser2net.py) on the Windows runner (Administrator)
       SER2NET_SERVICE_TESTS: "1"
+      # tests/_optional.py: where the optional packages are installed, a test that
+      # needs a missing one fails instead of skipping
+      SER2NET_OPTIONAL_TESTS: ${{ matrix.optional && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -116,6 +125,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies (+ cryptography for the in-process certificate tests)
         run: pip install -r requirements.txt cryptography
+      - name: Install the optional packages (MQTT / LDAP / OIDC; py3.12 legs)
+        if: matrix.optional
+        run: pip install -r requirements-optional.txt
       - name: Install socat (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y socat
@@ -134,12 +146,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SER2NET_BLACKHOLE_TESTS: "1"
+      SER2NET_OPTIONAL_TESTS: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt cryptography coverage==7.17.1
+      # with the optional packages, so the LDAP / OIDC / MQTT code is measured too
+      - run: pip install -r requirements.txt -r requirements-optional.txt coverage==7.17.1
       - run: sudo apt-get update && sudo apt-get install -y socat
       - name: Run the suite under coverage (servers the tests spawn are measured too)
         run: python tests/coverage_run.py

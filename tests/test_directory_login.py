@@ -1,7 +1,8 @@
 """Signing in to the web UI with LDAP / Active Directory and with OIDC, end to end: a
 ser2net server against a small LDAP server (_ldap_server.py) and a small HTTPS OpenID
 provider in this process. The LDAP part needs ldap3, the OIDC part authlib and
-cryptography; each is skipped without them.
+cryptography; each is skipped without them (a SKIP line, which tests/run_all.py
+repeats), or fails with SER2NET_OPTIONAL_TESTS=1.
 
   * a group setting that is only part of a group's name ("admins" for ser2net-admins)
     no longer gives that role: the sign-in is refused with the usual message, all.log
@@ -12,7 +13,9 @@ cryptography; each is skipped without them.
   * the AD direct-bind template {username}@corp.local reads the user's groups; a
     Turkish group name typed in another letter case gives its role; a sign-in that
     gets the default role logs the user's groups;
-  * the nested-groups box is saved, and kept when a form without it is posted.
+  * the nested-groups box is saved, and kept when a form without it is posted;
+  * the OIDC callback: a missing or altered state is refused (400), a failed token
+    exchange too (401), with nothing saved.
 
 Run: python3 tests/test_directory_login.py
 """
@@ -29,6 +32,7 @@ import threading
 import time
 import urllib.parse
 
+from _optional import need
 from _server import Browser, Server
 
 from app.web import auth
@@ -104,11 +108,6 @@ def ldap_form(d, **fields):
 
 
 def test_ldap():
-    try:
-        import ldap3  # noqa: F401
-    except ImportError:
-        print("skip: ldap3 not installed")
-        return
     with ad_directory() as d:
         config = {"users": [local_admin(), shadow("jdoe", "ldap", 5)],
                   "ldap": {"enabled": True, "server_uri": d.uri,
@@ -249,6 +248,15 @@ class _Provider(http.server.BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         from authlib.jose import jwt
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.server.token_requests += 1
+        if self.server.refuse:   # the code was not accepted
+            data = json.dumps({"error": "invalid_grant"}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         now = int(time.time())
         claims = dict(self.server.claims, iss=self.server.issuer, aud="ser2net", sub="s-1",
                       iat=now, exp=now + 300)
@@ -268,30 +276,61 @@ def start_provider(pki):
     srv.issuer = f"https://127.0.0.1:{srv.server_address[1]}"
     srv.key = JsonWebKey.generate_key("RSA", 2048, is_private=True)
     srv.claims = {}
+    srv.refuse, srv.token_requests = False, 0
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
 
-def oidc_sign_in(srv, provider, claims):
-    """Through the provider with these claims: (status, page) of the callback."""
+def oidc_start(srv, provider):
+    """/auth/oidc/login in a new browser: (browser, the state and nonce it sends)."""
     b = Browser(srv.base)
     st, headers, _ = b.get("/auth/oidc/login")
     location = headers.get("Location", "")
     assert st == 303 and location.startswith(provider.issuer), (st, all_log(srv)[-1500:])
     query = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)
-    provider.claims = dict(claims, nonce=query["nonce"][0])
+    return b, query["state"][0], query["nonce"][0]
+
+
+def oidc_sign_in(srv, provider, claims):
+    """Through the provider with these claims: (status, page) of the callback."""
+    b, state, nonce = oidc_start(srv, provider)
+    provider.claims = dict(claims, nonce=nonce)
     st, _, page = b.get("/auth/oidc/callback?" + urllib.parse.urlencode(
-        {"code": "CODE", "state": query["state"][0]}))
+        {"code": "CODE", "state": state}))
     return st, page
 
 
-def test_oidc():
+def oidc_refused_callbacks(srv, provider):
+    """A callback without the state cookie, with another state or without a code is
+    refused (400) before the code is used; a code the provider doesn't accept gives 401.
+    Nothing is saved."""
+    before, requests = srv.saved_config(), provider.token_requests
+    b, state, nonce = oidc_start(srv, provider)
+    provider.claims = {"preferred_username": "mallory", "groups": ["/plant/ser2net-admins"],
+                       "nonce": nonce}
+    stranger = Browser(srv.base)            # no state cookie
+    for browser, query in ((stranger, {"code": "CODE", "state": state}),
+                           (b, {"code": "CODE", "state": state + "x"}),
+                           (b, {"code": "CODE", "state": ""}),
+                           (b, {"state": state})):
+        st, _, page = browser.get("/auth/oidc/callback?" + urllib.parse.urlencode(query))
+        assert st == 400 and "SSO state mismatch" in page, (st, query)
+    assert provider.token_requests == requests, "the code was used despite a bad state"
+    provider.refuse = True
     try:
-        import authlib  # noqa: F401
-        import cryptography  # noqa: F401
-    except ImportError:
-        print("skip: authlib or cryptography not installed")
-        return
+        st, _, page = b.get("/auth/oidc/callback?" + urllib.parse.urlencode(
+            {"code": "CODE", "state": state}))
+    finally:
+        provider.refuse = False
+    assert st == 401 and "SSO sign-in failed." in page, st
+    assert provider.token_requests == requests + 1
+    assert "OIDC authentication failed: HTTPError: HTTP Error 400" in all_log(srv), \
+        all_log(srv)[-1500:]
+    assert srv.saved_config()["users"] == before["users"]
+    assert not any(u["username"] == "mallory" for u in srv.saved_config()["users"])
+
+
+def test_oidc():
     tmp = tempfile.mkdtemp(prefix="s2n_oidc_")
     provider = start_provider(make_pki(tmp))
     try:
@@ -300,6 +339,9 @@ def test_oidc():
                            "client_secret": "s3cret", "admin_group": "admins",
                            "operator_group": "Bakım"}}
         with Server(config, env={"SSL_CERT_FILE": os.path.join(tmp, "ca.pem")}) as srv:
+            oidc_refused_callbacks(srv, provider)
+            print("OIDC: callback without/with a wrong state 400, a refused code 401  OK")
+
             old = session_for(srv, "sso.user", 7)
             assert signed_in(srv, old)
             st, page = oidc_sign_in(srv, provider, {"preferred_username": "sso.user",
@@ -325,8 +367,10 @@ def test_oidc():
 
 
 def main():
-    test_ldap()
-    test_oidc()
+    if need("ldap3", what="LDAP sign-in through the web UI"):
+        test_ldap()
+    if need("authlib", "cryptography", what="OIDC sign-in through the web UI"):
+        test_oidc()
     print("\nPASS: LDAP / OIDC sign-in through the web UI")
 
 

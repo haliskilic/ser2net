@@ -6,8 +6,9 @@ matches whole group names only — the full DN, its leading RDNs or the group's 
 The bind/search flow is exercised with a fake connection factory and against a small
 LDAP server speaking the real protocol (_ldap_server.py), which answers like Active
 Directory where needed: sign-in names that are no DN (user@domain, DOMAIN\\user), the
-RootDSE, nested groups. Those parts are skipped only if ldap3 isn't importable (the
-escape helpers the code uses live in ldap3). Run: python3 tests/test_ldap.py
+RootDSE, nested groups. Those parts need ldap3 (the escape helpers the code uses live in
+it): without it they are skipped with a SKIP line (tests/run_all.py repeats it), and with
+SER2NET_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_ldap.py
 """
 import os
 import sys
@@ -16,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _names import OTHER_GROUP, SAME_GROUP
+from _optional import need
 
 from app.config import AppConfig, LdapSettings
 from app.web import ldap_auth
@@ -183,13 +185,27 @@ def _make_factory(directory, svc_dn, svc_pw):
     return factory
 
 
-def test_authenticate_flows():
-    try:
-        import ldap3  # noqa: F401  (the code uses ldap3's escape helpers)
-    except ImportError:
-        print("skip: ldap3 not installed (pure logic above already covered)")
-        return
+def test_empty_password_never_binds():
+    """An empty password (or user name) is refused before anything is sent: a simple bind
+    with an empty password is an anonymous bind, which many directories accept. Needs no
+    ldap3."""
+    binds = []
 
+    def factory(server, user, password):
+        binds.append(user)
+        raise AssertionError("an empty password must not reach the directory")
+
+    for s in (LdapSettings(enabled=True, server_uri="ldap://h",
+                           user_dn_template="uid={username},ou=people,dc=ex,dc=com"),
+              LdapSettings(enabled=True, server_uri="ldaps://h", bind_dn="cn=svc,dc=ex",
+                           bind_password="svcpw", user_search_base="dc=ex")):
+        for user, pw in (("alice", ""), ("", "secret"), ("", "")):
+            assert ldap_auth.authenticate(s, user, pw, server=object(), conn_factory=factory) is None
+    assert binds == [], binds
+    print("authenticate: an empty password or user name never binds (no anonymous bind)  OK")
+
+
+def test_authenticate_flows():
     user_dn = "uid=alice,ou=people,dc=ex,dc=com"
     directory = {user_dn: ("secret", [OPER_GROUP])}
 
@@ -199,8 +215,7 @@ def test_authenticate_flows():
     f = _make_factory(directory, svc_dn="", svc_pw="")
     assert ldap_auth.authenticate(s, "alice", "secret", server=object(), conn_factory=f) == [OPER_GROUP]
     assert ldap_auth.authenticate(s, "alice", "WRONG", server=object(), conn_factory=f) is None
-    assert ldap_auth.authenticate(s, "alice", "", server=object(), conn_factory=f) is None  # empty pw
-    print("authenticate direct-bind: groups on success, None on bad/empty password  OK")
+    print("authenticate direct-bind: groups on success, None on a bad password  OK")
 
     # search+bind mode
     s2 = LdapSettings(enabled=True, server_uri="ldap://h", bind_dn="cn=svc,dc=ex",
@@ -243,20 +258,9 @@ def ad_directory(**kw):
     return FakeDirectory(entries, {JDOE: "pw-jdoe", ASMITH: "pw-ann", SVC: "pw-svc"}, **kw)
 
 
-def have_ldap3() -> bool:
-    try:
-        import ldap3  # noqa: F401
-        return True
-    except ImportError:
-        print("skip: ldap3 not installed (pure logic above already covered)")
-        return False
-
-
 def test_ad_sign_in_names():
     """Direct bind with an AD sign-in name that is no DN (the UI's {username}@corp.local
     or CORP\\{username}): the account's entry is looked up after the bind."""
-    if not have_ldap3():
-        return
     import ldap3
     logs: list[str] = []
     with ad_directory() as d:
@@ -297,8 +301,6 @@ def test_ad_sign_in_names():
 
 def test_ad_lookup_problems():
     """A group lookup that fails is logged and flagged — the bind itself succeeded."""
-    if not have_ldap3():
-        return
     from _ldap_server import FakeDirectory
 
     child_asmith = "CN=asmith,OU=People," + CHILD
@@ -361,8 +363,6 @@ def test_ad_lookup_problems():
 
 
 def test_nested_groups():
-    if not have_ldap3():
-        return
     from _ldap_server import FakeDirectory
     logs: list[str] = []
     with ad_directory() as d:
@@ -412,10 +412,13 @@ def main():
     test_turkish_names()
     test_partial_match_noted()
     test_upsert_ldap_user()
-    test_authenticate_flows()
-    test_ad_sign_in_names()
-    test_ad_lookup_problems()
-    test_nested_groups()
+    test_empty_password_never_binds()
+    if need("ldap3", what="authenticate() with ldap3: bind, search, AD sign-in names, "
+                          "nested groups over the LDAP protocol"):
+        test_authenticate_flows()
+        test_ad_sign_in_names()
+        test_ad_lookup_problems()
+        test_nested_groups()
     print("\nPASS: LDAP/AD authentication")
 
 
