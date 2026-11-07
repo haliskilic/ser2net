@@ -322,6 +322,29 @@ def test_manual_peer_and_remote_control():
             "remote edit did not change the peer's mapping"
         print("remote edit of a peer's mapping took effect on the peer  OK")
 
+        # the proxy forwards only known, validated fields: a URL serial port is refused
+        bad_port = {**edit, "serial_port": "socket://10.0.0.9:1"}
+        assert post_a("/api/cluster/peer-save", bad_port) == 400, "a URL serial port must be refused"
+        _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+        assert json.loads(body)["mappings"][0]["serial"] == "/dev/ttyEDITED", "the URL edit leaked"
+
+        # a trace path typed into the form reaches the peer only as a bare file name
+        trace_edit = {**edit, "serial_port": "/dev/ttyEDITED", "opt_trace_both": "/data/config.json"}
+        assert post_a("/api/cluster/peer-save", trace_edit) == 200
+        bcfg = {}
+        for _ in range(20):
+            bcfg = json.load(open(os.path.join(tb, "config.json")))
+            if bcfg["mappings"][0]["options"]["trace_both"]:
+                break
+            time.sleep(0.1)
+        assert bcfg["mappings"][0]["options"]["trace_both"] == "config.json", \
+            bcfg["mappings"][0]["options"]["trace_both"]
+
+        # editing a mapping id the peer doesn't have is refused (no create via the proxy)
+        ghost = {**edit, "id": "nosuchid9999"}
+        assert post_a("/api/cluster/peer-save", ghost) == 400, "editing a missing mapping must be refused"
+        print("remote edit proxy: URL port refused, trace path reduced to a name, missing id refused  OK")
+
         print("\nPASS: manual peers + per-node health + remote control + remote edit")
     finally:
         for proc, tmp in ((pa, ta), (pb, tb)):
