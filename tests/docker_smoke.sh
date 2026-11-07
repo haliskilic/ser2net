@@ -18,14 +18,15 @@
 #    open is reported;
 # 8. the image holds what it runs and the license texts, not the tests, the offline
 #    wheels or the docs, and the app is compiled already;
-# 9. the first admin without the browser: `docker exec ... --set-password` on the running
+# 9. a read-only /data whose config.json needs updating still starts, with a warning;
+# 10. the first admin without the browser: `docker exec ... --set-password` on the running
 #    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PORT=18080
 fail() { echo "FAIL: $*"; docker logs s2n-smoke 2>&1 | tail -40 || true; exit 1; }
-cleanup() { docker rm -f s2n-smoke >/dev/null 2>&1 || true; docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f s2n-smoke >/dev/null 2>&1 || true; docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 cleanup
 
@@ -222,7 +223,21 @@ sys.exit(1 if missing or extra or len(pycs) < len(sources) or unhashed else 0)' 
     || fail "image contents"
 echo "image: runtime files and license texts in, tests / wheels / docs out, app compiled  OK"
 
-echo "== 9. first admin from SER2NET_ADMIN_PASSWORD_FILE"
+echo "== 9. a read-only /data"
+docker run --rm --user 0 --entrypoint sh -v s2n-smoke-d:/data -v "$HERE/fixtures:/fx:ro" "$IMAGE" -c \
+  'cp /fx/config-2.7.1.json /data/config.json && chown 10001:10001 /data/config.json'
+docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
+    -v s2n-smoke-d:/data:ro "$IMAGE" >/dev/null
+wait_healthy
+logs=$(docker logs s2n-smoke 2>&1)
+grep "could not update config.json at start-up" <<<"$logs" || fail "no warning about the failed write"
+grep -q "Traceback" <<<"$logs" && fail "traceback in the log"
+code=$(sign_in admin old-admin-pass-1)
+[ "$code" = 303 ] || fail "could not sign in ($code)"
+docker rm -f s2n-smoke >/dev/null
+echo "read-only /data: starts and signs in, the failed write is a warning  OK"
+
+echo "== 10. first admin from SER2NET_ADMIN_PASSWORD_FILE"
 secret_dir=$(mktemp -d)
 printf 'env-pass-123\n' > "$secret_dir/pw"
 chmod 644 "$secret_dir/pw"
