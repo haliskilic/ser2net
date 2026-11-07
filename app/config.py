@@ -1062,11 +1062,12 @@ class NotificationSettings:
 
 
 def fold(text) -> str:
-    """How names compare where letter case doesn't count (LDAP and OIDC group names; an
-    LDAP/OIDC sign-in name against the local accounts' names): NFC, every run of white
-    space (no-break spaces too) as one space, and letter case folded so that Turkish İ,
-    I, ı and i are one letter — str.lower() turns 'İ' into 'i' + U+0307 and leaves 'ı'
-    as it is, so KALİTE and Kalite, or BAKIM and Bakım, would differ."""
+    """How names compare where letter case doesn't count (LDAP and OIDC group names, LDAP
+    user names, an LDAP/OIDC sign-in name or a new account's name against the existing
+    ones): NFC, every run of white space (no-break spaces too) as one space, and letter
+    case folded so that Turkish İ, I, ı and i are one letter — str.lower() turns 'İ'
+    into 'i' + U+0307 and leaves 'ı' as it is, so KALİTE and Kalite, or BAKIM and Bakım,
+    would differ."""
     s = " ".join(unicodedata.normalize("NFC", str(text)).split())
     return s.replace("\u0130", "i").replace("\u0131", "i").casefold().replace("i\u0307", "i")
 
@@ -1196,6 +1197,16 @@ class AppConfig:
         )
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
+        spellings: dict[str, list[str]] = {}
+        for u in cfg.users:
+            if u.source == "ldap":
+                spellings.setdefault(fold(u.username), []).append(u.username)
+        for names in (n for n in spellings.values() if len(n) > 1):
+            cfg.load_notes.append(
+                f"LDAP accounts {', '.join(map(repr, names))} are one directory user, in "
+                "different letter case: they become one account at that user's next "
+                "sign-in, which ends the sessions of the other spellings (deleting one in "
+                "Settings → Users deletes them all)")
         if cfg.ldap.enabled and cfg.ldap.uses_tls and "tls_verify" not in (d.get("ldap") or {}):
             cfg.load_notes.append(
                 "LDAP: the directory server's certificate is now checked (LDAPS / StartTLS): "
@@ -1276,18 +1287,33 @@ class AppConfig:
         LDAP/OIDC ones while their sign-in method is on)."""
         return sum(1 for u in self.users if u.role == "admin" and self.source_enabled(u))
 
+    def external_accounts(self, name: str, source: str) -> list[User]:
+        """The accounts of the LDAP/OIDC user who signs in as `name`. An LDAP name is the
+        same name in any letter case (directories compare it that way, and a phone may
+        send "Jdoe" for jdoe): every LDAP account named so, the exact spelling first. An
+        OIDC name is compared exactly (a provider's "sub" is case-sensitive)."""
+        if source == "ldap":
+            return self.named(name, "ldap")
+        return [u for u in self.users if u.source == source and u.username == name]
+
     def upsert_external_user(self, username: str, role: str, source: str) -> User:
         """Create or refresh a shadow account for an externally-authenticated user
         (LDAP/OIDC). Bumps pwd_version when the role or source changes.
         A sign-in through a directory or an identity provider never takes over, converts
         or demotes a local account: raises AccountNameError when one has this name,
         letter case aside, or when the name can't be an account's (external_name_problem;
-        `username` is spelled as external_name() spells it)."""
+        `username` is spelled as external_name() spells it).
+        LDAP: the account is the one spelled like `username`, else the first in another
+        letter case (external_accounts); the person's other LDAP accounts — made by
+        earlier versions for each spelling — are removed, which ends their sessions."""
         if local := self.named(username, "local"):
             raise AccountNameError(f"the local account {local[0].username!r} has this name")
         if (why := external_name_problem(username)) is not None:
             raise AccountNameError(why)
-        u = self.get_user(username)
+        same = self.external_accounts(username, source)
+        if len(same) > 1:
+            self.users = [x for x in self.users if not any(x is y for y in same[1:])]
+        u = same[0] if same else self.get_user(username)
         if u is None:
             u = User(username=username, password_hash="", role=role, source=source,
                      pwd_version=new_pwd_version())

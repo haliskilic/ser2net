@@ -175,6 +175,33 @@ def test_upsert_never_takes_a_local_account():
     print("upsert_external_user: never takes over a local account (any letter case)  OK")
 
 
+def test_upsert_letter_case():
+    """A directory compares user names without regard to letter case, so jdoe, JDoe and
+    JDOE are one LDAP account: the one spelled as typed, else the first; the others
+    (earlier versions made one per spelling) go, ending their sessions. OIDC names stay
+    exact, and an exact name of the other source is taken over as before."""
+    cfg = AppConfig.from_dict({"users": [
+        {"username": "admin", "password_hash": "h", "role": "admin", "source": "local"},
+        {"username": "jdoe", "role": "admin", "pwd_version": 3, "source": "ldap"},
+        {"username": "JDoe", "role": "admin", "pwd_version": 9, "source": "ldap"},
+        {"username": "Alice", "role": "viewer", "pwd_version": 4, "source": "oidc"},
+        {"username": "bob", "role": "viewer", "pwd_version": 2, "source": "oidc"},
+        {"username": "ısık", "role": "viewer", "pwd_version": 6, "source": "ldap"}]})
+    assert any("'jdoe', 'JDoe' are one directory user" in n for n in cfg.load_notes), cfg.load_notes
+    u = cfg.upsert_external_user("JDOE", "viewer", "ldap")
+    assert (u.username, u.role, u.pwd_version) == ("jdoe", "viewer", 4), u
+    assert [x.username for x in cfg.users] == ["admin", "jdoe", "Alice", "bob", "ısık"]
+    cfg.users.append(User(username="JDOE", role="viewer", pwd_version=20, source="ldap"))
+    assert cfg.upsert_external_user("JDOE", "viewer", "ldap").pwd_version == 20  # exact first
+    assert [x.username for x in cfg.named("jdoe")] == ["JDOE"]
+    assert cfg.upsert_external_user("ISIK", "viewer", "ldap").username == "ısık"   # Turkish I/ı
+    alice = cfg.upsert_external_user("alice", "viewer", "oidc")      # OIDC: exact names
+    assert alice.username == "alice" and cfg.get_user("Alice").pwd_version == 4
+    bob = cfg.upsert_external_user("bob", "operator", "ldap")        # the other source: as before
+    assert bob.source == "ldap" and bob.pwd_version == 3 and len(cfg.named("bob")) == 1
+    print("upsert_external_user: an LDAP name in any letter case is one account; OIDC exact  OK")
+
+
 # ---- authenticate() flow with a fake connection factory (needs ldap3 for escapes) ----
 
 class _Attr:
@@ -447,6 +474,7 @@ def main():
     test_partial_match_noted()
     test_upsert_ldap_user()
     test_upsert_never_takes_a_local_account()
+    test_upsert_letter_case()
     test_empty_password_never_binds()
     if need("ldap3", what="authenticate() with ldap3: bind, search, AD sign-in names, "
                           "nested groups over the LDAP protocol"):

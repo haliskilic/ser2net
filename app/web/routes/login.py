@@ -9,7 +9,8 @@ from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
 from ...config import (
-    AccountNameError, ConfigError, User, external_name, external_name_problem, new_pwd_version,
+    AccountNameError, ConfigError, User, external_name, external_name_problem, fold,
+    new_pwd_version,
 )
 from ...engine import netinfo
 from ...i18n import _
@@ -30,8 +31,12 @@ def routes(ctx: Ctx) -> list:
     # ---------------- LDAP / OIDC groups -> role ----------------
     # (source, user name) whose sessions a refused sign-in already ended, so that more
     # refused tries don't save config.json (and push out a backup) each time; their next
-    # successful sign-in takes them off again
+    # successful sign-in takes them off again. An LDAP name in any letter case is one
+    # person (AppConfig.external_accounts).
     refused: set[tuple[str, str]] = set()
+
+    def _person(source: str, username: str) -> tuple[str, str]:
+        return source, fold(username) if source == "ldap" else username
 
     def _directory_role(source: str, username: str, groups, settings) -> str | None:
         """The role the groups reported by the directory (LDAP) or the identity provider
@@ -82,14 +87,15 @@ def routes(ctx: Ctx) -> list:
         """The directory or identity provider confirmed who this is, but their groups
         give no role any more: end the sessions their shadow account still has, which
         would otherwise keep the role saved with it until they expire."""
-        if (source, username) in refused:
+        if _person(source, username) in refused:
             return
         async with state.config_lock:
-            user = state.config.get_user(username)
-            if user is None or user.source != source:
+            accounts = state.config.external_accounts(username, source)
+            if not accounts:
                 return
-            user.pwd_version += 1
-            refused.add((source, username))
+            for user in accounts:
+                user.pwd_version += 1
+            refused.add(_person(source, username))
             try:
                 await state.asave()
             except (ConfigError, OSError) as e:  # still ended in memory, until a restart
@@ -210,9 +216,9 @@ def routes(ctx: Ctx) -> list:
         user = await _save_external("oidc", username, role)
         if user is None:   # a local account got the name meanwhile
             return _refusal_page(request, "oidc", _name_refused(request, "oidc", username))
-        refused.discard(("oidc", username))
-        state.log(f"login: {username} ({role}, oidc) from {client_ip(request)}")
-        ctx.audit(request, "oidc_login", username, user=username)
+        refused.discard(_person("oidc", username))
+        state.log(f"login: {user.username} ({role}, oidc) from {client_ip(request)}")
+        ctx.audit(request, "oidc_login", user.username, user=user.username)
         resp = RedirectResponse("/", status_code=303)
         set_session(resp, request, user)
         resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
@@ -252,13 +258,13 @@ def routes(ctx: Ctx) -> list:
                     if authed is None:   # a local account got the name meanwhile
                         return _refusal_page(request, "ldap",
                                              _name_refused(request, "ldap", username))
-                    refused.discard(("ldap", username))
+                    refused.discard(_person("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
-        if authed is not None:
+        if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
-            state.log(f"login: {username} ({authed.role}, {authed.source}) from {ip}")
-            ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=username)
+            state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
+            ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=authed.username)
             resp = RedirectResponse("/", status_code=303)
             set_session(resp, request, authed)
             return resp

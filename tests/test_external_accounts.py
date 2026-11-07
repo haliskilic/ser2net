@@ -9,11 +9,15 @@ accounts are written into config.json the way earlier sign-ins left them):
     CORP\\jdoe or a/b#c?d%41: the forms send the name in a field, not in the URL (the
     older /settings/users/<name>/... URLs still work for plain names);
   * with open access, the visitor's pseudo-user "(anonymous)" is not an account of that
-    name an older install may have: that account is not marked "you" and can be deleted.
+    name an older install may have: that account is not marked "you" and can be deleted;
+  * an LDAP name in any letter case is one person: signing out or deleting the account
+    covers the other spellings earlier versions made (never the last admin, never your
+    own row), and a new local account can't differ from an existing name only in case.
 
 Run: python3 tests/test_external_accounts.py
 """
 import html
+import http.cookiejar
 import os
 import sys
 
@@ -23,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _server import Browser, Server
 
 from app.config import EXTERNAL_NAME_MAX, external_name, external_name_problem
+from app.web import auth
 from app.web.auth import hash_password
 
 PW = "external-pass-1"
@@ -40,6 +45,16 @@ def shadow(name, source="ldap", role="viewer", version=4):
 
 def users(srv) -> dict:
     return {u["username"]: u for u in srv.saved_config()["users"]}
+
+
+def browser_as(srv, name, version) -> Browser:
+    """A browser with a session cookie of this (LDAP/OIDC) account."""
+    b = Browser(srv.base)
+    token = auth.issue_session(srv.saved_config()["secret_key"], 600, name, version)
+    b.jar.set_cookie(http.cookiejar.Cookie(
+        0, "ser2net_session", token, None, False, "127.0.0.1", False, False, "/", True,
+        False, None, False, None, None, {}))
+    return b
 
 
 def test_names():
@@ -113,10 +128,40 @@ def test_anonymous_is_not_an_account():
     print("open access: the visitor is not the account named (anonymous)  OK")
 
 
+def test_letter_case():
+    config = {"users": [local("admin"), shadow("hkilic", role="admin", version=3),
+                        shadow("Hkilic", role="admin", version=8), shadow("HKILIC", version=2),
+                        shadow("jdoe")],
+              "ldap": {"enabled": True, "server_uri": "ldap://127.0.0.1:9",
+                       "user_dn_template": "uid={username}"}}
+    with Server(config) as srv:
+        admin = Browser(srv.base)
+        admin.login("admin", PW)
+        for name, existing in (("ADMIN", "admin"), ("Admin", "admin"), ("JDOE", "jdoe")):
+            st, _, page = admin.post("/settings/users", {"username": name, "role": "viewer",
+                                                         "password": PW, "password2": PW})
+            assert f"User &#39;{existing}&#39; already exists." in page, (name, page[-600:])
+        assert len(users(srv)) == 5
+        st, _, page = admin.post("/settings/users/signout", {"username": "Hkilic"})
+        assert [users(srv)[n]["pwd_version"] for n in ("hkilic", "Hkilic", "HKILIC")] == [4, 9, 3]
+        # signed in as Hkilic: deleting hkilic takes HKILIC along, never your own row
+        me = browser_as(srv, "Hkilic", 9)
+        st, _, page = me.post("/settings/users/delete", {"username": "hkilic"})
+        assert "Its accounts in another letter case were deleted too: HKILIC." in page, page[-800:]
+        assert set(users(srv)) == {"admin", "Hkilic", "jdoe"}
+        st, _, page = admin.post("/settings/users/delete", {"username": "Hkilic"})
+        assert "deleted too" not in page and set(users(srv)) == {"admin", "jdoe"}
+        log = open(os.path.join(srv.data, "audit.log"), encoding="utf-8").read()
+        assert "\tuser_delete\thkilic\tHkilic" in log and "\tuser_delete\tHKILIC\tHkilic" in log
+    print("letter case: an LDAP user's other spellings are signed out and deleted with it; "
+          "a new local account can't differ only in case  OK")
+
+
 def main():
     test_names()
     test_manage_any_name()
     test_anonymous_is_not_an_account()
+    test_letter_case()
     print("\nPASS: LDAP/OIDC accounts in the Users panel")
 
 
