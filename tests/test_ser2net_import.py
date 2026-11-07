@@ -6,7 +6,10 @@ dicts plus warnings. Checks:
     *banner aliases): 4 mappings; the two that share a device with an earlier one come
     in disabled, so the whole import validates;
   * accepters: telnet, telnet(rfc2217), udp, bind address forms (host, localhost, ipv6),
-    TLS/certauth/sctp layers warned about, unusable ones skipped;
+    sctp warned about, unusable ones skipped;
+  * protections that can't be carried over hold the mapping disabled (certauth, ssl
+    clientauth, TLS files missing here, dtls, wronly/rawlp, no-con-to-acc), with every
+    reason; TLS is kept when its files are here; a read-only trace is not imported;
   * connectors: serialdev/sdev options (9600n81, rtscts, xonxoff, dtr=, nobreak, ...),
     Windows //./COMn, network/IPMI connectors skipped;
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
@@ -24,6 +27,7 @@ Run: python3 tests/test_ser2net_import.py
 """
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -122,6 +126,7 @@ def test_debian_default():
     assert has(warns, "con0192", "imported disabled", "/dev/ttyS0", "con0096")
     assert has(warns, "con0096", r"\B", "9600N81")
     assert not has(warns, "telnet-brk-on-sync"), warns  # meaningless on a raw TCP port
+    assert not has(warns, "TCP wrappers"), warns  # every port listens on localhost only
     print("Debian default ser2net.yaml: 4 mappings, banner alias, multi-line connectors, "
           "shared devices imported disabled  OK")
 
@@ -183,14 +188,167 @@ def test_accepters():
     # a host name can't be bound: listening on 0.0.0.0 would be wider, so it comes in disabled
     assert net["hostname"]["bind_ip"] == "0.0.0.0" and maps["hostname"]["enabled"] is False
     assert has(warns, "hostname:", "myhost.example.com", "imported disabled")
-    assert all(maps[n]["enabled"] for n in maps if n != "hostname")
-    assert not net["tls"].get("tls") and has(warns, "tls:", "TLS (ssl) is not imported")
+    # TLS without its files on this host and a gtlssh login can't be carried over: those
+    # mappings come in disabled rather than as open cleartext listeners
+    assert all(maps[n]["enabled"] for n in maps if n not in ("hostname", "tls", "gtlssh"))
+    assert maps["tls"]["enabled"] is False and not net["tls"].get("tls")
+    assert has(warns, "tls:", "/etc/ser2net/k.key", "not on this host", "imported disabled")
     assert net["gtlssh"]["protocol"] == "rfc2217" and net["gtlssh"]["port"] == 2011
-    assert has(warns, "gtlssh:", "certauth") and has(warns, "gtlssh:", "SCTP")
+    assert maps["gtlssh"]["enabled"] is False
+    assert has(warns, "gtlssh:", "certauth", "imported disabled") and has(warns, "gtlssh:", "SCTP")
     assert "unixsock" not in maps and has(warns, "unixsock:", "skipped", "not a TCP/UDP port")
     assert "dynamic" not in maps and has(warns, "dynamic:", "skipped", "'0'")
-    print("accepters: telnet / rfc2217 / udp / bind forms; TLS, certauth, SCTP warned; "
-          "unix socket and port 0 skipped  OK")
+    print("accepters: telnet / rfc2217 / udp / bind forms; TLS and certauth held disabled, SCTP "
+          "warned; unix socket and port 0 skipped  OK")
+
+
+def test_protections():
+    """A connection that would be more open here than in ser2net comes in disabled."""
+    d = tempfile.mkdtemp(prefix="s2n_import_")
+    cert, key = os.path.join(d, "ser2net.crt"), os.path.join(d, "ser2net.key")
+    for path in (cert, key):
+        with open(path, "w") as fh:
+            fh.write("placeholder\n")  # only checked to exist here
+    text = f"""
+default:
+  name: cert
+  value: {cert}
+  class: ssl
+default:
+  name: key
+  value: {key}
+  class: ssl
+connection: &tls
+  accepter: telnet(rfc2217),ssl,tcp,6101
+  connector: serialdev,/dev/ttyUSB1,115200n81
+connection: &tlsfiles
+  accepter: telnet,ssl(key={key},cert={cert}),tcp,6102
+  connector: serialdev,/dev/ttyUSB2
+connection: &tlsmissing
+  accepter: telnet,ssl(key={d}/other.key),tcp,6103
+  connector: serialdev,/dev/ttyUSB3
+connection: &clientauth
+  accepter: telnet,ssl(clientauth),tcp,6104
+  connector: serialdev,/dev/ttyUSB4
+connection: &gtlssh
+  accepter: telnet(rfc2217),mux,certauth(enable-password),ssl,tcp,6105
+  connector: serialdev,/dev/ttyUSB5
+connection: &dtls
+  accepter: dtls,udp,6106
+  connector: serialdev,/dev/ttyUSB6
+connection: &wronly
+  accepter: tcp,6107
+  connector: serialdev,/dev/ttyUSB7,9600n81,wronly
+connection: &lp
+  accepter: tcp,6108
+  connector: dev(wronly),/dev/lp0
+connection: &nocon
+  accepter: tcp,6109
+  connector: serialdev,/dev/ttyUSB9
+  options:
+    no-con-to-acc: true
+connection: &rdonly
+  accepter: tcp,6110
+  connector: serialdev,/dev/ttyUSB10
+  options:
+    no-acc-to-con: true
+    trace-read: /var/log/rd
+connection: &twrite
+  accepter: tcp,6111
+  connector: serialdev,/dev/ttyUSB11
+  options:
+    trace-write: /var/log/wr
+connection: &three
+  accepter: telnet,mux,certauth,ssl(clientauth=false,key={d}/none.key),tcp,myhost,6112
+  connector: serialdev,/dev/ttyUSB12
+connection: &shared1
+  accepter: telnet,ssl(clientauth),tcp,6113
+  connector: serialdev,/dev/ttyUSB13
+connection: &shared2
+  accepter: telnet,tcp,127.0.0.1,6114
+  connector: serialdev,/dev/ttyUSB13
+"""
+    maps, warns = parse(text)
+    on = {n for n, m in maps.items() if m["enabled"]}
+    assert on == {"tls", "tlsfiles", "rdonly", "twrite", "shared2"}, on
+    for name in ("tls", "tlsfiles"):  # the certificate is on this host: TLS is kept
+        net = maps[name]["network"]
+        assert (net["tls"], net["tls_cert"], net["tls_key"]) == (True, cert, key), net
+        assert has(warns, f"{name}:", "TLS (ssl) is kept", cert)
+    assert not maps["tlsmissing"]["network"].get("tls")
+    assert has(warns, "tlsmissing:", "other.key", "not on this host", "imported disabled")
+    for name in ("clientauth", "gtlssh"):  # TLS is set up, but what it relied on is missing
+        assert maps[name]["network"]["tls"] is True, name
+    assert has(warns, "clientauth:", "client certificates", "imported disabled")
+    assert has(warns, "gtlssh:", "certauth", "without a login")
+    assert has(warns, "dtls:", "dtls", "imported disabled rather than unencrypted")
+    assert has(warns, "wronly:", "wronly", "write-only") and has(warns, "lp:", "wronly")
+    assert has(warns, "nocon:", "no-con-to-acc", "imported disabled")
+    assert not has(warns, "nocon: not imported")  # handled, not listed as dropped
+    r = maps["rdonly"]
+    assert r["network"]["read_only"] is True and not r["options"].get("trace_both")
+    assert has(warns, "rdonly:", "trace-read is not imported", "passwords")
+    assert maps["twrite"]["options"]["trace_both"] == "/var/log/wr"
+    assert has(warns, "twrite:", "trace-write: both directions")
+    for why in ("listen address 'myhost'", "certauth", "none.key"):  # every reason is shown
+        assert has(warns, "three:", why), why
+    assert not has(warns, "three:", "client certificates")  # clientauth=false
+    # a held connection does not claim its device: the narrower one sharing it stays on
+    assert not has(warns, "shared2:", "also used by")
+    assert has(warns, "TCP wrappers", "hosts.allow")
+    print("protections: TLS kept with its files; certauth, clientauth, missing TLS files, dtls, "
+          "wronly and no-con-to-acc held disabled with every reason; read-only traces off  OK")
+
+    text = """
+default:
+  name: clientauth
+  value: true
+  class: ssl
+connection: &before
+  accepter: telnet,ssl(clientauth=no),tcp,6201
+  connector: serialdev,/dev/ttyS1
+connection: &auth
+  accepter: telnet,ssl,tcp,6202
+  connector: serialdev,/dev/ttyS2
+delete_default:
+  name: clientauth
+  class: ssl
+connection: &after
+  accepter: telnet,ssl,tcp,6203
+  connector: serialdev,/dev/ttyS3
+"""
+    maps, warns = parse(text)
+    assert has(warns, "auth:", "client certificates") and not has(warns, "before:", "client")
+    assert not has(warns, "after:", "client certificates")
+    assert has(warns, "after:", "/etc/ser2net/ser2net.crt") or has(warns, "after:", "TLS (ssl) is kept")
+    print("ssl defaults (clientauth, delete_default) reach the ssl layers that follow  OK")
+
+    # every connection uses a gtlssh login: nothing comes in enabled (and nothing is open)
+    text = r"""%YAML 1.1
+---
+defines:
+  hello: Port \N on \d\r\n
+connections:
+  bench1:
+    accepter: telnet(rfc2217),mux,certauth(),ssl,tcp,4401
+    connector: serialdev,/dev/ttyACM0,19200n81
+    options:
+      banner: =(hello)
+  bench2:
+    accepter: telnet(rfc2217),mux,certauth(),ssl,tcp,4402
+    connector: serialdev,/dev/ttyACM1,115200n81
+"""
+    maps, warns = parse(text)
+    assert list(maps) == ["bench1", "bench2"] and not any(m["enabled"] for m in maps.values())
+    assert not has(warns, "TCP wrappers")
+    conf = "\n".join(["TRACEFILE:t1:/var/log/t1",
+                      "3001:raw:0:/dev/ttyS1:9600 tr=t1",
+                      "3002:rawlp:0:/dev/ttyS2:"])
+    maps, warns = parse(conf, "ser2net.conf")
+    assert maps["ser2net-3001"]["enabled"] and not maps["ser2net-3001"]["options"].get("trace_both")
+    assert has(warns, "ser2net-3001", "tr is not imported")
+    assert maps["ser2net-3002"]["enabled"] is False and has(warns, "ser2net-3002", "rawlp", "write-only")
+    print("a gtlssh-only file comes in all disabled; 3.x tr= only and rawlp handled alike  OK")
 
 
 CONNECTORS = r"""
@@ -525,7 +683,7 @@ def test_v3():
     assert u["options"]["trace_both"] == "/var/log/s2n/2002.log" and u["options"]["trace_hexdump"]
     assert has(warns, "ser2net-udp-2002", r"\Y \M \D", "file name")
     assert maps["ser2net-2003"]["serial"]["baudrate"] == 19200  # DEFAULT:speed from here on
-    assert has(warns, "ser2net-2003", "rawlp")
+    assert maps["ser2net-2003"]["enabled"] is False and has(warns, "ser2net-2003", "rawlp")
     off = maps["ser2net-2004"]
     assert off["enabled"] is False
     assert off["serial"]["port"] == "/dev/serial/by-id/usb-FTDI_1:2-if00"  # DEVICE: alias
@@ -602,6 +760,7 @@ def test_errors():
 def main():
     test_debian_default()
     test_accepters()
+    test_protections()
     test_connectors()
     test_options()
     test_substitution()
