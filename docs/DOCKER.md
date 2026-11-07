@@ -1,6 +1,8 @@
 # Running ser2net in Docker
 
-ser2net ships an official `Dockerfile` and an example `docker-compose.yml`.
+ser2net ships an official `Dockerfile`, an example `docker-compose.yml` and a published
+image for amd64 + arm64 with every release: `ghcr.io/haliskilic/ser2net` (`:latest` or a
+release tag).
 
 ## Quick start (compose)
 
@@ -10,11 +12,13 @@ ser2net ships an official `Dockerfile` and an example `docker-compose.yml`.
    devices:
      - "/dev/serial/by-id/usb-FTDI_...-if00-port0:/dev/ttyUSB0"
    ```
-2. Start it:
+2. Edit `ports:` so it publishes the port of every mapping you are going to create
+   (a new mapping gets 4001; [Ports and networking](#ports-and-networking)).
+3. Start it:
    ```bash
    docker compose up -d
    ```
-3. Open `http://<host>:8080` and set the admin password on first access — or create the
+4. Open `http://<host>:8080` and set the admin password on first access — or create the
    first admin without the browser (next section). Inside the container `<host>` is not the
    machine's own name, so opened by a host name (not an IP address) the setup page asks for
    a one-time code, which keeps other web pages from claiming the new install:
@@ -50,25 +54,74 @@ ser2net ships an official `Dockerfile` and an example `docker-compose.yml`.
 ## Plain docker run
 
 ```bash
-docker build -t ser2net .
-docker run -d --name ser2net \
-  -p 8080:8080 \
-  --device /dev/ttyUSB0 \
-  --group-add "$(getent group dialout | cut -d: -f3)" \
+docker run -d --name ser2net --restart unless-stopped \
+  -p 8080:8080 -p 4001:4001 \
+  --device /dev/serial/by-id/usb-FTDI_...-if00-port0:/dev/ttyUSB0 \
+  --log-opt max-size=10m --log-opt max-file=3 \
   -v ser2net-data:/data \
-  ser2net
+  ghcr.io/haliskilic/ser2net:latest
 ```
 
-## Notes
+- `--restart unless-stopped` brings it back after a crash, a Docker restart or a power
+  cut. A container started without it stays down until someone starts it by hand; add
+  the policy to an existing one with `docker update --restart unless-stopped ser2net`.
+- To build the image yourself, run `docker build -t ser2net .` in a checkout and use
+  `ser2net` as the image name.
 
+## Ports and networking
+
+- **Mapping ports.** Only the ports you publish are reachable from outside the
+  container, and every mapping listens on the port you give it in the UI (a new one
+  gets 4001). Publish each one: `-p 4001:4001`, `-p 4002:4002`, `-p 4005:4005/udp` for a
+  UDP mapping (compose: under `ports:`); changing them means recreating the container.
+  Connect-out (client) mappings need nothing.
+- **Host network** (`--network host`, compose `network_mode: host`, no `-p`): every
+  mapping port is reachable as soon as it is created, and the LAN cluster's discovery
+  works. Two things change: `SER2NET_BIND_IP` is then an address of the host itself
+  (`0.0.0.0` = all its interfaces; set the LAN address to keep the UI off the others),
+  and the unprivileged process can't open ports below 1024 there (Modbus TCP's 502): use
+  1024 or above, or the default network with `-p 502:502`, where Docker allows them.
+- **LAN cluster.** Discovery (UDP broadcast, port 41750) doesn't cross Docker's default
+  network. Use the host network, or set Settings → LAN cluster → Advertise IP to the
+  host's LAN address and list the other nodes under Manual peers (on every node);
+  publish the UI with the same port inside and out (`8080:8080`), since that is the port
+  a node advertises.
 - **Bind address.** The admin UI binds to `0.0.0.0` *inside* the container (set via
   `SER2NET_BIND_IP`, with `SER2NET_PORT` for the port). The container network plus the
   published port are the real perimeter — don't publish `8080` to an untrusted network
   without TLS. These env vars win on every start, so compose stays the source of truth.
-- **Serial access.** Pass each port with `--device`, and grant the `dialout` group
-  (`--group-add`) so the process may open it. USB passthrough into containers is only
-  reliable on Linux hosts (not Docker Desktop on Windows/macOS — there, run ser2net
-  natively or bridge via RFC2217).
+
+## Serial devices
+
+- **Access.** Pass each port with `--device` (compose `devices:`). A device keeps its
+  host's numeric group inside the container — 20 on Debian/Ubuntu, 18 on Fedora/RHEL —
+  and the entrypoint gives the server that group, so no `--group-add` is needed. A
+  device the server still can't open (mode `0600`, say) is reported at start:
+  `[ser2net] warning: uid … can't open /dev/…`. The 2.8.0 image doesn't do this yet:
+  give it `--group-add` with the host's numeric serial GID
+  (`getent group dialout | cut -d: -f3`).
+- **A device missing at start** (an adapter unplugged at boot) makes Docker refuse to
+  start the container, and the web UI is down with it. A renumbered adapter
+  (`ttyUSB0` → `ttyUSB1`) isn't seen inside either. Both are what hot-plug avoids.
+- **Hot-plug.** Bind the host's `/dev` and allow the device types instead of listing
+  devices: `-v /dev:/dev --device-cgroup-rule='c 188:* rmw' --device-cgroup-rule='c 166:* rmw'`
+  (USB-serial `ttyUSB*`, USB CDC `ttyACM*`) plus `--group-add <host serial GID>`, for an
+  adapter plugged in after the start; the compose file has this variant. The port list
+  and mappings bound to a USB identity then see a re-plugged adapter too.
+- USB passthrough into containers is only reliable on Linux hosts (not Docker Desktop on
+  Windows/macOS — there, run ser2net natively or bridge via RFC2217).
+
+## Notes
+
+- **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`):
+  `docker ps` shows `healthy` once the UI answers — also before the first-run setup. The
+  probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
+  webhooks or SSO) don't affect it. Docker doesn't restart a container because it is
+  unhealthy; only the restart policy brings back one that exited.
+- **Logs.** Every log line goes to `/data/all.log` (rotated, 10 MB × 5) and to the
+  container's output, which Docker keeps without a limit by default: cap it with
+  `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
+  container in `/etc/docker/daemon.json`.
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to
@@ -86,10 +139,6 @@ docker run -d --name ser2net \
   bind-mounted folder looks root-owned there and would be handed to uid 10001 (a
   sub-uid on the host). Start it with `--userns=keep-id` (plus `--group-add keep-groups`
   with crun, to keep your serial device group); ser2net then runs as you.
-- **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`):
-  `docker ps` shows `healthy` once the UI answers — also before the first-run setup. The
-  probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
-  webhooks or SSO) don't affect it.
 - **Persistence.** `config.json`, its automatic backups (`backups/`), logs, traces
   (`traces/`) and any generated TLS material live in the `/data` volume; back that up to
   preserve mappings and the admin password. `/data` must be writable: mount the whole
@@ -107,4 +156,3 @@ docker run -d --name ser2net \
   exposure; raw data bridges are plaintext unless per-mapping TLS is enabled.
 - **Dependencies** are installed from PyPI into the image, so the container runs with
   `--no-bootstrap` (the bundled `vendor/wheels` offline path is for air-gapped hosts).
-```

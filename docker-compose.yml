@@ -1,6 +1,7 @@
 # ser2net — example compose deployment.
 #   docker compose up -d
-# Edit `devices` to match the serial port(s) you are bridging.
+# Edit `devices` to match the serial port(s) you are bridging and `ports` to match
+# your mappings. More (plain `docker run`, networking, hot-plug): docs/DOCKER.md
 services:
   ser2net:
     image: ghcr.io/haliskilic/ser2net:latest   # published for amd64 + arm64 with every release
@@ -8,20 +9,44 @@ services:
     container_name: ser2net
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8080:8080"   # web UI
+      # Each mapping listens on the port you give it in the UI: publish every one
+      # (add /udp for a UDP mapping), or use the host network below instead.
+      - "4001:4001"   # the port a new mapping gets by default
     volumes:
       - ser2net-data:/data
     # Pass through the host serial device(s). USB-serial adapters renumber across
-    # replug; bind by stable /dev/serial/by-id/... when possible.
+    # replug; bind by stable /dev/serial/by-id/... when possible. The container takes
+    # each device's group from the device itself (its numeric GID differs between
+    # distributions), so no group_add is needed. A device missing at start stops the
+    # container from starting: see the hot-plug variant below.
     devices:
       - "/dev/ttyUSB0:/dev/ttyUSB0"
-    # The serial device is owned by the 'dialout' group on most distros. Map that
-    # group's GID (check: `getent group dialout`) so the container may open it.
-    group_add:
-      - dialout
     environment:
       SER2NET_BIND_IP: "0.0.0.0"
       SER2NET_PORT: "8080"
+    # ser2net also writes its log to /data/all.log (rotated); cap Docker's own copy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # --- Variants ---
+    # Host network instead of `ports:` (remove those): every mapping port is reachable
+    # without publishing it, and LAN cluster discovery works. The web UI then binds
+    # SER2NET_BIND_IP on the host itself (0.0.0.0 = all its interfaces; set the LAN
+    # address to keep it off the others), and ports below 1024 (e.g. Modbus 502) can't
+    # be opened by the unprivileged process.
+    # network_mode: host
+    #
+    # Hot-plug instead of `devices:` (remove those): every serial adapter is seen, also
+    # one plugged in or renumbered after the start. Add "- /dev:/dev" under `volumes:`.
+    # device_cgroup_rules:
+    #   - "c 188:* rmw"   # ttyUSB* (USB-serial adapters)
+    #   - "c 166:* rmw"   # ttyACM* (USB CDC devices)
+    # group_add:
+    #   - "${SERIAL_GID:-20}"   # the host's serial group: getent group dialout | cut -d: -f3
 
 volumes:
   ser2net-data:
