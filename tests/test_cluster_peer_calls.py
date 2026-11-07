@@ -9,20 +9,28 @@ The fleet view's peer calls carry the shared cluster key, so:
   * a beacon can only name an IP address; a loopback or wildcard one (a node that
     could not tell its LAN address) falls back to the packet's source address;
   * a manual peer entry saved from Settings must name an IP address or host name,
-    while validate() stays lenient for entries an older release accepted.
+    while validate() stays lenient for entries an older release accepted;
+  * the cluster key may hold any characters: it is NFKC-normalised and used as UTF-8
+    bytes for the beacon HMAC, the header sent and the comparison on the receiving
+    side, so an ASCII key keeps exactly the bytes older releases send and check;
+  * a malformed beacon is dropped without an error.
 
 Run: python3 tests/test_cluster_peer_calls.py
 """
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import sys
+import unicodedata
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import AppConfig, ClusterSettings, ConfigError, parse_cluster_peer, peer_host
-from app.engine.cluster import ClusterDiscovery, _sign, peer_addr, peer_url
+from app.engine.cluster import (ClusterDiscovery, _sign, key_bytes, key_header,
+                                key_header_matches, peer_addr, peer_url)
 
 KEY = "shared-key"
 
@@ -134,12 +142,54 @@ def test_calls_only_known_peers():
     print("peer calls go only to discovered/configured peers at a valid address  OK")
 
 
+TR_KEY = "küme-anahtarı-çöüşğİı"
+
+
+def test_cluster_key():
+    # an ASCII key keeps the bytes every earlier release sends and checks
+    for k in ("rc-key-xyz", "a long key with spaces & symbols !#$%"):
+        assert key_bytes(k) == k.encode("ascii") and key_header(k) == k, k
+    # any characters, typed composed, pasted decomposed (NFD) or with a no-break space
+    nfd = unicodedata.normalize("NFD", TR_KEY)
+    assert nfd != TR_KEY and key_bytes(nfd) == key_bytes(TR_KEY) == TR_KEY.encode("utf-8")
+    assert key_bytes("iki\u00a0kelime") == key_bytes("iki kelime")
+    # the header value http.client sends (latin-1) carries exactly the key's bytes
+    assert key_header(TR_KEY).encode("latin-1") == TR_KEY.encode("utf-8")
+    assert key_header_matches(TR_KEY, key_header(nfd)) and key_header_matches(nfd, key_header(TR_KEY))
+    assert key_header_matches("rc-key-xyz", "rc-key-xyz")  # what v2.7/v2.8 peers send
+    for wrong in ("", None, "rc-key-xy", TR_KEY, "çöü", "\u0100", key_header("çöü")):
+        assert not key_header_matches(TR_KEY, wrong), wrong
+    assert not key_header_matches("", "")
+    # the same key in another normal form signs beacons the same way
+    assert _sign(nfd, "body") == _sign(TR_KEY, "body")
+    assert _sign("rc-key-xyz", "body") == hmac.new(b"rc-key-xyz", b"body", hashlib.sha256) \
+        .hexdigest(), "ASCII beacon signatures unchanged"
+    d = node(key=TR_KEY)
+    d.handle_datagram(beacon(key=nfd), ("10.0.0.5", 41750))
+    assert [p["id"] for p in d.peers()] == ["peer1111"]
+    print("cluster key: any characters (NFKC + UTF-8 bytes), ASCII keys byte-identical  OK")
+
+
+def test_malformed_beacons():
+    d = node()
+    signed_list = json.dumps({"d": "[]", "s": _sign(KEY, "[]")}).encode()
+    for data in (b"\xff\xfe", b"[]", b'"x"', b"7", b'{"d": 1, "s": "00"}',
+                 b'{"d": "{}", "s": 5}', json.dumps({"d": "{}", "s": "\u00fc"}).encode(),
+                 b'{"d": "\\ud800", "s": "00"}', ("[" * 30000 + "]" * 30000).encode(),
+                 signed_list, beacon(ip={"x": 1}, port=[8080])):
+        d.handle_datagram(data, ("10.0.0.9", 41750))   # must not raise
+    assert d.peers() == [], d.peers()
+    print("malformed beacons (types, non-ASCII signature, surrogates, nesting) dropped  OK")
+
+
 def main():
     test_peer_host_and_url()
     test_manual_peer_entries()
     test_find_target()
     test_beacon_address()
     test_calls_only_known_peers()
+    test_cluster_key()
+    test_malformed_beacons()
     print("\nPASS: cluster peer calls")
 
 

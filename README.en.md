@@ -153,8 +153,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   single table**, each row tagged with its host (name + IP) and each node's **health**
   (uptime · version · running/total). Operators can **remotely start/stop/restart and edit**
   a peer's mappings from that view. For routed/L3 networks broadcast can't reach, add
-  **manual peers** (host:port). Trust = the **same shared key** on every node; off by
-  default, enable under Settings → LAN cluster.
+  **manual peers** (host:port). Trust = the **same shared key** on every node (any
+  characters, Turkish letters too; it is Unicode-normalised (NFKC) before use, so the same
+  key typed or pasted elsewhere matches); off by default, enable under Settings → LAN cluster.
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
