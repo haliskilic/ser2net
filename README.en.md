@@ -285,8 +285,10 @@ Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
 `SER2NET_PORT` — the interactive picker can't run headless). The process runs as the
 `ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
-image is taken over on the first start, so upgrading needs no manual step. The image has
-a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCKER.md).
+image is taken over on the first start, and in a bind-mounted folder the files an older
+image wrote as root are handed to the folder's owner, so upgrading needs no manual step.
+The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
+[`docs/DOCKER.md`](docs/DOCKER.md).
 
 ---
 

@@ -286,8 +286,12 @@ def test_fatal_with_one_line():
                     msg = exits_with(runtime.prepare_config, path)
             finally:
                 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+            me = f"{os.getuid()}:{os.getgid()}"
             assert "cannot read the configuration" in msg and path in msg, msg
-            print("unreadable config.json: stop with one line  OK")
+            assert f"it belongs to {me} (mode 0000) and ser2net runs as {me}" in msg, msg
+            assert f"give the data directory to that account: sudo chown -R {me} {data}" in msg
+            print("unreadable config.json: stop with one line naming its owner, mode, the "
+                  "account ser2net runs as and the chown that fixes it  OK")
 
         fresh = os.path.join(new_dir(), "config.json")
         denied = PermissionError(errno.EACCES, "Permission denied")
@@ -295,6 +299,8 @@ def test_fatal_with_one_line():
         with env(**CONTAINER), failing_save(denied):
             msg = exits_with(runtime.prepare_config, fresh)
         assert "cannot create the configuration" in msg and "Permission denied" in msg, msg
+        if os.name == "posix":
+            assert "its folder belongs to" in msg and "sudo chown -R" in msg, msg
         shutil.rmtree(os.path.dirname(fresh), ignore_errors=True)
         print("first run that can't create config.json: stop (no first-run setup in memory)  OK")
 

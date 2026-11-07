@@ -17,6 +17,7 @@ import ipaddress
 import logging
 import os
 import signal
+import stat
 import sys
 import threading
 from typing import Callable, Mapping, Optional
@@ -74,13 +75,38 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
     return True
 
 
-def _os_error(e: OSError) -> str:
-    """'<file>: <reason>' for an OSError on a data file (one line, no traceback)."""
+def _os_error(e: OSError, data_dir: str | None = None) -> str:
+    """'<file>: <reason>' for an OSError on a data file (one line, no traceback). A
+    permission error on POSIX adds who owns the file, who ser2net runs as and the fix."""
     where = e.filename if e.filename is not None else ""
     if e.filename2 is not None:
         where = f"{where} -> {e.filename2}"
     reason = e.strerror or str(e)
-    return f"{where}: {reason}" if where else reason
+    text = f"{where}: {reason}" if where else reason
+    if isinstance(e, PermissionError) and os.name == "posix" and e.filename is not None:
+        text += _access_hint(os.fsdecode(e.filename), data_dir)
+    return text
+
+
+def _access_hint(path: str, data_dir: str | None) -> str:
+    """The usual cause of a permission error on ser2net's files: another account left
+    them behind (a run with sudo, or a Docker image before v2.8, which ran as root)."""
+    me = f"{os.getuid()}:{os.getgid()}"
+    owner = "it can't be inspected"
+    for target, label in ((path, "it"), (os.path.dirname(path), "its folder")):
+        try:
+            st = os.stat(target)
+        except OSError:
+            continue
+        owner = f"{label} belongs to {st.st_uid}:{st.st_gid} (mode {stat.S_IMODE(st.st_mode):04o})"
+        break
+    if data_dir is None:
+        return f" — {owner} and ser2net runs as {me}: make it readable for that account"
+    fix = f"sudo chown -R {me} {data_dir}"
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        fix += " (in a container: on the host folder mounted there)"
+    return (f" — {owner} and ser2net runs as {me}: give the data directory to that "
+            f"account: {fix}")
 
 
 # Stopping from another thread (the Windows service's stop request): request_shutdown()
@@ -109,12 +135,14 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     too. Fatal, with one line instead of a traceback: an unusable SER2NET_BIND_IP /
     SER2NET_PORT, a config.json that can't be read or parsed, a first run that can't
     create it."""
+    data_dir = os.path.dirname(os.path.abspath(config_path))
     try:
         store = ConfigStore(config_path)
         first_run = not store.exists()
         config = store.load()
     except OSError as e:
-        raise SystemExit(f"ser2net: cannot read the configuration: {_os_error(e)}") from None
+        raise SystemExit(
+            f"ser2net: cannot read the configuration: {_os_error(e, data_dir)}") from None
     except (ValueError, TypeError, AttributeError) as e:  # not JSON, or not shaped like it
         newest = store.backup_names()[:1]
         restore = (f", or put back its newest backup ({os.path.join(store.backup_dir, newest[0])})"
@@ -146,8 +174,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
             try:
                 store.save(config)
             except OSError as e:
-                raise SystemExit(
-                    f"ser2net: cannot create the configuration: {_os_error(e)}") from None
+                raise SystemExit(f"ser2net: cannot create the configuration: "
+                                 f"{_os_error(e, data_dir)}") from None
         elif problems:
             notes.append("WARNING: config.json was not updated at start-up because of the "
                          "setting(s) above; it keeps its current content until they are fixed")
@@ -156,9 +184,10 @@ def prepare_config(config_path: str, reconfigure: bool = False):
                 store.save(config)
             except OSError as e:  # read-only/full data dir, config.json mounted on its own
                 notes.append(f"WARNING: could not update config.json at start-up "
-                             f"({_os_error(e)}) — ser2net runs with these settings, but can't "
-                             "keep any change until config.json can be written (keep the data "
-                             "directory writable, and don't mount config.json on its own)")
+                             f"({_os_error(e, data_dir)}) — ser2net runs with these settings, "
+                             "but can't keep any change until config.json can be written (keep "
+                             "the data directory writable, and don't mount config.json on its "
+                             "own)")
     if admin:
         write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
                            "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin)
