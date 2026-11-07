@@ -11,7 +11,8 @@ metrics are that unit's poll points:
     by exception); seq counts on across NBIRTH, DBIRTH and DDATA: 0…255, 0, …;
   * DCMD: a metric named like a writable point of that device is written to the bus
     (through the gateway's write_point); NCMD: "Node Control/Rebirth" = true
-    republishes NBIRTH and the DBIRTHs;
+    republishes NBIRTH and the DBIRTHs. Commands are never retained (Sparkplug 3.0), so
+    a retained NCMD / DCMD the broker replays on subscribe is dropped (MqttPublisher);
   * stopping the mapping publishes NDEATH before disconnecting (a host then takes the
     node's devices offline too).
 After a lost connection the next session gets bdSeq + 1 (the Will is renewed in
@@ -75,7 +76,7 @@ class SparkplugNode:
     def publisher(self) -> MqttPublisher:
         dcmd = "/".join((sparkplug.TOPIC_NAMESPACE, self.group, "DCMD", self.node, "+"))
         self._pub = MqttPublisher(self.mapping.mqtt, logger=self._log, will=self._will,
-                                  birth=False, on_connect=self.birth,
+                                  birth=False, on_connect=self.birth, accept_retained=False,
                                   subscriptions={self.topic("NCMD"): self.on_node_command,
                                                  dcmd: self.on_device_command})
         self._log(f"Sparkplug B edge node {self.group}/{self.node}: "

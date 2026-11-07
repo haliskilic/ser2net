@@ -26,11 +26,17 @@ class MqttPublisher:
     connection carries a fresh one (the Sparkplug bdSeq). ``on_connect``
     runs on the event loop after every (re)connect; ``subscriptions`` maps topics to
     handlers ``(topic, payload)`` that also run on the event loop — paho's network
-    thread never touches the bridges directly."""
+    thread never touches the bridges directly.
+
+    The subscriptions are command topics, and a command is acted on once, when it arrives:
+    the broker also sends the last retained message of a topic on every (re)subscribe
+    (after each reconnect, restart or config save), flagged as retained, and such a replay
+    is dropped and logged unless ``accept_retained``. An empty message is never a command:
+    it is what clears a retained one (and reaches subscribers live, without the flag)."""
 
     def __init__(self, settings, logger=None, client=None, *, will=None,
                  birth: bool = True, on_connect: Optional[Callable[[], None]] = None,
-                 subscriptions: Optional[dict] = None) -> None:
+                 subscriptions: Optional[dict] = None, accept_retained: bool = False) -> None:
         self._s = settings
         self._log = logger or (lambda _m: None)
         self._client = client            # injected in tests; otherwise built in connect()
@@ -43,6 +49,7 @@ class MqttPublisher:
         self._birth = birth
         self._on_connect_cb = on_connect
         self._subs: dict[str, Callable[[str, bytes], None]] = dict(subscriptions or {})
+        self._accept_retained = accept_retained
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def connect(self) -> bool:
@@ -121,7 +128,8 @@ class MqttPublisher:
         self._call_soon(self.handle_connect)
 
     def _paho_on_message(self, client, userdata, msg) -> None:
-        self._call_soon(self.handle_message, msg.topic, bytes(msg.payload))
+        self._call_soon(self.handle_message, msg.topic, bytes(msg.payload),
+                        bool(getattr(msg, "retain", False)))
 
     def handle_connect(self) -> None:
         """After every (re)connect: subscribe again, then the owner's callback."""
@@ -136,10 +144,21 @@ class MqttPublisher:
             except Exception as e:
                 self._log(f"MQTT on-connect handler failed: {e}")
 
-    def handle_message(self, topic: str, payload: bytes) -> None:
+    def handle_message(self, topic: str, payload: bytes, retained: bool = False) -> None:
+        """A message on a subscribed topic (on the event loop); ``retained``: the broker
+        sent it from its retained store (paho's ``msg.retain``), not live."""
+        if not payload:  # clears a retained message; never a command
+            return
         handler = self._subs.get(topic)
         if handler is None:  # a subscription with a wildcard
             handler = next((h for t, h in self._subs.items() if _matches(t, topic)), None)
+        if handler is not None and retained:
+            if not self._accept_retained:
+                self._log(f"MQTT: ignored the retained message on {shown(topic, 120)}; a "
+                          "command is applied when it is published, not again from the "
+                          "broker's retained store (publish commands without retain)")
+                return
+            self._log(f"MQTT: applying the retained message on {shown(topic, 120)}")
         if handler is not None:
             try:
                 handler(topic, payload)

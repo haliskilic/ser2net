@@ -218,7 +218,13 @@ def test_mapping_form_modbus_fields():
     for name in ("network_read_only", "network_kick_old_user", "network_priority_client_ips",
                  "network_allowed_client_ips", "opt_idle_timeout_s"):
         assert not any(c.startswith("network_protocol=") for c in conditions(name)), name
-    print("mapping form: banner/close-on/client buffer not offered for modbus  OK")
+    # plain-format /set only (Sparkplug commands are never retained); the hidden marker
+    # sits with the checkbox, so it is posted exactly when the checkbox is offered
+    for name in ("mqtt_apply_retained_set", "mqtt_apply_retained_set_shown"):
+        assert conditions(name) == ["mqtt_payload_format=plain", "network_protocol=modbus"], \
+            (name, conditions(name))
+    print("mapping form: banner/close-on/client buffer not offered for modbus; the retained "
+          "/set option only for plain-format points  OK")
 
 
 def main():

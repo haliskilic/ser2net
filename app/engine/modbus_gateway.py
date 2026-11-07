@@ -155,7 +155,8 @@ class ModbusGatewayRunner:
                 from .mqtt_pub import MqttPublisher
                 self._mqtt = MqttPublisher(
                     mq, logger=self._log,
-                    subscriptions=dict.fromkeys(self._set_points, self._on_set_message))
+                    subscriptions=dict.fromkeys(self._set_points, self._on_set_message),
+                    accept_retained=bool(mq.apply_retained_set))
             self._mqtt.connect()
             self._poll_task = asyncio.create_task(
                 self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")

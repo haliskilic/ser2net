@@ -72,6 +72,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   gets `error: …` on `.../set/result`).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
   NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
+  A command is written once, when it is published: a retained `/set` that the broker sends
+  again after a reconnect, a restart or a configuration save is ignored (and logged)
+  unless **Re-apply a retained /set after every connect** is ticked; a retained Sparkplug
+  NCMD/DCMD is always ignored, an empty message (clearing a retained one) is not a
+  command, and a command published while ser2net is not connected is not delivered later.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).

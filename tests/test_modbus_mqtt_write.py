@@ -16,20 +16,29 @@ anywhere without a broker or hardware. Checks:
     a DBIRTH per Modbus unit (devices unit1, unit2) with its points, DDATA per device
     only for changed values with seq counting on, a DCMD writes a point of that device
     (not of another, and NCMD writes nothing), a coil takes only a Boolean, NCMD asks for
-    a rebirth (only with a Boolean true), the next session gets bdSeq + 1, NDEATH on stop.
+    a rebirth (only with a Boolean true), the next session gets bdSeq + 1, NDEATH on stop;
+  * retained commands, through the gateway's own start() (paho replaced by a stand-in
+    whose broker keeps retained messages and replays them on subscribe): a retained /set
+    is not written again after a reconnect or by a new runner unless the mapping opts in,
+    a retained NCMD / DCMD never is, and an empty message (clearing one) is no command.
 
 Run: python3 tests/test_modbus_mqtt_write.py
 """
 import asyncio
+import contextlib
 import socket
 import struct
+import sys
+import types
 from contextlib import suppress
+from unittest import mock
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
 from app.config import MappingConfig
-from app.engine import modbus, sparkplug
+from app.engine import modbus, serial_io, sparkplug
 from app.engine.modbus_gateway import ModbusGatewayRunner
+from app.engine.mqtt_pub import _matches
 
 REGS = {10: 0, 20: 0, 21: 0, 0: 0x41BC, 1: 0x0000}   # input regs 0/1 = float32 23.5
 COILS = {0: False, 1: False, 2: False}
@@ -87,9 +96,23 @@ async def fake_slave(reader, writer):
                 await writer.drain()
 
 
+class Msg:
+    """What paho hands to on_message."""
+
+    def __init__(self, topic, payload, retain):
+        self.topic, self.payload, self.retain = topic, payload, retain
+
+
 class FakeMqtt:
-    def __init__(self):
+    """The gateway's MQTT client, with the broker behind it: what the gateway publishes is
+    recorded and, like a broker, the last retained message of each topic is kept and sent
+    to every new subscription with the retain flag set, through paho's on_message (which
+    MqttPublisher.connect sets)."""
+
+    def __init__(self, retained=None):
         self.published, self.subscribed, self.wills = [], [], []
+        self.retained = dict(retained or {})
+        self.on_message = None
 
     def will_set(self, topic, payload, qos=0, retain=False):
         self.wills.append((topic, bytes(payload), qos, retain))
@@ -99,12 +122,74 @@ class FakeMqtt:
 
     def subscribe(self, topic, qos=0):
         self.subscribed.append(topic)
+        for t, payload in list(self.retained.items()):
+            if _matches(topic, t):
+                self.on_message(self, None, Msg(t, payload, True))
+
+    def deliver(self, topic, payload, retain=False):
+        """Another client publishes: a retained message is kept (an empty one clears it),
+        and subscribers get it live, without the retain flag (MQTT 3.1.1, 3.3.1.3)."""
+        if retain:
+            if payload:
+                self.retained[topic] = payload
+            else:
+                self.retained.pop(topic, None)
+        if any(_matches(sub, topic) for sub in self.subscribed):
+            self.on_message(self, None, Msg(topic, payload, False))
+
+    def connect_async(self, host, port, keepalive=60):
+        pass
+
+    def loop_start(self):
+        pass
 
     def loop_stop(self):
         pass
 
     def disconnect(self):
         pass
+
+
+@contextlib.contextmanager
+def fake_paho(client):
+    """paho.mqtt.client replaced by a module whose Client() is ``client``, so the real
+    start() -> MqttPublisher.connect() wiring runs without paho or a broker."""
+    mod = types.ModuleType("paho.mqtt.client")
+    mod.CallbackAPIVersion = types.SimpleNamespace(VERSION2=2)
+    mod.Client = lambda *a, **k: client
+    pkg, sub = types.ModuleType("paho"), types.ModuleType("paho.mqtt")
+    pkg.mqtt, sub.client = sub, mod
+    with mock.patch.dict(sys.modules, {"paho": pkg, "paho.mqtt": sub, "paho.mqtt.client": mod}):
+        yield
+
+
+@contextlib.asynccontextmanager
+async def started(slave_port, fake, fmt="plain", points=None, logs=None, mqtt=None,
+                  network=None):
+    """A gateway started by its own start(): the serial port is a connection to the fake
+    slave, paho is ``fake``; the broker's CONNACK is up to the test (fake.on_connect)."""
+    m = MappingConfig.from_dict({
+        "name": "Line 3 PLC", "kind": "net", "serial": {"port": "fake", "baudrate": 9600},
+        "network": dict({"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
+                         "port": free_port()}, **(network or {})),
+        "mqtt": dict({"enabled": True, "host": "broker", "base_topic": "plant/a",
+                      "payload_format": fmt}, **(mqtt or {})),
+        "modbus_poll": {"interval_s": 0.1, "points": points or ONE_POINT}})
+    m.validate()
+
+    async def open_bus(settings):
+        sr, sw = await asyncio.open_connection("127.0.0.1", slave_port)
+        return sr, sw, None, settings.port
+    real_open, serial_io.open_serial = serial_io.open_serial, open_bus
+    r = ModbusGatewayRunner(m, logger=logs.append if logs is not None else (lambda _m: None))
+    try:
+        with fake_paho(fake):
+            await r.start()
+        assert await wait(lambda: r._link.is_open), r.status.as_dict()
+        yield r
+    finally:
+        await asyncio.wait_for(r.stop(), timeout=10)
+        serial_io.open_serial = real_open
 
 
 POINTS = [
@@ -118,12 +203,13 @@ POINTS = [
 SP_POINTS = POINTS + [{"name": "level", "unit": 2, "fn": 3, "address": 30, "dtype": "uint16"}]
 
 
-async def gateway(fmt, slave_port, fake, points=POINTS, logs=None):
+async def gateway(fmt, slave_port, fake, points=POINTS, logs=None, mqtt=None, network=None):
     m = MappingConfig.from_dict({
         "name": "Line 3 PLC", "kind": "net", "serial": {"port": "fake", "baudrate": 9600},
-        "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
-                    "port": free_port()},
-        "mqtt": {"enabled": True, "host": "broker", "base_topic": "plant/a", "payload_format": fmt},
+        "network": dict({"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
+                         "port": free_port()}, **(network or {})),
+        "mqtt": dict({"enabled": True, "host": "broker", "base_topic": "plant/a",
+                      "payload_format": fmt}, **(mqtt or {})),
         "modbus_poll": {"interval_s": 0.1, "points": points}})
     m.validate()
     log = logs.append if logs is not None else (lambda _m: None)
@@ -138,7 +224,8 @@ async def gateway(fmt, slave_port, fake, points=POINTS, logs=None):
     else:  # what start() subscribes: each writable point's own /set topic
         from app.engine.mqtt_pub import MqttPublisher
         subs = dict.fromkeys(r._set_points, r._on_set_message)
-        r._mqtt = MqttPublisher(m.mqtt, logger=log, client=fake, subscriptions=subs)
+        r._mqtt = MqttPublisher(m.mqtt, logger=log, client=fake, subscriptions=subs,
+                                accept_retained=m.mqtt.apply_retained_set)
     if fmt == "sparkplug_b":
         r._mqtt._client = fake
     r._mqtt.connect()
@@ -281,6 +368,78 @@ async def test_plain_one_point(slave_port):
         sw.close()
 
 
+def bus_writes():
+    return [p for p in SEEN if p[0] in (5, 6, 15, 16)]
+
+
+async def test_retained_replay(slave_port):
+    """A command is written once, when it is published. The broker sends the retained copy
+    of a /set or a Sparkplug command again to every new subscription -- after a reconnect,
+    and to every new runner (a config save, Start, restart, a service start) -- and that
+    copy is not written again unless the mapping opts in (plain /set only)."""
+    pump_set = "plant/a/pump/set"
+    # a controller left "on" retained on the pump's /set; the pump is off by now
+    COILS[0] = False
+    SEEN.clear()
+    fake, logs = FakeMqtt(retained={pump_set: b"on"}), []
+    async with started(slave_port, fake, logs=logs) as r:
+        fake.on_connect(fake, None, {}, 0)             # CONNACK: subscribe -> the replay
+        await asyncio.sleep(0.3)
+        assert COILS[0] is False and bus_writes() == [], (COILS, bus_writes())
+        assert last(fake, pump_set + "/result") is None
+        assert any("ignored the retained message on 'plant/a/pump/set'" in m for m in logs), logs
+        # a live command is written, once
+        fake.deliver(pump_set, b"on", retain=True)
+        assert await wait(lambda: COILS[0] is True and last(fake, pump_set + "/result") == b"ok")
+        assert len(bus_writes()) == 1
+        # switched off locally; the connection drops and comes back: nothing is replayed
+        COILS[0] = False
+        r._mqtt._paho_on_disconnect(fake, None)
+        fake.on_connect(fake, None, {}, 0)
+        await asyncio.sleep(0.3)
+        assert COILS[0] is False and len(bus_writes()) == 1, bus_writes()
+        # clearing the retained message (an empty one, delivered live) is not a command
+        answers = len([t for t, _p in fake.published if t == pump_set + "/result"])
+        fake.deliver(pump_set, b"", retain=True)
+        await asyncio.sleep(0.2)
+        assert len([t for t, _p in fake.published if t == pump_set + "/result"]) == answers
+        assert pump_set not in fake.retained and len(bus_writes()) == 1
+    print("plain: a retained /set is not written again on reconnect / a new runner; a live "
+          "one is written once; an empty message is no command  OK")
+
+    # opted in: the retained /set is written after each connect, and the log says so
+    SEEN.clear()
+    logs = []
+    async with started(slave_port, FakeMqtt(retained={pump_set: b"on"}), logs=logs,
+                       mqtt={"apply_retained_set": True}) as r:
+        r._mqtt._client.on_connect(r._mqtt._client, None, {}, 0)
+        assert await wait(lambda: COILS[0] is True and len(bus_writes()) == 1), bus_writes()
+        assert any("applying the retained message on 'plant/a/pump/set'" in m for m in logs)
+    print("plain + apply_retained_set: the retained /set is written after connect  OK")
+
+    # Sparkplug B: NCMD / DCMD are never retained; a retained one is ignored even with the
+    # plain-format option on, a live one is written
+    node = "spBv1.0/ser2net/{}/Line_3_PLC"
+    dcmd = sparkplug.encode_payload(sparkplug.Payload(0, [sparkplug.Metric(
+        "pump", sparkplug.DataType.Boolean, True)], None), include_datatype=False)
+    rebirth = sparkplug.encode_payload(sparkplug.Payload(0, [sparkplug.Metric(
+        sparkplug.REBIRTH, sparkplug.DataType.Boolean, True)], None), include_datatype=False)
+    COILS[0] = False
+    SEEN.clear()
+    logs = []
+    fake = FakeMqtt(retained={node.format("DCMD") + "/unit1": dcmd, node.format("NCMD"): rebirth})
+    async with started(slave_port, fake, "sparkplug_b", logs=logs,
+                       mqtt={"apply_retained_set": True}) as r:
+        fake.on_connect(fake, None, {}, 0)
+        await asyncio.sleep(0.3)
+        births = [t for t, _p in fake.published if t == node.format("NBIRTH")]
+        assert COILS[0] is False and bus_writes() == [] and len(births) == 1, (COILS, births)
+        assert sum("ignored the retained message" in m for m in logs) == 2, logs
+        fake.deliver(node.format("DCMD") + "/unit1", dcmd)
+        assert await wait(lambda: COILS[0] is True and len(bus_writes()) == 1), bus_writes()
+    print("sparkplug: retained NCMD / DCMD ignored on subscribe, a live DCMD is written  OK")
+
+
 async def test_sparkplug(slave_port):
     fake, logs = FakeMqtt(), []
     REGS[10], REGS[30] = 5, 42
@@ -400,6 +559,7 @@ async def main():
     try:
         await test_plain(port)
         await test_plain_one_point(port)
+        await test_retained_replay(port)
         await test_sparkplug(port)
     finally:
         srv.close()

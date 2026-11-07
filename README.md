@@ -74,7 +74,12 @@ düzenlemeye gerek yok.
   kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
   `.../set/result`'ta `error: …` alır). İstenirse **Sparkplug B**
   edge node olarak, her Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH,
-  `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth.
+  `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth. Bir komut yayınlandığında bir
+  kez yazılır: broker'ın yeniden bağlanma, yeniden başlatma ya da config kaydından sonra
+  tekrar gönderdiği retained bir `/set`, **Retained /set komutunu her bağlantıdan sonra
+  yeniden uygula** işaretli değilse yok sayılır (ve loglanır); retained bir Sparkplug
+  NCMD/DCMD her zaman yok sayılır, boş bir mesaj (retained mesajı temizleyen) komut
+  değildir ve ser2net bağlı değilken yayınlanan bir komut sonradan iletilmez.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
