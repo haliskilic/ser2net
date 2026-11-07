@@ -15,7 +15,7 @@ from ...config import ConfigError, MappingConfig
 from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
-from .common import TRIGGER, Ctx
+from .common import TRIGGER, Ctx, console_interactive, sees_to_device
 from .forms import _form_error, _modbus_points_json
 
 
@@ -139,7 +139,11 @@ def routes(ctx: Ctx) -> list:
                         "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))})
         return out
 
+    # Traces record both directions, what clients type to the device included (see
+    # common.sees_to_device): listing and downloading them needs operator+.
     async def mapping_traces(request):
+        if deny := require_role(request, "operator"):
+            return deny
         mid = request.path_params["mid"]
         m = state.config.get_mapping(mid)
         if not m:
@@ -152,6 +156,8 @@ def routes(ctx: Ctx) -> list:
 
     async def mapping_trace_file(request):
         """Download one of a mapping's trace files — only a name from its own list."""
+        if deny := require_role(request, "operator"):
+            return deny
         mid, name = request.path_params["mid"], request.path_params["name"]
         m = state.config.get_mapping(mid)
         f = next((f for f in await asyncio.to_thread(_trace_files, mid) if f["name"] == name), None)
@@ -165,9 +171,10 @@ def routes(ctx: Ctx) -> list:
         m = state.config.get_mapping(mid)
         if not m:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
-        interactive = (m.kind == "net" and not m.network.read_only)
+        me = current_user(request)  # what the console WebSockets will allow this user
         return render(request, "_console.html", mid=mid, mapping_name=m.name,
-                      interactive=interactive, bridge=m.kind == "serialbridge")
+                      interactive=console_interactive(me, m), to_device=sees_to_device(me, m),
+                      bridge=m.kind == "serialbridge")
 
     async def mapping_save(request):
         if deny := require_role(request, "operator"):

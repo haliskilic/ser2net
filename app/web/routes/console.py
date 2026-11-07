@@ -1,6 +1,6 @@
 """Live traffic in the browser over WebSockets: the interactive console (xterm.js;
 what the device sends, and typing to it) and the read-only traffic feed of the hex
-view (both directions, timestamped)."""
+view (timestamped; what is sent to the device only for operators and admins)."""
 from __future__ import annotations
 
 import asyncio
@@ -11,9 +11,9 @@ from urllib.parse import urlparse
 
 from starlette.routing import WebSocketRoute
 
-from ...config import ROLE_RANK
+from ...engine.bridge import TO_DEVICE
 from .. import auth
-from .common import Ctx
+from .common import Ctx, console_interactive, sees_to_device
 
 CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
 
@@ -51,8 +51,7 @@ def routes(ctx: Ctx) -> list:
         mon = _Monitor()
         runner.add_monitor(mon)
         # viewers get an observe-only console; writing to the device needs operator+
-        can_write = ROLE_RANK.get(ws_user.role, 0) >= ROLE_RANK["operator"]
-        interactive = (mapping.kind == "net" and not mapping.network.read_only and can_write)
+        interactive = console_interactive(ws_user, mapping)
         peer = websocket.client.host if websocket.client else "?"
         state.log(f"[{mapping.name}] console opened by {ws_user.username} ({peer})")
 
@@ -106,9 +105,10 @@ def routes(ctx: Ctx) -> list:
 
     # ---------------- traffic feed for the hex view (read-only) ----------------
     async def traffic_ws(websocket):
-        """Both directions of a mapping's traffic, as binary frames
+        """A mapping's traffic, as binary frames
         [direction: 1 byte (0 = from the device, 1 = to it)][time: float64 BE][bytes].
-        Read-only for everyone who may open the console."""
+        Read-only for everyone who may open the console; what is sent to the device
+        only for those who may see it (sees_to_device), the others never get it queued."""
         ws_user, token = await _authorize(websocket)
         if ws_user is None:
             return
@@ -119,7 +119,8 @@ def routes(ctx: Ctx) -> list:
             await websocket.close(code=1011)
             return
         await websocket.accept()
-        mon = _TrafficMonitor()
+        to_device = sees_to_device(ws_user, mapping)
+        mon = _TrafficMonitor(to_device=to_device)
         runner.add_traffic_monitor(mon)
         peer = websocket.client.host if websocket.client else "?"
         state.log(f"[{mapping.name}] hex view opened by {ws_user.username} ({peer})")
@@ -187,12 +188,16 @@ class _Monitor:
 
 class _TrafficMonitor:
     """A hex-view observer: (direction, time, bytes) items, best-effort like _Monitor
-    (the oldest item is dropped on overflow so a slow browser never stalls a bridge)."""
+    (the oldest item is dropped on overflow so a slow browser never stalls a bridge).
+    Without `to_device`, what is sent to the device is left out."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, to_device: bool) -> None:
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=4096)
+        self.to_device = to_device
 
     def feed_traffic(self, direction: int, data: bytes) -> None:
+        if direction == TO_DEVICE and not self.to_device:
+            return
         item = (direction, time.time(), bytes(data))
         try:
             self.queue.put_nowait(item)
