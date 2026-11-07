@@ -26,7 +26,7 @@ run() { exec python /app/ser2net.py --no-bootstrap --data-dir "$DATA" "$@"; }
 say() { echo "[ser2net] $*"; }
 # in_data <find expression>: find in $DATA, but not below a mount point inside it
 in_data() {
-    mounts=$(awk -v d="$DATA/" 'index($5, d) == 1 { print $5 }' /proc/self/mountinfo)
+    mounts=$(awk -v d="$DATA/" 'index($5, d) == 1 { print $5 }' /proc/self/mountinfo) || mounts=""
     while IFS= read -r mp; do
         if [ -n "$mp" ]; then
             set -- -path "$(printf '%b' "$mp")" -prune -o "$@"  # mountinfo writes " " as \040
