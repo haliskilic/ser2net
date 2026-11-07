@@ -16,7 +16,9 @@
 # 7. a serial device passed with --device keeps the host's group (here 18, Fedora's
 #    dialout, not the image's 20): the server gets that group; a node it still can't
 #    open is reported;
-# 8. the first admin without the browser: `docker exec ... --set-password` on the running
+# 8. the image holds what it runs and the license texts, not the tests, the offline
+#    wheels or the docs, and the app is compiled already;
+# 9. the first admin without the browser: `docker exec ... --set-password` on the running
 #    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
@@ -202,7 +204,25 @@ docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$dev_dir"
 echo "serial devices: the node's host group is added, an unusable node is reported  OK"
 
-echo "== 8. first admin from SER2NET_ADMIN_PASSWORD_FILE"
+echo "== 8. image contents"
+docker run --rm --entrypoint python "$IMAGE" -c '
+import glob, os, sys
+os.chdir("/app")
+need = ["ser2net.py", "bootstrap.py", "requirements.txt", "requirements-optional.txt",
+        "LICENSE", "NOTICE", "COMMERCIAL_LICENSE.md", "THIRD-PARTY-NOTICES.md",
+        "tools/docker-entrypoint.sh", "tools/licenses/pyserial.txt", "app/locale/tr.json",
+        "app/web/templates/base.html", "app/web/static/app.css"]
+missing = [f for f in need if not os.path.isfile(f)]
+extra = [d for d in ("tests", "vendor", "docs", ".github", "Dockerfile") if os.path.exists(d)]
+sources = glob.glob("app/**/*.py", recursive=True)
+pycs = glob.glob("app/**/__pycache__/*.pyc", recursive=True)
+unhashed = [p for p in pycs if open(p, "rb").read(8)[4] != 3]  # 3 = checked-hash
+print(f"{len(sources)} modules, {len(pycs)} compiled; missing {missing}, extra {extra}")
+sys.exit(1 if missing or extra or len(pycs) < len(sources) or unhashed else 0)' \
+    || fail "image contents"
+echo "image: runtime files and license texts in, tests / wheels / docs out, app compiled  OK"
+
+echo "== 9. first admin from SER2NET_ADMIN_PASSWORD_FILE"
 secret_dir=$(mktemp -d)
 printf 'env-pass-123\n' > "$secret_dir/pw"
 chmod 644 "$secret_dir/pw"
