@@ -7,7 +7,7 @@ import secrets
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
-from ...config import User
+from ...config import User, new_pwd_version
 from ...engine import netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth
@@ -158,7 +158,7 @@ def routes(ctx: Ctx) -> list:
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
         async with state.config_lock:
             state.config.users = [User(username=username, password_hash=pw_hash,
-                                       role="admin", pwd_version=1)]
+                                       role="admin", pwd_version=new_pwd_version())]
             await state.asave()
         user = state.config.get_user(username)
         state.log(f"first-run setup complete; admin user '{username}' created")

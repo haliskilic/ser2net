@@ -1039,7 +1039,8 @@ class NotificationSettings:
 @dataclass
 class User:
     """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
-    on that user's password/role change to revoke only their existing sessions.
+    on that user's password/role change to revoke only their existing sessions (a new
+    account starts at a random value, see new_pwd_version).
     `source` is 'local' (password in password_hash) or 'ldap' (a shadow account whose
     role is derived from LDAP groups on each login; no local password)."""
     username: str = ""
@@ -1058,6 +1059,14 @@ class User:
         if u.source not in ("local", "ldap", "oidc"):
             u.source = "local"
         return u
+
+
+def new_pwd_version() -> int:
+    """The first pwd_version of a new account. A session cookie is checked against the
+    user name and this number only, so it is random rather than 1: an account deleted
+    and created again under the same name (or an LDAP/OIDC user signing in again after
+    being deleted) must not match the cookies the earlier account was given."""
+    return secrets.randbelow(2 ** 31)
 
 
 @dataclass
@@ -1166,7 +1175,8 @@ class AppConfig:
         (LDAP/OIDC). Bumps pwd_version when the role or source changes."""
         u = self.get_user(username)
         if u is None:
-            u = User(username=username, password_hash="", role=role, source=source, pwd_version=1)
+            u = User(username=username, password_hash="", role=role, source=source,
+                     pwd_version=new_pwd_version())
             self.users.append(u)
         elif u.role != role or u.source != source:
             u.role, u.source = role, source
