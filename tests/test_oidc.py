@@ -166,7 +166,7 @@ def test_https_only():
                "http://[::1]/jwks", "http://localhost:8443/x", "http://127.9.9.9/x"):
         assert oidc_auth.secure_url(ok, "x") == ok, ok
     for bad in ("http://idp.example.com/token", "http://10.0.0.5/jwks", "ftp://idp/x",
-                "https:///nohost", "", None, 42, "//idp.example.com/x"):
+                "https:///nohost", "", None, 42, "//idp.example.com/x", "http://[::1/x"):
         try:
             oidc_auth.secure_url(bad, "token endpoint")
         except oidc_auth.InsecureEndpoint as e:

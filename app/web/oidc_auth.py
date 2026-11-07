@@ -3,9 +3,8 @@
 Endpoints are discovered from the issuer's /.well-known/openid-configuration. The
 returned id_token is validated — signature via the issuer's JWKS, plus iss / aud /
 exp / nonce, its times with CLOCK_SKEW_S of tolerance — using authlib.jose (do NOT
-hand-roll JWT validation). A claim
-(groups_claim) maps to a ser2net role, reusing the LDAP group→role logic (whole group
-names only: ldap_auth.group_matches).
+hand-roll JWT validation). A claim (groups_claim) maps to a ser2net role, reusing the
+LDAP group→role logic (whole group names only: ldap_auth.group_matches).
 
 The code request carries PKCE (S256; the verifier travels in the signed state cookie).
 Every address the discovery document names, and every redirect on the way, must be
@@ -67,9 +66,12 @@ def secure_url(url, what: str) -> str:
     localhost: nothing leaves this machine — a provider on the same host). Raises
     InsecureEndpoint for anything else, such as the http:// addresses a Keycloak behind a
     TLS-terminating proxy advertises when its proxy settings are missing."""
-    parts = urllib.parse.urlsplit(url if isinstance(url, str) else "")
-    if parts.hostname and (parts.scheme == "https"
-                           or (parts.scheme == "http" and _loopback(parts.hostname))):
+    try:
+        parts = urllib.parse.urlsplit(url if isinstance(url, str) else "")
+        host = parts.hostname
+    except ValueError:   # such as an unclosed [IPv6 address
+        host = None
+    if host and (parts.scheme == "https" or (parts.scheme == "http" and _loopback(host))):
         return url
     raise InsecureEndpoint(
         f"the identity provider's {what} {url!r} is not an https:// address, so OIDC sign-in "
