@@ -234,9 +234,11 @@ containers.
 
 Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
 group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
-mounted `noexec`, point `TMPDIR` at a directory that isn't. For certificate checks (MQTT
-over TLS, OIDC, LDAPS / StartTLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE`
-if set.
+mounted `noexec`, point `TMPDIR` at a directory that isn't. While it runs it keeps that
+copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
+don't delete it under a long-running instance; a copy left behind by a killed process
+still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS) it
+uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
 reports. `ser2net --licenses` prints the license text of every component inside the
