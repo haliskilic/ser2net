@@ -65,7 +65,8 @@ düzenlemeye gerek yok.
   yerine getiremediği bir RFC 2217 isteği (bozuk ya da ayrılmış bir değer veya seri portun
   reddettiği bir değer) RFC 2217'nin dediği gibi güncel ayarla yanıtlanır ve portu olduğu
   gibi bırakır; istemci bağlı kalır. Kaybolan seri port yeniden açılırken de RFC 2217
-  istemcisi bağlı kalır ve yeniden açılan port onun ayarlarını alır (bkz.
+  istemcisi bağlı kalır ve yeniden açılan port onun ayarlarını alır; istenirse istemci
+  ayrılınca port eşlemenin ayarlarına döner (bkz.
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md)). 1 KiB'tan uzun bir telnet ya da RFC 2217
   alt müzakeresi (gerçekleri birkaç bayttır) o istemcinin oturumunu sonlandırır; nedeni
   log'a yazılır.

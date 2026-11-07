@@ -34,6 +34,12 @@ What the server does with an RFC 2217 client's settings:
   (if the reopened port refuses one of them, the client is disconnected and the log says
   which). A connect-out (`client` mode) RFC 2217 mapping connects only while its serial
   port is open.
+- By default what a client set stays on the port after it leaves, until the port is
+  reopened. Tick **Restore the serial settings when the RFC 2217 client leaves**
+  (`options.rfc2217_restore_on_disconnect`) to put the port back to the mapping's baud
+  rate, data bits, parity, stop bits and flow control when the client disconnects, so the
+  next client, the web console, MQTT and a trace see what the mapping says. RTS/DTR are
+  left as they are, because toggling them resets many boards (ESP32/Arduino auto-reset).
 
 ## 2. Linux — a real `/dev/tty*` for legacy apps (free, socat)
 

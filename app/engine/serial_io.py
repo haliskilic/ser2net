@@ -101,6 +101,20 @@ def refuse_url(device: str) -> None:
                          "URL ports are not opened")
 
 
+def port_settings(settings: SerialSettings) -> dict[str, Any]:
+    """The pyserial settings a mapping's port is opened with: baud rate, data bits, parity,
+    stop bits and flow control (in the order pyserial applies them)."""
+    return dict(
+        baudrate=settings.baudrate,
+        bytesize=settings.bytesize,
+        parity=settings.parity,
+        stopbits=settings.stopbits,
+        xonxoff=(settings.flowcontrol == "xonxoff"),
+        rtscts=(settings.flowcontrol == "rtscts"),
+        dsrdtr=(settings.flowcontrol == "dsrdtr"),
+    )
+
+
 async def open_serial(settings: SerialSettings):
     """Open the serial port asynchronously.
 
@@ -113,16 +127,7 @@ async def open_serial(settings: SerialSettings):
     _patch_serial_asyncio_fast()
     device = resolve_device(settings)
     refuse_url(device)  # the one place every serial port is opened
-    kwargs: dict[str, Any] = dict(
-        url=device,
-        baudrate=settings.baudrate,
-        bytesize=settings.bytesize,
-        parity=settings.parity,
-        stopbits=settings.stopbits,
-        xonxoff=(settings.flowcontrol == "xonxoff"),
-        rtscts=(settings.flowcontrol == "rtscts"),
-        dsrdtr=(settings.flowcontrol == "dsrdtr"),
-    )
+    kwargs: dict[str, Any] = dict(url=device, **port_settings(settings))
     # `exclusive` is POSIX-only in pyserial; Windows ports are exclusive anyway.
     if sys.platform != "win32":
         kwargs["exclusive"] = settings.exclusive

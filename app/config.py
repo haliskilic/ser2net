@@ -448,6 +448,10 @@ class MappingOptions:
     # RFC2217 interop knobs for non-compliant peers:
     rfc2217_poll_modem_interval_s: float = 1.0
     rfc2217_net_timeout_s: float = 3.0
+    # RFC2217: once the client has left, put the serial port back to this mapping's baud
+    # rate, data bits, parity, stop bits and flow control (off: what the client set stays
+    # until the port is reopened). RTS/DTR are left alone: toggling them can reset a device.
+    rfc2217_restore_on_disconnect: bool = False
     # Modbus gateway: how long to wait for an RTU slave's reply before returning a
     # Modbus exception (0x0B gateway-target-failed) to the TCP master.
     modbus_response_timeout_s: float = 1.0

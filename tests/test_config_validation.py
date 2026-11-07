@@ -389,6 +389,36 @@ def test_form_apply_retained_set():
     print("form: apply_retained_set kept when the form leaves it out, set when shown  OK")
 
 
+def test_form_rfc2217_restore_on_disconnect():
+    """'Restore the serial settings when the RFC 2217 client leaves' is a checkbox (absent
+    when unticked) shown for RFC 2217 mappings only, so its hidden marker says whether the
+    form had it: without the marker (another protocol, an older cluster peer's form) the
+    stored value is kept on edit and a new mapping gets the default, off."""
+    base = {"name": "vc", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "rfc2217",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+    existing = MappingConfig.from_dict({"name": "vc", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "rfc2217", "port": 4001},
+                                        "options": {"rfc2217_restore_on_disconnect": True}})
+    assert MappingConfig().options.rfc2217_restore_on_disconnect is False, "off by default"
+    assert MappingConfig.from_dict({"options": {}}).options.rfc2217_restore_on_disconnect is False
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.options.rfc2217_restore_on_disconnect
+
+    marker = {"opt_rfc2217_restore_on_disconnect_shown": "1"}
+    on = {"opt_rfc2217_restore_on_disconnect": "on"}
+    assert parsed(dict(base, id=existing.id)) is True, "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, **marker)) is False, "shown and unticked: off"
+    assert parsed(dict(base, id=existing.id, **marker, **on)) is True
+    assert parsed(base) is False and parsed(dict(base, **marker)) is False
+    assert parsed(dict(base, **marker, **on)) is True
+    print("form: rfc2217_restore_on_disconnect kept when the form leaves it out, set when "
+          "shown  OK")
+
+
 def test_form_udp_reply_fields():
     """The reply address and peer timeout are shown (and posted) for UDP only. Without
     them (another mode, an older cluster peer's form) the stored values are kept on edit
@@ -441,6 +471,7 @@ def main():
     test_form_conn_options_parse_and_preserve()
     test_form_modbus_fields_not_offered()
     test_form_apply_retained_set()
+    test_form_rfc2217_restore_on_disconnect()
     test_form_udp_reply_fields()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
