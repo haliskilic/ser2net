@@ -591,8 +591,9 @@ inside aren't readable by other users:
   the box to restore them too (that also signs everyone else out). *Only its mappings*
   goes through the import preview. A restore can be undone too; a downloaded backup
   leaves out the session key.
-- `all.log` — global activity (size-rotated); `audit.log` — sign-ins and config changes,
-  who/from where/what (rotated). Searchable under Settings → *Audit log*, CSV export.
+- `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
+  console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
+  under Settings → *Audit log*, CSV export.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
