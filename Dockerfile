@@ -1,8 +1,7 @@
 # ser2net — serial-to-network bridge with a web admin UI.
 # Build:  docker build -t ser2net .
-# Run:    docker run -d --name ser2net -p 8080:8080 \
-#           --device /dev/ttyUSB0 --group-add dialout \
-#           -v ser2net-data:/data ser2net
+# Run:    docker compose up -d (docker-compose.yml), or the `docker run` command in
+#         docs/DOCKER.md: restart policy, mapping ports, serial devices, log limits.
 FROM python:3.12-slim
 
 WORKDIR /app

@@ -286,15 +286,17 @@ ardından `pip install --no-index --find-links vendor/wheels -r requirements-opt
 
 ### Docker
 ```bash
-docker compose up -d        # docker-compose.yml içindeki `devices:` satırını düzenleyin
-# veya:
-docker build -t ser2net . && docker run -d -p 8080:8080 \
-  --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
+docker compose up -d        # önce docker-compose.yml'deki `devices:` ve `ports:` kısmını düzenleyin
 ```
+Compose olmadan [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) içindeki `docker run`
+komutunu kullanın (hazır imaj, `--restart unless-stopped`, eşleme portları,
+`/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (ya da `:2.8`, `:2.8.0`); `docker-compose.yml` bunu kullanır.
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
-ayarlanır — başsız ortamda interaktif seçici çalışamaz). Süreç root olarak değil, `ser2net`
+ayarlanır — başsız ortamda interaktif seçici çalışamaz). Her eşlemenin portunu da yayınlayın
+(yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
+alınır, `--group-add` gerekmez. Süreç root olarak değil, `ser2net`
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
 volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
 olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez.
@@ -583,7 +585,9 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 ## ⚙️ Servis olarak çalıştırma
 
 - **Docker:** resmi `Dockerfile` + `docker-compose.yml` (bkz. yukarısı ve
-  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume.
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. Düz
+  `docker run` ile çalıştırıyorsanız `--restart unless-stopped` ekleyin (var olan bir
+  container için: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
   **root ile çalıştırmayın.**

@@ -275,15 +275,17 @@ standalone binary already bundles them.)
 
 ### Docker
 ```bash
-docker compose up -d        # edit the `devices:` line in docker-compose.yml first
-# or:
-docker build -t ser2net . && docker run -d -p 8080:8080 \
-  --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
+docker compose up -d        # edit `devices:` and `ports:` in docker-compose.yml first
 ```
+Without compose, use the `docker run` command in
+[`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) (the published image,
+`--restart unless-stopped`, the mapping ports, a `/dev/serial/by-id` device, log limits).
 Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (or `:2.8`, `:2.8.0`); `docker-compose.yml` uses it.
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
-`SER2NET_PORT` — the interactive picker can't run headless). The process runs as the
+`SER2NET_PORT` — the interactive picker can't run headless). Publish each mapping's port
+too (a new mapping gets 4001), or use the host network. The serial device's group is taken
+from the device itself, so no `--group-add` is needed. The process runs as the
 `ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
 image is taken over on the first start, and in a bind-mounted folder the files an older
 image wrote as root are handed to the folder's owner, so upgrading needs no manual step.
@@ -566,7 +568,9 @@ is no account at all; later starts ignore it.
 ## ⚙️ Run as a service
 
 - **Docker:** official `Dockerfile` + `docker-compose.yml` (see above and
-  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume.
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. A plain
+  `docker run` needs `--restart unless-stopped` for that (an existing container:
+  `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
   **Do not run as root.**
