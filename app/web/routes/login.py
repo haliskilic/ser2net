@@ -7,7 +7,7 @@ import secrets
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
-from ...config import User, new_pwd_version
+from ...config import ConfigError, User, new_pwd_version
 from ...engine import netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth
@@ -143,27 +143,62 @@ def routes(ctx: Ctx) -> list:
         resp.delete_cookie(auth.SESSION_COOKIE, path="/")
         return resp
 
+    # ---------------- first-run setup ----------------
+    # Only while no account exists (GuardMiddleware sends everything here then). Like
+    # open access, it trusts a request only when every host name it claims is this
+    # machine's (auth.claims_own_host, the DNS-rebinding guard). Through another name
+    # (a reverse proxy, Docker's host name) the page asks for the one-time code that
+    # AppState.prepare_first_run wrote to setup-code.txt. No redirect: every path leads here.
+    def setup_page(request, status_code=200, error=None):
+        return render(request, "setup.html", status_code=status_code, error=error,
+                      ips=netinfo.list_ip_candidates(), admin=state.config.admin_ui,
+                      locked=state.setup_locked, need_code=not auth.claims_own_host(request.headers),
+                      host=auth.foreign_host(request.headers))
+
     async def setup_get(request):
-        return render(request, "setup.html", error=None,
-                      ips=netinfo.list_ip_candidates(),
-                      admin=state.config.admin_ui)
+        trusted = auth.claims_own_host(request.headers) and not state.setup_locked
+        return setup_page(request, 200 if trusted else 403)
 
     async def setup_post(request):
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
+        if state.setup_locked:
+            return setup_page(request, status_code=403)
+        ip = client_ip(request)
+        if not auth.claims_own_host(request.headers):
+            if state.rate_limiter.blocked(ip):
+                return setup_page(request, 429, _("Too many attempts. Wait a few minutes and try "
+                                                  "again."))
+            if not state.setup_code_ok(form.get("setup_code") or ""):
+                state.rate_limiter.record_failure(ip)
+                state.log(f"first-run setup refused: wrong setup code from {ip} "
+                          f"(host {auth.foreign_host(request.headers)!r})")
+                return setup_page(request, 403, _("That setup code is not right. It is in "
+                                                  "setup-code.txt in ser2net’s data folder."))
         username = (form.get("username") or "admin").strip() or "admin"
         pw = form.get("password", "")
         pw2 = form.get("password2", "")
         err = _username_problem(username) or _password_problem(pw, pw2)
         if err:
-            return render(request, "setup.html", status_code=400, error=err,
-                          ips=netinfo.list_ip_candidates(), admin=state.config.admin_ui)
+            return setup_page(request, 400, err)
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
         async with state.config_lock:
-            state.config.users = [User(username=username, password_hash=pw_hash,
-                                       role="admin", pwd_version=new_pwd_version())]
-            await state.asave()
+            # checked again here: another setup request may have finished while this one
+            # was sending its form or hashing — it must not replace that admin
+            claimed = state.config.password_set
+            if not claimed:
+                state.config.users = [User(username=username, password_hash=pw_hash,
+                                           role="admin", pwd_version=new_pwd_version())]
+                try:
+                    await state.asave()
+                except ConfigError as e:
+                    state.config.users = []
+                    return setup_page(request, 400, str(e))
+        if claimed:
+            state.log(f"first-run setup from {ip} ignored: the admin account exists already")
+            return RedirectResponse("/login", status_code=303)
+        state.first_run_done()
         user = state.config.get_user(username)
         state.log(f"first-run setup complete; admin user '{username}' created")
         ctx.audit(request, "first_run_setup", username, user=username)

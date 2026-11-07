@@ -12,9 +12,11 @@ fully resets the system — those are the only two state files.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import re
+import secrets
 import sys
 import time
 from collections import deque
@@ -38,6 +40,8 @@ LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at star
 ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
 ALL_LOG_BACKUPS = 5                    # keep 5 rotations (~60 MB total worst case)
 AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup kept)
+# first-run setup through a host name that isn't this machine's needs this file's code
+SETUP_CODE_FILE = "setup-code.txt"
 
 
 # control characters (incl. tab / CR / LF) that must not reach an audit record
@@ -144,6 +148,9 @@ class AppState:
         self.started_at = time.time()
         # the admin UI listener's connection guard (runtime.py; None in tests without one)
         self.admin_guard: Any = None
+        # first-run setup (see prepare_first_run)
+        self.setup_code = ""
+        self.setup_locked = False
         self._maint_task: asyncio.Task | None = None
         self._requests_task: asyncio.Task | None = None
         # per-mapping logs can contain raw serial traffic; keep the logs dir private
@@ -350,6 +357,51 @@ class AppState:
             await self.run_log_maintenance()
             await asyncio.sleep(LOG_MAINTENANCE_INTERVAL)
 
+    # ---------------- first-run setup ----------------
+    @property
+    def setup_code_path(self) -> str:
+        return os.path.join(self.data_dir, SETUP_CODE_FILE)
+
+    def prepare_first_run(self, environ=None) -> None:
+        """While there is no account, the setup page creates the first admin. Opened by
+        this machine's IP address or name it just works; through any other name (DNS
+        rebinding, but also a reverse proxy or Docker's host name) it asks for a one-time
+        code, which is written to setup-code.txt in the data directory — never to a log.
+        With SER2NET_ADMIN_PASSWORD_FILE / _USER set the admin comes from there, and the
+        page stays closed if that failed."""
+        environ = os.environ if environ is None else environ
+        if self.config.password_set:
+            self.first_run_done()
+            return
+        if accounts.provision_requested(environ):
+            self.setup_locked = True
+            self.log("first-run setup in the browser is closed: SER2NET_ADMIN_PASSWORD_FILE / "
+                     "SER2NET_ADMIN_USER is set but created no admin (see above). Fix it and "
+                     "restart, or run: ser2net --set-password <name>")
+            return
+        self.setup_code = "-".join(secrets.token_hex(2) for _ in range(5))
+        try:
+            fd = os.open(self.setup_code_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(self.setup_code + "\n")
+            where = f"asks for the one-time code in {self.setup_code_path}"
+        except OSError as e:
+            where = f"can't be used (could not write {self.setup_code_path}: {e})"
+        self.log("no admin account yet: open the web UI by this machine's IP address or "
+                 f"localhost to create one (through another host name the setup page {where}), "
+                 "or run: ser2net --set-password <name>")
+
+    def setup_code_ok(self, value: str) -> bool:
+        def norm(s: str) -> str:
+            return "".join(c for c in s.lower() if c.isalnum())
+        return bool(self.setup_code) and hmac.compare_digest(norm(value), norm(self.setup_code))
+
+    def first_run_done(self) -> None:
+        """The first admin exists: the setup code is no longer needed."""
+        self.setup_code = ""
+        with _suppress(OSError):
+            os.remove(self.setup_code_path)
+
     # ---------------- `ser2net --set-password` / `--sign-out-all` while running ----------------
     async def _account_requests_loop(self) -> None:
         while True:
@@ -380,6 +432,8 @@ class AppState:
                 return False, f"could not save config.json: {e}"
         if change.action == "sessions_revoke_all":
             self.revoked_sessions.clear()  # signed with the old key: dead anyway
+        if change.first_admin:
+            self.first_run_done()
         self.log(f"command line: {change.message}")
         self.audit("local", change.action, change.detail, user=accounts.ACTOR)
         return True, change.message

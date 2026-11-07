@@ -245,7 +245,11 @@ Linux (in an old-glibc container, so the result runs on older distributions too)
 On first run:
 1. The **console** asks which local IP the admin UI binds to (machine IPs or custom)
    and a port (default 8080). Headless/service default is the safe **127.0.0.1**.
-2. Open the printed URL; **set the admin password** on the first screen.
+2. Open the printed URL; **set the admin password** on the first screen. Open it by the
+   machine's IP address or `localhost`: reached through another host name (a reverse
+   proxy, the Docker host's name) the setup page also asks for the one-time code in
+   `data/setup-code.txt`, so that no other web page can claim a new install (DNS
+   rebinding). No browser at hand: `ser2net --set-password admin` (see Security).
 3. From the dashboard, **+ Add mapping**: pick a COM/tty and map it to an IP:port.
 
 Change the bind IP later:
@@ -502,6 +506,8 @@ inside aren't readable by other users:
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
   are reduced to the file name, which is logged at start-up.
 - `tls/` — certificate/key if self-signed is generated.
+- `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
+  only until the first admin account does.
 
 Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
