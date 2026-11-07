@@ -381,6 +381,9 @@ class _ClientConn:
         # None = graceful-close sentinel (see request_graceful_close)
         self._out: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=self._queue_max)
         self._session: Optional[ProtocolSession] = None
+        # what the client sends that its protocol session refuses or ignores (malformed
+        # RFC 2217 requests, ...): logged at most once a minute per client
+        self._protocol_log = _LogEvery(lambda msg: runner._log(f"client {self.peer}: {msg}"))
         self._last_activity = time.monotonic()
         self._closing = False
         self.close_reason = ""  # why the session ended (first cause wins; for the log)
@@ -420,7 +423,7 @@ class _ClientConn:
         ser = self.runner.serial_instance
         self._session = make_session(m.network.protocol, ser,
                                      poll_interval=m.options.rfc2217_poll_modem_interval_s,
-                                     read_only=m.network.read_only)
+                                     read_only=m.network.read_only, log=self._protocol_log)
 
         # initial bytes: protocol negotiation, then banner
         init = bytearray(self._session.initial_net_bytes())

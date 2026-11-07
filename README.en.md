@@ -58,9 +58,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   Datagrams wait for the serial port in a queue of at most 64 KiB: what a sender faster
   than the line sends beyond that is dropped, counted and logged.
 - **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live changes to
-  baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway). A telnet or
-  RFC 2217 subnegotiation longer than 1 KiB (real ones are a few bytes) ends that client's
-  session, and the log says why.
+  baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway). An RFC 2217
+  request the port can't carry out (a malformed or reserved value, or one the serial port
+  refuses) is answered with the current setting, as RFC 2217 says, and leaves the port as
+  it was; the client stays connected. A telnet or RFC 2217 subnegotiation longer than
+  1 KiB (real ones are a few bytes) ends that client's session, and the log says why.
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.

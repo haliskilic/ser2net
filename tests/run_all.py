@@ -74,6 +74,7 @@ PORTABLE = [
     "test_access_policy.py",
     "test_traffic_counters.py",
     "test_protocol_parsers.py",
+    "test_rfc2217_settings.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
