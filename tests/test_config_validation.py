@@ -361,6 +361,34 @@ def test_form_modbus_fields_not_offered():
     print("form: banner/close-on/client buffer kept when a Modbus form leaves them out  OK")
 
 
+def test_form_apply_retained_set():
+    """'Re-apply a retained /set' is a checkbox (absent when unticked) shown only for
+    plain-format Modbus points, so its hidden marker says whether the form had it: without
+    the marker (Sparkplug format, an older cluster peer's form) the stored value is kept on
+    edit and a new mapping gets the default, off."""
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502"}
+    existing = MappingConfig.from_dict({"name": "gw", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "modbus", "port": 502},
+                                        "mqtt": {"apply_retained_set": True}})
+    assert MappingConfig().mqtt.apply_retained_set is False, "off by default"
+    assert MappingConfig.from_dict({"mqtt": {}}).mqtt.apply_retained_set is False
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.mqtt.apply_retained_set
+
+    marker = {"mqtt_apply_retained_set_shown": "1"}
+    assert parsed(dict(base, id=existing.id)) is True, "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, **marker)) is False, "shown and unticked: off"
+    assert parsed(dict(base, id=existing.id, mqtt_apply_retained_set="on", **marker)) is True
+    assert parsed(base) is False and parsed(dict(base, **marker)) is False
+    assert parsed(dict(base, mqtt_apply_retained_set="on", **marker)) is True
+    print("form: apply_retained_set kept when the form leaves it out, set when shown  OK")
+
+
 def test_web_access_settings():
     cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
     assert cfg.admin_ui.require_login is True, "login must be required by default"
@@ -379,6 +407,7 @@ def main():
     test_connection_lifecycle_validation()
     test_form_conn_options_parse_and_preserve()
     test_form_modbus_fields_not_offered()
+    test_form_apply_retained_set()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

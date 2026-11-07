@@ -456,6 +456,11 @@ class MqttSettings:
     payload_format: str = "plain"
     sparkplug_group_id: str = "ser2net"
     sparkplug_node_id: str = ""
+    # Plain-format commands: also write a <base_topic>/<point>/set that the broker sends
+    # from its retained store after each (re)connect. Off: a command is written once, when
+    # it is published (Sparkplug NCMD / DCMD are never retained, so a retained one is
+    # always ignored).
+    apply_retained_set: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MqttSettings":
