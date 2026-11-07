@@ -115,7 +115,13 @@ düzenlemeye gerek yok.
 - **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp, döner dosyalar,
   arayüzden indirilir), Prometheus `/metrics`, audit log ekranı, canlı log görüntüleyici,
   **tarayıcı-içi seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz) ve
-  iki yönlü, zaman damgalı **canlı hex görünümü**.
+  iki yönlü, zaman damgalı **canlı hex görünümü**. Panodaki **Gelen / Giden** sayaçları
+  (`/api/v1/status`'ta `bytes_in` / `bytes_out`, `/metrics`'te
+  `ser2net_mapping_bytes_in_total` / `ser2net_mapping_bytes_out_total`) seri cihazdan
+  okunan ve cihaza yazılan baytlardır; cihazı kaç istemci paylaşırsa paylaşsın bir kez
+  sayılır (serial↔serial: A → B / B → A). Ağdan gelip cihaza yazılamayan veri (portu açık
+  değilken) atılmış sayılır (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`),
+  panoda işaretlenir ve loglanır.
 - **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
   bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
@@ -272,7 +278,9 @@ volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapm
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.
-- **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı).
+- **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
+  çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
+  düşürülen yavaş istemciler.
 
 ---
 

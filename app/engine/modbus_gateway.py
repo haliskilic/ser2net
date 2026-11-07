@@ -125,10 +125,10 @@ class ModbusGatewayRunner:
         for mon in list(self._traffic):
             mon.feed_traffic(direction, data)
 
-    async def serial_write(self, data: bytes) -> None:
+    async def serial_write(self, data: bytes) -> bool:
         # the modbus console is observe-only (injecting raw bytes would corrupt
         # the request/response framing on the shared bus)
-        return
+        return False
 
     # ---------------- lifecycle ----------------
     async def start(self) -> None:

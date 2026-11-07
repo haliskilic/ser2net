@@ -29,8 +29,11 @@ def routes(ctx: Ctx) -> list:
             lines += [
                 f"ser2net_mapping_running{{{lbl}}} {running}",
                 f"ser2net_mapping_clients{{{lbl}}} {st.get('client_count', 0)}",
+                # bytes read from / written to the serial device, counted once at the device;
+                # dropped: sent for the device but not written (see RunnerStatus)
                 f"ser2net_mapping_bytes_in_total{{{lbl}}} {st.get('bytes_in', 0)}",
                 f"ser2net_mapping_bytes_out_total{{{lbl}}} {st.get('bytes_out', 0)}",
+                f"ser2net_mapping_bytes_dropped_total{{{lbl}}} {st.get('bytes_dropped', 0)}",
                 f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
                 f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
             ]

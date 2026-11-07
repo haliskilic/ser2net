@@ -106,6 +106,7 @@ class SerialLink:
         use it to wire up a stand-in stream pair)."""
         self.reader, self.writer, self.serial, self.device = reader, writer, serial, device
         self.status.device = device
+        self.status.devices = (device,) if device else ()
         self.status.last_error = ""
         self.status.state = "running"
         self.down = False

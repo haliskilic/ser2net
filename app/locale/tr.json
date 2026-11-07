@@ -672,5 +672,8 @@
   "writable points take MQTT commands (/set or Sparkplug DCMD)": "yazılabilir noktalar MQTT komutu alır (/set ya da Sparkplug DCMD)",
   "Who may write is up to the broker: let only trusted clients publish to <span class=\"mono\">&lt;topic&gt;/+/set</span> (Sparkplug: the node’s NCMD and DCMD topics), and use TLS and a username. Read-only refuses every write.": "Kimin yazabileceğine broker karar verir: <span class=\"mono\">&lt;topic&gt;/+/set</span> topic'lerine (Sparkplug'da düğümün NCMD ve DCMD topic'lerine) yalnızca güvendiğin istemcilerin yayın yapmasına izin ver; TLS ve kullanıcı adı kullan. Salt okunur her yazmayı reddeder.",
   "Writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them. Restrict those topics with the broker’s ACLs, and use TLS and credentials.": "Yazılabilir noktalar TLS'siz ya da kullanıcı adsız bir broker bağlantısı üzerinden MQTT komutu alıyor: broker'ın komut topic'lerine yayın yapmasına izin verdiği her istemci onlara yazabilir. Bu topic'leri broker ACL'leriyle kısıtla; TLS ve kimlik bilgisi kullan.",
-  "Modbus points → broker, commands → writable points; needs paho-mqtt": "Modbus noktaları → broker, komutlar → yazılabilir noktalar; paho-mqtt gerektirir"
+  "Modbus points → broker, commands → writable points; needs paho-mqtt": "Modbus noktaları → broker, komutlar → yazılabilir noktalar; paho-mqtt gerektirir",
+  "In: bytes read from the serial device · Out: bytes written to it (serial↔serial: A → B / B → A)": "Gelen: seri cihazdan okunan baytlar · Giden: cihaza yazılan baytlar (seri↔seri: A → B / B → A)",
+  "data from the network that was not written to the serial device; the mapping’s log says why": "ağdan gelip seri cihaza yazılamayan veri; nedeni eşlemenin logunda",
+  "%(n)s bytes dropped": "%(n)s bayt atıldı"
 }

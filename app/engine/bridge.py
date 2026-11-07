@@ -17,6 +17,10 @@ writer's drain() before reading more from that client.
 Every TCP data socket (accepted or connect-out) gets TCP keepalive (sockopts.py), so
 a peer that vanished without a FIN/RST is detected and its slot freed instead of
 staying ESTABLISHED forever; each disconnect is logged with its reason.
+
+Traffic counters (RunnerStatus) count at the device, once: bytes_in what was read from
+it, bytes_out what was handed to it, bytes_dropped what the network sent for it that
+was not written (the port was not open).
 """
 from __future__ import annotations
 
@@ -103,6 +107,29 @@ def fmt_duration(secs: float) -> str:
     if m:
         return f"{m}m {s:02d}s"
     return f"{s}s"
+
+
+class _LogEvery:
+    """A log line that can repeat many times a second (dropped data, a UDP peer that keeps
+    changing, refused datagrams): written at most once per ``interval`` seconds, saying
+    how many were held back since the last one."""
+
+    def __init__(self, log, interval: float = 60.0) -> None:
+        self._log = log
+        self._interval = interval
+        self._next = 0.0
+        self._held = 0
+
+    def __call__(self, msg: str) -> None:
+        now = time.monotonic()
+        if now < self._next:
+            self._held += 1
+            return
+        if self._held:
+            msg += f" ({self._held} more since the last such line)"
+        self._held = 0
+        self._next = now + self._interval
+        self._log(msg)
 
 
 def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
@@ -268,12 +295,18 @@ class RunnerStatus:
     client_count: int = 0
     # connected peers: each {"peer": "ip:port", "connected_at": unix_ts}
     clients: list[dict] = field(default_factory=list)
-    bytes_in: int = 0   # from serial -> network
-    bytes_out: int = 0  # from network -> serial
+    # counted at the device, once (not per client, no telnet/RFC2217 control bytes);
+    # serial<->serial bridge: in = port A -> B, out = port B -> A
+    bytes_in: int = 0       # read from the serial device
+    bytes_out: int = 0      # handed to the serial device (from clients, datagrams, the console)
+    bytes_dropped: int = 0  # sent for the device but not written: the port was not open
     reconnects: int = 0
     dropped_clients: int = 0   # clients dropped because their output queue overflowed
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
     last_error: str = ""
+    # the serial devices open now, for the Ports page's "in use" (both ports of a
+    # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
+    devices: tuple[str, ...] = ()
 
     def set_clients(self, clients) -> None:
         """Publish the connected clients (each has peer, connected_at and priority)."""
@@ -298,6 +331,7 @@ class RunnerStatus:
             "clients": clients,
             "bytes_in": self.bytes_in,
             "bytes_out": self.bytes_out,
+            "bytes_dropped": self.bytes_dropped,
             "reconnects": self.reconnects,
             "dropped_clients": self.dropped_clients,
             "queue_overflows": self.queue_overflows,
@@ -429,7 +463,6 @@ class _ClientConn:
                     self._out.put_nowait(ctrl)
             if serial_bound and not m.network.read_only:
                 await self.runner.serial_write(serial_bound)
-                self.runner.status.bytes_out += len(serial_bound)
         raise _Disconnect("closed by peer")
 
     async def _pump_serial_to_net(self) -> None:
@@ -446,7 +479,6 @@ class _ClientConn:
             self.writer.write(data)
             await self.writer.drain()
             self._last_activity = time.monotonic()
-            self.runner.status.bytes_in += len(data)
 
     async def _pump_poll(self) -> None:
         session = self._session
@@ -508,6 +540,7 @@ class MappingRunner:
         # the serial port shared by server/client/udp (a serial<->serial bridge opens its own)
         self._link = SerialLink(mapping.serial, self.status, self._stop, self._log)
         self._access = AccessPolicy(mapping.network)
+        self._drop_log = _LogEvery(self._log)  # data for the device that was not written
         co = mapping.options.closeon
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
@@ -648,15 +681,31 @@ class MappingRunner:
         return ctx
 
     # ---------------- serial side ----------------
-    async def serial_write(self, data: bytes) -> None:
+    async def serial_write(self, data: bytes) -> bool:
+        """Write data from the network (a client, a datagram, the browser console) to the
+        device and count it: bytes_out once the open port took it, else bytes_dropped.
+        Returns False when it was dropped. Awaits drain(): the caller reads no more from
+        its client until the port has room (network->serial backpressure)."""
         w = self._link.writer
-        if w is None:
-            return  # serial not currently open; drop (status shows reconnecting)
+        if w is None or w.is_closing():
+            # serial not currently open (status shows reconnecting): drop
+            self._drop(len(data), "the serial port is not open")
+            return False
         if self._tracer:
             self._tracer.write("net>ser", data)
         self._feed_traffic(TO_DEVICE, data)
         w.write(data)
+        self.status.bytes_out += len(data)
         await w.drain()
+        return True
+
+    def _drop(self, n: int, why: str) -> None:
+        """Count data for the device that is not written, and log it (rate-limited)."""
+        if n <= 0:
+            return
+        self.status.bytes_dropped += n
+        self._drop_log(f"data for the device dropped: {why} "
+                       f"({self.status.bytes_dropped} bytes so far)")
 
     async def _serial_session(self, reader: asyncio.StreamReader,
                               writer: asyncio.StreamWriter) -> None:
@@ -672,6 +721,7 @@ class MappingRunner:
             data = await reader.read(READ_CHUNK)
             if not data:
                 raise ConnectionError("serial EOF / device removed")
+            self.status.bytes_in += len(data)  # once, whoever receives it (or nobody)
             if self._tracer:
                 self._tracer.write("ser>net", data)
             self._feed_monitors(data)
@@ -831,6 +881,7 @@ class MappingRunner:
                 ra, wa, _sa, da = await serial_io.open_serial(self.mapping.serial)
                 rb, wb, _sb, db = await serial_io.open_serial(self.mapping.serial_b)
                 self.status.device = f"{da} <-> {db}"
+                self.status.devices = (da, db)
                 self.status.last_error = ""
                 self.status.state = "running"
                 backoff.reset()
@@ -861,6 +912,9 @@ class MappingRunner:
                 break
 
     async def _pump_serial_pair(self, reader, writer, tag: str) -> None:
+        # port A is "the device" of the counters and the live view: A -> B counts as in,
+        # B -> A as out
+        from_a = tag.startswith("A")
         while not self._stop.is_set():
             data = await reader.read(READ_CHUNK)
             if not data:
@@ -868,10 +922,13 @@ class MappingRunner:
             if self._tracer:
                 self._tracer.write(tag, data)
             self._feed_monitors(data)
-            self._feed_traffic(FROM_DEVICE if tag.startswith("A") else TO_DEVICE, data)
+            self._feed_traffic(FROM_DEVICE if from_a else TO_DEVICE, data)
             writer.write(data)
+            if from_a:
+                self.status.bytes_in += len(data)
+            else:
+                self.status.bytes_out += len(data)
             await writer.drain()
-            self.status.bytes_in += len(data)
 
 
 # ---------------------------------------------------------------------------
@@ -892,7 +949,6 @@ class _UdpPeer:
         if t is not None and self.addr is not None:
             with contextlib.suppress(Exception):
                 t.sendto(data, self.addr)
-            self.runner.status.bytes_in += len(data)
 
     def kick(self, reason: str = "") -> None:
         pass
@@ -923,13 +979,16 @@ class _UdpBridge(asyncio.DatagramProtocol):
             peer.addr = addr
             peer.peer = f"{addr[0]}:{addr[1]}"
             r._refresh_clients()
-        if r.mapping.network.read_only:
+        if r.mapping.network.read_only or not data:
             return
+        sw = r._link.writer
+        if sw is None or sw.is_closing():
+            r._drop(len(data), "the serial port is not open")
+            return
+        # traced and counted only when it is handed to the port
         if r._tracer:
             r._tracer.write("net>ser", data)
         r._feed_traffic(TO_DEVICE, data)
-        sw = r._link.writer
-        if sw is not None:
-            with contextlib.suppress(Exception):
-                sw.write(data)  # datagram_received is sync; transport buffers
-            r.status.bytes_out += len(data)
+        with contextlib.suppress(Exception):
+            sw.write(data)  # datagram_received is sync; transport buffers
+        r.status.bytes_out += len(data)

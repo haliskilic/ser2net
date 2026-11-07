@@ -55,6 +55,8 @@ async def test_tcp_client():
     # serial -> bridge -> remote
     await asyncio.to_thread(device.write, b"pong"); await asyncio.to_thread(device.flush)
     assert (await asyncio.wait_for(r.read(16), 2)) == b"pong"
+    st = sup.status(m.id)
+    assert (st["bytes_in"], st["bytes_out"]) == (4, 4), st
     print("TCP connect-out (client mode): bidirectional  OK")
     w.close(); device.close(); server.close(); await sup.stop_all(); p.terminate(); await p.wait()
 
@@ -78,6 +80,8 @@ async def test_udp():
     await asyncio.sleep(0.3)
     data, _ = await asyncio.to_thread(us.recvfrom, 64)        # serial -> bridge -> client
     assert data == b"udp-out", data
+    st = sup.status(m.id)
+    assert (st["bytes_in"], st["bytes_out"]) == (len(b"udp-out"), len(b"udp-in")), st
     print("UDP mode: bidirectional datagrams  OK")
     us.close(); device.close(); await sup.stop_all(); p.terminate(); await p.wait()
 
@@ -99,10 +103,14 @@ async def test_serialbridge():
     await asyncio.to_thread(ext_a.write, b"A2B"); await asyncio.to_thread(ext_a.flush)
     await asyncio.sleep(0.3)
     assert (await asyncio.to_thread(ext_b.read, 16)) == b"A2B"
-    await asyncio.to_thread(ext_b.write, b"B2A"); await asyncio.to_thread(ext_b.flush)
+    await asyncio.to_thread(ext_b.write, b"B2A!"); await asyncio.to_thread(ext_b.flush)
     await asyncio.sleep(0.3)
-    assert (await asyncio.to_thread(ext_a.read, 16)) == b"B2A"
-    print("serial<->serial bridge: bidirectional  OK")
+    assert (await asyncio.to_thread(ext_a.read, 16)) == b"B2A!"
+    # port A is "the device": A -> B counts as in, B -> A as out; both ports are in use
+    st = sup.status(m.id)
+    assert (st["bytes_in"], st["bytes_out"]) == (3, 4), st
+    assert {a1, b1} <= sup.devices_in_use(), sup.devices_in_use()
+    print("serial<->serial bridge: bidirectional, counted per direction  OK")
     ext_a.close(); ext_b.close(); await sup.stop_all()
     pa.terminate(); pb.terminate(); await pa.wait(); await pb.wait()
 

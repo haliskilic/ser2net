@@ -136,6 +136,7 @@ def test_mappings_table():
     tpl = make_templates().env.get_template("_mappings_body.html")
     statuses = {"m1": {"state": "reconnecting", "last_error": f"could not open port {BY_ID}",
                        "client_count": 2, "dropped_clients": 1, "bytes_in": 10, "bytes_out": 20,
+                       "bytes_dropped": 7,
                        "clients": [{"peer": "127.0.0.1:50000", "duration": "3m", "priority": True}]}}
     for can_edit in (True, False):
         out = tpl.render(mappings=mappings(), statuses=statuses, can_edit=can_edit)
@@ -146,6 +147,13 @@ def test_mappings_table():
         assert n_btn == (7 + 6 + 7 if can_edit else 2 * 3), f"unexpected button count {n_btn}"
         err = next(n for n in root.walk() if "err-small" in n.classes())
         assert err.attrs.get("title", "").endswith(BY_ID), "full error belongs in the tooltip"
+        # the counters say what they count; dropped data is flagged in the same cell
+        th = [n for n in root.walk() if n.tag == "th"][5]
+        assert th.attrs.get("title", "").startswith("In: bytes read from the serial device"), th.attrs
+        cell = next(n for n in root.walk() if n.attrs.get("data-label") == "In / Out")
+        warn = [n for n in cell.walk() if "err-small" in n.classes()]
+        assert len(warn) == 1 and "not written to the serial device" in warn[0].attrs["title"], warn
+        assert out.count("7 bytes dropped") == 1, "only the mapping that dropped data is flagged"
     empty = tpl.render(mappings=[], statuses={}, can_edit=True)
     check_table_contract(empty, "empty mappings table")
     print("mappings table: wrapper, card labels, buttons in their cell, escaping  OK")

@@ -27,6 +27,9 @@ class _FakeWriter:
     def write(self, data):
         self.written.extend(data)
 
+    def is_closing(self):
+        return False
+
 
 def _make_runner(*, allowed, read_only=False):
     m = MappingConfig.from_dict({
