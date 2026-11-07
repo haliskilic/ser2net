@@ -705,5 +705,7 @@
   "line {0} is longer than {1} KB, so the file is not imported.": "satır {0}, {1} KB sınırından uzun, bu yüzden dosya içe aktarılmadı.",
   "The file is larger than {0} MB, too large for a ser2net configuration.": "Dosya {0} MB sınırından büyük; bir ser2net yapılandırması için fazla büyük.",
   "{0}: nested too deeply to import": "{0}: içe aktarılamayacak kadar derin iç içe",
-  "… and {0} more warnings": "… ve {0} uyarı daha"
+  "… and {0} more warnings": "… ve {0} uyarı daha",
+  "The file is larger than {0} MB.": "Dosya {0} MB sınırından büyük.",
+  "The file has {0} mappings; at most {1} can be imported at once.": "Dosyada {0} eşleme var; bir seferde en fazla {1} eşleme içe aktarılabilir."
 }
