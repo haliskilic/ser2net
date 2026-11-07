@@ -26,10 +26,11 @@ it is authenticated, and what a beacon may change.
   * during a planned key change the previous key is accepted (until its end) and
     tried with a peer that refuses the key;
   * beacons: an old one (a replay, an earlier run of a node) is dropped, also after
-    discovery restarts (a settings save); a restart replaces the row, copies of one
-    installation (two runs of one id) show up as such, a beacon with this node's own
-    id from another run is reported, one signed with another key is noted but never
-    contacted;
+    discovery restarts (a settings save) - unless nothing was heard from the node for
+    longer than a peer lives (a restart that set its clock back); a restart replaces
+    the row, copies of one installation (two runs of one id) show up as such, a beacon
+    with this node's own id from another run is reported, one signed with another key
+    is noted but never contacted;
   * a malformed beacon is dropped without an error;
   * peer calls connect directly - HTTP(S)_PROXY / ALL_PROXY never apply - and don't
     follow redirects; why a peer's requests fail is logged once per change;
@@ -63,8 +64,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.config import AppConfig, ClusterSettings, ConfigError, parse_cluster_peer, peer_host
 from app.engine import cluster as cluster_mod
 from app.engine.cluster import (AUTH_HEADER, BOOT_SKEW_S, CLOCK_WINDOW_S, FETCH_CACHE_S,
-                                KEY_HEADER, NOTE_TTL, ClusterDiscovery, _Answer, _Link,
-                                _Nonces, _sign,
+                                KEY_HEADER, NOTE_TTL, PEER_TTL, ClusterDiscovery, _Answer,
+                                _Link, _Nonces, _sign,
                                 canonical_target, format_auth, key_bytes, key_header,
                                 key_header_matches, parse_auth, peer_addr, peer_url, reply_mac,
                                 request_mac)
@@ -735,6 +736,36 @@ def test_replayed_old_beacons_get_no_key():
           "address get no request, the raw key only goes to it as a manual peer  OK")
 
 
+def test_reboot_with_clock_set_back():
+    """A node that restarts with its clock set back (no RTC, NTP not synced yet) looks like
+    a replay only while its row is live: once nothing was heard from it for longer than a
+    peer lives, it is accepted again - a node up to 2.8.0 and a current one alike."""
+    d = node()
+    before = (beacon(id="rtc1", ip="10.0.0.21", t=50000.0),
+              beacon2(id="rtc2", ip="10.0.0.22", ips=["10.0.0.22"], t=50000.0))
+    after = (beacon(id="rtc1", ip="10.0.0.21", t=46400.0),     # an hour back
+             beacon2(id="rtc2", ip="10.0.0.22", ips=["10.0.0.22"], b="afterreboot00001",
+                     t=46400.0))
+    for data in before:
+        d.handle_datagram(data, ("10.0.0.2", 41750))
+    assert sorted(p["id"] for p in d.peers()) == ["rtc1", "rtc2"]
+    d._peers.clear()            # (they stopped beaconing while they restarted)
+    for data in after:
+        d.handle_datagram(data, ("10.0.0.2", 41750))
+    assert d.peers() == [], "right after their last beacon, an older time is a replay"
+    for rec in d._ids.values():  # nothing heard from them for longer than a peer lives
+        rec["seen"] -= PEER_TTL + 1
+    for data in after:
+        d.handle_datagram(data, ("10.0.0.2", 41750))
+    assert sorted(p["id"] for p in d.peers()) == ["rtc1", "rtc2"], d.peers()
+    d.handle_datagram(beacon(id="rtc1", ip="10.0.0.21", t=46405.0), ("10.0.0.2", 41750))
+    d.handle_datagram(after[0], ("10.6.6.6", 41750))
+    assert next(p for p in d.peers() if p["id"] == "rtc1")["offset"] < -3000, \
+        "its newer beacons count, a repeat of an older one does not"
+    print("a node that restarts with its clock set back shows up again once it was silent "
+          "longer than a peer lives  OK")
+
+
 TR_KEY = "küme-anahtarı-çöüşğİı"
 
 
@@ -919,6 +950,7 @@ def main():
     test_key_mismatch_and_rotation()
     test_legacy_peer_calls()
     test_replayed_old_beacons_get_no_key()
+    test_reboot_with_clock_set_back()
     test_cluster_key()
     test_malformed_beacons()
     test_direct_no_redirect()

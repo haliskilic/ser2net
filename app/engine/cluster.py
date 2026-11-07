@@ -30,7 +30,9 @@ beacons can be replayed from anywhere), or a manual peer that refused a signed r
 the way older releases do (never one that has answered a signed request since this
 node started). Beacons carry the protocol version, a random id of the sending process
 (two processes with one node id are copies of one installation) and the sender's own
-addresses; a beacon not newer than the last one from its sender is dropped.
+addresses; a beacon not newer than the last one from its sender is dropped, unless
+nothing was heard from that sender for longer than a peer lives (a restart, which may
+have set its clock back).
 """
 from __future__ import annotations
 
@@ -486,9 +488,16 @@ class ClusterDiscovery:
         or a run dated well before the latest (an earlier run, replayed). A new run (a
         restart) replaces the earlier run's row, unless earlier runs keep beaconing too:
         then several nodes share the id (copies of one installation) and each has a row.
-        Releases up to 2.8.0 send no run id: their beacons count as one run."""
+        Releases up to 2.8.0 send no run id: their beacons count as one run. After nothing
+        was accepted from a node for longer than PEER_TTL (its row is gone), what was
+        stored for it is forgotten: that is a restart, which may have set its clock back
+        (no RTC, NTP not synced yet), not a replay - and a replayed beacon steers no
+        request any more (signed requests; the raw key never goes to a packet's source)."""
         now = time.time()
         rec = self._ids.get(pid)
+        if rec is not None and now - rec["seen"] > PEER_TTL:
+            del self._ids[pid]
+            rec = None
         if rec is None:
             if len(self._ids) >= 512:   # ids come and go: keep the ones heard from last
                 for gone in sorted(self._ids, key=lambda i: self._ids[i]["seen"])[:256]:
