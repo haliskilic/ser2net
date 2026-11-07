@@ -174,10 +174,10 @@
 ## Planned
 
 ### Later
-- Cluster hardening (from the v2.5 review): validate/curb peer-advertised IPs before the
-  server-side fetch (SSRF defense-in-depth), optional TLS certificate pinning for peer
-  fetch/control, a light rate-limit on the key-guarded peer endpoints, optional IPv6
-  (multicast) discovery
+- Cluster: once fleets have moved to signed peer requests, make legacy (raw-key)
+  authentication off by default and later drop it; optional TLS certificate pinning for
+  peer requests (requests and replies are signed, but over plain HTTP a reply can still be
+  read on the network); optional IPv6 (multicast) discovery
 - `.deb` / `.rpm` packages and an install script for the Linux executable
 - RTU inter-frame tuning for the Modbus gateway
 
