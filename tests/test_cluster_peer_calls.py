@@ -16,7 +16,10 @@ The fleet view's peer calls carry the shared cluster key, so:
   * a malformed beacon is dropped without an error;
   * peer calls connect directly - HTTP(S)_PROXY / ALL_PROXY never apply, so the key
     never goes to a proxy - and don't follow redirects; why a peer's requests fail is
-    logged once per change.
+    logged once per change;
+  * the fleet view's per-peer answer is shared by every open dashboard for a few
+    seconds, with one request per peer in flight, dropped after a remote change; peer
+    requests run on their own small thread pool and a reply has a size limit.
 
 The network checks use small HTTP servers on 127.0.0.1 standing in for peers.
 
@@ -37,7 +40,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import AppConfig, ClusterSettings, ConfigError, parse_cluster_peer, peer_host
-from app.engine.cluster import (ClusterDiscovery, _sign, key_bytes, key_header,
+from app.engine import cluster as cluster_mod
+from app.engine.cluster import (FETCH_CACHE_S, ClusterDiscovery, _sign, key_bytes, key_header,
                                 key_header_matches, peer_addr, peer_url)
 
 KEY = "shared-key"
@@ -293,6 +297,67 @@ def test_failures_logged_once():
     print("peer request failures: logged once per change, recovery logged  OK")
 
 
+def test_shared_answers():
+    gate, hits = threading.Event(), []
+
+    def reply(path):
+        hits.append(path)
+        n = len(hits)
+        gate.wait(5)
+        return 200, {}, json.dumps({"n": n}).encode()
+    peer = FakePeer(reply)
+    down = FakePeer(lambda path: (503, {}, b""))
+    logs = []
+    d = node(peers=[f"127.0.0.1:{peer.port}", f"127.0.0.1:{down.port}"], log=logs.append)
+    t, t_down = d.all_targets()
+
+    async def run():
+        tabs = [asyncio.create_task(d.fetch_peer(t)) for _ in range(10)]  # ten dashboards
+        await asyncio.sleep(0.3)
+        gate.set()
+        assert await asyncio.gather(*tabs) == [{"n": 1}] * 10 and len(hits) == 1, hits
+        assert await d.fetch_peer(t) == {"n": 1} and len(hits) == 1, "answer is reused"
+        assert any(th.name.startswith("cluster-http") for th in threading.enumerate())
+        d.forget(t)   # after a remote start/stop/edit
+        assert await d.fetch_peer(t) == {"n": 2}, "asked again after forget()"
+        k = next(iter(d._fetched))
+        d._fetched[k] = (d._fetched[k][0] - FETCH_CACHE_S - 1, d._fetched[k][1])
+        assert await d.fetch_peer(t) == {"n": 3}, "an old answer is not reused"
+        # an answer to a request that started before forget() is not kept
+        gate.clear()
+        d.forget(t)
+        first = asyncio.create_task(d.fetch_peer(t))
+        await asyncio.sleep(0.2)
+        d.forget(t)
+        second = asyncio.create_task(d.fetch_peer(t))
+        await asyncio.sleep(0.2)
+        gate.set()
+        assert await first == {"n": 4} and await second == {"n": 5}
+        assert await d.fetch_peer(t) == {"n": 5} and len(hits) == 5, hits
+        # "no answer" is shared too, so a dead peer is asked once, not once per tab
+        assert await asyncio.gather(*[d.fetch_peer(t_down) for _ in range(5)]) == [None] * 5
+        assert await d.fetch_peer(t_down) is None and len(down.requests) == 1, down.requests
+        # a reply over the size limit is refused
+        saved = cluster_mod.MAX_REPLY_BYTES
+        cluster_mod.MAX_REPLY_BYTES = 64
+        try:
+            peer.reply = lambda path: (200, {}, json.dumps({"x": "y" * 100}).encode())
+            assert await d.get_peer(t, "/api/cluster/local") is None
+            assert any("reply larger than" in m for m in logs), logs
+        finally:
+            cluster_mod.MAX_REPLY_BYTES = saved
+        await d.stop()
+        assert d._fetched == {} and d._executor is None
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        peer.close()
+        down.close()
+    print("fleet view: one shared request per peer, reused briefly, dropped on change; "
+          "own thread pool; reply size limit  OK")
+
+
 def main():
     test_peer_host_and_url()
     test_manual_peer_entries()
@@ -303,6 +368,7 @@ def main():
     test_malformed_beacons()
     test_direct_no_redirect()
     test_failures_logged_once()
+    test_shared_answers()
     print("\nPASS: cluster peer calls")
 
 

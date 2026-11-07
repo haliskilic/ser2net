@@ -348,3 +348,14 @@ document.addEventListener("htmx:beforeSwap", function (e) {
   });
   document.addEventListener("DOMContentLoaded", restoreControls);
 })();
+
+// 6) Cluster panel: a tab in the background skips its refresh (each one makes this node
+//    ask every peer) and refreshes as soon as it is shown again.
+document.addEventListener("htmx:beforeRequest", function (e) {
+  var el = e.detail.elt;
+  if (el && el.id === "cluster" && document.hidden) e.preventDefault();
+});
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden && document.getElementById("cluster") && window.htmx)
+    htmx.trigger(document.body, "refreshCluster");
+});

@@ -368,11 +368,14 @@ def test_manual_peer_and_remote_control():
         assert json.loads(body)["mappings"][0]["enabled"] is True, "remote start did not take effect"
         print("remote start of a peer's mapping via the unified view  OK")
 
-        # remote STOP via A's proxy -> B's mapping becomes disabled. A scheme in the
-        # request is not used: the call goes to the peer's own address, never elsewhere.
+        # A's view shows the start at once: the answer it shares between dashboards for a
+        # few seconds was dropped by the remote action
         html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
         acts = rendered_actions(html, mid)
-        assert set(acts) == {"stop", "restart", "edit"}, acts
+        assert set(acts) == {"stop", "restart", "edit"}, f"stale fleet view after start: {acts}"
+
+        # remote STOP via A's proxy -> B's mapping becomes disabled. A scheme in the
+        # request is not used: the call goes to the peer's own address, never elsewhere.
         trap = trap_listener()
         crafted = f"http://127.0.0.1:{trap.getsockname()[1]}/?x="
         assert post_a("/api/cluster/control-peer", {**acts["stop"], "scheme": crafted}) == 200
@@ -422,6 +425,8 @@ def test_manual_peer_and_remote_control():
             time.sleep(0.1)
         assert json.loads(body)["mappings"][0]["serial"] == "/dev/ttyEDITED", \
             "remote edit did not change the peer's mapping"
+        html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
+        assert "ttyEDITED" in html, "A's fleet view must show the edit at once"
         assert not trapped(trap), "the edit must be saved on the peer itself"
         trap.close()
         print("remote edit of a peer's mapping took effect on the peer  OK")

@@ -11,13 +11,16 @@ Deliberately **not** mDNS/zeroconf and no extra dependencies: just an asyncio
 DatagramProtocol + a periodic broadcast task. This module only does *discovery*
 (who is out there and how to reach their web UI). Aggregating a peer's mappings
 is an HTTP GET to that peer's ``/api/cluster/local`` (guarded by the shared key);
-``fetch_peer`` performs it off the event loop. The browser only ever talks to the
-node it logged into — that node fans out to its peers server-side.
+``fetch_peer`` performs it off the event loop, on a small thread pool of its own, and
+shares each answer between all open dashboards for a few seconds. The browser only
+ever talks to the node it logged into — that node fans out to its peers server-side.
 """
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
+import functools
 import hashlib
 import hmac
 import ipaddress
@@ -35,6 +38,10 @@ from ..config import parse_cluster_peer, peer_host
 
 BEACON_INTERVAL = 5.0   # seconds between outbound beacons
 PEER_TTL = 20.0         # a peer is dropped if not heard from within this window
+FETCH_CACHE_S = 4.0     # a peer's fleet-view answer is reused this long (by every tab)
+HTTP_WORKERS = 8        # threads for peer requests: their own pool, so slow or
+                        # unreachable peers never hold up sign-ins, saves or port scans
+MAX_REPLY_BYTES = 8 * 1024 * 1024   # a larger peer reply is refused
 _LOOPBACK = ("0.0.0.0", "::", "127.0.0.1", "localhost", "")
 
 
@@ -143,6 +150,9 @@ class ClusterDiscovery:
         self._peers: dict[str, dict] = {}   # id -> {id,name,ip,port,scheme,last_seen}
         self._opener = _peer_opener()
         self._problems: dict[str, str] = {}  # peer host:port -> why its last request failed
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._fetched: dict[tuple, tuple[float, dict | None]] = {}  # target -> (when, answer)
+        self._fetching: dict[tuple, asyncio.Task] = {}               # target -> request running
         self._running = False
         self.discovery_error = ""           # non-empty when UDP discovery couldn't start
 
@@ -306,6 +316,10 @@ class ClusterDiscovery:
             self._transport = None
         self._peers.clear()
         self._problems.clear()
+        self.forget()
+        if self._executor is not None:  # requests still running finish on their own
+            self._executor.shutdown(wait=False)
+            self._executor = None
 
     async def _beacon_loop(self) -> None:
         while True:
@@ -366,7 +380,40 @@ class ClusterDiscovery:
         return data if 200 <= status < 300 or status == 400 else None
 
     async def fetch_peer(self, peer: dict, timeout: float = 2.5) -> dict | None:
-        return await self.get_peer(peer, "/api/cluster/local", timeout=timeout)
+        """A peer's fleet-view payload (/api/cluster/local), or None when it doesn't
+        answer. Shared by every open dashboard: an answer (also "no answer") is reused
+        for FETCH_CACHE_S seconds, and one request per peer at most is in flight,
+        however many tabs and users refresh the fleet view."""
+        k = _target_key(peer)
+        hit = self._fetched.get(k)
+        if hit is not None and time.monotonic() - hit[0] < FETCH_CACHE_S:
+            return hit[1]
+        task = self._fetching.get(k)
+        if task is None:
+            task = asyncio.create_task(self.get_peer(peer, "/api/cluster/local", timeout=timeout),
+                                       name="cluster-fetch")
+            self._fetching[k] = task
+            task.add_done_callback(functools.partial(self._fetch_done, k))
+        return await asyncio.shield(task)   # a closed tab doesn't cancel it for the others
+
+    def _fetch_done(self, k: tuple, task: asyncio.Task) -> None:
+        if self._fetching.get(k) is not task:
+            return  # forgotten while it ran: its answer may predate a change
+        del self._fetching[k]
+        if not task.cancelled() and task.exception() is None:
+            now = time.monotonic()
+            self._fetched = {t: v for t, v in self._fetched.items() if now - v[0] < FETCH_CACHE_S}
+            self._fetched[k] = (now, task.result())
+
+    def forget(self, peer: dict | None = None) -> None:
+        """Drop shared fleet-view answers - one peer's or all - so the next refresh asks
+        again: after a remote start/stop/edit the table shows the change at once."""
+        if peer is None:
+            self._fetched.clear()
+            self._fetching.clear()
+        else:
+            self._fetched.pop(_target_key(peer), None)
+            self._fetching.pop(_target_key(peer), None)
 
     async def control_peer(self, target: dict, mapping_id: str, action: str,
                            timeout: float = 4.0) -> dict | None:
@@ -385,9 +432,19 @@ class ClusterDiscovery:
         except ValueError:
             self._note(target, "not a valid peer address")
             return 0, None
-        status, data, problem = await asyncio.to_thread(self._http, method, url, body, timeout)
+        try:
+            status, data, problem = await asyncio.get_running_loop().run_in_executor(
+                self._pool(), self._http, method, url, body, timeout)
+        except RuntimeError:  # the interpreter is shutting down
+            return 0, None
         self._note(target, problem)
         return status, data
+
+    def _pool(self) -> concurrent.futures.ThreadPoolExecutor:
+        if self._executor is None:
+            self._executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=HTTP_WORKERS, thread_name_prefix="cluster-http")
+        return self._executor
 
     def _http(self, method: str, url: str, body: bytes | None,
               timeout: float) -> tuple[int, dict | None, str]:
@@ -399,11 +456,11 @@ class ClusterDiscovery:
         req = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
             with self._opener.open(req, timeout=timeout) as r:
-                data = _json_object(r)
-                return r.status, data, "" if data is not None else "not a ser2net cluster reply"
+                data, problem = _read_json(r)
+                return r.status, data, problem
         except urllib.error.HTTPError as e:
             with contextlib.closing(e):
-                data = _json_object(e)
+                data, _why = _read_json(e)
             if e.code in (401, 403):
                 return e.code, None, (f"HTTP {e.code}: it refused this node's cluster key "
                                       "(or its cluster is off)")
@@ -430,10 +487,16 @@ class ClusterDiscovery:
             self.log(f"cluster: peer {addr} answers again")
 
 
-def _json_object(resp) -> dict | None:
-    """A peer reply's JSON object, or None."""
+def _read_json(resp) -> tuple[dict | None, str]:
+    """A peer reply's JSON object (at most MAX_REPLY_BYTES), or None and why not."""
     try:
-        data = json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
-    return data if isinstance(data, dict) else None
+        raw = resp.read(MAX_REPLY_BYTES + 1)
+    except Exception as e:  # cut off, timed out
+        return None, f"reply not read: {e}"
+    if len(raw) > MAX_REPLY_BYTES:
+        return None, f"reply larger than {MAX_REPLY_BYTES // 2**20} MB"
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        data = None
+    return (data, "") if isinstance(data, dict) else (None, "not a ser2net cluster reply")
