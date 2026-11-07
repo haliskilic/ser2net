@@ -63,8 +63,8 @@ def test_names():
                "ali_x.com#EXT#@corp.onmicrosoft.com", "x" * EXTERNAL_NAME_MAX, "(x"):
         assert external_name_problem(ok) is None, ok
     for bad, why in (("", "empty"), ("x" * (EXTERNAL_NAME_MAX + 1), "longer than 255"),
-                     ("jdoe\x00", "U+0000"), ("ad‮min", "U+202E"),
-                     ("ad​min", "U+200B"), ("a\tb", "U+0009"), ("a b", "U+2028"),
+                     ("jdoe\x00", "U+0000"), ("ad\u202emin", "U+202E"),
+                     ("ad\u200bmin", "U+200B"), ("a\tb", "U+0009"), ("a\u2028b", "U+2028"),
                      ("(anonymous)", "parentheses"), ("(no login)", "parentheses")):
         problem = external_name_problem(bad)
         assert problem and why in problem, (bad, problem)
