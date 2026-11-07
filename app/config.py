@@ -1076,6 +1076,38 @@ class AccountNameError(ValueError):
     The text says why, for the log."""
 
 
+EXTERNAL_NAME_MAX = 255   # an LDAP/OIDC account name (UPNs and e-mail addresses fit)
+
+
+def external_name(name) -> str:
+    """The one spelling an LDAP/OIDC sign-in name is kept in: NFC (the same name sent
+    decomposed is not another account), without white space around it."""
+    return unicodedata.normalize("NFC", str(name)).strip()
+
+
+def external_name_problem(name: str) -> Optional[str]:
+    """Why `name` (as external_name() spells it) can't name an LDAP/OIDC account, for the
+    log; None if it can. Any printable text works — DOMAIN\\user, user@domain, names with
+    / # ? % — because the Users panel sends names in form fields, not in URLs. But every
+    character must be visible: a control, format (such as a right-to-left override or a
+    zero-width space) or line-separator character would hide the real name in the Users
+    panel, the logs and the audit log. A name in parentheses is how the audit log marks
+    who acted without an account ("(no login)", "(command line)")."""
+    if not name:
+        return "it is empty"
+    if len(name) > EXTERNAL_NAME_MAX:
+        return f"it is longer than {EXTERNAL_NAME_MAX} characters"
+    hidden = sorted({c for c in name if unicodedata.category(c)[0] == "C"
+                     or unicodedata.category(c) in ("Zl", "Zp")})
+    if hidden:
+        return ("it contains control or invisible characters ("
+                + ", ".join(f"U+{ord(c):04X}" for c in hidden) + ")")
+    if name.startswith("(") and name.endswith(")"):
+        return ("a name in parentheses is how the audit log marks who acted without an "
+                "account, such as '(no login)'")
+    return None
+
+
 @dataclass
 class User:
     """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
@@ -1249,9 +1281,12 @@ class AppConfig:
         (LDAP/OIDC). Bumps pwd_version when the role or source changes.
         A sign-in through a directory or an identity provider never takes over, converts
         or demotes a local account: raises AccountNameError when one has this name,
-        letter case aside."""
+        letter case aside, or when the name can't be an account's (external_name_problem;
+        `username` is spelled as external_name() spells it)."""
         if local := self.named(username, "local"):
             raise AccountNameError(f"the local account {local[0].username!r} has this name")
+        if (why := external_name_problem(username)) is not None:
+            raise AccountNameError(why)
         u = self.get_user(username)
         if u is None:
             u = User(username=username, password_hash="", role=role, source=source,

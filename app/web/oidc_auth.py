@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 
 from .. import optional
+from ..config import external_name
 from .ldap_auth import role_for_groups  # shared group/claim -> role mapping
 
 _DISCOVERY_CACHE: dict[str, tuple[dict, float]] = {}
@@ -99,10 +100,12 @@ def complete(settings, redirect_uri: str, code: str, nonce: str, logger=None,
 
 
 def username_from_claims(claims: dict, settings) -> str:
+    """The user's name: the username_claim, else preferred_username, email or sub,
+    spelled as LDAP/OIDC account names are kept (config.external_name)."""
     for key in (settings.username_claim, "preferred_username", "email", "sub"):
         value = claims.get(key)
         if value:
-            return str(value)
+            return external_name(value)
     return ""
 
 

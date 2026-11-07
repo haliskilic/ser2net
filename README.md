@@ -439,7 +439,11 @@ belirlenir. Yerel hesaplar önce gelir: adı (büyük/küçük harf fark etmeksi
 hesabın adı olan bir LDAP/OIDC girişi reddedilir, all.log'a ve denetim kaydına
 (`ldap_login_denied` / `oidc_login_denied`) yazılır; böyle bir giriş yerel hesabı asla
 devralmaz, SSO hesabına çevirmez ya da rolünü düşürmez. Birini yerel hesaptan SSO'ya
-taşımak için önce yerel hesabını silin (başka bir admin kalmalı).
+taşımak için önce yerel hesabını silin (başka bir admin kalmalı). LDAP/OIDC adı yazdırılabilir
+her metin olabilir (`CORP\jdoe`, `jdoe@corp.local`, `/` ya da `#` içeren adlar; bu hesaplar
+da Kullanıcılar panelinden kapatılıp silinebilir); denetim karakteri ya da görünmez karakter
+içeren, 255 karakterden uzun ya da parantez içindeki bir adla giriş reddedilir (nedeni
+all.log'da).
 
 **TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
 Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika

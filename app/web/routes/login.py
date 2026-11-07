@@ -8,7 +8,9 @@ import time
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
-from ...config import AccountNameError, ConfigError, User, new_pwd_version
+from ...config import (
+    AccountNameError, ConfigError, User, external_name, external_name_problem, new_pwd_version,
+)
 from ...engine import netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth
@@ -95,26 +97,40 @@ def routes(ctx: Ctx) -> list:
         state.log(f"{source.upper()}: {username!r} signed out everywhere: their groups give "
                   f"no role any more")
 
-    def _local_name_refused(request, source: str, username: str) -> str | None:
-        """A sign-in through the directory (LDAP) or the identity provider (OIDC) under
-        the name of a local account, letter case aside, is refused: it must never take
-        over, convert or demote that account (upsert_external_user refuses it too).
-        Logged, audited and notified like a failed sign-in. Returns the sign-in page's
-        message, or None when no local account has the name."""
+    def _name_refused(request, source: str, username: str) -> str | None:
+        """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
+        can't have an account under this name is refused: the name of a local account,
+        letter case aside — such a sign-in must never take over, convert or demote that
+        account (upsert_external_user refuses it too) — or a name no account can have
+        (external_name_problem). Logged, audited and notified like a failed sign-in.
+        Returns the sign-in page's message, or None when the name can be used."""
         local = state.config.named(username, "local")
-        if not local:
+        why = (f"the local account {local[0].username!r} has this name" if local
+               else external_name_problem(username))
+        if why is None:
             return None
-        ip, name = client_ip(request), local[0].username
-        state.log(f"{source.upper()} login denied for {username!r}: the local account {name!r} "
-                  f"has this name, and an {source.upper()} sign-in never takes over a local "
-                  f"account. To let them sign in with {source.upper()}, delete the local "
-                  f"account in Settings → Users (another admin must remain).")
-        ctx.audit(request, f"{source}_login_denied", f"local account {name}", user=username)
-        state.notifier.emit("login_failed", ip, "",
-                            f"{source.upper()} user {username!r} from {ip}: the name of a local account")
-        return _("There is a local account named {0} here, so you can't sign in under that "
-                 "name with SSO or a directory account. Sign in with that account’s password, "
-                 "or ask an admin to delete the local account first.").format(name)
+        ip, what = client_ip(request), source.upper()
+        if local:
+            state.log(f"{what} login denied for {username!r}: {why}, and an {what} sign-in "
+                      f"never takes over a local account. To let them sign in with {what}, "
+                      f"delete the local account in Settings → Users (another admin must "
+                      f"remain).")
+        else:
+            hint = ("; Settings → Single sign-on (OIDC) → Username claim can name another "
+                    "claim" if source == "oidc" else "")
+            state.log(f"{what} login denied for {username!r}: no account can have this name "
+                      f"here: {why}{hint}")
+        ctx.audit(request, f"{source}_login_denied",
+                  f"local account {local[0].username}" if local else why, user=username)
+        state.notifier.emit("login_failed", ip, "", f"{what} user {username!r} from {ip}: "
+                            + ("the name of a local account" if local else why))
+        if local:
+            return _("There is a local account named {0} here, so you can't sign in under that "
+                     "name with SSO or a directory account. Sign in with that account’s "
+                     "password, or ask an admin to delete the local account first.").format(
+                         local[0].username)
+        return _("Your user name from the directory or the identity provider can’t be used "
+                 "here; an admin can see why in all.log.")
 
     def _refusal_page(request, source: str, message: str | None):
         if source == "oidc":
@@ -182,7 +198,7 @@ def routes(ctx: Ctx) -> list:
         username = oidc_auth.username_from_claims(claims, oidc)
         if not username:
             state.log("OIDC login denied: the ID token names no user")
-        elif refusal := _local_name_refused(request, "oidc", username):
+        elif refusal := _name_refused(request, "oidc", username):
             return _refusal_page(request, "oidc", refusal)
         role = username and _directory_role("oidc", username,
                                             oidc_auth.groups_from_claims(claims, oidc), oidc)
@@ -193,7 +209,7 @@ def routes(ctx: Ctx) -> list:
                           oidc_error=_("Your account isn't mapped to a role."))
         user = await _save_external("oidc", username, role)
         if user is None:   # a local account got the name meanwhile
-            return _refusal_page(request, "oidc", _local_name_refused(request, "oidc", username))
+            return _refusal_page(request, "oidc", _name_refused(request, "oidc", username))
         refused.discard(("oidc", username))
         state.log(f"login: {username} ({role}, oidc) from {client_ip(request)}")
         ctx.audit(request, "oidc_login", username, user=username)
@@ -222,19 +238,20 @@ def routes(ctx: Ctx) -> list:
                 authed = user
         # LDAP/AD: for unknown users (or LDAP shadow accounts) when LDAP is enabled
         elif state.config.ldap.enabled:
+            username = external_name(username)
             groups = await asyncio.to_thread(
                 ldap_auth.authenticate, state.config.ldap, username, password, state.log,
                 on_tls_problem=_note_tls_problem)
             if groups is not None:
                 state.ldap_tls_problem = None   # the connection to the directory works
-                if refusal := _local_name_refused(request, "ldap", username):
+                if refusal := _name_refused(request, "ldap", username):
                     return _refusal_page(request, "ldap", refusal)
                 role = _directory_role("ldap", username, groups, state.config.ldap)
                 if role:
                     authed = await _save_external("ldap", username, role)
                     if authed is None:   # a local account got the name meanwhile
                         return _refusal_page(request, "ldap",
-                                             _local_name_refused(request, "ldap", username))
+                                             _name_refused(request, "ldap", username))
                     refused.discard(("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
