@@ -13,7 +13,10 @@
 # 6. a host user's folder that a 2.7 image wrote to as root (bind mount): the files
 #    the image left are handed to the folder's owner and the old config signs in;
 #    mounted read-only, the start stops with the chown command to run on the host;
-# 7. the first admin without the browser: `docker exec ... --set-password` on the running
+# 7. a serial device passed with --device keeps the host's group (here 18, Fedora's
+#    dialout, not the image's 20): the server gets that group; a node it still can't
+#    open is reported;
+# 8. the first admin without the browser: `docker exec ... --set-password` on the running
 #    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
@@ -180,7 +183,26 @@ docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$host_dir"
 echo "bind mount upgrade: root / ser2net files handed to the folder's owner, old password, logs and audit work  OK"
 
-echo "== 7. first admin from SER2NET_ADMIN_PASSWORD_FILE"
+echo "== 7. serial device groups"
+dev_dir=$(mktemp -d)
+# stand-ins for adapters (1:3 is /dev/null): one in group 18, one only root may open
+sudo mknod -m 660 "$dev_dir/ttyFAKE0" c 1 3 && sudo chgrp 18 "$dev_dir/ttyFAKE0"
+sudo mknod -m 600 "$dev_dir/ttyFAKE1" c 1 3
+docker run -d --name s2n-smoke --health-interval=1s -v s2n-smoke-a:/data \
+    --device "$dev_dir/ttyFAKE0:/dev/ttyUSB7" --device "$dev_dir/ttyFAKE1:/dev/ttyACM9" "$IMAGE" >/dev/null
+wait_healthy
+docker exec s2n-smoke stat -c '%n %u:%g %a' /dev/ttyUSB7 /dev/ttyACM9
+st=$(proc_status); echo "$st"
+echo "$st" | grep -E "^Groups:" | grep -q -w 18 || fail "the device's group 18 was not added"
+echo "$st" | grep -E "^Groups:" | grep -q -w 0 && fail "root group kept"
+logs=$(docker logs s2n-smoke 2>&1)
+grep -q "can't open /dev/ttyACM9" <<<"$logs" || fail "no warning for the node it can't open"
+grep -q "can't open /dev/ttyUSB7" <<<"$logs" && fail "false warning for /dev/ttyUSB7"
+docker rm -f s2n-smoke >/dev/null
+sudo rm -rf "$dev_dir"
+echo "serial devices: the node's host group is added, an unusable node is reported  OK"
+
+echo "== 8. first admin from SER2NET_ADMIN_PASSWORD_FILE"
 secret_dir=$(mktemp -d)
 printf 'env-pass-123\n' > "$secret_dir/pw"
 chmod 644 "$secret_dir/pw"
