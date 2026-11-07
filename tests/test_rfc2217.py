@@ -4,7 +4,10 @@ speaking RFC 2217 bytes) against our server, over socat PTYs (Linux, needs socat
   - bidirectional data, and a client-requested baud rate is applied to the server-side
     serial.Serial via PortManager;
   - a client whose subnegotiation never ends is disconnected once it passes 1024 bytes,
-    with the reason in the log, and the mapping goes on serving the next client.
+    with the reason in the log, and the mapping goes on serving the next client;
+  - a baud rate the port refuses (2^32-1: the OS can't take it) and reserved or malformed
+    values are answered with the current setting: the pyserial client sees "remote
+    rejected value", the port keeps its setting, the session and its data go on.
 
 socat links the PTYs under fixed names (pty,link=...), so a test can stop it (the device
 vanishes, as an unplugged USB adapter does) and start it again under the same path.
@@ -180,6 +183,72 @@ async def test_endless_subnegotiation(folder):
         await dev.unplug()
 
 
+async def read_answers(reader, want: bytes, timeout=3.0):
+    """Read from the server until ``want`` has come (modem notifications may be mixed in)."""
+    got = b""
+    end = asyncio.get_running_loop().time() + timeout
+    while want not in got:
+        left = end - asyncio.get_running_loop().time()
+        assert left > 0, (want.hex(), got.hex())
+        got += await asyncio.wait_for(reader.read(256), timeout=left)
+    return got
+
+
+async def test_refused_values(folder):
+    dev = Device(folder)
+    await dev.plug()
+    sup, mapping, logs = await start(dev)
+    device = client = None
+    try:
+        device = serial.Serial(dev.device, baudrate=9600, timeout=0)
+        runner = sup._runners[mapping.id]
+        client = await asyncio.to_thread(open_client, mapping.network.port)
+        assert runner.serial_instance.baudrate == 19200
+        try:
+            await asyncio.to_thread(setattr, client, "baudrate", 2 ** 32 - 1)
+        except ValueError as e:
+            assert "remote rejected value" in str(e), e
+        else:
+            raise AssertionError("a baud rate the port refused was acknowledged")
+        assert runner.serial_instance.baudrate == 19200, runner.serial_instance.baudrate
+        assert any("the serial port refused baudrate 4294967295" in ln for ln in logs), logs
+        await asyncio.to_thread(setattr, client, "baudrate", 38400)
+        assert runner.serial_instance.baudrate == 38400
+        await asyncio.to_thread(client.write, b"ping")
+        await asyncio.sleep(0.3)
+        assert await asyncio.to_thread(device.read, 64) == b"ping"
+        await asyncio.to_thread(client.close)
+        client = None
+        print("a baud rate the port refuses: 'remote rejected value', the port keeps its "
+              "setting, the session goes on  OK")
+
+        # reserved / malformed values from a client that speaks RFC 2217 itself
+        assert await wait_for(lambda: sup.status(mapping.id)["client_count"] == 0)
+        r, w = await asyncio.open_connection("127.0.0.1", mapping.network.port)
+        await asyncio.wait_for(r.read(256), timeout=2)  # the server's negotiation
+        w.write(bytes([IAC, SB, 44, 3, 9, IAC, SE]))  # parity 9 (reserved)
+        await read_answers(r, bytes([IAC, SB, 44, 103, 1, IAC, SE]))  # parity: none
+        w.write(bytes([IAC, SB, 44, 1, 0, 0, IAC, SE]))  # a two-byte baud rate
+        await read_answers(r, bytes([IAC, SB, 44, 101, 0, 0, 0x96, 0, IAC, SE]))  # 38400
+        w.write(b"raw")
+        await w.drain()
+        await asyncio.sleep(0.3)
+        assert await asyncio.to_thread(device.read, 64) == b"raw"
+        assert runner.serial_instance.baudrate == 38400
+        assert sup.status(mapping.id)["client_count"] == 1
+        assert not any("pump error" in ln for ln in logs), logs
+        w.close()
+        print("reserved / malformed values: answered with the current setting, the client "
+              "stays connected  OK")
+    finally:
+        if client is not None:
+            await asyncio.to_thread(client.close)
+        if device is not None:
+            device.close()
+        await sup.stop_all()
+        await dev.unplug()
+
+
 async def main():
     if not shutil.which("socat"):
         print("SKIP: socat not found")
@@ -188,9 +257,10 @@ async def main():
     try:
         await test_data_and_baud_change(folder)
         await test_endless_subnegotiation(folder)
+        await test_refused_values(folder)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
-    print("\nPASS: RFC2217 data + live baud change, bounded subnegotiation")
+    print("\nPASS: RFC2217 data + live baud change, bounded subnegotiation, refused values")
 
 
 if __name__ == "__main__":

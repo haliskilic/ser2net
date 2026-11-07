@@ -61,9 +61,12 @@ düzenlemeye gerek yok.
   göndericiyi unutturur. Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler:
   hattan hızlı gönderen birinin bunu aşan datagram'ları atılır, sayılır ve loglanır.
 - **Protokoller:** `raw`, `telnet` (8-bit temiz), `rfc2217` (uzaktan canlı
-  baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway). 1 KiB'tan
-  uzun bir telnet ya da RFC 2217 alt müzakeresi (gerçekleri birkaç bayttır) o istemcinin
-  oturumunu sonlandırır; nedeni log'a yazılır.
+  baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway). Portun
+  yerine getiremediği bir RFC 2217 isteği (bozuk ya da ayrılmış bir değer veya seri portun
+  reddettiği bir değer) RFC 2217'nin dediği gibi güncel ayarla yanıtlanır ve portu olduğu
+  gibi bırakır; istemci bağlı kalır. 1 KiB'tan uzun bir telnet ya da RFC 2217 alt
+  müzakeresi (gerçekleri birkaç bayttır) o istemcinin oturumunu sonlandırır; nedeni log'a
+  yazılır.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
   RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
