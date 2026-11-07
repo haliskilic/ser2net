@@ -20,6 +20,8 @@ dicts plus warnings. Checks:
   * a 3.x ser2net.conf with BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/DEFAULT/
     CONTROLPORT/LED/SIGNATURE lines, every state and line continuation;
   * garbage, JSON, empty and non-ser2net YAML -> ConfigError;
+  * limits: alias/define/escape expansion, file size, nesting and connection count
+    refuse the file quickly; long flows and quoted scalars are read in one pass;
   * every produced dict passes MappingConfig.from_dict(d).validate(), and the set of
     them passes AppConfig.validate() (no port or serial-device clash).
 Pure parsing: no network, no serial hardware.
@@ -29,6 +31,7 @@ Run: python3 tests/test_ser2net_import.py
 import os
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -321,7 +324,7 @@ connection: &after
     maps, warns = parse(text)
     assert has(warns, "auth:", "client certificates") and not has(warns, "before:", "client")
     assert not has(warns, "after:", "client certificates")
-    assert has(warns, "after:", "/etc/ser2net/ser2net.crt") or has(warns, "after:", "TLS (ssl) is kept")
+    assert has(warns, "after:", "/etc/ser2net/ser2net.crt") or has(warns, "after:", "is kept")
     print("ssl defaults (clientauth, delete_default) reach the ssl layers that follow  OK")
 
     # every connection uses a gtlssh login: nothing comes in enabled (and nothing is open)
@@ -348,7 +351,8 @@ connections:
     maps, warns = parse(conf, "ser2net.conf")
     assert maps["ser2net-3001"]["enabled"] and not maps["ser2net-3001"]["options"].get("trace_both")
     assert has(warns, "ser2net-3001", "tr is not imported")
-    assert maps["ser2net-3002"]["enabled"] is False and has(warns, "ser2net-3002", "rawlp", "write-only")
+    assert maps["ser2net-3002"]["enabled"] is False
+    assert has(warns, "ser2net-3002", "rawlp", "write-only")
     print("a gtlssh-only file comes in all disabled; 3.x tr= only and rawlp handled alike  OK")
 
 
@@ -835,6 +839,78 @@ def test_errors():
           "file -> no mappings + a warning  OK")
 
 
+def refused(text, want, filename="ser2net.yaml"):
+    """The file is refused with a ConfigError naming the limit, quickly."""
+    t = time.monotonic()
+    try:
+        parse_ser2net_config(text, filename)
+    except ConfigError as e:
+        assert want in str(e), (want, str(e)[:300])
+    else:
+        raise AssertionError(f"accepted ({want})")
+    assert time.monotonic() - t < 10, f"took {time.monotonic() - t:.1f} s ({want})"
+
+
+def quick(text, filename="ser2net.yaml"):
+    t = time.monotonic()
+    maps, warns = parse(text, filename)
+    assert time.monotonic() - t < 10, f"took {time.monotonic() - t:.1f} s"
+    return maps, warns
+
+
+HEAD = "connection: &c\n  accepter: tcp,4001\n  connector: serialdev,/dev/ttyS0\n  options:\n"
+
+
+def test_limits():
+    """Files whose aliases, defines or escapes would expand without bound, or that are
+    huge or deeply nested, are refused at once; long but sane input is read in one pass."""
+    flow = [HEAD + "    a0: &a0 [x, x, x, x, x, x, x, x, x, x]"]
+    for i in range(1, 8):  # each line repeats the previous one ten times
+        flow.append(f"    a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * 10) + "]")
+    refused("\n".join(flow) + "\n", "YAML nodes")
+    block = ["connections:", "  c0:", "    accepter: tcp,4001",
+             "    connector: serialdev,/dev/ttyS0", "    options: &o0"]
+    block += ["      kickolduser: true"] * 10
+    for i in range(1, 8):
+        block += [f"  c{i}:", f"    accepter: tcp,{4001 + i}",
+                  "    connector: serialdev,/dev/ttyS0", f"    x: &o{i}"]
+        block += [f"      - *o{i - 1}"] * 10
+    refused("\n".join(block) + "\n", "YAML nodes")
+    chain = ["define: &d0 xxxxxxxxxx"]
+    chain += [f"define: &d{i} " + f"*(d{i - 1})" * 10 for i in range(1, 8)]
+    refused("\n".join(chain) + "\n" + HEAD + "    banner: '*(d7)'\n", "longer than 64 KB")
+    refused(HEAD.replace("serialdev,/dev/ttyS0", "serialdev,/dev/" + "y" * 3000)
+            + "    openstr: '" + "\\d" * 1000 + "'\n", "c: openstr: the value is longer")
+    conf = "BANNER:b1:" + "x" * 60000 + "\n" + "".join(f"{i}:raw:0:/dev/ttyS{i}:b1\n"
+                                                      for i in range(1, 400))
+    refused(conf, "more than 16 MB", "ser2net.conf")
+    refused("BANNER:b1:" + "x" * 70000 + "\n", "line 1 is longer than 64 KB", "ser2net.conf")
+    refused(HEAD + "    x: " + "[" * 100 + "]" * 100 + "\n", "nested more than 64 levels")
+    refused("connection: &c\n" + "".join(" " * (i + 1) + "k:\n" for i in range(100)), "nested")
+    refused(HEAD + "    x: {[a]: b}\n", "cannot be a key")
+    refused("# " + "x" * (1024 * 1024) + "\n" + HEAD, "larger than 1 MB")
+    refused("".join(f"connection: &c{i}\n  accepter: tcp,{1 + i}\n"
+                    f"  connector: serialdev,/dev/ttyS{i}\n" for i in range(1001)),
+            "more than 1000 connections")
+
+    maps, warns = quick(HEAD + "    banner: [\n" + "".join("      a,\n" for _ in range(8000))
+                        + "      b ]\n    kickolduser: true\n")
+    assert maps["c"]["network"]["kick_old_user"] is True and has(warns, "banner is not a single")
+    refused(HEAD + "    x: [\n" + "".join("      a,\n" for _ in range(8000)), "unterminated [")
+    maps, _w = quick(HEAD + "    banner: \"x\n" + "".join("      ab\n" for _ in range(20000))
+                     + "      end\"\n")
+    assert maps["c"]["options"]["banner"] == "x" + " ab" * 20000 + " end"
+    maps, warns = quick(HEAD + "".join(f"    unknown{i}: 1\n" for i in range(30000)))
+    assert sum("not imported (no equivalent here)" in w for w in warns) == 1
+    maps, _w = quick(HEAD + "    banner: '" + "$(" * 30000 + "'\n")
+    assert maps["c"]["options"]["banner"] == "$(" * 30000
+    maps, warns = quick(HEAD + "".join(f"    max-connections: x{i}\n" for i in range(5000)))
+    assert len(warns) == 1002 and warns[1000] == "… and 4000 more warnings", warns[999:]
+    assert has(warns[1001:], "TCP wrappers")  # the file-level notes come after the cut
+    print("limits: alias / define / escape expansion, size, nesting and connection count "
+          "refused quickly; long flows, quoted scalars, many options read in one pass  OK")
+
+
 def main():
     test_debian_default()
     test_accepters()
@@ -848,6 +924,7 @@ def main():
     test_v3()
     test_names_and_clashes()
     test_errors()
+    test_limits()
     print("\nPASS: ser2net.yaml / ser2net.conf import (every mapping validates)")
 
 

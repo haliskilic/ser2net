@@ -23,11 +23,11 @@ repeated listening port is skipped: the import can then be applied as a whole.
 """
 from __future__ import annotations
 
-import copy
 import ipaddress
 import os
 import re
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -35,6 +35,41 @@ from .config import (
     MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, trace_file_name, url_port,
 )
 from .i18n import _
+
+# What one file may cost. A ser2net configuration is a few KB, but aliases, defines and
+# string escapes can repeat text without limit, so each kind of growth has a bound and
+# a file past one is refused (ConfigError) instead of tying up the service.
+MAX_TEXT = 1024 * 1024        # characters in the file
+MAX_CONNECTIONS = 1000        # connections (and ser2net.conf ports) in the file
+_MAX_VALUE = 64 * 1024        # characters in one value, defines and escapes expanded
+_MAX_WORK = 16 * 1024 * 1024  # characters of values and messages produced in all
+_MAX_NODES = 100_000          # YAML nodes, each alias counted as all it repeats
+_MAX_DEPTH = 64               # YAML collections nested in each other
+_MAX_WARNINGS = 1000          # warnings listed; the rest are only counted
+
+
+class _Budget:
+    """The characters (_MAX_WORK) one file may still produce."""
+
+    def __init__(self) -> None:
+        self.left = _MAX_WORK
+
+    def spend(self, n: int) -> None:
+        self.left -= n
+        if self.left < 0:
+            raise ConfigError(_("The file expands to more than {0} MB of text with its "
+                                "aliases, defines and references, so it is not imported.")
+                              .format(_MAX_WORK // 2**20))
+
+
+def _too_long(what: str) -> ConfigError:
+    return ConfigError(_("{0}: the value is longer than {1} KB with its defines and escapes "
+                         "expanded, so the file is not imported.").format(what, _MAX_VALUE // 1024))
+
+
+def _too_many_connections() -> ConfigError:
+    return ConfigError(_("The file has more than {0} connections; import it in parts.")
+                       .format(MAX_CONNECTIONS))
 
 
 # ---------------------------------------------------------------------------
@@ -109,9 +144,9 @@ def _key(body: str) -> Optional[tuple[str, str]]:
     return key, body[m.start() + 1:]
 
 
-def _close_quote(seg: str, quote: str) -> int:
-    """Index of the closing quote in seg, or -1 (the string goes on)."""
-    j = 0
+def _close_quote(seg: str, quote: str, start: int = 0) -> int:
+    """Index of the closing quote in seg (looking from `start`), or -1 (the string goes on)."""
+    j = start
     while j < len(seg):
         c = seg[j]
         if quote == '"' and c == "\\":
@@ -140,55 +175,69 @@ def _dq_unescape(s: str) -> str:
 def _fold_quoted(parts: list[str], quote: str) -> str:
     """Join the lines of a multi-line quoted scalar (a line break folds to a space,
     an empty line to a newline, a trailing backslash in "..." joins directly)."""
-    text, blank = parts[0], 0
+    out, blank = [parts[0]], 0
+    run = -1  # backslashes the text ends with (-1: the first line is not trimmed yet)
     for n, raw in enumerate(parts[1:], 1):
         last = n == len(parts) - 1
         seg = raw.lstrip(" \t") if last else raw.strip(" \t")
         if not seg and not last:
             blank += 1
             continue
-        text = text.rstrip(" \t")
-        trailing = len(text) - len(text.rstrip("\\"))
-        if quote == '"' and trailing % 2 == 1:
-            text, sep = text[:-1], ""
+        if run < 0:  # only the first line can end in blanks: the others are stripped
+            out[0] = out[0].rstrip(" \t")
+            run = len(out[0]) - len(out[0].rstrip("\\"))
+        if quote == '"' and run % 2 == 1:  # an escaped line break: join directly
+            out[-1] = out[-1][:-1]
+            if not out[-1]:
+                out.pop()
+            run, sep = run - 1, ""
         else:
             sep = "\n" * blank if blank else " "
-        text, blank = text + sep + seg, 0
+        tail = len(seg) - len(seg.rstrip("\\"))
+        run = run + tail if seg and tail == len(seg) and not sep else tail
+        out += [sep, seg]
+        blank = 0
+    text = "".join(out)
     return _dq_unescape(text) if quote == '"' else text.replace("''", "'")
 
 
-def _flow_end(text: str) -> int:
-    """Index just past the bracket closing text[0] ([ or {), or -1 if not on these lines."""
-    depth, j, quote = 0, 0, ""
-    while j < len(text):
-        c = text[j]
-        if quote:
-            if c == "\\" and quote == '"':
-                j += 1
-            elif c == quote:
-                quote = ""
-        elif c in "\"'" and (j == 0 or text[j - 1] in " \t\n,[{:"):
-            quote = c
-        elif c == "#" and (j == 0 or text[j - 1] in " \t\n"):
-            nl = text.find("\n", j)
-            if nl < 0:
-                return -1
-            j = nl
-        elif c in "[{":
-            depth += 1
-        elif c in "]}":
-            depth -= 1
-            if depth == 0:
-                return j + 1
-        j += 1
-    return -1
+class _FlowEnd:
+    """Finds the bracket that closes a flow collection ([ or {), one line at a time, so
+    a collection over many lines is scanned once."""
+
+    def __init__(self) -> None:
+        self.depth, self.quote = 0, ""
+
+    def scan(self, line: str) -> int:
+        """Index just past the closing bracket in `line`, or -1 if it comes later."""
+        depth, quote, j = self.depth, self.quote, 0
+        while j < len(line):
+            c = line[j]
+            if quote:
+                if c == "\\" and quote == '"':
+                    j += 1  # (at the end of a line: the line break is escaped)
+                elif c == quote:
+                    quote = ""
+            elif c in "\"'" and (j == 0 or line[j - 1] in " \t,[{:"):
+                quote = c
+            elif c == "#" and (j == 0 or line[j - 1] in " \t"):
+                break  # a comment: the rest of the line
+            elif c in "[{":
+                depth += 1
+            elif c in "]}":
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+            j += 1
+        self.depth, self.quote = depth, quote
+        return -1
 
 
 class _Flow:
     """Parser for one flow collection ([a, *b] / {name: speed, value: 115200})."""
 
-    def __init__(self, text: str, anchors: dict[str, Any]) -> None:
-        self.s, self.j, self.anchors = text, 0, anchors
+    def __init__(self, text: str, reader: "_YamlReader") -> None:
+        self.s, self.j, self.r = text, 0, reader
 
     def _ws(self) -> None:
         while self.j < len(self.s):
@@ -203,23 +252,24 @@ class _Flow:
 
     def value(self) -> Any:
         self._ws()
+        self.r.count()
         c = self.s[self.j:self.j + 1]
         if c in ("[", "{"):
             return self._collection(c)
         if c in ("'", '"'):
-            end = _close_quote(self.s[self.j + 1:], c)
+            end = _close_quote(self.s, c, self.j + 1)
             if end < 0:
                 raise ValueError(_("unterminated quoted string"))
-            raw = self.s[self.j + 1:self.j + 1 + end]
-            self.j += end + 2
+            raw = self.s[self.j + 1:end]
+            self.j = end + 1
             return _fold_quoted(raw.split("\n"), c)
         if c == "*":
             m = _ALIAS_NAME.match(self.s, self.j + 1)
             name = m.group(0) if m else ""
-            if name not in self.anchors:
+            if name not in self.r.anchors:
                 raise ValueError(_("unknown alias *{0}").format(name))
             self.j += 1 + len(name)
-            return copy.deepcopy(self.anchors[name])
+            return self.r.alias(name)
         start = self.j
         while self.j < len(self.s):
             ch = self.s[self.j]
@@ -234,22 +284,26 @@ class _Flow:
     def _collection(self, opening: str) -> Any:
         close = "]" if opening == "[" else "}"
         self.j += 1
+        self.r.nest(1)
         items: list[Any] = []
         mapping = _YMap()
         while True:
             self._ws()
             if self.s.startswith(close, self.j):
                 self.j += 1
+                self.r.nest(-1)
                 return items if opening == "[" else mapping
             item = self.value()
             self._ws()
             if opening == "{":
+                if not isinstance(item, str):
+                    raise ValueError(_("a [...] or {...} cannot be a key"))
                 val: Any = ""
                 if self.s.startswith(":", self.j):
                     self.j += 1
                     val = self.value()
                     self._ws()
-                mapping.entries.append((str(item), val, ""))
+                mapping.entries.append((item, val, ""))
             else:
                 items.append(item)
             if self.s.startswith(",", self.j):
@@ -264,6 +318,9 @@ class _YamlReader:
         self.i = 0     # next line to read
         self.last = 0  # last line consumed (for error messages)
         self.anchors: dict[str, Any] = {}
+        self.sizes: dict[str, int] = {}  # anchor -> the nodes it stands for
+        self.nodes = 0                   # nodes read, aliases counted in full (count())
+        self.depth = 0                   # collections around the one being read
 
     def _err(self, msg: str, index: Optional[int] = None) -> _YamlError:
         return _YamlError((self.last if index is None else index) + 1, msg)
@@ -294,18 +351,42 @@ class _YamlReader:
                 raise self._err(_("unexpected indentation"), self.i)
         return docs
 
+    def count(self, n: int = 1) -> None:
+        """Count nodes read. An alias shares the node it names (nothing changes a node once
+        it is read), so it costs nothing to copy, but it stands for every node in it: the
+        file is refused past _MAX_NODES of them rather than repeating them without end."""
+        self.nodes += n
+        if self.nodes > _MAX_NODES:
+            raise self._err(_("the file stands for more than {0} YAML nodes (an alias counts "
+                              "as all it repeats)").format(_MAX_NODES))
+
+    def alias(self, name: str) -> Any:
+        self.count(self.sizes[name])
+        return self.anchors[name]
+
+    def nest(self, step: int) -> None:
+        self.depth += step
+        if self.depth > _MAX_DEPTH:
+            raise self._err(_("collections are nested more than {0} levels deep")
+                            .format(_MAX_DEPTH), self.i)
+
     def _node(self, parent: int) -> Any:
         """The block node on the next lines, indented deeper than `parent`."""
         nxt = self._peek()
         if nxt is None or nxt[0] <= parent:
             return ""
         ind, body = nxt
+        self.nest(1)
+        node: Any
         if _is_item(body):
-            return self._seq(ind)
-        if _key(body) is not None:
-            return self._map(ind, root=parent < 0)
-        self._take()
-        return self._value(body, parent)[0]
+            node = self._seq(ind)
+        elif _key(body) is not None:
+            node = self._map(ind, root=parent < 0)
+        else:
+            self._take()
+            node = self._value(body, parent)[0]
+        self.nest(-1)
+        return node
 
     def _map(self, ind: int, root: bool = False) -> _YMap:
         m = _YMap()
@@ -322,7 +403,7 @@ class _YamlReader:
             value, anchor = self._value(kv[1], ind, in_map=True)
             if root and anchor and isinstance(value, (_YMap, list)):
                 # ser2net: *con0 / *led1 stand for the name of a main-level entry
-                self.anchors[anchor] = anchor
+                self.anchors[anchor], self.sizes[anchor] = anchor, 1
             m.entries.append((kv[0], value, anchor))
 
     def _seq(self, ind: int) -> list[Any]:
@@ -353,6 +434,8 @@ class _YamlReader:
             if m.group(1) == "&":
                 anchor = m.group(2)
             s = s[m.end():]
+        start = self.nodes
+        self.count()
         node: Any
         if not s or s.startswith("#"):
             nxt = self._peek()
@@ -365,7 +448,7 @@ class _YamlReader:
             name = m2.group(0) if m2 else ""
             if name not in self.anchors:
                 raise self._err(_("unknown alias *{0}").format(name))
-            node = copy.deepcopy(self.anchors[name])
+            node = self.alias(name)
         elif s[0] in "\"'":
             node = self._quoted(s)
         elif s[0] in "[{":
@@ -375,13 +458,13 @@ class _YamlReader:
         else:
             node = self._plain(s, parent)
         if anchor:
-            self.anchors[anchor] = node
+            self.anchors[anchor], self.sizes[anchor] = node, self.nodes - start
         return node, anchor
 
     def _plain(self, first: str, parent: int) -> str:
         """A plain scalar; lines indented deeper than its key continue it, folded with
         one space (ser2net configs split long connector strings this way)."""
-        out, breaks = _cut_comment(first), 0
+        out, breaks = [_cut_comment(first)], 0
         while self.i < len(self.lines):
             ind, body = _indent(self.lines[self.i])
             if not body or body.startswith("#"):
@@ -391,9 +474,9 @@ class _YamlReader:
             if ind <= parent or _boundary(ind, body):
                 break
             self._take()
-            out += ("\n" * breaks if breaks else " ") + _cut_comment(body)
+            out.append(("\n" * breaks if breaks else " ") + _cut_comment(body))
             breaks = 0
-        return out
+        return "".join(out)
 
     def _quoted(self, s: str) -> str:
         quote, parts = s[0], [s[1:]]
@@ -408,16 +491,18 @@ class _YamlReader:
         return _fold_quoted(parts, quote)
 
     def _flow(self, s: str) -> Any:
-        text = s
-        while (end := _flow_end(text)) < 0:
+        scan, lines = _FlowEnd(), [s]
+        while (end := scan.scan(lines[-1])) < 0:
             if self.i >= len(self.lines):
                 raise self._err(_("unterminated [...] or {...}"))
-            text += "\n" + self._take()
+            lines.append(self._take())
+        text = "\n".join(lines)
+        end += len(text) - len(lines[-1])
         tail = text[end:].strip()
         if tail and not tail.startswith("#"):
             raise self._err(_("unexpected text after ] or }"))
         try:
-            return _Flow(text[:end], self.anchors).value()
+            return _Flow(text[:end], self).value()
         except ValueError as e:
             raise self._err(str(e)) from None
 
@@ -447,13 +532,17 @@ class _YamlReader:
         if m.group(1) == "|":
             text = "\n".join(lines)
         else:  # folded: lines join with a space, an empty line is a newline
-            text, blank = "", 0
+            parts: list[str] = []
+            blank = 0
             for ln in lines:
                 if not ln:
                     blank += 1
                     continue
-                text += ("\n" * blank if blank else " ") + ln if text else ln
+                if parts:
+                    parts.append("\n" * blank if blank else " ")
+                parts.append(ln)
                 blank = 0
+            text = "".join(parts)
         if chomp == "-" or not text:
             return text
         return text + "\n" * (1 + trailing if chomp == "+" else 1)
@@ -466,6 +555,7 @@ class _YamlReader:
 class _Conn:
     name: str
     label: str                       # how warnings name it
+    budget: _Budget                  # the file's (shared by its connections)
     v3: bool = False                 # ser2net 3.x (escapes differ slightly)
     enabled: bool = True
     device: str = ""
@@ -485,12 +575,15 @@ class _Conn:
     holds: list[str] = field(default_factory=list)  # why it comes in disabled (else more open)
     ssl: Optional[dict[str, Any]] = None             # the accepter's ssl layer (_ssl_layer)
     remctl: bool = False                                         # 3.x RFC2217 flag
-    dropped: list[str] = field(default_factory=list)             # options with no equivalent
+    dropped: dict[str, None] = field(default_factory=dict)       # options with no equivalent
     notes: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)             # why it is not imported
+    noted: set[str] = field(default_factory=set)                 # = set(notes)
 
     def note(self, msg: str) -> None:
-        if msg not in self.notes:
+        if msg not in self.noted:
+            self.budget.spend(len(self.label) + len(msg))  # the warning it becomes
+            self.noted.add(msg)
             self.notes.append(msg)
 
     def hold(self, why: str) -> None:
@@ -507,8 +600,7 @@ class _Conn:
         self.note(msg)
 
     def drop(self, option: str) -> None:
-        if option not in self.dropped:
-            self.dropped.append(option)
+        self.dropped[option] = None
 
     def serial_text(self) -> str:
         """ser2net's \\B: the serial parameters, e.g. 9600N81."""
@@ -832,7 +924,7 @@ def _convert(c: _Conn, text: str, kind: str, what: str) -> str:
     dropped: list[str] = []
     fixed: list[str] = []
 
-    def one(m: re.Match[str]) -> str:
+    def escape(m: re.Match[str]) -> str:
         e = m.group(1)
         ch = e[0]
         if ch == "x" and len(e) > 1:
@@ -860,9 +952,23 @@ def _convert(c: _Conn, text: str, kind: str, what: str) -> str:
             dropped.append("\\" + ch)
             return _GONE
         return ch  # ser2net prints an unknown escape's character
+
+    grown = 0  # what the escapes add (\d is the whole device path, ...)
+
+    def one(m: re.Match[str]) -> str:
+        nonlocal grown
+        rep = escape(m)
+        grown += len(rep) - len(m.group(0))
+        if len(text) + grown > _MAX_VALUE:
+            raise _too_long(f"{c.label}: {what}")
+        return rep
     if kind == "banner":  # real line breaks (from "..." YAML) become the banner's escapes
         text = text.replace("\r", "\\r").replace("\n", "\\n")
+    c.budget.spend(len(text))
     out = _ESCAPE.sub(one, text)
+    if len(out) > _MAX_VALUE:
+        raise _too_long(f"{c.label}: {what}")
+    c.budget.spend(len(out))
     # a dropped part of a file name takes its separator along: tr-\p-\Y-\M -> tr-2000
     out = re.sub(f"[-_.: ]?{_GONE}" if kind == "file" else _GONE, "", out)
     if fixed:
@@ -974,6 +1080,7 @@ def _remaddr(c: _Conn, value: str) -> None:
 def _default_remaddr(c: _Conn, value: str) -> None:
     """The default remaddr, for a connection that gives no client address itself."""
     if value.strip() and not c.access_given:
+        c.budget.spend(len(value))
         _remaddr(c, value)
         if c.access_given:
             c.note(_("remaddr {0} comes from the defaults (the connection sets none)")
@@ -1055,13 +1162,29 @@ _OPTION_DEFAULTS = {"kickolduser", "max-connections", "remaddr", "telnet-brk-on-
                     "trace-both-timestamp"}
 
 
-def _substitute(s: str, aliases: dict[str, str], act: str, notes: list[str]) -> str:
+_REFERENCE = {act: re.compile("[" + re.escape(act) + "$]") for act in ("*", "=", "*=")}
+_MAX_DOLLAR_REF = 64  # $(name) is looked up only for a name this short
+
+
+def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str], None],
+                what: str) -> str:
     """ser2net's references inside strings: *(name) in version 1 files, =(name) in
     version 2 ('**' / '*(*' for the literal characters); *{file} / ={file} (a file on
-    the ser2net host) cannot be read here. $(name) is replaced too for a known name."""
+    the ser2net host) cannot be read here. $(name) is replaced too for a known name.
+    One pass over s (each bracket is searched for once); a value that grows past
+    _MAX_VALUE refuses the file."""
     out: list[str] = []
-    i = 0
+    grown, i = 0, 0
+    found = {")": -1, "}": -1}  # where that bracket was found last (len(s): none is left)
+    special = _REFERENCE[act]
     while i < len(s):
+        m = special.search(s, i)
+        if m is None:
+            out.append(s[i:])
+            break
+        if m.start() > i:
+            out.append(s[i:m.start()])
+            i = m.start()
         ch, nxt = s[i], s[i + 1:i + 2]
         ours = ch in act
         if ours and nxt == ch:
@@ -1073,47 +1196,65 @@ def _substitute(s: str, aliases: dict[str, str], act: str, notes: list[str]) -> 
                 out.append(ch + nxt)
                 i += 3
                 continue
-            close = s.find(")" if nxt == "(" else "}", i + 2)
-            if close > 0:
+            closing = ")" if nxt == "(" else "}"
+            if found[closing] < i + 2:
+                at = s.find(closing, i + 2)
+                found[closing] = len(s) if at < 0 else at
+            close = found[closing]
+            if close < len(s) and (ours or close - i - 2 <= _MAX_DOLLAR_REF):
                 ref = s[i + 2:close]
                 if nxt == "{":
-                    notes.append(_("{0}{{{1}}} (a file on the ser2net host) is left out")
-                                 .format(ch, ref))
+                    note(_("{0}{{{1}}} (a file on the ser2net host) is left out")
+                         .format(ch, ref))
                     i = close + 1
                     continue
                 if ref in aliases:
+                    grown += len(aliases[ref])
+                    if grown > _MAX_VALUE:
+                        raise _too_long(what)
                     out.append(aliases[ref])
                     i = close + 1
                     continue
-                if ours:
-                    notes.append(_("unknown reference {0}({1}) left as it is").format(ch, ref))
+                if ours:  # the name runs to the first ')', as ser2net reads it
+                    note(_("unknown reference {0}({1}) left as it is").format(ch, ref))
+                    out.append(s[i:close + 1])
+                    i = close + 1
+                    continue
         out.append(ch)
         i += 1
     return "".join(out)
 
 
 class _Yaml:
-    def __init__(self, act: str) -> None:
+    def __init__(self, act: str, budget: _Budget) -> None:
         self.act = act                       # reference character(s): * (v1), = (v2)
+        self.budget = budget
         self.aliases: dict[str, str] = {}
         self.warnings: list[str] = []
         self.conns: list[_Conn] = []
+        self.connections = 0                 # connection entries read (MAX_CONNECTIONS)
         self.serial_defaults: dict[str, str] = {}
         self.option_defaults: dict[str, str] = {}
         self.ssl_defaults: dict[str, str] = {}   # key / cert / clientauth of the ssl layer
 
-    def text(self, node: Any, notes: list[str], what: str) -> str:
+    def text(self, node: Any, note: Callable[[str], None], what: str) -> str:
         if isinstance(node, (_YMap, list)):
-            notes.append(_("{0} is not a single value, ignored").format(what))
+            note(_("{0} is not a single value, ignored").format(what))
             return ""
-        return _substitute(str(node), self.aliases, self.act, notes)
+        s = str(node)
+        self.budget.spend(len(s))
+        out = _substitute(s, self.aliases, self.act, note, what)
+        if len(out) > _MAX_VALUE:
+            raise _too_long(what)
+        self.budget.spend(len(out))
+        return out
 
     def gtext(self, node: Any, what: str) -> str:
         """text() outside a connection: notes become warnings about `what`."""
-        notes: list[str] = []
-        value = self.text(node, notes, what)
-        self.warnings.extend(f"{what}: {n}" for n in notes)
-        return value
+        def note(msg: str) -> None:
+            self.budget.spend(len(what) + len(msg))
+            self.warnings.append(f"{what}: {msg}")
+        return self.text(node, note, what)
 
     def entry(self, key: str, value: Any, anchor: str) -> None:
         k = key.lower()
@@ -1178,20 +1319,24 @@ class _Yaml:
         self.ssl_defaults.pop(name.strip().lower(), None)
 
     def connection(self, name: str, body: Any) -> None:
+        self.connections += 1
+        if self.connections > MAX_CONNECTIONS:
+            raise _too_many_connections()
         if name:
             self.aliases[name] = name  # ser2net: *(con0) is the connection's name
-        c = _Conn(name=name, label=name or _("a connection without a name"))
+        c = _Conn(name=name, label=name or _("a connection without a name"), budget=self.budget)
         if not isinstance(body, _YMap):
             c.skip(_("not a mapping"))
         else:
-            accepter = self.text(body.get("accepter", ""), c.notes, "accepter").strip()
-            connector = self.text(body.get("connector", ""), c.notes, "connector").strip()
+            accepter = self.text(body.get("accepter", ""), c.note, "accepter").strip()
+            connector = self.text(body.get("connector", ""), c.note, "connector").strip()
             if not accepter or not connector:
                 c.skip(_("it needs both an accepter and a connector"))
             elif _accepter(c, accepter, self.ssl_defaults):
                 if not name:
                     c.name = c.label = f"ser2net-{c.network['port']}"
                 defaults = [f"{k}={v}" for k, v in self.serial_defaults.items()]
+                self.budget.spend(sum(map(len, defaults)))
                 if _connector(c, connector, defaults):
                     self.settings(c, body)
                     _finish(c)
@@ -1199,41 +1344,44 @@ class _Yaml:
         self.warnings.extend(_notes(c, imported=bool(self.conns) and self.conns[-1] is c))
 
     def settings(self, c: _Conn, body: _YMap) -> None:
-        enable = self.text(body.get("enable", "on"), c.notes, "enable")
+        enable = self.text(body.get("enable", "on"), c.note, "enable")
         b = _bool(enable)
         if b is None:
             c.note(_("enable '{0}' is not on/off: imported disabled").format(enable))
         c.enabled = bool(b)
         for k, v in self.option_defaults.items():
             if k != "remaddr":  # see below
+                self.budget.spend(len(v))
                 _option(c, k, v)
         for key, value, _a in body.entries:
             k = key.lower()
             if k == "options":
                 if isinstance(value, _YMap):
                     for okey, oval, _oa in value.entries:
-                        _option(c, okey, self.text(oval, c.notes, okey))
-                elif str(value).strip():
+                        _option(c, okey, self.text(oval, c.note, okey))
+                elif isinstance(value, list) or str(value).strip():
                     c.note(_("options is not a mapping, ignored"))
             elif k not in ("accepter", "connector", "enable"):
-                _option(c, key, self.text(value, c.notes, key))  # timeout (and stray options)
+                _option(c, key, self.text(value, c.note, key))  # timeout (and stray options)
         # ser2net takes the default remaddr only for a connection that gives no address
         # itself (an empty remaddr gives none); it never adds the two up
         _default_remaddr(c, self.option_defaults.get("remaddr", ""))
 
 
-def _from_yaml(text: str, label: str) -> tuple[list[_Conn], list[str]]:
+def _from_yaml(text: str, label: str, budget: _Budget) -> tuple[list[_Conn], list[str]]:
     try:
         docs = _YamlReader(text).documents()
     except _YamlError as e:
         raise ConfigError(f"{label}: {e}") from None
+    except RecursionError:  # the reader limits the nesting (_MAX_DEPTH); this only backs it up
+        raise ConfigError(_("{0}: nested too deeply to import").format(label)) from None
     entries = [e for d in docs if isinstance(d, _YMap) for e in d.entries]
     keys = {k.lower() for k, _v, _a in entries}
     v1, v2 = bool(keys & _V1_KEYS), bool(keys & _V2_KEYS)
     if not (v1 or v2):
         raise ConfigError(_("{0} is not a ser2net configuration: it has no connection, define "
                             "or default entries.").format(label))
-    y = _Yaml("=" if v2 and not v1 else "*=" if v2 else "*")
+    y = _Yaml("=" if v2 and not v1 else "*=" if v2 else "*", budget)
     if v1 and v2:
         y.warnings.append(_("the file mixes ser2net version 1 and version 2 YAML entries"))
     for key, value, anchor in entries:
@@ -1255,26 +1403,34 @@ _V3_IGNORED_DEFAULTS = ("local", "chardelay", "telnet_brk_on_sync")
 
 def _v3_lines(text: str) -> list[tuple[int, str]]:
     """Logical lines (line number, text): blank and '#' lines dropped, a trailing
-    backslash continues the line on the next one (as ser2net 3.x reads them)."""
+    backslash continues the line on the next one (as ser2net 3.x reads them). A line
+    longer than _MAX_VALUE refuses the file."""
     out: list[tuple[int, str]] = []
-    buf, start = "", 0
+    buf: list[str] = []
+    size, start = 0, 0  # size: characters in buf
     for n, line in enumerate(text.split("\n"), 1):
-        if not buf:
+        if not size:
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
-            start, line = n, line.lstrip()
+            start, line, buf = n, line.lstrip(), []
+        if size + len(line) > _MAX_VALUE:
+            raise ConfigError(_("line {0} is longer than {1} KB, so the file is not imported.")
+                              .format(start, _MAX_VALUE // 1024))
         if line.endswith("\\"):
-            buf += line[:-1]
+            buf.append(line[:-1])
+            size += len(line) - 1
             continue
-        out.append((start, buf + line))
-        buf = ""
-    if buf:
-        out.append((start, buf))
+        out.append((start, "".join(buf) + line))
+        buf, size = [], 0
+    if size:
+        out.append((start, "".join(buf)))
     return out
 
 
 class _V3:
-    def __init__(self) -> None:
+    def __init__(self, budget: _Budget) -> None:
+        self.budget = budget
+        self.connections = 0                           # port lines read (MAX_CONNECTIONS)
         self.strings: dict[str, tuple[str, str]] = {}  # name -> (BANNER/OPENSTR/..., text)
         self.devices: dict[str, str] = {}
         self.tracefiles: dict[str, str] = {}
@@ -1308,11 +1464,15 @@ class _V3:
             self.strings[name] = (kind, value)
 
     def port(self, n: int, line: str, m: re.Match[str]) -> None:
+        self.connections += 1
+        if self.connections > MAX_CONNECTIONS:
+            raise _too_many_connections()
         state = m.group(1)
         timeout, _sep, rest = line[m.end():].partition(":")
         device, _sep, options = rest.partition(":")
         device = self.devices.get(device.strip(), device.strip())
-        c = _Conn(name="", label=_("line {0}").format(n), v3=True)
+        self.budget.spend(len(device))  # a DEVICE: name repeats its path
+        c = _Conn(name="", label=_("line {0}").format(n), budget=self.budget, v3=True)
         fields = []
         for f in line[: m.start()].split(","):
             if f.strip().lower() == "udp":
@@ -1344,6 +1504,7 @@ class _V3:
         _idle_timeout(c, timeout)
         for name, value in self.defaults.items():
             if name != "remaddr":  # see below
+                self.budget.spend(len(value))
                 self.default(c, name, value)
         for tok in options.split():
             self.token(c, tok)
@@ -1451,8 +1612,8 @@ class _V3:
         return True
 
 
-def _from_v3(lines: list[tuple[int, str]]) -> tuple[list[_Conn], list[str]]:
-    p = _V3()
+def _from_v3(lines: list[tuple[int, str]], budget: _Budget) -> tuple[list[_Conn], list[str]]:
+    p = _V3(budget)
     for n, line in lines:
         d = _V3_DIRECTIVE.match(line)
         m = _V3_STATE.search(line)
@@ -1468,42 +1629,49 @@ def _from_v3(lines: list[tuple[int, str]]) -> tuple[list[_Conn], list[str]]:
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def _assemble(conns: list[_Conn], warnings: list[str]) -> list[dict]:
+def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[dict]:
     """Drop what does not validate or listens where an earlier one does, make the names
     unique and keep one active mapping per serial device."""
+    def warn(msg: str) -> None:
+        budget.spend(len(msg))
+        warnings.append(msg)
     kept: list[_Conn] = []
+    listening: dict[tuple[str, int], dict[str, str]] = {}  # (tcp|udp, port) -> bind IP -> name
     for c in conns:
         try:
             MappingConfig.from_dict(c.to_dict()).validate()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
-            warnings.append(_("{0}: skipped: {1}").format(c.label, e))
+            warn(_("{0}: skipped: {1}").format(c.label, e))
             continue
         net = c.network
         proto = "udp" if net["mode"] == "udp" else "tcp"
-        other = next((o for o in kept if o.network["port"] == net["port"]
-                      and ("udp" if o.network["mode"] == "udp" else "tcp") == proto
-                      and _ip_overlaps(o.network["bind_ip"], net["bind_ip"])), None)
+        on_port = listening.setdefault((proto, net["port"]), {})
+        other = next((name for ip, name in on_port.items()
+                      if _ip_overlaps(ip, net["bind_ip"])), None)
         if other is not None:
-            warnings.append(_("{0}: skipped: {1} port {2} is already used by '{3}'")
-                            .format(c.label, proto.upper(), net["port"], other.name))
+            warn(_("{0}: skipped: {1} port {2} is already used by '{3}'")
+                 .format(c.label, proto.upper(), net["port"], other))
             continue
+        on_port[net["bind_ip"]] = c.name
         kept.append(c)
     used: set[str] = set()
+    tried: dict[str, int] = {}  # name -> the last (k) tried for it: those before are taken
     owner: dict[str, str] = {}
     for c in kept:
-        base, k = c.name, 1
+        base = c.name
+        k = tried.get(base, 1)
         while c.name in used:
             k += 1
             c.name = f"{base} ({k})"
+        tried[base] = k
         used.add(c.name)
         if c.name != base:
-            warnings.append(_("{0}: renamed to '{1}' (the name is used twice)")
-                            .format(c.label, c.name))
+            warn(_("{0}: renamed to '{1}' (the name is used twice)").format(c.label, c.name))
         if c.enabled and c.device in owner:
             c.enabled = False
-            warnings.append(_("{0}: imported disabled: {1} is also used by '{2}', and a serial "
-                              "port can be open in only one active mapping here")
-                            .format(c.label, c.device, owner[c.device]))
+            warn(_("{0}: imported disabled: {1} is also used by '{2}', and a serial port can be "
+                   "open in only one active mapping here")
+                 .format(c.label, c.device, owner[c.device]))
         elif c.enabled:
             owner[c.device] = c.name
     return [c.to_dict() for c in kept]
@@ -1525,21 +1693,30 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
 
     `text` is a ser2net 4.x ser2net.yaml or a 3.x ser2net.conf (detected from the
     content; `filename` only names the file in messages). Raises ConfigError when it
-    is neither, or when the YAML is broken."""
+    is neither, when the YAML is broken, or when the file is past one of the limits
+    at the top of this module."""
+    if len(text) > MAX_TEXT:
+        raise ConfigError(_("The file is larger than {0} MB, too large for a ser2net "
+                            "configuration.").format(MAX_TEXT // 2**20))
+    budget = _Budget()
     text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
     label = re.split(r"[\\/]", filename)[-1] if filename else ""
     if not text.strip():
         raise ConfigError(_("The file is empty."))
     if looks_yaml(text):
-        conns, warnings = _from_yaml(text, label or "ser2net.yaml")
+        conns, warnings = _from_yaml(text, label or "ser2net.yaml", budget)
     else:
         lines = _v3_lines(text)
         if not any(_V3_DIRECTIVE.match(ln) or _V3_STATE.search(ln) for _n, ln in lines):
             raise ConfigError(_("{0} is not a ser2net configuration: expected a ser2net.yaml "
                                 "(ser2net 4.x) or ser2net.conf (ser2net 3.x) file.").format(
                                     label or _("The file")))
-        conns, warnings = _from_v3(lines)
-    mappings = _assemble(conns, warnings)
+        conns, warnings = _from_v3(lines, budget)
+    mappings = _assemble(conns, warnings, budget)
+    if len(warnings) > _MAX_WARNINGS:
+        more = len(warnings) - _MAX_WARNINGS
+        del warnings[_MAX_WARNINGS:]
+        warnings.append(_("… and {0} more warnings").format(more))
     if not mappings:
         warnings.append(_("No connection could be imported.") if conns else
                         _("The file has no ser2net connections to import."))
