@@ -18,7 +18,10 @@ repeats), or fails with SER2NET_OPTIONAL_TESTS=1.
     gets the default role logs the user's groups;
   * the nested-groups box is saved, and kept when a form without it is posted;
   * the OIDC callback: a missing or altered state is refused (400), a failed token
-    exchange too (401), with nothing saved;
+    exchange too (401, the token endpoint's answer in all.log), with nothing saved; the
+    code request carries PKCE (S256), a state cookie from before it still works; the
+    provider's error answers are logged and shown by their code (403 / 503 / 400); an
+    e-mail address the provider has not verified names nobody;
   * a directory or provider account named like a local account (letter case aside) is
     refused (403, logged and audited): the local admin keeps its source, role,
     password and sessions; so is a name with invisible characters, an over-long one or
@@ -42,7 +45,7 @@ import urllib.parse
 from _optional import need
 from _server import Browser, Server
 
-from app.web import auth
+from app.web import auth, oidc_auth
 from app.web.auth import hash_password
 
 PW = "dir-login-pass-1"
@@ -304,8 +307,9 @@ class _Provider(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         from authlib.jose import jwt
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
         self.server.token_requests += 1
+        self.server.token_bodies.append(dict(urllib.parse.parse_qsl(body)))
         if self.server.refuse:   # the code was not accepted
             data = json.dumps({"error": "invalid_grant"}).encode()
             self.send_response(400)
@@ -333,7 +337,7 @@ def start_provider(pki):
     srv.issuer = f"https://127.0.0.1:{srv.server_address[1]}"
     srv.key = JsonWebKey.generate_key("RSA", 2048, is_private=True)
     srv.claims = {}
-    srv.refuse, srv.token_requests = False, 0
+    srv.refuse, srv.token_requests, srv.token_bodies = False, 0, []
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
@@ -345,7 +349,59 @@ def oidc_start(srv, provider):
     location = headers.get("Location", "")
     assert st == 303 and location.startswith(provider.issuer), (st, all_log(srv)[-1500:])
     query = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)
+    assert query["code_challenge_method"] == ["S256"], query    # PKCE, always
+    provider.challenge = query["code_challenge"][0]
     return b, query["state"][0], query["nonce"][0]
+
+
+def oidc_provider_answers(srv, provider):
+    """PKCE: the token request carries the verifier of the challenge the browser was
+    sent with; a state cookie from before (no verifier) still works. The provider's
+    error answers are logged and shown by their code, never as its text."""
+    st, _ = oidc_sign_in(srv, provider, {"preferred_username": "pkce.user",
+                                         "groups": ["ser2net-viewers"]})
+    assert st == 303, st
+    verifier = provider.token_bodies[-1]["code_verifier"]
+    assert oidc_auth.code_challenge(verifier) == provider.challenge
+    # a sign-in started by the previous version: its state cookie has no verifier
+    b, state, nonce = oidc_start(srv, provider)
+    redirect = f"{srv.base}/auth/oidc/callback"
+    old = auth.sign_payload(srv.saved_config()["secret_key"],
+                            {"s": state, "n": nonce, "r": redirect}, ttl_seconds=600)
+    b.jar.clear()
+    b.jar.set_cookie(http.cookiejar.Cookie(
+        0, "ser2net_oidc", old, None, False, "127.0.0.1", False, False, "/auth/oidc", True,
+        False, None, False, None, None, {}))
+    provider.claims = {"preferred_username": "pkce.user", "groups": ["ser2net-viewers"],
+                       "nonce": nonce}
+    st, _, _ = b.get("/auth/oidc/callback?" + urllib.parse.urlencode({"code": "C", "state": state}))
+    assert st == 303 and "code_verifier" not in provider.token_bodies[-1], st
+
+    b, state, _nonce = oidc_start(srv, provider)
+    requests = provider.token_requests
+    for query, status, text in (
+            ({"error": "access_denied", "error_description": "User is not assigned to the "
+              "client application.", "state": state}, 403, "didn’t let you sign in to ser2net"),
+            ({"error": "temporarily_unavailable"}, 503, "can’t sign you in right now"),
+            ({"error": "invalid_scope", "state": state}, 400,
+             "refused the sign-in request (invalid_scope)"),
+            ({"error": "<b>x</b>", "state": state}, 400, "refused the sign-in request (?)")):
+        st, _, page = b.get("/auth/oidc/callback?" + urllib.parse.urlencode(query))
+        assert st == status and text in page, (query, st)
+        assert "User is not assigned" not in page and "<b>x</b>" not in page
+    log = all_log(srv)
+    assert ("OIDC: the identity provider refused the sign-in: 'access_denied' ('User is not "
+            "assigned to the client application.')") in log, log[-1500:]
+    assert "'temporarily_unavailable' (not for a sign-in started in this browser)" in log
+    assert provider.token_requests == requests
+
+    # an e-mail address the provider hasn't verified names nobody (sub doesn't stand in)
+    st, page = oidc_sign_in(srv, provider, {"email": "eve@example.com", "email_verified": False,
+                                            "groups": ["ser2net-viewers"]})
+    assert st == 403, st
+    assert ("OIDC login denied: the ID token names the user by the e-mail address "
+            "'eve@example.com', which the provider has not verified") in all_log(srv)
+    assert not [u for u in srv.saved_config()["users"] if u["username"] in ("eve@example.com", "s-1")]
 
 
 def oidc_sign_in(srv, provider, claims):
@@ -381,8 +437,8 @@ def oidc_refused_callbacks(srv, provider):
         provider.refuse = False
     assert st == 401 and "SSO sign-in failed." in page, st
     assert provider.token_requests == requests + 1
-    assert "OIDC authentication failed: HTTPError: HTTP Error 400" in all_log(srv), \
-        all_log(srv)[-1500:]
+    assert ("OIDC sign-in failed: the token endpoint refused the code: HTTP 400 "
+            "'invalid_grant'") in all_log(srv), all_log(srv)[-1500:]
     assert srv.saved_config()["users"] == before["users"]
     assert not any(u["username"] == "mallory" for u in srv.saved_config()["users"])
 
@@ -397,7 +453,11 @@ def test_oidc():
                            "operator_group": "Bakım", "viewer_group": "ser2net-viewers"}}
         with Server(config, env={"SSL_CERT_FILE": os.path.join(tmp, "ca.pem")}) as srv:
             oidc_refused_callbacks(srv, provider)
-            print("OIDC: callback without/with a wrong state 400, a refused code 401  OK")
+            print("OIDC: callback without/with a wrong state 400, a refused code 401 (the "
+                  "token endpoint's answer logged)  OK")
+            oidc_provider_answers(srv, provider)
+            print("OIDC: PKCE S256 (an older state cookie still works); the provider's errors "
+                  "logged and shown by code; an unverified e-mail names nobody  OK")
 
             # the provider's "admin" (or "Admin") is not the local admin
             before = user_of(srv, "admin")
@@ -414,7 +474,8 @@ def test_oidc():
                   "stays as it was  OK")
 
             # names no account can have: refused, with the reason in all.log
-            for name in ("(anonymous)", "ad‮min", "x" * 256):
+            refused_names = ("(anonymous)", "ad\u202emin", "x" * 256)
+            for name in refused_names:
                 st, page = oidc_sign_in(srv, provider, {"preferred_username": name,
                                                         "groups": ["ser2net-viewers"]})
                 assert st == 403 and "can’t be used here" in page, (name, st)
@@ -423,7 +484,7 @@ def test_oidc():
                     "a name in parentheses") in log, log[-1500:]
             assert "it contains control or invisible characters (U+202E)" in log
             assert "Username claim can name another claim" in log
-            assert len(srv.saved_config()["users"]) == 2, srv.saved_config()["users"]
+            assert not [u for u in srv.saved_config()["users"] if u["username"] in refused_names]
             st, _ = oidc_sign_in(srv, provider, {"preferred_username": " CORP\\op/1#x ",
                                                  "groups": ["ser2net-viewers"]})
             assert st == 303 and user_of(srv, "CORP\\op/1#x")["role"] == "viewer", st

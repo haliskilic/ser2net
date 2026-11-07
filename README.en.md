@@ -145,9 +145,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   directory; LDAP group membership maps to a role. Works alongside local accounts;
   needs `ldap3`. LDAPS / StartTLS check the server's certificate (the system's CAs or
   your own CA file).
-- **OIDC single sign-on (optional):** authorization-code flow with Keycloak / Entra ID /
-  Google / Okta; the id_token is validated (signature/iss/aud/exp/nonce) and a claim maps
-  to a role. Needs `authlib`.
+- **OIDC single sign-on (optional):** authorization-code flow with PKCE, with Keycloak /
+  Entra ID / Google / Okta; the id_token is validated (signature/iss/aud/exp/nonce) and a
+  claim maps to a role. Needs `authlib`.
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
   status and ports; **bearer-token** auth (with a role — `viewer` is read-only); OpenAPI
   3.0 (`/api/v1/openapi.json`). The token is generated in Settings.
@@ -436,6 +436,18 @@ name can be any printable text (`CORP\jdoe`, `jdoe@corp.local`, names with `/` o
 such accounts can be signed out and deleted in the Users panel too); a sign-in under a name
 with control or invisible characters, longer than 255 characters or in parentheses is
 refused (all.log says why).
+
+**OIDC (SSO):** the code request carries PKCE (S256). Every address the provider's discovery
+document gives (authorization, token, JWKS) and every redirect on the way must be https://
+(http:// only to this machine's loopback address): if a Keycloak behind a TLS-terminating
+proxy announces http:// addresses, SSO sign-in is refused and all.log says why (fix
+Keycloak's proxy / frontend URL settings), because the client secret, the code and the
+signing keys would travel in clear text. When the provider sends the user back with an error
+instead of a code (e.g. the user is not assigned to the application: `access_denied`), the
+error and its description go to all.log and the user sees a message for that error code;
+the token endpoint's error answers are logged too. An e-mail address the provider calls
+unverified (`email_verified: false`) is never used as the user name. If the discovery
+document names another issuer than the configured one, all.log warns once.
 
 **LDAP over TLS (LDAPS / StartTLS):** the directory server's certificate is checked. It
 must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: its
