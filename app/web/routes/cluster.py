@@ -10,6 +10,7 @@ and the call goes to that peer's own address and scheme.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import re
 import socket
@@ -19,9 +20,9 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
-from ...config import ConfigError, MappingConfig, trace_file_name
+from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
 from ...engine import netinfo, portlist
-from ...engine.cluster import peer_addr
+from ...engine.cluster import peer_addr, peer_port, peer_url
 from ...i18n import _
 from .. import auth
 from . import ops
@@ -102,8 +103,11 @@ def _mapping_endpoint(m) -> str:
     return f"{m.network.bind_ip}:{m.network.port}"
 
 
-def _fmt_uptime(seconds: float) -> str:
-    s = int(max(0, seconds))
+def _fmt_uptime(seconds) -> str:
+    try:
+        s = int(max(0, seconds))
+    except (TypeError, ValueError):
+        return ""
     d, s = divmod(s, 86400)
     h, s = divmod(s, 3600)
     m, _sec = divmod(s, 60)
@@ -157,22 +161,31 @@ def routes(ctx: Ctx) -> list:
 
     def _node_from(target, data) -> dict:
         """Build a fleet-table node entry from a fetch target + the peer's payload
-        (data is None when the peer is unreachable)."""
+        (data is None when the peer is unreachable). The address shown, the Open link
+        and the actions are the target's - where this node found the peer: its beacon
+        or its manual entry - never the address the peer reports for itself. That one
+        differs behind NAT or Docker, for a peer entered by name and for one that could
+        not tell its LAN address; it is shown only as information."""
+        ip, port, scheme = target["ip"], target["port"], target["scheme"]
         base = {"self": False, "source": target.get("source", "auto"),
-                "ip": target["ip"], "port": target["port"], "scheme": target["scheme"]}
+                "ip": ip, "port": port, "scheme": scheme, "addr": peer_addr(ip, port)}
+        with contextlib.suppress(ValueError):
+            base["url"] = peer_url(scheme, ip, port)
         if not data:
             return {**base, "online": False, "id": target.get("id", ""),
-                    "name": target.get("name", f"{target['ip']}:{target['port']}"),
+                    "name": target.get("name", base["addr"]),
                     "uptime": "", "version": "", "mapping_count": 0, "running_count": 0,
                     "mappings": []}
+        maps = data.get("mappings")
+        maps = [m for m in maps if isinstance(m, dict)] if isinstance(maps, list) else []
+        own_ip, own_port = peer_host(data.get("ip", "")), peer_port(data.get("port"))
+        if own_ip and own_port and peer_addr(own_ip, own_port) != base["addr"]:
+            base["reported"] = peer_addr(own_ip, own_port)
         return {**base, "online": True, "id": data.get("id", target.get("id", "")),
-                "name": data.get("name", base["ip"]),
-                "ip": data.get("ip", base["ip"]), "port": data.get("port", base["port"]),
-                "scheme": data.get("scheme", base["scheme"]),
+                "name": data.get("name", base["addr"]),
                 "uptime": _fmt_uptime(data.get("uptime_s", 0)), "version": data.get("version", ""),
-                "mapping_count": data.get("mapping_count", len(data.get("mappings", []))),
-                "running_count": data.get("running_count", 0),
-                "mappings": data.get("mappings", [])}
+                "mapping_count": data.get("mapping_count", len(maps)),
+                "running_count": data.get("running_count", 0), "mappings": maps}
 
     async def cluster_status(request):
         """Aggregated view for the browser: local node + every discovered/manual peer,
@@ -182,6 +195,7 @@ def routes(ctx: Ctx) -> list:
                           discovery_error="")
         local = local_node_payload()
         nodes = [{**local, "self": True, "online": True, "source": "self",
+                  "addr": peer_addr(local["ip"], local["port"]),
                   "uptime": _fmt_uptime(local["uptime_s"])}]
         if is_anonymous(request):  # other nodes' data needs a real login here
             return render(request, "_cluster_body.html", nodes=nodes, can_edit=False,

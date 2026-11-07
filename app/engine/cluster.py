@@ -41,7 +41,7 @@ def _sign(key: str, body: str) -> str:
     return hmac.new(key.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def _port(value) -> int | None:
+def peer_port(value) -> int | None:
     """value as a TCP port (1..65535), else None."""
     if isinstance(value, bool):
         return None
@@ -57,7 +57,7 @@ def peer_url(scheme: str, host: str, port, path: str = "/", query: dict | None =
     https, the host an IP address or host name and the port 1..65535, so no value can
     point the URL (and the key sent with it) at another host. An IPv6 host is put in
     brackets and the query is encoded."""
-    h, p = peer_host(host), _port(port)
+    h, p = peer_host(host), peer_port(port)
     if scheme not in ("http", "https") or h is None or p is None or not path.startswith("/"):
         raise ValueError(f"not a cluster peer address: {scheme!r}, {host!r}, {port!r}")
     url = f"{scheme}://[{h}]:{p}{path}" if ":" in h else f"{scheme}://{h}:{p}{path}"
@@ -145,7 +145,7 @@ class ClusterDiscovery:
         pid = str(p.get("id", ""))
         if not pid or pid == self.config.instance_id:
             return  # ignore our own beacon
-        ip, port = self._beacon_address(p.get("ip"), addr), _port(p.get("port"))
+        ip, port = self._beacon_address(p.get("ip"), addr), peer_port(p.get("port"))
         if ip is None or port is None:
             return  # no web-UI address to reach it at
         scheme = p.get("scheme") if p.get("scheme") in ("http", "https") else "http"
@@ -205,7 +205,7 @@ class ClusterDiscovery:
         """The discovered or configured peer at host:port (as the fleet view shows it),
         else None. Browser-initiated peer calls are resolved through this, so their
         address and scheme — where the shared key goes — never come from the request."""
-        h, p = peer_host(host), _port(port)
+        h, p = peer_host(host), peer_port(port)
         if h is None or p is None:
             return None
         return next((t for t in self.all_targets() if t["ip"] == h and t["port"] == p), None)
@@ -311,10 +311,12 @@ class ClusterDiscovery:
         return data if 200 <= status < 300 else None
 
     async def post_peer(self, target: dict, path: str, fields, timeout: float = 6.0) -> dict | None:
-        """POST a form to a key-guarded path of a known peer: its JSON answer, or None."""
+        """POST a form to a key-guarded path of a known peer: its JSON answer — also a
+        400 refusal, whose "error" is the peer's own message (e.g. why it can't save
+        a mapping) — or None."""
         body = urllib.parse.urlencode(fields).encode()
         status, data = await self._request(target, "POST", path, None, body, timeout)
-        return data if 200 <= status < 300 else None
+        return data if 200 <= status < 300 or status == 400 else None
 
     async def fetch_peer(self, peer: dict, timeout: float = 2.5) -> dict | None:
         return await self.get_peer(peer, "/api/cluster/local", timeout=timeout)

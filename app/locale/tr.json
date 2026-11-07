@@ -706,5 +706,6 @@
   "{0}: nested too deeply to import": "{0}: içe aktarılamayacak kadar derin iç içe",
   "… and {0} more warnings": "… ve {0} uyarı daha",
   "The file is larger than {0} MB.": "Dosya {0} MB sınırından büyük.",
-  "The file has {0} mappings; at most {1} can be imported at once.": "Dosyada {0} eşleme var; bir seferde en fazla {1} eşleme içe aktarılabilir."
+  "The file has {0} mappings; at most {1} can be imported at once.": "Dosyada {0} eşleme var; bir seferde en fazla {1} eşleme içe aktarılabilir.",
+  "its own address: %(addr)s": "kendi bildirdiği adres: %(addr)s"
 }

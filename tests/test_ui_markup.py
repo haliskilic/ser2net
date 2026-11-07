@@ -16,6 +16,7 @@ portable test guards the template side of the contract on every platform:
 Run: python3 tests/test_ui_markup.py
 """
 import html.parser
+import json
 import os
 import sys
 
@@ -169,19 +170,29 @@ def test_cluster_table():
                   "client_count": 0, "bytes_in": 0, "bytes_out": 0}]
     nodes = [
         {"name": "this-host", "self": True, "source": "self", "ip": "10.0.0.1", "port": 8080,
-         "scheme": "http", "online": True, "uptime": "1h", "version": __version__,
-         "running_count": 1, "mapping_count": 2, "mappings": node_maps},
-        {"name": "peer-host", "self": False, "source": "manual", "ip": "10.0.0.2", "port": 8080,
+         "addr": "10.0.0.1:8080", "scheme": "http", "online": True, "uptime": "1h",
+         "version": __version__, "running_count": 1, "mapping_count": 2, "mappings": node_maps},
+        {"name": "peer-host", "self": False, "source": "manual", "ip": "fd00::2", "port": 8443,
+         "addr": "[fd00::2]:8443", "url": "https://[fd00::2]:8443/", "reported": EVIL,
          "scheme": "https", "online": True, "uptime": "2h", "version": __version__,
          "running_count": 1, "mapping_count": 2, "mappings": node_maps},
         {"name": "gone", "self": False, "source": "auto", "ip": "10.0.0.3", "port": 8080,
-         "scheme": "http", "online": False, "mappings": []},
+         "addr": "10.0.0.3:8080", "url": "http://10.0.0.3:8080/", "scheme": "http",
+         "online": False, "mappings": []},
     ]
     out = tpl.render(nodes=nodes, can_edit=True, peers_hidden=False, discovery_error="")
     root = check_table_contract(out, "cluster table")
-    assert "<img" not in out and "&lt;img" in out, "peer mapping names must be escaped"
-    assert sum(1 for n in root.walk() if n.tag == "button") == 3 + 2, \
-        "only the peer's rows get buttons (Stop+Restart+Edit / Start+Edit)"
+    assert "<img" not in out and "&lt;img" in out, "peer names and addresses must be escaped"
+    buttons = [n for n in root.walk() if n.tag == "button"]
+    assert len(buttons) == 3 + 2, "only the peer's rows get buttons (Stop+Restart+Edit / Start+Edit)"
+    # the actions name the peer by its host + port only (the server finds its scheme)
+    vals = [json.loads(b.attrs["hx-vals"]) for b in buttons if "hx-vals" in b.attrs]
+    assert vals and all(v["host"] == "fd00::2" and v["port"] == 8443 and "scheme" not in v
+                        for v in vals), vals
+    edit = next(b.attrs["hx-get"] for b in buttons if "hx-get" in b.attrs)
+    assert edit.startswith("/api/cluster/peer-form?host=fd00%3A%3A2&port=8443&mid="), edit
+    opens = [n.attrs["href"] for n in root.walk() if n.tag == "a"]
+    assert opens == ["https://[fd00::2]:8443/"], "Open only for an online peer, at its URL"
     check_table_contract(tpl.render(nodes=[], can_edit=True), "empty cluster table")
     print("cluster table: wrapper, card labels, buttons in their cell, escaping  OK")
 

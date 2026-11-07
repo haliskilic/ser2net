@@ -15,19 +15,19 @@
   </thead>
   <tbody>
   {% for n in nodes %}
-    {% set hosturl = n.scheme ~ '://' ~ n.ip ~ ':' ~ n.port %}
     <tr class="node-row{% if not n.online %} node-offline{% endif %}">
       <td colspan="7">
         <strong>{{ n.name }}</strong>
         {% if n.self %}<span class="tag">{{ _("this node") }}</span>{% endif %}
         {% if n.source == 'manual' %}<span class="tag">{{ _("manual") }}</span>{% endif %}
-        <span class="peer mono">{{ n.ip }}:{{ n.port }}</span>
+        <span class="peer mono">{{ n.addr }}</span>
+        {% if n.reported %}<span class="muted">({{ _("its own address: %(addr)s", addr=n.reported) }})</span>{% endif %}
         {% if n.online %}
           <span class="muted"> · {{ _("up %(uptime)s", uptime=n.uptime) }}{% if n.version %} · v{{ n.version }}{% endif %} · {{ _("%(running)s/%(total)s running", running=n.running_count, total=n.mapping_count) }}</span>
         {% else %}
           <span class="state state-error">{{ _("offline / unreachable") }}</span>
         {% endif %}
-        {% if not n.self and n.online %}<a class="btn sm" href="{{ hosturl }}" target="_blank" rel="noopener">{{ _("Open") }}</a>{% endif %}
+        {% if not n.self and n.online and n.url %}<a class="btn sm" href="{{ n.url }}" target="_blank" rel="noopener">{{ _("Open") }}</a>{% endif %}
       </td>
     </tr>
     {% for m in n.mappings %}

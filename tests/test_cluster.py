@@ -11,9 +11,11 @@ a stand-in v2.7/v2.8 peer whose id this version would not take (kept as the peer
 
 Run: python3 tests/test_cluster.py
 """
+import html as htmllib
 import http.cookiejar
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -194,6 +196,21 @@ def test_endpoints():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def rendered_actions(html, mid):
+    """What the fleet view's buttons for mapping *mid* send: {action: hx-vals} for the
+    control buttons, plus "edit": the Edit button's URL."""
+    out = {}
+    for vals in re.findall(r"hx-vals='([^']*)'", html):
+        v = json.loads(htmllib.unescape(vals))
+        if v.get("mid") == mid:
+            out[v["action"]] = v
+    for url in re.findall(r'hx-get="(/api/cluster/peer-form\?[^"]*)"', html):
+        url = htmllib.unescape(url)
+        if urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("mid") == [mid]:
+            out["edit"] = url
+    return out
+
+
 def trap_listener():
     """A listening socket nothing should ever connect to (the kernel queues a connection
     attempt even if it is never accepted, so trapped() sees it)."""
@@ -225,22 +242,28 @@ def start_node(cfg_obj):
 
 def test_manual_peer_and_remote_control():
     """Two real nodes linked by a MANUAL peer (no UDP dependency): node A aggregates
-    node B's mappings + health and can remotely start/stop them with the shared key."""
+    node B's mappings + health and can remotely start/stop/edit them with the shared
+    key. B reports an address of its own (as behind NAT or Docker) that A can't use:
+    the buttons A renders must still reach B, so the test sends exactly those."""
     key = "rc-key-xyz"
     ui_a, ui_b = free_port(), free_port()
     # different discovery ports so the nodes DON'T auto-discover each other — the
     # manual peer is the only link, making the test deterministic.
     dp_a, dp_b = free_port(), free_port()
-    map_port = free_port()
+    map_port, map_port2 = free_port(), free_port()
     node_b = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_b},
               "users": [{"username": "admin", "password_hash": hash_password("clusteradmin1"),
                          "role": "admin", "pwd_version": 1}],
               "cluster": {"enabled": True, "key": key, "discovery_port": dp_b,
-                          "advertise_ip": "127.0.0.1"},
+                          "advertise_ip": "192.0.2.10"},   # not where A reaches it
               "mappings": [{"name": "REMOTE1", "enabled": False, "kind": "net",
                             "serial": {"port": "/dev/ttyTEST", "baudrate": 9600},
                             "network": {"mode": "server", "protocol": "raw",
-                                        "bind_ip": "127.0.0.1", "port": map_port}}]}
+                                        "bind_ip": "127.0.0.1", "port": map_port}},
+                           {"name": "REMOTE2", "enabled": False, "kind": "net",
+                            "serial": {"port": "/dev/ttyTEST2", "baudrate": 9600},
+                            "network": {"mode": "server", "protocol": "raw",
+                                        "bind_ip": "127.0.0.1", "port": map_port2}}]}
     node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a},
               "cluster": {"enabled": True, "key": key, "discovery_port": dp_a,
                           "peers": [f"127.0.0.1:{ui_b}"]}}
@@ -292,13 +315,23 @@ def test_manual_peer_and_remote_control():
         assert ("v2.6" in html or "up " in html), "per-node health (version/uptime) missing"
         print("manual peer aggregated with health (version/uptime) + 'manual' tag  OK")
 
+        # B is shown, opened and controlled at the address A reaches it at; the address
+        # B reports for itself is only shown as information
+        assert f'href="http://127.0.0.1:{ui_b}/"' in html, "Open must point where A reaches B"
+        assert f"its own address: 192.0.2.10:{ui_b}" in html, "B's own address shown as info"
+        acts = rendered_actions(html, mid)
+        assert set(acts) == {"start", "edit"}, acts
+        assert acts["start"] == {"host": "127.0.0.1", "port": ui_b, "mid": mid, "action": "start"}
+        print("fleet view uses the address B was found at, B's own one only shown  OK")
+
         # peer-facing control is key-guarded
         code, _ = raw_request(ui_b, "/api/cluster/control", method="POST")
         assert code == 403, f"control without key must be 403, got {code}"
 
-        # remote START via A's proxy -> B's mapping becomes enabled
-        ctrl = {"host": "127.0.0.1", "port": str(ui_b), "mid": mid, "action": "start"}
-        assert post_a("/api/cluster/control-peer", ctrl) == 200, "remote start should be accepted"
+        # remote START via A's proxy (the values A's Start button sends) -> B's mapping
+        # becomes enabled
+        assert post_a("/api/cluster/control-peer", acts["start"]) == 200, \
+            "remote start should be accepted"
         for _ in range(20):
             _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
             if json.loads(body)["mappings"][0]["enabled"]:
@@ -309,10 +342,12 @@ def test_manual_peer_and_remote_control():
 
         # remote STOP via A's proxy -> B's mapping becomes disabled. A scheme in the
         # request is not used: the call goes to the peer's own address, never elsewhere.
+        html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
+        acts = rendered_actions(html, mid)
+        assert set(acts) == {"stop", "restart", "edit"}, acts
         trap = trap_listener()
         crafted = f"http://127.0.0.1:{trap.getsockname()[1]}/?x="
-        ctrl.update(action="stop", scheme=crafted)
-        assert post_a("/api/cluster/control-peer", ctrl) == 200
+        assert post_a("/api/cluster/control-peer", {**acts["stop"], "scheme": crafted}) == 200
         for _ in range(20):
             _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
             if not json.loads(body)["mappings"][0]["enabled"]:
@@ -328,13 +363,13 @@ def test_manual_peer_and_remote_control():
         print("control proxy rejects an unknown (non-peer) address  OK")
 
         # ---- remote EDIT: load the peer's mapping into the form, change it, save ----
-        form_url = "/api/cluster/peer-form?" + urllib.parse.urlencode(
-            {"host": "127.0.0.1", "port": ui_b, "mid": mid, "scheme": crafted})
+        form_url = acts["edit"] + "&" + urllib.parse.urlencode({"scheme": crafted})
         code, html = get_a(form_url)
         assert code == 200, (code, html[:300])
         assert "/api/cluster/peer-save" in html and 'name="host"' in html, html[:400]
         assert 'name="scheme"' not in html, "the form must not carry a scheme back"
         assert "Edit mapping" in html and "/dev/ttyTEST" in html, "form should show peer's values"
+        assert f"on 127.0.0.1:{ui_b}" in html, "the form names the peer where A reaches it"
         assert not trapped(trap), "the form must be loaded from the peer itself"
         # a GET without the token header (a link from another site) makes no peer call
         assert get_a(form_url, header=False)[0] == 403, "peer-form needs the CSRF header"
@@ -385,6 +420,20 @@ def test_manual_peer_and_remote_control():
         ghost = {**edit, "id": "nosuchid9999"}
         assert post_a("/api/cluster/peer-save", ghost) == 400, "editing a missing mapping must be refused"
         print("remote edit proxy: URL port refused, trace path reduced to a name, missing id refused  OK")
+
+        # a change only the peer can refuse (its other mapping has that port) shows the
+        # peer's own reason in the form
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{ui_a}/api/cluster/peer-save", method="POST",
+            data=urllib.parse.urlencode({**edit, "network_port": str(map_port2)}).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded", "X-CSRF-Token": csrf()})
+        try:
+            op.open(req, timeout=10)
+            raise AssertionError("a port clash on the peer must be refused")
+        except urllib.error.HTTPError as e:
+            code, page = e.code, e.read().decode()
+        assert code == 400 and "REMOTE2" in page, (code, page[:600])
+        print("remote edit: the peer's own validation message is shown  OK")
 
         print("\nPASS: manual peers + per-node health + remote control + remote edit")
     finally:
