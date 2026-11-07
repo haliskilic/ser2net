@@ -10,7 +10,8 @@ portable test guards the template side of the contract on every platform:
     every data cell (not the name, not the buttons) has a data-label for the
     phone card layout; each row spans exactly as many columns as the header;
   * a mapping name / device path full of HTML is rendered escaped;
-  * the static assets carry ?v=<version> (fresh CSS/JS right after an upgrade).
+  * the static assets carry ?v=<version> (fresh CSS/JS right after an upgrade);
+  * the mapping form does not offer a Modbus gateway the options it doesn't use.
 
 Run: python3 tests/test_ui_markup.py
 """
@@ -194,11 +195,38 @@ def test_ports_table_and_assets():
     print("ports table contract + versioned static asset URLs  OK")
 
 
+def test_mapping_form_modbus_fields():
+    """The Modbus gateway uses no connect banner, close-on string or client buffer, so the
+    form shows those only for raw / telnet / rfc2217 (app.js hides and disables a
+    data-show-when block); Read-only, kick and priority IPs apply to masters and stay."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig.from_dict({"id": "mb1", "name": "gw", "serial": {"port": "COM3"},
+                                 "network": {"protocol": "modbus", "port": 502}})
+    root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                            ports=[], ips=[], error=None))
+
+    def conditions(name):
+        field = next(n for n in root.walk() if n.attrs.get("name") == name)
+        return [a.attrs["data-show-when"] for a in field.ancestors() if "data-show-when" in a.attrs]
+
+    for name in ("opt_banner", "opt_closeon", "network_client_queue_max"):
+        assert "network_protocol=raw,telnet,rfc2217" in conditions(name), (name, conditions(name))
+    for name in ("network_read_only", "network_kick_old_user", "network_priority_client_ips",
+                 "network_allowed_client_ips", "opt_idle_timeout_s"):
+        assert not any(c.startswith("network_protocol=") for c in conditions(name)), name
+    print("mapping form: banner/close-on/client buffer not offered for modbus  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
     test_cluster_table()
     test_ports_table_and_assets()
+    test_mapping_form_modbus_fields()
     print("\nPASS: UI markup contract")
 
 

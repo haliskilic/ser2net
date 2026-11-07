@@ -63,6 +63,11 @@ düzenlemeye gerek yok.
   RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
   adaptör çıkarıldığında) master'lar bu sürede `0x0B` alır ve port, her eşlemede olduğu
   gibi yeniden açılır (durum `reconnecting`, cihaz kayboldu/geri geldi bildirimleri).
+  Master'lar diğer istemciler gibi kabul edilir (izinli IP'ler, max bağlantı, öncelikli
+  IP'ler, eski-kullanıcıyı-at); **salt okunur** bir gateway okuma olmayan her isteği
+  (FC5/6/15/16/22/23 gibi yazmalar, slave'i yeniden başlatan ya da susturan tanılama
+  komutları, bilinmeyen fonksiyon kodları) hatta göndermeden `0x01` exception ile yanıtlar.
+  Banner, open/close string ve `closeon` burada kullanılmaz (Modbus çerçevelerini bozar).
   **Edge modu:** coil ve register'ları periyodik okuyup MQTT'ye yayınlar (bool,
   uint/int/float 16/32, ölçek); `"writable": true` noktalar MQTT'den yazılır
   (`<topic>/<nokta>/set` → FC5/FC15 coil, FC6/FC16 register). İstenirse **Sparkplug B**
@@ -87,7 +92,8 @@ düzenlemeye gerek yok.
   Tablo yalnızca değiştiğinde yenilenir (titreme yok, seçimler korunur).
 - **Erişim kontrolü (eşleme başına):** izinli IP/CIDR listesi, **yüksek-öncelikli**
   istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at,
-  salt-okunur, banner, open/close string, `closeon`.
+  salt-okunur, banner, open/close string, `closeon` (Modbus gateway banner, open/close
+  string ve `closeon` kullanmaz).
 - **Bağlantı yaşam döngüsü (eşleme başına, TCP):** **TCP keepalive ile ölü bağlantı
   tespiti** — FIN/RST göndermeden kaybolan istemci ya da uzak sunucu (elektrik kesintisi,
   kablo çekilmesi, Wi-Fi/VPN/NAT düşmesi) artık sonsuza dek `ESTABLISHED` kalmaz:

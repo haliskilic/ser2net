@@ -335,6 +335,32 @@ def test_form_conn_options_parse_and_preserve():
     print("form: keepalive/connect-timeout/max-time parsed when posted, kept when absent  OK")
 
 
+def test_form_modbus_fields_not_offered():
+    """The mapping form leaves the connect banner, close-on string and client buffer out
+    for a Modbus gateway (it uses none of them). Absent => the stored values are kept on
+    edit and a new mapping gets the defaults; a form that posts them (another protocol,
+    an older cluster peer's form) still sets them."""
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502"}
+    existing = MappingConfig.from_dict({
+        "name": "gw", "serial": {"port": "COM7"},
+        "network": {"protocol": "modbus", "port": 502, "client_queue_max": 8192},
+        "options": {"banner": "Welcome \\N", "closeon": "BYE"}})
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.options.banner, m.options.closeon, m.network.client_queue_max
+
+    assert parsed(dict(base, id=existing.id)) == ("Welcome \\N", "BYE", 8192)
+    assert parsed(base) == ("", "", 2048)
+    posted = dict(base, id=existing.id, network_protocol="raw", opt_banner="",
+                  opt_closeon="logout", network_client_queue_max="4096")
+    assert parsed(posted) == ("", "logout", 4096)
+    print("form: banner/close-on/client buffer kept when a Modbus form leaves them out  OK")
+
+
 def test_web_access_settings():
     cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
     assert cfg.admin_ui.require_login is True, "login must be required by default"
@@ -352,6 +378,7 @@ def main():
     test_connection_lifecycle_defaults_and_upgrade()
     test_connection_lifecycle_validation()
     test_form_conn_options_parse_and_preserve()
+    test_form_modbus_fields_not_offered()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

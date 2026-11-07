@@ -6,11 +6,15 @@ _transaction path: a Modbus/TCP master -> gateway -> RTU slave -> back, includin
 transaction-id integrity and the gateway-timeout exception. With serial_io.open_serial
 replaced by that fake bus, the real start() / serial supervision runs too: the port
 goes away (its transport is closed, as the serial library does on an I/O error) and
-comes back, and the gateway must reopen it and report the outage.
+comes back, and the gateway must reopen it and report the outage. Masters are admitted
+like bridge clients (allow-list, max connections, kick_old_user, priority IPs), and a
+read-only gateway answers anything that is not a read with exception 01 without
+touching the bus.
 
 Run: python3 tests/test_modbus_gateway.py
 """
 import asyncio
+import contextlib
 import os
 import socket
 import sys
@@ -113,12 +117,59 @@ class FakePort:
         self.opens[-1].transport.abort()
 
 
-def gateway_mapping(gw_port, **network):
+def gateway_mapping(gw_port, options=None, **network):
     return MappingConfig.from_dict({
         "name": "mb", "kind": "net", "serial": {"port": "/dev/ttyUSB-fake", "baudrate": 9600},
         "network": dict({"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
                          "port": gw_port, "max_connections": 4}, **network),
-        "options": {"modbus_response_timeout_s": 0.4}})
+        "options": dict({"modbus_response_timeout_s": 0.4}, **(options or {}))})
+
+
+@contextlib.asynccontextmanager
+async def running_gateway(slave_port, logs=None, options=None, **network):
+    """A started gateway whose serial port is a FakePort; yields (runner, its TCP port)."""
+    port = FakePort(slave_port)
+    real_open, serial_io.open_serial = serial_io.open_serial, port.open
+    gw_port = free_port()
+    runner = ModbusGatewayRunner(gateway_mapping(gw_port, options, **network),
+                                 logger=logs.append if logs is not None else (lambda _m: None))
+    try:
+        await runner.start()
+        assert await wait_for(lambda: runner._link.is_open), runner.status.as_dict()
+        yield runner, gw_port
+    finally:
+        await asyncio.wait_for(runner.stop(), timeout=10)
+        serial_io.open_serial = real_open
+
+
+def echo_slave(seen):
+    """An RTU slave that records each request and answers with the request PDU itself
+    (what a slave sends back for an accepted single write; good enough for any FC here)."""
+    async def handle(reader, writer):
+        buf = bytearray()
+        try:
+            while True:
+                data = await reader.read(512)
+                if not data:
+                    break
+                buf += data
+                with suppress(ValueError):
+                    unit, pdu = modbus.rtu_unwrap(bytes(buf))
+                    buf.clear()
+                    seen.append((unit, pdu))
+                    writer.write(modbus.rtu_wrap(unit, pdu))
+                    await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+    return handle
+
+
+async def closed_by_gateway(reader, timeout=3.0):
+    """True once the gateway has closed (or reset) this master's connection."""
+    try:
+        return await asyncio.wait_for(reader.read(1), timeout) == b""
+    except (ConnectionError, OSError):
+        return True
 
 
 async def test_request_path(slave_port):
@@ -250,6 +301,129 @@ async def test_missing_port_at_start(slave_port):
         await asyncio.wait_for(runner.stop(), timeout=10)
 
 
+async def test_read_only():
+    """A read-only gateway forwards reads only; everything else gets exception 01 (illegal
+    function) and never reaches the bus. Without read-only, writes still pass."""
+    seen = []
+    srv = await asyncio.start_server(echo_slave(seen), "127.0.0.1", 0)
+    slave_port = srv.sockets[0].getsockname()[1]
+    reads = [bytes.fromhex("0300000002"),          # FC3 read holding registers
+             bytes.fromhex("080000a537"),          # FC8/00 return query data (echo)
+             bytes.fromhex("2b0e0100")]            # FC43/14 read device identification
+    refused = [bytes.fromhex("0600010003"),       # FC6 write single register
+               bytes.fromhex("0500acff00"),       # FC5 write single coil
+               bytes.fromhex("0f0013000a02cd01"),  # FC15 write multiple coils
+               bytes.fromhex("100001000204000a0102"),  # FC16 write multiple registers
+               bytes.fromhex("16000400f20025"),   # FC22 mask write register
+               bytes.fromhex("1700030006000e00030600ff00ff00ff"),  # FC23 read/write
+               bytes.fromhex("0800040000"),       # FC8/04 force listen only mode
+               bytes.fromhex("2b0d0000"),         # FC43/13 CANopen general reference
+               bytes.fromhex("4100")]             # user-defined function code
+    logs = []
+    try:
+        async with running_gateway(slave_port, logs, read_only=True) as (runner, gw_port):
+            mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
+            txn = 0x100
+            for pdu in reads:
+                txn += 1
+                assert await request(mr, mw, txn, RESPONSIVE_UNIT, pdu) == pdu, pdu.hex(" ")
+            for pdu in refused:
+                txn += 1
+                got = await request(mr, mw, txn, RESPONSIVE_UNIT, pdu)
+                assert got == bytes([pdu[0] | 0x80, modbus.ILLEGAL_FUNCTION]), (pdu.hex(" "), got)
+            # a broadcast write (unit 0) is refused the same way
+            assert await request(mr, mw, 0x200, 0, bytes.fromhex("0600010003")) == b"\x86\x01"
+            assert [p for _u, p in seen] == reads, f"only the reads may reach the bus: {seen}"
+            mw.close()
+            assert await wait_for(lambda: not runner._clients)
+            assert await wait_for(lambda: any("disconnected" in m for m in logs))
+        refusals = [m for m in logs if m.startswith("read-only: refused")]
+        assert len(refusals) == 1 and "FC6" in refusals[0], refusals  # once per master
+        assert any(m.startswith("read-only: requests from Modbus/TCP masters") for m in logs), logs
+        bye = next(m for m in logs if m.startswith("modbus master disconnected"))
+        assert f"{len(refused) + 1} request(s) refused" in bye, bye
+        print(f"read-only: {len(reads)} reads forwarded; {len(refused) + 1} writes/unknown "
+              "-> exception 01, nothing on the bus, logged once  OK")
+
+        # the same requests reach the bus on a writable gateway
+        seen.clear()
+        async with running_gateway(slave_port) as (runner, gw_port):
+            mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
+            assert await request(mr, mw, 1, RESPONSIVE_UNIT, refused[0]) == refused[0]
+            assert [p for _u, p in seen] == [refused[0]]
+            mw.close()
+        print("not read-only: a write still reaches the slave  OK")
+    finally:
+        srv.close()
+        with suppress(Exception):
+            await asyncio.wait_for(srv.wait_closed(), timeout=2)
+
+
+async def test_master_admission(slave_port):
+    """Allow-list, max connections, kick_old_user and priority IPs apply to masters."""
+    # a full gateway refuses a new master unless kick_old_user or a priority IP says otherwise
+    logs = []
+    async with running_gateway(slave_port, logs, max_connections=1,
+                               priority_client_ips=["10.9.9.9"]) as (runner, gw_port):
+        ar, aw = await asyncio.open_connection("127.0.0.1", gw_port)
+        assert await request(ar, aw, 1, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        br, _bw = await asyncio.open_connection("127.0.0.1", gw_port)
+        assert await closed_by_gateway(br), "a master over max_connections must be refused"
+        assert await request(ar, aw, 2, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        assert any("max connections reached" in m for m in logs), logs
+    print("full: the next master is refused, the connected one keeps working  OK")
+
+    # kick_old_user: the new master takes over, the old one is dropped with the reason logged
+    logs = []
+    async with running_gateway(slave_port, logs, max_connections=1,
+                               kick_old_user=True) as (runner, gw_port):
+        ar, aw = await asyncio.open_connection("127.0.0.1", gw_port)
+        assert await request(ar, aw, 1, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        br, bw = await asyncio.open_connection("127.0.0.1", gw_port)
+        assert await request(br, bw, 2, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        assert await closed_by_gateway(ar), "the old master should have been kicked"
+        assert await wait_for(lambda: len(runner.status.clients) == 1)
+        assert any("kicking" in m and "for new client" in m for m in logs), logs
+        assert await wait_for(lambda: any("kicked for new client" in m for m in logs)), logs
+    print("kick_old_user: a reconnecting master replaces the old connection  OK")
+
+    # a priority IP gets in without kick_old_user and is shown as a priority client
+    logs = []
+    async with running_gateway(slave_port, logs, max_connections=1,
+                               priority_client_ips=["127.0.0.1"]) as (runner, gw_port):
+        ar, aw = await asyncio.open_connection("127.0.0.1", gw_port)
+        assert await request(ar, aw, 1, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        br, bw = await asyncio.open_connection("127.0.0.1", gw_port)
+        assert await request(br, bw, 2, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        assert await closed_by_gateway(ar), "a priority master must make room"
+        assert await wait_for(lambda: len(runner.status.clients) == 1)
+        assert runner.status.as_dict()["clients"][0]["priority"] is True, runner.status.clients
+        assert any("for priority client" in m for m in logs), logs
+    print("priority IP: admitted at capacity, listed as priority  OK")
+
+    # not in the allow-list: dropped before anything reaches the bus
+    async with running_gateway(slave_port, max_connections=1,
+                               allowed_client_ips=["10.0.0.0/8"]) as (runner, gw_port):
+        cr, _cw = await asyncio.open_connection("127.0.0.1", gw_port)
+        assert await closed_by_gateway(cr) and not runner._clients
+    print("allow-list: a master outside it is dropped  OK")
+
+
+async def test_unused_options_logged(slave_port):
+    """A banner, open string or close-on string would put bytes outside Modbus frames:
+    the gateway sends none of them and says so once at start."""
+    logs = []
+    unused = {"banner": "hi\\r\\n", "closeon": "BYE", "openstr": "ATZ"}
+    async with running_gateway(slave_port, logs, options=unused) as (runner, gw_port):
+        mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
+        # no banner in front of the reply: the first bytes are the MBAP header
+        assert await request(mr, mw, 7, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        mw.close()
+    line = next((m for m in logs if m.startswith("not used by a Modbus gateway")), "")
+    assert "banner" in line and "openstr" in line and "closeon" in line, logs
+    print("banner/openstr/closeon: not sent, logged once at start  OK")
+
+
 async def main():
     slave_port = free_port()
     slave_srv = await asyncio.start_server(fake_rtu_slave, "127.0.0.1", slave_port)
@@ -257,6 +431,9 @@ async def main():
         await test_request_path(slave_port)
         await test_reopen_after_port_loss(slave_port)
         await test_missing_port_at_start(slave_port)
+        await test_read_only()
+        await test_master_admission(slave_port)
+        await test_unused_options_logged(slave_port)
         print("\nPASS: Modbus RTU<->TCP gateway")
     finally:
         slave_srv.close()
