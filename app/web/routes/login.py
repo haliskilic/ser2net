@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import secrets
 import time
 
@@ -172,8 +173,15 @@ def routes(ctx: Ctx) -> list:
             return RedirectResponse("/login", status_code=303)
         redirect_uri = _oidc_redirect_uri(request)
         st, nonce = secrets.token_urlsafe(16), secrets.token_urlsafe(16)
+        verifier = oidc_auth.new_code_verifier()   # PKCE
         try:
-            url = await asyncio.to_thread(oidc_auth.build_authorize_url, oidc, redirect_uri, st, nonce)
+            url = await asyncio.to_thread(oidc_auth.build_authorize_url, oidc, redirect_uri, st,
+                                          nonce, code_verifier=verifier)
+        except oidc_auth.InsecureEndpoint as e:
+            state.log(f"OIDC login init failed: {e}")
+            return render(request, "login.html", status_code=502, error=None, oidc_enabled=True,
+                          oidc_error=_("SSO sign-in is off: the identity provider gives an "
+                                       "address that isn’t https:// (all.log says which)."))
         except Exception as e:
             state.log(f"OIDC login init failed: {e}")
             return render(request, "login.html", status_code=502, error=None,
@@ -181,29 +189,58 @@ def routes(ctx: Ctx) -> list:
         resp = RedirectResponse(url, status_code=303)
         resp.set_cookie(OIDC_COOKIE,
                         auth.sign_payload(state.config.secret_key,
-                                          {"s": st, "n": nonce, "r": redirect_uri}, ttl_seconds=600),
+                                          {"s": st, "n": nonce, "r": redirect_uri, "v": verifier},
+                                          ttl_seconds=600),
                         max_age=600, httponly=True, samesite="lax",
                         secure=state.config.admin_ui.tls_enabled, path="/auth/oidc")
         return resp
+
+    def _provider_error(request, data, error: str):
+        """The provider sent the browser back with an error instead of a code (RFC 6749
+        4.1.2.1, OIDC Core 3.1.2.6): logged with its description, shown by its code —
+        never the provider's own text."""
+        st = request.query_params.get("state", "")
+        ours = bool(data) and secrets.compare_digest(st, str(data.get("s", "")))
+        desc = request.query_params.get("error_description", "")
+        state.log(f"OIDC: the identity provider refused the sign-in: {error[:64]!r}"
+                  + (f" ({desc[:200]!r})" if desc else "")
+                  + ("" if ours else " (not for a sign-in started in this browser)"))
+        if error == "access_denied":
+            status, message = 403, _("The identity provider didn’t let you sign in to ser2net. "
+                                     "Ask its administrator to give your account access.")
+        elif error in ("temporarily_unavailable", "server_error"):
+            status, message = 503, _("The identity provider can’t sign you in right now. Try "
+                                     "again in a few minutes.")
+        else:
+            code = error if re.fullmatch(r"[a-z0-9_]{1,64}", error) else "?"
+            status, message = 400, _("The identity provider refused the sign-in request ({0}). "
+                                     "An admin should check the SSO settings; all.log has "
+                                     "the details.").format(code)
+        return render(request, "login.html", status_code=status, error=None, oidc_enabled=True,
+                      oidc_error=message)
 
     async def oidc_callback(request):
         oidc = state.config.oidc
         if not oidc.enabled:
             return RedirectResponse("/login", status_code=303)
         data = auth.read_payload(state.config.secret_key, request.cookies.get(OIDC_COOKIE))
+        if (error := request.query_params.get("error")) is not None:
+            return _provider_error(request, data, error)
         code = request.query_params.get("code", "")
         st = request.query_params.get("state", "")
         if not (data and code and st.isascii()  # (compare_digest raises on non-ASCII text)
                 and secrets.compare_digest(st, str(data.get("s", "")))):
             return render(request, "login.html", status_code=400, error=None, oidc_enabled=True,
                           oidc_error=_("SSO state mismatch — please try again."))
-        claims = await asyncio.to_thread(oidc_auth.complete, oidc, data["r"], code, data["n"], state.log)
+        # "v": the PKCE verifier (a state cookie from before it was sent has none)
+        claims = await asyncio.to_thread(oidc_auth.complete, oidc, data["r"], code, data["n"],
+                                         state.log, code_verifier=str(data.get("v") or ""))
         if claims is None:
             return render(request, "login.html", status_code=401, error=None, oidc_enabled=True,
                           oidc_error=_("SSO sign-in failed."))
         username = oidc_auth.username_from_claims(claims, oidc)
         if not username:
-            state.log("OIDC login denied: the ID token names no user")
+            state.log(f"OIDC login denied: {oidc_auth.no_username_reason(claims, oidc)}")
         elif refusal := _name_refused(request, "oidc", username):
             return _refusal_page(request, "oidc", refusal)
         role = username and _directory_role("oidc", username,

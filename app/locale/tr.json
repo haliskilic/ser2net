@@ -815,5 +815,9 @@
   "Your user name from the directory or the identity provider can’t be used here; an admin can see why in all.log.": "Dizinden ya da kimlik sağlayıcıdan gelen kullanıcı adın burada kullanılamıyor; nedenini bir admin all.log'da görebilir.",
   "Its accounts in another letter case were deleted too: {0}.": "Başka büyük/küçük harfle yazılmış hesapları da silindi: {0}.",
   "Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.": "Kullanıcı adı 1-32 karakter olmalı: Türkçe karakter içermeyen harfler (a-z, A-Z), rakam, '.', '_' ya da '-'.",
-  "Not allowed: {0}": "İzin verilmeyen karakterler: {0}"
+  "Not allowed: {0}": "İzin verilmeyen karakterler: {0}",
+  "SSO sign-in is off: the identity provider gives an address that isn’t https:// (all.log says which).": "SSO ile giriş kapalı: kimlik sağlayıcı https:// olmayan bir adres veriyor (hangisi olduğu all.log'da).",
+  "The identity provider didn’t let you sign in to ser2net. Ask its administrator to give your account access.": "Kimlik sağlayıcı ser2net'e girmene izin vermedi. Hesabına erişim vermesi için sağlayıcının yöneticisine başvur.",
+  "The identity provider can’t sign you in right now. Try again in a few minutes.": "Kimlik sağlayıcı şu anda girişini tamamlayamıyor. Birkaç dakika sonra tekrar dene.",
+  "The identity provider refused the sign-in request ({0}). An admin should check the SSO settings; all.log has the details.": "Kimlik sağlayıcı giriş isteğini reddetti ({0}). Bir admin SSO ayarlarını kontrol etmeli; ayrıntılar all.log'da."
 }

@@ -3,14 +3,20 @@
 Pure parts (claim->role/username, the signed state cookie) always run in CI: a group
 setting matches a whole claim value in any letter case (Turkish İ/I/ı/i as one
 letter), or the last part of a Keycloak path / DOMAIN\\name — never a part of a name.
-Discovery and the authorize URL need no package either. The full token-exchange +
-id_token validation flow uses a real RS256-signed token and mocked discovery/token/JWKS
-HTTP, so it runs without a provider; it needs authlib and cryptography: without them it
-is skipped with a SKIP line (tests/run_all.py repeats it), and with
-SER2NET_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_oidc.py
+An e-mail address the provider says is not verified names nobody (no fall-back to sub).
+Discovery and the authorize URL (with PKCE S256) need no package either; every address
+the provider gives, and every redirect, must be https:// (http:// only to loopback). The
+full token-exchange + id_token validation flow uses a real RS256-signed token and mocked
+discovery/token/JWKS HTTP, so it runs without a provider; it needs authlib and
+cryptography: without them it is skipped with a SKIP line (tests/run_all.py repeats it),
+and with SER2NET_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_oidc.py
 """
+import base64
+import hashlib
+import http.server
 import os
 import sys
+import threading
 import time
 import urllib.parse
 
@@ -44,6 +50,21 @@ def test_claim_mapping():
     assert oidc_auth.username_from_claims({"sub": "xyz"}, s) == "xyz"
     # one spelling: NFC, no white space around it
     assert oidc_auth.username_from_claims({"preferred_username": " Jose\u0301 "}, s) == "Jos\u00e9"
+    # an e-mail address the provider has not verified names nobody — and sub doesn't stand in
+    for flag in (False, "false", "False"):
+        claims = {"email": "a@b.c", "email_verified": flag, "sub": "xyz"}
+        assert oidc_auth.username_from_claims(claims, s) == "", flag
+        assert "'a@b.c', which the provider has not verified" in oidc_auth.no_username_reason(
+            claims, s)
+    for flag in (True, "true", None):   # Entra ID often sends no email_verified at all
+        assert oidc_auth.username_from_claims({"email": "a@b.c", "email_verified": flag}, s) \
+            == "a@b.c"
+    assert oidc_auth.username_from_claims({"preferred_username": "alice", "email": "a@b.c",
+                                           "email_verified": False}, s) == "alice"
+    by_mail = OidcSettings(username_claim="email")
+    assert oidc_auth.username_from_claims({"email": "a@b.c", "email_verified": False,
+                                           "preferred_username": "alice"}, by_mail) == ""
+    assert oidc_auth.no_username_reason({}, s) == "the ID token names no user"
     print("OIDC claim -> role/username mapping (+ fallbacks, deny)  OK")
 
 
@@ -120,8 +141,69 @@ def test_discovery_and_authorize_url():
     oidc_auth.build_authorize_url(s, "https://h/cb", "S2", "N2", fetch=fetch)
     assert len(fetched) == 1, fetched
     assert oidc_auth.discover(ISSUER, fetch=fetch) is disco
+    # PKCE: the S256 challenge of the verifier (RFC 7636 appendix B's example)
+    verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    assert oidc_auth.code_challenge(verifier) == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    url = oidc_auth.build_authorize_url(s, "https://h/cb", "S3", "N3", fetch=fetch,
+                                        code_verifier=verifier)
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert params["code_challenge"] == ["E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"]
+    assert params["code_challenge_method"] == ["S256"] and "code_verifier" not in params
+    v = oidc_auth.new_code_verifier()
+    assert 43 <= len(v) <= 128 and set(v) <= set(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"), v
+    assert oidc_auth.code_challenge(v) == base64.urlsafe_b64encode(
+        hashlib.sha256(v.encode()).digest()).rstrip(b"=").decode()
     oidc_auth._DISCOVERY_CACHE.clear()
-    print("OIDC: discovery (cached) and the authorization-code redirect URL  OK")
+    print("OIDC: discovery (cached) and the authorization-code redirect URL with PKCE S256  OK")
+
+
+def test_https_only():
+    """An address from the provider that is not https:// (http:// only to this machine's
+    loopback address) stops the sign-in before anything goes to it."""
+    for ok in ("https://idp.example.com/auth", "http://127.0.0.1:8080/realms/x/token",
+               "http://[::1]/jwks", "http://localhost:8443/x", "http://127.9.9.9/x"):
+        assert oidc_auth.secure_url(ok, "x") == ok, ok
+    for bad in ("http://idp.example.com/token", "http://10.0.0.5/jwks", "ftp://idp/x",
+                "https:///nohost", "", None, 42, "//idp.example.com/x"):
+        try:
+            oidc_auth.secure_url(bad, "token endpoint")
+        except oidc_auth.InsecureEndpoint as e:
+            assert "is not an https:// address" in str(e), e
+        else:
+            raise AssertionError(f"accepted {bad!r}")
+    oidc_auth._DISCOVERY_CACHE.clear()
+    disco = {"issuer": ISSUER, "authorization_endpoint": "http://idp.example.com/auth"}
+    try:
+        oidc_auth.build_authorize_url(_settings(), "https://h/cb", "S", "N", fetch=lambda u: disco)
+    except oidc_auth.InsecureEndpoint as e:
+        assert "authorization endpoint 'http://idp.example.com/auth'" in str(e), e
+    else:
+        raise AssertionError("an http:// authorization endpoint was used")
+    oidc_auth._DISCOVERY_CACHE.clear()
+
+    # a redirect to plain http is not followed (the loopback server itself may be http)
+    class Redirect(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 (http.server API)
+            self.send_response(302)
+            self.send_header("Location", "http://idp.example.com/.well-known/x")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Redirect)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        oidc_auth._get_json(f"http://127.0.0.1:{srv.server_address[1]}/x", timeout=5)
+    except oidc_auth.InsecureEndpoint as e:
+        assert "redirect 'http://idp.example.com/.well-known/x'" in str(e), e
+    else:
+        raise AssertionError("followed a redirect to http://")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    print("OIDC: provider addresses and redirects must be https:// (or loopback http://)  OK")
 
 
 def test_complete_flow():
@@ -143,9 +225,12 @@ def test_complete_flow():
             return jwks if url.endswith("/jwks") else disco
         return fetch
 
+    sent = []
+
     def post_for(token):
         def post(url, data):
             assert data["grant_type"] == "authorization_code" and data["code"] == "CODE"
+            sent.append(data)
             return {"id_token": token, "token_type": "Bearer"}
         return post
 
@@ -157,7 +242,33 @@ def test_complete_flow():
     claims = oidc_auth.complete(s, "https://h/cb", "CODE", "N1", fetch=fetch_for(tok), post=post_for(tok))
     assert claims and claims["preferred_username"] == "alice"
     assert oidc_auth.role_from_claims(claims, s) == "operator"
-    print("OIDC complete(): valid id_token -> claims; groups -> operator  OK")
+    assert "code_verifier" not in sent[-1]          # a state cookie from before PKCE
+    assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", fetch=fetch_for(tok),
+                              post=post_for(tok), code_verifier="V" * 43)
+    assert sent[-1]["code_verifier"] == "V" * 43
+    print("OIDC complete(): valid id_token -> claims; groups -> operator; PKCE verifier sent  OK")
+
+    # a token endpoint or JWKS address that is not https:// is never used
+    for name in ("token_endpoint", "jwks_uri"):
+        oidc_auth._DISCOVERY_CACHE.clear()
+        bad = dict(disco, **{name: "http://idp.example.com/" + name})
+        logs, posts = [], len(sent)
+        assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", logs.append,
+                                  fetch=lambda u, d=bad: jwks if u.endswith("/jwks") else d,
+                                  post=post_for(tok)) is None
+        assert any("is not an https:// address" in m for m in logs), logs
+        assert len(sent) == posts + (name == "jwks_uri"), name   # no code to an http endpoint
+    oidc_auth._DISCOVERY_CACHE.clear()
+    # a discovery document naming another issuer: logged once; tokens must come from it
+    other = dict(disco, issuer="https://sso.example.com")
+    logs = []
+    for _ in range(2):
+        assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", logs.append,
+                                  fetch=lambda u: jwks if u.endswith("/jwks") else other,
+                                  post=post_for(tok)) is None
+    assert sum("names the issuer 'https://sso.example.com'" in m for m in logs) == 1, logs
+    oidc_auth._DISCOVERY_CACHE.clear()
+    print("OIDC complete(): http:// token/JWKS addresses refused; another issuer logged  OK")
 
     # nonce mismatch -> rejected
     assert oidc_auth.complete(s, "https://h/cb", "CODE", "WRONG", fetch=fetch_for(tok), post=post_for(tok)) is None
@@ -176,6 +287,7 @@ def main():
     test_claim_turkish_names()
     test_signed_state_cookie()
     test_discovery_and_authorize_url()
+    test_https_only()
     if need("authlib", "cryptography", what="OIDC token exchange and id_token checks "
                                             "(oidc_auth.complete)"):
         test_complete_flow()

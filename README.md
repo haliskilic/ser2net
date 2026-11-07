@@ -150,8 +150,9 @@ düzenlemeye gerek yok.
   LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
   LDAPS / StartTLS'te sunucunun sertifikası denetlenir (sistemin CA'ları ya da kendi CA
   dosyanız).
-- **OIDC tek-oturum (SSO, opsiyonel):** Keycloak/Entra ID/Google/Okta ile authorization-code
-  akışı; id_token doğrulanır (imza/iss/aud/exp/nonce), claim→rol eşlenir. `authlib` gerektirir.
+- **OIDC tek-oturum (SSO, opsiyonel):** Keycloak/Entra ID/Google/Okta ile PKCE'li
+  authorization-code akışı; id_token doğrulanır (imza/iss/aud/exp/nonce), claim→rol eşlenir.
+  `authlib` gerektirir.
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
   durum ve portlar; **bearer-token** kimlik doğrulama (rol seçilebilir — `viewer`
   salt-okunur); OpenAPI 3.0 (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
@@ -449,6 +450,17 @@ her metin olabilir (`CORP\jdoe`, `jdoe@corp.local`, `/` ya da `#` içeren adlar;
 da Kullanıcılar panelinden kapatılıp silinebilir); denetim karakteri ya da görünmez karakter
 içeren, 255 karakterden uzun ya da parantez içindeki bir adla giriş reddedilir (nedeni
 all.log'da).
+
+**OIDC (SSO):** kod isteği PKCE (S256) taşır. Sağlayıcının keşif belgesinde verdiği tüm
+adresler (yetkilendirme, token, JWKS) ve yoldaki yönlendirmeler https:// olmalıdır (http://
+yalnızca bu makinenin loopback adresine): TLS sonlandıran bir proxy arkasındaki Keycloak
+http:// adresler bildirirse SSO girişi reddedilir ve all.log nedenini yazar (Keycloak'ın
+proxy / frontend URL ayarlarını düzeltin), çünkü client secret, kod ve imza anahtarları açık
+metin giderdi. Sağlayıcı kod yerine bir hatayla dönerse (ör. kullanıcı uygulamaya atanmamış:
+`access_denied`) hata ve açıklaması all.log'a yazılır, kullanıcı hata koduna göre bir mesaj
+görür; token endpoint'inin hata yanıtları da loglanır. Sağlayıcının doğrulanmamış dediği
+(`email_verified: false`) bir e-posta adresi kullanıcı adı olamaz. Keşif belgesindeki issuer
+yapılandırılandan farklıysa all.log bir kez uyarır.
 
 **TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
 Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika
