@@ -637,6 +637,34 @@ def bundle_problems_windows(bundle):
     return problems, f"{count} PE files"
 
 
+def check_version_resource(exe):
+    """The Windows exe carries a VS_VERSIONINFO built from app.__version__ (ser2net.spec
+    + tools/win_version_info.py), so Explorer shows a version/publisher instead of nothing
+    and the exe no longer uses PyInstaller's default console icon."""
+    import pefile
+
+    pe = pefile.PE(exe, fast_load=True)
+    pe.parse_data_directories(
+        directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
+    strings = {}
+    for info in getattr(pe, "FileInfo", []):
+        for entry in (info if isinstance(info, list) else [info]):
+            for table in getattr(entry, "StringTable", []) or []:
+                for key, val in table.entries.items():
+                    strings[key.decode("utf-8", "replace")] = val.decode("utf-8", "replace")
+    has_icon = any(getattr(e, "name", None) and e.name.string == b"RT_GROUP_ICON" or
+                   getattr(e, "id", None) == 14  # RT_GROUP_ICON
+                   for e in pe.DIRECTORY_ENTRY_RESOURCE.entries)
+    pe.close()
+    assert strings.get("ProductName") == "ser2net", strings
+    assert strings.get("OriginalFilename") == "ser2net.exe", strings
+    assert strings.get("ProductVersion") == __version__, strings
+    assert strings.get("FileVersion", "").startswith(__version__), strings
+    assert has_icon, "no RT_GROUP_ICON resource (custom icon not embedded)"
+    print(f"windows exe: version resource (ProductName={strings['ProductName']}, "
+          f"ProductVersion={strings['ProductVersion']}) and an icon  OK")
+
+
 def mapped_libraries(pids):
     """Every DLL / shared object the processes have mapped."""
     import psutil
@@ -736,13 +764,24 @@ def test_binary():
         assert version == f"ser2net {__version__}", f"--version printed {version!r}"
         print(f"{where}: --version -> {version}  OK")
 
+        # both platforms now ship a python-build-standalone interpreter with a supported
+        # OpenSSL (>= 3.5); a build that fell back to an EOL OpenSSL 3.0 must fail here
+        about = run.output(["--about"])
+        m = re.search(r"OpenSSL (\d+)\.(\d+)", about)
+        assert m and (int(m.group(1)), int(m.group(2))) >= (3, 5), \
+            f"{where}: bundled OpenSSL is below the supported 3.5 series:\n{about}"
+        print(f"{where}: --about reports {m.group(0)} (a supported series)  OK")
+
         licenses = run.output(["--licenses"])
         for needle in ("AGPL-3.0-only", "CPython", "OpenSSL", "ldap3 2.", "LGPL", "paho-mqtt",
                        "cryptography", "pyinstaller", "starlette", "pyserial"):
             assert needle in licenses, f"--licenses does not cover {needle!r}"
-        if not WINDOWS:  # python-build-standalone's statically linked native libraries
-            for lib in ("openssl-3", "libffi", "zlib", "mpdecimal"):
-                assert f"LICENSE.{lib} " in licenses, f"--licenses misses {lib}"
+        # python-build-standalone's native libraries (the python.org build folded these
+        # into its own LICENSE.txt; PBS — now used on Windows too — keeps them apart)
+        for lib in ("openssl-3", "libffi", "zlib"):
+            assert f"LICENSE.{lib} " in licenses, f"--licenses misses {lib}"
+        if not WINDOWS:
+            assert "LICENSE.mpdecimal " in licenses, "--licenses misses mpdecimal"
         print(f"{where}: --licenses covers ser2net, CPython/OpenSSL and every bundled package  OK")
 
         if not IMAGE:  # LGPL: the bundled ldap3 can be replaced without rebuilding
@@ -855,6 +894,8 @@ def test_binary():
             problems, n = loaded_problems(bundle, pids)
             assert not problems, "running process uses outside libraries:\n  " + "\n  ".join(problems)
             print(f"running: all {n} mapped libraries come from the bundle or the OS  OK")
+            if WINDOWS:
+                check_version_resource(BIN)
     finally:
         run_ok = hasattr(run, "proc")
         if run_ok:

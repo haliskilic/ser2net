@@ -52,7 +52,7 @@ Docker image. Used unmodified, through their public APIs.
 | Component | License |
 |---|---|
 | CPython 3.12 interpreter and standard library | PSF-2.0 |
-| OpenSSL 3 (statically linked into the interpreter) | Apache-2.0 |
+| OpenSSL 3.5 (linked into the interpreter) | Apache-2.0 |
 | libffi, expat, libX11/libXau/libxcb (Linux) | MIT |
 | zlib / zlib-ng | Zlib |
 | bzip2 | bzip2-1.0.6 |
@@ -65,10 +65,11 @@ Docker image. Used unmodified, through their public APIs.
 | PyInstaller bootloader | GPL-2.0-or-later **with the bootloader exception**, which allows distributing it inside programs under any license |
 | PyInstaller and pyinstaller-hooks-contrib runtime hooks | GPL-2.0-or-later with the bootloader exception / Apache-2.0 |
 
-The Linux executable uses a [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
-interpreter (the native libraries above are linked into it); the Windows executable
-uses the python.org build, whose `LICENSE.txt` (included in `ser2net --licenses`) covers
-the libraries it ships.
+Both executables use a [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
+interpreter (the native libraries above are linked into it), pinned to the same release
+per platform so Windows and Linux ship the same CPython and a supported OpenSSL (3.5 LTS).
+Each native library's own license text is included in `ser2net --licenses` and in the
+`*.THIRD-PARTY-LICENSES.txt` attached to the release.
 
 ## Browser assets (`app/web/static/`)
 

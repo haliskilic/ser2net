@@ -48,8 +48,16 @@ a = Analysis(
 # raise the minimum glibc version.
 a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith("libgcc_s.so")]
 pyz = PYZ(a.pure)
+# Windows: stamp the exe with a version resource (tools/win_version_info.py writes
+# build/win_version.txt from app.__version__ at build time) and the ser2net icon, so
+# Explorer's Details tab shows the version/publisher and the exe no longer carries
+# PyInstaller's default console icon. Both are ignored on other platforms.
+version_file = os.path.join("build", "win_version.txt")
+icon_file = os.path.join("tools", "ser2net.ico")
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
     name="ser2net",
     debug=False, strip=False, upx=False, console=True,
+    version=version_file if os.path.isfile(version_file) else None,
+    icon=icon_file if os.path.isfile(icon_file) else None,
 )

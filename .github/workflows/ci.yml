@@ -178,4 +178,7 @@ jobs:
   # Build the standalone executables and prove they need nothing else installed
   # (same workflow the release uses). Heavy, so: pull requests and main only.
   standalone:
+    permissions:
+      contents: read
+      actions: read   # the reusable workflow requests it (SignPath); the caller must grant it
     uses: ./.github/workflows/standalone.yml

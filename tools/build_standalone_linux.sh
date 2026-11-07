@@ -51,5 +51,7 @@ for lic in bzip2 cpython expat libX11 libXau libedit libffi liblzma libuuid libx
 done
 "$PY" tools/third_party.py licenses build/THIRD-PARTY-LICENSES.txt --strict --extra build/licenses-native
 "$PY" tools/third_party.py sbom build/ser2net.cdx.json --strict
+# fail the build if this interpreter's OpenSSL is an unsupported (EOL) series
+"$PY" tools/release_guard.py interpreter --min-openssl 3.5
 "$PY" -m PyInstaller --clean --noconfirm ser2net.spec
 dist/ser2net --version
