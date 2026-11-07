@@ -67,6 +67,7 @@ PORTABLE = [
     "test_modbus_write.py",
     "test_sparkplug.py",
     "test_ser2net_import.py",
+    "test_import_safety.py",
     "test_i18n.py",
     "test_mapping_ids.py",
     "test_serial_url_ports.py",

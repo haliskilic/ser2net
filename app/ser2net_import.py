@@ -8,19 +8,24 @@ dependency anyway); 3.x has its own colon-separated line format. So this module
 carries a small reader for the YAML subset ser2net configs use plus a 3.x line
 parser, and turns every ser2net connection into a dict for MappingConfig.from_dict.
 
-What has no equivalent here (TLS/certauth, LEDs, rotators, mDNS, chardelay, ...) is
-reported as a warning that names the connection; a connection that cannot be
-represented at all (a network or IPMI connector, a unix-socket accepter) is skipped
-with a warning, so every returned dict passes MappingConfig.validate(). ser2net only
-opens a serial device while a client is connected, so several of its ports may share
-one device; a mapping here keeps its device open, so later connections on the same
-device are imported disabled, and a repeated listening port is skipped: the import
-can then be applied as a whole.
+What has no equivalent here (LEDs, rotators, mDNS, chardelay, ...) is reported as a
+warning that names the connection. A connection that would be more open here than in
+ser2net is imported disabled, with a warning that says why: its gtlssh login
+(certauth) or TLS client certificates (ssl clientauth) cannot be carried over, its TLS
+certificate is not on this host (with the files there it keeps TLS), the device only
+received data (wronly, rawlp, no-con-to-acc), its bind address or remaddr cannot be
+used here. A connection that cannot be represented at all (a network or IPMI
+connector, a unix-socket accepter) is skipped with a warning, so every returned dict
+passes MappingConfig.validate(). ser2net only opens a serial device while a client is
+connected, so several of its ports may share one device; a mapping here keeps its
+device open, so later connections on the same device are imported disabled, and a
+repeated listening port is skipped: the import can then be applied as a whole.
 """
 from __future__ import annotations
 
 import copy
 import ipaddress
+import os
 import re
 import socket
 from dataclasses import dataclass, field
@@ -476,7 +481,8 @@ class _Conn:
     traces: dict[str, str] = field(default_factory=dict)         # both/read/write -> file
     trace_mods: dict[tuple[str, str], bool] = field(default_factory=dict)
     access_given: bool = False                                   # remaddr was set
-    hold: str = ""                     # why it must come in disabled (wider access otherwise)
+    holds: list[str] = field(default_factory=list)  # why it comes in disabled (else more open)
+    ssl: Optional[dict[str, Any]] = None             # the accepter's ssl layer (_ssl_layer)
     remctl: bool = False                                         # 3.x RFC2217 flag
     dropped: list[str] = field(default_factory=list)             # options with no equivalent
     notes: list[str] = field(default_factory=list)
@@ -485,6 +491,12 @@ class _Conn:
     def note(self, msg: str) -> None:
         if msg not in self.notes:
             self.notes.append(msg)
+
+    def hold(self, why: str) -> None:
+        """Import the connection disabled: as it is here it would be more open than in
+        ser2net (every reason is reported)."""
+        if why not in self.holds:
+            self.holds.append(why)
 
     def skip(self, why: str) -> None:
         """Note why the connection is not imported (then the only notes shown for it)."""
@@ -608,8 +620,8 @@ def _bind_ip(c: _Conn, host: str, family: str) -> str:
     if ip is not None and not ip.is_multicast and not (
             ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
         return str(ip)
-    c.hold = (_("listen address '{0}' cannot be used as a bind IP here: the mapping listens on "
-                "0.0.0.0 and is imported disabled; set its bind IP, then enable it").format(host))
+    c.hold(_("listen address '{0}' cannot be used as a bind IP here: the mapping listens on "
+             "0.0.0.0 and is imported disabled; set its bind IP, then enable it").format(host))
     return "0.0.0.0"
 
 
@@ -620,7 +632,7 @@ _OTHER_TERMINALS = ("unix", "unixdgram", "stdio", "pty", "file", "echo", "dummy"
                     "ssl", "certauth", "mux")
 
 
-def _accepter(c: _Conn, spec: str) -> bool:
+def _accepter(c: _Conn, spec: str, ssl_defaults: Optional[dict[str, str]] = None) -> bool:
     """The listening side: telnet / telnet(rfc2217) over tcp|udp,[host,]port."""
     layers = _split_gensio(spec)
     for idx, part in enumerate(layers):
@@ -637,11 +649,14 @@ def _accepter(c: _Conn, spec: str) -> bool:
                       and _bool(o.split("=", 1)[1] if "=" in o else "true") for o in opts)
             c.network["protocol"] = "rfc2217" if rfc else "telnet"
         elif low == "ssl":
-            c.note(_("TLS (ssl) is not imported: the mapping listens without TLS; enable TLS "
-                     "on it with a certificate and key if clients expect it"))
+            c.ssl = _ssl_layer(opts, ssl_defaults or {})  # resolved in _tls()
+        elif low == "dtls":
+            c.hold(_("{0} (encryption) is not available here for this connection: the mapping "
+                     "is imported disabled rather than unencrypted").format(name))
         elif low == "certauth":
-            c.note(_("certauth (gtlssh login) is not imported: clients connect without "
-                     "authentication"))
+            c.hold(_("certauth (gtlssh login) is not available here: the mapping is imported "
+                     "disabled rather than open to clients without a login; allow only known "
+                     "client IPs on it before you enable it"))
         elif low == "mux":
             pass  # gtlssh's channel layer, comes with certauth
         elif low in _OTHER_TERMINALS:
@@ -650,6 +665,53 @@ def _accepter(c: _Conn, spec: str) -> bool:
             c.note(_("accepter layer '{0}' is not imported").format(name))
     c.skip(_("accepter '{0}' is not a TCP/UDP port").format(spec))
     return False
+
+
+# the files ser2net's ssl layer uses unless told otherwise (<sysconfdir>/ser2net/)
+_SSL_FILES = {"key": "/etc/ser2net/ser2net.key", "cert": "/etc/ser2net/ser2net.crt"}
+
+
+def _ssl_layer(opts: list[str], defaults: dict[str, str]) -> dict[str, Any]:
+    """ssl(key=..,cert=..,clientauth) -> {key, cert, clientauth}; what the layer leaves
+    out comes from the file's ssl defaults, then from ser2net's own files."""
+    found = {**_SSL_FILES, **defaults}
+    auth = found.pop("clientauth", "").strip()
+    clientauth = bool(auth) and _bool(auth) is not False  # a default without a value is off
+    for o in opts:
+        name, eq, value = o.partition("=")
+        name = name.strip().lower()
+        if name in ("key", "cert"):
+            found[name] = value.strip()
+        elif name == "clientauth":
+            clientauth = not eq or _bool(value) is not False
+    # an empty cert= means the certificate is in the key file
+    return {"key": found["key"], "cert": found["cert"] or found["key"], "clientauth": clientauth}
+
+
+def _tls(c: _Conn) -> None:
+    """The accepter's ssl layer: TLS with the same certificate when its files are on this
+    host, else the mapping comes in disabled rather than unencrypted. Client
+    certificates (clientauth) are not checked here: such a mapping comes in disabled."""
+    s = c.ssl
+    if s is None:
+        return
+    if s["clientauth"]:
+        c.hold(_("TLS client certificates (ssl clientauth) are not available here: the mapping "
+                 "is imported disabled rather than open to clients without a certificate; "
+                 "allow only known client IPs on it before you enable it"))
+    if c.network["mode"] == "udp":
+        c.hold(_("{0} (encryption) is not available here for this connection: the mapping "
+                 "is imported disabled rather than unencrypted").format("ssl"))
+        return
+    cert, key = s["cert"], s["key"]
+    if all(os.path.isabs(p) and os.path.isfile(p) for p in (cert, key)):
+        c.network.update(tls=True, tls_cert=cert, tls_key=key)
+        c.note(_("TLS (ssl) is kept: the mapping uses the certificate '{0}' and the key '{1}'")
+               .format(cert, key))
+    else:
+        c.hold(_("TLS (ssl): the certificate '{0}' or the key '{1}' is not on this host: the "
+                 "mapping is imported disabled rather than unencrypted; set TLS on it with a "
+                 "certificate and key, then enable it").format(cert, key))
 
 
 _SPEED = re.compile(r"(?:speed=)?(\d+)([NEOMS])?([5-8])?([12])?", re.I)
@@ -705,6 +767,10 @@ def _serial_option(c: _Conn, tok: str) -> None:
     flag: Optional[bool] = True
     if low.startswith("-"):
         low, flag = low[1:], False
+    if low == "wronly":
+        if flag and (not eq or _bool(value) is not False):
+            _write_only(c, tok)
+        return
     if low not in _SERIAL_FLAGS + ("dtr", "rts", "rs485"):
         if low not in ("custspeed", "uucplock", "flock", "readbuf"):  # nothing to do here
             c.drop(tok)
@@ -739,6 +805,13 @@ def _serial_option(c: _Conn, tok: str) -> None:
 
 _SERIAL_FLAGS = ("xonxoff", "rtscts", "hangup-when-done", "hangup_when_done", "hupcl",
                  "nobreak", "rdonly", "local")
+
+
+def _write_only(c: _Conn, what: str) -> None:
+    """ser2net only wrote to the device (wronly, 3.x rawlp): its output never reached the
+    clients. A mapping here always passes it on, so it comes in disabled."""
+    c.hold(_("{0} (a write-only device) is not available here: the device's output would be "
+             "sent to clients, so the mapping is imported disabled").format(what))
 
 
 # ---------------------------------------------------------------------------
@@ -843,6 +916,11 @@ def _option(c: _Conn, key: str, value: str) -> None:
     elif k == "no-acc-to-con":  # clients' data is not passed to the device = read-only
         if _flag(c, key, value):
             c.network["read_only"] = True
+    elif k == "no-con-to-acc":  # the device's data is not passed to the clients
+        if _bool(value) is not False:
+            c.hold(_("no-con-to-acc (the device's output is not sent to clients) is not "
+                     "available here: the mapping is imported disabled rather than sending it "
+                     "to them"))
     elif k == "telnet-brk-on-sync":  # only matters on telnet ports
         if _bool(value) and c.network["protocol"] != "raw":
             c.drop(key)
@@ -910,6 +988,12 @@ def _finish(c: _Conn) -> None:
     labels = ({"both": "tb", "read": "tr", "write": "tw"} if c.v3 else
               {k: f"trace-{k}" for k in ("both", "read", "write")})
     kind = next((k for k in ("both", "read", "write") if k in c.traces), "")
+    if kind == "read" and "write" not in c.traces:
+        # only the device's output was traced; a trace here records the clients' input too
+        c.note(_("{0} is not imported: it traced only the device's output, and a trace here "
+                 "also records what clients send (passwords too); set a trace file on the "
+                 "mapping if you want that").format(labels["read"]))
+        kind = ""
     if kind:
         path = _convert(c, c.traces[kind], "file", labels[kind])
         name = trace_file_name(path)
@@ -927,12 +1011,14 @@ def _finish(c: _Conn) -> None:
             b = c.trace_mods.get((kind, mod), c.trace_mods.get(("all", mod)))
             if b is not None:
                 c.options[f"trace_{mod}"] = b
+    _tls(c)
     if c.access_given and not net.get("allowed_client_ips"):
-        c.hold = (_("remaddr could not be imported: the mapping is imported disabled rather "
-                    "than open to every client"))
-    if c.hold:
+        c.hold(_("remaddr could not be imported: the mapping is imported disabled rather "
+                 "than open to every client"))
+    if c.holds:
         c.enabled = False
-        c.note(c.hold)
+        for why in c.holds:
+            c.note(why)
     if c.dropped:
         c.note(_("not imported (no equivalent here): {0}").format(", ".join(c.dropped)))
 
@@ -951,7 +1037,7 @@ _V2_KEYS = {"connections", "defines", "defaults", "delete_defaults", "rotators",
 _TOP_KEY = re.compile(r"^(?:connections?|defines?|defaults?|delete_defaults?|rotators?|leds?|"
                       r"admins?|include)[ \t]*:(?:[ \t]|$)", re.I | re.M)
 _SERIAL_DEFAULTS = {"speed", "nobreak", "rtscts", "xonxoff", "local", "hangup-when-done",
-                    "dtr", "rts", "custspeed", "rs485", "uucplock", "flock"}
+                    "dtr", "rts", "custspeed", "rs485", "uucplock", "flock", "wronly"}
 _OPTION_DEFAULTS = {"kickolduser", "max-connections", "remaddr", "telnet-brk-on-sync",
                     "chardelay", "trace-hexdump", "trace-timestamp", "trace-both-hexdump",
                     "trace-both-timestamp"}
@@ -1002,6 +1088,7 @@ class _Yaml:
         self.conns: list[_Conn] = []
         self.serial_defaults: dict[str, str] = {}
         self.option_defaults: dict[str, str] = {}
+        self.ssl_defaults: dict[str, str] = {}   # key / cert / clientauth of the ssl layer
 
     def text(self, node: Any, notes: list[str], what: str) -> str:
         if isinstance(node, (_YMap, list)):
@@ -1060,8 +1147,11 @@ class _Yaml:
 
     def default(self, name: str, value: str, cls: str) -> None:
         n, cls = name.strip().lower(), cls.strip().lower()
+        if n in ("key", "cert", "clientauth") and cls in ("", "ssl"):
+            self.ssl_defaults[n] = value.strip()  # for the accepters' ssl layers
+            return
         if not n or cls not in ("", "serialdev", "sdev", "ser2net"):
-            return  # a default for another gensio (ssl keys, ipmisol, ...) does not apply
+            return  # a default for another gensio (ipmisol, certauth, ...) does not apply
         if n in _SERIAL_DEFAULTS and cls != "ser2net":
             self.serial_defaults[n] = value.strip()
         elif n in _OPTION_DEFAULTS and cls in ("", "ser2net"):
@@ -1073,6 +1163,7 @@ class _Yaml:
     def delete_default(self, name: str) -> None:
         self.serial_defaults.pop(name.strip().lower(), None)
         self.option_defaults.pop(name.strip().lower(), None)
+        self.ssl_defaults.pop(name.strip().lower(), None)
 
     def connection(self, name: str, body: Any) -> None:
         if name:
@@ -1085,7 +1176,7 @@ class _Yaml:
             connector = self.text(body.get("connector", ""), c.notes, "connector").strip()
             if not accepter or not connector:
                 c.skip(_("it needs both an accepter and a connector"))
-            elif _accepter(c, accepter):
+            elif _accepter(c, accepter, self.ssl_defaults):
                 if not name:
                     c.name = c.label = f"ser2net-{c.network['port']}"
                 defaults = [f"{k}={v}" for k, v in self.serial_defaults.items()]
@@ -1232,9 +1323,8 @@ class _V3:
         c.device = device
         c.enabled = state != "off"
         c.network["protocol"] = "telnet" if state == "telnet" else "raw"
-        if state == "rawlp":
-            c.note(_("rawlp (a printer port without serial settings) is imported as raw; the "
-                     "device is opened as a serial port"))
+        if state == "rawlp":  # a printer port: ser2net opens it write-only
+            _write_only(c, "rawlp")
         _idle_timeout(c, timeout)
         for name, value in self.defaults.items():
             self.default(c, name, value)
@@ -1436,4 +1526,15 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
     if not mappings:
         warnings.append(_("No connection could be imported.") if conns else
                         _("The file has no ser2net connections to import."))
+    if any(_open_to_all(m) for m in mappings):
+        warnings.append(_("ser2net may also have limited its clients with TCP wrappers "
+                          "(/etc/hosts.allow, /etc/hosts.deny); those rules are not imported: a "
+                          "mapping without allowed client IPs accepts any client"))
     return mappings, warnings
+
+
+def _open_to_all(m: dict) -> bool:
+    """An enabled mapping that listens beyond the loopback and accepts any client."""
+    net = m["network"]
+    return bool(m["enabled"] and not net.get("allowed_client_ips")
+                and not ipaddress.ip_address(net["bind_ip"]).is_loopback)
