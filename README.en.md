@@ -156,6 +156,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   **manual peers** (host:port). Trust = the **same shared key** on every node (any
   characters, Turkish letters too; it is Unicode-normalised (NFKC) before use, so the same
   key typed or pasted elsewhere matches); off by default, enable under Settings → LAN cluster.
+  Peers are always contacted directly, never through an HTTP proxy (`HTTP(S)_PROXY` /
+  `ALL_PROXY` apply to webhooks and SSO only).
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT

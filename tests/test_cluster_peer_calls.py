@@ -13,16 +13,24 @@ The fleet view's peer calls carry the shared cluster key, so:
   * the cluster key may hold any characters: it is NFKC-normalised and used as UTF-8
     bytes for the beacon HMAC, the header sent and the comparison on the receiving
     side, so an ASCII key keeps exactly the bytes older releases send and check;
-  * a malformed beacon is dropped without an error.
+  * a malformed beacon is dropped without an error;
+  * peer calls connect directly - HTTP(S)_PROXY / ALL_PROXY never apply, so the key
+    never goes to a proxy - and don't follow redirects; why a peer's requests fail is
+    logged once per change.
+
+The network checks use small HTTP servers on 127.0.0.1 standing in for peers.
 
 Run: python3 tests/test_cluster_peer_calls.py
 """
 import asyncio
 import hashlib
 import hmac
+import http.server
 import json
 import os
+import socket
 import sys
+import threading
 import unicodedata
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -33,6 +41,51 @@ from app.engine.cluster import (ClusterDiscovery, _sign, key_bytes, key_header,
                                 key_header_matches, peer_addr, peer_url)
 
 KEY = "shared-key"
+PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+
+
+class FakePeer:
+    """An HTTP server on 127.0.0.1 that records requests and answers with
+    reply(path) -> (status, headers, body); stands in for a peer, a proxy or a host
+    nothing should reach."""
+
+    def __init__(self, reply=None, port=0):
+        self.requests = []
+        self.reply = reply or (lambda path: (200, {}, b'{"id": "p1", "mappings": []}'))
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def handle_one(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                outer.requests.append({"method": self.command, "path": self.path,
+                                       "headers": self.headers,
+                                       "body": self.rfile.read(n) if n else b""})
+                status, headers, body = outer.reply(self.path)
+                self.send_response(status)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = do_CONNECT = handle_one
+
+            def log_message(self, *args):
+                pass
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.port = self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def node(peers=(), key=KEY, log=None):
@@ -125,7 +178,7 @@ def test_beacon_address():
 def test_calls_only_known_peers():
     d = node(peers=["10.0.0.9:8080", "https://user@x:1"])
     calls = []
-    d._http = lambda method, url, body, timeout: calls.append(url) or (200, {"ok": True})
+    d._http = lambda method, url, body, timeout: calls.append(url) or (200, {"ok": True}, "")
 
     async def run():
         known = d.find_target("10.0.0.9", 8080)
@@ -182,6 +235,64 @@ def test_malformed_beacons():
     print("malformed beacons (types, non-ASCII signature, surrogates, nesting) dropped  OK")
 
 
+def test_direct_no_redirect():
+    proxy, peer = FakePeer(), FakePeer()
+    saved = {k: os.environ.get(k) for k in PROXY_VARS}
+    for k in PROXY_VARS[:3]:   # as set so that webhooks / SSO reach the Internet
+        os.environ[k] = f"http://127.0.0.1:{proxy.port}"
+    os.environ.pop("NO_PROXY", None)
+    try:
+        logs = []
+        d = node(peers=[f"127.0.0.1:{peer.port}"], key=TR_KEY, log=logs.append)
+        t = d.all_targets()[0]
+        assert asyncio.run(d.get_peer(t, "/api/cluster/local"))["id"] == "p1"
+        assert len(peer.requests) == 1 and not proxy.requests, "must connect directly"
+        sent = peer.requests[0]["headers"]["X-Cluster-Key"].encode("latin-1")
+        assert sent == TR_KEY.encode("utf-8"), sent
+        # a redirect is not followed (the key would go along)
+        peer.reply = lambda path: (302, {"Location": f"http://127.0.0.1:{proxy.port}/x"}, b"")
+        assert asyncio.run(d.get_peer(t, "/api/cluster/local")) is None
+        assert not proxy.requests, "a redirect must not be followed"
+        assert any("redirects are not followed" in m for m in logs), logs
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        proxy.close()
+        peer.close()
+    print("peer calls: direct despite HTTP(S)_PROXY/ALL_PROXY, redirects not followed  OK")
+
+
+def test_failures_logged_once():
+    logs = []
+    port = free_port()   # nothing listens here yet
+    d = node(peers=[f"127.0.0.1:{port}"], log=logs.append)
+    t = d.all_targets()[0]
+
+    async def calls(n):
+        return [await d.get_peer(t, "/api/cluster/local", timeout=2) for _ in range(n)]
+    assert asyncio.run(calls(3)) == [None] * 3
+    failed = [m for m in logs if "failed" in m]
+    assert len(failed) == 1 and f"127.0.0.1:{port}" in failed[0], logs
+    peer = FakePeer(lambda path: (403, {}, b'{"error": "forbidden"}'), port=port)
+    try:
+        assert asyncio.run(calls(2)) == [None] * 2
+        assert len(logs) == 2 and "refused this node's cluster key" in logs[1], logs
+        peer.reply = lambda path: (200, {}, b'{"id": "p1"}')
+        assert asyncio.run(calls(2))[0] == {"id": "p1"}
+        assert len(logs) == 3 and logs[2].endswith("answers again"), logs
+        # a refusal with the peer's own reason (400) is an answer, not a failure
+        peer.reply = lambda path: (400, {}, b'{"ok": false, "error": "port in use"}')
+        assert asyncio.run(d.post_peer(t, "/api/cluster/mapping-save", {"id": "x"})) == \
+            {"ok": False, "error": "port in use"}
+        assert len(logs) == 3, logs
+    finally:
+        peer.close()
+    print("peer request failures: logged once per change, recovery logged  OK")
+
+
 def main():
     test_peer_host_and_url()
     test_manual_peer_entries()
@@ -190,6 +301,8 @@ def main():
     test_calls_only_known_peers()
     test_cluster_key()
     test_malformed_beacons()
+    test_direct_no_redirect()
+    test_failures_logged_once()
     print("\nPASS: cluster peer calls")
 
 

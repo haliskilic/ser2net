@@ -101,6 +101,24 @@ def _target_key(t: dict) -> tuple:
     return t.get("scheme"), t.get("ip"), t.get("port")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # following it would send the key on to wherever it points
+
+
+def _peer_opener() -> urllib.request.OpenerDirector:
+    """The urllib opener for peer requests. Always a direct connection: a proxy from
+    HTTP(S)_PROXY / ALL_PROXY (or the Windows proxy settings), set so that webhooks or
+    SSO can reach the Internet, would be handed the key - and NO_PROXY can't name a
+    whole LAN. Redirects are not followed. TLS is not verified: cluster trust is the
+    shared key, not the certificate (self-signed is normal)."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                       urllib.request.HTTPSHandler(context=ctx), _NoRedirect())
+
+
 class _BeaconProtocol(asyncio.DatagramProtocol):
     def __init__(self, on_datagram):
         self._on_datagram = on_datagram
@@ -123,6 +141,8 @@ class ClusterDiscovery:
         self._transport = None
         self._beacon_task: asyncio.Task | None = None
         self._peers: dict[str, dict] = {}   # id -> {id,name,ip,port,scheme,last_seen}
+        self._opener = _peer_opener()
+        self._problems: dict[str, str] = {}  # peer host:port -> why its last request failed
         self._running = False
         self.discovery_error = ""           # non-empty when UDP discovery couldn't start
 
@@ -285,6 +305,7 @@ class ClusterDiscovery:
                 self._transport.close()
             self._transport = None
         self._peers.clear()
+        self._problems.clear()
 
     async def _beacon_loop(self) -> None:
         while True:
@@ -322,15 +343,6 @@ class ClusterDiscovery:
                 seen.add(a)
                 out.append(a)
         return out
-
-    @staticmethod
-    def _peer_ssl_ctx(url: str):
-        if not url.startswith("https"):
-            return None
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE   # cluster trust is the shared key, not the cert
-        return ctx
 
     # ----- peer HTTP (all key-guarded; trust is the shared key) -----
     def _auth_headers(self) -> dict[str, str]:
@@ -371,24 +383,51 @@ class ClusterDiscovery:
         try:
             url = peer_url(target["scheme"], target["ip"], target["port"], path, query)
         except ValueError:
+            self._note(target, "not a valid peer address")
             return 0, None
-        return await asyncio.to_thread(self._http, method, url, body, timeout)
+        status, data, problem = await asyncio.to_thread(self._http, method, url, body, timeout)
+        self._note(target, problem)
+        return status, data
 
     def _http(self, method: str, url: str, body: bytes | None,
-              timeout: float) -> tuple[int, dict | None]:
-        """Make one peer request (in a worker thread); never raises."""
+              timeout: float) -> tuple[int, dict | None, str]:
+        """Make one peer request (in a worker thread): (status, JSON object or None, what
+        went wrong - "" when the peer answered as a cluster node does). Never raises."""
         headers = self._auth_headers()
         if body is not None:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
         req = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=self._peer_ssl_ctx(url)) as r:
-                return r.status, _json_object(r)
+            with self._opener.open(req, timeout=timeout) as r:
+                data = _json_object(r)
+                return r.status, data, "" if data is not None else "not a ser2net cluster reply"
         except urllib.error.HTTPError as e:
             with contextlib.closing(e):
-                return e.code, _json_object(e)
-        except Exception:
-            return 0, None
+                data = _json_object(e)
+            if e.code in (401, 403):
+                return e.code, None, (f"HTTP {e.code}: it refused this node's cluster key "
+                                      "(or its cluster is off)")
+            if 300 <= e.code < 400:
+                return e.code, None, f"HTTP {e.code}: redirects are not followed"
+            # a 4xx with a JSON answer is a peer refusing one request (e.g. a bad edit)
+            return e.code, data, "" if data is not None and e.code < 500 else f"HTTP {e.code}"
+        except Exception as e:  # no connection, timeout, TLS ...
+            return 0, None, str(getattr(e, "reason", "") or e) or type(e).__name__
+
+    def _note(self, target: dict, problem: str) -> None:
+        """Log why requests to a peer fail - once per change, not on every refresh: the
+        first failure, a different one, and the first success after them."""
+        addr = peer_addr(target["ip"], target["port"])
+        if problem == self._problems.get(addr, ""):
+            return
+        if problem:
+            if len(self._problems) >= 256:  # peers come and go; keep this bounded
+                self._problems.clear()
+            self._problems[addr] = problem
+            self.log(f"cluster: request to peer {addr} failed: {problem}")
+        else:
+            del self._problems[addr]
+            self.log(f"cluster: peer {addr} answers again")
 
 
 def _json_object(resp) -> dict | None:

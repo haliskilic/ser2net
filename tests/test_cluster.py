@@ -249,13 +249,14 @@ def trapped(trap) -> bool:
         return False
 
 
-def start_node(cfg_obj):
+def start_node(cfg_obj, env=None):
     tmp = tempfile.mkdtemp(prefix="ser2net_cl_")
     cfg = os.path.join(tmp, "config.json")
     with open(cfg, "w") as fh:
         json.dump(cfg_obj, fh)
+    child = {k: v for k, v in os.environ.items() if k.lower() != "no_proxy"}
     proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
-                            cwd=ROOT, stdin=subprocess.DEVNULL,
+                            cwd=ROOT, stdin=subprocess.DEVNULL, env=dict(child, **(env or {})),
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return proc, tmp
 
@@ -290,7 +291,10 @@ def test_manual_peer_and_remote_control():
     node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a},
               "cluster": {"enabled": True, "key": key, "discovery_port": dp_a,
                           "peers": [f"127.0.0.1:{ui_b}"]}}
-    pa, ta = start_node(node_a)
+    # A runs with proxy variables (as for webhooks / SSO): its peer calls must not use them
+    proxy = trap_listener()
+    via = f"http://127.0.0.1:{proxy.getsockname()[1]}"
+    pa, ta = start_node(node_a, {"HTTP_PROXY": via, "HTTPS_PROXY": via, "ALL_PROXY": via})
     pb, tb = start_node(node_b)
     try:
         assert wait_port(ui_a) and wait_port(ui_b), "nodes did not start"
@@ -336,6 +340,7 @@ def test_manual_peer_and_remote_control():
         html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
         assert "REMOTE1" in html and "manual" in html, html[:500]
         assert ("v2.6" in html or "up " in html), "per-node health (version/uptime) missing"
+        assert not trapped(proxy), "peer calls must connect directly, never via a proxy"
         print("manual peer aggregated with health (version/uptime) + 'manual' tag  OK")
 
         # B is shown, opened and controlled at the address A reaches it at; the address
@@ -457,6 +462,9 @@ def test_manual_peer_and_remote_control():
             code, page = e.code, e.read().decode()
         assert code == 400 and "REMOTE2" in page, (code, page[:600])
         print("remote edit: the peer's own validation message is shown  OK")
+        assert not trapped(proxy), "peer calls must connect directly, never via a proxy"
+        proxy.close()
+        print("peer calls ignored HTTP(S)_PROXY / ALL_PROXY  OK")
 
         print("\nPASS: manual peers + per-node health + remote control + remote edit")
     finally:
