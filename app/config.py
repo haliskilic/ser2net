@@ -49,6 +49,12 @@ MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year
 SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
 SESSION_TIMEOUT_MAX_S = 30 * 86400
+# LDAP/OIDC accounts not signed in for this many days are removed (AppConfig
+# .external_users_expire_days, app/signins.py); 0 = never. At least the longest session
+# lifetime, so no live session ends that way.
+EXPIRE_DAYS_DEFAULT = 90
+EXPIRE_DAYS_MIN = SESSION_TIMEOUT_MAX_S // 86400
+EXPIRE_DAYS_MAX = 3650
 
 
 class ConfigError(ValueError):
@@ -1151,6 +1157,9 @@ class AppConfig:
     api_token_role: str = "admin"  # role granted by the API token (viewer = read-only)
     # lifetime of a web-UI sign-in (cookie + signed token); Settings -> Web UI access
     session_timeout_s: int = SESSION_TIMEOUT_DEFAULT_S
+    # LDAP/OIDC accounts not signed in for this many days are removed (0: never);
+    # Settings -> Users
+    external_users_expire_days: int = EXPIRE_DAYS_DEFAULT
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
     users: list[User] = field(default_factory=list)
@@ -1186,6 +1195,7 @@ class AppConfig:
             api_token_hash=d.get("api_token_hash", ""),
             api_token_role=d.get("api_token_role", "admin") if d.get("api_token_role", "admin") in ROLES else "admin",
             session_timeout_s=_session_timeout(d.get("session_timeout_s")),
+            external_users_expire_days=_expire_days(d.get("external_users_expire_days")),
             users=users,
             ldap=LdapSettings.from_dict(d.get("ldap", {})),
             oidc=OidcSettings.from_dict(d.get("oidc", {})),
@@ -1197,6 +1207,12 @@ class AppConfig:
         )
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
+        raw_days = d.get("external_users_expire_days")
+        if raw_days is not None and raw_days != cfg.external_users_expire_days:
+            cfg.load_notes.append(
+                f"external_users_expire_days {raw_days!r} is not 0 (never) or "
+                f"{EXPIRE_DAYS_MIN}..{EXPIRE_DAYS_MAX} days: {cfg.external_users_expire_days} "
+                "is used")
         spellings: dict[str, list[str]] = {}
         for u in cfg.users:
             if u.source == "ldap":
@@ -1244,6 +1260,7 @@ class AppConfig:
             "api_token_hash": self.api_token_hash,
             "api_token_role": self.api_token_role,
             "session_timeout_s": self.session_timeout_s,
+            "external_users_expire_days": self.external_users_expire_days,
             "users": [asdict(u) for u in self.users],
             "ldap": asdict(self.ldap),
             "oidc": asdict(self.oidc),
@@ -1418,6 +1435,19 @@ def _epoch(value: Any) -> float:
     except (TypeError, ValueError, OverflowError):
         return 0.0
     return t if math.isfinite(t) and t > 0 else 0.0
+
+
+def _expire_days(value: Any) -> int:
+    """external_users_expire_days from a config file: missing or unreadable -> the
+    default, 0 or less -> 0 (never), anything else clamped into the supported range (a
+    hand-edited value must not stop a start; from_dict notes the change)."""
+    if value is None or isinstance(value, bool):
+        return EXPIRE_DAYS_DEFAULT
+    try:
+        days = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return EXPIRE_DAYS_DEFAULT
+    return 0 if days <= 0 else min(max(days, EXPIRE_DAYS_MIN), EXPIRE_DAYS_MAX)
 
 
 def _ip_overlaps(a: str, b: str) -> bool:

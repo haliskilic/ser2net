@@ -96,7 +96,7 @@
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}</td>
+        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
         <td>
           {% if u.source != 'local' %}
             <span class="mono">{{ u.role }}</span> <span class="muted">({{ _("from %(source)s", source=u.source|upper) }})</span>
@@ -133,6 +133,16 @@
   </table>
   </div>
   <p class="muted mb-sm">{{ _('Roles: <span class="mono">admin</span> (everything), <span class="mono">operator</span> (manage mappings), <span class="mono">viewer</span> (read-only).') }}</p>
+  {% if ldap.enabled or oidc.enabled or users|rejectattr("source", "equalto", "local")|list %}
+  <p class="muted mb-sm">{{ _("LDAP / OIDC accounts are made at their first sign-in, and every sign-in takes their role from the directory or the identity provider again. Delete signs such an account out at once, but whether that person can sign in again is up to the directory: while a mapped group or the default role still applies, their next sign-in makes a new account.") }}</p>
+  <form method="post" action="/settings/users/expiry" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Remove LDAP / OIDC accounts not signed in for (days)") }} <span class="muted">({{ _("0 = never · %(min)s to %(max)s · never admins or local accounts", min=expire_min, max=expire_max) }})</span>
+      <input type="number" name="expire_days" min="0" max="{{ expire_max }}" value="{{ expire_days }}" required>
+    </label>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
+  {% endif %}
   <form method="post" action="/settings/users" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <div class="grid2">

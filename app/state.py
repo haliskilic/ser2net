@@ -25,11 +25,12 @@ from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from . import accounts
-from .config import AppConfig, ConfigStore, lock_down_dir, mapping_file, valid_mapping_id
+from .config import AppConfig, ConfigStore, User, lock_down_dir, mapping_file, valid_mapping_id
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
 from .notify import Notifier
+from .signins import SignIns
 from .web.auth import LoginRateLimiter, RevokedSessions
 
 # Per-mapping log retention (automatic maintenance).
@@ -141,6 +142,8 @@ class AppState:
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
+        # when each account last signed in (from audit.log, then every session issued)
+        self.signins = SignIns()
         # LDAP/OIDC group settings that matched a sign-in's group only as part of its name,
         # which no longer counts: (source, setting) -> details, shown in Settings until
         # that section is saved (in memory only)
@@ -361,9 +364,51 @@ class AppState:
                     self._attach_mapping_handler(lg, mid)
 
     async def _log_maintenance_loop(self) -> None:
+        await self.load_sign_ins()
         while True:
             await self.run_log_maintenance()
+            try:
+                await self.expire_external_accounts()
+            except Exception as e:  # never let maintenance crash the loop
+                self.log(f"removing unused LDAP/OIDC accounts failed: {e}")
             await asyncio.sleep(LOG_MAINTENANCE_INTERVAL)
+
+    # ---------------- sign-ins: last sign-in, unused LDAP/OIDC accounts ----------------
+    async def load_sign_ins(self) -> None:
+        """Read the sign-ins on record in the audit log (app/signins.py)."""
+        try:
+            await asyncio.to_thread(lambda: self.signins.load(self.read_audit()))
+        except Exception as e:  # still usable: sign-ins from now on count
+            self.signins.loaded = True
+            self.log(f"could not read the sign-ins in the audit log: {e}")
+
+    async def expire_external_accounts(self) -> list[User]:
+        """Remove the LDAP/OIDC accounts not signed in for external_users_expire_days
+        (SignIns.expired: never local accounts, admins or the last accounts). Each is
+        logged and audited; returns them."""
+        days = self.config.external_users_expire_days
+        async with self.config_lock:
+            gone = self.signins.expired(self.config.users, days)
+            if not gone:
+                return []
+            before = self.config.users
+            self.config.users = [u for u in before if not any(u is g for g in gone)]
+            try:  # removing accounts can't make a valid config invalid: like the CLI's
+                await asyncio.to_thread(self.store.save, self.config, validate=False)
+            except OSError as e:
+                self.config.users = before
+                self.log(f"could not save the removal of unused LDAP/OIDC accounts: {e}")
+                return []
+        for u in gone:
+            last = self.signins.last(u)
+            seen = time.strftime("%Y-%m-%d", time.localtime(last)) if last else "none on record"
+            self.log(f"{u.source.upper()} account {u.username!r} ({u.role}) removed: no sign-in "
+                     f"for {days} days (last: {seen}). It is made again at their next sign-in "
+                     f"while {u.source.upper()} still gives them a role.")
+            self.audit("local", "user_expired",
+                       f"{u.username}: {u.source}, no sign-in for {days} days (last: {seen})",
+                       user="(maintenance)")
+        return gone
 
     # ---------------- first-run setup ----------------
     @property

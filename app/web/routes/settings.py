@@ -19,8 +19,9 @@ from starlette.routing import Route
 
 from ... import i18n, importer, optional
 from ...config import (
-    NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
-    ConfigError, NotificationSettings, User, backup_time, new_pwd_version, parse_cluster_peer,
+    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
+    WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
+    backup_time, new_pwd_version, parse_cluster_peer,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -55,6 +56,10 @@ def routes(ctx: Ctx) -> list:
         return (optional.load("ldap3", "ldap3")[1] if state.config.ldap.enabled else None,
                 optional.load("authlib.jose", "authlib")[1] if state.config.oidc.enabled else None)
 
+    def _sign_in_time(user) -> str:
+        when = state.signins.last(user)
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(when)) if when else "—"
+
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
@@ -68,6 +73,9 @@ def routes(ctx: Ctx) -> list:
                       api_token_role=state.config.api_token_role,
                       new_api_token=new_api_token, new_cluster_key=new_cluster_key,
                       me=current_user(request), users=state.config.users, roles=ROLES,
+                      last_sign_in={u.username: _sign_in_time(u) for u in state.config.users},
+                      expire_days=state.config.external_users_expire_days,
+                      expire_min=EXPIRE_DAYS_MIN, expire_max=EXPIRE_DAYS_MAX,
                       ldap=state.config.ldap, ldap_problem=ldap_problem,
                       ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,
@@ -519,6 +527,43 @@ def routes(ctx: Ctx) -> list:
         if others:
             ok += " " + _("Its accounts in another letter case were deleted too: {0}.").format(
                 ", ".join(u.username for u in others))
+        if target.source != "local":
+            ok += " " + _("They are signed out; while {0} still gives them a role, their next "
+                          "sign-in makes a new account.").format(target.source.upper())
+        return await settings_get(request, ok=ok)
+
+    async def settings_users_expiry(request):
+        """How many days without a sign-in an LDAP/OIDC account is kept (0: for ever)."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        try:
+            days = int(str(form.get("expire_days", "")).strip())
+        except ValueError:
+            days = -1
+        if not (days == 0 or EXPIRE_DAYS_MIN <= days <= EXPIRE_DAYS_MAX):
+            return await settings_get(request, error=_(
+                "Enter 0 (never) or a number of days from {0} to {1}.").format(
+                    EXPIRE_DAYS_MIN, EXPIRE_DAYS_MAX))
+        async with state.config_lock:
+            old = state.config.external_users_expire_days
+            state.config.external_users_expire_days = days
+            try:
+                await state.asave()
+            except ConfigError as e:
+                state.config.external_users_expire_days = old
+                return await settings_get(request, error=str(e))
+        state.log(f"LDAP/OIDC accounts are removed after {days} days without a sign-in" if days
+                  else "LDAP/OIDC accounts are no longer removed for not signing in")
+        ctx.audit(request, "users_expiry", str(days))
+        gone = await state.expire_external_accounts()
+        ok = (_("Saved: LDAP / OIDC accounts that haven’t signed in for {0} days are removed "
+                "(checked every hour).").format(days) if days else
+              _("Saved: LDAP / OIDC accounts are never removed for not signing in."))
+        if gone:
+            ok += " " + _("Removed now: {0}.").format(", ".join(u.username for u in gone))
         return await settings_get(request, ok=ok)
 
     async def settings_users_signout(request):
@@ -1053,6 +1098,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/users/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/delete", settings_users_delete, methods=["POST"]),
         Route("/settings/users/signout", settings_users_signout, methods=["POST"]),
+        Route("/settings/users/expiry", settings_users_expiry, methods=["POST"]),
         # the user name in the URL: older pages and scripts (only names without /)
         Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
@@ -1113,6 +1159,12 @@ def _setting_changes(old, new) -> list[str]:
         diff(f"{label} · {_('Admin group')}", a.admin_group or "—", b.admin_group or "—")
     diff(f"LDAP · {_('Server certificate check')}", onoff(old.ldap.tls_verify),
          onoff(new.ldap.tls_verify))
+
+    def days(value) -> str:
+        return _("{0} days").format(value) if value else _("never")
+
+    diff(_("Remove LDAP / OIDC accounts not signed in for"),
+         days(old.external_users_expire_days), days(new.external_users_expire_days))
     return out
 
 
