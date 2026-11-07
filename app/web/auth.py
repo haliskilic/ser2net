@@ -196,8 +196,9 @@ def session_user(cfg, token: str | None, revoked: RevokedSessions | None = None)
 # --------------------------------------------------------------------------
 # optional anonymous access (login requirement switched off by an admin)
 # --------------------------------------------------------------------------
-# Not a valid account name (see routes._username_problem), so it can never collide
-# with a real user.
+# Not a valid account name: local names can't hold parentheses (forms._username_problem)
+# and LDAP/OIDC names in parentheses are refused (config.external_name_problem). Identity
+# checks compare the source too (an older install may have such an account).
 ANONYMOUS_USERNAME = "(anonymous)"
 
 

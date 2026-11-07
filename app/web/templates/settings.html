@@ -4,6 +4,7 @@
 {% set is_admin = me and me.role == 'admin' %}
 {% set is_operator = me and me.role in ['operator', 'admin'] %}
 {% set is_anonymous = me and me.source == 'anonymous' %}
+{% set my_name = me.username if me and not is_anonymous else none %}
 {% set unchanged = _('•••••• (unchanged)') %}
 {% macro group_warning(w) -%}
 {%- set setting = {'admin_group': _('Admin group'), 'operator_group': _('Operator group'), 'viewer_group': _('Viewer group')}[w.setting] -%}
@@ -95,13 +96,14 @@
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}</td>
+        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}</td>
         <td>
           {% if u.source != 'local' %}
             <span class="mono">{{ u.role }}</span> <span class="muted">({{ _("from %(source)s", source=u.source|upper) }})</span>
           {% else %}
-          <form method="post" action="/settings/users/{{ u.username }}/role" class="inline">
+          <form method="post" action="/settings/users/role" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+            <input type="hidden" name="username" value="{{ u.username }}">
             <select name="role">
               {% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>{% endfor %}
             </select>
@@ -110,14 +112,16 @@
           {% endif %}
         </td>
         <td>
-          {% if me.username != u.username %}
+          {% if u.username != my_name %}
           <div class="row-actions">
-            <form method="post" action="/settings/users/{{ u.username }}/signout" class="inline">
+            <form method="post" action="/settings/users/signout" class="inline">
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
               <button class="btn sm" type="submit">{{ _("Sign out") }}</button>
             </form>
-            <form method="post" action="/settings/users/{{ u.username }}/delete" class="inline">
+            <form method="post" action="/settings/users/delete" class="inline">
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
               <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
             </form>
           </div>
@@ -143,7 +147,7 @@
     </div>
     <button class="btn" type="submit">{{ _("Add user") }}</button>
   </form>
-  {% set resettable = users|selectattr("source", "equalto", "local")|rejectattr("username", "equalto", me.username)|list %}
+  {% set resettable = users|selectattr("source", "equalto", "local")|rejectattr("username", "equalto", my_name)|list %}
   {% if resettable %}
   <h3 class="mt-sm">{{ _("Set another user’s password") }}</h3>
   <p class="muted mb-sm">{{ _("For someone who forgot theirs; it also signs that user out everywhere. “Sign out” in the table ends a user’s sessions without changing anything else.") }}</p>

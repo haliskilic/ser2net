@@ -397,6 +397,17 @@ def routes(ctx: Ctx) -> list:
                                                         "oidc", "OIDC"))
 
     # ---------------- user management (admin only) ----------------
+    def _target_name(request, form) -> str:
+        """The account a Users-panel form acts on: its `username` field (any name works
+        there, also DOMAIN\\user or one with / # ?), or the older form's URL
+        /settings/users/<name>/... (kept for scripts and older pages)."""
+        return request.path_params.get("username") or str(form.get("username") or "")
+
+    def _is_me(request, username: str) -> bool:
+        """The signed-in account itself (never the open-access pseudo-user)."""
+        me = current_user(request)
+        return me is not None and me.source != "anonymous" and me.username == username
+
     def _last_admin(target) -> bool:
         """Would demoting / deleting this admin leave no admin, or none who can sign in
         (an LDAP/OIDC admin can't while that method is off)?"""
@@ -435,7 +446,7 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        username = request.path_params["username"]
+        username = _target_name(request, form)
         role = form.get("role", "viewer")
         async with state.config_lock:  # checked under the lock: two admins at once
             target = state.config.get_user(username)
@@ -458,13 +469,12 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        username = request.path_params["username"]
-        me = current_user(request)
+        username = _target_name(request, form)
         async with state.config_lock:  # checked under the lock: two admins at once
             target = state.config.get_user(username)
             if target is None:
                 return await settings_get(request, error=_("User not found."))
-            if me and me.username == username:
+            if _is_me(request, username):
                 return await settings_get(request, error=_("You cannot delete your own account."))
             if target.role == "admin" and _last_admin(target):
                 return await settings_get(request, error=_("Cannot delete the last admin."))
@@ -480,7 +490,7 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        username = request.path_params["username"]
+        username = _target_name(request, form)
         async with state.config_lock:
             target, err = await _bump_sessions(username)
         if err:
@@ -488,8 +498,7 @@ def routes(ctx: Ctx) -> list:
         state.log(f"all sessions of {username} signed out")
         ctx.audit(request, "user_signout", username)
         resp = await settings_get(request, ok=_("'{0}' was signed out everywhere.").format(username))
-        me = current_user(request)
-        if me is not None and me.username == username:
+        if _is_me(request, username):
             set_session(resp, request, target)  # your own row: you stay signed in here
         return resp
 
@@ -505,13 +514,13 @@ def routes(ctx: Ctx) -> list:
         pw, pw2 = form.get("password", ""), form.get("password2", "")
 
         def problem():
-            target, me = state.config.get_user(username), current_user(request)
+            target = state.config.get_user(username)
             if target is None:
                 return _("User not found.")
             if target.source != "local":
                 return _("'{0}' signs in with {1}; their password is managed there.").format(
                     username, target.source.upper())
-            if me is not None and me.username == username:
+            if _is_me(request, username):
                 return _("To change your own password, use the form at the top (it asks for "
                          "the current one).")
             return None
@@ -855,7 +864,8 @@ def routes(ctx: Ctx) -> list:
             ok.append(_("Access-related changes: {0}.").format("; ".join(changes)))
         resp = await settings_get(request, ok=" ".join(ok + notes))
         me = current_user(request)
-        mine = cur.get_user(me.username) if with_accounts and me is not None else None
+        mine = (cur.get_user(me.username)
+                if with_accounts and me is not None and me.source != "anonymous" else None)
         if mine is not None:
             set_session(resp, request, mine)
         return resp
@@ -1003,6 +1013,10 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
         Route("/settings/users", settings_users_create, methods=["POST"]),
         Route("/settings/users/password", settings_users_password, methods=["POST"]),
+        Route("/settings/users/role", settings_users_role, methods=["POST"]),
+        Route("/settings/users/delete", settings_users_delete, methods=["POST"]),
+        Route("/settings/users/signout", settings_users_signout, methods=["POST"]),
+        # the user name in the URL: older pages and scripts (only names without /)
         Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
         Route("/settings/users/{username}/signout", settings_users_signout, methods=["POST"]),

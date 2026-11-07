@@ -42,6 +42,8 @@ def test_claim_mapping():
     assert oidc_auth.username_from_claims({"preferred_username": "alice"}, s) == "alice"
     assert oidc_auth.username_from_claims({"email": "a@b.c"}, s) == "a@b.c"          # falls back
     assert oidc_auth.username_from_claims({"sub": "xyz"}, s) == "xyz"
+    # one spelling: NFC, no white space around it
+    assert oidc_auth.username_from_claims({"preferred_username": " Jose\u0301 "}, s) == "Jos\u00e9"
     print("OIDC claim -> role/username mapping (+ fallbacks, deny)  OK")
 
 

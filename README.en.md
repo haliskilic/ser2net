@@ -426,7 +426,11 @@ worked out from their groups at every sign-in. Local accounts come first: an LDA
 sign-in under the name of a local account (letter case aside) is refused and written to
 all.log and the audit log (`ldap_login_denied` / `oidc_login_denied`); it never takes over
 the local account, turns it into an SSO account or demotes it. To move someone from a local
-account to SSO, delete the local account first (another admin must remain).
+account to SSO, delete the local account first (another admin must remain). An LDAP/OIDC
+name can be any printable text (`CORP\jdoe`, `jdoe@corp.local`, names with `/` or `#`;
+such accounts can be signed out and deleted in the Users panel too); a sign-in under a name
+with control or invisible characters, longer than 255 characters or in parentheses is
+refused (all.log says why).
 
 **LDAP over TLS (LDAPS / StartTLS):** the directory server's certificate is checked. It
 must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: its

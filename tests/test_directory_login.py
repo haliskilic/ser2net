@@ -18,7 +18,8 @@ repeats), or fails with SER2NET_OPTIONAL_TESTS=1.
     exchange too (401), with nothing saved;
   * a directory or provider account named like a local account (letter case aside) is
     refused (403, logged and audited): the local admin keeps its source, role,
-    password and sessions.
+    password and sessions; so is a name with invisible characters, an over-long one or
+    one in parentheses, while DOMAIN\\name with / and # works.
 
 Run: python3 tests/test_directory_login.py
 """
@@ -392,6 +393,23 @@ def test_oidc():
             Browser(srv.base).login("admin", PW)
             print("OIDC: a sign-in under a local account's name is refused; the local admin "
                   "stays as it was  OK")
+
+            # names no account can have: refused, with the reason in all.log
+            for name in ("(anonymous)", "ad‮min", "x" * 256):
+                st, page = oidc_sign_in(srv, provider, {"preferred_username": name,
+                                                        "groups": ["ser2net-viewers"]})
+                assert st == 403 and "can’t be used here" in page, (name, st)
+            log = all_log(srv)
+            assert ("OIDC login denied for '(anonymous)': no account can have this name here: "
+                    "a name in parentheses") in log, log[-1500:]
+            assert "it contains control or invisible characters (U+202E)" in log
+            assert "Username claim can name another claim" in log
+            assert len(srv.saved_config()["users"]) == 2, srv.saved_config()["users"]
+            st, _ = oidc_sign_in(srv, provider, {"preferred_username": " CORP\\op/1#x ",
+                                                 "groups": ["ser2net-viewers"]})
+            assert st == 303 and user_of(srv, "CORP\\op/1#x")["role"] == "viewer", st
+            print("OIDC: names with invisible characters, over-long or in parentheses are "
+                  "refused; DOMAIN\\name with / and # works  OK")
 
             old = session_for(srv, "sso.user", 7)
             assert signed_in(srv, old)
