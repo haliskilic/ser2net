@@ -284,8 +284,9 @@ Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/
 (or `:2.8`, `:2.8.0`); `docker-compose.yml` uses it.
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
 `SER2NET_PORT` — the interactive picker can't run headless). Publish each mapping's port
-too (a new mapping gets 4001), or use the host network. The serial device's group is taken
-from the device itself, so no `--group-add` is needed. The process runs as the
+too (a new mapping gets 4001), or use the host network. A serial device's group is taken
+from the device itself, so `--group-add` isn't needed for the usual device names. The
+process runs as the
 `ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
 image is taken over on the first start, and in a bind-mounted folder the files an older
 image wrote as root are handed to the folder's owner, so upgrading needs no manual step.

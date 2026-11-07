@@ -18,8 +18,9 @@ services:
     # Pass through the host serial device(s). USB-serial adapters renumber across
     # replug; bind by stable /dev/serial/by-id/... when possible. The container takes
     # each device's group from the device itself (its numeric GID differs between
-    # distributions), so no group_add is needed. A device missing at start stops the
-    # container from starting: see the hot-plug variant below.
+    # distributions), so no group_add is needed while the container side keeps a serial
+    # name (ttyUSB*, ttyACM*, ttyS*, ...). A device missing at start stops the container
+    # from starting: see the hot-plug variant below.
     devices:
       - "/dev/ttyUSB0:/dev/ttyUSB0"
     environment:

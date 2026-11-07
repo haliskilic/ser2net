@@ -296,7 +296,7 @@ Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
 ayarlanır — başsız ortamda interaktif seçici çalışamaz). Her eşlemenin portunu da yayınlayın
 (yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
-alınır, `--group-add` gerekmez. Süreç root olarak değil, `ser2net`
+alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç root olarak değil, `ser2net`
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
 volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
 olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez.

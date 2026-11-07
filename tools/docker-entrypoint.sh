@@ -12,7 +12,8 @@
 #     image can have written there — owned by root (an image before v2.8) or by
 #     ser2net — are handed to that owner first, or the server couldn't read them.
 # Handing files over is best effort: when it fails (a read-only mount, NFS with
-# root_squash), the start goes on and ser2net names the file it can't read.
+# root_squash), the start goes on and ser2net names the file it can't read. Nothing
+# below a mount point inside /data (a volume or host folder mounted there) is touched.
 # The supplementary groups given with --group-add are kept; root's own group is not.
 # The group of each serial device passed in (--device, compose `devices:`) is added
 # too: the node keeps the host's numeric group, which need not be the image's
@@ -20,9 +21,27 @@
 # Started as another user (docker run --user ...), it runs as that user unchanged.
 set -eu
 DATA=/data
-SERIAL="/dev/tty[A-Z]* /dev/rfcomm* /dev/serial/by-id/* /dev/serial/by-path/*"
+SERIAL="/dev/tty[A-Z]* /dev/ttymxc* /dev/rfcomm* /dev/serial/by-id/* /dev/serial/by-path/*"
 run() { exec python /app/ser2net.py --no-bootstrap --data-dir "$DATA" "$@"; }
 say() { echo "[ser2net] $*"; }
+# in_data <find expression>: find in $DATA, but not below a mount point inside it
+in_data() {
+    mounts=$(awk -v d="$DATA/" 'index($5, d) == 1 { print $5 }' /proc/self/mountinfo)
+    while IFS= read -r mp; do
+        if [ -n "$mp" ]; then
+            set -- -path "$(printf '%b' "$mp")" -prune -o "$@"  # mountinfo writes " " as \040
+        fi
+    done <<EOF
+$mounts
+EOF
+    find "$DATA" "$@"
+}
+# take_over <uid:gid> [find tests]: hand the matching entries of $DATA to that owner
+take_over() {
+    owner=$1
+    shift
+    in_data "$@" -print0 | xargs -0 -r chown -h "$owner"
+}
 
 if [ "$(id -u)" != "0" ]; then
     run "$@"
@@ -35,29 +54,31 @@ if [ "$uid" = "0" ]; then
         "new root-owned folder): handing it to user ser2net (uid 10001)"
     # in a user namespace (rootless Podman) a host user's own folder shows up as root's
     if [ -r /proc/self/uid_map ] && ! grep -qE '^ *0 +0 +4294967295 *$' /proc/self/uid_map; then
-        say "if $DATA is a folder of yours (rootless Podman), start the container with" \
-            "--userns=keep-id instead, so it keeps its owner"
+        say "if $DATA is a folder of yours, start the container so that it keeps your uid" \
+            "(Podman: --userns=keep-id); the folder then keeps its owner"
     fi
-    chown -R ser2net:ser2net "$DATA" || say "warning: could not hand all of $DATA to ser2net"
+    take_over ser2net:ser2net || say "warning: could not hand all of $DATA to ser2net"
     uid=10001
     gid=10001
 elif [ "$uid" = "10001" ]; then
-    if [ -n "$(find "$DATA" ! -uid 10001 -print 2>/dev/null | head -n 1)" ]; then
-        chown -R ser2net:ser2net "$DATA" || say "warning: could not hand all of $DATA to ser2net"
+    if [ -n "$(in_data ! -uid 10001 -print 2>/dev/null | head -n 1)" ]; then
+        take_over ser2net:ser2net ! -uid 10001 \
+            || say "warning: could not hand all of $DATA to ser2net"
     fi
-elif [ -n "$(find "$DATA" \( -uid 0 -o -uid 10001 \) -print 2>/dev/null | head -n 1)" ]; then
+elif [ -n "$(in_data \( -uid 0 -o -uid 10001 \) -print 2>/dev/null | head -n 1)" ]; then
     say "$DATA belongs to uid $uid: handing the files an image wrote there (owned by root" \
         "or ser2net) to $uid:$gid"
-    find "$DATA" \( -uid 0 -o -uid 10001 \) -exec chown -h "$uid:$gid" {} + \
+    take_over "$uid:$gid" \( -uid 0 -o -uid 10001 \) \
         || say "warning: could not hand every file to $uid:$gid; fix it on the host:" \
                "sudo chown -R $uid:$gid <the folder mounted at $DATA>"
 fi
 extra=$(id -G | tr ' ' '\n' | grep -v -x -e 0 -e "$gid" | paste -sd, -) || extra=""
-# the serial devices' groups (not root's 0, not 65534: a group unmapped in a user namespace)
+# the serial devices' groups: not root's 0, not tty's 5 (consoles), not 65534 (a group
+# unmapped in a user namespace)
 for dev in $SERIAL; do
     [ -c "$dev" ] || continue
     g=$(stat -L -c %g "$dev")
-    case ",0,65534,$gid,$extra," in
+    case ",0,5,65534,$gid,$extra," in
         *",$g,"*) ;;
         *) extra="${extra:+$extra,}$g" ;;
     esac
