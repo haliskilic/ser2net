@@ -58,9 +58,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
-  **Edge mode:** also polls coils and registers on an interval and publishes the decoded
-  values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
-  values from MQTT (`<topic>/<point>/set` → FC5/FC15 coils, FC6/FC16 registers).
+  If the serial port goes away (a USB adapter unplugged), masters get `0x0B` meanwhile
+  and the port is reopened like any mapping's (state `reconnecting`, device lost/back
+  notifications). **Edge mode:** also polls coils and registers on an interval and
+  publishes the decoded values to MQTT (bool, uint/int/float 16/32, scaling);
+  `"writable": true` points take values from MQTT (`<topic>/<point>/set` → FC5/FC15
+  coils, FC6/FC16 registers).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
   NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`

@@ -88,6 +88,7 @@ SOCAT = [
     "test_v2_console.py",
     "test_v2_web.py",
     "test_web_e2e.py",
+    "test_serial_reconnect.py",
 ]
 
 

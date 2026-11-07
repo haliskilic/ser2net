@@ -81,9 +81,7 @@ async def main():
     runner._resp_timeout = 0.4
 
     sr, sw = await asyncio.open_connection("127.0.0.1", slave_port)
-    runner._sreader, runner._swriter, runner.serial_instance = sr, sw, object()
-    runner._serial_ready.set()
-    runner.status.state = "running"
+    runner._link.attach(sr, sw)
     fake = FakeMqtt()
     runner._mqtt = MqttPublisher(mapping.mqtt, logger=lambda _m: None, client=fake)
     runner._mqtt.connect()
