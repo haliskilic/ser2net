@@ -46,8 +46,8 @@
           <span class="state state-error">{{ _("its cluster is switched off") }}</span>
         {% elif n.problem == 'legacy-off' %}
           <span class="state state-error">{{ _("2.8.0 or older — legacy authentication is off on this node") }}</span>
-        {% elif n.problem == 'confirm' %}
-          <span class="state state-reconnecting">{{ _("2.8.0 or older — confirming its address…") }}</span>
+        {% elif n.problem == 'manual-only' %}
+          <span class="state state-error">{{ _("2.8.0 or older and doesn’t advertise its LAN address — add it as a manual peer (Settings → LAN cluster) to manage it") }}</span>
         {% elif n.problem == 'unsigned' %}
           <span class="state state-error">{{ _("its answer is not signed with the cluster key") }}</span>
         {% elif n.problem == 'clock' %}

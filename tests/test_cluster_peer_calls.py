@@ -20,15 +20,16 @@ it is authenticated, and what a beacon may change.
     their request, and the nonce store is bounded and fails closed;
   * nodes up to 2.8.0 only know the raw key (X-Cluster-Key): it is accepted and sent
     only while legacy authentication is on, and sent only to a peer whose beacon says
-    it is older or a manual one that refused a signed request as older nodes do -
-    never to one that answered a signed request, and to an address taken from a
-    beacon's packet only once a second beacon confirms it;
+    it is older (at the address that beacon advertises, never at the one it came
+    from) or a manual one that refused a signed request as older nodes do - never to
+    one that answered a signed request;
   * during a planned key change the previous key is accepted (until its end) and
     tried with a peer that refuses the key;
-  * beacons: an old one (a replay, an earlier run of a node) is dropped, a restart
-    replaces the row, copies of one installation (two runs of one id) show up as
-    such, a beacon with this node's own id from another run is reported, one signed
-    with another key is noted but never contacted;
+  * beacons: an old one (a replay, an earlier run of a node) is dropped, also after
+    discovery restarts (a settings save); a restart replaces the row, copies of one
+    installation (two runs of one id) show up as such, a beacon with this node's own
+    id from another run is reported, one signed with another key is noted but never
+    contacted;
   * a malformed beacon is dropped without an error;
   * peer calls connect directly - HTTP(S)_PROXY / ALL_PROXY never apply - and don't
     follow redirects; why a peer's requests fail is logged once per change;
@@ -62,7 +63,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.config import AppConfig, ClusterSettings, ConfigError, parse_cluster_peer, peer_host
 from app.engine import cluster as cluster_mod
 from app.engine.cluster import (AUTH_HEADER, BOOT_SKEW_S, CLOCK_WINDOW_S, FETCH_CACHE_S,
-                                KEY_HEADER, NOTE_TTL, ClusterDiscovery, _Answer, _Nonces, _sign,
+                                KEY_HEADER, NOTE_TTL, ClusterDiscovery, _Answer, _Link,
+                                _Nonces, _sign,
                                 canonical_target, format_auth, key_bytes, key_header,
                                 key_header_matches, parse_auth, peer_addr, peer_url, reply_mac,
                                 request_mac)
@@ -648,35 +650,89 @@ def test_legacy_peer_calls():
             imposter.close()
         await e.stop()
 
-        # an auto-discovered node up to 2.8.0 (its beacon says v1): the raw key at once...
-        old = LegacyPeer(lambda path: (200, {}, b'{"id": "old2"}'))
-        f = node()
-        try:
-            f.handle_datagram(beacon(id="old2", ip="127.0.0.1", port=old.port), ("127.0.0.1", 41750))
-            tf = f.all_targets()[0]
-            # ...but its address came from the beacon's packet: only once a second beacon,
-            # well after the first, confirms it
-            assert await f.get_peer(tf, "/api/cluster/local") is None and old.requests == []
-            assert f.peer_state(tf)["problem"] == "confirm"
-            row = next(iter(f._peers.values()))
-            row["since"] -= cluster_mod.CONFIRM_S
-            f.handle_datagram(beacon(id="old2", ip="127.0.0.1", port=old.port), ("127.0.0.1", 41750))
-            assert (await f.get_peer(f.all_targets()[0], "/api/cluster/local"))["id"] == "old2"
-            assert _attempts(old) == ["key"], "an older node gets no signed attempt first"
-            f.cluster.legacy_auth = False
-            old.requests.clear()
-            assert await f.get_peer(f.all_targets()[0], "/api/cluster/local") is None
-            assert old.requests == []
-        finally:
-            old.close()
+        # an auto-discovered node up to 2.8.0 (its beacon says v1) gets the raw key at once,
+        # at the address its beacon advertises - not at the one the beacon came from
+        f, sent = node(), []
+
+        def fake_http(method, url, body, timeout, how):
+            sent.append((url, how["mode"]))
+            return _Answer(status=200, data={"id": "old2"})
+        f._http = fake_http
+        f.handle_datagram(beacon(id="old2", ip="10.0.0.44", port=8080), ("10.6.6.6", 41750))
+        tf = f.all_targets()[0]
+        assert (await f.get_peer(tf, "/api/cluster/local"))["id"] == "old2"
+        assert sent == [("http://10.0.0.44:8080/api/cluster/local", "legacy")], sent
+        f.cluster.legacy_auth = False
+        sent.clear()
+        assert await f.get_peer(tf, "/api/cluster/local") is None and sent == []
         await f.stop()
     try:
         asyncio.run(run())
     finally:
         legacy.close()
     print("older peers: the raw key only for them (manual: after a refusal as they refuse; "
-          "auto: by their beacon, once its address is confirmed), never after a signed "
+          "auto: by their beacon, at the address it advertises), never after a signed "
           "answer, never with legacy authentication off  OK")
+
+
+class _Clock:
+    """The cluster module's clock, *offset* seconds ahead (when a beacon is received)."""
+
+    def __init__(self):
+        self.offset = 0.0
+
+    def time(self):
+        return time.time() + self.offset
+
+    def monotonic(self):
+        return time.monotonic() + self.offset
+
+
+def test_replayed_old_beacons_get_no_key():
+    """A node up to 2.8.0 that advertises 127.0.0.1 (no default route): its beacons can be
+    replayed from anywhere, so captured ones (validly signed, increasing times) sent from
+    another address, received several seconds apart like real ones, with nothing
+    remembered about the node yet (as right after a restart), make this node send
+    nothing there - let alone the raw key."""
+    trap = LegacyPeer(lambda path: (200, {}, b'{"id": "old3"}'))   # the replaying host
+    logs = []
+    d, clock = node(log=logs.append), _Clock()
+
+    def replayed(t):
+        d.handle_datagram(beacon(id="old3", ip="127.0.0.1", port=trap.port, t=t),
+                          ("127.0.0.1", 41750))
+
+    async def run():
+        for i, t in enumerate((1000.0, 1006.0, 1012.0)):
+            clock.offset = 7.0 * i     # received 7 s apart
+            replayed(t)
+        target = d.all_targets()[0]
+        assert target["from_packet"] and not target["configured"], target
+        assert d._how(target, _Link()) == "manual-only"
+        assert await d.get_peer(target, "/api/cluster/local") is None
+        assert trap.requests == [], "nothing may go to the address a beacon came from"
+        assert d.peer_state(target)["problem"] == "manual-only" and "manual peer" in logs[-1]
+        # a settings save (discovery restarts) doesn't make the old beacons new again
+        await d.stop()
+        replayed(1012.0)
+        assert d.peers() == [], d.peers()
+        # added as a manual peer at that address, where the admin says it is: the raw key
+        # goes there
+        d.cluster.peers.append(f"127.0.0.1:{trap.port}")
+        replayed(1018.0)
+        target = d.all_targets()[0]
+        assert target["source"] == "auto" and target["configured"], target
+        assert (await d.get_peer(target, "/api/cluster/local"))["id"] == "old3"
+        assert _attempts(trap) == ["key"], _attempts(trap)
+        await d.stop()
+    saved, cluster_mod.time = cluster_mod.time, clock
+    try:
+        asyncio.run(run())
+    finally:
+        cluster_mod.time = saved
+        trap.close()
+    print("an older node that doesn't advertise its address: replayed beacons from another "
+          "address get no request, the raw key only goes to it as a manual peer  OK")
 
 
 TR_KEY = "küme-anahtarı-çöüşğİı"
@@ -862,6 +918,7 @@ def main():
     test_signed_peer_calls()
     test_key_mismatch_and_rotation()
     test_legacy_peer_calls()
+    test_replayed_old_beacons_get_no_key()
     test_cluster_key()
     test_malformed_beacons()
     test_direct_no_redirect()

@@ -411,11 +411,13 @@ gösterilir ve açılışta loga yazılır.
 - **Eski düğümler (eski kimlik doğrulama):** 2.8.0 ya da daha eski sürümle çalışan
   düğümler yalnızca ham anahtarı bilir ve onu her istekte gönderir. *Eski kimlik doğrulama*
   işaretliyken (Ayarlar → LAN cluster; kademeli yükseltmede filo bölünmesin diye varsayılan
-  olarak açık) bir düğüm bu anahtarı kabul eder ve yalnızca o düğümlerle kullanır: beacon'ı daha eski olduğunu
-  söyleyenler ve imzalı bir isteği eski sürümlerin yaptığı gibi reddeden manuel eşler (imzalı
-  bir isteğe yanıt vermiş bir eş asla). Filo görünümü bunları **imzasız anahtar** etiketiyle
-  gösterir ve bir uyarıda listeler. **Tüm düğümler yükseltilince bu işareti her düğümde
-  kaldırın.**
+  olarak açık) bir düğüm bu anahtarı kabul eder ve yalnızca o düğümlerle kullanır: beacon'ı
+  daha eski olduğunu söyleyenler (beacon'ın bildirdiği adreste) ve imzalı bir isteği eski
+  sürümlerin yaptığı gibi reddeden manuel eşler (imzalı bir isteğe yanıt vermiş bir eş asla).
+  LAN adresini bildirmeyen eski bir düğüm (varsayılan rota yok: beacon'ı 127.0.0.1 diyor) diğer
+  düğümlerden ancak orada manuel eş olarak eklenince yönetilir; filo görünümü bunu belirtir.
+  Filo görünümü bu düğümleri **imzasız anahtar** etiketiyle gösterir ve bir uyarıda listeler.
+  **Tüm düğümler yükseltilince bu işareti her düğümde kaldırın.**
 - **Anahtar:** ağdaki herkes zayıf bir anahtarı beacon'lardan çevrimdışı tahmin etmeyi
   deneyebilir; anahtar ise bir düğüme diğer tüm düğümlerin eşlemelerini başlatma, durdurma ve
   değiştirme yetkisi verir: en az 16 rastgele karakter kullanın (*Yeni anahtar üret ve
