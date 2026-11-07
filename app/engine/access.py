@@ -9,7 +9,7 @@
 - ``read_only``: a client may watch the device but not change it. Each runner enforces it
   for its protocol: the bridge never writes a client's bytes to the port (and its RFC2217
   session refuses line changes), the Modbus gateway answers write requests with an
-  exception instead of putting them on the bus.
+  exception instead of putting them on the bus and refuses MQTT/Sparkplug writes.
 
 Also the TLS context of a listener (``network.tls``), the same for both runners.
 """

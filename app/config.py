@@ -625,6 +625,15 @@ class MappingConfig:
         """The serial ports this mapping opens: A, and B for a serial-to-serial bridge."""
         return [self.serial, self.serial_b] if self.kind == "serialbridge" else [self.serial]
 
+    @property
+    def accepts_mqtt_writes(self) -> bool:
+        """MQTT commands can write to the bus: a Modbus gateway with MQTT on, writable
+        points and Read-only off. Who may send them (<base_topic>/<point>/set, or the
+        Sparkplug NCMD / DCMD topics) is up to the broker's access rules."""
+        return (self.kind == "net" and self.network.protocol == "modbus" and self.mqtt.enabled
+                and not self.network.read_only
+                and any(p.writable for p in self.modbus_poll.points))
+
     def validate_input(self) -> None:
         """The rules for a mapping that is being created or changed (web form, REST API,
         import, cluster), checked there in addition to validate(). validate() must not

@@ -69,7 +69,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
   values from MQTT (`<topic>/<point>/set`, one value for that point only: FC5 for a coil,
   FC6/FC16 for a holding register's own one or two registers; a JSON list or other text
-  gets `error: …` on `.../set/result`).
+  gets `error: …` on `.../set/result`). **Read-only** refuses these writes too (`error:
+  mapping is read-only`; a refused DCMD is logged), and the dashboard marks a mapping that
+  takes MQTT writes with **CMD** (see Security: the broker decides who may send them).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
   NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
   A command is written once, when it is published: a retained `/set` that the broker sends
@@ -300,6 +302,26 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 `0.0.0.0`/`::` in an allow/priority list means "any client". A mapping's serial port is a
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
+
+**MQTT commands (Modbus edge mode):** writable points take values from any client the
+broker lets publish to `<topic>/<point>/set` or, for Sparkplug B, to
+`spBv1.0/<group>/NCMD/<node>` and `spBv1.0/<group>/DCMD/<node>/<device>`. ser2net does not
+authenticate these clients itself, and `allowed_client_ips` covers only the Modbus/TCP port,
+so the broker's access rules (ACLs) are the authorization: let only the clients that must
+switch outputs publish to the command topics, and connect to the broker with TLS and a
+username/password. **Read-only** refuses every write. The dashboard marks a mapping that
+takes MQTT writes with **CMD**, and with **CMD ⚠** (plus a warning in its log at start)
+when its broker connection has no TLS or no username. A Mosquitto `acl_file` for the base
+topic `plant/line3`, for example:
+```
+user ser2net
+topic readwrite plant/line3/#
+user scada
+topic write plant/line3/+/set
+topic read plant/line3/#
+user historian
+topic read plant/line3/#
+```
 
 **Open access (optional):** for trusted networks only, an admin can untick "Require
 login" under **Settings → Web UI access** and give visitors a role (`viewer` read-only /

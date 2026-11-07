@@ -13,8 +13,9 @@ re-resolved, whenever it is lost) plus an asyncio TCP server, both torn down
 cleanly on stop(). Masters are admitted by the same policy as bridge clients
 (access.AccessPolicy: allow-list, max connections, priority IPs, kick_old_user);
 a read-only gateway answers every request that is not known to be a read with
-exception 01 and never puts it on the bus. A banner, open/close strings and
-closeon don't apply: bytes outside Modbus frames would break the framing.
+exception 01 and never puts it on the bus, and refuses MQTT/Sparkplug writes as well.
+A banner, open/close strings and closeon don't apply: bytes outside Modbus frames
+would break the framing.
 """
 from __future__ import annotations
 
@@ -291,7 +292,10 @@ class ModbusGatewayRunner:
         """Write one value to one writable point, and nothing beyond it: a coil takes a
         bool (FC5), a holding register a number, encoded as the point's own type (FC6 for
         a 16-bit type, FC16 for the two registers of a 32-bit one). Check the slave's
-        reply, then read the point back and publish it."""
+        reply, then read the point back and publish it. A read-only mapping writes nothing
+        (checked here, at write time, for every command path)."""
+        if self.mapping.network.read_only:
+            raise ValueError("mapping is read-only")
         if not point.writable:
             raise ValueError(f"point {point.name!r} is not writable")
         if point.fn == modbus.READ_COILS:
@@ -336,6 +340,10 @@ class ModbusGatewayRunner:
         if point is None or self._mqtt is None:
             return
         result = topic + "/result"
+        if self.mapping.network.read_only:
+            self._log(f"write '{point.name}' from MQTT refused: the mapping is read-only")
+            self._mqtt.publish_raw(result, b"error: mapping is read-only")
+            return
         try:
             value = parse_write_payload(payload, point)
         except ValueError as e:
@@ -376,7 +384,15 @@ class ModbusGatewayRunner:
         if self.mapping.network.read_only:
             self._log("read-only: requests from Modbus/TCP masters that are not reads get "
                       "exception 01 (illegal function) and never reach the bus; MQTT/Sparkplug "
-                      "writes follow each point's writable flag")
+                      "writes to writable points are refused too")
+        mq = self.mapping.mqtt
+        missing = [what for what, have in (("TLS", mq.tls), ("a username", mq.username))
+                   if not have]
+        if self.mapping.accepts_mqtt_writes and missing:
+            self._log("warning: writable points take MQTT commands over a broker connection "
+                      f"without {' or '.join(missing)}: any client the broker lets publish to "
+                      "the command topics can write them; restrict those topics with the "
+                      "broker's access rules (ACLs)")
 
     def _refuse(self, master: _Master, pdu: bytes) -> bytes:
         """Answer a request a read-only gateway does not forward: exception 01 (illegal

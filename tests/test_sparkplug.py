@@ -516,6 +516,20 @@ def test_node_commands():
           "rebirth only on Boolean true, long names logged short  OK")
 
 
+def test_node_read_only():
+    """On a read-only mapping a DCMD writes nothing and is logged; it is checked for each
+    command, so it follows the mapping's setting without a new session."""
+    node, command, writes, logs, _births = edge_node(read_only=True)
+    command("DCMD", "unit1", Metric("pump", T.Boolean, True))
+    command("DCMD", "unit2", Metric("level", T.UInt16, 3))
+    assert writes == [], writes
+    assert sum("refused: the mapping is read-only" in line for line in logs) == 2, logs
+    node.mapping.network.read_only = False
+    command("DCMD", "unit1", Metric("pump", T.Boolean, True))
+    assert writes == [("pump", True)], writes
+    print("edge node: read-only refuses (and logs) DCMD writes, checked per command  OK")
+
+
 def main():
     test_varint_primitives()
     test_wire_bytes_by_hand()
@@ -531,6 +545,7 @@ def main():
     test_datatype_for_modbus_values()
     test_edge_node_message_flow()
     test_node_commands()
+    test_node_read_only()
     print("\nPASS: Sparkplug B payload codec + edge node commands")
 
 
