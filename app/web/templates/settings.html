@@ -197,6 +197,9 @@
 <section class="panel panel-narrow" id="cluster-settings">
   <div class="panel-head"><h2>{{ _("LAN cluster") }}</h2></div>
   <p class="muted mb-sm">{{ _('Discover other ser2net nodes on the local network (signed UDP broadcast — no mDNS) and show every node’s mappings in one table on the dashboard, each row tagged with its host (name + IP). Set the <em>same shared key</em> on every node so they trust each other; with the key, operators can start/stop/restart a peer’s mappings from the unified view. This node’s ID: <span class="mono">%(id)s</span>.', id=instance_id[:8]) }}</p>
+  {% for c in cluster_copies %}
+  <div class="banner warn">{{ _("Another node uses this node’s identity: %(name)s at %(addr)s — probably a copy of this installation (its data folder, disk or VM image). Give one of the two a new identity (below).", name=c.name, addr=c.addr) }}</div>
+  {% endfor %}
   {% if new_cluster_key %}
   <div class="banner ok">{{ _("New cluster key (copy it now — it is not shown again). Set the same key on every node:") }}
     <div class="mono token-box">{{ new_cluster_key }}</div>
@@ -237,6 +240,12 @@
       <button class="btn" type="submit" name="then" value="generate">{{ _("Generate a new key and save") }}</button>
     </div>
   </form>
+  <form method="post" action="/settings/cluster/identity" class="inline mt-sm"
+        data-confirm="{{ _('Give this node a new identity? Everyone signed in to it is signed out (you stay signed in), and other nodes see it as a new node.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <button class="btn" type="submit">{{ _("Give this node a new identity") }}</button>
+  </form>
+  <p class="muted mt-sm">{{ _("For a node copied from another installation (its data folder, disk or VM image): a new cluster ID and a new session key, so the copies no longer hide each other in the cluster and a sign-in to one is not valid on the other.") }}</p>
 </section>
 
 <section class="panel panel-narrow" id="notifications">

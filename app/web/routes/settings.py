@@ -46,6 +46,7 @@ def routes(ctx: Ctx) -> list:
                 "cluster_previous": len(keys) > 1,
                 "cluster_previous_until": time.strftime("%Y-%m-%d %H:%M", time.gmtime(until))
                 if until else "",
+                "cluster_copies": state.cluster.copies(),
                 "cluster_legacy": state.cluster.legacy_nodes() if c.active else []}
 
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
@@ -680,6 +681,39 @@ def routes(ctx: Ctx) -> list:
             return await settings_get(request, new_cluster_key=key, ok=ok)
         return await settings_get(request, ok=ok)
 
+    async def settings_cluster_identity(request):
+        """Give this node a new cluster id and a new session key - the way out for a copy
+        of another installation (its data folder, disk or VM image): the copies no longer
+        hide each other in the cluster, and a sign-in to one is not valid on the other.
+        Everyone signed in here is signed out, except the admin doing this."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        async with state.config_lock:
+            old = (state.config.instance_id, state.config.secret_key)
+            state.config.instance_id = secrets.token_hex(8)
+            state.config.secret_key = secrets.token_hex(32)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                state.config.instance_id, state.config.secret_key = old
+                return await settings_get(request, error=str(e))
+        await state.cluster.stop()
+        await state.cluster.start()
+        new_id = state.config.instance_id
+        state.log(f"new identity for this node: cluster id {old[0][:8]} -> {new_id[:8]}, new "
+                  "session key (everyone else signed in here is signed out)")
+        ctx.audit(request, "node_new_identity", f"{old[0][:8]} -> {new_id[:8]}")
+        resp = await settings_get(request, ok=_("This node has a new identity (cluster ID {0}). "
+                                                "Everyone else signed in to it was signed out.")
+                                  .format(new_id[:8]))
+        user = current_user(request)
+        if user is not None and user.source != "anonymous":
+            set_session(resp, request, user)  # signed with the new key: this admin stays in
+        return resp
+
     return [
         Route("/settings", settings_get, methods=["GET"]),
         Route("/settings/password", settings_password_post, methods=["POST"]),
@@ -694,6 +728,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/ldap", settings_ldap_post, methods=["POST"]),
         Route("/settings/oidc", settings_oidc_post, methods=["POST"]),
         Route("/settings/cluster", settings_cluster_post, methods=["POST"]),
+        Route("/settings/cluster/identity", settings_cluster_identity, methods=["POST"]),
         Route("/settings/config/export", config_export),
         # the body is refused (413) past the import file limit, before it is spooled
         Route("/settings/config/import", config_import, methods=["POST"],
