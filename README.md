@@ -609,8 +609,9 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
   oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
   de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
-- `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler ve config değişiklikleri,
-  kim/nereden/ne (döner). Ayarlar → *Audit log*'da aranabilir, CSV olarak indirilebilir.
+- `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
+  konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
+  *Audit log*'da aranabilir, CSV olarak indirilebilir.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam

@@ -2,13 +2,15 @@
 
 Also: the hex view's traffic feed (both directions, timestamped) for an admin; a viewer
 gets a read-only console and a hex view of what the device sends only — never what a
-client sends to the device.
+client sends to the device — and opening either is recorded in the audit log.
 
 Run: python3 tests/test_v2_console.py
 """
 import asyncio
 import contextlib
+import csv
 import http.cookiejar
+import io
 import json
 import os
 import re
@@ -205,6 +207,16 @@ def main():
 
         asyncio.run(viewer_test())
         print("viewer: read-only console, hex view shows only what the device sends  OK")
+
+        def audit(action):
+            text = op.open("http://127.0.0.1:%d/settings/audit.csv?action=%s" % (UI, action),
+                           timeout=10).read().decode("utf-8")
+            return {(r["user"], r["detail"]) for r in csv.DictReader(io.StringIO(text))}
+
+        assert {("admin", "CON (interactive)"), ("view1", "CON (read-only)")} <= audit("console_open")
+        assert {("admin", "CON (both directions)"),
+                ("view1", "CON (device output only)")} <= audit("hex_view_open"), audit("hex_view_open")
+        print("audit log: console and hex view opens recorded with user and mode  OK")
 
         device.close()
         print("\nPASS: WebSocket console (auth + bidirectional)")

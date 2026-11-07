@@ -32,6 +32,7 @@ def routes(ctx: Ctx) -> list:
         if ws_user is None or (origin and urlparse(origin).netloc != websocket.headers.get("host")):
             await websocket.close(code=1008)
             return None, token
+        websocket.state.user = ws_user  # like request.state.user (ctx.audit)
         return ws_user, token
 
     # ---------------- console (xterm over WebSocket) ----------------
@@ -54,6 +55,8 @@ def routes(ctx: Ctx) -> list:
         interactive = console_interactive(ws_user, mapping)
         peer = websocket.client.host if websocket.client else "?"
         state.log(f"[{mapping.name}] console opened by {ws_user.username} ({peer})")
+        ctx.audit(websocket, "console_open",
+                  f"{mapping.name} ({'interactive' if interactive else 'read-only'})")
 
         async def sender():
             while True:
@@ -124,6 +127,8 @@ def routes(ctx: Ctx) -> list:
         runner.add_traffic_monitor(mon)
         peer = websocket.client.host if websocket.client else "?"
         state.log(f"[{mapping.name}] hex view opened by {ws_user.username} ({peer})")
+        ctx.audit(websocket, "hex_view_open",
+                  f"{mapping.name} ({'both directions' if to_device else 'device output only'})")
 
         async def sender():
             while True:
