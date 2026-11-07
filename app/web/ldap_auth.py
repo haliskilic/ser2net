@@ -19,6 +19,9 @@ from dataclasses import dataclass
 
 from ..config import ROLE_RANK, User
 
+# LDAP_MATCHING_RULE_IN_CHAIN: Active Directory follows nested groups for this filter
+IN_CHAIN_RULE = "1.2.840.113556.1.4.1941"
+
 # ---------------- group -> role ----------------
 # A group setting (admin_group / operator_group / viewer_group, for LDAP and OIDC alike)
 # names one group, and only its whole name matches — never a part of it. Letter case and
@@ -177,19 +180,166 @@ def upsert_ldap_user(config, username: str, role: str) -> User:
     return config.upsert_external_user(username, role, "ldap")
 
 
-def _entry_groups(entry, attr) -> list[str]:
+# ---------------- bind + group lookup (ldap3) ----------------
+class DirectoryGroups(list[str]):
+    """The group DNs read for a user whose bind succeeded (authenticate).
+    lookup_failed tells "they are in no group" apart from "their groups could not be
+    read" (the reason is logged)."""
+    lookup_failed = False
+
+
+def _values(entry, attr) -> list[str]:
     try:
         return [str(v) for v in entry[attr].values]
     except Exception:
         return []
 
 
+def _dns_domain(dn: str) -> str:
+    """corp.local for DC=corp,DC=local or OU=Staff,DC=corp,DC=local."""
+    return ".".join(v for rdn in _split_dn(dn) or [] for t, v in rdn if t == "dc")
+
+
+class _GroupLookup:
+    """Reads the groups of the user who signed in, over an ldap3 connection."""
+
+    def __init__(self, conn, settings, username, log, ldap3, escape):
+        self.conn, self.settings, self.username, self.log = conn, settings, username, log
+        self.ldap3, self.escape = ldap3, escape
+        self._root: dict[str, str] | None = None
+
+    def problem(self, what: str) -> None:
+        """Log why the groups could not be read, with the server's error, if any."""
+        r = getattr(self.conn, "result", None) or {}
+        if r.get("result"):   # an error answer, not just "no such entry"
+            what += f" — {r.get('description')} ({r['result']})"
+            if r.get("message"):
+                what += ": " + " ".join(str(r["message"]).split())
+        self.log(f"LDAP: bound as {self.username!r}, but their groups could not be read: "
+                 f"{what}")
+
+    def root(self, attr: str) -> str:
+        """An attribute of the server's RootDSE: defaultNamingContext (Active Directory:
+        the DN of the server's domain) or configurationNamingContext."""
+        if self._root is None:
+            names = ("defaultNamingContext", "configurationNamingContext")
+            self.conn.search("", "(objectClass=*)", search_scope=self.ldap3.BASE,
+                             attributes=list(names))
+            entry = self.conn.entries[0] if self.conn.entries else None
+            self._root = {n: (_values(entry, n) or [""])[0] for n in names} if entry else {}
+        return self._root.get(attr, "")
+
+    def netbios_domain(self, name: str) -> str:
+        """The DN of the forest's domain with this NetBIOS name (its crossRef), or ""."""
+        config = self.root("configurationNamingContext")
+        if not config:
+            return ""
+        # under CN=Partitions only the domains' crossRef objects have a nETBIOSName
+        self.conn.search("CN=Partitions," + config, f"(nETBIOSName={self.escape(name)})",
+                         search_scope=self.ldap3.LEVEL, attributes=["nCName"])
+        entries = self.conn.entries
+        return (_values(entries[0], "nCName") or [""])[0] if len(entries) == 1 else ""
+
+    def direct(self, bind_name: str) -> DirectoryGroups:
+        """Groups of the account that bound as `bind_name` (direct bind)."""
+        groups = DirectoryGroups()
+        attr = self.settings.group_attr
+        try:
+            if _split_dn(bind_name):     # a DN: read that entry
+                user_dn = bind_name
+                self.conn.search(user_dn, "(objectClass=*)", search_scope=self.ldap3.BASE,
+                                 attributes=[attr])
+                entry = self.conn.entries[0] if self.conn.entries else None
+                if entry is None:
+                    self.problem(f"no entry {user_dn!r}")
+            else:                        # an AD sign-in name; not a DN, so not a search base
+                entry = self.find_account(bind_name)
+                user_dn = entry.entry_dn if entry is not None else ""
+            if entry is None:
+                groups.lookup_failed = True
+                return groups
+            groups.extend(_values(entry, attr))
+            if self.settings.nested_groups:
+                self.add_nested(groups, user_dn)
+        except Exception as e:
+            self.problem(f"{type(e).__name__}: {e}")
+            groups.lookup_failed = True
+        return groups
+
+    def find_account(self, bind_name: str):
+        """The entry of an AD sign-in name: user@domain by userPrincipalName (an account
+        without one also by sAMAccountName, when the base is that domain) under the user
+        search base, else the server's domain; DOMAIN\\user by sAMAccountName in that
+        domain (found by its NetBIOS name), under the user search base if it is in it.
+        None (logged) unless there is exactly one."""
+        search_base = self.settings.user_search_base.strip()
+        if "\\" in bind_name:
+            netbios, _sep, account = bind_name.partition("\\")
+            domain = self.netbios_domain(netbios)
+            if not domain:
+                self.problem(f"the directory names no domain {netbios!r} (crossRef)")
+                return None
+            base = search_base or domain
+            # by its DC= part: a child domain's DN is below its parent's DN
+            if fold(_dns_domain(base)) != fold(_dns_domain(domain)):
+                self.problem(f"the user search base {base!r} is not in the domain {netbios!r}")
+                return None
+            tries = [("sAMAccountName", account)]
+        elif "@" in bind_name:
+            base = search_base or self.root("defaultNamingContext")
+            if not base:
+                self.problem("no user search base is set and the server names no "
+                             "defaultNamingContext")
+                return None
+            account, _at, suffix = bind_name.rpartition("@")
+            tries = [("userPrincipalName", bind_name)]
+            if fold(suffix) == fold(_dns_domain(base)):   # the implicit UPN: account@domain
+                tries.append(("sAMAccountName", account))
+        else:
+            self.problem(f"{bind_name!r} is no DN, user@domain or DOMAIN\\user name")
+            return None
+        for attr, value in tries:
+            self.conn.search(base, f"({attr}={self.escape(value)})",
+                             attributes=[self.settings.group_attr])
+            entries = self.conn.entries
+            if len(entries) > 1:
+                self.problem(f"{len(entries)} entries have {attr}={value} under {base!r}")
+                return None
+            if entries:
+                return entries[0]
+        self.problem(" or ".join(f"{a}={v}" for a, v in tries) + f" is not under {base!r}")
+        return None
+
+    def add_nested(self, groups: DirectoryGroups, user_dn: str) -> None:
+        """Add the groups the user is in through other groups (Active Directory's
+        LDAP_MATCHING_RULE_IN_CHAIN, searched in the whole domain)."""
+        try:
+            base = self.root("defaultNamingContext") or self.settings.user_search_base.strip()
+            if not base:
+                self.problem("nested groups: no base to search them in")
+                groups.lookup_failed = True
+                return
+            self.conn.search(base, f"(member:{IN_CHAIN_RULE}:={self.escape(user_dn)})",
+                             attributes=[self.ldap3.NO_ATTRIBUTES])
+            if (getattr(self.conn, "result", None) or {}).get("result"):
+                self.problem(f"nested groups under {base!r}")
+                groups.lookup_failed = True
+            known = {fold(g) for g in groups}
+            for entry in self.conn.entries:
+                if fold(entry.entry_dn) not in known:
+                    known.add(fold(entry.entry_dn))
+                    groups.append(entry.entry_dn)
+        except Exception as e:   # keep the direct groups
+            self.problem(f"nested groups: {type(e).__name__}: {e}")
+            groups.lookup_failed = True
+
+
 def authenticate(settings, username: str, password: str, logger=None,
                  server=None, conn_factory=None) -> list[str] | None:
-    """Bind to LDAP as `username`/`password`; return the user's group DNs on success
-    or None on failure. Never raises on a bad bind. `server`/`conn_factory` are
-    injection points for tests (an ldap3 MOCK_SYNC server). Returns None if ldap3 is
-    not installed."""
+    """Bind to LDAP as `username`/`password`; return the user's group DNs (a
+    DirectoryGroups) on success or None on failure. Never raises on a bad bind.
+    `server`/`conn_factory` are injection points for tests (an ldap3 MOCK_SYNC
+    server). Returns None if ldap3 is not installed."""
     log = logger or (lambda _m: None)
     if not username or not password:   # empty password must not become an anonymous bind
         return None
@@ -205,6 +355,10 @@ def authenticate(settings, username: str, password: str, logger=None,
         ab = ldap3.AUTO_BIND_TLS_BEFORE_BIND if settings.start_tls else ldap3.AUTO_BIND_NO_TLS
         return ldap3.Connection(srv, user=user, password=pw, auto_bind=ab)
 
+    def _unbind(conn) -> None:
+        with contextlib.suppress(Exception):
+            conn.unbind()
+
     factory = conn_factory or _default_factory
     try:
         if server is None:
@@ -213,30 +367,32 @@ def authenticate(settings, username: str, password: str, logger=None,
             server = ldap3.Server(settings.server_uri, get_info=ldap3.NONE, connect_timeout=5,
                                   use_ssl=settings.server_uri.lower().startswith("ldaps"))
         if settings.user_dn_template.strip():
-            # direct bind: the supplied credentials bind as the templated DN
-            user_dn = settings.user_dn_template.format(username=escape_rdn(username))
-            conn = factory(server, user_dn, password)
-            groups = []
-            with contextlib.suppress(Exception):
-                conn.search(user_dn, "(objectClass=*)", search_scope=ldap3.BASE,
-                            attributes=[settings.group_attr])
-                if conn.entries:
-                    groups = _entry_groups(conn.entries[0], settings.group_attr)
-            conn.unbind()
-            return groups
+            # direct bind: the supplied credentials bind as the templated DN (or AD
+            # sign-in name: {username}@corp.local, CORP\{username})
+            bind_name = settings.user_dn_template.format(username=escape_rdn(username))
+            conn = factory(server, bind_name, password)
+            try:
+                return _GroupLookup(conn, settings, username, log, ldap3,
+                                    escape_filter_chars).direct(bind_name)
+            finally:
+                _unbind(conn)
         # search+bind: bind as the service account, find the user, then bind as them
         svc = factory(server, settings.bind_dn, settings.bind_password)
-        flt = settings.user_search_filter.format(username=escape_filter_chars(username))
-        svc.search(settings.user_search_base, flt, attributes=[settings.group_attr])
-        if not svc.entries:
-            svc.unbind()
-            return None
-        entry = svc.entries[0]
-        user_dn, groups = entry.entry_dn, _entry_groups(entry, settings.group_attr)
-        svc.unbind()
-        user_conn = factory(server, user_dn, password)   # verify the password
-        user_conn.unbind()
-        return groups
+        try:
+            flt = settings.user_search_filter.format(username=escape_filter_chars(username))
+            svc.search(settings.user_search_base, flt, attributes=[settings.group_attr])
+            if not svc.entries:
+                return None
+            entry = svc.entries[0]
+            user_dn = entry.entry_dn
+            groups = DirectoryGroups(_values(entry, settings.group_attr))
+            _unbind(factory(server, user_dn, password))   # verify the password
+            if settings.nested_groups:
+                _GroupLookup(svc, settings, username, log, ldap3,
+                             escape_filter_chars).add_nested(groups, user_dn)
+            return groups
+        finally:
+            _unbind(svc)
     except Exception as e:  # bad bind / server error -> denied, never crash the login
         log(f"LDAP authentication failed for {username!r}: {type(e).__name__}: {e}")
         return None

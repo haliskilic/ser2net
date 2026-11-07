@@ -9,11 +9,12 @@ the real LDAPv3 wire format, so ser2net's ldap3 client code runs unchanged again
 entries: {dn: {attribute: [values]}}; passwords: {dn: password}. With ad=True (the
 default) it answers like Active Directory where the tests need it: a bind by
 userPrincipalName (also the implicit sAMAccountName@<domain>) or DOMAIN\\sAMAccountName,
-a RootDSE with defaultNamingContext, a search base that isn't a DN refused with
-invalidDNSyntax, and the LDAP_MATCHING_RULE_IN_CHAIN filter on `member` following
-nested groups. With ad=False it is a plain directory (OpenLDAP): DN binds only, no
-defaultNamingContext, an unknown matching rule matches nothing. Filters are single
-conditions (equality, presence, extensible match): pyasn1 can't decode ldap3's
+a RootDSE with defaultNamingContext and configurationNamingContext (the crossRef
+entries of the domains go under its CN=Partitions), a search base that isn't a DN
+refused with invalidDNSyntax, and the LDAP_MATCHING_RULE_IN_CHAIN filter on `member`
+following nested groups. With ad=False it is a plain directory (OpenLDAP): DN binds
+only, no defaultNamingContext, an unknown matching rule matches nothing. Filters are
+single conditions (equality, presence, extensible match): pyasn1 can't decode ldap3's
 definitions of &, | and !. Every bind name and search is recorded (`binds`, `searches`).
 Needs ldap3 (its ASN.1 definitions, pyasn1).
 """
@@ -150,6 +151,7 @@ class FakeDirectory:
             root = {"namingcontexts": [self.base]}
             if self.ad:
                 root["defaultnamingcontext"] = [self.base]
+                root["configurationnamingcontext"] = ["CN=Configuration," + self.base]
             return 0, [("", {k: v for k, v in root.items() if not wanted or k in wanted})]
         if not is_dn(base):
             return 34, []  # invalidDNSyntax: what AD answers for a UPN used as the base

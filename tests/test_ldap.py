@@ -3,9 +3,11 @@
 The role-mapping and shadow-user logic are pure (always run in CI): a group setting
 matches whole group names only — the full DN, its leading RDNs or the group's own name
 (the CN), in any letter case with Turkish İ/I/ı/i as one letter — never a part of one.
-The actual bind/search flow is exercised with a fake connection factory, so no real
-LDAP server is needed; it is skipped only if ldap3 isn't importable (the escape helpers
-the code uses live in ldap3). Run: python3 tests/test_ldap.py
+The bind/search flow is exercised with a fake connection factory and against a small
+LDAP server speaking the real protocol (_ldap_server.py), which answers like Active
+Directory where needed: sign-in names that are no DN (user@domain, DOMAIN\\user), the
+RootDSE, nested groups. Those parts are skipped only if ldap3 isn't importable (the
+escape helpers the code uses live in ldap3). Run: python3 tests/test_ldap.py
 """
 import os
 import sys
@@ -210,6 +212,199 @@ def test_authenticate_flows():
     print("authenticate search+bind: finds user, verifies password, returns groups  OK")
 
 
+# ---- authenticate() against a small LDAP server (real protocol, real ldap3 client) ----
+
+BASE = "DC=corp,DC=local"
+JDOE = "CN=John Doe,OU=People," + BASE
+ASMITH = "CN=Ann Smith,OU=People," + BASE        # no userPrincipalName attribute
+OPS = "CN=ser2net-operators,OU=Groups," + BASE
+ADMINS = "CN=ser2net-admins,OU=Groups," + BASE
+PLANT = "CN=Plant Staff,OU=Groups," + BASE        # has OPS as a member: jdoe is in it nested
+SVC = "CN=svc-ser2net,OU=Service," + BASE
+PARTITIONS = "CN=Partitions,CN=Configuration," + BASE   # a crossRef per domain of the forest
+CHILD = "DC=child," + BASE                               # a child domain's naming context
+
+
+def ad_directory(**kw):
+    from _ldap_server import FakeDirectory
+    entries = {
+        JDOE: {"objectClass": ["user"], "sAMAccountName": ["jdoe"],
+               "userPrincipalName": ["jdoe@corp.local"], "memberOf": [OPS]},
+        ASMITH: {"objectClass": ["user"], "sAMAccountName": ["asmith"], "memberOf": [ADMINS]},
+        OPS: {"objectClass": ["group"], "member": [JDOE]},
+        ADMINS: {"objectClass": ["group"], "member": [ASMITH]},
+        PLANT: {"objectClass": ["group"], "member": [OPS]},
+        SVC: {"objectClass": ["user"], "sAMAccountName": ["svc-ser2net"]},
+        "CN=CORP," + PARTITIONS: {"objectClass": ["crossRef"], "nETBIOSName": ["CORP"],
+                                  "nCName": [BASE]},
+        "CN=CHILD," + PARTITIONS: {"objectClass": ["crossRef"], "nETBIOSName": ["CHILD"],
+                                   "nCName": [CHILD]},
+    }
+    return FakeDirectory(entries, {JDOE: "pw-jdoe", ASMITH: "pw-ann", SVC: "pw-svc"}, **kw)
+
+
+def have_ldap3() -> bool:
+    try:
+        import ldap3  # noqa: F401
+        return True
+    except ImportError:
+        print("skip: ldap3 not installed (pure logic above already covered)")
+        return False
+
+
+def test_ad_sign_in_names():
+    """Direct bind with an AD sign-in name that is no DN (the UI's {username}@corp.local
+    or CORP\\{username}): the account's entry is looked up after the bind."""
+    if not have_ldap3():
+        return
+    import ldap3
+    logs: list[str] = []
+    with ad_directory() as d:
+        # what reading the groups used to do: the UPN as a search base, which AD refuses
+        conn = ldap3.Connection(ldap3.Server(d.uri, get_info=ldap3.NONE), user="jdoe@corp.local",
+                                password="pw-jdoe", auto_bind=ldap3.AUTO_BIND_NO_TLS)
+        conn.search("jdoe@corp.local", "(objectClass=*)", search_scope=ldap3.BASE,
+                    attributes=["memberOf"])
+        assert conn.result["description"] == "invalidDNSyntax" and not conn.entries
+        conn.unbind()
+        d.searches.clear()
+
+        upn = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="{username}@corp.local")
+        groups = ldap_auth.authenticate(upn, "jdoe", "pw-jdoe", logs.append)
+        assert groups == [OPS] and not groups.lookup_failed, (groups, logs)
+        assert ("", 0, "(objectClass=*)") in d.searches               # the RootDSE
+        assert (BASE, 2, "(userPrincipalName=jdoe@corp.local)") in d.searches, d.searches
+        assert not any(b == "jdoe@corp.local" for b, _s, _f in d.searches)
+        assert ldap_auth.role_for_groups(groups, LdapSettings(operator_group="ser2net-operators")) \
+            == "operator"
+        assert ldap_auth.authenticate(upn, "jdoe", "wrong", logs.append) is None
+        # an account without userPrincipalName: the implicit UPN, by sAMAccountName
+        assert ldap_auth.authenticate(upn, "asmith", "pw-ann", logs.append) == [ADMINS]
+        assert (BASE, 2, "(sAMAccountName=asmith)") in d.searches
+        # under the user search base when one is set
+        d.searches.clear()
+        upn.user_search_base = "OU=People," + BASE
+        assert ldap_auth.authenticate(upn, "jdoe", "pw-jdoe", logs.append) == [OPS]
+        assert d.searches == [(upn.user_search_base, 2, "(userPrincipalName=jdoe@corp.local)")]
+        # DOMAIN\\user
+        nt4 = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="CORP\\{username}")
+        assert ldap_auth.authenticate(nt4, "jdoe", "pw-jdoe", logs.append) == [OPS]
+        assert (PARTITIONS, 1, "(nETBIOSName=CORP)") in d.searches
+        assert (BASE, 2, "(sAMAccountName=jdoe)") in d.searches
+        assert not [m for m in logs if "could not be read" in m], logs
+    print("authenticate: AD user@domain / DOMAIN\\user binds find the account's groups  OK")
+
+
+def test_ad_lookup_problems():
+    """A group lookup that fails is logged and flagged — the bind itself succeeded."""
+    if not have_ldap3():
+        return
+    from _ldap_server import FakeDirectory
+
+    child_asmith = "CN=asmith,OU=People," + CHILD
+    child_staff = "CN=child-staff,OU=Groups," + CHILD
+
+    class Forest(FakeDirectory):
+        """Also takes sign-in names of other domains, as a forest (or a trust) would."""
+        names = {"asmith@child.corp.local": ASMITH, "child\\asmith": child_asmith,
+                 "other\\jdoe": JDOE, "jdoe": JDOE}
+
+        def _bind_dn(self, name):
+            return self.names.get(name.lower()) or super()._bind_dn(name)
+
+    logs: list[str] = []
+    with ad_directory() as d:
+        s = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="{username}@corp.local",
+                         user_search_base="OU=Nowhere," + BASE)
+        groups = ldap_auth.authenticate(s, "jdoe", "pw-jdoe", logs.append)
+        assert groups == [] and groups.lookup_failed, groups
+        assert "'jdoe'" in logs[-1] and "noSuchObject (32)" in logs[-1], logs
+    with ad_directory() as base:
+        entries = {dn: dict(a) for dn, a in base.entries.items()}
+    entries[child_asmith] = {"objectClass": ["user"], "sAMAccountName": ["asmith"],
+                             "memberOf": [child_staff]}
+    with Forest(entries, {JDOE: "pw-jdoe", ASMITH: "pw-ann", child_asmith: "pw-child"}) as d:
+        # another domain's UPN: no sAMAccountName fallback in this domain (where
+        # "asmith" could be someone else)
+        child = LdapSettings(enabled=True, server_uri=d.uri,
+                             user_dn_template="{username}@child.corp.local")
+        groups = ldap_auth.authenticate(child, "asmith", "pw-ann", logs.append)
+        assert groups == [] and groups.lookup_failed, groups
+        assert not any("sAMAccountName" in f for _b, _s, f in d.searches), d.searches
+        assert "userPrincipalName=asmith@child.corp.local is not under" in logs[-1], logs
+        # DOMAIN\user: in that domain (its crossRef), not in the server's own domain
+        nt4 = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="CHILD\\{username}")
+        assert ldap_auth.authenticate(nt4, "asmith", "pw-child", logs.append) == [child_staff]
+        assert (CHILD, 2, "(sAMAccountName=asmith)") in d.searches, d.searches
+        nt4.user_search_base = "OU=People," + BASE     # a base in another domain
+        groups = ldap_auth.authenticate(nt4, "asmith", "pw-child", logs.append)
+        assert groups == [] and groups.lookup_failed, groups
+        assert "is not in the domain 'CHILD'" in logs[-1], logs
+        corp = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="CORP\\{username}",
+                            user_search_base="OU=People," + CHILD)
+        groups = ldap_auth.authenticate(corp, "asmith", "pw-ann", logs.append)
+        assert groups == [] and "is not in the domain 'CORP'" in logs[-1], logs
+        other = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="OTHER\\{username}")
+        groups = ldap_auth.authenticate(other, "jdoe", "pw-jdoe", logs.append)
+        assert groups == [] and "names no domain 'OTHER'" in logs[-1], logs
+        # a bare name is none of the forms an account can be found by
+        bare = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="{username}")
+        groups = ldap_auth.authenticate(bare, "jdoe", "pw-jdoe", logs.append)
+        assert groups == [] and "is no DN, user@domain or DOMAIN" in logs[-1], logs
+    # two entries for one account name: no guessing
+    with ad_directory() as d:
+        d.entries["CN=jdoe2,OU=Other," + BASE] = {"samaccountname": ["jdoe"], "memberof": [ADMINS]}
+        nt4 = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="CORP\\{username}")
+        groups = ldap_auth.authenticate(nt4, "jdoe", "pw-jdoe", logs.append)
+        assert groups == [] and groups.lookup_failed and "2 entries" in logs[-1], (groups, logs)
+    print("authenticate: a failed group lookup is logged; DOMAIN\\user only in that domain  OK")
+
+
+def test_nested_groups():
+    if not have_ldap3():
+        return
+    from _ldap_server import FakeDirectory
+    logs: list[str] = []
+    with ad_directory() as d:
+        upn = LdapSettings(enabled=True, server_uri=d.uri, user_dn_template="{username}@corp.local")
+        assert ldap_auth.authenticate(upn, "jdoe", "pw-jdoe", logs.append) == [OPS]
+        assert not any("1.2.840.113556.1.4.1941" in f for _b, _s, f in d.searches)
+        upn.nested_groups = True
+        groups = ldap_auth.authenticate(upn, "jdoe", "pw-jdoe", logs.append)
+        assert groups == [OPS, PLANT] and not groups.lookup_failed, groups
+        assert (BASE, 2, f"(member:1.2.840.113556.1.4.1941:={JDOE})") in d.searches, d.searches
+        assert ldap_auth.role_for_groups(groups, LdapSettings(admin_group="plant staff")) == "admin"
+        # search + bind: the service account searches
+        sb = LdapSettings(enabled=True, server_uri=d.uri, bind_dn=SVC, bind_password="pw-svc",
+                          user_search_base="OU=People," + BASE,
+                          user_search_filter="(sAMAccountName={username})", nested_groups=True)
+        assert ldap_auth.authenticate(sb, "jdoe", "pw-jdoe", logs.append) == [OPS, PLANT]
+        assert ldap_auth.authenticate(sb, "jdoe", "wrong", logs.append) is None
+        # a DN template on AD works as before, with nested groups too
+        dn = LdapSettings(enabled=True, server_uri=d.uri, nested_groups=True,
+                          user_dn_template="CN={username},OU=People," + BASE)
+        assert ldap_auth.authenticate(dn, "John Doe", "pw-jdoe", logs.append) == [OPS, PLANT]
+        assert not [m for m in logs if "could not be read" in m], logs
+    # OpenLDAP: DN binds as before; the AD-only rule simply finds nothing more
+    people = "ou=people,dc=ex,dc=com"
+    alice = "uid=alice," + people
+    entries = {alice: {"objectClass": ["inetOrgPerson"], "uid": ["alice"],
+                       "memberOf": [OPER_GROUP]},
+               "cn=svc,dc=ex,dc=com": {"objectClass": ["person"]}}
+    with FakeDirectory(entries, {alice: "secret", "cn=svc,dc=ex,dc=com": "svcpw"}, ad=False,
+                       base="dc=ex,dc=com") as d:
+        plain = LdapSettings(enabled=True, server_uri=d.uri,
+                             user_dn_template="uid={username}," + people)
+        assert ldap_auth.authenticate(plain, "alice", "secret", logs.append) == [OPER_GROUP]
+        assert d.searches == [(alice, 0, "(objectClass=*)")], d.searches
+        sb = LdapSettings(enabled=True, server_uri=d.uri, bind_dn="cn=svc,dc=ex,dc=com",
+                          bind_password="svcpw", user_search_base=people, nested_groups=True)
+        groups = ldap_auth.authenticate(sb, "alice", "secret", logs.append)
+        assert groups == [OPER_GROUP] and not groups.lookup_failed, groups
+        assert not [m for m in logs if "could not be read" in m], logs
+    print("authenticate: nested groups (AD, opt-in) in every bind mode; OpenLDAP unchanged  OK")
+
+
 def main():
     test_role_for_groups()
     test_whole_names_only()
@@ -218,6 +413,9 @@ def main():
     test_partial_match_noted()
     test_upsert_ldap_user()
     test_authenticate_flows()
+    test_ad_sign_in_names()
+    test_ad_lookup_problems()
+    test_nested_groups()
     print("\nPASS: LDAP/AD authentication")
 
 

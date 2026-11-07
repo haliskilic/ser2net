@@ -425,7 +425,11 @@ giriş yaptığında all.log'a ayarı ve grubu belirten bir WARNING yazılır, A
 kaydedene kadar bunu gösterir. Admin'leriniz yalnızca böyle bir gruptan geliyorsa
 `ser2net --set-password AD` ile oluşturulan yerel bir admin'le girin (aşağıya bakın) ve
 ayarı düzeltin. Grupları artık rol vermeyen bir dizin kullanıcısının bir sonraki girişi,
-hâlâ açık olan oturumlarını da kapatır.
+hâlâ açık olan oturumlarını da kapatır. `{username}@corp.local` ya da `CORP\{username}`
+ile AD doğrudan bind'de, grupları okumak için hesap kullanıcı arama tabanında (boşsa
+kendi domain'inin tamamında) userPrincipalName / sAMAccountName ile bulunur; *İç içe
+grupları da say* (yalnızca AD) kullanıcının başka gruplar üzerinden üyesi olduğu grupları
+da ekler.
 
 **Parola unutuldu, giriş yapılamıyor, tarayıcı yok (hesap kurtarma):**
 `ser2net --set-password AD`, yerel `AD` hesabına yeni parola verir (terminalde iki kez

@@ -413,7 +413,10 @@ its DN) gives no role: all.log names the setting and the group in a WARNING at t
 sign-in, and Settings shows it until you save that section. If your only admins came from
 such a group, sign in with a local admin created by `ser2net --set-password NAME` (see
 below) and correct the setting. When a directory user's groups give no role any more,
-their next sign-in also ends the sessions they still had.
+their next sign-in also ends the sessions they still had. AD direct bind with
+`{username}@corp.local` or `CORP\{username}` finds the account by userPrincipalName /
+sAMAccountName under the user search base (blank: its whole domain) to read its groups;
+*Also count nested groups* (AD only) adds the groups a user is in through other groups.
 
 **Lost password, locked out, no browser (account recovery):**
 `ser2net --set-password NAME` sets a new password for the local account `NAME` (asked

@@ -9,8 +9,10 @@ cryptography; each is skipped without them.
     with `ser2net --set-password`), and Settings shows it until that section is saved;
   * an existing LDAP/OIDC account whose groups give no role any more is signed out
     everywhere at its next sign-in — once: further refused tries don't save again;
-  * a Turkish group name typed in another letter case gives its role; a sign-in that
-    gets the default role logs the user's groups.
+  * the AD direct-bind template {username}@corp.local reads the user's groups; a
+    Turkish group name typed in another letter case gives its role; a sign-in that
+    gets the default role logs the user's groups;
+  * the nested-groups box is saved, and kept when a form without it is posted.
 
 Run: python3 tests/test_directory_login.py
 """
@@ -35,7 +37,7 @@ from app.web.auth import hash_password
 PW = "dir-login-pass-1"
 BASE = "DC=corp,DC=local"
 ADMINS = "CN=ser2net-admins,OU=Groups," + BASE
-TEMPLATE = "CN={username},OU=People," + BASE   # direct bind with the account's DN
+TEMPLATE = "{username}@corp.local"   # direct bind with the AD sign-in name Settings suggests
 
 
 def local_admin():
@@ -96,7 +98,7 @@ def ldap_form(d, **fields):
     form = {"ldap_enabled": "on", "ldap_server_uri": d.uri,
             "ldap_user_dn_template": TEMPLATE, "ldap_admin_group": "admins",
             "ldap_operator_group": "bilgi işlem", "ldap_viewer_group": "",
-            "ldap_default_role": ""}
+            "ldap_default_role": "", "ldap_nested_groups_shown": "1"}
     form.update(fields)
     return {k: v for k, v in form.items() if v is not None}
 
@@ -152,7 +154,7 @@ def test_ldap():
             # a Turkish group name in another letter case: BİLGİ İŞLEM = "bilgi işlem"
             Browser(srv.base).login("ayse", "pw-ayse")
             assert user_of(srv, "ayse")["role"] == "operator"
-            print("LDAP: a Turkish group name in another letter case gives its role  OK")
+            print("LDAP: UPN direct bind finds the groups; Turkish İ/ı names match  OK")
 
             # the fix: the whole name; saving drops the warning
             st, _, page = admin.post("/settings/ldap", ldap_form(
@@ -165,6 +167,16 @@ def test_ldap():
             assert ("LDAP login for 'mehmet': no group setting matches their groups: "
                     "'Domain Users', 'Kalite Kontrol'; default role viewer") in all_log(srv)
             print("LDAP: the group's whole name works; the default role logs the groups  OK")
+
+            # nested groups: ticked, kept by a form without the box, unticked
+            for fields, expect in (({"ldap_nested_groups": "on"}, True),
+                                   ({"ldap_nested_groups_shown": None}, True),
+                                   ({}, False)):
+                st, _, page = admin.post("/settings/ldap", ldap_form(
+                    d, ldap_admin_group="ser2net-admins", **fields))
+                assert "LDAP settings saved." in page, st
+                assert srv.saved_config()["ldap"]["nested_groups"] is expect, fields
+            print("LDAP: the nested-groups box is saved; an older form keeps it  OK")
 
 
 # ---------------- OIDC ----------------

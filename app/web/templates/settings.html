@@ -194,6 +194,8 @@
       <label>{{ _("Viewer group") }} <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2net-viewers"></label>
     </div>
     <p class="muted">{{ _('A group setting is the whole name of one group, in any letter case (Turkish İ/ı too): its name (the CN, such as <span class="mono">ser2net-admins</span>) or its full DN. Part of a name, such as <span class="mono">admins</span> for ser2net-admins, doesn’t match.') }}</p>
+    <input type="hidden" name="ldap_nested_groups_shown" value="1">
+    <label class="chk"><input type="checkbox" name="ldap_nested_groups" {% if ldap.nested_groups %}checked{% endif %}> {{ _("Also count nested groups (Active Directory: groups the user is in through another group)") }}</label>
     <button class="btn primary" type="submit">{{ _("Save LDAP") }}</button>
   </form>
 </section>
