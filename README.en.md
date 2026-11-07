@@ -447,7 +447,11 @@ instead of a code (e.g. the user is not assigned to the application: `access_den
 error and its description go to all.log and the user sees a message for that error code;
 the token endpoint's error answers are logged too. An e-mail address the provider calls
 unverified (`email_verified: false`) is never used as the user name. If the discovery
-document names another issuer than the configured one, all.log warns once.
+document names another issuer than the configured one, all.log warns once. The id_token's
+times (iat / nbf / exp) are accepted with up to 2 minutes of clock difference: keep the
+clocks of this server and of the provider synchronised (NTP); when a token is refused for its
+times, all.log says how many seconds this server's clock is behind or ahead of the
+provider's.
 
 **LDAP over TLS (LDAPS / StartTLS):** the directory server's certificate is checked. It
 must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: its

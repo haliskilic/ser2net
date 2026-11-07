@@ -460,7 +460,10 @@ metin giderdi. Sağlayıcı kod yerine bir hatayla dönerse (ör. kullanıcı uy
 `access_denied`) hata ve açıklaması all.log'a yazılır, kullanıcı hata koduna göre bir mesaj
 görür; token endpoint'inin hata yanıtları da loglanır. Sağlayıcının doğrulanmamış dediği
 (`email_verified: false`) bir e-posta adresi kullanıcı adı olamaz. Keşif belgesindeki issuer
-yapılandırılandan farklıysa all.log bir kez uyarır.
+yapılandırılandan farklıysa all.log bir kez uyarır. id_token'ın zamanları (iat / nbf / exp)
+2 dakikalık saat farkıyla kabul edilir: bu sunucunun ve sağlayıcının saatlerini senkron tutun
+(NTP); bir token zamanı yüzünden reddedilirse all.log bu sunucunun saatinin sağlayıcınınkinden
+kaç saniye geri ya da ileri olduğunu yazar.
 
 **TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
 Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika
