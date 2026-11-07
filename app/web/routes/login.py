@@ -195,12 +195,17 @@ def routes(ctx: Ctx) -> list:
                         secure=state.config.admin_ui.tls_enabled, path="/auth/oidc")
         return resp
 
+    def _same(given: str, expected) -> bool:
+        """The state from the URL is the one in the signed cookie (compared as bytes: a
+        str with non-ASCII text would make compare_digest raise)."""
+        return secrets.compare_digest(given.encode(), str(expected or "").encode())
+
     def _provider_error(request, data, error: str):
         """The provider sent the browser back with an error instead of a code (RFC 6749
         4.1.2.1, OIDC Core 3.1.2.6): logged with its description, shown by its code —
         never the provider's own text."""
         st = request.query_params.get("state", "")
-        ours = bool(data) and secrets.compare_digest(st, str(data.get("s", "")))
+        ours = bool(data) and _same(st, data.get("s"))
         desc = request.query_params.get("error_description", "")
         state.log(f"OIDC: the identity provider refused the sign-in: {error[:64]!r}"
                   + (f" ({desc[:200]!r})" if desc else "")
@@ -228,8 +233,7 @@ def routes(ctx: Ctx) -> list:
             return _provider_error(request, data, error)
         code = request.query_params.get("code", "")
         st = request.query_params.get("state", "")
-        if not (data and code and st.isascii()  # (compare_digest raises on non-ASCII text)
-                and secrets.compare_digest(st, str(data.get("s", "")))):
+        if not data or not code or not _same(st, data.get("s")):
             return render(request, "login.html", status_code=400, error=None, oidc_enabled=True,
                           oidc_error=_("SSO state mismatch — please try again."))
         # "v": the PKCE verifier (a state cookie from before it was sent has none)

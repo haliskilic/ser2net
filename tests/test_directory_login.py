@@ -425,6 +425,7 @@ def oidc_refused_callbacks(srv, provider):
     for browser, query in ((stranger, {"code": "CODE", "state": state}),
                            (b, {"code": "CODE", "state": state + "x"}),
                            (b, {"code": "CODE", "state": ""}),
+                           (b, {"code": "CODE", "state": "çalış"}),     # not ASCII: no 500
                            (b, {"state": state})):
         st, _, page = browser.get("/auth/oidc/callback?" + urllib.parse.urlencode(query))
         assert st == 400 and "SSO state mismatch" in page, (st, query)
