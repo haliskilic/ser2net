@@ -65,14 +65,13 @@
 <form class="mform" hx-post="{{ '/api/cluster/peer-save' if remote else '/api/mappings/save' }}" hx-target="#form-panel" hx-swap="innerHTML">
   <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
   {% if remote %}
-  <input type="hidden" name="scheme" value="{{ remote.scheme }}">
   <input type="hidden" name="host" value="{{ remote.host }}">
   <input type="hidden" name="port" value="{{ remote.port }}">
   {% endif %}
   {% if not is_new %}<input type="hidden" name="id" value="{{ remote.id if remote else mapping.id }}">{% endif %}
 
   <div class="form-head">
-    <h3>{{ _("New mapping") if is_new else _("Edit mapping") }}{% if remote %} <span class="tag">{{ _("on %(host)s", host=remote.host ~ ':' ~ remote.port) }}</span>{% endif %}</h3>
+    <h3>{{ _("New mapping") if is_new else _("Edit mapping") }}{% if remote %} <span class="tag">{{ _("on %(host)s", host=remote.addr) }}</span>{% endif %}</h3>
     <button type="button" class="btn sm" data-cancel>{{ _("Cancel") }}</button>
   </div>
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}

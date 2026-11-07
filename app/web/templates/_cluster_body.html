@@ -44,14 +44,15 @@
       <td class="col-actions">
         {% if can_edit and not n.self %}
         <div class="row-actions"><div class="btn-group">
-          {% set vals = '{"scheme":"' ~ n.scheme ~ '","host":"' ~ n.ip ~ '","port":"' ~ n.port ~ '","mid":"' ~ m.id ~ '","action":"' %}
+          {# the peer by host + port only: the server looks up its address and scheme #}
+          {% set peer = {"host": n.ip, "port": n.port, "mid": m.id} %}
           {% if m.enabled %}
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}stop"}' hx-swap="none">{{ _("Stop") }}</button>
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}restart"}' hx-swap="none">{{ _("Restart") }}</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="stop")|tojson }}' hx-swap="none">{{ _("Stop") }}</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="restart")|tojson }}' hx-swap="none">{{ _("Restart") }}</button>
           {% else %}
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}start"}' hx-swap="none">{{ _("Start") }}</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="start")|tojson }}' hx-swap="none">{{ _("Start") }}</button>
           {% endif %}
-          <button class="btn sm" hx-get="/api/cluster/peer-form?scheme={{ n.scheme }}&host={{ n.ip }}&port={{ n.port }}&mid={{ m.id|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
+          <button class="btn sm" hx-get="/api/cluster/peer-form?{{ peer|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
         </div></div>
         {% endif %}
       </td>

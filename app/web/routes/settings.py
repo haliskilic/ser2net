@@ -18,7 +18,7 @@ from starlette.routing import Route
 from ... import importer
 from ...config import (
     NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
-    ConfigError, NotificationSettings, User,
+    ConfigError, NotificationSettings, User, parse_cluster_peer,
 )
 from ...i18n import _
 from .. import auth, selfsigned
@@ -594,6 +594,11 @@ def routes(ctx: Ctx) -> list:
         except ValueError:
             return await settings_get(request, error=_("Cluster discovery port must be a number."))
         peers = [ln.strip() for ln in (form.get("peers") or "").splitlines() if ln.strip()]
+        try:  # each entry saved here must name an IP address or host name
+            for entry in peers:
+                parse_cluster_peer(entry, strict=True)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         new = ClusterSettings(
             enabled=form.get("enabled") == "on",
             key=(form.get("key") or "").strip(),

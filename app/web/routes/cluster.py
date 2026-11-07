@@ -4,7 +4,8 @@ Two kinds of endpoint live here. Peer-facing ones (``/api/cluster/local``,
 ``/control``, ``/mapping-data``, ``/mapping-save``) are called by OTHER nodes and are
 authenticated by the shared cluster key, not a session. Browser-facing ones (status,
 ``control-peer``, ``peer-form``, ``peer-save``) need a signed-in operator and proxy to
-a peer that must be on the known-address allowlist.
+a peer the browser names by host + port: it must be a discovered or configured peer,
+and the call goes to that peer's own address and scheme.
 """
 from __future__ import annotations
 
@@ -13,7 +14,6 @@ import hmac
 import re
 import socket
 import time
-from urllib.parse import quote
 
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
@@ -21,9 +21,11 @@ from starlette.routing import Route
 from ... import __version__
 from ...config import ConfigError, MappingConfig, trace_file_name
 from ...engine import netinfo, portlist
+from ...engine.cluster import peer_addr
 from ...i18n import _
+from .. import auth
 from . import ops
-from .common import Ctx
+from .common import Ctx, csrf_failed
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -73,15 +75,17 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     return fields, None
 
 
-def _remote(scheme, host, port, peer_id, mapping) -> dict:
-    """The fleet view's edit form for a peer's mapping: where it is saved, and under which
-    id. That is the id the peer itself keys the mapping by, sent back to it unchanged: a
+def _remote(target, peer_id, mapping) -> dict:
+    """The fleet view's edit form for a peer's mapping: the peer's host + port it posts
+    back (resolved again on save), the address it shows, and the id it is saved under.
+    That is the id the peer itself keys the mapping by, sent back to it unchanged: a
     v2.7/v2.8 peer may keep an id that this node would not take (``mapping`` carries the
     id derived from it here, which that peer has never heard of). This node uses it only
     to address the mapping on the peer, never for a file or path of its own."""
     if not isinstance(peer_id, str) or not peer_id:
         peer_id = mapping.id
-    return {"scheme": scheme, "host": host, "port": port, "id": peer_id}
+    return {"host": target["ip"], "port": target["port"],
+            "addr": peer_addr(target["ip"], target["port"]), "id": peer_id}
 
 
 def _mapping_kind_label(m) -> str:
@@ -211,28 +215,24 @@ def routes(ctx: Ctx) -> list:
 
     async def cluster_control_peer(request):
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
-        The peer is validated against the known-address allowlist (so the browser can't
-        aim this at an arbitrary host), then the call is made with the shared key."""
+        The peer must be a discovered or configured one (so the browser can't aim this
+        at an arbitrary host); the call goes to its address with the shared key."""
         if deny := require_peer_access(request):
             return deny
         form = await request.form()
-        scheme = form.get("scheme", "http")
-        host, action = form.get("host", ""), form.get("action", "")
-        mid = form.get("mid", "")
-        try:
-            port = int(form.get("port", "0"))
-        except ValueError:
-            return PlainTextResponse(_("Bad port"), status_code=400)
+        action, mid = form.get("action", ""), form.get("mid", "")
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
-        if (host, port) not in state.cluster.known_addresses():
-            return PlainTextResponse(_("Unknown cluster peer"), status_code=403)
-        res = await state.cluster.control_peer(scheme, host, port, mid, action)
+        target, err = _peer_target(form.get)
+        if err:
+            return err
+        res = await state.cluster.control_peer(target, mid, action)
         if not res or not res.get("ok"):
             return PlainTextResponse(_("Peer did not accept the command "
                                        "(unreachable or rejected)."), status_code=502)
-        state.log(f"cluster: sent {action} to {host}:{port} for '{res.get('name', mid)}'")
-        ctx.audit(request, f"cluster_control_{action}", f"{host}:{port}/{res.get('name', mid)}")
+        addr = peer_addr(target["ip"], target["port"])
+        state.log(f"cluster: sent {action} to {addr} for '{res.get('name', mid)}'")
+        ctx.audit(request, f"cluster_control_{action}", f"{addr}/{res.get('name', mid)}")
         return Response("", headers={"HX-Trigger": "refreshCluster"})
 
     # ---- remote EDIT: peer renders no UI; THIS node renders the form (so the CSRF
@@ -266,38 +266,42 @@ def routes(ctx: Ctx) -> list:
         state.audit(ip, "cluster_remote_save", msg, user="cluster-peer")
         return JSONResponse({"ok": True, "name": msg})
 
-    def _peer_from_request(getter):
-        """(scheme, host, port) from a request, validated against the peer allowlist.
-        Returns (tuple, None) on success or (None, error-response)."""
-        scheme, host = getter("scheme", "http"), getter("host", "")
+    def _peer_target(getter):
+        """The peer a browser request names by host + port (as the fleet view shows them)
+        — a discovered or configured one — or (None, error response). The address and
+        scheme used, and so where the shared key goes, are that peer's own; nothing else
+        in the request picks them."""
         try:
             port = int(getter("port", "0"))
-        except ValueError:
+        except (TypeError, ValueError):
             return None, PlainTextResponse(_("Bad peer port"), status_code=400)
-        if (host, port) not in state.cluster.known_addresses():
+        target = state.cluster.find_target(getter("host", ""), port)
+        if target is None:
             return None, PlainTextResponse(_("Unknown cluster peer"), status_code=403)
-        return (scheme, host, port), None
+        return target, None
 
     async def cluster_peer_form(request):
         """Browser-facing proxy: load a peer's mapping into the edit form (rendered
         here so the CSRF token is the browser's). Submits to /api/cluster/peer-save."""
         if deny := require_peer_access(request):
             return deny
-        peer, err = _peer_from_request(request.query_params.get)
+        # A GET, so the middleware's CSRF check doesn't cover it; the Edit button (htmx)
+        # sends the token header, a link from another site can't — so such a link can't
+        # make this node call a peer with the key.
+        if not auth.csrf_token_matches(request, request.headers.get("x-csrf-token")):
+            return csrf_failed()
+        target, err = _peer_target(request.query_params.get)
         if err:
             return err
-        scheme, host, port = peer
-        mid = request.query_params.get("mid", "")
-        data = await state.cluster.get_peer(
-            scheme, host, port, f"/api/cluster/mapping-data?mid={quote(mid, safe='')}")
+        data = await state.cluster.get_peer(target, "/api/cluster/mapping-data",
+                                            {"mid": request.query_params.get("mid", "")})
         if not data or not isinstance(data.get("mapping"), dict):
             return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
         mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
                       modbus_points_json=_modbus_points_json(mapping),
                       ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
-                      remote=_remote(scheme, host, port, data["mapping"].get("id"), mapping),
-                      error=None)
+                      remote=_remote(target, data["mapping"].get("id"), mapping), error=None)
 
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
@@ -307,18 +311,16 @@ def routes(ctx: Ctx) -> list:
         if deny := require_peer_access(request):
             return deny
         form = await request.form()
-        peer, err = _peer_from_request(form.get)
+        target, err = _peer_target(form.get)
         if err:
             return err
-        scheme, host, port = peer
-        mid = form.get("id", "")
 
         # Fetch the peer's current mapping (for the stored trace value + to confirm it
         # exists — the fleet view only edits) and its version, concurrently.
         data, local = await asyncio.gather(
-            state.cluster.get_peer(scheme, host, port,
-                                   f"/api/cluster/mapping-data?mid={quote(mid, safe='')}"),
-            state.cluster.get_peer(scheme, host, port, "/api/cluster/local"))
+            state.cluster.get_peer(target, "/api/cluster/mapping-data",
+                                   {"mid": form.get("id", "")}),
+            state.cluster.get_peer(target, "/api/cluster/local"))
 
         def _reload(msg):
             try:
@@ -331,7 +333,7 @@ def routes(ctx: Ctx) -> list:
                           is_new=False, modbus_points_json=_modbus_points_json(mapping),
                           ports=portlist.visible((data or {}).get("ports", [])),
                           ips=(data or {}).get("ips", []),
-                          remote=_remote(scheme, host, port, mid, mapping), error=msg)
+                          remote=_remote(target, form.get("id", ""), mapping), error=msg)
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))
@@ -339,10 +341,11 @@ def routes(ctx: Ctx) -> list:
                                          (local or {}).get("version", ""))
         if ferr:
             return _reload(ferr)
-        res = await state.cluster.post_peer(scheme, host, port, "/api/cluster/mapping-save", fields)
+        res = await state.cluster.post_peer(target, "/api/cluster/mapping-save", fields)
         if res and res.get("ok"):
-            state.log(f"cluster: edited '{res.get('name', '')}' on {host}:{port}")
-            ctx.audit(request, "cluster_edit", f"{host}:{port}/{res.get('name', '')}")
+            addr = peer_addr(target["ip"], target["port"])
+            state.log(f"cluster: edited '{res.get('name', '')}' on {addr}")
+            ctx.audit(request, "cluster_edit", f"{addr}/{res.get('name', '')}")
             return Response("", headers={"HX-Trigger": "refreshCluster"})
         return _reload((res or {}).get("error") or _("The peer rejected the change or was "
                                                      "unreachable."))

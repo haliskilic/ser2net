@@ -81,6 +81,7 @@ PORTABLE = [
     "test_tls_admission.py",
     "test_admin_limits.py",
     "test_event_loop.py",       # real-server part (600 idle sockets, proactor): Windows CI
+    "test_cluster_peer_calls.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

@@ -38,7 +38,6 @@
   "Authenticate users against a directory; their group membership maps to a ser2net role. Local accounts above keep working. Needs <span class=\"mono\">ldap3</span> (optional).": "Kullanıcıları bir dizin sunucusunda doğrular; grup üyelikleri bir ser2net rolüne eşlenir. Yukarıdaki yerel hesaplar çalışmaya devam eder. İsteğe bağlı <span class=\"mono\">ldap3</span> paketini gerektirir.",
   "auto from request": "istekten otomatik",
   "Bad peer port": "Geçersiz eş portu",
-  "Bad port": "Geçersiz port",
   "bad | or > block header": "hatalı | ya da > blok başlığı",
   "Base topic": "Ana topic",
   "Baud rate": "Baud hızı",

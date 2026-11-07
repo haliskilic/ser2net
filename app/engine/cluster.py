@@ -20,15 +20,17 @@ import asyncio
 import contextlib
 import hashlib
 import hmac
+import ipaddress
 import json
 import socket
 import ssl
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 from . import netinfo
-from ..config import parse_cluster_peer
+from ..config import parse_cluster_peer, peer_host
 
 BEACON_INTERVAL = 5.0   # seconds between outbound beacons
 PEER_TTL = 20.0         # a peer is dropped if not heard from within this window
@@ -37,6 +39,38 @@ _LOOPBACK = ("0.0.0.0", "::", "127.0.0.1", "localhost", "")
 
 def _sign(key: str, body: str) -> str:
     return hmac.new(key.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _port(value) -> int | None:
+    """value as a TCP port (1..65535), else None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None
+    return port if 1 <= port <= 65535 else None
+
+
+def peer_url(scheme: str, host: str, port, path: str = "/", query: dict | None = None) -> str:
+    """The URL of *path* on a peer's web UI. ValueError unless the scheme is http or
+    https, the host an IP address or host name and the port 1..65535, so no value can
+    point the URL (and the key sent with it) at another host. An IPv6 host is put in
+    brackets and the query is encoded."""
+    h, p = peer_host(host), _port(port)
+    if scheme not in ("http", "https") or h is None or p is None or not path.startswith("/"):
+        raise ValueError(f"not a cluster peer address: {scheme!r}, {host!r}, {port!r}")
+    url = f"{scheme}://[{h}]:{p}{path}" if ":" in h else f"{scheme}://{h}:{p}{path}"
+    return f"{url}?{urllib.parse.urlencode(query)}" if query else url
+
+
+def peer_addr(host, port) -> str:
+    """host:port as the UI and the logs show it (an IPv6 address in brackets)."""
+    return f"[{host}]:{port}" if ":" in str(host) else f"{host}:{port}"
+
+
+def _target_key(t: dict) -> tuple:
+    return t.get("scheme"), t.get("ip"), t.get("port")
 
 
 class _BeaconProtocol(asyncio.DatagramProtocol):
@@ -111,14 +145,27 @@ class ClusterDiscovery:
         pid = str(p.get("id", ""))
         if not pid or pid == self.config.instance_id:
             return  # ignore our own beacon
-        ip = str(p.get("ip", "")).strip()
-        if ip in _LOOPBACK and addr:
-            ip = addr[0]   # advertised IP unusable — fall back to the packet's source
+        ip, port = self._beacon_address(p.get("ip"), addr), _port(p.get("port"))
+        if ip is None or port is None:
+            return  # no web-UI address to reach it at
         scheme = p.get("scheme") if p.get("scheme") in ("http", "https") else "http"
         self._peers[pid] = {
             "id": pid, "name": str(p.get("name", "?")), "ip": ip,
-            "port": int(p.get("port", 0) or 0), "scheme": scheme, "last_seen": time.time(),
+            "port": port, "scheme": scheme, "last_seen": time.time(),
         }
+
+    @staticmethod
+    def _beacon_address(advertised, addr) -> str | None:
+        """Where a beacon's sender is reached: the IP address it advertises or, when that
+        is no usable address (loopback or wildcard: the node could not tell its LAN IP),
+        the packet's source address. Never a host name from the beacon."""
+        try:
+            ip = ipaddress.ip_address(str(advertised or "").strip())
+        except ValueError:
+            ip = None
+        if ip is not None and not (ip.is_loopback or ip.is_unspecified):
+            return str(ip)
+        return str(addr[0]) if addr else None   # fall back to the packet's source
 
     def peers(self) -> list[dict]:
         """Live peers (TTL-pruned), sorted by name then ip."""
@@ -137,7 +184,8 @@ class ClusterDiscovery:
                 scheme, host, port = parse_cluster_peer(entry)
             except Exception:
                 continue
-            out.append({"scheme": scheme, "ip": host, "port": port, "source": "manual"})
+            out.append({"scheme": scheme, "ip": peer_host(host) or host, "port": port,
+                        "source": "manual"})
         return out
 
     def all_targets(self) -> list[dict]:
@@ -153,10 +201,14 @@ class ClusterDiscovery:
                 targets.append(m)
         return targets
 
-    def known_addresses(self) -> set:
-        """(ip, port) allowlist of peers this node may reach — used to bound the
-        remote-control proxy so the browser can't aim it at an arbitrary address."""
-        return {(t["ip"], int(t["port"])) for t in self.all_targets()}
+    def find_target(self, host, port) -> dict | None:
+        """The discovered or configured peer at host:port (as the fleet view shows it),
+        else None. Browser-initiated peer calls are resolved through this, so their
+        address and scheme — where the shared key goes — never come from the request."""
+        h, p = peer_host(host), _port(port)
+        if h is None or p is None:
+            return None
+        return next((t for t in self.all_targets() if t["ip"] == h and t["port"] == p), None)
 
     # ----- lifecycle -----
     async def start(self) -> None:
@@ -251,41 +303,61 @@ class ClusterDiscovery:
         return ctx
 
     # ----- peer HTTP (all key-guarded; trust is the shared key) -----
-    async def get_peer(self, scheme: str, host: str, port: int, path: str,
+    async def get_peer(self, target: dict, path: str, query: dict | None = None,
                        timeout: float = 3.0) -> dict | None:
-        url = f"{scheme}://{host}:{port}{path}"
-        return await asyncio.to_thread(self._http_get_json, url, timeout)
+        """GET a key-guarded path of a known peer: its JSON answer, or None (no answer,
+        refused, not a ser2net node)."""
+        status, data = await self._request(target, "GET", path, query, None, timeout)
+        return data if 200 <= status < 300 else None
 
-    async def post_peer(self, scheme: str, host: str, port: int, path: str,
-                        fields: dict, timeout: float = 6.0) -> dict | None:
-        url = f"{scheme}://{host}:{port}{path}"
-        data = urllib.parse.urlencode(fields).encode()
-        return await asyncio.to_thread(self._http_post_json, url, data, timeout)
+    async def post_peer(self, target: dict, path: str, fields, timeout: float = 6.0) -> dict | None:
+        """POST a form to a key-guarded path of a known peer: its JSON answer, or None."""
+        body = urllib.parse.urlencode(fields).encode()
+        status, data = await self._request(target, "POST", path, None, body, timeout)
+        return data if 200 <= status < 300 else None
 
     async def fetch_peer(self, peer: dict, timeout: float = 2.5) -> dict | None:
-        return await self.get_peer(peer["scheme"], peer["ip"], peer["port"],
-                                   "/api/cluster/local", timeout)
+        return await self.get_peer(peer, "/api/cluster/local", timeout=timeout)
 
-    async def control_peer(self, scheme: str, host: str, port: int, mapping_id: str,
-                           action: str, timeout: float = 4.0) -> dict | None:
-        return await self.post_peer(scheme, host, port, "/api/cluster/control",
+    async def control_peer(self, target: dict, mapping_id: str, action: str,
+                           timeout: float = 4.0) -> dict | None:
+        return await self.post_peer(target, "/api/cluster/control",
                                     {"mapping_id": mapping_id, "action": action}, timeout)
 
-    def _http_get_json(self, url: str, timeout: float) -> dict | None:
-        req = urllib.request.Request(url, headers={"X-Cluster-Key": self.cluster.key})
+    async def _request(self, target: dict, method: str, path: str, query: dict | None,
+                       body: bytes | None, timeout: float) -> tuple[int, dict | None]:
+        """One key-guarded request: (HTTP status, 0 when nothing answered; the reply's
+        JSON object or None). Made only to a discovered or configured peer, at an
+        address peer_url accepts, so the key never goes to an address from a request."""
+        if not any(_target_key(t) == _target_key(target) for t in self.all_targets()):
+            return 0, None
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=self._peer_ssl_ctx(url)) as r:
-                return json.loads(r.read().decode("utf-8"))
-        except Exception:
-            return None
+            url = peer_url(target["scheme"], target["ip"], target["port"], path, query)
+        except ValueError:
+            return 0, None
+        return await asyncio.to_thread(self._http, method, url, body, timeout)
 
-    def _http_post_json(self, url: str, data: bytes, timeout: float) -> dict | None:
-        req = urllib.request.Request(
-            url, data=data, method="POST",
-            headers={"X-Cluster-Key": self.cluster.key,
-                     "Content-Type": "application/x-www-form-urlencoded"})
+    def _http(self, method: str, url: str, body: bytes | None,
+              timeout: float) -> tuple[int, dict | None]:
+        """Make one peer request (in a worker thread); never raises."""
+        headers = {"X-Cluster-Key": self.cluster.key}
+        if body is not None:
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        req = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout, context=self._peer_ssl_ctx(url)) as r:
-                return json.loads(r.read().decode("utf-8"))
+                return r.status, _json_object(r)
+        except urllib.error.HTTPError as e:
+            with contextlib.closing(e):
+                return e.code, _json_object(e)
         except Exception:
-            return None
+            return 0, None
+
+
+def _json_object(resp) -> dict | None:
+    """A peer reply's JSON object, or None."""
+    try:
+        data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
