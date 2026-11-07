@@ -56,7 +56,7 @@ from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_tim
 from . import serial_io, sockopts
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
-from .protocols.base import ProtocolSession
+from .protocols.base import ProtocolError, ProtocolSession
 from .serial_link import Backoff, SerialLink
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ class _Disconnect(ConnectionError):
 
 def describe_disconnect(exc: BaseException) -> str:
     """Short, operator-facing reason a TCP client connection ended."""
-    if isinstance(exc, _Disconnect):
+    if isinstance(exc, (_Disconnect, ProtocolError)):
         return str(exc)
     code = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
     if code in _PEER_TIMEOUT_ERRNOS:
@@ -475,8 +475,15 @@ class _ClientConn:
             if ctrl:
                 with contextlib.suppress(asyncio.QueueFull):
                     self._out.put_nowait(ctrl)
+            written = False
             if serial_bound and not m.network.read_only:
-                await self.runner.serial_write(serial_bound)
+                written = await self.runner.serial_write(serial_bound)
+            if not written:
+                # Nothing reached the port (read-only, only telnet/RFC 2217 commands, or
+                # the port is not open), so no serial drain() paces this client: let the
+                # other tasks run before the next read, which returns at once while the
+                # socket buffer holds more.
+                await asyncio.sleep(0)
         raise _Disconnect("closed by peer")
 
     async def _pump_serial_to_net(self) -> None:
