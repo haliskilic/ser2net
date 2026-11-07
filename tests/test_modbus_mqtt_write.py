@@ -20,7 +20,9 @@ anywhere without a broker or hardware. Checks:
   * retained commands, through the gateway's own start() (paho replaced by a stand-in
     whose broker keeps retained messages and replays them on subscribe): a retained /set
     is not written again after a reconnect or by a new runner unless the mapping opts in,
-    a retained NCMD / DCMD never is, and an empty message (clearing one) is no command.
+    a retained NCMD / DCMD never is, and an empty message (clearing one) is no command;
+  * Read-only refuses MQTT / Sparkplug writes as well (checked when a command arrives),
+    and the start-up log warns about commands over a broker link without TLS / username.
 
 Run: python3 tests/test_modbus_mqtt_write.py
 """
@@ -136,6 +138,12 @@ class FakeMqtt:
                 self.retained.pop(topic, None)
         if any(_matches(sub, topic) for sub in self.subscribed):
             self.on_message(self, None, Msg(topic, payload, False))
+
+    def username_pw_set(self, username, password=None):
+        pass
+
+    def tls_set(self):
+        pass
 
     def connect_async(self, host, port, keepalive=60):
         pass
@@ -440,6 +448,69 @@ async def test_retained_replay(slave_port):
     print("sparkplug: retained NCMD / DCMD ignored on subscribe, a live DCMD is written  OK")
 
 
+async def test_read_only(slave_port):
+    """Read-only refuses MQTT and Sparkplug writes too: a /set gets error: mapping is
+    read-only, a DCMD is logged and dropped, and nothing reaches the bus. It is checked when
+    a command arrives, so it follows the mapping without a restart."""
+    COILS[0] = False
+    SEEN.clear()
+    fake, logs = FakeMqtt(), []
+    r, sw = await gateway("plain", slave_port, fake, ONE_POINT, logs, network={"read_only": True})
+    try:
+        assert "plant/a/pump/set" in fake.subscribed, "still subscribed: refused with an answer"
+        r._mqtt.handle_message("plant/a/pump/set", b"1")
+        assert await wait(lambda: last(fake, "plant/a/pump/set/result")
+                          == b"error: mapping is read-only")
+        try:
+            await r.write_point(r._set_points["plant/a/pump/set"], True)
+        except ValueError as e:
+            assert str(e) == "mapping is read-only", e
+        else:
+            raise AssertionError("write_point wrote on a read-only mapping")
+        await asyncio.sleep(0.1)
+        assert COILS[0] is False and bus_writes() == [], bus_writes()
+        assert any("write 'pump' from MQTT refused: the mapping is read-only" in m for m in logs)
+        r.mapping.network.read_only = False            # e.g. a later in-place toggle
+        r._mqtt.handle_message("plant/a/pump/set", b"1")
+        assert await wait(lambda: COILS[0] is True and last(fake, "plant/a/pump/set/result") == b"ok")
+    finally:
+        sw.close()
+    print("plain + read-only: /set answered error: mapping is read-only, nothing on the bus  OK")
+
+    COILS[0] = False
+    SEEN.clear()
+    fake, logs = FakeMqtt(), []
+    r, sw = await gateway("sparkplug_b", slave_port, fake, SP_POINTS, logs,
+                          network={"read_only": True})
+    try:
+        r._mqtt.handle_message(sparkplug.topic("ser2net", "DCMD", "Line_3_PLC", "unit1"),
+                               sparkplug.encode_payload(sparkplug.Payload(0, [sparkplug.Metric(
+                                   "pump", sparkplug.DataType.Boolean, True)], None)))
+        await asyncio.sleep(0.3)
+        assert COILS[0] is False and bus_writes() == [], bus_writes()
+        assert any("DCMD for unit1/'pump' refused: the mapping is read-only" in m for m in logs), logs
+    finally:
+        sw.close()
+    print("sparkplug + read-only: DCMD logged and refused, nothing on the bus  OK")
+
+    # at start: what read-only means here, or a warning when commands come in without TLS
+    for network, mqtt, expect in (({"read_only": True}, {}, "writes to writable points are refused too"),
+                                  ({}, {}, "without TLS or a username"),
+                                  ({}, {"tls": True}, "without a username")):
+        logs = []
+        async with started(slave_port, FakeMqtt(), logs=logs, mqtt=mqtt, network=network):
+            pass
+        assert any(expect in m for m in logs), (expect, logs)
+        assert any("warning: writable points take MQTT commands" in m for m in logs) \
+            == (not network), logs
+    logs = []
+    async with started(slave_port, FakeMqtt(), logs=logs,
+                       mqtt={"tls": True, "username": "ser2net", "password": "x"}):
+        pass
+    assert not any("warning:" in m for m in logs), logs
+    print("start-up log: read-only scope, warning for commands without TLS / username  OK")
+
+
 async def test_sparkplug(slave_port):
     fake, logs = FakeMqtt(), []
     REGS[10], REGS[30] = 5, 42
@@ -560,6 +631,7 @@ async def main():
         await test_plain(port)
         await test_plain_one_point(port)
         await test_retained_replay(port)
+        await test_read_only(port)
         await test_sparkplug(port)
     finally:
         srv.close()

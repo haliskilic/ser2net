@@ -227,12 +227,58 @@ def test_mapping_form_modbus_fields():
           "/set option only for plain-format points  OK")
 
 
+def test_mqtt_command_tags():
+    """The dashboard tags a Modbus mapping whose writable points take MQTT commands CMD,
+    as a warning (CMD ⚠) when its broker connection has no TLS or no username; a read-only
+    one is RO and never CMD. The mapping form shows the same warning as a banner."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+
+    def gw(mid, mqtt=None, writable=True, **network):
+        return MappingConfig.from_dict({
+            "id": mid, "name": mid, "serial": {"port": "COM3"},
+            "network": dict({"protocol": "modbus", "port": 502}, **network),
+            "mqtt": dict({"enabled": True, "host": "b", "base_topic": "plant/a"}, **(mqtt or {})),
+            "modbus_poll": {"points": [{"name": "pump", "fn": 1, "dtype": "bool",
+                                        "writable": writable}]}})
+    env = make_templates().env
+    rows, form = env.get_template("_mappings_body.html"), env.get_template("_mapping_form.html")
+
+    def row(m):
+        out = rows.render(mappings=[m], statuses={}, can_edit=False)
+        check_table_contract(out, f"mappings table ({m.id})")
+        return out
+
+    def form_of(m):
+        return form.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                           ports=[], ips=[], error=None)
+
+    for m in (gw("open"), gw("tls_only", {"tls": True}), gw("user_only", {"username": "u"})):
+        out = row(m)
+        assert ">CMD ⚠</span>" in out and "tag tag-danger" in out, (m.id, out)
+        assert 'class="banner warn"' in form_of(m), m.id
+    secure = gw("secure", {"tls": True, "username": "u"})
+    out = row(secure)
+    assert ">CMD</span>" in out and "tag-danger" not in out, out
+    assert 'class="banner warn"' not in form_of(secure)
+    read_only = gw("ro", read_only=True)
+    assert ">RO</span>" in row(read_only) and ">CMD" not in row(read_only)
+    assert 'class="banner warn"' not in form_of(read_only)
+    for m in (gw("mqtt_off", {"enabled": False}), gw("no_writable", writable=False)):
+        assert ">CMD" not in row(m) and 'class="banner warn"' not in form_of(m), m.id
+    print("CMD tag (⚠ without TLS / username) and the form warning follow MQTT writes; "
+          "read-only is RO only  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
     test_cluster_table()
     test_ports_table_and_assets()
     test_mapping_form_modbus_fields()
+    test_mqtt_command_tags()
     print("\nPASS: UI markup contract")
 
 

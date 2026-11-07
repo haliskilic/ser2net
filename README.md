@@ -72,7 +72,10 @@ düzenlemeye gerek yok.
   uint/int/float 16/32, ölçek); `"writable": true` noktalar MQTT'den yazılır
   (`<topic>/<nokta>/set`, yalnızca o noktaya tek değer: coil için FC5, holding register için
   kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
-  `.../set/result`'ta `error: …` alır). İstenirse **Sparkplug B**
+  `.../set/result`'ta `error: …` alır). **Salt okunur** bu yazmaları da reddeder (`error:
+  mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler panoda
+  **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker karar
+  verir). İstenirse **Sparkplug B**
   edge node olarak, her Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH,
   `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth. Bir komut yayınlandığında bir
   kez yazılır: broker'ın yeniden bağlanma, yeniden başlatma ya da config kaydından sonra
@@ -305,6 +308,26 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 `0.0.0.0`/`::` "herkes" demektir. Bir eşlemenin seri portu yalnızca cihaz yolu ya da COM
 adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
 port olarak kabul edilmez.
+
+**MQTT komutları (Modbus edge modu):** yazılabilir noktalar, broker'ın `<topic>/<nokta>/set`
+topic'ine ya da Sparkplug B'de `spBv1.0/<group>/NCMD/<node>` ve
+`spBv1.0/<group>/DCMD/<node>/<cihaz>` topic'lerine yayın yapmasına izin verdiği her
+istemciden değer alır. ser2net bu istemcilerin kimliğini kendisi doğrulamaz ve
+`allowed_client_ips` yalnızca Modbus/TCP portunu kapsar; asıl yetkilendirme broker'ın erişim
+kurallarıdır (ACL): komut topic'lerine yalnızca çıkışları anahtarlaması gereken istemciler
+yayın yapabilsin, broker'a TLS ve kullanıcı adı/parola ile bağlanın. **Salt okunur** her
+yazmayı reddeder. MQTT'den yazma alan eşlemeler panoda **CMD**, broker bağlantısında TLS ya
+da kullanıcı adı yoksa **CMD ⚠** etiketiyle gösterilir (ayrıca açılışta loga uyarı düşer).
+Örneğin `plant/line3` ana topic'i için bir Mosquitto `acl_file`:
+```
+user ser2net
+topic readwrite plant/line3/#
+user scada
+topic write plant/line3/+/set
+topic read plant/line3/#
+user historian
+topic read plant/line3/#
+```
 
 **Parolasız erişim (isteğe bağlı):** yalnızca güvenilir ağlar için, bir admin
 **Ayarlar → Web arayüzü erişimi**'nden giriş zorunluluğunu kapatıp ziyaretçilere bir rol

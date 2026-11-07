@@ -10,7 +10,8 @@ metrics are that unit's poll points:
   * each poll publishes a DDATA per device with the points whose value changed (report
     by exception); seq counts on across NBIRTH, DBIRTH and DDATA: 0…255, 0, …;
   * DCMD: a metric named like a writable point of that device is written to the bus
-    (through the gateway's write_point); NCMD: "Node Control/Rebirth" = true
+    (through the gateway's write_point), unless the mapping is read-only (then the
+    command is logged and refused); NCMD: "Node Control/Rebirth" = true
     republishes NBIRTH and the DBIRTHs. Commands are never retained (Sparkplug 3.0), so
     a retained NCMD / DCMD the broker replays on subscribe is dropped (MqttPublisher);
   * stopping the mapping publishes NDEATH before disconnecting (a host then takes the
@@ -157,6 +158,10 @@ class SparkplugNode:
                           "point)")
                 continue
             if m.is_null:
+                continue
+            if self.mapping.network.read_only:  # checked per command, not at subscribe time
+                self._log(f"Sparkplug DCMD for {dev}/{shown(m.name)} refused: the mapping is "
+                          "read-only")
                 continue
             value = m.value
             # Sparkplug 3.0 lets a host leave the datatype off a command; the value then
