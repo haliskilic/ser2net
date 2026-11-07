@@ -27,7 +27,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, console, standalone
+from . import accounts, console, i18n, standalone
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
@@ -180,6 +180,9 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
+    for lang in i18n.missing_catalogs():
+        state.log(f"WARNING: the '{lang}' UI translation is missing from {i18n.LOCALE_DIR} "
+                  "— the web UI shows English to visitors who pick it")
     state.prepare_first_run()
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:
         state.log("WARNING: admin UI is bound to a network address over plain HTTP — "

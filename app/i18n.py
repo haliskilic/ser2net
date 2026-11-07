@@ -37,6 +37,13 @@ def catalog(lang: str) -> dict:
         return {}
 
 
+def missing_catalogs() -> list[str]:
+    """The offered languages whose catalog can't be loaded — a packaging mistake that
+    would otherwise only show as an English UI with the language switch still on
+    (runtime logs a warning for each at start-up; this also loads the catalogs)."""
+    return [lang for lang in LANGUAGES if lang != DEFAULT and not catalog(lang)]
+
+
 def current() -> str:
     return _lang.get()
 
