@@ -160,7 +160,8 @@ düzenlemeye gerek yok.
   eklenebilir. Güven = her düğümde **aynı paylaşılan anahtar** (Türkçe harfler dahil her
   karakter olabilir; kullanılmadan önce Unicode NFKC ile normalleştirilir, başka bir sistemde
   yazılan ya da yapıştırılan aynı anahtar da eşleşir); varsayılan kapalı, Ayarlar → LAN
-  cluster'dan açılır.
+  cluster'dan açılır. Eşlere her zaman doğrudan bağlanılır, hiçbir zaman HTTP proxy üzerinden
+  bağlanılmaz (`HTTP(S)_PROXY` / `ALL_PROXY` yalnızca webhook ve SSO için geçerlidir).
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına

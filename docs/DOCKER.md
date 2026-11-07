@@ -46,7 +46,9 @@ docker run -d --name ser2net \
   groups given with `--group-add` (serial device access) are kept, root's group is not.
   With `docker run --user …` the entrypoint just runs as that user.
 - **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`):
-  `docker ps` shows `healthy` once the UI answers — also before the first-run setup.
+  `docker ps` shows `healthy` once the UI answers — also before the first-run setup. The
+  probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
+  webhooks or SSO) don't affect it.
 - **Persistence.** `config.json`, its automatic backups (`backups/`), logs, traces
   (`traces/`) and any generated TLS material live in the `/data` volume; back that up to
   preserve mappings and the admin password.
