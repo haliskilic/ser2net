@@ -15,6 +15,7 @@ import base64
 import hashlib
 import http.server
 import os
+import re
 import sys
 import threading
 import time
@@ -214,10 +215,15 @@ def test_complete_flow():
     disco = {"issuer": ISSUER, "authorization_endpoint": ISSUER + "/auth",
              "token_endpoint": ISSUER + "/token", "jwks_uri": ISSUER + "/jwks"}
 
-    def make_token(aud=CLIENT_ID, nonce="N1", exp_delta=300, iss=ISSUER):
+    def make_token(aud=CLIENT_ID, nonce="N1", exp_delta=300, iss=ISSUER, iat_delta=0,
+                   nbf_delta=None, exp=True):
+        now = int(time.time())
         payload = {"iss": iss, "aud": aud, "sub": "u1", "preferred_username": "alice",
-                   "groups": ["ser2net-operators"], "nonce": nonce,
-                   "iat": int(time.time()), "exp": int(time.time()) + exp_delta}
+                   "groups": ["ser2net-operators"], "nonce": nonce, "iat": now + iat_delta}
+        if exp:
+            payload["exp"] = now + iat_delta + exp_delta
+        if nbf_delta is not None:
+            payload["nbf"] = now + nbf_delta
         return jwt.encode({"alg": "RS256"}, payload, key).decode()
 
     def fetch_for(token):
@@ -275,10 +281,36 @@ def test_complete_flow():
     # wrong audience -> rejected
     bad_aud = make_token(aud="someone-else")
     assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", fetch=fetch_for(bad_aud), post=post_for(bad_aud)) is None
-    # expired -> rejected
-    expired = make_token(exp_delta=-10)
-    assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", fetch=fetch_for(expired), post=post_for(expired)) is None
-    print("OIDC complete(): rejects bad nonce / audience / expiry  OK")
+    # expired beyond the clock tolerance -> rejected
+    logs = []
+    expired = make_token(iat_delta=-900, exp_delta=300 - 2 * oidc_auth.CLOCK_SKEW_S)
+    assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", logs.append,
+                              fetch=fetch_for(expired), post=post_for(expired)) is None
+    assert any("this server's clock is about 9" in m and "s ahead of the identity provider's"
+               in m and "(NTP)" in m for m in logs), logs
+    # an ID token without exp never expires: refused
+    assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", fetch=fetch_for(t := make_token(
+        exp=False)), post=post_for(t)) is None
+    print("OIDC complete(): rejects bad nonce / audience / expiry / no exp  OK")
+
+    # this host's clock a little off the provider's: within CLOCK_SKEW_S it still works
+    assert oidc_auth.CLOCK_SKEW_S == 120
+    for fields in ({"iat_delta": 30}, {"iat_delta": 115}, {"iat_delta": -200, "exp_delta": 100},
+                   {"nbf_delta": 60}, {"iat_delta": -1, "exp_delta": -60}):
+        tok = make_token(**fields)
+        assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", fetch=fetch_for(tok),
+                                  post=post_for(tok)), fields
+    # ...beyond it, refused with a hint at the clocks (iat is trustworthy: signed)
+    for fields, hint in (({"iat_delta": 600}, r"about (59[89]|600) s behind the identity "),
+                         ({"nbf_delta": 600, "iat_delta": 590}, r"about 5[89]\d s behind the ")):
+        logs = []
+        tok = make_token(**fields)
+        assert oidc_auth.complete(s, "https://h/cb", "CODE", "N1", logs.append,
+                                  fetch=fetch_for(tok), post=post_for(tok)) is None, fields
+        assert any(re.search(hint, m) and "check the time synchronisation (NTP)" in m
+                   for m in logs), (fields, logs)
+    print("OIDC complete(): ID-token times allow 120 s of clock difference; beyond, the log "
+          "says how far this server's clock is off  OK")
 
 
 def main():

@@ -2,7 +2,8 @@
 
 Endpoints are discovered from the issuer's /.well-known/openid-configuration. The
 returned id_token is validated — signature via the issuer's JWKS, plus iss / aud /
-exp / nonce — using authlib.jose (do NOT hand-roll JWT validation). A claim
+exp / nonce, its times with CLOCK_SKEW_S of tolerance — using authlib.jose (do NOT
+hand-roll JWT validation). A claim
 (groups_claim) maps to a ser2net role, reusing the LDAP group→role logic (whole group
 names only: ldap_auth.group_matches).
 
@@ -35,6 +36,11 @@ from .ldap_auth import role_for_groups  # shared group/claim -> role mapping
 
 _DISCOVERY_CACHE: dict[str, tuple[dict, float]] = {}
 _DISCOVERY_TTL = 3600.0
+# How far this host's clock may be off the identity provider's when an ID token's times
+# (iat, nbf, exp) are checked: two minutes, as authlib's own OIDC client allows. Without
+# it, a host a second behind a provider that stamps iat with the current second (such as
+# Keycloak) has its sign-ins refused as "issued in the future".
+CLOCK_SKEW_S = 120
 _ISSUER_WARNED: set[tuple[str, str]] = set()   # (configured, discovered): logged once
 
 
@@ -179,6 +185,7 @@ def complete(settings, redirect_uri: str, code: str, nonce: str, logger=None,
     log = logger or (lambda _m: None)
     try:
         from authlib.jose import JsonWebKey, jwt
+        from authlib.jose.errors import ExpiredTokenError, InvalidTokenError
     except Exception as e:  # not only ImportError (e.g. an authlib without authlib.jose)
         log(f"OIDC sign-in disabled: {optional.problem(e, 'authlib')}")
         return None
@@ -196,11 +203,16 @@ def complete(settings, redirect_uri: str, code: str, nonce: str, logger=None,
             log("OIDC: token response had no id_token")
             return None
         jwks = JsonWebKey.import_key_set(fetch(secure_url(doc.get("jwks_uri"), "jwks_uri")))
-        claims = jwt.decode(id_token, jwks, claims_options={
+        claims = jwt.decode(id_token, jwks, claims_options={   # checks the signature
             "iss": {"essential": True, "value": _expected_issuer(settings, doc, log)},
             "aud": {"essential": True, "value": settings.client_id},
+            "exp": {"essential": True},        # OIDC Core: an ID token always expires
         })
-        claims.validate()                      # exp / iat / nbf
+        try:
+            claims.validate(leeway=CLOCK_SKEW_S)   # exp / iat / nbf
+        except (ExpiredTokenError, InvalidTokenError) as e:
+            log(f"OIDC: the ID token was refused ({e}): {_clock_hint(claims)}")
+            return None
         if nonce and claims.get("nonce") != nonce:
             log("OIDC: nonce mismatch (possible replay)")
             return None
@@ -211,6 +223,20 @@ def complete(settings, redirect_uri: str, code: str, nonce: str, logger=None,
     except Exception as e:  # discovery/token/JWKS/JWT failure -> denied
         log(f"OIDC authentication failed: {type(e).__name__}: {e}")
         return None
+
+
+def _clock_hint(claims) -> str:
+    """How far this host's clock seems off the provider's, for a token refused for its
+    times. The provider issued it (iat, under a signature already checked) a moment ago
+    by its own clock, so now - iat is about the difference between the two clocks."""
+    iat = claims.get("iat")
+    if isinstance(iat, bool) or not isinstance(iat, (int, float)):
+        return "check that this server's clock is right (time synchronisation, NTP)"
+    offset = round(time.time() - iat)
+    where = f"{-offset} s behind" if offset < 0 else f"{offset} s ahead of"
+    return (f"this server's clock is about {where} the identity provider's ({CLOCK_SKEW_S} s "
+            f"are allowed): check the time synchronisation (NTP) of this server and of the "
+            f"provider")
 
 
 def _says_false(value) -> bool:
