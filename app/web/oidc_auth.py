@@ -6,8 +6,9 @@ exp / nonce — using authlib.jose (do NOT hand-roll JWT validation). A claim
 (groups_claim) maps to a ser2net role, reusing the LDAP group→role logic (whole group
 names only: ldap_auth.group_matches).
 
-authlib is an OPTIONAL dependency (lazy import): absent => OIDC login is disabled
-and local accounts keep working. HTTP uses stdlib urllib; the fetch/post calls are
+authlib is an OPTIONAL dependency (lazy import): absent or failing to import => OIDC
+login is disabled with a log line saying which (app.optional), and local accounts keep
+working. HTTP uses stdlib urllib; the fetch/post calls are
 injectable so the full flow can be tested without a real provider.
 """
 from __future__ import annotations
@@ -17,6 +18,7 @@ import time
 import urllib.parse
 import urllib.request
 
+from .. import optional
 from .ldap_auth import role_for_groups  # shared group/claim -> role mapping
 
 _DISCOVERY_CACHE: dict[str, tuple[dict, float]] = {}
@@ -68,8 +70,8 @@ def complete(settings, redirect_uri: str, code: str, nonce: str, logger=None,
     log = logger or (lambda _m: None)
     try:
         from authlib.jose import JsonWebKey, jwt
-    except ImportError:
-        log("OIDC enabled but authlib is not installed; SSO disabled (pip install authlib)")
+    except Exception as e:  # not only ImportError (e.g. an authlib without authlib.jose)
+        log(f"OIDC sign-in disabled: {optional.problem(e, 'authlib')}")
         return None
     try:
         doc = discover(settings.issuer, fetch=fetch)

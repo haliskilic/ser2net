@@ -5,10 +5,11 @@ ser2net role. On success a 'shadow' local User (source='ldap', no password) is
 upserted so the rest of the system — sessions, role checks, the Users panel — works
 uniformly; the role is refreshed from LDAP groups on every login.
 
-ldap3 is an OPTIONAL dependency, imported lazily: if it's absent, LDAP login is
-disabled with a log line and local accounts keep working. The actual bind/search is
-isolated so the role-mapping and shadow-user logic can be unit-tested without ldap3;
-the group -> role matching (OIDC claims use it too) is pure Python.
+ldap3 is an OPTIONAL dependency, imported lazily: if it's absent or fails to import,
+LDAP login is disabled with a log line saying which (app.optional) and local accounts
+keep working. The actual bind/search is isolated so the role-mapping and shadow-user
+logic can be unit-tested without ldap3; the group -> role matching (OIDC claims use it
+too) is pure Python.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from .. import optional
 from ..config import ROLE_RANK, User
 
 # LDAP_MATCHING_RULE_IN_CHAIN: Active Directory follows nested groups for this filter
@@ -339,7 +341,7 @@ def authenticate(settings, username: str, password: str, logger=None,
     """Bind to LDAP as `username`/`password`; return the user's group DNs (a
     DirectoryGroups) on success or None on failure. Never raises on a bad bind.
     `server`/`conn_factory` are injection points for tests (an ldap3 MOCK_SYNC
-    server). Returns None if ldap3 is not installed."""
+    server). Returns None if ldap3 is missing or fails to import (logged)."""
     log = logger or (lambda _m: None)
     if not username or not password:   # empty password must not become an anonymous bind
         return None
@@ -347,8 +349,8 @@ def authenticate(settings, username: str, password: str, logger=None,
         import ldap3
         from ldap3.utils.conv import escape_filter_chars
         from ldap3.utils.dn import escape_rdn
-    except ImportError:
-        log("LDAP enabled but ldap3 is not installed; LDAP login disabled (pip install ldap3)")
+    except Exception as e:  # not only ImportError: never a 500 for the sign-in
+        log(f"LDAP login disabled: {optional.problem(e, 'ldap3')}")
         return None
 
     def _default_factory(srv, user, pw):

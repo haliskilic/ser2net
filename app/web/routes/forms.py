@@ -22,11 +22,6 @@ def _password_problem(pw: str, pw2: str) -> str | None:
     return None
 
 
-def _module_present(name: str) -> bool:
-    import importlib.util
-    return importlib.util.find_spec(name) is not None
-
-
 def _ldap_from_form(form, old) -> LdapSettings:
     pw = form.get("ldap_bind_password", "")
     return LdapSettings.from_dict({

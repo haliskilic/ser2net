@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from ... import i18n, importer
+from ... import i18n, importer, optional
 from ...config import (
     NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
     ConfigError, NotificationSettings, User, backup_time, new_pwd_version, parse_cluster_peer,
@@ -27,8 +27,7 @@ from ...i18n import _
 from .. import auth, selfsigned
 from .common import Ctx, csrf_failed
 from .forms import (
-    _checkbox, _ldap_from_form, _module_present, _oidc_from_form, _password_problem,
-    _username_problem,
+    _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
 )
 
 
@@ -50,10 +49,17 @@ def routes(ctx: Ctx) -> list:
                 "cluster_copies": state.cluster.copies(),
                 "cluster_legacy": state.cluster.legacy_nodes() if c.active else []}
 
+    def _package_problems():
+        """Why LDAP / OIDC sign-in can't work for want of its package, while it is on: a
+        real import (find_spec would call a package that fails to import present)."""
+        return (optional.load("ldap3", "ldap3")[1] if state.config.ldap.enabled else None,
+                optional.load("authlib.jose", "authlib")[1] if state.config.oidc.enabled else None)
+
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
         backups = state.store.backups() if me is not None and me.role == "admin" else []
+        ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups,
@@ -62,8 +68,8 @@ def routes(ctx: Ctx) -> list:
                       api_token_role=state.config.api_token_role,
                       new_api_token=new_api_token, new_cluster_key=new_cluster_key,
                       me=current_user(request), users=state.config.users, roles=ROLES,
-                      ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
-                      oidc=state.config.oidc, oidc_lib=_module_present("authlib"),
+                      ldap=state.config.ldap, ldap_problem=ldap_problem,
+                      oidc=state.config.oidc, oidc_problem=oidc_problem,
                       group_warnings={src: [w for (s, _k), w in sorted(state.group_warnings.items())
                                             if s == src] for src in ("ldap", "oidc")},
                       **_cluster_view(),

@@ -140,19 +140,24 @@ def print_about() -> int:
     import ssl
     from importlib import metadata
 
+    from app import optional
+
     lines = [f"ser2net {__version__}",
              f"Python {platform.python_version()} ({platform.python_implementation()}), "
              f"{ssl.OPENSSL_VERSION}",
              f"Platform: {platform.platform()} ({platform.machine()})",
              f"Build: {'standalone executable' if FROZEN else 'source'}"]
-    for dist, module in (("pyserial", "serial"), ("starlette", "starlette"),
-                         ("uvicorn", "uvicorn"), ("paho-mqtt", "paho.mqtt"),
-                         ("ldap3", "ldap3"), ("authlib", "authlib"),
-                         ("cryptography", "cryptography")):
-        try:
-            mod = __import__(module, fromlist=["__name__"])
-        except Exception:
-            lines.append(f"  {dist:13} not installed")
+    components = (("pyserial", "serial"), ("pyserial-asyncio-fast", "serial_asyncio_fast"),
+                  ("starlette", "starlette"), ("uvicorn", "uvicorn"),
+                  ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),
+                  ("authlib", "authlib"), ("cryptography", "cryptography"))
+    width = max(len(dist) for dist, _module in components)
+    for dist, module in components:
+        mod, problem = optional.load(module, dist, module)
+        if problem is not None:
+            # "not installed" only when it really isn't; else the error importing it raised
+            lines.append(f"  {dist:{width}} " + ("not installed" if problem.missing else
+                                                 f"failed to import: {problem.error}"))
             continue
         version = getattr(mod, "__version__", None)
         if not isinstance(version, str):
@@ -161,7 +166,7 @@ def print_about() -> int:
             except metadata.PackageNotFoundError:
                 version = "?"
         where = os.path.dirname(getattr(mod, "__file__", "") or "")
-        lines.append(f"  {dist:13} {version}  ({where})")
+        lines.append(f"  {dist:{width}} {version}  ({where})")
     _write_utf8("\n".join(lines) + "\n")
     return 0
 

@@ -53,6 +53,7 @@ PORTABLE = [
     "test_ldap.py",
     "test_oidc.py",
     "test_directory_login.py",  # LDAP/OIDC sign-in end to end; skips without ldap3 / authlib
+    "test_optional_packages.py",
     "test_cluster.py",
     "test_ui_markup.py",
     "test_ui_layout.py",      # browser layout check; skips without Playwright (CI 'ui' job runs it)

@@ -12,7 +12,8 @@ CI 'standalone' jobs build the executables and set it):
      SER2NET_MAX_GLIBC (default 2.28); Windows: VC++ runtime and Python inside;
   2. run with an EMPTY PATH (no python, no openssl, nothing to borrow) and no
      PYTHON* variables: --version; it boots and serves the UI; a raw TCP mapping
-     accepts a client; MQTT, LDAP and OIDC libraries are inside (no "not installed");
+     accepts a client; MQTT, LDAP and OIDC libraries are inside and import (no "not
+     installed", no "failed to import");
      Settings → Generate self-signed certificate works (no openssl program); OIDC
      discovery over a certificate-checked HTTPS connection works (bundled OpenSSL
      + CA certificates);
@@ -514,6 +515,8 @@ def test_binary():
                 fh.write('__version__ = "0.0-override-test"\n')
             about = run.output(["--about"])
             assert re.search(r"ldap3\s+2\.\d", about), f"bundled ldap3 not found:\n{about}"
+            assert re.search(r"pyasn1\s+0\.\d", about), f"bundled pyasn1 not found:\n{about}"
+            assert "not installed" not in about and "failed to import" not in about, about
             about = run.output(["--about"], {"SER2NET_LIB_OVERRIDE": override})
             assert re.search(r"ldap3\s+0\.0-override-test", about), \
                 f"SER2NET_LIB_OVERRIDE did not replace ldap3:\n{about}"
@@ -529,6 +532,8 @@ def test_binary():
 
         st, _, page = s.request("/settings")
         assert st == 200 and "is not installed" not in page, "LDAP/OIDC library missing from the bundle"
+        assert "failed to import" not in page and "missing from this executable" not in page, \
+            "LDAP/OIDC library in the bundle does not import"
         st, _, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
         assert "Self-signed certificate generated" in page, \
             re.sub(r"\s+", " ", page[page.find("banner"):][:300])
@@ -550,7 +555,7 @@ def test_binary():
         assert f"listening on 127.0.0.1:{raw} (raw, keepalive" in log, log[-1500:]
         assert "client connected: 127.0.0.1" in log, log[-1500:]
         assert "MQTT publishing serial lines to 127.0.0.1" in log, "paho-mqtt missing from the bundle?"
-        assert "not installed" not in log, log[-1500:]
+        assert "not installed" not in log and "failed to import" not in log, log[-1500:]
         if IMAGE:
             assert f"TLS: using the system CA bundle {run.ca_path}" in log, \
                 f"binary did not pick {run.ca_path}:\n" + log[:1500]
