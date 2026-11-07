@@ -3,6 +3,8 @@
 The role-mapping and shadow-user logic are pure (always run in CI): a group setting
 matches whole group names only — the full DN, its leading RDNs or the group's own name
 (the CN), in any letter case with Turkish İ/I/ı/i as one letter — never a part of one.
+An LDAP/OIDC sign-in never takes over a local account of the same name (any letter
+case); an LDAP name in any letter case is one shadow account (OIDC names stay exact).
 The bind/search flow is exercised with a fake connection factory and against a small
 LDAP server speaking the real protocol (_ldap_server.py), which answers like Active
 Directory where needed: sign-in names that are no DN (user@domain, DOMAIN\\user), the

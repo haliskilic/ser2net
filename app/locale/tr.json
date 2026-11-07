@@ -813,7 +813,7 @@
   "Server certificate check": "Sunucu sertifikası denetimi",
   "There is a local account named {0} here, so you can't sign in under that name with SSO or a directory account. Sign in with that account’s password, or ask an admin to delete the local account first.": "Burada {0} adında yerel bir hesap var; bu yüzden bu adla SSO ya da dizin hesabıyla giriş yapamazsın. O hesabın parolasıyla giriş yap ya da bir admin'den önce yerel hesabı silmesini iste.",
   "Your user name from the directory or the identity provider can’t be used here; an admin can see why in all.log.": "Dizinden ya da kimlik sağlayıcıdan gelen kullanıcı adın burada kullanılamıyor; nedenini bir admin all.log'da görebilir.",
-  "Its accounts in another letter case were deleted too: {0}.": "Başka büyük/küçük harfle yazılmış hesapları da silindi: {0}.",
+  "Its accounts in another letter case were deleted too: {0}.": "Aynı kullanıcının başka büyük/küçük harfle yazılmış hesapları da silindi: {0}.",
   "Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.": "Kullanıcı adı 1-32 karakter olmalı: Türkçe karakter içermeyen harfler (a-z, A-Z), rakam, '.', '_' ya da '-'.",
   "Not allowed: {0}": "İzin verilmeyen karakterler: {0}",
   "SSO sign-in is off: the identity provider gives an address that isn’t https:// (all.log says which).": "SSO ile giriş kapalı: kimlik sağlayıcı https:// olmayan bir adres veriyor (hangisi olduğu all.log'da).",
@@ -822,7 +822,7 @@
   "The identity provider refused the sign-in request ({0}). An admin should check the SSO settings; all.log has the details.": "Kimlik sağlayıcı giriş isteğini reddetti ({0}). Bir admin SSO ayarlarını kontrol etmeli; ayrıntılar all.log'da.",
   "last sign-in: %(time)s": "son giriş: %(time)s",
   "LDAP / OIDC accounts are made at their first sign-in, and every sign-in takes their role from the directory or the identity provider again. Delete signs such an account out at once, but whether that person can sign in again is up to the directory: while a mapped group or the default role still applies, their next sign-in makes a new account.": "LDAP / OIDC hesapları ilk girişte oluşturulur ve her girişte rolleri yeniden dizinden ya da kimlik sağlayıcıdan alınır. Sil, böyle bir hesabın oturumlarını hemen kapatır; ama o kişinin yeniden giriş yapıp yapamayacağına dizin karar verir: eşlenen bir grup ya da varsayılan rol geçerli oldukça bir sonraki girişi yeni bir hesap oluşturur.",
-  "Remove LDAP / OIDC accounts not signed in for (days)": "Şu kadar gün giriş yapmayan LDAP / OIDC hesaplarını kaldır (gün)",
+  "Remove LDAP / OIDC accounts not signed in for (days)": "Giriş yapılmayan LDAP / OIDC hesaplarını kaldırma süresi (gün)",
   "0 = never · %(min)s to %(max)s · never admins or local accounts": "0 = hiçbir zaman · %(min)s ile %(max)s arası · admin'ler ve yerel hesaplar asla kaldırılmaz",
   "Save": "Kaydet",
   "Enter 0 (never) or a number of days from {0} to {1}.": "0 (hiçbir zaman) ya da {0} ile {1} arasında bir gün sayısı gir.",
@@ -832,5 +832,5 @@
   "They are signed out; while {0} still gives them a role, their next sign-in makes a new account.": "Oturumları kapatıldı; {0} onlara bir rol verdiği sürece bir sonraki girişleri yeni bir hesap oluşturur.",
   "{0} days": "{0} gün",
   "never": "hiçbir zaman",
-  "Remove LDAP / OIDC accounts not signed in for": "Giriş yapmayan LDAP / OIDC hesaplarını kaldırma süresi"
+  "Remove LDAP / OIDC accounts not signed in for": "Giriş yapılmayan LDAP / OIDC hesaplarını kaldırma süresi"
 }
