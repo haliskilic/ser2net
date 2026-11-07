@@ -19,7 +19,7 @@ from starlette.routing import Route
 from ... import importer
 from ...config import (
     NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
-    ConfigError, NotificationSettings, User, parse_cluster_peer,
+    ConfigError, NotificationSettings, User, new_pwd_version, parse_cluster_peer,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -280,7 +280,7 @@ def routes(ctx: Ctx) -> list:
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
         async with state.config_lock:
             state.config.users.append(User(username=username, password_hash=pw_hash,
-                                           role=role, pwd_version=1))
+                                           role=role, pwd_version=new_pwd_version()))
             await state.asave()
         state.log(f"user created: {username} ({role})")
         ctx.audit(request, "user_create", f"{username}:{role}")

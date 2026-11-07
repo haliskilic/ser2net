@@ -35,13 +35,18 @@ def test_upsert_ldap_user():
         {"username": "admin", "password_hash": "x", "role": "admin", "source": "local"}]})
     u = ldap_auth.upsert_ldap_user(cfg, "alice", "operator")
     assert u.username == "alice" and u.role == "operator" and u.source == "ldap"
-    assert u.password_hash == "" and u.pwd_version == 1 and len(cfg.users) == 2
+    assert u.password_hash == "" and isinstance(u.pwd_version, int) and len(cfg.users) == 2
     v0 = u.pwd_version
     same = ldap_auth.upsert_ldap_user(cfg, "alice", "operator")  # unchanged -> no bump
     assert same is u and same.pwd_version == v0
     promoted = ldap_auth.upsert_ldap_user(cfg, "alice", "admin")  # role change -> bump
     assert promoted.role == "admin" and promoted.pwd_version == v0 + 1
-    print("upsert_ldap_user: creates shadow, refreshes role, bumps pwd_version on change  OK")
+    # deleted, then back at the next sign-in: a new random version, not the old cookies' one
+    cfg.users = [x for x in cfg.users if x.username != "alice"]
+    again = ldap_auth.upsert_ldap_user(cfg, "alice", "viewer")
+    assert again is not promoted and again.pwd_version != promoted.pwd_version
+    print("upsert_ldap_user: creates shadow (random first version), refreshes role, bumps "
+          "pwd_version on change  OK")
 
 
 # ---- authenticate() flow with a fake connection factory (needs ldap3 for escapes) ----

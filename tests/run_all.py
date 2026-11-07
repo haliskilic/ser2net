@@ -55,6 +55,7 @@ PORTABLE = [
     "test_vendor_wheels.py",
     "test_trace.py",
     "test_session_timeout.py",
+    "test_session_revocation.py",
     "test_backups_import.py",
     "test_audit_log.py",
     "test_healthcheck.py",
