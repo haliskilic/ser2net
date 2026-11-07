@@ -67,11 +67,22 @@ def _oidc_from_form(form, old) -> OidcSettings:
     })
 
 
+_USERNAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+
 def _username_problem(username: str) -> str | None:
+    """A local account's name: ASCII letters, digits, '.', '_' or '-' (the setup and Users
+    forms check the same in the browser: pattern). Names the characters it refuses — a
+    phone keyboard can put in a Turkish İ unnoticed."""
     if not username:
         return _("Username is required.")
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", username):
-        return _("Username must be 1-32 characters: letters, digits, '.', '_' or '-'.")
+        rule = _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', "
+                 "'_' or '-'.")
+        bad = [c for c in dict.fromkeys(username) if c not in _USERNAME_CHARS]
+        if bad:
+            rule += " " + _("Not allowed: {0}").format(", ".join(repr(c) for c in bad))
+        return rule
     return None
 
 

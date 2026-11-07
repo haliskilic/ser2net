@@ -230,7 +230,7 @@
       <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
     </label>
     <div class="grid3">
-      <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}"></label>
+      <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       <label>{{ _("Password") }} <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="{{ _('optional') }}"></label>
       <label class="chk chk-pad"><input type="checkbox" name="mqtt_tls" {% if mapping.mqtt.tls %}checked{% endif %}> TLS</label>
     </div>

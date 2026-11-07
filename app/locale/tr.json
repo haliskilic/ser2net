@@ -604,7 +604,6 @@
   "Username": "Kullanıcı adı",
   "Username claim": "Kullanıcı adı claim'i",
   "Username is required.": "Kullanıcı adı gerekli.",
-  "Username must be 1-32 characters: letters, digits, '.', '_' or '-'.": "Kullanıcı adı 1-32 karakter olmalı: harf, rakam, '.', '_' ya da '-'.",
   "Users": "Kullanıcılar",
   "viewer = read-only": "viewer = salt okunur",
   "Viewer group": "Viewer grubu",
@@ -814,5 +813,7 @@
   "Server certificate check": "Sunucu sertifikası denetimi",
   "There is a local account named {0} here, so you can't sign in under that name with SSO or a directory account. Sign in with that account’s password, or ask an admin to delete the local account first.": "Burada {0} adında yerel bir hesap var; bu yüzden bu adla SSO ya da dizin hesabıyla giriş yapamazsın. O hesabın parolasıyla giriş yap ya da bir admin'den önce yerel hesabı silmesini iste.",
   "Your user name from the directory or the identity provider can’t be used here; an admin can see why in all.log.": "Dizinden ya da kimlik sağlayıcıdan gelen kullanıcı adın burada kullanılamıyor; nedenini bir admin all.log'da görebilir.",
-  "Its accounts in another letter case were deleted too: {0}.": "Başka büyük/küçük harfle yazılmış hesapları da silindi: {0}."
+  "Its accounts in another letter case were deleted too: {0}.": "Başka büyük/küçük harfle yazılmış hesapları da silindi: {0}.",
+  "Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.": "Kullanıcı adı 1-32 karakter olmalı: Türkçe karakter içermeyen harfler (a-z, A-Z), rakam, '.', '_' ya da '-'.",
+  "Not allowed: {0}": "İzin verilmeyen karakterler: {0}"
 }
