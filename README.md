@@ -157,8 +157,10 @@ düzenlemeye gerek yok.
   **sağlığını** (uptime · sürüm · çalışan/toplam) belirtir. Operatörler bu ekrandan
   başka bir host'un eşlemelerini **uzaktan başlat/durdur/yeniden başlat ve düzenle** edebilir.
   Broadcast'in ulaşmadığı yönlendirilmiş/L3 ağlar için **manuel peer** (host:port)
-  eklenebilir. Güven = her düğümde **aynı paylaşılan anahtar**; varsayılan kapalı,
-  Ayarlar → LAN cluster'dan açılır.
+  eklenebilir. Güven = her düğümde **aynı paylaşılan anahtar** (Türkçe harfler dahil her
+  karakter olabilir; kullanılmadan önce Unicode NFKC ile normalleştirilir, başka bir sistemde
+  yazılan ya da yapıştırılan aynı anahtar da eşleşir); varsayılan kapalı, Ayarlar → LAN
+  cluster'dan açılır.
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına

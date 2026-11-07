@@ -25,6 +25,7 @@ import json
 import socket
 import ssl
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,8 +38,35 @@ PEER_TTL = 20.0         # a peer is dropped if not heard from within this window
 _LOOPBACK = ("0.0.0.0", "::", "127.0.0.1", "localhost", "")
 
 
+def key_bytes(key: str) -> bytes:
+    """The cluster key as every check uses it - the beacon HMAC and the credential sent
+    with peer requests: Unicode NFKC-normalised, then UTF-8. NFKC makes the same key
+    typed or pasted on different systems match (a composed or decomposed letter, a
+    no-break space); an ASCII key is unchanged, so its bytes are those every release
+    has used."""
+    return unicodedata.normalize("NFKC", key or "").encode("utf-8", "surrogatepass")
+
+
+def key_header(key: str) -> str:
+    """The X-Cluster-Key header value for *key*: key_bytes as latin-1 text, which
+    http.client sends as exactly those bytes (an ASCII key goes out unchanged)."""
+    return key_bytes(key).decode("latin-1")
+
+
+def key_header_matches(key: str, header: str | None) -> bool:
+    """Whether an X-Cluster-Key header carries *key*. The server decodes header bytes
+    as latin-1, so encoding back gives the bytes that were sent; they are compared with
+    key_bytes(key) as bytes (a text comparison fails on a non-ASCII key)."""
+    want = key_bytes(key)
+    try:
+        got = (header or "").encode("latin-1")
+    except UnicodeEncodeError:  # not text from a header
+        return False
+    return bool(want and got) and hmac.compare_digest(got, want)
+
+
 def _sign(key: str, body: str) -> str:
-    return hmac.new(key.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.new(key_bytes(key), body.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def peer_port(value) -> int | None:
@@ -127,20 +155,22 @@ class ClusterDiscovery:
 
     def handle_datagram(self, data: bytes, addr) -> None:
         """Verify a received beacon and record/refresh the peer. Pure (no I/O) so it
-        can be called directly from tests to inject a peer."""
+        can be called directly from tests to inject a peer. Any host on the LAN can
+        send here, so anything malformed is dropped without an error."""
         key = self.cluster.key
         if not key:
             return
         try:
             env = json.loads(data.decode("utf-8"))
             body, sig = env["d"], env["s"]
-        except (ValueError, KeyError, AttributeError, TypeError):
-            return
-        if not hmac.compare_digest(_sign(key, body), str(sig)):
-            return  # different key (or tampered) — not part of our cluster
-        try:
+            if not (isinstance(body, str) and isinstance(sig, str) and sig.isascii()):
+                return
+            if not hmac.compare_digest(_sign(key, body), sig):
+                return  # different key (or tampered) — not part of our cluster
             p = json.loads(body)
-        except ValueError:
+        except (ValueError, KeyError, AttributeError, TypeError, RecursionError):
+            return  # (a UnicodeError is a ValueError)
+        if not isinstance(p, dict):
             return
         pid = str(p.get("id", ""))
         if not pid or pid == self.config.instance_id:
@@ -303,6 +333,11 @@ class ClusterDiscovery:
         return ctx
 
     # ----- peer HTTP (all key-guarded; trust is the shared key) -----
+    def _auth_headers(self) -> dict[str, str]:
+        """The credential sent with every peer request: the shared key itself, as every
+        release since 2.6 sends and checks it (byte-identical for an ASCII key)."""
+        return {"X-Cluster-Key": key_header(self.cluster.key)}
+
     async def get_peer(self, target: dict, path: str, query: dict | None = None,
                        timeout: float = 3.0) -> dict | None:
         """GET a key-guarded path of a known peer: its JSON answer, or None (no answer,
@@ -342,7 +377,7 @@ class ClusterDiscovery:
     def _http(self, method: str, url: str, body: bytes | None,
               timeout: float) -> tuple[int, dict | None]:
         """Make one peer request (in a worker thread); never raises."""
-        headers = {"X-Cluster-Key": self.cluster.key}
+        headers = self._auth_headers()
         if body is not None:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
         req = urllib.request.Request(url, data=body, method=method, headers=headers)

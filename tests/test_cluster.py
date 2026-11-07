@@ -12,6 +12,7 @@ a stand-in v2.7/v2.8 peer whose id this version would not take (kept as the peer
 Run: python3 tests/test_cluster.py
 """
 import html as htmllib
+import http.client
 import http.cookiejar
 import json
 import os
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,7 +33,7 @@ sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
 from app.config import AppConfig, ClusterSettings              # noqa: E402
-from app.engine.cluster import ClusterDiscovery, PEER_TTL, _sign  # noqa: E402
+from app.engine.cluster import ClusterDiscovery, PEER_TTL, _sign, key_header  # noqa: E402
 from app.web.auth import hash_password                         # noqa: E402
 
 
@@ -119,6 +121,20 @@ def raw_request(ui, path, headers=None, method="GET"):
         return e.code, e.read().decode("utf-8")
 
 
+def header_request(ui, path, name, value: bytes):
+    """GET with one header sent as raw bytes (e.g. non-ASCII); returns the status."""
+    conn = http.client.HTTPConnection("127.0.0.1", ui, timeout=10)
+    try:
+        conn.putrequest("GET", path)
+        conn.putheader(name, value)
+        conn.endheaders()
+        r = conn.getresponse()
+        r.read()
+        return r.status
+    finally:
+        conn.close()
+
+
 def test_endpoints():
     tmp = tempfile.mkdtemp(prefix="ser2net_cluster_")
     cfg = os.path.join(tmp, "config.json")
@@ -163,7 +179,11 @@ def test_endpoints():
         data = json.loads(body)
         assert data["name"] == socket.gethostname() and data["id"], data
         assert data["mappings"] == [], "no mappings yet"
-        print("cluster/local: key-guarded (403/403/200), returns node identity  OK")
+        # a key that isn't ASCII (the UTF-8 or latin-1 bytes of a letter) is a wrong key
+        for raw in ("ü".encode(), "ü".encode("latin-1"), key.encode() + "ş".encode()):
+            code = header_request(ui, "/api/cluster/local", "X-Cluster-Key", raw)
+            assert code == 403, f"non-ASCII key bytes must be 403, got {code}"
+        print("cluster/local: key-guarded (403/403/200, non-ASCII -> 403), returns node identity  OK")
 
         port = free_port()
         post("/api/mappings/save", {
@@ -244,8 +264,10 @@ def test_manual_peer_and_remote_control():
     """Two real nodes linked by a MANUAL peer (no UDP dependency): node A aggregates
     node B's mappings + health and can remotely start/stop/edit them with the shared
     key. B reports an address of its own (as behind NAT or Docker) that A can't use:
-    the buttons A renders must still reach B, so the test sends exactly those."""
-    key = "rc-key-xyz"
+    the buttons A renders must still reach B, so the test sends exactly those. The key
+    has Turkish letters, and B's copy is the same text in decomposed form (NFD)."""
+    key = "küme-anahtarı-çöüşğİı"
+    hdr = {"X-Cluster-Key": key_header(key)}
     ui_a, ui_b = free_port(), free_port()
     # different discovery ports so the nodes DON'T auto-discover each other — the
     # manual peer is the only link, making the test deterministic.
@@ -254,7 +276,8 @@ def test_manual_peer_and_remote_control():
     node_b = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_b},
               "users": [{"username": "admin", "password_hash": hash_password("clusteradmin1"),
                          "role": "admin", "pwd_version": 1}],
-              "cluster": {"enabled": True, "key": key, "discovery_port": dp_b,
+              "cluster": {"enabled": True, "key": unicodedata.normalize("NFD", key),
+                          "discovery_port": dp_b,
                           "advertise_ip": "192.0.2.10"},   # not where A reaches it
               "mappings": [{"name": "REMOTE1", "enabled": False, "kind": "net",
                             "serial": {"port": "/dev/ttyTEST", "baudrate": 9600},
@@ -304,7 +327,7 @@ def test_manual_peer_and_remote_control():
                           "password2": "adminpass123", "_csrf": csrf()})
 
         # node B's mapping id (and confirm it starts disabled)
-        _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+        _, body = raw_request(ui_b, "/api/cluster/local", hdr)
         bmaps = json.loads(body)["mappings"]
         mid = bmaps[0]["id"]
         assert bmaps[0]["enabled"] is False, bmaps
@@ -333,7 +356,7 @@ def test_manual_peer_and_remote_control():
         assert post_a("/api/cluster/control-peer", acts["start"]) == 200, \
             "remote start should be accepted"
         for _ in range(20):
-            _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+            _, body = raw_request(ui_b, "/api/cluster/local", hdr)
             if json.loads(body)["mappings"][0]["enabled"]:
                 break
             time.sleep(0.1)
@@ -349,7 +372,7 @@ def test_manual_peer_and_remote_control():
         crafted = f"http://127.0.0.1:{trap.getsockname()[1]}/?x="
         assert post_a("/api/cluster/control-peer", {**acts["stop"], "scheme": crafted}) == 200
         for _ in range(20):
-            _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+            _, body = raw_request(ui_b, "/api/cluster/local", hdr)
             if not json.loads(body)["mappings"][0]["enabled"]:
                 break
             time.sleep(0.1)
@@ -388,7 +411,7 @@ def test_manual_peer_and_remote_control():
                 "network_port": str(map_port)}
         assert post_a("/api/cluster/peer-save", edit) == 200, "remote edit should be accepted"
         for _ in range(20):
-            _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+            _, body = raw_request(ui_b, "/api/cluster/local", hdr)
             if json.loads(body)["mappings"][0]["serial"] == "/dev/ttyEDITED":
                 break
             time.sleep(0.1)
@@ -401,7 +424,7 @@ def test_manual_peer_and_remote_control():
         # the proxy forwards only known, validated fields: a URL serial port is refused
         bad_port = {**edit, "serial_port": "socket://10.0.0.9:1"}
         assert post_a("/api/cluster/peer-save", bad_port) == 400, "a URL serial port must be refused"
-        _, body = raw_request(ui_b, "/api/cluster/local", {"X-Cluster-Key": key})
+        _, body = raw_request(ui_b, "/api/cluster/local", hdr)
         assert json.loads(body)["mappings"][0]["serial"] == "/dev/ttyEDITED", "the URL edit leaked"
 
         # a trace path typed into the form reaches the peer only as a bare file name

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hmac
 import re
 import socket
 import time
@@ -22,7 +21,7 @@ from starlette.routing import Route
 from ... import __version__
 from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
 from ...engine import netinfo, portlist
-from ...engine.cluster import peer_addr, peer_port, peer_url
+from ...engine.cluster import key_header_matches, peer_addr, peer_port, peer_url
 from ...i18n import _
 from .. import auth
 from . import ops
@@ -149,14 +148,22 @@ def routes(ctx: Ctx) -> list:
                 "version": __version__, "uptime_s": int(time.time() - state.started_at),
                 "mapping_count": len(maps), "running_count": running, "mappings": maps}
 
+    def _peer_authorized(request) -> bool:
+        """Whether a peer-facing request carries this node's cluster key: the one check
+        every key-guarded endpoint makes (compared as bytes, so any key works)."""
+        cfg = state.config
+        return cfg.cluster.active and key_header_matches(
+            cfg.cluster.key, request.headers.get("x-cluster-key"))
+
+    def _forbidden():
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
     async def cluster_local(request):
         """Peer-facing: returns this node's mappings to another cluster node that
         presents the matching shared key. Guarded by the key, not a user session
         (added to PUBLIC_PATHS) — read-only, exposes no credentials."""
-        cfg = state.config
-        key = request.headers.get("x-cluster-key", "")
-        if not (cfg.cluster.active and key and hmac.compare_digest(key, cfg.cluster.key)):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if not _peer_authorized(request):
+            return _forbidden()
         return JSONResponse(local_node_payload())
 
     def _node_from(target, data) -> dict:
@@ -211,10 +218,8 @@ def routes(ctx: Ctx) -> list:
     async def cluster_control(request):
         """Peer-facing remote control: another cluster node (presenting the shared key)
         asks us to start/stop/restart one of OUR mappings. Key-guarded, no session."""
-        cfg = state.config
-        key = request.headers.get("x-cluster-key", "")
-        if not (cfg.cluster.active and key and hmac.compare_digest(key, cfg.cluster.key)):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if not _peer_authorized(request):
+            return _forbidden()
         form = await request.form()
         mid, action = form.get("mapping_id", ""), form.get("action", "")
         if action not in ("start", "stop", "restart"):
@@ -254,10 +259,9 @@ def routes(ctx: Ctx) -> list:
     async def cluster_mapping_data(request):
         """Peer-facing: a mapping's full config + this node's serial ports + IP
         candidates, so the controlling node can render the edit form. Key-guarded."""
+        if not _peer_authorized(request):
+            return _forbidden()
         cfg = state.config
-        key = request.headers.get("x-cluster-key", "")
-        if not (cfg.cluster.active and key and hmac.compare_digest(key, cfg.cluster.key)):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
         m = cfg.get_mapping(request.query_params.get("mid", ""))
         if not m:
             return JSONResponse({"error": "not_found"}, status_code=404)
@@ -267,10 +271,8 @@ def routes(ctx: Ctx) -> list:
     async def cluster_mapping_save(request):
         """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
         from the same form the controlling node rendered. Key-guarded."""
-        cfg = state.config
-        key = request.headers.get("x-cluster-key", "")
-        if not (cfg.cluster.active and key and hmac.compare_digest(key, cfg.cluster.key)):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if not _peer_authorized(request):
+            return _forbidden()
         form = await request.form()
         ok, msg = await ops.save_mapping_from_form(state, form)
         if not ok:
