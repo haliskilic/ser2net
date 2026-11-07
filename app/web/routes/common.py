@@ -49,6 +49,7 @@ class Ctx:
     def set_session(self, response, request, user) -> None:
         cfg = self.state.config
         ttl = cfg.session_timeout_s  # Settings -> Web UI access -> session lifetime
+        self.state.signins.note(user.username, user.source)   # its last sign-in
         response.set_cookie(
             auth.SESSION_COOKIE,
             auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),

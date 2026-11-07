@@ -435,7 +435,16 @@ from an existing one only in letter case. An LDAP/OIDC
 name can be any printable text (`CORP\jdoe`, `jdoe@corp.local`, names with `/` or `#`;
 such accounts can be signed out and deleted in the Users panel too); a sign-in under a name
 with control or invisible characters, longer than 255 characters or in parentheses is
-refused (all.log says why).
+refused (all.log says why). **Settings → Users** shows each account's last sign-in (from the
+audit log and the sign-ins since; not written to config.json). LDAP/OIDC accounts that have
+not signed in for **90 days** are removed at start-up and every hour, and written to all.log
+and the audit log (`user_expired`); the period is set there too
+(`external_users_expire_days`: 0 = never, or 30–3650 days). Admins, local accounts and the
+last remaining accounts are never removed; an account with no sign-in in the audit log at
+all only when the log goes back that far for that kind of sign-in. Deleting (or removing)
+an LDAP/OIDC account ends its sessions at once, but access is up to the directory: while a
+mapped group or the default role still applies, the person's next sign-in makes a new
+account.
 
 **OIDC (SSO):** the code request carries PKCE (S256). Every address the provider's discovery
 document gives (authorization, token, JWKS) and every redirect on the way must be https://

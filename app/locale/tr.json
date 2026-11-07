@@ -819,5 +819,18 @@
   "SSO sign-in is off: the identity provider gives an address that isn’t https:// (all.log says which).": "SSO ile giriş kapalı: kimlik sağlayıcı https:// olmayan bir adres veriyor (hangisi olduğu all.log'da).",
   "The identity provider didn’t let you sign in to ser2net. Ask its administrator to give your account access.": "Kimlik sağlayıcı ser2net'e girmene izin vermedi. Hesabına erişim vermesi için sağlayıcının yöneticisine başvur.",
   "The identity provider can’t sign you in right now. Try again in a few minutes.": "Kimlik sağlayıcı şu anda girişini tamamlayamıyor. Birkaç dakika sonra tekrar dene.",
-  "The identity provider refused the sign-in request ({0}). An admin should check the SSO settings; all.log has the details.": "Kimlik sağlayıcı giriş isteğini reddetti ({0}). Bir admin SSO ayarlarını kontrol etmeli; ayrıntılar all.log'da."
+  "The identity provider refused the sign-in request ({0}). An admin should check the SSO settings; all.log has the details.": "Kimlik sağlayıcı giriş isteğini reddetti ({0}). Bir admin SSO ayarlarını kontrol etmeli; ayrıntılar all.log'da.",
+  "last sign-in: %(time)s": "son giriş: %(time)s",
+  "LDAP / OIDC accounts are made at their first sign-in, and every sign-in takes their role from the directory or the identity provider again. Delete signs such an account out at once, but whether that person can sign in again is up to the directory: while a mapped group or the default role still applies, their next sign-in makes a new account.": "LDAP / OIDC hesapları ilk girişte oluşturulur ve her girişte rolleri yeniden dizinden ya da kimlik sağlayıcıdan alınır. Sil, böyle bir hesabın oturumlarını hemen kapatır; ama o kişinin yeniden giriş yapıp yapamayacağına dizin karar verir: eşlenen bir grup ya da varsayılan rol geçerli oldukça bir sonraki girişi yeni bir hesap oluşturur.",
+  "Remove LDAP / OIDC accounts not signed in for (days)": "Şu kadar gün giriş yapmayan LDAP / OIDC hesaplarını kaldır (gün)",
+  "0 = never · %(min)s to %(max)s · never admins or local accounts": "0 = hiçbir zaman · %(min)s ile %(max)s arası · admin'ler ve yerel hesaplar asla kaldırılmaz",
+  "Save": "Kaydet",
+  "Enter 0 (never) or a number of days from {0} to {1}.": "0 (hiçbir zaman) ya da {0} ile {1} arasında bir gün sayısı gir.",
+  "Saved: LDAP / OIDC accounts that haven’t signed in for {0} days are removed (checked every hour).": "Kaydedildi: {0} gündür giriş yapmamış LDAP / OIDC hesapları kaldırılır (her saat denetlenir).",
+  "Saved: LDAP / OIDC accounts are never removed for not signing in.": "Kaydedildi: LDAP / OIDC hesapları giriş yapmadıkları için hiçbir zaman kaldırılmaz.",
+  "Removed now: {0}.": "Şimdi kaldırılanlar: {0}.",
+  "They are signed out; while {0} still gives them a role, their next sign-in makes a new account.": "Oturumları kapatıldı; {0} onlara bir rol verdiği sürece bir sonraki girişleri yeni bir hesap oluşturur.",
+  "{0} days": "{0} gün",
+  "never": "hiçbir zaman",
+  "Remove LDAP / OIDC accounts not signed in for": "Giriş yapmayan LDAP / OIDC hesaplarını kaldırma süresi"
 }
