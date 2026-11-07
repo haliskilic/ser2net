@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import functools
 import hashlib
 import ipaddress
 import json
@@ -1176,6 +1177,9 @@ class AppConfig:
     # Loading had to create secret_key / instance_id (config.json lacked them); the
     # start-up saves them once (runtime.prepare_config). Never persisted.
     ids_created: bool = field(default=False, repr=False, compare=False)
+    # Parts start-up accepted although validate() rejects them (tolerate_problems): part
+    # key -> its content then. Never persisted.
+    tolerated: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     # ----- (de)serialization -----
     @staticmethod
@@ -1347,7 +1351,15 @@ class AppConfig:
         return next((m for m in self.mappings if m.id == mapping_id), None)
 
     def validate(self) -> None:
-        """Validate every mapping and cross-mapping invariants (unique IP:port)."""
+        """Validate every part (the admin UI settings, each section, each mapping) and the
+        cross-mapping invariants (unique IP:port, one mapping per serial port); raises
+        the first problem as ConfigError."""
+        for _key, _label, _content, check in self._parts():
+            check()
+        for _key, error in self._clashes():
+            raise error
+
+    def _validate_admin_ui(self) -> None:
         # TLS: both files required together, and they must exist/be readable so a
         # bad path fails fast at save time instead of crashing uvicorn at startup.
         cert, key = self.admin_ui.tls_cert, self.admin_ui.tls_key
@@ -1374,16 +1386,28 @@ class AppConfig:
                 SESSION_TIMEOUT_MIN_S <= self.session_timeout_s <= SESSION_TIMEOUT_MAX_S):
             raise ConfigError(_("Session lifetime must be between {0} minutes and {1} days.").format(SESSION_TIMEOUT_MIN_S // 60, SESSION_TIMEOUT_MAX_S // 86400))
 
-        self.ldap.validate()
-        self.oidc.validate()
-        self.cluster.validate()
-        self.notifications.validate()
-
-        seen: dict[tuple[str, str, int], str] = {}   # (proto, bind_ip, port) -> name
-        serial_owner: dict[str, tuple[str, str]] = {}  # device -> (mapping_id, name)
+    def _parts(self):
+        """validate()'s checks, one per part of the config, in order: (key, label,
+        content, check). content() is what tells whether a save changed the part; a
+        mapping's enabled flag is left out of it, since starting or stopping one changes
+        nothing its own check looks at (a serial port it then shares is a clash)."""
+        yield ("admin_ui", "admin UI", lambda: (asdict(self.admin_ui), self.session_timeout_s),
+               self._validate_admin_ui)
+        for key, label in (("ldap", "LDAP"), ("oidc", "OIDC"), ("cluster", "LAN cluster"),
+                           ("notifications", "notifications")):
+            section = getattr(self, key)
+            yield key, label, functools.partial(asdict, section), section.validate
         for m in self.mappings:
-            m.validate()
+            yield (f"mapping {m.id}", f"mapping '{m.name or m.id}'",
+                   functools.partial(_mapping_content, m), m.validate)
 
+    def _clashes(self) -> list[tuple[str, ConfigError]]:
+        """Every pair of mappings that would share a serial port or a listening port, keyed
+        by the resource and both mapping ids."""
+        found = []
+        serial_users: list[tuple[str, MappingConfig]] = []          # (device, mapping)
+        listeners: list[tuple[str, str, int, MappingConfig]] = []   # (proto, bind_ip, port, mapping)
+        for m in self.mappings:
             # A serial port can only be opened by one mapping. Flag two ENABLED
             # mappings that target the same literal device (skip dynamic VID/PID
             # `match` entries, whose device path is resolved at open time).
@@ -1394,13 +1418,12 @@ class AppConfig:
                 if m.kind == "serialbridge" and m.serial_b.port and not m.serial_b.match:
                     devices.append(m.serial_b.port)
                 for dev in devices:
-                    prev = serial_owner.get(dev)
-                    if prev is not None and prev[0] != m.id:
-                        raise ConfigError(
-                            _("Mappings '{0}' and '{1}' both use serial port {2} — a serial "
-                              "port can only be opened by one mapping.").format(prev[1], m.name, dev)
-                        )
-                    serial_owner[dev] = (m.id, m.name)
+                    for used, other in serial_users:
+                        if used == dev and other.id != m.id:
+                            found.append((f"serial {dev} {other.id} {m.id}", ConfigError(
+                                _("Mappings '{0}' and '{1}' both use serial port {2} — a serial "
+                                  "port can only be opened by one mapping.").format(other.name, m.name, dev))))
+                    serial_users.append((dev, m))
 
             # only listening mappings (server/udp) bind a port; client/serialbridge don't
             if m.kind != "net" or not m.network.listens:
@@ -1409,35 +1432,78 @@ class AppConfig:
             # bind different transports), so the clash key includes the transport.
             proto = "udp" if m.network.mode == "udp" else "tcp"
             # 0.0.0.0 collides with everything on that port; treat any overlap as a clash.
-            for (sproto, bip, bport), other in seen.items():
+            for sproto, bip, bport, other in listeners:
                 if sproto == proto and bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
-                    raise ConfigError(
+                    found.append((f"{proto} {m.network.port} {other.id} {m.id}", ConfigError(
                         _("Mappings '{0}' and '{1}' both use {2} port {3} on overlapping "
-                          "addresses ({4} / {5}).").format(other, m.name, proto.upper(), m.network.port, bip, m.network.bind_ip)
-                    )
-            seen[(proto, m.network.bind_ip, m.network.port)] = m.name
+                          "addresses ({4} / {5}).").format(other.name, m.name, proto.upper(), m.network.port, bip, m.network.bind_ip))))
+            listeners.append((proto, m.network.bind_ip, m.network.port, m))
+        return found
+
+    def _broken(self) -> list[tuple[str, str, Any]]:
+        """(key, problem, content) for every part validate() rejects and every clash."""
+        found = []
+        for key, label, content, check in self._parts():
+            try:
+                check()
+            except Exception as e:  # a hand-edited value of the wrong type raises others too
+                found.append((key, f"{label}: {e}", content()))
+        try:
+            found += [(key, str(error), None) for key, error in self._clashes()]
+        except Exception as e:  # mappings too broken to compare
+            found.append(("clashes", f"mappings: {e}", None))
+        return found
 
     def problems(self) -> list[str]:
-        """Everything validate() rejects in this config, one line each (validate() stops
-        at the first). Start-up only logs these and runs anyway: a config.json that
-        loads is never refused, since an older release may have accepted it or a file it
-        names may be missing on this machine (runtime.prepare_config)."""
-        found = []
-        try:  # the settings outside the mappings
-            dataclasses.replace(self, mappings=[]).validate()
-        except Exception as e:  # a hand-edited value of the wrong type raises others too
-            found.append(str(e))
-        for m in self.mappings:
+        """Everything validate() rejects in this config, one line each, naming the part
+        (validate() stops at the first)."""
+        return [problem for _key, problem, _content in self._broken()]
+
+    def tolerate_problems(self) -> list[str]:
+        """Accept what this config breaks now and return it, one line each: later saves
+        may leave those parts as they are (validate_for_save). Start-up does this, since
+        a config.json that loads is never refused: an older release may have accepted
+        it, or a file it names may be missing on this machine (runtime.prepare_config)."""
+        broken = self._broken()
+        self.tolerated = {key: content for key, _problem, content in broken}
+        return [problem for _key, problem, _content in broken]
+
+    def validate_for_save(self) -> None:
+        """What a save enforces: validate(), except that a part start-up accepted while
+        broken (tolerate_problems) may stay broken as long as it is left as it was, and
+        so may a clash it accepted. What a save changes or adds must validate, so one bad
+        value can't block every other change (signing in with LDAP/OIDC, stopping a
+        mapping, fixing another broken part)."""
+        if not self.tolerated:
+            self.validate()
+            return
+        still: dict[str, Any] = {}
+        for key, _label, content, check in self._parts():
             try:
-                m.validate()
+                check()
             except Exception as e:
-                found.append(f"mapping '{m.name or m.id}': {e}")
-        if not found:
-            try:  # what involves several mappings: a shared port or serial device
-                self.validate()
-            except Exception as e:
-                found.append(str(e))
-        return found
+                if key not in self.tolerated or content() != self.tolerated[key]:
+                    if isinstance(e, ConfigError):
+                        raise
+                    raise ConfigError(str(e)) from e
+                still[key] = self.tolerated[key]
+        try:
+            clashes = self._clashes()
+        except Exception as e:
+            if "clashes" not in self.tolerated:
+                raise ConfigError(str(e)) from e
+            clashes, still["clashes"] = [], None
+        for key, error in clashes:
+            if key not in self.tolerated:
+                raise error
+            still[key] = None
+        self.tolerated = still
+
+
+def _mapping_content(m: "MappingConfig") -> dict[str, Any]:
+    content = m.to_dict()
+    content.pop("enabled", None)
+    return content
 
 
 def _api_token_role(d: dict[str, Any]) -> tuple[str, str]:
@@ -1544,7 +1610,8 @@ class ConfigStore:
             return False
 
     def save(self, config: AppConfig, *, validate: bool = True) -> None:
-        """Atomically persist config to a single file (validates first).
+        """Atomically persist config to a single file (validates first: what start-up
+        accepted while broken may stay as it was, see AppConfig.validate_for_save).
 
         Uses a temp file + os.replace so config.json is never partially written; the
         version being replaced is kept in backups/ first (see the class docstring).
@@ -1552,7 +1619,7 @@ class ConfigStore:
         fail on an unrelated setting (account recovery, app/accounts.py).
         """
         if validate:
-            config.validate()
+            config.validate_for_save()
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
         self._backup_current(data)

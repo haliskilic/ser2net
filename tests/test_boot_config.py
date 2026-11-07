@@ -8,9 +8,12 @@ traceback, and `restart: unless-stopped` looped it with the web UI down. Checked
 way a container starts:
   * a config.json that already holds the settings is left alone (no rewrite, no backup);
   * a new address or an upgrade's normalisation is saved once, the old file backed up;
-  * a rejected setting is logged (which mapping, what), the file is left as it is, and
-    the real server starts: the UI answers, the broken mappings fail on their own, the
-    others run, and the cluster and a mapping that can't even be built don't stop it;
+  * a rejected setting is logged (which part, what) and accepted, and the real server
+    starts: the UI answers, the broken mappings fail on their own, the others run, and
+    the cluster and a mapping that can't even be built don't stop it;
+  * later saves refuse only what they change or add: stopping or deleting a mapping,
+    fixing one broken part while others stay broken work; editing a broken part without
+    fixing it, or adding a new clash, is refused with its error;
   * a write that fails is a warning, not a crash;
   * fatal with one line and no traceback: an unusable SER2NET_BIND_IP / SER2NET_PORT, a
     config.json that can't be read or parsed, a first run that can't create it, an admin
@@ -29,13 +32,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 
 from _server import ROOT, Browser, Server, free_port
 
 from app import runtime
-from app.config import AdminUI, AppConfig, ConfigStore, MappingConfig
-from app.web.auth import hash_password
+from app.config import AdminUI, AppConfig, ConfigError, ConfigStore, MappingConfig
+from app.web.auth import hash_password, hash_token
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
 CONTAINER = {"SER2NET_BIND_IP": "0.0.0.0", "SER2NET_PORT": "8080"}
@@ -90,6 +94,11 @@ def backups(data: str) -> list[str]:
     return sorted(os.listdir(d)) if os.path.isdir(d) else []
 
 
+def read_json(path: str):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
 def warnings(config) -> list[str]:
     return [n for n in config.load_notes if n.startswith("WARNING")]
 
@@ -141,15 +150,22 @@ def test_left_alone_unless_changed():
         shutil.rmtree(data, ignore_errors=True)
 
 
+TOKEN = "s2n_boot-config-test"
+MISSING = os.path.join(tempfile.gettempdir(), "s2n-no-such-dir", "cert.pem")
+
+
 def broken_config(ports: dict) -> dict:
-    """Every mapping here breaks a rule validate() enforces; none may stop the start."""
-    missing = os.path.join(tempfile.gettempdir(), "s2n-no-such-dir", "cert.pem")
+    """Every mapping but "ok" breaks a rule validate() enforces; none may stop the start."""
+    missing = MISSING
     net = {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1"}
     return {
         "users": [{"username": "admin", "password_hash": hash_password("admin-pass-1"),
                    "role": "admin", "pwd_version": 1, "source": "local"}],
+        "api_token_hash": hash_token(TOKEN),
         "cluster": {"enabled": True, "key": "cluster-key", "discovery_port": "not-a-port"},
         "mappings": [
+            {"id": "b00000000000", "name": "ok", "serial": {"port": "/dev/s2n-missing-0"},
+             "network": dict(net, port=ports["ok"])},
             # rejected, but runs (the bad entry is skipped): must keep listening
             {"id": "b00000000001", "name": "acl-typo", "serial": {"port": "/dev/s2n-missing-1"},
              "network": dict(net, port=ports["acl"], allowed_client_ips=["not-a-cidr",
@@ -171,55 +187,196 @@ def broken_config(ports: dict) -> dict:
     }
 
 
+PORTS = {"ok": 1, "acl": 2, "tls_off": 3, "tls_on": 4, "modbus": 5}
+
+
 def test_problems_listed():
-    cfg = AppConfig.from_dict(broken_config({"acl": 1, "tls_off": 2, "tls_on": 3, "modbus": 4}))
+    cfg = AppConfig.from_dict(broken_config(PORTS))
+    cfg.ldap.enabled = True  # a second broken section: each one is listed, by name
     found = cfg.problems()
-    assert found[0] == "Cluster discovery port must be a number.", found
-    assert [p.split(":")[0] for p in found[1:]] == [
+    assert found[0].startswith("LDAP: LDAP is enabled but no server URI"), found
+    assert found[1] == "LAN cluster: Cluster discovery port must be a number.", found
+    assert [p.split(":")[0] for p in found[2:]] == [
         "mapping 'acl-typo'", "mapping 'tls-off'", "mapping 'tls-on'", "mapping 'baud-typo'"], found
-    assert "TLS file not found" in found[2] and "Baud rate" in found[4], found
-    clash = AppConfig(mappings=[MappingConfig(name="a"), MappingConfig(name="b")])
-    for m in clash.mappings:  # both on the default 0.0.0.0:4001, different serial ports
-        m.serial.port = f"/dev/s2n-{m.name}"
-    assert clash.problems() == ["Mappings 'a' and 'b' both use TCP port 4001 on overlapping "
-                                "addresses (0.0.0.0 / 0.0.0.0)."], clash.problems()
+    assert "TLS file not found" in found[3] and "Baud rate" in found[5], found
+    clash = AppConfig(mappings=[MappingConfig(name=n) for n in ("a", "b", "c")])
+    for m in clash.mappings:  # all on the default 0.0.0.0:4001, a and c on one serial port
+        m.serial.port = "/dev/s2n-a" if m.name in "ac" else "/dev/s2n-b"
+    clash.mappings[1].network.port = 4002
+    assert clash.problems() == [
+        "Mappings 'a' and 'c' both use serial port /dev/s2n-a — a serial port can only be "
+        "opened by one mapping.",
+        "Mappings 'a' and 'c' both use TCP port 4001 on overlapping addresses (0.0.0.0 / 0.0.0.0)."
+    ], clash.problems()
+    try:
+        clash.validate()
+    except ConfigError as e:  # validate() still raises the first one
+        assert str(e) == clash.problems()[0], str(e)
+    else:
+        raise AssertionError("validate() accepted a clash")
     assert AppConfig().problems() == []
-    print("problems(): every rejected setting, by mapping name, cross-mapping clashes too  OK")
+    print("problems(): every rejected part (section or mapping) by name, every clash  OK")
+
+
+def test_saves_refuse_only_new_problems():
+    """What start-up accepted may stay as it is; what a save changes or adds must validate."""
+    data = new_dir()
+    try:
+        store = ConfigStore(os.path.join(data, "config.json"))
+        cfg = AppConfig.from_dict(broken_config(PORTS))
+        try:
+            store.save(cfg)
+        except ConfigError:
+            pass
+        else:
+            raise AssertionError("an invalid config was saved without being accepted first")
+        accepted = cfg.tolerate_problems()
+        assert len(accepted) == 5 and not os.path.exists(store.path)
+        store.save(cfg)  # nothing changed: the accepted problems don't block the save
+        saved = read_json(store.path)
+        assert "tolerated" not in saved and saved["cluster"]["discovery_port"] == "not-a-port"
+
+        by = {m.name: m for m in cfg.mappings}
+        by["ok"].enabled = by["tls-on"].enabled = False  # stopping: fine, broken or not
+        cfg.users[0].pwd_version += 1                    # a password change, a sign-in ...
+        store.save(cfg)
+        by["tls-on"].enabled = True
+        store.save(cfg)
+
+        def refused(change, undo, expect):
+            change()
+            try:
+                store.save(cfg)
+            except ConfigError as e:
+                assert expect in str(e), str(e)
+            else:
+                raise AssertionError(f"saved although {expect!r}")
+            finally:
+                undo()
+
+        acl = by["acl-typo"].network
+        # a broken part edited without fixing it
+        refused(lambda: setattr(acl, "max_connections", 2),
+                lambda: setattr(acl, "max_connections", 1), "Invalid allowed client IP/CIDR")
+        refused(lambda: setattr(cfg.cluster, "advertise_ip", "x"),
+                lambda: setattr(cfg.cluster, "advertise_ip", ""), "Cluster discovery port")
+        # a new problem in a part that was fine
+        refused(lambda: setattr(by["ok"].network, "max_connections", 0),
+                lambda: setattr(by["ok"].network, "max_connections", 1), "Max connections")
+        newcomer = MappingConfig(name="clash")
+        newcomer.serial.port = "/dev/s2n-new"
+        newcomer.network.bind_ip, newcomer.network.port = "127.0.0.1", PORTS["ok"]
+        refused(lambda: cfg.mappings.append(newcomer), lambda: cfg.mappings.remove(newcomer),
+                "both use TCP port")
+        # fixing one broken part while the others stay broken
+        acl.allowed_client_ips = ["127.0.0.1"]
+        store.save(cfg)
+        assert len(cfg.problems()) == 4 and "mapping b00000000001" not in cfg.tolerated
+        # ... and once fixed, it is held to the rules again
+        refused(lambda: setattr(acl, "allowed_client_ips", ["not-a-cidr"]),
+                lambda: setattr(acl, "allowed_client_ips", ["127.0.0.1"]),
+                "Invalid allowed client IP/CIDR")
+        cfg.mappings.remove(by["baud-typo"])  # deleting a broken mapping
+        store.save(cfg)
+        assert [m["name"] for m in read_json(store.path)["mappings"]] == [
+            "ok", "acl-typo", "tls-off", "tls-on"]
+        fresh = AppConfig.from_dict(cfg.to_dict())  # a restore or import starts strict
+        assert fresh.tolerated == {}
+        try:
+            fresh.validate_for_save()
+        except ConfigError:
+            pass
+        else:
+            raise AssertionError("an unaccepted config passed")
+    finally:
+        shutil.rmtree(data, ignore_errors=True)
+    print("saves: accepted problems may stay; a changed or new part must validate; fixed "
+          "parts are held to the rules again  OK")
+
+
+def api(srv, method, path, body=None):
+    req = urllib.request.Request(srv.base + "/api/v1" + path, method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Authorization": f"Bearer {TOKEN}",
+                                          "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status, json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"null")
 
 
 def test_invalid_settings_still_start():
-    ports = {k: free_port() for k in ("acl", "tls_off", "tls_on", "modbus")}
+    ports = {k: free_port() for k in PORTS}
     srv = Server(broken_config(ports))
-    with open(srv.config_path, "rb") as fh:
-        written = fh.read()
+    with open(srv.config_path, encoding="utf-8") as fh:
+        written = json.load(fh)
     with srv:
         log = srv.output()
-        for line in ("WARNING: config.json: Cluster discovery port must be a number.",
+        for line in ("WARNING: config.json: LAN cluster: Cluster discovery port must be a number.",
                      "WARNING: config.json: mapping 'acl-typo': Invalid allowed client IP/CIDR",
                      "WARNING: config.json: mapping 'tls-off': TLS file not found",
                      "WARNING: config.json: mapping 'baud-typo': Baud rate must be",
-                     "config.json was not updated at start-up",
                      "ser2net starts with the setting(s) above anyway",
                      "cluster: discovery port 'not-a-port' is not a port number",
                      "[tls-on] start failed", "[baud-typo] start failed",
+                     f"listening on 127.0.0.1:{ports['ok']}",
                      f"listening on 127.0.0.1:{ports['acl']}"):
             assert line in log, f"{line!r} not logged:\n{log[-3000:]}"
         assert "Traceback" not in log, log[-3000:]
-        with open(srv.config_path, "rb") as fh:
-            assert fh.read() == written, "config.json must be left as it is"
-        assert backups(srv.data) == []
+        # saved as usual (here: the minimal file filled in), the rejected values kept as they were
+        saved = srv.saved_config()
+        by = {m["name"]: m for m in saved["mappings"]}
+        assert by["tls-on"]["network"]["tls_cert"] == MISSING
+        assert by["baud-typo"]["serial"]["baudrate"] == "9600"
+        assert saved["cluster"]["discovery_port"] == "not-a-port" and "tolerated" not in saved
+        assert len(backups(srv.data)) == 1
+        with open(os.path.join(srv.data, "backups", backups(srv.data)[0]), encoding="utf-8") as fh:
+            assert json.load(fh) == written, "the original file must be backed up"
         with urllib.request.urlopen(srv.base + "/healthz", timeout=10) as r:
             assert r.read().strip() == b"ok"
         b = Browser(srv.base)
-        b.login("admin", "admin-pass-1")  # a local sign-in saves nothing: works
+        b.login("admin", "admin-pass-1")
         st, _h, _body = b.get("/")
         assert st == 200, st
         st, _h, table = b.get("/api/status")  # the dashboard's mapping table
         assert st == 200 and "baud-typo" in table and "state-error" in table, (st, table[-1500:])
         with socket.create_connection(("127.0.0.1", ports["acl"]), timeout=5):
             pass
-    print("rejected settings: logged per mapping, config.json untouched, UI up, the bad "
-          "mappings fail alone, the others run  OK")
+        print("rejected settings: logged per part, accepted, saved as they were; UI up, the "
+              "bad mappings fail alone, the others run  OK")
+
+        mid = {m["name"]: m["id"] for m in saved["mappings"]}
+        for name in ("ok", "tls-on"):  # stop a valid and a broken mapping
+            st, body = api(srv, "POST", f"/mappings/{mid[name]}/stop")
+            assert st == 200, (st, body)
+        st, _h, page = b.post("/settings/password", {"current": "admin-pass-1",
+                                                     "password": "admin-pass-2",
+                                                     "password2": "admin-pass-2"})
+        assert st == 200 and "Password updated" in page, (st, page[-800:])
+        saved = srv.saved_config()
+        assert [m["enabled"] for m in saved["mappings"] if m["name"] in ("ok", "tls-on")] \
+            == [False, False]
+        assert saved["users"][0]["pwd_version"] == 2
+        st, baud = api(srv, "GET", f"/mappings/{mid['baud-typo']}")
+        baud["name"] = "baud-typo-renamed"  # still "9600": refused, with its own error
+        st, body = api(srv, "PUT", f"/mappings/{mid['baud-typo']}", baud)
+        assert st == 400 and "Baud rate must be a positive integer" in body["detail"], (st, body)
+        baud["serial"]["baudrate"] = 9600
+        st, body = api(srv, "PUT", f"/mappings/{mid['baud-typo']}", baud)
+        assert st == 200, (st, body)
+        st, body = api(srv, "POST", "/mappings", {
+            "name": "clash", "serial": {"port": "/dev/s2n-missing-9"},
+            "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": ports["ok"]}})
+        assert st == 400 and "both use TCP port" in body["detail"], (st, body)
+        st, body = api(srv, "DELETE", f"/mappings/{mid['acl-typo']}")
+        assert st == 200, (st, body)
+        saved = srv.saved_config()
+        assert [m["name"] for m in saved["mappings"]] == ["ok", "tls-off", "tls-on",
+                                                          "baud-typo-renamed"]
+        assert "Traceback" not in srv.output(), srv.output()[-3000:]
+    print("with problems accepted: stopping (valid or broken), a password change, fixing one "
+          "part, deleting another are saved; an unfixed edit and a new clash are refused  OK")
 
 
 def test_write_failure_is_a_warning():
@@ -348,6 +505,7 @@ def test_real_process_has_no_traceback():
 def main():
     test_left_alone_unless_changed()
     test_problems_listed()
+    test_saves_refuse_only_new_problems()
     test_invalid_settings_still_start()
     test_write_failure_is_a_warning()
     test_fatal_with_one_line()

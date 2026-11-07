@@ -128,11 +128,12 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     from SER2NET_ADMIN_PASSWORD_FILE. Returns (store, config).
 
     A config.json that loads is never refused: what validate() rejects in it is logged
-    as a warning (config.load_notes) and the server starts with it, as a start without
-    the env vars always has (a mapping that can't start fails on its own). The file is
-    written back only when this start changes it (first run, --reconfigure, a new env
-    address, an upgrade's normalisation) and it is valid; a failing write is a warning
-    too. Fatal, with one line instead of a traceback: an unusable SER2NET_BIND_IP /
+    as a warning (config.load_notes) and accepted (AppConfig.tolerate_problems), so the
+    server starts with it, as a start without the env vars always has (a mapping that
+    can't start fails on its own), and later saves only refuse what they change or add.
+    The file is written back only when this start changes it (first run, --reconfigure,
+    a new env address, an upgrade's normalisation); a failing write is a warning too.
+    Fatal, with one line instead of a traceback: an unusable SER2NET_BIND_IP /
     SER2NET_PORT, a config.json that can't be read or parsed, a first run that can't
     create it."""
     data_dir = os.path.dirname(os.path.abspath(config_path))
@@ -163,38 +164,31 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     if note:
         notes.append(note)
 
-    problems = config.problems()
+    problems = config.tolerate_problems()
     notes.extend(f"WARNING: config.json: {p}" for p in problems)
     # also the first admin from the environment, or a config.json without secret_key /
     # instance_id (made by hand, or a downloaded backup put in its place): keep them, or
     # every restart would sign everyone out and give this node a new cluster id
     if ((first_run or reconfigure or env_set) and not store.matches(config)
             or config.ids_created or admin):
-        if first_run:
-            try:
-                store.save(config)
-            except OSError as e:
+        try:
+            store.save(config)
+        except OSError as e:  # read-only/full data dir, config.json mounted on its own
+            if first_run:
                 raise SystemExit(f"ser2net: cannot create the configuration: "
                                  f"{_os_error(e, data_dir)}") from None
-        elif problems:
-            notes.append("WARNING: config.json was not updated at start-up because of the "
-                         "setting(s) above; it keeps its current content until they are fixed")
-        else:
-            try:
-                store.save(config)
-            except OSError as e:  # read-only/full data dir, config.json mounted on its own
-                notes.append(f"WARNING: could not update config.json at start-up "
-                             f"({_os_error(e, data_dir)}) — ser2net runs with these settings, "
-                             "but can't keep any change until config.json can be written (keep "
-                             "the data directory writable, and don't mount config.json on its "
-                             "own)")
+            notes.append(f"WARNING: could not update config.json at start-up "
+                         f"({_os_error(e, data_dir)}) — ser2net runs with these settings, "
+                         "but can't keep any change until config.json can be written (keep "
+                         "the data directory writable, and don't mount config.json on its "
+                         "own)")
     if admin:
         write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
                            "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin)
     if problems:
         notes.append("WARNING: ser2net starts with the setting(s) above anyway — what they "
-                     "affect may not work, and saving any change is refused until they are "
-                     "fixed (in the web UI, or in config.json)")
+                     "affect may not work. Fix them in the web UI (or in config.json); "
+                     "changes that leave them as they are can be saved meanwhile")
     return store, config
 
 
