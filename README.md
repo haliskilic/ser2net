@@ -338,6 +338,11 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yollar dosya adına indirgenir ve açılışta log'a yazılır.
 - `tls/` — self-signed üretilirse sertifika/anahtar.
 
+Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
+içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
+ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış
+logu ya da içe aktarma önizlemesi bunu belirtir.
+
 `config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
 temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin).
 

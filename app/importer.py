@@ -48,9 +48,14 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
         if not isinstance(item, dict):
             raise ConfigError(_("Mapping #{0} is not an object.").format(i))
         try:
-            mappings.append(MappingConfig.from_dict(item))
+            m = MappingConfig.from_dict(item)
         except (TypeError, ValueError) as e:
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
+        if item.get("id") and item["id"] != m.id:
+            warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "
+                              "digits or _), so it gets a new one.").format(
+                i, m.name, repr(item["id"])[:80]))
+        mappings.append(m)
     whole_config = "users" in doc or "admin_ui" in doc
     source = _("ser2net config.json") if whole_config else _("ser2net export")
     if whole_config:

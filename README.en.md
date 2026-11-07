@@ -332,6 +332,11 @@ inside aren't readable by other users:
   are reduced to the file name, which is logged at start-up.
 - `tls/` — certificate/key if self-signed is generated.
 
+Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
+new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
+replaced when the config is loaded or the file is imported; the start-up log or the import
+preview says so.
+
 Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
 `backups/` is never restored by itself — delete it too if you want it gone).
 
