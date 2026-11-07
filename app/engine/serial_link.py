@@ -12,6 +12,9 @@ The link's state, for the runner and anything built on it:
   - ``down``: it could not be opened or went away, and is not open again yet; False until
     the first attempt is over (at start-up the port may simply not be open *yet*);
   - ``reader`` / ``writer`` / ``serial`` / ``device``: the open port (None / "" otherwise);
+    ``on_change`` (optional) is told each time ``serial`` changes: the pyserial object of
+    a port just opened, None when it is closed (what drives the port itself, an RFC 2217
+    session, follows it);
   - ``status.state``: ``running`` while it is open, ``device-missing`` / ``reconnecting``
     while it is not (what the dashboard, /metrics and the notifications report).
 """
@@ -58,11 +61,13 @@ class Backoff:
 
 class SerialLink:
     def __init__(self, settings: SerialSettings, status: RunnerStatus, stop: asyncio.Event,
-                 log: Callable[[str], None]) -> None:
+                 log: Callable[[str], None],
+                 on_change: Optional[Callable[[Any], None]] = None) -> None:
         self.settings = settings
         self.status = status
         self._stop = stop
         self._log = log
+        self._on_change = on_change
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
         self.serial: Any = None  # the pyserial object (an RFC2217 session drives it)
@@ -104,6 +109,7 @@ class SerialLink:
                serial: Any = None, device: str = "") -> None:
         """Mark an open port as the link's: what run() does after each open (a test can
         use it to wire up a stand-in stream pair)."""
+        changed = serial is not self.serial
         self.reader, self.writer, self.serial, self.device = reader, writer, serial, device
         self.status.device = device
         self.status.devices = (device,) if device else ()
@@ -112,19 +118,30 @@ class SerialLink:
         self.down = False
         self.ready.set()
         self._log(f"serial open: {device} @ {self.settings.compact()}")
+        if changed:
+            self._changed(serial)
 
     async def close(self) -> None:
         """Close the port if it is open; the link is down afterwards (also after an open
         that failed: run() closes after every attempt)."""
         self.down = True
         self.ready.clear()
-        w = self.writer
+        w, had_serial = self.writer, self.serial is not None
         self.reader = self.writer = self.serial = None
         self.device = ""
+        if had_serial:
+            self._changed(None)
         if w is not None:
             with contextlib.suppress(Exception):
                 w.close()
                 await w.wait_closed()
+
+    def _changed(self, serial: Any) -> None:
+        if self._on_change is not None:
+            try:
+                self._on_change(serial)
+            except Exception as e:  # what follows the port must not break the link
+                self._log(f"serial port change not taken up: {type(e).__name__}: {e}")
 
     async def hold_open(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """A session for a runner that reads the port only when it needs to (the Modbus

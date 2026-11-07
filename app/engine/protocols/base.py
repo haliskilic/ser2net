@@ -8,6 +8,7 @@ client out-of-band (telnet negotiation replies, RFC2217 modem notifications).
 from __future__ import annotations
 
 import re
+from typing import Any
 
 #: The longest telnet subnegotiation (the bytes between IAC SB and IAC SE) a client may
 #: send. Real ones are a few bytes (an RFC 2217 COM-PORT-OPTION command at most 6, a
@@ -28,7 +29,8 @@ def data_run_end(data: bytes, start: int) -> int:
 
 
 class ProtocolError(ConnectionError):
-    """Ends a client session that can't go on (the message is the reason logged)."""
+    """Ends a client session that can't go on (the client broke the protocol, a reopened
+    port refused the client's settings); the message is the reason logged."""
 
 
 def subnegotiation_too_long() -> ProtocolError:
@@ -60,3 +62,9 @@ class ProtocolSession:
     def poll(self) -> bytes:
         """Periodic hook (only called if poll_interval is set). Returns net-bound bytes."""
         return b""
+
+    def serial_changed(self, serial: Any) -> None:
+        """The mapping's serial port was reopened (``serial``: the new pyserial object) or
+        closed (None). Only a session that drives the port itself (RFC 2217) uses it;
+        raises ProtocolError when the session can't go on with the reopened port. Bytes
+        for the client are collected with take_net_out()."""

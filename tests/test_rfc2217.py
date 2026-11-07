@@ -7,7 +7,12 @@ speaking RFC 2217 bytes) against our server, over socat PTYs (Linux, needs socat
     with the reason in the log, and the mapping goes on serving the next client;
   - a baud rate the port refuses (2^32-1: the OS can't take it) and reserved or malformed
     values are answered with the current setting: the pyserial client sees "remote
-    rejected value", the port keeps its setting, the session and its data go on.
+    rejected value", the port keeps its setting, the session and its data go on;
+  - the device goes away and comes back under a connected pyserial client: the client
+    stays connected (what it changes meanwhile is acknowledged and waits for the port),
+    the reopened port is a new serial object that gets the client's settings (at the OS
+    level too), data flows both ways and later changes reach the new port, not the old;
+  - a connect-out RFC 2217 mapping connects only once its serial port is open.
 
 socat links the PTYs under fixed names (pty,link=...), so a test can stop it (the device
 vanishes, as an unplugged USB adapter does) and start it again under the same path.
@@ -20,6 +25,7 @@ import shutil
 import socket
 import sys
 import tempfile
+import termios
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -249,6 +255,105 @@ async def test_refused_values(folder):
         await dev.unplug()
 
 
+LOST = ("reconnecting", "device-missing")
+
+
+async def test_reopen_under_connected_client(folder):
+    dev = Device(folder)
+    await dev.plug()
+    sup, mapping, logs = await start(dev)
+    client = device = None
+    try:
+        runner = sup._runners[mapping.id]
+        client = await asyncio.to_thread(open_client, mapping.network.port)  # 19200
+        # (2 stop bits: some kernels' PTYs refuse parity / 7 data bits)
+        await asyncio.to_thread(setattr, client, "stopbits", serial.STOPBITS_TWO)
+        first = runner.serial_instance
+        assert (first.baudrate, first.stopbits) == (19200, 2)
+
+        await dev.unplug()
+        assert await wait_for(lambda: sup.status(mapping.id)["state"] in LOST), \
+            sup.status(mapping.id)
+        # the client stays connected; what it changes meanwhile waits for the port
+        await asyncio.to_thread(setattr, client, "baudrate", 38400)
+        await asyncio.to_thread(client.reset_input_buffer)
+        assert sup.status(mapping.id)["client_count"] == 1
+        assert first.baudrate == 19200, "the old serial object was changed"
+        print("device gone: the RFC 2217 client stays connected, its changes are "
+              "acknowledged  OK")
+
+        await dev.plug()
+        assert await wait_for(lambda: sup.status(mapping.id)["state"] == "running",
+                              timeout=25), sup.status(mapping.id)
+        second = runner.serial_instance
+        assert second is not first, "still the old serial object"
+        assert (second.baudrate, second.stopbits) == (38400, 2), (second.baudrate,
+                                                                 second.stopbits)
+        attrs = termios.tcgetattr(second.fd)  # what the OS port runs at
+        assert attrs[4] == termios.B38400 and attrs[2] & termios.CSTOPB, attrs
+        device = serial.Serial(dev.device, baudrate=9600, timeout=0)
+        await asyncio.to_thread(client.write, b"after")
+        await asyncio.sleep(0.3)
+        assert await asyncio.to_thread(device.read, 64) == b"after"
+        await asyncio.to_thread(device.write, b"back")
+        await asyncio.to_thread(device.flush)
+        await asyncio.sleep(0.3)
+        assert await asyncio.to_thread(client.read, 4) == b"back"
+        # later changes reach the reopened port; a purge works on it
+        await asyncio.to_thread(setattr, client, "baudrate", 57600)
+        await asyncio.to_thread(client.reset_input_buffer)
+        assert second.baudrate == 57600 and first.baudrate == 19200
+        assert sup.status(mapping.id)["client_count"] == 1
+        assert not any("client disconnected" in ln or "pump error" in ln for ln in logs), logs
+        print("device back: the session drives the reopened port, which got the client's "
+              "settings; data flows, later changes reach it  OK")
+    finally:
+        if client is not None:
+            await asyncio.to_thread(client.close)
+        if device is not None:
+            device.close()
+        await sup.stop_all()
+        if dev.proc is not None:
+            await dev.unplug()
+
+
+async def test_connect_out_waits_for_the_port(folder):
+    dev = Device(folder)  # not plugged in yet
+    accepted: asyncio.Queue = asyncio.Queue()
+
+    async def on_conn(reader, writer):
+        await accepted.put((reader, writer))
+
+    srv = await asyncio.start_server(on_conn, "127.0.0.1", 0)
+    logs = []
+    sup = Supervisor(logger=logs.append)
+    m = MappingConfig.from_dict({
+        "name": "rfc2217-out", "enabled": True,
+        "serial": {"port": dev.port, "baudrate": 9600},
+        "network": {"mode": "client", "protocol": "rfc2217", "remote_host": "127.0.0.1",
+                    "remote_port": srv.sockets[0].getsockname()[1]}})
+    try:
+        ok, msg = await sup.apply_mapping(m)
+        assert ok, msg
+        await asyncio.sleep(1.5)
+        assert accepted.empty(), "connected out while the serial port is missing"
+        assert not any("pump error" in ln for ln in logs), logs
+        await dev.plug()
+        r, w = await asyncio.wait_for(accepted.get(), timeout=25)
+        negotiation = await asyncio.wait_for(r.read(256), timeout=2)
+        assert bytes([IAC, 251, 44]) in negotiation, negotiation.hex()  # WILL COM-PORT
+        w.write(bytes([IAC, SB, 44, 1, 0, 0, 0, 0, IAC, SE]))  # what is the baud rate?
+        await read_answers(r, bytes([IAC, SB, 44, 101, 0, 0, 0x25, 0x80, IAC, SE]))  # 9600
+        w.close()
+        print("connect-out RFC 2217: connects once the serial port is open, the session "
+              "answers  OK")
+    finally:
+        await sup.stop_all()
+        srv.close()
+        if dev.proc is not None:
+            await dev.unplug()
+
+
 async def main():
     if not shutil.which("socat"):
         print("SKIP: socat not found")
@@ -258,9 +363,12 @@ async def main():
         await test_data_and_baud_change(folder)
         await test_endless_subnegotiation(folder)
         await test_refused_values(folder)
+        await test_reopen_under_connected_client(folder)
+        await test_connect_out_waits_for_the_port(folder)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
-    print("\nPASS: RFC2217 data + live baud change, bounded subnegotiation, refused values")
+    print("\nPASS: RFC2217 data + live baud change, bounded subnegotiation, refused values, "
+          "reopened port, connect-out")
 
 
 if __name__ == "__main__":

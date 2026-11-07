@@ -29,6 +29,12 @@ port refuses (Windows SetCommState, a baud rate the OS can't take) is first take
 off the serial object, where pyserial stores it before the driver sees it. What a client
 sends that is refused or ignored is logged (rate-limited by the bridge).
 
+The serial port can go away and be reopened while a client stays connected (the bridge
+reopens it with a new pyserial object and calls serial_changed): the session then drives
+the reopened port, which is given the settings the client has, so it goes on as before.
+While the port is closed, the client's settings can still be read and changed (they take
+effect when it is back), the modem lines read low and a purge has nothing to do.
+
 Known upstream gaps (documented, not fatal): server-side NOTIFY-LINESTATE is
 stubbed, and "query current" for BREAK/DTR/RTS is stubbed. Mainstream flow control
 and baud/parity/databits/stopbits changes work.
@@ -40,7 +46,8 @@ from typing import Callable, Optional
 
 from serial import rfc2217 as _rfc2217
 
-from .base import MAX_SUBNEGOTIATION, ProtocolSession, data_run_end, subnegotiation_too_long
+from .base import (MAX_SUBNEGOTIATION, ProtocolError, ProtocolSession, data_run_end,
+                   subnegotiation_too_long)
 
 _MODEM_READS = ("cts", "dsr", "ri", "cd")
 _LINE_WRITES = ("rts", "dtr", "break_condition")
@@ -60,6 +67,16 @@ def _noop(*_args, **_kwargs):
     return None
 
 
+def _settings_of(ser) -> dict:
+    """A port's settings, the ones an RFC 2217 client can change ({} without a port)."""
+    settings = {}
+    if ser is not None:
+        for name in _CONFIG_WRITES:
+            with contextlib.suppress(Exception):
+                settings[name] = getattr(ser, name)
+    return settings
+
+
 class _ModemSafeSerial:
     """Transparent proxy that prevents unsupported modem-line ioctls from raising.
 
@@ -76,6 +93,12 @@ class _ModemSafeSerial:
 
     A port setting the serial port refuses is put back to what it was and raised as
     ValueError, which PortManager answers with the current setting (_set_config).
+
+    The proxy keeps the port settings as the client knows them, and the RTS/DTR/BREAK
+    state it set: rebind() moves it to a reopened port, which is given them, or to None
+    while the port is closed. Without a port, settings are read from and changed in what
+    the proxy keeps (the reopened port gets the changes), line changes wait for the port
+    too, modem lines read low and a purge does nothing.
     """
 
     def __init__(self, ser, read_only: bool = False,
@@ -83,30 +106,66 @@ class _ModemSafeSerial:
         object.__setattr__(self, "_ser", ser)
         object.__setattr__(self, "_read_only", read_only)
         object.__setattr__(self, "_log", log or _noop)
+        object.__setattr__(self, "_settings", _settings_of(ser))  # as the client knows them
+        object.__setattr__(self, "_lines", {})  # RTS/DTR/BREAK as the client set them
 
     def __getattr__(self, name):
+        ser = self._ser
         if name in _MODEM_READS:
+            if ser is None:
+                return False  # no port: the lines are low
             try:
-                return getattr(self._ser, name)
+                return getattr(ser, name)
             except Exception:
                 return False
-        if self._read_only and name in _RO_BLOCKED_CALLS:
+        if ser is None:
+            if name in self._settings:
+                return self._settings[name]
+            if name in _RO_BLOCKED_CALLS:
+                return _noop  # no port: nothing to purge
+        elif self._read_only and name in _RO_BLOCKED_CALLS:
             return _noop
-        return getattr(self._ser, name)
+        return getattr(ser, name)
 
     def __setattr__(self, name, value):
         if self._read_only and name in _RO_BLOCKED_WRITES:
             return  # read-only: ignore baud/framing/flow-control/RTS/DTR/BREAK changes
+        ser = self._ser
         if name in _LINE_WRITES:
-            try:
-                setattr(self._ser, name, value)
-            except Exception:
-                pass
+            if ser is not None:
+                try:
+                    setattr(ser, name, value)
+                except Exception:
+                    return  # not supported by this port (PTYs, some USB adapters)
+            self._lines[name] = value
             return
         if name in _CONFIG_WRITES:
-            self._set_config(name, value)
+            if ser is not None:
+                self._set_config(name, value)
+            self._settings[name] = value
             return
-        setattr(self._ser, name, value)
+        setattr(ser, name, value)
+
+    def rebind(self, ser) -> list[str]:
+        """Drive ``ser`` from now on: the reopened port, or None while it is closed. A
+        reopened port (of a writable mapping) is given the client's settings and line
+        state; returns the settings it refused (it keeps its own for those)."""
+        object.__setattr__(self, "_ser", ser)
+        if ser is None:
+            return []
+        refused = []
+        if not self._read_only:
+            for name, value in self._settings.items():  # pyserial's order: baud rate first
+                try:
+                    if getattr(ser, name) != value:
+                        self._set_config(name, value)
+                except Exception:
+                    refused.append(f"{name} {value!r}")
+            for name, value in self._lines.items():
+                with contextlib.suppress(Exception):
+                    setattr(ser, name, value)
+        object.__setattr__(self, "_settings", _settings_of(ser))
+        return refused
 
     def _set_config(self, name: str, value) -> None:
         """Set a port setting; raises ValueError, with the old value back in place, when
@@ -309,10 +368,9 @@ class Rfc2217Session(ProtocolSession):
                  log: Optional[Callable[[str], None]] = None) -> None:
         """``log``: where what the client sends that is refused or ignored is reported."""
         self._conn = _NetConnection()
-        safe_serial = (_ModemSafeSerial(serial_instance, read_only=read_only, log=log)
-                       if serial_instance is not None else serial_instance)
+        self._serial = _ModemSafeSerial(serial_instance, read_only=read_only, log=log)
         # PortManager.__init__ emits initial telnet negotiation into _conn.
-        self._pm = _PortManager(safe_serial, self._conn, log=log)
+        self._pm = _PortManager(self._serial, self._conn, log=log)
         self.poll_interval = poll_interval if poll_interval and poll_interval > 0 else 1.0
 
     def initial_net_bytes(self) -> bytes:
@@ -340,3 +398,16 @@ class Rfc2217Session(ProtocolSession):
         except Exception:
             pass
         return self.take_net_out()
+
+    def serial_changed(self, serial) -> None:
+        """Drive the bridge's port from now on: the reopened one (given the client's
+        settings, so the client goes on as before) or None while it is closed. The modem
+        lines are reported to the client as they are now. Raises ProtocolError when the
+        reopened port refuses a setting the client has (the client would be told one
+        thing while the port runs at another)."""
+        refused = self._serial.rebind(serial)
+        with contextlib.suppress(Exception):
+            self._pm.check_modem_lines()
+        if refused:
+            raise ProtocolError("the reopened serial port refused the client's settings ("
+                                + ", ".join(refused) + ")")
