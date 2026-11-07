@@ -23,7 +23,7 @@ import time
 from typing import Callable
 
 from . import sparkplug
-from .mqtt_pub import MqttPublisher
+from .mqtt_pub import MqttPublisher, shown
 
 UINT64 = sparkplug.DataType.UInt64
 BOOLEAN = sparkplug.DataType.Boolean
@@ -134,9 +134,9 @@ class SparkplugNode:
             return
         for m in cmd.metrics:
             if m.name != sparkplug.REBIRTH:
-                self._log(f"Sparkplug NCMD for {m.name!r} ignored (points are written with "
+                self._log(f"Sparkplug NCMD for {shown(m.name)} ignored (points are written with "
                           "a DCMD to their device)")
-            elif m.value:
+            elif m.value is True:  # a Boolean true, not just any truthy value
                 self._log("Sparkplug rebirth requested")
                 self.birth()
 
@@ -152,7 +152,8 @@ class SparkplugNode:
         for m in cmd.metrics:
             point = self.points.get(m.name) if m.name in names else None
             if point is None or not point.writable:
-                self._log(f"Sparkplug DCMD for {dev}/{m.name} ignored (not a writable point)")
+                self._log(f"Sparkplug DCMD for {dev}/{shown(m.name)} ignored (not a writable "
+                          "point)")
                 continue
             if m.is_null:
                 continue

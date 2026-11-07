@@ -499,8 +499,9 @@ class ModbusPoint:
     address: int = 0            # 0-based coil / register address
     dtype: str = "uint16"       # uint16 | int16 | uint32 | int32 | float32 (registers), bool (bits)
     scale: float = 1.0          # published value = raw * scale (0 = no scaling, as before)
-    # MQTT may write it: <base_topic>/<name>/set, or a Sparkplug B NCMD (coils: FC5 /
-    # FC15, holding registers: FC6 / FC16). Only coils and holding registers.
+    # MQTT may write it: <base_topic>/<name>/set, or a Sparkplug B DCMD to its unit's
+    # device (a coil: FC5, a holding register: FC6 / FC16 for its own one or two
+    # registers). Only coils and holding registers.
     writable: bool = False
 
     @staticmethod

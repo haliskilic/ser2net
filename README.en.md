@@ -67,7 +67,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   open/close strings and `closeon` don't apply (they would break the Modbus framing).
   **Edge mode:** also polls coils and registers on an interval and publishes the decoded
   values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
-  values from MQTT (`<topic>/<point>/set` → FC5/FC15 coils, FC6/FC16 registers).
+  values from MQTT (`<topic>/<point>/set`, one value for that point only: FC5 for a coil,
+  FC6/FC16 for a holding register's own one or two registers; a JSON list or other text
+  gets `error: …` on `.../set/result`).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
   NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
