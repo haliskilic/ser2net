@@ -7,31 +7,169 @@ uniformly; the role is refreshed from LDAP groups on every login.
 
 ldap3 is an OPTIONAL dependency, imported lazily: if it's absent, LDAP login is
 disabled with a log line and local accounts keep working. The actual bind/search is
-isolated so the role-mapping and shadow-user logic can be unit-tested without ldap3.
+isolated so the role-mapping and shadow-user logic can be unit-tested without ldap3;
+the group -> role matching (OIDC claims use it too) is pure Python.
 """
 from __future__ import annotations
 
 import contextlib
+import re
+import unicodedata
+from dataclasses import dataclass
 
-from ..config import User
+from ..config import ROLE_RANK, User
+
+# ---------------- group -> role ----------------
+# A group setting (admin_group / operator_group / viewer_group, for LDAP and OIDC alike)
+# names one group, and only its whole name matches — never a part of it. Letter case and
+# extra spaces don't count (fold). It matches a group the directory or the identity
+# provider reports when it is
+#   * the same text: a full DN, compared RDN by RDN (cn=ser2net-admins,ou=groups,
+#     dc=corp,dc=local), or the value exactly as the provider sends it;
+#   * the group's own name: the value of a DN's first RDN (ser2net-admins), the last
+#     segment of a path (Keycloak sends /team/ser2net-admins) or the part after a
+#     DOMAIN\ prefix (AD FS);
+#   * the leading RDNs of the DN (cn=ser2net-admins,ou=groups) or the trailing segments
+#     of a path (team/ser2net-admins); a setting starting with / is the whole path.
+GROUP_SETTINGS = (("admin_group", "admin"), ("operator_group", "operator"),
+                  ("viewer_group", "viewer"))
+
+_DN_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9-]*|[0-9]+(?:\.[0-9]+)*")
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def fold(text) -> str:
+    """How group names compare: NFC, every run of white space (no-break spaces too) as
+    one space, and letter case folded so that Turkish İ, I, ı and i are one letter —
+    str.lower() turns 'İ' into 'i' + U+0307 and leaves 'ı' as it is, so KALİTE and
+    Kalite, or BAKIM and Bakım, would differ."""
+    s = " ".join(unicodedata.normalize("NFC", str(text)).split())
+    return s.replace("\u0130", "i").replace("\u0131", "i").casefold().replace("i\u0307", "i")
+
+
+def _split_dn(text) -> list[list[tuple[str, str]]] | None:
+    """The RDNs of an RFC 4514 DN, each a list of (attribute type, value) with the
+    escapes (\\, \\2C, UTF-8 bytes such as \\C4\\B0) decoded, or None when `text` is not
+    a DN."""
+    s = str(text)
+    rdns: list[list[tuple[str, str]]] = []
+    avas: list[tuple[str, str]] = []
+    i, n = 0, len(s)
+    while True:
+        eq = s.find("=", i)
+        if eq < 0 or not _DN_TYPE.fullmatch(s[i:eq].strip()):
+            return None
+        typ, i, raw = s[i:eq].strip().lower(), eq + 1, bytearray()
+        while i < n and s[i] not in ",+":
+            if s[i] == "\\":
+                pair = s[i + 1:i + 3]
+                if len(pair) == 2 and set(pair) <= _HEX:
+                    raw.append(int(pair, 16))
+                    i += 3
+                    continue
+                if i + 1 >= n:
+                    return None
+                i += 1
+            raw += s[i].encode("utf-8", "surrogatepass")
+            i += 1
+        avas.append((typ, raw.decode("utf-8", "replace").strip()))
+        if i >= n or s[i] == ",":
+            rdns.append(avas)
+            avas = []
+        if i >= n:
+            return rdns
+        i += 1
+
+
+def _dn_key(text) -> tuple[frozenset[tuple[str, str]], ...] | None:
+    rdns = _split_dn(text)
+    return None if rdns is None else tuple(frozenset((t, fold(v)) for t, v in rdn)
+                                           for rdn in rdns)
+
+
+def group_matches(setting, group) -> bool:
+    """Does this group setting name this group? (the rules above)"""
+    want = fold(setting or "")
+    if not want:
+        return False
+    if want == fold(group):
+        return True
+    have = _dn_key(group)
+    if have:
+        wanted = _dn_key(setting)
+        if wanted:                                   # the full DN or its leading RDNs
+            return have[:len(wanted)] == wanted
+        return any(value == want for _type, value in have[0])   # the group's own name
+    text, typed = str(group).strip(), str(setting).strip()
+    if "\\" in text and "\\" not in typed:          # DOMAIN\group
+        return fold(text.rsplit("\\", 1)[1]) == want
+    if "/" in text or "/" in typed:                 # a path such as Keycloak's /team/group
+        path = [fold(p) for p in text.strip("/").split("/")]
+        tail = [fold(p) for p in typed.strip("/").split("/")]
+        return path == tail if typed.startswith("/") else path[-len(tail):] == tail
+    return False
+
+
+def group_name(group) -> str:
+    """A group's own name: a DN's first RDN value, a path's last segment, the part
+    after DOMAIN\\ — what to enter as the group setting."""
+    rdns = _split_dn(group)
+    if rdns:
+        return rdns[0][0][1]
+    text = str(group).strip()
+    if "\\" in text:
+        return text.rsplit("\\", 1)[1]
+    return text.rstrip("/").rsplit("/", 1)[-1] if "/" in text else text
+
+
+def group_names(groups, limit: int = 10) -> str:
+    """The groups for a log line: their own names, at most `limit`, each cut at 64
+    characters."""
+    groups = list(groups)
+    names = [group_name(g) for g in groups[:limit]]
+    text = ", ".join(repr(n if len(n) <= 64 else n[:63] + "…") for n in names) or "none"
+    return text + (f" (+{len(groups) - limit} more)" if len(groups) > limit else "")
+
+
+@dataclass
+class RoleDecision:
+    """How a user's groups map to a role (role_decision)."""
+    role: str | None          # the role they get; None: the sign-in is refused
+    setting: str = ""         # the group setting that gave it ("": none, default_role)
+    group: str = ""           # the group it matched
+    # a group setting that is only part of the name of one of their groups, which counted
+    # before group names had to match whole, and would give more than `role`:
+    # (setting, its value, that group) and the role it gave
+    partial: tuple[str, str, str] | None = None
+    partial_role: str = ""
+
+
+def role_decision(groups, settings) -> RoleDecision:
+    """The highest role a user's groups give (LDAP group DNs or OIDC claim values):
+    admin_group, then operator_group, then viewer_group, else default_role (blank:
+    None, refused)."""
+    groups = [str(g) for g in groups]
+    decision = RoleDecision(settings.default_role or None)
+    for setting, role in GROUP_SETTINGS:
+        group = next((g for g in groups if group_matches(getattr(settings, setting), g)), None)
+        if group is not None:
+            decision = RoleDecision(role, setting, group)
+            break
+    for setting, role in GROUP_SETTINGS:  # the earlier rule: the text anywhere in a group
+        text = (getattr(settings, setting) or "").strip().lower()
+        group = next((g for g in groups if text and text in g.lower()), None)
+        if group is not None:
+            if ROLE_RANK[role] > ROLE_RANK.get(decision.role or "", 0):
+                decision.partial = (setting, getattr(settings, setting), group)
+                decision.partial_role = role
+            break
+    return decision
 
 
 def role_for_groups(groups, settings) -> str | None:
-    """Highest ser2net role granted by a user's group DNs, or None to deny (the user
+    """Highest ser2net role granted by a user's groups, or None to deny (the user
     authenticated but is in no mapped group and no default_role is set)."""
-    lowered = [str(g).lower() for g in groups]
-
-    def member(group_name: str) -> bool:
-        g = (group_name or "").strip().lower()
-        return bool(g) and any(g in dn for dn in lowered)
-
-    if member(settings.admin_group):
-        return "admin"
-    if member(settings.operator_group):
-        return "operator"
-    if member(settings.viewer_group):
-        return "viewer"
-    return settings.default_role or None
+    return role_decision(groups, settings).role
 
 
 def upsert_ldap_user(config, username: str, role: str) -> User:

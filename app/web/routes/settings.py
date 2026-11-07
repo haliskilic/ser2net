@@ -64,6 +64,8 @@ def routes(ctx: Ctx) -> list:
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
                       oidc=state.config.oidc, oidc_lib=_module_present("authlib"),
+                      group_warnings={src: [w for (s, _k), w in sorted(state.group_warnings.items())
+                                            if s == src] for src in ("ldap", "oidc")},
                       **_cluster_view(),
                       session_minutes=state.config.session_timeout_s // 60,
                       notify=state.config.notifications, notify_events=NOTIFY_EVENTS,
@@ -310,6 +312,12 @@ def routes(ctx: Ctx) -> list:
                            "off.").format(name)
         return ""
 
+    def _clear_group_warnings(source: str) -> None:
+        """Saving that section answers its group-setting warnings (a sign-in that still
+        matches only part of a group name shows a new one)."""
+        for key in [k for k in state.group_warnings if k[0] == source]:
+            del state.group_warnings[key]
+
     async def settings_ldap_post(request):
         if deny := require_role(request, "admin"):
             return deny
@@ -328,6 +336,7 @@ def routes(ctx: Ctx) -> list:
             except ConfigError as e:
                 state.config.ldap = old
                 return await settings_get(request, error=str(e))
+        _clear_group_warnings("ldap")
         state.log(f"LDAP settings updated (enabled={state.config.ldap.enabled})")
         ctx.audit(request, "ldap_settings",
                     "enabled" if state.config.ldap.enabled else "disabled")
@@ -353,6 +362,7 @@ def routes(ctx: Ctx) -> list:
             except ConfigError as e:
                 state.config.oidc = old
                 return await settings_get(request, error=str(e))
+        _clear_group_warnings("oidc")
         state.log(f"OIDC settings updated (enabled={state.config.oidc.enabled})")
         ctx.audit(request, "oidc_settings",
                     "enabled" if state.config.oidc.enabled else "disabled")

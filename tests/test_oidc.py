@@ -1,7 +1,9 @@
 """OIDC single sign-on (Phase 2.3).
 
-Pure parts (claim->role/username, the signed state cookie) always run in CI. The
-full token-exchange + id_token validation flow uses a real RS256-signed token and
+Pure parts (claim->role/username, the signed state cookie) always run in CI: a group
+setting matches a whole claim value in any letter case (Turkish İ/I/ı/i as one
+letter), or the last part of a Keycloak path / DOMAIN\\name — never a part of a name.
+The full token-exchange + id_token validation flow uses a real RS256-signed token and
 mocked discovery/token/JWKS HTTP, so it runs without a provider; it's skipped only
 if authlib isn't importable. Run: python3 tests/test_oidc.py
 """
@@ -11,6 +13,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from _names import OTHER_GROUP, SAME_GROUP
 
 from app.config import OidcSettings
 from app.web import auth, oidc_auth
@@ -35,6 +39,42 @@ def test_claim_mapping():
     assert oidc_auth.username_from_claims({"email": "a@b.c"}, s) == "a@b.c"          # falls back
     assert oidc_auth.username_from_claims({"sub": "xyz"}, s) == "xyz"
     print("OIDC claim -> role/username mapping (+ fallbacks, deny)  OK")
+
+
+def test_claim_whole_names():
+    s = OidcSettings(admin_group="admins", operator_group="ser2net-operators", default_role="")
+    for value in ("sysadmins", "admins-readonly", "/team/not-admins", "ser2net-admins",
+                  "/admins/printers", "CORP\\domain admins"):
+        assert oidc_auth.role_from_claims({"groups": [value]}, s) is None, value
+    # the forms providers send: the name, a Keycloak path, DOMAIN\\name
+    for value in ("admins", "ADMINS", "/admins", "/plant/team/admins", "CORP\\Admins"):
+        assert oidc_auth.role_from_claims({"groups": [value]}, s) == "admin", value
+    assert oidc_auth.role_from_claims({"groups": ["/x/ser2net-operators", "sysadmins"]}, s) \
+        == "operator"
+    s.default_role = "viewer"
+    assert oidc_auth.role_from_claims({"groups": ["sysadmins"]}, s) == "viewer"
+    # a path setting: its trailing segments; one that starts with / is the whole path
+    path = OidcSettings(admin_group="team/ser2net-admins", operator_group="/plant/ser2net-ops")
+    assert oidc_auth.role_from_claims({"groups": ["/org/team/ser2net-admins"]}, path) == "admin"
+    assert oidc_auth.role_from_claims({"groups": ["/org/other/ser2net-admins"]}, path) is None
+    assert oidc_auth.role_from_claims({"groups": ["/plant/ser2net-ops"]}, path) == "operator"
+    assert oidc_auth.role_from_claims({"groups": ["plant/ser2net-ops"]}, path) == "operator"
+    assert oidc_auth.role_from_claims({"groups": ["/site/plant/ser2net-ops"]}, path) is None
+    # a claim that is one value, or not a string at all
+    assert oidc_auth.groups_from_claims({"groups": 42}, s) == ["42"]
+    assert oidc_auth.groups_from_claims({}, s) == []
+    print("OIDC groups: whole names, Keycloak paths and DOMAIN\\name; no part of a name  OK")
+
+
+def test_claim_turkish_names():
+    for typed, stored in SAME_GROUP:
+        s = OidcSettings(operator_group=typed)
+        assert oidc_auth.role_from_claims({"groups": [stored]}, s) == "operator", (typed, stored)
+        assert oidc_auth.role_from_claims({"groups": f"/Fabrika/{stored}"}, s) == "operator"
+    for typed, stored in OTHER_GROUP:
+        s = OidcSettings(operator_group=typed)
+        assert oidc_auth.role_from_claims({"groups": [stored]}, s) is None, (typed, stored)
+    print("OIDC groups: Turkish İ/I/ı/i, NFD and no-break spaces compare as typed  OK")
 
 
 def test_signed_state_cookie():
@@ -101,6 +141,8 @@ def test_complete_flow():
 
 def main():
     test_claim_mapping()
+    test_claim_whole_names()
+    test_claim_turkish_names()
     test_signed_state_cookie()
     test_complete_flow()
     print("\nPASS: OIDC single sign-on")

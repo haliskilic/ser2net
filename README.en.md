@@ -402,6 +402,19 @@ ends every session at once, the admin's own excepted — use it when a copy of
 `config.json` or a backup may have leaked (downloaded backups leave the key out). While
 LDAP or OIDC is switched off, its accounts' sessions don't count.
 
+**LDAP / OIDC groups → roles:** a group setting (admin / operator / viewer group) names one
+group and matches only its whole name, never a part of it. For LDAP that is the group's
+name (its CN, e.g. `ser2net-admins`), the start of its DN (`cn=ser2net-admins,ou=groups`)
+or its full DN; for OIDC the value as the provider sends it, or its last part
+(`ser2net-admins` matches Keycloak's `/team/ser2net-admins` and `CORP\ser2net-admins`).
+Letter case doesn't matter, Turkish İ/I/ı/i included (`Bilgi İşlem` = `BİLGİ İŞLEM`). A
+setting that is only part of a group's name (`admins` for `ser2net-admins`, or just an OU of
+its DN) gives no role: all.log names the setting and the group in a WARNING at that user's
+sign-in, and Settings shows it until you save that section. If your only admins came from
+such a group, sign in with a local admin created by `ser2net --set-password NAME` (see
+below) and correct the setting. When a directory user's groups give no role any more,
+their next sign-in also ends the sessions they still had.
+
 **Lost password, locked out, no browser (account recovery):**
 `ser2net --set-password NAME` sets a new password for the local account `NAME` (asked
 twice on the terminal; piped, the first line of stdin) and signs that account out
