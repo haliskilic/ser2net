@@ -21,8 +21,14 @@ RUN groupadd --system --gid 10001 ser2net \
       --shell /usr/sbin/nologin ser2net \
  && mkdir -p /data && chown ser2net:ser2net /data
 
+# (.dockerignore lets in only what the image runs, plus the license texts)
 COPY . .
-RUN chmod 0755 /app/tools/docker-entrypoint.sh
+# Compile the app once here: the server runs as an unprivileged user that can't write
+# /app, so it would otherwise compile every module in memory at each start. checked-hash
+# .pyc files stay valid whatever timestamps the layers keep, and are checked against the
+# source, so sources mounted over /app/app are still used.
+RUN chmod 0755 /app/tools/docker-entrypoint.sh \
+ && python -m compileall -q -j0 --invalidation-mode checked-hash /app/app
 
 # Config + logs live on a volume so they survive container recreation.
 VOLUME ["/data"]

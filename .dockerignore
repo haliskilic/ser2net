@@ -1,8 +1,17 @@
-.git
-.github
-lib
-data
+# Allow-list: only what the image runs, plus the license texts it must carry, goes into
+# the build context. Tests, the offline wheels, docs, a local .venv / build / dist and
+# caches stay out, also in a local `docker build .`.
+*
+!app
+!ser2net.py
+!bootstrap.py
+!requirements.txt
+!requirements-optional.txt
+!tools/docker-entrypoint.sh
+!tools/licenses
+!LICENSE
+!NOTICE
+!COMMERCIAL_LICENSE.md
+!THIRD-PARTY-NOTICES.md
 **/__pycache__
-*.pyc
-*.pyo
-docs/screenshots
+**/*.py[co]
