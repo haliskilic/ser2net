@@ -58,13 +58,14 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
-  If the serial port goes away (a USB adapter unplugged), masters get `0x0B` meanwhile
-  and the port is reopened like any mapping's (state `reconnecting`, device lost/back
-  notifications). Masters are admitted like other clients (allowed IPs, max connections,
-  priority IPs, kick-old-user); a **read-only** gateway answers every request that is not
-  a read (writes such as FC5/6/15/16/22/23, diagnostics that restart or silence a slave,
-  unknown function codes) with exception `0x01` without putting it on the bus. Banner,
-  open/close strings and `closeon` don't apply (they would break the Modbus framing).
+  If the serial port goes away (a USB adapter unplugged), masters get `0x0A` (gateway path
+  unavailable) at once meanwhile and the port is reopened like any mapping's (state
+  `reconnecting`, device lost/back notifications). Masters are admitted like other
+  clients (allowed IPs, max connections, priority IPs, kick-old-user); a **read-only**
+  gateway answers every request that is not a read (writes such as FC5/6/15/16/22/23,
+  diagnostics that restart or silence a slave, unknown function codes) with exception
+  `0x01` without putting it on the bus. Banner, open/close strings and `closeon` don't
+  apply (they would break the Modbus framing).
   **Edge mode:** also polls coils and registers on an interval and publishes the decoded
   values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
   values from MQTT (`<topic>/<point>/set`, one value for that point only: FC5 for a coil,

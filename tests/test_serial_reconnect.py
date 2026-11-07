@@ -5,7 +5,7 @@ vanish (reads on the port fail, as for an unplugged USB adapter) and starting it
 brings it back under the same path. Both runners keep their port with the same
 supervision (serial_link.SerialLink), so both must report the outage and reopen:
   - Modbus gateway: a fake RTU slave answers on the device end. While the device is gone
-    the mapping is reconnecting (not running, not "in use"), a master gets 0x0B, and once
+    the mapping is reconnecting (not running, not "in use"), a master gets 0x0A, and once
     it is back the same Modbus/TCP master connection is served again;
   - raw bridge: a connected TCP client gets the device's data again after it returns,
     and its bytes reach the device.
@@ -30,7 +30,7 @@ from app.engine.supervisor import Supervisor
 
 REPLY_PDU = bytes([0x03, 0x02, 0x12, 0x34])  # read holding registers: one word
 READ_PDU = bytes([0x03, 0x00, 0x00, 0x00, 0x01])
-TIMEOUT_PDU = bytes([0x83, modbus.GATEWAY_TARGET_FAILED])
+UNAVAILABLE_PDU = bytes([0x83, modbus.GATEWAY_PATH_UNAVAILABLE])
 LOST = ("reconnecting", "device-missing")
 
 
@@ -149,8 +149,8 @@ async def test_gateway_device_returns(folder):
         assert st["last_error"] and dev.port not in sup.devices_in_use(), st
         lost = sup.all_status()
         assert [e[0] for e in notify.status_events(before, lost, names)] == ["device_lost"]
-        assert await request(mr, mw, 2) == TIMEOUT_PDU
-        print(f"gateway: device gone -> {st['state']} ({st['last_error']}), 0x0B, "
+        assert await request(mr, mw, 2) == UNAVAILABLE_PDU
+        print(f"gateway: device gone -> {st['state']} ({st['last_error']}), 0x0A, "
               "device_lost  OK")
 
         await dev.plug()

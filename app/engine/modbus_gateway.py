@@ -5,7 +5,10 @@ protocol is ``modbus``. It listens as a Modbus/TCP server: each connected master
 sends Modbus/TCP requests, which the gateway converts to Modbus/RTU, forwards on
 the shared serial bus (one transaction at a time, since RTU is a single-master
 bus), reads the slave's RTU reply, and returns it to that master as Modbus/TCP —
-echoing the transaction id so concurrent masters don't get crossed wires.
+echoing the transaction id so concurrent masters don't get crossed wires. A request
+whose slave doesn't answer in time is answered with exception 0x0B (gateway target
+failed to respond); while the serial port is down, every request is answered with 0x0A
+(gateway path unavailable) at once.
 
 Shares the lifecycle shape (and the H3/H4 fixes) of MappingRunner: the same
 supervised serial port (serial_link.SerialLink: reopened, and its USB identity
@@ -209,13 +212,17 @@ class ModbusGatewayRunner:
     # ---------------- one RTU transaction on the shared bus ----------------
     async def _transaction(self, unit: int, pdu: bytes) -> bytes:
         function = pdu[0] if pdu else 0
+        if self._link.down:  # the port is gone (reconnecting): answer now, don't queue
+            return modbus.exception_pdu(function, modbus.GATEWAY_PATH_UNAVAILABLE)
+        if not self._link.is_open:
+            # the first open at start-up is still under way: wait a little for it, outside
+            # the bus lock, so queued requests wait together and not one timeout each
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._link.ready.wait(), timeout=self._resp_timeout)
         async with self._bus_lock:
-            if not self._link.is_open:
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self._link.ready.wait(), timeout=self._resp_timeout)
             reader, writer = self._link.reader, self._link.writer
-            if reader is None or writer is None:
-                return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
+            if reader is None or writer is None:  # not open (yet), or lost meanwhile
+                return modbus.exception_pdu(function, modbus.GATEWAY_PATH_UNAVAILABLE)
             # discard any stale bytes left on the bus, then send the RTU request
             with contextlib.suppress(Exception):
                 while True:
@@ -274,7 +281,9 @@ class ModbusGatewayRunner:
         poll = self.mapping.modbus_poll
         while not self._stop.is_set():
             values = {}
-            for p in poll.points:
+            # while the port is gone there is nothing to read (the link logs the outage)
+            points = poll.points if not self._link.down else []
+            for p in points:
                 try:
                     values[p.name] = await self._read_point(p)
                 except Exception as e:  # one bad point must not stop the loop

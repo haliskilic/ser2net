@@ -9,6 +9,8 @@ a capped backoff, until the mapping stops (the runner cancels the task).
 
 The link's state, for the runner and anything built on it:
   - ``is_open`` / ``ready``: the port is open right now (``ready`` is the Event to wait on);
+  - ``down``: it could not be opened or went away, and is not open again yet; False until
+    the first attempt is over (at start-up the port may simply not be open *yet*);
   - ``reader`` / ``writer`` / ``serial`` / ``device``: the open port (None / "" otherwise);
   - ``status.state``: ``running`` while it is open, ``device-missing`` / ``reconnecting``
     while it is not (what the dashboard, /metrics and the notifications report).
@@ -66,6 +68,7 @@ class SerialLink:
         self.serial: Any = None  # the pyserial object (an RFC2217 session drives it)
         self.device = ""
         self.ready = asyncio.Event()
+        self.down = False
 
     @property
     def is_open(self) -> bool:
@@ -75,6 +78,7 @@ class SerialLink:
         """Keep the port open until ``stop`` is set: open it, run ``session`` while it is
         open, close it once the session ends, and try again after a backoff."""
         backoff = Backoff()
+        self.down = False  # the first attempt is under way
         while not self._stop.is_set():
             try:
                 reader, writer, ser, device = await serial_io.open_serial(self.settings)
@@ -104,11 +108,14 @@ class SerialLink:
         self.status.device = device
         self.status.last_error = ""
         self.status.state = "running"
+        self.down = False
         self.ready.set()
         self._log(f"serial open: {device} @ {self.settings.compact()}")
 
     async def close(self) -> None:
-        """Close the port if it is open; the link is down afterwards."""
+        """Close the port if it is open; the link is down afterwards (also after an open
+        that failed: run() closes after every attempt)."""
+        self.down = True
         self.ready.clear()
         w = self.writer
         self.reader = self.writer = self.serial = None

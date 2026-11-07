@@ -61,8 +61,9 @@ düzenlemeye gerek yok.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
   RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
-  adaptör çıkarıldığında) master'lar bu sürede `0x0B` alır ve port, her eşlemede olduğu
-  gibi yeniden açılır (durum `reconnecting`, cihaz kayboldu/geri geldi bildirimleri).
+  adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır ve
+  port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
+  kayboldu/geri geldi bildirimleri).
   Master'lar diğer istemciler gibi kabul edilir (izinli IP'ler, max bağlantı, öncelikli
   IP'ler, eski-kullanıcıyı-at); **salt okunur** bir gateway okuma olmayan her isteği
   (FC5/6/15/16/22/23 gibi yazmalar, slave'i yeniden başlatan ya da susturan tanılama
