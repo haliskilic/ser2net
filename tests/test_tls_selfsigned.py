@@ -12,7 +12,8 @@ executables — and the openssl command is only a fallback for source installs.
      with neither there is a clear error instead of a crash
   3. the real server started with an EMPTY PATH: POST /settings/tls/generate saves
      the pair and points admin_ui.tls_cert / tls_key at it
-Parts 1 and 3 need cryptography (pip install cryptography) and are skipped without.
+Parts 1 and 3 need cryptography (pip install cryptography) and are skipped without (a
+SKIP line, which tests/run_all.py repeats), or fail with SER2NET_OPTIONAL_TESTS=1.
 
 Run: python3 tests/test_tls_selfsigned.py
 """
@@ -35,14 +36,10 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
+from _optional import need  # noqa: E402
+
 from app.web import selfsigned  # noqa: E402
 from app.web.auth import hash_password  # noqa: E402
-
-try:
-    import cryptography  # noqa: F401
-    HAVE_CRYPTOGRAPHY = True
-except ImportError:
-    HAVE_CRYPTOGRAPHY = False
 
 
 class EmptyPath:
@@ -93,9 +90,6 @@ def verified_handshake(cert, key, server_name):
 
 
 def test_cryptography_without_openssl():
-    if not HAVE_CRYPTOGRAPHY:
-        print("cryptography not installed: in-process generation  SKIP")
-        return
     with tempfile.TemporaryDirectory() as d, EmptyPath():
         cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
         assert selfsigned.generate(cert, key) == "cryptography"
@@ -160,9 +154,6 @@ def wait_port(port, timeout=20):
 
 
 def test_web_button_with_empty_path():
-    if not HAVE_CRYPTOGRAPHY:
-        print("cryptography not installed: web button with an empty PATH  SKIP")
-        return
     tmp = tempfile.mkdtemp(prefix="ser2net_tlsgen_")
     ui = free_port()
     cfg_path = os.path.join(tmp, "config.json")
@@ -212,9 +203,12 @@ def test_web_button_with_empty_path():
 
 
 def main():
-    test_cryptography_without_openssl()
+    have = need("cryptography", what="certificates made in-process (parts 1 and 3)")
+    if have:
+        test_cryptography_without_openssl()
     test_fallbacks_without_cryptography()
-    test_web_button_with_empty_path()
+    if have:
+        test_web_button_with_empty_path()
     print("\nPASS: self-signed certificate without an external openssl")
 
 

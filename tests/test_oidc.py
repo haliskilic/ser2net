@@ -3,18 +3,22 @@
 Pure parts (claim->role/username, the signed state cookie) always run in CI: a group
 setting matches a whole claim value in any letter case (Turkish İ/I/ı/i as one
 letter), or the last part of a Keycloak path / DOMAIN\\name — never a part of a name.
-The full token-exchange + id_token validation flow uses a real RS256-signed token and
-mocked discovery/token/JWKS HTTP, so it runs without a provider; it's skipped only
-if authlib isn't importable. Run: python3 tests/test_oidc.py
+Discovery and the authorize URL need no package either. The full token-exchange +
+id_token validation flow uses a real RS256-signed token and mocked discovery/token/JWKS
+HTTP, so it runs without a provider; it needs authlib and cryptography: without them it
+is skipped with a SKIP line (tests/run_all.py repeats it), and with
+SER2NET_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_oidc.py
 """
 import os
 import sys
 import time
+import urllib.parse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _names import OTHER_GROUP, SAME_GROUP
+from _optional import need
 
 from app.config import OidcSettings
 from app.web import auth, oidc_auth
@@ -89,12 +93,37 @@ def test_signed_state_cookie():
     print("OIDC signed state cookie: round-trips, rejects tamper/expiry  OK")
 
 
+def test_discovery_and_authorize_url():
+    """The sign-in redirect: endpoints from the issuer's discovery document (cached), the
+    authorization-code request with state and nonce. Needs no authlib."""
+    fetched = []
+    disco = {"issuer": ISSUER, "authorization_endpoint": ISSUER + "/auth",
+             "token_endpoint": ISSUER + "/token", "jwks_uri": ISSUER + "/jwks"}
+
+    def fetch(url):
+        fetched.append(url)
+        return disco
+
+    oidc_auth._DISCOVERY_CACHE.clear()
+    s = _settings()
+    s.issuer = ISSUER + "/"          # a trailing slash is not part of the discovery URL
+    url = oidc_auth.build_authorize_url(s, "https://h/auth/oidc/callback", "ST", "NO", fetch=fetch)
+    assert fetched == [ISSUER + "/.well-known/openid-configuration"], fetched
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert url.startswith(ISSUER + "/auth?"), url
+    assert params == {"response_type": ["code"], "client_id": [CLIENT_ID],
+                      "redirect_uri": ["https://h/auth/oidc/callback"],
+                      "scope": ["openid email profile"], "state": ["ST"], "nonce": ["NO"]}, params
+    # the discovery document is cached: a second sign-in fetches nothing
+    oidc_auth.build_authorize_url(s, "https://h/cb", "S2", "N2", fetch=fetch)
+    assert len(fetched) == 1, fetched
+    assert oidc_auth.discover(ISSUER, fetch=fetch) is disco
+    oidc_auth._DISCOVERY_CACHE.clear()
+    print("OIDC: discovery (cached) and the authorization-code redirect URL  OK")
+
+
 def test_complete_flow():
-    try:
-        from authlib.jose import JsonWebKey, jwt
-    except ImportError:
-        print("skip: authlib not installed (pure logic above already covered)")
-        return
+    from authlib.jose import JsonWebKey, jwt
 
     key = JsonWebKey.generate_key("RSA", 2048, is_private=True)
     jwks = {"keys": [key.as_dict()]}                       # private dict still verifies (has public parts)
@@ -144,7 +173,10 @@ def main():
     test_claim_whole_names()
     test_claim_turkish_names()
     test_signed_state_cookie()
-    test_complete_flow()
+    test_discovery_and_authorize_url()
+    if need("authlib", "cryptography", what="OIDC token exchange and id_token checks "
+                                            "(oidc_auth.complete)"):
+        test_complete_flow()
     print("\nPASS: OIDC single sign-on")
 
 
