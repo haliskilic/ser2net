@@ -307,6 +307,15 @@ def test_fatal_with_one_line():
         missing = os.path.join(data, "no-such-cert.pem")
         msg = exits_with(runtime._require_admin_tls, AdminUI(tls_cert=missing, tls_key=missing))
         assert "cannot read the admin UI TLS certificate" in msg and missing in msg, msg
+        assert "fix admin_ui.tls_cert / tls_key in config.json" in msg, msg
+        if os.name == "posix" and os.geteuid() != 0:
+            key = os.path.join(data, "key.pem")
+            with open(key, "w") as fh:
+                fh.write("key")
+            os.chmod(key, 0)
+            msg = exits_with(runtime._require_admin_tls, AdminUI(tls_cert=key, tls_key=key))
+            os.chmod(key, stat.S_IRUSR | stat.S_IWUSR)
+            assert "(mode 0000)" in msg and "make it readable for that account" in msg, msg
         runtime._require_admin_tls(AdminUI())  # no TLS: nothing to check
         print("unreadable admin UI certificate: stop with one line (no fallback to HTTP)  OK")
     finally:

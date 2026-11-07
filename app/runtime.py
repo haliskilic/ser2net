@@ -246,8 +246,10 @@ def _require_admin_tls(admin) -> None:
             with open(path, "rb"):
                 pass
         except OSError as e:
-            raise SystemExit(f"ser2net: cannot read the admin UI TLS {what}: {_os_error(e)} "
-                             "— fix admin_ui.tls_cert / tls_key in config.json") from None
+            fix = ("" if isinstance(e, PermissionError)
+                   else " — fix admin_ui.tls_cert / tls_key in config.json")
+            raise SystemExit(f"ser2net: cannot read the admin UI TLS {what}: "
+                             f"{_os_error(e)}{fix}") from None
 
 
 def main(config_path: str, reconfigure: bool = False) -> int:
