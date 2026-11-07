@@ -276,7 +276,8 @@ def test_failures_logged_once():
     t = d.all_targets()[0]
 
     async def calls(n):
-        return [await d.get_peer(t, "/api/cluster/local", timeout=2) for _ in range(n)]
+        # (a long timeout: on Windows a refused connection to loopback takes ~2 s)
+        return [await d.get_peer(t, "/api/cluster/local", timeout=8) for _ in range(n)]
     assert asyncio.run(calls(3)) == [None] * 3
     failed = [m for m in logs if "failed" in m]
     assert len(failed) == 1 and f"127.0.0.1:{port}" in failed[0], logs
