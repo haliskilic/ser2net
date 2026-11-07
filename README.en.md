@@ -282,7 +282,9 @@ The UI is **password-protected by default** and binds to **127.0.0.1** by defaul
 Exposing it to the network requires an explicit IP choice at startup and warns when
 bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mapping
 `allowed_client_ips`. Raw TCP is plaintext — be careful on untrusted networks. A bare
-`0.0.0.0`/`::` in an allow/priority list means "any client".
+`0.0.0.0`/`::` in an allow/priority list means "any client". A mapping's serial port is a
+device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
+`loop://`, ...) are not accepted as a port.
 
 **Open access (optional):** for trusted networks only, an admin can untick "Require
 login" under **Settings → Web UI access** and give visitors a role (`viewer` read-only /

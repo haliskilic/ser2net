@@ -287,7 +287,9 @@ Arayüz **varsayılan olarak parola korumalı**. Varsayılan bind **127.0.0.1**;
 için açılışta IP seçimi gerekir ve TLS'siz ağ bind'inde uyarı verilir. LAN'a açılan
 kurulumlarda TLS (`admin_ui.tls_*`) ve eşleme bazlı `allowed_client_ips` önerilir.
 Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde tek başına
-`0.0.0.0`/`::` "herkes" demektir.
+`0.0.0.0`/`::` "herkes" demektir. Bir eşlemenin seri portu yalnızca cihaz yolu ya da COM
+adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
+port olarak kabul edilmez.
 
 **Parolasız erişim (isteğe bağlı):** yalnızca güvenilir ağlar için, bir admin
 **Ayarlar → Web arayüzü erişimi**'nden giriş zorunluluğunu kapatıp ziyaretçilere bir rol

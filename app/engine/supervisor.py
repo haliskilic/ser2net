@@ -12,6 +12,7 @@ import contextlib
 from typing import Callable, Optional
 
 from ..config import AppConfig, MappingConfig
+from . import serial_io
 from .bridge import MappingRunner
 
 
@@ -83,6 +84,9 @@ class Supervisor:
             runner.status.state = "stopped"
             return True, "disabled"
         try:
+            # a stored URL port fails the start once, instead of retrying it forever
+            for side in mapping.serial_sides():
+                serial_io.refuse_url(side.port)
             await runner.start()
             return True, "started"
         except Exception as e:

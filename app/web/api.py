@@ -54,6 +54,7 @@ def build_api_routes(state):
         try:
             mapping = MappingConfig.from_dict(body)
             mapping.validate()
+            mapping.validate_input()
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         async with state.config_lock:
@@ -83,6 +84,7 @@ def build_api_routes(state):
         try:
             mapping = MappingConfig.from_dict(body)
             mapping.validate()
+            mapping.validate_input()
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         async with state.config_lock:
