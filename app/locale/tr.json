@@ -695,5 +695,15 @@
   "no-con-to-acc (the device's output is not sent to clients) is not available here: the mapping is imported disabled rather than sending it to them": "no-con-to-acc (cihazın çıktısı istemcilere gönderilmez) burada kullanılamıyor: eşleme çıktıyı istemcilere göndermek yerine kapalı olarak içe aktarıldı",
   "{0} is not imported: it traced only the device's output, and a trace here also records what clients send (passwords too); set a trace file on the mapping if you want that": "{0} içe aktarılmadı: yalnızca cihazın çıktısını kaydediyordu, buradaki trace ise istemcilerin gönderdiklerini de (parolalar dahil) kaydeder; bunu istiyorsan eşlemede bir trace dosyası belirle",
   "ser2net may also have limited its clients with TCP wrappers (/etc/hosts.allow, /etc/hosts.deny); those rules are not imported: a mapping without allowed client IPs accepts any client": "ser2net istemcilerini TCP wrappers (/etc/hosts.allow, /etc/hosts.deny) ile de sınırlamış olabilir; bu kurallar içe aktarılmaz: izin verilen istemci IP'si olmayan bir eşleme her istemciyi kabul eder",
-  "remaddr {0} comes from the defaults (the connection sets none)": "remaddr {0} varsayılanlardan alındı (bağlantı kendisi adres vermiyor)"
+  "remaddr {0} comes from the defaults (the connection sets none)": "remaddr {0} varsayılanlardan alındı (bağlantı kendisi adres vermiyor)",
+  "The file expands to more than {0} MB of text with its aliases, defines and references, so it is not imported.": "Dosya alias, define ve referanslarıyla {0} MB metin sınırını aşıyor, bu yüzden içe aktarılmadı.",
+  "{0}: the value is longer than {1} KB with its defines and escapes expanded, so the file is not imported.": "{0}: değer, define'lar ve kaçış dizileri açıldığında {1} KB sınırını aşıyor, bu yüzden dosya içe aktarılmadı.",
+  "The file has more than {0} connections; import it in parts.": "Dosyadaki bağlantı sayısı {0} sınırını aşıyor; dosyayı parçalara bölerek içe aktar.",
+  "the file stands for more than {0} YAML nodes (an alias counts as all it repeats)": "dosya {0} YAML düğümü sınırını aşıyor (bir alias, tekrarladığı her şey kadar sayılır)",
+  "collections are nested more than {0} levels deep": "iç içe koleksiyonlar {0} düzey sınırını aşıyor",
+  "a [...] or {...} cannot be a key": "bir [...] ya da {...} anahtar olamaz",
+  "line {0} is longer than {1} KB, so the file is not imported.": "satır {0}, {1} KB sınırından uzun, bu yüzden dosya içe aktarılmadı.",
+  "The file is larger than {0} MB, too large for a ser2net configuration.": "Dosya {0} MB sınırından büyük; bir ser2net yapılandırması için fazla büyük.",
+  "{0}: nested too deeply to import": "{0}: içe aktarılamayacak kadar derin iç içe",
+  "… and {0} more warnings": "… ve {0} uyarı daha"
 }
