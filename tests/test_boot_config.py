@@ -94,6 +94,11 @@ def backups(data: str) -> list[str]:
     return sorted(os.listdir(d)) if os.path.isdir(d) else []
 
 
+def read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def read_json(path: str):
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
@@ -442,6 +447,10 @@ def test_fatal_with_one_line():
             assert "is not a valid configuration" in msg, msg
         print("config.json that is not JSON / not a config: stop with one line naming the "
               "newest backup  OK")
+        with env(**CONTAINER):  # the Windows service has no console: the line goes to all.log
+            msg = exits_with(runtime.service_main, path)
+        assert msg in read_text(os.path.join(data, "all.log")), "not in all.log"
+        print("as a service: the one line is also written to all.log  OK")
 
         if os.name == "posix" and os.geteuid() != 0:
             with open(path, "w", encoding="utf-8") as fh:
@@ -471,7 +480,7 @@ def test_fatal_with_one_line():
         print("first run that can't create config.json: stop (no first-run setup in memory)  OK")
 
         missing = os.path.join(data, "no-such-cert.pem")
-        msg = exits_with(runtime._require_admin_tls, AdminUI(tls_cert=missing, tls_key=missing))
+        msg = exits_with(runtime.require_admin_tls, AdminUI(tls_cert=missing, tls_key=missing))
         assert "cannot read the admin UI TLS certificate" in msg and missing in msg, msg
         assert "fix admin_ui.tls_cert / tls_key in config.json" in msg, msg
         if os.name == "posix" and os.geteuid() != 0:
@@ -479,13 +488,13 @@ def test_fatal_with_one_line():
             with open(key, "w") as fh:
                 fh.write("key")
             os.chmod(key, 0)
-            msg = exits_with(runtime._require_admin_tls, AdminUI(tls_cert=key, tls_key=key))
+            msg = exits_with(runtime.require_admin_tls, AdminUI(tls_cert=key, tls_key=key))
             os.chmod(key, stat.S_IRUSR | stat.S_IWUSR)
             assert "(mode 0000)" in msg and "make it readable for that account" in msg, msg
-        msg = exits_with(runtime._require_admin_tls, AdminUI(tls_cert=True, tls_key=True))
+        msg = exits_with(runtime.require_admin_tls, AdminUI(tls_cert=True, tls_key=True))
         assert "admin_ui.tls_cert in config.json must be a file name, not True" in msg, msg
         os.fstat(1)  # stdout is still open (open(True) would have closed it)
-        runtime._require_admin_tls(AdminUI())  # no TLS: nothing to check
+        runtime.require_admin_tls(AdminUI())  # no TLS: nothing to check
         print("unreadable admin UI certificate: stop with one line (no fallback to HTTP)  OK")
     finally:
         shutil.rmtree(data, ignore_errors=True)

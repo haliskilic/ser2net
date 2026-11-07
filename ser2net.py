@@ -221,12 +221,13 @@ def main(argv: list[str] | None = None) -> int:
         _store, loaded = runtime.prepare_config(config_path, args.reconfigure)
         for note in loaded.load_notes:
             _write_utf8(note + "\n")
+        runtime.require_admin_tls(loaded.admin_ui)  # the service could not start without it
         return _service_call(lambda ws: ws.install(args.service_name, data_dir, config))
     if args.service:
         from app import winservice
 
         return winservice.run(args.service_name,
-                              lambda: runtime.main(config_path=config_path),
+                              lambda: runtime.service_main(config_path),
                               runtime.request_shutdown)
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
 

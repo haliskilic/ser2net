@@ -20,6 +20,7 @@ import signal
 import stat
 import sys
 import threading
+import time
 from typing import Callable, Mapping, Optional
 
 # asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
@@ -229,7 +230,7 @@ def loop_factory(choice: str) -> Optional[Callable[[], asyncio.AbstractEventLoop
     return None
 
 
-def _require_admin_tls(admin) -> None:
+def require_admin_tls(admin) -> None:
     """The admin UI's TLS certificate and key must be readable, or the start stops here
     with one line (uvicorn would fail later, with a traceback, after the bridges started).
     No fallback to plain HTTP: it would send passwords in clear where TLS was set up."""
@@ -253,7 +254,7 @@ def _require_admin_tls(admin) -> None:
 def main(config_path: str, reconfigure: bool = False) -> int:
     standalone.prepare()  # standalone Linux binary: find the system CA certificates
     store, config = prepare_config(config_path, reconfigure)
-    _require_admin_tls(config.admin_ui)
+    require_admin_tls(config.admin_ui)
 
     choice, loop_note = event_loop_choice()
     try:
@@ -280,6 +281,20 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
         loop.default_exception_handler(context)
 
     loop.set_exception_handler(handler)
+
+
+def service_main(config_path: str) -> int:
+    """main() for the Windows service, which has no console: a start-up error that stops
+    it (the one-line SystemExit) also goes to all.log next to config.json, where the
+    admin looks for it."""
+    try:
+        return main(config_path=config_path)
+    except SystemExit as e:
+        if isinstance(e.code, str):
+            log = os.path.join(os.path.dirname(os.path.abspath(config_path)), "all.log")
+            with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {e.code}\n")
+        raise
 
 
 async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
