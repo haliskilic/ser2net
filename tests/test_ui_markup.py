@@ -235,6 +235,36 @@ def test_mapping_form_modbus_fields():
           "/set option only for plain-format points  OK")
 
 
+def test_mapping_form_udp_fields():
+    """The UDP reply address and peer timeout are offered for UDP only, in one block whose
+    timeout field is the presence marker (forms.py _OPTIONAL_FORM_FIELDS), next to a note
+    that the allow-list checks a forgeable source address."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig.from_dict({"id": "u1", "name": "udp", "serial": {"port": "COM3"},
+                                 "network": {"mode": "udp", "port": 4001,
+                                             "udp_peer_host": "10.0.0.9", "udp_peer_port": 5000,
+                                             "udp_peer_timeout_s": 30}})
+    out = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                     ports=[], ips=[], error=None)
+    root = parse(out)
+    block = None
+    for name, value in (("network_udp_peer_host", "10.0.0.9"), ("network_udp_peer_port", "5000"),
+                        ("network_udp_peer_timeout_s", "30")):
+        field = next(n for n in root.walk() if n.attrs.get("name") == name)
+        assert field.attrs.get("value") == value, (name, field.attrs)
+        owner = next(a for a in field.ancestors() if "data-show-when" in a.attrs)
+        assert owner.attrs["data-show-when"] == "network_mode=udp", (name, owner.attrs)
+        assert block in (None, owner), "one block, shown and posted together"
+        block = owner
+    assert any(n.tag == "p" for n in block.walk()), "the note belongs to the UDP block"
+    assert "source address, which can be forged" in out
+    print("mapping form: UDP reply address / peer timeout in one UDP-only block  OK")
+
+
 def test_mqtt_command_tags():
     """The dashboard tags a Modbus mapping whose writable points take MQTT commands CMD,
     as a warning (CMD ⚠) when its broker connection has no TLS or no username; a read-only
@@ -286,6 +316,7 @@ def main():
     test_cluster_table()
     test_ports_table_and_assets()
     test_mapping_form_modbus_fields()
+    test_mapping_form_udp_fields()
     test_mqtt_command_tags()
     print("\nPASS: UI markup contract")
 

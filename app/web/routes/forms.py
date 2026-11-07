@@ -136,6 +136,9 @@ _OPTIONAL_FORM_FIELDS = {
     "network_client_queue_max": ("network", ("client_queue_max",)),
     "opt_banner": ("options", ("banner",)),
     "opt_closeon": ("options", ("closeon",)),
+    # UDP only: where the device's output goes
+    "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
+                                               "udp_peer_timeout_s")),
 }
 
 
@@ -172,6 +175,14 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                                             strict=strict, cast=float)
     if "network_client_queue_max" in form:
         network["client_queue_max"] = _num(form, "network_client_queue_max", 2048, strict=strict)
+    if "network_udp_peer_timeout_s" in form:
+        network.update(
+            udp_peer_host=form.get("network_udp_peer_host", "").strip(),
+            udp_peer_port=(_num(form, "network_udp_peer_port", 0, strict=strict)
+                           if form.get("network_udp_peer_port") else 0),
+            udp_peer_timeout_s=(_num(form, "network_udp_peer_timeout_s", 0, strict=strict)
+                                if form.get("network_udp_peer_timeout_s") else 0),
+        )
     options = {
         "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
         "trace_both": form.get("opt_trace_both", "").strip(),
