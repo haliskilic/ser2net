@@ -70,6 +70,7 @@ PORTABLE = [
     "test_i18n.py",
     "test_mapping_ids.py",
     "test_serial_url_ports.py",
+    "test_cluster_peer_save.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
