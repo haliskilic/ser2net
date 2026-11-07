@@ -27,6 +27,9 @@ _win: Any = ctypes
 
 DEFAULT_NAME = "ser2net"
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+# where a frozen build installs itself so only administrators can replace the exe a
+# LocalSystem service runs (see install()); the folder name under %ProgramFiles%
+INSTALL_SUBDIR = "ser2net"
 
 # winsvc.h
 SC_MANAGER_CONNECT = 0x0001
@@ -39,6 +42,7 @@ SERVICE_CHANGE_CONFIG = 0x0002
 SERVICE_WIN32_OWN_PROCESS = 0x00000010
 SERVICE_AUTO_START = 0x00000002
 SERVICE_ERROR_NORMAL = 0x00000001
+SERVICE_NO_CHANGE = 0xFFFFFFFF
 SERVICE_CONFIG_DESCRIPTION = 1
 SERVICE_CONFIG_FAILURE_ACTIONS = 2
 SERVICE_CONFIG_FAILURE_ACTIONS_FLAG = 4
@@ -117,6 +121,87 @@ def display_name(name: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# Where a frozen build installs itself (admin-only), and the ACL decision table
+# --------------------------------------------------------------------------
+def program_files() -> str:
+    return os.environ.get("ProgramFiles") or r"C:\Program Files"
+
+
+def program_data() -> str:
+    return os.environ.get("ProgramData") or r"C:\ProgramData"
+
+
+def install_dir() -> str:
+    """The admin-only folder a frozen build copies itself into on --install-service."""
+    return os.path.join(program_files(), INSTALL_SUBDIR)
+
+
+def installed_exe_path(name: str) -> str:
+    """Where the service's exe lives after install: ser2net.exe for the default service,
+    <name>.exe for a named one, so several services share one admin-only folder but each
+    upgrades to its own path."""
+    return os.path.join(install_dir(), "ser2net.exe" if name == DEFAULT_NAME else f"{name}.exe")
+
+
+def default_service_data_dir(name: str) -> str:
+    """Admin-controlled data directory for a frozen service install (not next to the exe,
+    which would otherwise sit under %ProgramFiles% read-only to the service)."""
+    base = os.path.join(program_data(), INSTALL_SUBDIR)
+    return base if name == DEFAULT_NAME else os.path.join(base, name)
+
+
+def firewall_command(name: str, exe: Optional[str] = None) -> str:
+    """The netsh rule that lets other hosts reach a LocalSystem service (which never sees
+    the interactive Windows Firewall prompt). One program-scoped rule covers the admin UI,
+    every mapping's listen port and the cluster's UDP discovery. Printed as a hint, not
+    applied — the firewall stays closed by default."""
+    if exe is None:
+        exe = (installed_exe_path(name) if getattr(sys, "frozen", False)
+               else os.path.abspath(sys.executable))
+    return (f'netsh advfirewall firewall add rule name="{display_name(name)}" dir=in '
+            f'action=allow program="{exe}" enable=yes')
+
+
+# Access-right bits that let a principal replace or delete a file or add one to a folder
+# (winnt.h). Any of these on the service's exe or its folder is a local-privilege-
+# escalation path when the service runs as LocalSystem.
+FILE_WRITE_DATA = 0x0002
+FILE_APPEND_DATA = 0x0004
+FILE_WRITE_EA = 0x0010
+FILE_DELETE_CHILD = 0x0040
+_DELETE = 0x00010000
+WRITE_DAC = 0x00040000
+WRITE_OWNER = 0x00080000
+GENERIC_WRITE = 0x40000000
+GENERIC_ALL = 0x10000000
+DANGEROUS_RIGHTS = (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_DELETE_CHILD
+                    | _DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL)
+
+# SIDs that are expected to have full control of a system location: SYSTEM, LocalService,
+# NetworkService, the Administrators group. S-1-5-80-* (per-service SIDs, incl.
+# TrustedInstaller) are treated as safe by _is_safe_sid.
+SAFE_SIDS = frozenset({"S-1-5-18", "S-1-5-19", "S-1-5-20", "S-1-5-32-544"})
+
+
+def _is_safe_sid(sid: str) -> bool:
+    return sid in SAFE_SIDS or sid.startswith("S-1-5-80-")
+
+
+def acl_offenders(aces) -> list[str]:
+    """Pure decision table (any OS; the Windows caller reads the ACEs). Given a file/dir's
+    access-control entries as (sid, access_mask, allow), return the sorted SIDs of
+    non-administrator principals left with a right that could replace or delete it —
+    honouring a deny ACE for the same SID. Empty means only admins/SYSTEM can write."""
+    allow: dict[str, int] = {}
+    deny: dict[str, int] = {}
+    for sid, mask, is_allow in aces:
+        (allow if is_allow else deny)[sid] = (allow if is_allow else deny).get(sid, 0) | int(mask)
+    offenders = [sid for sid, mask in allow.items()
+                 if not _is_safe_sid(sid) and (mask & DANGEROUS_RIGHTS & ~deny.get(sid, 0))]
+    return sorted(offenders)
+
+
+# --------------------------------------------------------------------------
 # Windows API (lazy)
 # --------------------------------------------------------------------------
 _api = None
@@ -168,6 +253,9 @@ def _advapi():
                                       w.DWORD, w.LPCWSTR, w.LPCWSTR, w.LPVOID, w.LPCWSTR,
                                       w.LPCWSTR, w.LPCWSTR]),
         "OpenServiceW": (w.HANDLE, [w.HANDLE, w.LPCWSTR, w.DWORD]),
+        "ChangeServiceConfigW": (w.BOOL, [w.HANDLE, w.DWORD, w.DWORD, w.DWORD, w.LPCWSTR,
+                                          w.LPCWSTR, w.LPDWORD, w.LPCWSTR, w.LPCWSTR,
+                                          w.LPCWSTR, w.LPCWSTR]),
         "ChangeServiceConfig2W": (w.BOOL, [w.HANDLE, w.DWORD, w.LPVOID]),
         "StartServiceW": (w.BOOL, [w.HANDLE, w.DWORD, w.LPVOID]),
         "ControlService": (w.BOOL, [w.HANDLE, w.DWORD, ctypes.POINTER(SERVICE_STATUS)]),
@@ -190,6 +278,110 @@ def _advapi():
     return _api
 
 
+def writable_by_non_admins(path: str) -> Optional[list[str]]:
+    """The non-administrator principals (resolved to names where possible) that can
+    replace or delete `path` — [] when only admins/SYSTEM can, None when it can't be
+    determined (an unreadable ACL, or not Windows). Reads the DACL through the Windows
+    API and feeds it to acl_offenders(); callers never hard-fail on None."""
+    if sys.platform != "win32" or not os.path.exists(path):
+        return None
+    from ctypes import wintypes as w
+
+    advapi = _win.WinDLL("advapi32", use_last_error=True)
+    kernel = _win.WinDLL("kernel32", use_last_error=True)
+    SE_FILE_OBJECT = 1
+    DACL_SECURITY_INFORMATION = 0x4
+    advapi.GetNamedSecurityInfoW.restype = w.DWORD
+    advapi.GetNamedSecurityInfoW.argtypes = [w.LPCWSTR, ctypes.c_int, w.DWORD,
+                                             ctypes.c_void_p, ctypes.c_void_p,
+                                             ctypes.POINTER(ctypes.c_void_p),
+                                             ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.GetAclInformation.restype = w.BOOL
+    advapi.GetAclInformation.argtypes = [ctypes.c_void_p, ctypes.c_void_p, w.DWORD, ctypes.c_int]
+    advapi.GetAce.restype = w.BOOL
+    advapi.GetAce.argtypes = [ctypes.c_void_p, w.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.ConvertSidToStringSidW.restype = w.BOOL
+    advapi.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(w.LPWSTR)]
+
+    class ACL_SIZE_INFORMATION(ctypes.Structure):  # noqa: N801
+        _fields_ = [("AceCount", w.DWORD), ("AclBytesInUse", w.DWORD),
+                    ("AclBytesFree", w.DWORD)]
+
+    class ACE_HEADER(ctypes.Structure):  # noqa: N801
+        _fields_ = [("AceType", ctypes.c_ubyte), ("AceFlags", ctypes.c_ubyte),
+                    ("AceSize", w.WORD)]
+
+    class ALLOWED_ACE(ctypes.Structure):  # noqa: N801 (ACCESS_ALLOWED_ACE / _DENIED_ACE share a layout)
+        _fields_ = [("Header", ACE_HEADER), ("Mask", w.DWORD), ("SidStart", w.DWORD)]
+
+    pdacl = ctypes.c_void_p()
+    psd = ctypes.c_void_p()
+    rc = advapi.GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                      None, None, ctypes.byref(pdacl), None, ctypes.byref(psd))
+    if rc != NO_ERROR:
+        return None
+    try:
+        if not pdacl:  # a NULL DACL grants everyone everything
+            return ["Everyone"]
+        info = ACL_SIZE_INFORMATION()
+        if not advapi.GetAclInformation(pdacl, ctypes.byref(info), ctypes.sizeof(info), 2):
+            return None
+        aces, sids = [], []
+        for i in range(info.AceCount):
+            pace = ctypes.c_void_p()
+            if not advapi.GetAce(pdacl, i, ctypes.byref(pace)):
+                return None
+            ace = ctypes.cast(pace, ctypes.POINTER(ALLOWED_ACE)).contents
+            if ace.Header.AceType not in (0, 1):  # ACCESS_ALLOWED_ACE_TYPE / _DENIED_ACE_TYPE
+                continue
+            psid = ctypes.c_void_p(pace.value + ALLOWED_ACE.SidStart.offset)
+            sid_str = w.LPWSTR()
+            if not advapi.ConvertSidToStringSidW(psid, ctypes.byref(sid_str)):
+                return None
+            sid = sid_str.value or ""
+            kernel.LocalFree(sid_str)
+            aces.append((sid, ace.Mask, ace.Header.AceType == 0))
+            sids.append((sid, psid.value))
+        offenders = acl_offenders(aces)
+        return [_sid_display(advapi, dict(sids)[sid], sid) for sid in offenders]
+    finally:
+        kernel.LocalFree(psd)
+
+
+def _sid_display(advapi, psid: int, sid: str) -> str:
+    """A readable 'DOMAIN\\name' for a SID, falling back to the SID string."""
+    from ctypes import wintypes as w
+
+    advapi.LookupAccountSidW.restype = w.BOOL
+    advapi.LookupAccountSidW.argtypes = [w.LPCWSTR, ctypes.c_void_p, w.LPWSTR,
+                                         ctypes.POINTER(w.DWORD), w.LPWSTR,
+                                         ctypes.POINTER(w.DWORD), ctypes.c_void_p]
+    name = ctypes.create_unicode_buffer(256)
+    domain = ctypes.create_unicode_buffer(256)
+    cch_name = w.DWORD(256)
+    cch_domain = w.DWORD(256)
+    use = w.DWORD()
+    if advapi.LookupAccountSidW(None, ctypes.c_void_p(psid), name, ctypes.byref(cch_name),
+                                domain, ctypes.byref(cch_domain), ctypes.byref(use)):
+        return f"{domain.value}\\{name.value}" if domain.value else name.value
+    return sid
+
+
+def _unsafe_locations(paths, log: Callable[[str], None]) -> list[str]:
+    """Of `paths`, those a non-administrator can replace or add files to, each as
+    '<path> (<who>)'. A path whose ACL can't be read is noted via log and skipped."""
+    out = []
+    for p in paths:
+        if not p or not os.path.exists(p):
+            continue
+        who = writable_by_non_admins(p)
+        if who is None:
+            log(f"note: could not check who can modify {p}")
+        elif who:
+            out.append(f"{p} ({', '.join(who)})")
+    return out
+
+
 def _fail(what: str) -> ServiceError:
     err = _win.get_last_error()
     if err == ERROR_ACCESS_DENIED:
@@ -209,49 +401,166 @@ def _wait_state(api, svc, want: int, timeout: float = 30.0) -> int:
         time.sleep(0.3)
 
 
+def _copy_exe_to(dest: str, log: Callable[[str], None]) -> None:
+    """Copy the running frozen exe to the admin-only install path (the caller stopped any
+    service using dest first, so the file is not locked). Best effort to lock the folder
+    down even though %ProgramFiles% is already admin-only."""
+    import shutil
+
+    from .config import lock_down_dir
+
+    src = os.path.abspath(sys.executable)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    lock_down_dir(os.path.dirname(dest))
+    for attempt in range(10):  # a just-stopped service can hold the old exe a moment longer
+        try:
+            shutil.copy2(src, dest)
+            break
+        except PermissionError:
+            if attempt == 9:
+                raise
+            time.sleep(0.3)
+    log(f"installed the program to {dest}")
+
+
+def _service_extras(api, svc, name: str, data_dir: str) -> None:
+    """Description + restart-on-failure actions, shared by a fresh install and an upgrade."""
+    desc = api.SERVICE_DESCRIPTIONW(
+        f"Serial-to-network bridge with a web UI. Data directory: {data_dir}")
+    api.dll.ChangeServiceConfig2W(svc, SERVICE_CONFIG_DESCRIPTION, ctypes.byref(desc))
+    actions = (api.SC_ACTION * 3)(*[api.SC_ACTION(SC_ACTION_RESTART, RESTART_DELAY_MS)] * 3)
+    fa = api.SERVICE_FAILURE_ACTIONSW(86400, None, None, 3, actions)
+    if not api.dll.ChangeServiceConfig2W(svc, SERVICE_CONFIG_FAILURE_ACTIONS, ctypes.byref(fa)):
+        raise _fail("Setting the restart-on-failure actions")
+    flag = api.SERVICE_FAILURE_ACTIONS_FLAG(True)  # also after an exit with an error
+    api.dll.ChangeServiceConfig2W(svc, SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, ctypes.byref(flag))
+
+
+def _guard_location(frozen: bool, allow_unsafe_location: bool,
+                    log: Callable[[str], None]) -> Optional[str]:
+    """For a source checkout, refuse to install when a non-administrator can replace the
+    interpreter, this checkout, app/ or lib/ — the service would run their code as
+    LocalSystem. Returns the exe to register from (a frozen build's admin-only copy), or
+    None for the source path (python + ser2net.py stay where they are)."""
+    if frozen:
+        return None  # install() relocates the exe itself
+    root = os.path.dirname(os.path.abspath(sys.argv[0]))
+    checked = [os.path.dirname(os.path.abspath(sys.executable)), root,
+               os.path.join(root, "app"), os.path.join(root, "lib")]
+    unsafe = _unsafe_locations(checked, log)
+    if unsafe and not allow_unsafe_location:
+        raise ServiceError(
+            "a non-administrator can modify where this runs from, so the LocalSystem "
+            "service would run their code:\n  " + "\n  ".join(unsafe) + "\nMove the "
+            "checkout under an admin-only folder (e.g. %ProgramFiles%\\ser2net), or, if "
+            "this location is trusted, pass --allow-unsafe-location. The standalone exe "
+            "installs itself to an admin-only folder and needs no flag.")
+    if unsafe:
+        log("WARNING: installing although a non-administrator can modify:\n  "
+            + "\n  ".join(unsafe))
+    return None
+
+
+def location_warning() -> Optional[str]:
+    """A WARNING line for the service log when a non-administrator can replace the program
+    this (LocalSystem) service runs — else None. Frozen: the exe itself; source: the
+    interpreter's folder, the checkout and app/ / lib/. Returns None off Windows."""
+    if getattr(sys, "frozen", False):
+        targets = [os.path.abspath(sys.executable)]
+    else:
+        root = os.path.dirname(os.path.abspath(sys.argv[0]))
+        targets = [os.path.dirname(os.path.abspath(sys.executable)), root,
+                   os.path.join(root, "app"), os.path.join(root, "lib")]
+    unsafe = _unsafe_locations(targets, lambda *_: None)
+    if not unsafe:
+        return None
+    return ("WARNING: a non-administrator can modify where this service runs from, so "
+            "they could run code as LocalSystem: " + "; ".join(unsafe) + " — reinstall "
+            "the standalone exe (it installs itself to an admin-only folder) or move the "
+            "checkout under %ProgramFiles%")
+
+
 def install(name: str, data_dir: str, config: Optional[str] = None, start: bool = True,
-            log: Callable[[str], None] = print) -> None:
+            log: Callable[[str], None] = print, *, frozen: Optional[bool] = None,
+            allow_unsafe_location: bool = False) -> None:
     api = _advapi()
     name = check_name(name)
-    cmd = service_command(name, data_dir, config)
+    frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    _guard_location(frozen, allow_unsafe_location, log)
+    # A frozen build registers (and, when upgrading, copies itself to) an admin-only
+    # path under %ProgramFiles%, so a non-administrator can't replace the exe the
+    # LocalSystem service runs. A source checkout stays where it is (guarded above).
+    dest = installed_exe_path(name) if frozen else None
+    cmd = (service_command(name, data_dir, config, frozen=frozen, executable=dest) if dest
+           else service_command(name, data_dir, config, frozen=frozen))
+    already_installed = dest is not None and os.path.abspath(sys.executable) == os.path.abspath(dest)
+
     scm = api.dll.OpenSCManagerW(None, None, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE)
     if not scm:
         raise _fail("Opening the Service Control Manager")
     try:
+        existing = api.dll.OpenServiceW(
+            scm, name, SERVICE_QUERY_STATUS | SERVICE_START | SERVICE_STOP
+            | SERVICE_CHANGE_CONFIG | DELETE)
+        if existing:  # upgrade in place: stop it, replace the exe, point it at cmd, start
+            try:
+                _upgrade(api, existing, name, data_dir, config, cmd, dest, already_installed,
+                         start, log)
+            finally:
+                api.dll.CloseServiceHandle(existing)
+            return
+        if dest and not already_installed:
+            _copy_exe_to(dest, log)
         svc = api.dll.CreateServiceW(
             scm, name, display_name(name),
             SERVICE_QUERY_STATUS | SERVICE_START | SERVICE_STOP | SERVICE_CHANGE_CONFIG | DELETE,
             SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
             cmd, None, None, None, None, None)  # LocalSystem
         if not svc:
-            if _win.get_last_error() == ERROR_SERVICE_EXISTS:
-                raise ServiceError(f"A service named '{name}' already exists. Remove it first "
-                                   f"with --uninstall-service, or pick another --service-name.")
             raise _fail("Creating the service")
         try:
-            desc = api.SERVICE_DESCRIPTIONW(
-                f"Serial-to-network bridge with a web UI. Data directory: {data_dir}")
-            api.dll.ChangeServiceConfig2W(svc, SERVICE_CONFIG_DESCRIPTION, ctypes.byref(desc))
-            actions = (api.SC_ACTION * 3)(*[api.SC_ACTION(SC_ACTION_RESTART, RESTART_DELAY_MS)] * 3)
-            fa = api.SERVICE_FAILURE_ACTIONSW(86400, None, None, 3, actions)
-            if not api.dll.ChangeServiceConfig2W(svc, SERVICE_CONFIG_FAILURE_ACTIONS, ctypes.byref(fa)):
-                raise _fail("Setting the restart-on-failure actions")
-            flag = api.SERVICE_FAILURE_ACTIONS_FLAG(True)  # also after an exit with an error
-            api.dll.ChangeServiceConfig2W(svc, SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, ctypes.byref(flag))
+            _service_extras(api, svc, name, data_dir)
             log(f"service '{name}' installed: starts at boot, restarts {RESTART_DELAY_MS // 1000} s "
                 f"after a failure\n  command: {cmd}")
             if start:
-                if not api.dll.StartServiceW(svc, 0, None):
-                    raise _fail("Starting the service")
-                state = _wait_state(api, svc, SERVICE_RUNNING)
-                if state != SERVICE_RUNNING:
-                    raise ServiceError(f"The service did not reach RUNNING (state {state}); "
-                                       f"see {os.path.join(data_dir, 'all.log')}.")
-                log(f"service '{name}' is running")
+                _start_and_wait(api, svc, name, data_dir, log)
         finally:
             api.dll.CloseServiceHandle(svc)
     finally:
         api.dll.CloseServiceHandle(scm)
+
+
+def _upgrade(api, svc, name: str, data_dir: str, config: Optional[str], cmd: str,
+             dest: Optional[str], already_installed: bool, start: bool,
+             log: Callable[[str], None]) -> None:
+    """Re-point an existing service at the current build and restart it (no uninstall, so
+    the service keeps its identity and dependents)."""
+    st = api.SERVICE_STATUS()
+    if api.dll.ControlService(svc, SERVICE_CONTROL_STOP, ctypes.byref(st)):
+        _wait_state(api, svc, SERVICE_STOPPED)
+        log(f"service '{name}' stopped for the upgrade")
+    elif _win.get_last_error() not in (ERROR_SERVICE_NOT_ACTIVE, NO_ERROR):
+        raise _fail("Stopping the service to upgrade it")
+    if dest and not already_installed:  # the old copy is now unlocked
+        _copy_exe_to(dest, log)
+    if not api.dll.ChangeServiceConfigW(svc, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START,
+                                        SERVICE_ERROR_NORMAL, cmd, None, None, None, None, None,
+                                        display_name(name)):
+        raise _fail("Updating the service configuration")
+    _service_extras(api, svc, name, data_dir)
+    log(f"service '{name}' upgraded in place\n  command: {cmd}")
+    if start:
+        _start_and_wait(api, svc, name, data_dir, log)
+
+
+def _start_and_wait(api, svc, name: str, data_dir: str, log: Callable[[str], None]) -> None:
+    if not api.dll.StartServiceW(svc, 0, None):
+        raise _fail("Starting the service")
+    state = _wait_state(api, svc, SERVICE_RUNNING)
+    if state != SERVICE_RUNNING:
+        raise ServiceError(f"The service did not reach RUNNING (state {state}); "
+                           f"see {os.path.join(data_dir, 'all.log')}.")
+    log(f"service '{name}' is running")
 
 
 def uninstall(name: str, log: Callable[[str], None] = print) -> None:
@@ -281,6 +590,19 @@ def uninstall(name: str, log: Callable[[str], None] = print) -> None:
             api.dll.CloseServiceHandle(svc)
     finally:
         api.dll.CloseServiceHandle(scm)
+    # best effort: drop the exe this service's install copied into %ProgramFiles%\ser2net
+    # (the running copy is unlocked once the service process has exited)
+    dest = installed_exe_path(name)
+    if os.path.isfile(dest):
+        for _ in range(10):
+            try:
+                os.remove(dest)
+                log(f"removed {dest}")
+                break
+            except FileNotFoundError:
+                break
+            except OSError:
+                time.sleep(0.3)
 
 
 def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:

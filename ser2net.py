@@ -83,6 +83,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     svc.add_argument("--service-name", default="ser2net",
                      help="Name of the Windows service (default: ser2net); lets several "
                           "instances with different data directories run side by side.")
+    svc.add_argument("--allow-unsafe-location", action="store_true",
+                     help="Install the service from a source checkout even if a "
+                          "non-administrator can modify it (the standalone exe never needs "
+                          "this: it installs itself to an admin-only folder).")
     svc.add_argument("--service", action="store_true", help=argparse.SUPPRESS)  # used by the SCM
     p.add_argument(
         "--healthcheck",
@@ -200,6 +204,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.about:
         return print_about()
 
+    # A frozen Windows service keeps its data under %ProgramData% (admin-controlled),
+    # not next to the exe in the admin-only %ProgramFiles% install folder. Only when the
+    # user didn't pass a --data-dir of their own; existing services keep what they have.
+    if (args.install_service and FROZEN and os.name == "nt"
+            and os.path.abspath(args.data_dir) == os.path.abspath(os.path.join(_app_dir(), "data"))):
+        from app import winservice
+
+        args.data_dir = winservice.default_service_data_dir(args.service_name)
+
     # 2. resolve config path
     config_path = args.config or os.path.join(args.data_dir, "config.json")
 
@@ -216,13 +229,30 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         data_dir = os.path.abspath(args.data_dir)
         config = os.path.abspath(args.config) if args.config else None
+        # another instance already using this data directory would clash with the
+        # service we install (and with the first-run save below). Only test the lock
+        # here — the service, once started, is the one that holds it.
+        from app import datalock
+
+        pid = datalock.holder(data_dir)
+        if pid is not None:
+            who = f"process {pid}" if pid else "another process"
+            print(f"ser2net: {who} is already running with the data directory {data_dir}. "
+                  "Stop it first (a service: sc stop <name>), or install with a different "
+                  "--data-dir.", file=sys.stderr)
+            return 1
         # first run: asks for the UI address; warnings (e.g. a setting that was not saved)
         # would otherwise only reach the service's log
         _store, loaded = runtime.prepare_config(config_path, args.reconfigure)
         for note in loaded.load_notes:
             _write_utf8(note + "\n")
         runtime.require_admin_tls(loaded.admin_ui)  # the service could not start without it
-        return _service_call(lambda ws: ws.install(args.service_name, data_dir, config))
+        rc = _service_call(lambda ws: ws.install(
+            args.service_name, data_dir, config,
+            allow_unsafe_location=args.allow_unsafe_location))
+        if rc == 0:
+            _print_firewall_hint(loaded, args.service_name)
+        return rc
     if args.service:
         from app import winservice
 
@@ -230,6 +260,27 @@ def main(argv: list[str] | None = None) -> int:
                               lambda: runtime.service_main(config_path),
                               runtime.request_shutdown)
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
+
+
+def _print_firewall_hint(config, service_name: str) -> None:
+    """A LocalSystem service never sees the Windows Firewall prompt, so other hosts can't
+    reach the admin UI, the mapping ports or the cluster until a rule is added. Print the
+    exact command when anything listens beyond loopback (the firewall is not opened for
+    the user: secure by default)."""
+    admin = config.admin_ui
+    beyond_loopback = admin.bind_ip not in ("127.0.0.1", "::1", "localhost") or any(
+        m.enabled and getattr(m.network, "listens", False)
+        and m.network.bind_ip not in ("127.0.0.1", "::1") for m in config.mappings)
+    if not beyond_loopback:
+        return
+    from app import winservice
+
+    _write_utf8(
+        "\nWindows Firewall: this service listens for other hosts, which the firewall "
+        "blocks until you allow it (a service gets no prompt). From an elevated prompt:\n  "
+        + winservice.firewall_command(service_name) + "\n  (remove it later with: "
+        f'netsh advfirewall firewall delete rule name="{winservice.display_name(service_name)}")'
+        "\nSee docs/WINDOWS.md.\n")
 
 
 def _service_call(fn) -> int:
