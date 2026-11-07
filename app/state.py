@@ -22,6 +22,7 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
+from . import accounts
 from .config import AppConfig, ConfigStore, lock_down_dir, mapping_file, valid_mapping_id
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
@@ -41,6 +42,29 @@ AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup 
 
 # control characters (incl. tab / CR / LF) that must not reach an audit record
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
+                       user: str = "") -> None:
+    """Append one record to the audit log at `path`: one line, tab-separated: time,
+    client IP, action, detail, user (the user column was added in v2.8 — older lines
+    have four fields). Control characters in any field become spaces, so a crafted
+    mapping name can't forge an extra record. Rotated past AUDIT_LOG_MAX_BYTES (one
+    backup kept). Best effort: never raises."""
+    fields = [time.strftime("%Y-%m-%d %H:%M:%S"), actor_ip, action, detail[:500], user]
+    line = "\t".join(_CONTROL.sub(" ", str(f)) for f in fields)
+    try:
+        # size-based rotation (keep one backup) so audit.log can't grow forever
+        if os.path.getsize(path) > AUDIT_LOG_MAX_BYTES:
+            with _suppress(OSError):
+                os.replace(path, path + ".1")
+    except OSError:
+        pass  # file doesn't exist yet
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
 
 
 def _parse_log_ts(line: str) -> float | None:
@@ -121,6 +145,7 @@ class AppState:
         # the admin UI listener's connection guard (runtime.py; None in tests without one)
         self.admin_guard: Any = None
         self._maint_task: asyncio.Task | None = None
+        self._requests_task: asyncio.Task | None = None
         # per-mapping logs can contain raw serial traffic; keep the logs dir private
         # on both platforms (POSIX 0700 / Windows owner-only ACL).
         for d in (self.logs_dir, self.traces_dir):
@@ -162,25 +187,9 @@ class AppState:
         return os.path.join(self.data_dir, "audit.log")
 
     def audit(self, actor_ip: str, action: str, detail: str = "", user: str = "") -> None:
-        """Append a config-change audit record, separate from all.log. One line per
-        record, tab-separated: time, client IP, action, detail, user (the user column
-        was added in v2.8 — older lines have four fields). Control characters in any
-        field become spaces, so a crafted mapping name can't forge an extra record."""
-        fields = [time.strftime("%Y-%m-%d %H:%M:%S"), actor_ip, action, detail[:500], user]
-        line = "\t".join(_CONTROL.sub(" ", str(f)) for f in fields)
-        apath = self.audit_path
-        try:
-            # size-based rotation (keep one backup) so audit.log can't grow forever
-            if os.path.getsize(apath) > AUDIT_LOG_MAX_BYTES:
-                with _suppress(OSError):
-                    os.replace(apath, apath + ".1")
-        except OSError:
-            pass  # file doesn't exist yet
-        try:
-            with open(apath, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except OSError:
-            pass
+        """Append a config-change audit record (write_audit_record), separate from
+        all.log, and note it in all.log."""
+        write_audit_record(self.audit_path, actor_ip, action, detail, user)
         who = f" by {user}" if user else ""
         self._logger.info(_CONTROL.sub(" ", f"AUDIT {actor_ip} {action} {detail}{who}").rstrip())
 
@@ -341,6 +350,40 @@ class AppState:
             await self.run_log_maintenance()
             await asyncio.sleep(LOG_MAINTENANCE_INTERVAL)
 
+    # ---------------- `ser2net --set-password` / `--sign-out-all` while running ----------------
+    async def _account_requests_loop(self) -> None:
+        while True:
+            await asyncio.sleep(accounts.POLL_S)
+            try:
+                await self.handle_account_requests()
+            except Exception as e:  # never let a bad request end the loop
+                self.log(f"command-line request failed: {e}")
+
+    async def handle_account_requests(self) -> None:
+        """Apply what the command line left in <data>/admin-requests/ (app/accounts.py)."""
+        for request_id, request in await asyncio.to_thread(accounts.take_requests, self.data_dir):
+            ok, message = await self._apply_account_request(request)
+            await asyncio.to_thread(accounts.answer, self.data_dir, request_id, ok, message)
+
+    async def _apply_account_request(self, request) -> tuple[bool, str]:
+        if request is None:
+            return False, "the request was unreadable or too old; run the command again"
+        async with self.config_lock:
+            try:
+                change = accounts.apply(self.config, request)
+            except accounts.AccountError as e:
+                return False, str(e)
+            try:  # like the command itself: an unrelated bad setting must not block this
+                await asyncio.to_thread(self.store.save, self.config, validate=False)
+            except OSError as e:
+                change.undo()
+                return False, f"could not save config.json: {e}"
+        if change.action == "sessions_revoke_all":
+            self.revoked_sessions.clear()  # signed with the old key: dead anyway
+        self.log(f"command line: {change.message}")
+        self.audit("local", change.action, change.detail, user=accounts.ACTOR)
+        return True, change.message
+
     def save(self) -> None:
         """Persist config atomically (validates first; raises ConfigError on bad config)."""
         self.store.save(self.config)
@@ -359,13 +402,16 @@ class AppState:
         await self.notifier.start()
         # run an immediate pass, then hourly, to enforce log retention
         self._maint_task = asyncio.create_task(self._log_maintenance_loop(), name="log-maintenance")
+        self._requests_task = asyncio.create_task(self._account_requests_loop(),
+                                                  name="account-requests")
 
     async def stop_engine(self) -> None:
-        if self._maint_task is not None:
-            self._maint_task.cancel()
-            with _suppress(asyncio.CancelledError):
-                await self._maint_task
-            self._maint_task = None
+        for task in (self._maint_task, self._requests_task):
+            if task is not None:
+                task.cancel()
+                with _suppress(asyncio.CancelledError):
+                    await task
+        self._maint_task = self._requests_task = None
         await self.notifier.stop()
         await self.cluster.stop()
         await self.supervisor.stop_all()
