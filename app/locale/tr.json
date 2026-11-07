@@ -813,5 +813,6 @@
   "Not saved: the CA certificate file {0} holds no certificate (PEM or DER).": "Kaydedilmedi: CA sertifika dosyası {0} hiç sertifika içermiyor (PEM ya da DER).",
   "Server certificate check": "Sunucu sertifikası denetimi",
   "There is a local account named {0} here, so you can't sign in under that name with SSO or a directory account. Sign in with that account’s password, or ask an admin to delete the local account first.": "Burada {0} adında yerel bir hesap var; bu yüzden bu adla SSO ya da dizin hesabıyla giriş yapamazsın. O hesabın parolasıyla giriş yap ya da bir admin'den önce yerel hesabı silmesini iste.",
-  "Your user name from the directory or the identity provider can’t be used here; an admin can see why in all.log.": "Dizinden ya da kimlik sağlayıcıdan gelen kullanıcı adın burada kullanılamıyor; nedenini bir admin all.log'da görebilir."
+  "Your user name from the directory or the identity provider can’t be used here; an admin can see why in all.log.": "Dizinden ya da kimlik sağlayıcıdan gelen kullanıcı adın burada kullanılamıyor; nedenini bir admin all.log'da görebilir.",
+  "Its accounts in another letter case were deleted too: {0}.": "Başka büyük/küçük harfle yazılmış hesapları da silindi: {0}."
 }

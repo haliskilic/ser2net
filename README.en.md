@@ -426,7 +426,12 @@ worked out from their groups at every sign-in. Local accounts come first: an LDA
 sign-in under the name of a local account (letter case aside) is refused and written to
 all.log and the audit log (`ldap_login_denied` / `oidc_login_denied`); it never takes over
 the local account, turns it into an SSO account or demotes it. To move someone from a local
-account to SSO, delete the local account first (another admin must remain). An LDAP/OIDC
+account to SSO, delete the local account first (another admin must remain). Like
+directories, ser2net ignores letter case in LDAP names (Turkish İ/ı too): `hkilic`, `Hkilic`
+and `HKILIC` are one account; the accounts earlier versions made for each spelling merge at
+that person's next sign-in (the other spellings' sessions end), and *Sign out* and *Delete*
+cover all of them. OIDC names are compared exactly. A new local account's name can't differ
+from an existing one only in letter case. An LDAP/OIDC
 name can be any printable text (`CORP\jdoe`, `jdoe@corp.local`, names with `/` or `#`;
 such accounts can be signed out and deleted in the Users panel too); a sign-in under a name
 with control or invisible characters, longer than 255 characters or in parentheses is

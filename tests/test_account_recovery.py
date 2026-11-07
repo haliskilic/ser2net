@@ -74,6 +74,8 @@ def test_apply():
     ch.undo()
     assert cfg.get_user("rescue") is None
     for bad in ({"action": "set_password", "username": "jdoe", "password_hash": h},
+                {"action": "set_password", "username": "JDoe", "password_hash": h},
+                {"action": "set_password", "username": "ADMIN", "password_hash": h},
                 {"action": "set_password", "username": "a/b", "password_hash": h},
                 {"action": "set_password", "username": "admin", "password_hash": "plain text"},
                 {"action": "drop_tables"}):
@@ -88,8 +90,13 @@ def test_apply():
     assert cfg.secret_key != key
     first = accounts.apply(AppConfig(), {"action": "set_password", "username": "boss", "password_hash": h})
     assert first.first_admin and first.action == "first_run_setup"
-    print("apply: set (+1 version) / create admin / undo; LDAP account, bad name or hash refused; "
-          "new session key  OK")
+    try:
+        accounts.apply(cfg, {"action": "set_password", "username": "Admin", "password_hash": h})
+    except accounts.AccountError as e:
+        assert "there is a local account 'admin' (another letter case)" in str(e), e
+    assert [u.username for u in cfg.users] == ["admin", "jdoe"]
+    print("apply: set (+1 version) / create admin / undo; LDAP account (any letter case), a "
+          "name differing only in case, bad name or hash refused; new session key  OK")
 
 
 def test_request_files():

@@ -10,6 +10,9 @@ repeats), or fails with SER2NET_OPTIONAL_TESTS=1.
     with `ser2net --set-password`), and Settings shows it until that section is saved;
   * an existing LDAP/OIDC account whose groups give no role any more is signed out
     everywhere at its next sign-in — once: further refused tries don't save again;
+  * an LDAP name in any letter case is one account: earlier versions' accounts for
+    other spellings are merged at the next sign-in (their sessions end; a refused
+    sign-in ends them too), and the log and audit name the account, not what was typed;
   * the AD direct-bind template {username}@corp.local reads the user's groups; a
     Turkish group name typed in another letter case gives its role; a sign-in that
     gets the default role logs the user's groups;
@@ -143,17 +146,19 @@ def ldap_form(d, **fields):
 
 def test_ldap():
     with ad_directory() as d:
-        config = {"users": [local_admin(), shadow("jdoe", "ldap", 5)],
+        # JDoe: what an earlier version made of a sign-in typed with a capital J
+        config = {"users": [local_admin(), shadow("jdoe", "ldap", 5), shadow("JDoe", "ldap", 11)],
                   "ldap": {"enabled": True, "server_uri": d.uri,
                            "user_dn_template": TEMPLATE, "admin_group": "admins",
                            "operator_group": "bilgi işlem", "default_role": ""}}
         with Server(config) as srv:
+            assert "LDAP accounts 'jdoe', 'JDoe' are one directory user" in all_log(srv)
             local_name_refused(srv)
             print("LDAP: a sign-in under a local account's name (any letter case) is refused; "
                   "the local admin stays as it was  OK")
 
-            old = session_for(srv, "jdoe", 5)
-            assert signed_in(srv, old)
+            old, capital = session_for(srv, "jdoe", 5), session_for(srv, "JDoe", 11)
+            assert signed_in(srv, old) and signed_in(srv, capital)
 
             # "admins" is only part of the group name ser2net-admins: refused
             st, _, page = Browser(srv.base).post("/login", {"username": "jdoe",
@@ -170,9 +175,10 @@ def test_ldap():
             assert "LDAP: 'jdoe' signed out everywhere" in log, log[-2000:]
             print("LDAP: a setting that is only part of a group name is refused and logged  OK")
 
-            # ...and the sessions the account still had are over, saved once
+            # ...and the sessions the account still had are over (in any spelling), saved once
             assert not signed_in(srv, old), "the refused account kept its session"
-            assert user_of(srv, "jdoe")["pwd_version"] == 6
+            assert not signed_in(srv, capital), "another spelling kept its session"
+            assert user_of(srv, "jdoe")["pwd_version"] == 6 and user_of(srv, "JDoe")["pwd_version"] == 12
             saved = backups(srv)
             st, _, _ = Browser(srv.base).post("/login", {"username": "jdoe", "password": "pw-jdoe"})
             assert st == 401 and user_of(srv, "jdoe")["pwd_version"] == 6
@@ -199,6 +205,19 @@ def test_ldap():
             assert "LDAP settings saved." in page and "only as part of its name" not in page
             Browser(srv.base).login("jdoe", "pw-jdoe")
             assert user_of(srv, "jdoe")["role"] == "admin"
+            # one account in any letter case: JDoe went at that sign-in, JDOE is jdoe
+            assert [u["username"] for u in srv.saved_config()["users"]
+                    if u["username"].lower() == "jdoe"] == ["jdoe"], srv.saved_config()["users"]
+            logins = all_log(srv).count("login: jdoe (admin, ldap) from")
+            phone = Browser(srv.base)
+            phone.login("JDOE", "pw-jdoe")
+            assert len(srv.saved_config()["users"]) == 3, srv.saved_config()["users"]
+            assert signed_in(srv, phone.cookie("ser2net_session").value)
+            assert all_log(srv).count("login: jdoe (admin, ldap) from") == logins + 1
+            assert "login: JDOE" not in all_log(srv) and "\tJDOE\n" not in audit_log(srv)
+            assert audit_log(srv).count("\tlogin\tadmin, ldap\tjdoe\n") == 2, audit_log(srv)
+            print("LDAP: a name in any letter case signs in to the one account (earlier "
+                  "spellings merged, logged under its name)  OK")
             Browser(srv.base).login("mehmet", "pw-mehmet")
             assert user_of(srv, "mehmet")["role"] == "viewer"
             assert ("LDAP login for 'mehmet': no group setting matches their groups: "

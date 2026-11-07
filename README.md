@@ -439,7 +439,12 @@ belirlenir. Yerel hesaplar önce gelir: adı (büyük/küçük harf fark etmeksi
 hesabın adı olan bir LDAP/OIDC girişi reddedilir, all.log'a ve denetim kaydına
 (`ldap_login_denied` / `oidc_login_denied`) yazılır; böyle bir giriş yerel hesabı asla
 devralmaz, SSO hesabına çevirmez ya da rolünü düşürmez. Birini yerel hesaptan SSO'ya
-taşımak için önce yerel hesabını silin (başka bir admin kalmalı). LDAP/OIDC adı yazdırılabilir
+taşımak için önce yerel hesabını silin (başka bir admin kalmalı). Dizinler gibi ser2net de
+LDAP adlarında büyük/küçük harfe bakmaz (Türkçe İ/ı dahil): `hkilic`, `Hkilic` ve `HKILIC` tek
+hesaptır; eski sürümlerin her yazılış için açtığı hesaplar o kişinin bir sonraki girişinde
+birleşir (diğer yazılışların oturumları kapanır), *Oturumları kapat* ve *Sil* hepsine
+uygulanır. OIDC adları birebir karşılaştırılır. Yeni bir yerel hesabın adı mevcut bir adla
+yalnızca büyük/küçük harfte ayrılamaz. LDAP/OIDC adı yazdırılabilir
 her metin olabilir (`CORP\jdoe`, `jdoe@corp.local`, `/` ya da `#` içeren adlar; bu hesaplar
 da Kullanıcılar panelinden kapatılıp silinebilir); denetim karakteri ya da görünmez karakter
 içeren, 255 karakterden uzun ya da parantez içindeki bir adla giriş reddedilir (nedeni

@@ -89,6 +89,14 @@ def _set_password(config, username: str, password_hash: str) -> Change:
     if not auth.is_password_hash(password_hash):
         raise AccountError("the request carries no valid password hash")
     user = config.get_user(username)
+    if user is None and (taken := config.named(username)):
+        # names that differ only in letter case are one name for LDAP, and easily mistaken
+        other = taken[0]
+        if other.source == "local":
+            raise AccountError(f"there is a local account '{other.username}' (another letter "
+                               f"case); run the command with that name")
+        raise AccountError(f"'{other.username}' is an {other.source.upper()} account (letter "
+                           "case aside); give a new local admin account another name")
     if user is None:
         first = not config.users
         new = User(username=username, password_hash=password_hash, role="admin",

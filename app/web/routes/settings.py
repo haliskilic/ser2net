@@ -124,17 +124,29 @@ def routes(ctx: Ctx) -> list:
         set_session(resp, request, user)
         return resp
 
+    def _spellings(target) -> list:
+        """The other accounts of an LDAP user, in another letter case (made by earlier
+        versions, one per spelling; a sign-in now merges them): signing out or deleting
+        that user covers them too."""
+        if target.source != "ldap":
+            return []
+        return [u for u in state.config.external_accounts(target.username, "ldap")
+                if u is not target]
+
     async def _bump_sessions(username: str):
         """Sign every session of `username` out (pwd_version + 1). Returns the user, or
         an error text. Caller holds config_lock."""
         target = state.config.get_user(username)
         if target is None:
             return None, _("User not found.")
-        target.pwd_version += 1
+        accounts = [target, *_spellings(target)]
+        for u in accounts:
+            u.pwd_version += 1
         try:
             await state.asave()
         except ConfigError as e:
-            target.pwd_version -= 1
+            for u in accounts:
+                u.pwd_version -= 1
             return None, str(e)
         return target, None
 
@@ -415,6 +427,14 @@ def routes(ctx: Ctx) -> list:
         return cfg.admin_count() <= 1 or (cfg.source_enabled(target)
                                           and cfg.usable_admin_count() <= 1)
 
+    def _leaves_no_admin(gone) -> bool:
+        """Would deleting these accounts leave no admin, or none who can sign in?"""
+        cfg = state.config
+        admins = [u for u in gone if u.role == "admin"]
+        rest = [u for u in cfg.users if u.role == "admin" and not any(u is g for g in gone)]
+        return bool(admins) and (not rest or (any(cfg.source_enabled(u) for u in admins)
+                                              and not any(cfg.source_enabled(u) for u in rest)))
+
     async def settings_users_create(request):
         if deny := require_role(request, "admin"):
             return deny
@@ -424,15 +444,23 @@ def routes(ctx: Ctx) -> list:
         username = (form.get("username") or "").strip()
         role = form.get("role", "viewer")
         pw, pw2 = form.get("password", ""), form.get("password2", "")
+
+        def taken():
+            """Also an account of this name in another letter case: LDAP names compare
+            that way, and two names that differ only in case are easily mistaken."""
+            other = state.config.named(username)
+            return _("User '{0}' already exists.").format(other[0].username) if other else None
+
         err = (_username_problem(username)
                or (None if role in ROLES else _("Invalid role."))
-               or _password_problem(pw, pw2))
-        if not err and state.config.get_user(username):
-            err = _("User '{0}' already exists.").format(username)
+               or _password_problem(pw, pw2)
+               or taken())
         if err:
             return await settings_get(request, error=err)
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
         async with state.config_lock:
+            if err := taken():  # created while the password was hashed
+                return await settings_get(request, error=err)
             state.config.users.append(User(username=username, password_hash=pw_hash,
                                            role=role, pwd_version=new_pwd_version()))
             await state.asave()
@@ -478,11 +506,20 @@ def routes(ctx: Ctx) -> list:
                 return await settings_get(request, error=_("You cannot delete your own account."))
             if target.role == "admin" and _last_admin(target):
                 return await settings_get(request, error=_("Cannot delete the last admin."))
-            state.config.users = [u for u in state.config.users if u.username != username]
+            others = [u for u in _spellings(target) if not _is_me(request, u.username)]
+            if others and _leaves_no_admin([target, *others]):
+                return await settings_get(request, error=_("Cannot delete the last admin."))
+            gone = [target, *others]
+            state.config.users = [u for u in state.config.users if not any(u is g for g in gone)]
             await state.asave()
-        state.log(f"user deleted: {username}")
-        ctx.audit(request, "user_delete", username)
-        return await settings_get(request, ok=_("User '{0}' deleted.").format(username))
+        for u in gone:
+            state.log(f"user deleted: {u.username}")
+            ctx.audit(request, "user_delete", u.username)
+        ok = _("User '{0}' deleted.").format(username)
+        if others:
+            ok += " " + _("Its accounts in another letter case were deleted too: {0}.").format(
+                ", ".join(u.username for u in others))
+        return await settings_get(request, ok=ok)
 
     async def settings_users_signout(request):
         if deny := require_role(request, "admin"):
