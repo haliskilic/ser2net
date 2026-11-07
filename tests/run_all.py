@@ -48,6 +48,7 @@ PORTABLE = [
     "test_modbus_frame.py",
     "test_modbus_gateway.py",
     "test_rbac.py",
+    "test_route_access.py",   # every route and WebSocket against the access matrix
     "test_mqtt_pub.py",
     "test_modbus_poll.py",
     "test_ldap.py",
