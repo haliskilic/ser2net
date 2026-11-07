@@ -792,10 +792,16 @@ class LdapSettings:
     default_role applies when authenticated but in no mapped group (empty => deny). A
     group setting is a group's whole name (its CN) or DN, compared without regard to
     letter case (ldap_auth.group_matches). nested_groups (Active Directory) also
-    counts the groups a user is in through other groups."""
+    counts the groups a user is in through other groups.
+    TLS (ldaps:// or StartTLS): the server's certificate must chain to a CA the system
+    trusts — or, with ca_file set, to one in that file only (PEM or DER) — and name the
+    host in server_uri (ldap_auth.tls_context). tls_verify=False skips the check
+    (insecure)."""
     enabled: bool = False
     server_uri: str = ""             # ldap://host:389 or ldaps://host:636
     start_tls: bool = False
+    tls_verify: bool = True          # check the server's certificate (LDAPS / StartTLS)
+    ca_file: str = ""                # CA certificate(s) to trust instead of the system's
     user_dn_template: str = ""       # direct-bind template (mutually exclusive with search)
     bind_dn: str = ""                # service account for search+bind
     bind_password: str = ""
@@ -813,6 +819,17 @@ class LdapSettings:
         d = dict(d or {})
         known = {f.name for f in dataclasses.fields(LdapSettings)}
         return LdapSettings(**{k: v for k, v in d.items() if k in known})
+
+    @property
+    def uses_tls(self) -> bool:
+        """ldaps://, or StartTLS: the bind passwords travel encrypted."""
+        return self.server_uri.strip().lower().startswith("ldaps://") or bool(self.start_tls)
+
+    @property
+    def sends_plaintext(self) -> bool:
+        """Passwords over the network unencrypted: neither ldaps:// nor StartTLS, and no
+        ldapi:// (a local socket)."""
+        return not (self.uses_tls or self.server_uri.strip().lower().startswith("ldapi://"))
 
     def validate(self) -> None:
         if not self.enabled:
@@ -1131,6 +1148,14 @@ class AppConfig:
         )
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
+        if cfg.ldap.enabled and cfg.ldap.uses_tls and "tls_verify" not in (d.get("ldap") or {}):
+            cfg.load_notes.append(
+                "LDAP: the directory server's certificate is now checked (LDAPS / StartTLS): "
+                "it must come from a CA this system trusts and name the host in the server "
+                "URI. If LDAP sign-in fails with a certificate error, all.log says why; for a "
+                "private CA (Active Directory Certificate Services) or a self-signed "
+                "certificate, set Settings → LDAP / Active Directory → CA certificate file "
+                "(ldap.ca_file). Local accounts are not affected.")
         for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
             old_id = (raw or {}).get("id")
             if old_id and old_id != m.id:

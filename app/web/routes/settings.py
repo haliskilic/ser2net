@@ -24,7 +24,7 @@ from ...config import (
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
-from .. import auth, selfsigned
+from .. import auth, ldap_auth, selfsigned
 from .common import Ctx, csrf_failed
 from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
@@ -69,6 +69,7 @@ def routes(ctx: Ctx) -> list:
                       new_api_token=new_api_token, new_cluster_key=new_cluster_key,
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       ldap=state.config.ldap, ldap_problem=ldap_problem,
+                      ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,
                       group_warnings={src: [w for (s, _k), w in sorted(state.group_warnings.items())
                                             if s == src] for src in ("ldap", "oidc")},
@@ -318,6 +319,19 @@ def routes(ctx: Ctx) -> list:
                            "off.").format(name)
         return ""
 
+    def _ca_file_problem(ldap) -> str | None:
+        """Checked when the LDAP form is saved: the CA certificate file can be read and
+        holds a certificate."""
+        if not (ldap.tls_verify and ldap.ca_file.strip()):
+            return None
+        try:
+            ldap_auth.tls_context(ldap)
+        except ldap_auth.CaFileError as e:
+            return (_("Not saved: the CA certificate file {0} can't be read.") if e.unreadable
+                    else _("Not saved: the CA certificate file {0} holds no certificate (PEM "
+                           "or DER).")).format(e.path)
+        return None
+
     def _clear_group_warnings(source: str) -> None:
         """Saving that section answers its group-setting warnings (a sign-in that still
         matches only part of a group name shows a new one)."""
@@ -334,7 +348,8 @@ def routes(ctx: Ctx) -> list:
             old = state.config.ldap
             before = state.config.usable_admin_count()
             state.config.ldap = _ldap_from_form(form, old)
-            if problem := _directory_off_problem(before, "LDAP"):
+            if problem := (_directory_off_problem(before, "LDAP")
+                           or _ca_file_problem(state.config.ldap)):
                 state.config.ldap = old
                 return await settings_get(request, error=problem)
             try:
@@ -343,7 +358,12 @@ def routes(ctx: Ctx) -> list:
                 state.config.ldap = old
                 return await settings_get(request, error=str(e))
         _clear_group_warnings("ldap")
+        state.ldap_tls_problem = None   # answered; the next failing sign-in shows it again
         state.log(f"LDAP settings updated (enabled={state.config.ldap.enabled})")
+        if old.tls_verify != state.config.ldap.tls_verify:
+            state.log("WARNING: LDAP: the directory server's certificate is no longer checked "
+                      "(insecure)" if old.tls_verify else
+                      "LDAP: the directory server's certificate is checked again")
         ctx.audit(request, "ldap_settings",
                     "enabled" if state.config.ldap.enabled else "disabled")
         return await settings_get(request, ok=_("LDAP settings saved.")
@@ -1040,6 +1060,8 @@ def _setting_changes(old, new) -> list[str]:
         diff(label, onoff(a.enabled), onoff(b.enabled))
         diff(f"{label} · {_('Default role')}", role(a.default_role), role(b.default_role))
         diff(f"{label} · {_('Admin group')}", a.admin_group or "—", b.admin_group or "—")
+    diff(f"LDAP · {_('Server certificate check')}", onoff(old.ldap.tls_verify),
+         onoff(new.ldap.tls_verify))
     return out
 
 

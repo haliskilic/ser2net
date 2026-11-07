@@ -67,6 +67,15 @@ def routes(ctx: Ctx) -> list:
             "name": ldap_auth.group_name(group), "user": username, "got": d.role or "",
             "was": d.partial_role, "time": time.strftime("%Y-%m-%d %H:%M")}
 
+    def _note_tls_problem(problem: ldap_auth.TlsProblem) -> None:
+        """A sign-in found the directory server's certificate refused (or ldap.ca_file
+        unusable): Settings → LDAP shows it until that section is saved or a directory
+        sign-in works. Runs in the sign-in's worker thread."""
+        state.ldap_tls_problem = {"kind": problem.kind, "reason": problem.reason,
+                                  "uri": problem.uri, "ca_file": problem.ca_file,
+                                  "unreadable": problem.unreadable,
+                                  "time": time.strftime("%Y-%m-%d %H:%M")}
+
     async def _end_refused_sessions(source: str, username: str) -> None:
         """The directory or identity provider confirmed who this is, but their groups
         give no role any more: end the sessions their shadow account still has, which
@@ -173,8 +182,10 @@ def routes(ctx: Ctx) -> list:
         # LDAP/AD: for unknown users (or LDAP shadow accounts) when LDAP is enabled
         elif state.config.ldap.enabled:
             groups = await asyncio.to_thread(
-                ldap_auth.authenticate, state.config.ldap, username, password, state.log)
+                ldap_auth.authenticate, state.config.ldap, username, password, state.log,
+                on_tls_problem=_note_tls_problem)
             if groups is not None:
+                state.ldap_tls_problem = None   # the connection to the directory works
                 role = _directory_role("ldap", username, groups, state.config.ldap)
                 if role:
                     async with state.config_lock:

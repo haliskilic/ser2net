@@ -143,7 +143,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   single-password setups migrate automatically to one `admin` user.
 - **LDAP / Active Directory auth (optional):** users authenticate by binding to the
   directory; LDAP group membership maps to a role. Works alongside local accounts;
-  needs `ldap3`.
+  needs `ldap3`. LDAPS / StartTLS check the server's certificate (the system's CAs or
+  your own CA file).
 - **OIDC single sign-on (optional):** authorization-code flow with Keycloak / Entra ID /
   Google / Okta; the id_token is validated (signature/iss/aud/exp/nonce) and a claim maps
   to a role. Needs `authlib`.
@@ -232,7 +233,8 @@ containers.
 Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
 group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
 mounted `noexec`, point `TMPDIR` at a directory that isn't. For certificate checks (MQTT
-over TLS, OIDC) it uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
+over TLS, OIDC, LDAPS / StartTLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE`
+if set.
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
 reports. `ser2net --licenses` prints the license text of every component inside the
@@ -417,6 +419,25 @@ their next sign-in also ends the sessions they still had. AD direct bind with
 `{username}@corp.local` or `CORP\{username}` finds the account by userPrincipalName /
 sAMAccountName under the user search base (blank: its whole domain) to read its groups;
 *Also count nested groups* (AD only) adds the groups a user is in through other groups.
+
+**LDAP over TLS (LDAPS / StartTLS):** the directory server's certificate is checked. It
+must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: its
+certificate store, where a domain member usually has the AD CA already) and name the host
+in the server URI: use the name the certificate was issued for (`ldaps://dc01.corp.local`;
+an IP address only if the certificate lists it). For your own CA (Active Directory
+Certificate Services) or a self-signed certificate, set **Settings → LDAP → CA certificate
+file** to that CA's certificate, PEM or DER as Windows exports it (Docker: put it in the
+`/data` volume); then only the certificates in that file are trusted. A refused certificate
+is logged in all.log with the reason and what to set, and Settings shows it; nothing is
+sent over that connection. *Don't check the server certificate* turns the check off, which
+is insecure — anyone on the network between ser2net and the directory could read the
+passwords and sign in as anyone; Settings and the start-up log warn while it is off, and
+while passwords go unencrypted (`ldap://` without StartTLS). Over TLS ser2net doesn't
+follow a referral to another server (that server's certificate would go unchecked): point
+the URI at a server that holds the users and their groups. **After upgrading from 2.8 or
+older**, LDAP sign-in stops if the certificate isn't trusted: set the CA certificate file
+(local accounts keep working; without a local admin, create one with
+`ser2net --set-password NAME`).
 
 **Lost password, locked out, no browser (account recovery):**
 `ser2net --set-password NAME` sets a new password for the local account `NAME` (asked
