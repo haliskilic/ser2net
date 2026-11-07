@@ -82,7 +82,17 @@ docker run -d --name ser2net \
   webhooks or SSO) don't affect it.
 - **Persistence.** `config.json`, its automatic backups (`backups/`), logs, traces
   (`traces/`) and any generated TLS material live in the `/data` volume; back that up to
-  preserve mappings and the admin password.
+  preserve mappings and the admin password. `/data` must be writable: mount the whole
+  directory, not `config.json` on its own (it is replaced atomically, which a single-file
+  mount doesn't allow). A start rewrites `config.json` only when something changed (the
+  `SER2NET_*` address, an upgrade).
+- **A setting the image rejects doesn't stop it.** If `config.json` holds a value this
+  version refuses (a mapping's TLS file that isn't mounted, a hand edit), the container
+  still starts: the log names each one (`WARNING: config.json: mapping '…': …`), the
+  mappings that can start run, and the file is left as it is. Saving any change is
+  refused until it is fixed — sign in and edit or remove that part. An unusable
+  `SER2NET_BIND_IP` / `SER2NET_PORT`, an unreadable or broken `config.json` and a missing
+  admin UI certificate still stop the start, with a one-line message.
 - **TLS.** Put a reverse proxy (or set `admin_ui.tls_*`) in front for LAN/Internet
   exposure; raw data bridges are plaintext unless per-mapping TLS is enabled.
 - **Dependencies** are installed from PyPI into the image, so the container runs with

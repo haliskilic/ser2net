@@ -3,10 +3,10 @@
 Writes a config the way 2.6.x left it (no keepalive / connect-timeout / max-time /
 web-access keys; values the old REST API accepted unchecked, e.g. idle_timeout_s
 -1 or "300"), then boots the real server the way Docker / headless installs do —
-with SER2NET_BIND_IP set, which re-saves (and so validates) the config on every
-start. Checks: it starts, the old password still logs in, mappings / users / API
-token survive, legacy values are normalised, and the new settings take their safe
-defaults (keepalive on, login still required). Cross-platform.
+with SER2NET_BIND_IP set, which re-saves (and so validates) the config when loading
+changed it, as here. Checks: it starts, the old password still logs in, mappings /
+users / API token survive, legacy values are normalised, and the new settings take
+their safe defaults (keepalive on, login still required). Cross-platform.
 
 Run: python3 tests/test_upgrade_from_2_6.py
 """

@@ -1417,6 +1417,28 @@ class AppConfig:
                     )
             seen[(proto, m.network.bind_ip, m.network.port)] = m.name
 
+    def problems(self) -> list[str]:
+        """Everything validate() rejects in this config, one line each (validate() stops
+        at the first). Start-up only logs these and runs anyway: a config.json that
+        loads is never refused, since an older release may have accepted it or a file it
+        names may be missing on this machine (runtime.prepare_config)."""
+        found = []
+        try:  # the settings outside the mappings
+            dataclasses.replace(self, mappings=[]).validate()
+        except Exception as e:  # a hand-edited value of the wrong type raises others too
+            found.append(str(e))
+        for m in self.mappings:
+            try:
+                m.validate()
+            except Exception as e:
+                found.append(f"mapping '{m.name or m.id}': {e}")
+        if not found:
+            try:  # what involves several mappings: a shared port or serial device
+                self.validate()
+            except Exception as e:
+                found.append(str(e))
+        return found
+
 
 def _api_token_role(d: dict[str, Any]) -> tuple[str, str]:
     """api_token_role from a config file, and a note when it had to be changed. No key
@@ -1511,6 +1533,15 @@ class ConfigStore:
         with open(self.path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         return AppConfig.from_dict(data)
+
+    def matches(self, config: AppConfig) -> bool:
+        """True when config.json already holds exactly this configuration, so saving it
+        would change nothing (start-up then leaves the file alone)."""
+        try:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                return json.load(fh) == json.loads(json.dumps(config.to_dict()))
+        except (OSError, ValueError):
+            return False
 
     def save(self, config: AppConfig, *, validate: bool = True) -> None:
         """Atomically persist config to a single file (validates first).

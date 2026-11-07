@@ -84,7 +84,10 @@ class Supervisor:
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:
         """Register a non-running runner so status is queryable for disabled mappings."""
         if mapping.id not in self._runners:
-            r = make_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+            try:
+                r = make_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+            except Exception:  # see apply_mapping; start-up already warned about it
+                return
             r.status.state = "stopped"
             self._runners[mapping.id] = r
             if mapping.id not in self._order:
@@ -98,7 +101,11 @@ class Supervisor:
             with contextlib.suppress(Exception):
                 await old.stop()
 
-        runner = make_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+        try:
+            runner = make_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+        except Exception as e:  # a hand-edited value of the wrong type: only this one is down
+            self.log(f"[{mapping.name}] start failed: {e}")
+            return False, str(e)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
         async with self._lock:
