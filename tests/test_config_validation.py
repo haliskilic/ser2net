@@ -389,6 +389,39 @@ def test_form_apply_retained_set():
     print("form: apply_retained_set kept when the form leaves it out, set when shown  OK")
 
 
+def test_form_udp_reply_fields():
+    """The reply address and peer timeout are shown (and posted) for UDP only. Without
+    them (another mode, an older cluster peer's form) the stored values are kept on edit
+    and a new mapping gets the defaults: the last sender, never forgotten."""
+    base = {"name": "u", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "udp", "network_protocol": "raw",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+    existing = MappingConfig.from_dict({
+        "name": "u", "serial": {"port": "COM7"},
+        "network": {"mode": "udp", "udp_peer_host": "10.0.0.9", "udp_peer_port": 5000,
+                    "udp_peer_timeout_s": 30}})
+    fresh = MappingConfig()
+    assert (fresh.network.udp_peer_host, fresh.network.udp_peer_port,
+            fresh.network.udp_peer_timeout_s) == ("", 0, 0)
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        n = m.network
+        return n.udp_peer_host, n.udp_peer_port, n.udp_peer_timeout_s
+
+    shown = {"network_udp_peer_host": " 192.168.1.20 ", "network_udp_peer_port": "4002",
+             "network_udp_peer_timeout_s": "60"}
+    assert parsed(dict(base, **shown)) == ("192.168.1.20", 4002, 60)
+    cleared = {"network_udp_peer_host": "", "network_udp_peer_port": "",
+               "network_udp_peer_timeout_s": ""}
+    assert parsed(dict(base, id=existing.id, **cleared)) == ("", 0, 0), "blank = off"
+    assert parsed(dict(base, id=existing.id)) == ("10.0.0.9", 5000, 30), "absent: kept"
+    assert parsed(dict(base, id=existing.id, network_mode="server")) == ("10.0.0.9", 5000, 30)
+    assert parsed(base) == ("", 0, 0)
+    print("form: UDP reply address / peer timeout parsed when shown, kept when absent  OK")
+
+
 def test_web_access_settings():
     cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
     assert cfg.admin_ui.require_login is True, "login must be required by default"
@@ -408,6 +441,7 @@ def main():
     test_form_conn_options_parse_and_preserve()
     test_form_modbus_fields_not_offered()
     test_form_apply_retained_set()
+    test_form_udp_reply_fields()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

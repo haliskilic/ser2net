@@ -55,7 +55,11 @@ düzenlemeye gerek yok.
 ## ✨ Özellikler
 
 - **Taşıma modları:** TCP **sunucu** (dinleme), TCP **istemci** (dışarı bağlanma),
-  **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**.
+  **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**. UDP,
+  cihazın çıktısını izinli bir IP'den gelen son datagram'ın göndericisine ya da her zaman
+  sabit bir **yanıt adresine** (IP + port) gönderir; **karşı uç zaman aşımı** sessiz kalan
+  göndericiyi unutturur. Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler:
+  hattan hızlı gönderen birinin bunu aşan datagram'ları atılır, sayılır ve loglanır.
 - **Protokoller:** `raw`, `telnet` (8-bit temiz), `rfc2217` (uzaktan canlı
   baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway).
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
@@ -119,9 +123,9 @@ düzenlemeye gerek yok.
   (`/api/v1/status`'ta `bytes_in` / `bytes_out`, `/metrics`'te
   `ser2net_mapping_bytes_in_total` / `ser2net_mapping_bytes_out_total`) seri cihazdan
   okunan ve cihaza yazılan baytlardır; cihazı kaç istemci paylaşırsa paylaşsın bir kez
-  sayılır (serial↔serial: A → B / B → A). Ağdan gelip cihaza yazılamayan veri (portu açık
-  değilken) atılmış sayılır (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`),
-  panoda işaretlenir ve loglanır.
+  sayılır (serial↔serial: A → B / B → A). Ağdan gelip cihaza yazılamayan veri (port açık
+  değilken ya da bir UDP datagram'ı kuyruğu dolu bulduğunda) atılmış sayılır
+  (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`), panoda işaretlenir ve loglanır.
 - **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
   bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
@@ -317,6 +321,14 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 `0.0.0.0`/`::` "herkes" demektir. Bir eşlemenin seri portu yalnızca cihaz yolu ya da COM
 adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
 port olarak kabul edilmez.
+
+**UDP eşlemeleri:** `allowed_client_ips` her datagram için denetlenir, ama baktığı şey
+datagram'ın kaynak adresidir ve ağdaki bir gönderici bu adresi taklit edebilir; yani UDP'de
+izin listesi kimlik doğrulama değildir. Yanıt adresi yoksa izinli her gönderici (ya da izinli
+bir adresi taklit eden biri) tek bir datagram'la cihazın çıktısını devralır, salt okunur
+eşlemede bile; göndericinin her değişimi loga yazılır (en fazla dakikada bir). Çıktıyı doğru
+makinede tutmak için bir **yanıt adresi** girin. Güvenilmeyen ağlarda TLS'li bir TCP eşlemesi
+ya da bir güvenlik duvarı kullanın.
 
 **MQTT komutları (Modbus edge modu):** yazılabilir noktalar, broker'ın `<topic>/<nokta>/set`
 topic'ine ya da Sparkplug B'de `spBv1.0/<group>/NCMD/<node>` ve

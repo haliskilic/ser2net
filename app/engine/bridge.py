@@ -18,15 +18,21 @@ Every TCP data socket (accepted or connect-out) gets TCP keepalive (sockopts.py)
 a peer that vanished without a FIN/RST is detected and its slot freed instead of
 staying ESTABLISHED forever; each disconnect is logged with its reason.
 
+A UDP mapping can't slow a sender down: its datagrams wait in a bounded queue
+(UDP_BACKLOG_MAX) that is written to the port the same way, and a datagram that finds it
+full is dropped and counted. The device's output goes to the last allowed sender, or
+always to a configured reply address.
+
 Traffic counters (RunnerStatus) count at the device, once: bytes_in what was read from
 it, bytes_out what was handed to it, bytes_dropped what the network sent for it that
-was not written (the port was not open).
+was not written (the port was not open, or the UDP queue was full).
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import errno
+import ipaddress
 import os
 import queue
 import socket
@@ -46,7 +52,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import TaskGroup
     from exceptiongroup import BaseExceptionGroup
 
-from ..config import MappingConfig, mapping_file
+from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
 from . import serial_io, sockopts
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
@@ -62,6 +68,13 @@ READ_CHUNK = 4096
 FROM_DEVICE = 0
 TO_DEVICE = 1
 CLIENT_QUEUE_MAX = 2048  # outbound chunks buffered per client before it's dropped
+# UDP can't make a sender wait, so a UDP mapping's datagrams wait for its serial port in a
+# queue of at most this many bytes, written like a TCP client's data (drain() keeps the
+# port's own buffer at its high-water mark). A datagram that would go beyond it is dropped
+# and counted (bytes_dropped): a sender faster than the line costs neither memory nor
+# event-loop time. 64 KiB is that high-water mark too, about 68 s of line time at 9600
+# baud and 6 s at 115200; the largest datagram fits.
+UDP_BACKLOG_MAX = 64 * 1024
 # errno/winerror values for "the peer stopped answering" (keepalive or retransmission
 # timeout): ETIMEDOUT, plus on Windows WSAETIMEDOUT, WSAENETRESET and the overlapped-I/O
 # ERROR_SEM_TIMEOUT.
@@ -299,7 +312,8 @@ class RunnerStatus:
     # serial<->serial bridge: in = port A -> B, out = port B -> A
     bytes_in: int = 0       # read from the serial device
     bytes_out: int = 0      # handed to the serial device (from clients, datagrams, the console)
-    bytes_dropped: int = 0  # sent for the device but not written: the port was not open
+    bytes_dropped: int = 0  # sent for the device but not written: the port was not open,
+    #                         or a UDP datagram found UDP_BACKLOG_MAX bytes waiting
     reconnects: int = 0
     dropped_clients: int = 0   # clients dropped because their output queue overflowed
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
@@ -615,10 +629,12 @@ class MappingRunner:
                 self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol}, "
                           f"{sockopts.describe(net)})")
             elif net.mode == "udp":
+                udp = _UdpBridge(self)  # a malformed stored reply address fails the start
                 loop = asyncio.get_running_loop()
                 self._udp_transport, _ = await loop.create_datagram_endpoint(
-                    lambda: _UdpBridge(self), local_addr=(net.bind_ip, net.port))
-                self._log(f"UDP on {net.bind_ip}:{net.port}")
+                    lambda: udp, local_addr=(net.bind_ip, net.port))
+                self._main_task = asyncio.create_task(udp.run(), name=f"udp:{self.mapping.name}")
+                self._log(f"UDP on {net.bind_ip}:{net.port}, {udp.describe()}")
         except BaseException:
             await self.stop()
             raise
@@ -932,23 +948,30 @@ class MappingRunner:
 
 
 # ---------------------------------------------------------------------------
-# UDP transport (datagram bridge). The serial read loop broadcasts to _clients,
-# so a _UdpPeer sink in _clients carries serial->net; datagram_received carries
-# net->serial. One peer is tracked (the last sender).
+# UDP transport (datagram bridge). The serial read loop broadcasts to _clients, so the
+# _UdpPeer in _clients carries serial->net; datagram_received carries net->serial, through
+# a bounded queue that _UdpBridge.run() writes to the port. One peer gets the device's
+# output: the reply address when one is set (udp_peer_host / udp_peer_port), otherwise
+# the sender of the last allowed datagram (forgotten after udp_peer_timeout_s without a
+# datagram from it, when that is set).
 # ---------------------------------------------------------------------------
+def _udp_label(addr) -> str:
+    return f"{addr[0]}:{addr[1]}"
+
+
 class _UdpPeer:
-    def __init__(self, runner: "MappingRunner", addr) -> None:
-        self.runner = runner
+    """Where a UDP mapping sends the device's output; listed as its client."""
+
+    def __init__(self, bridge: "_UdpBridge", addr, label: str = "") -> None:
+        self.bridge = bridge
         self.addr = addr
-        self.peer = f"{addr[0]}:{addr[1]}"
+        self.peer = label or _udp_label(addr)
         self.priority = False
-        self.connected_at = time.time()
+        self.connected_at = time.time()     # since when it gets the output
+        self.last_heard = time.monotonic()  # its last datagram (for the peer timeout)
 
     def feed_from_serial(self, data: bytes) -> None:
-        t = self.runner._udp_transport
-        if t is not None and self.addr is not None:
-            with contextlib.suppress(Exception):
-                t.sendto(data, self.addr)
+        self.bridge.send(self, data)
 
     def kick(self, reason: str = "") -> None:
         pass
@@ -958,37 +981,143 @@ class _UdpPeer:
 
 
 class _UdpBridge(asyncio.DatagramProtocol):
+    """A UDP mapping's socket side. Every datagram is checked against the allow-list; an
+    allowed one makes its sender the peer (unless there is a reply address) and waits in a
+    queue that run() writes to the serial port. A datagram that would take the queue past
+    UDP_BACKLOG_MAX bytes is dropped and counted instead."""
+
     def __init__(self, runner: "MappingRunner") -> None:
         self.runner = runner
+        net = runner.mapping.network
+        self.reply_to = udp_peer_address(net)  # ValueError: a malformed stored one
+        # the peer timeout is for a sender that was learned, not for the reply address
+        self.timeout = 0.0 if self.reply_to else udp_peer_timeout(net)
+        self.transport: Optional[asyncio.DatagramTransport] = None
+        self.peer: Optional[_UdpPeer] = None
+        self._queue: list[bytes] = []
+        self._queued = 0  # bytes waiting: queued, or being written by run()
+        self._wake = asyncio.Event()
+        self._peer_log = _LogEvery(runner._log)
+        self._refused_log = _LogEvery(runner._log)
+        self._error_log = _LogEvery(runner._log)
+
+    def describe(self) -> str:
+        """Where the device's output goes (for the start-up log line)."""
+        if self.reply_to:
+            return f"device output to {_udp_label(self.reply_to)}"
+        if self.timeout:
+            return (f"device output to the last sender (forgotten after "
+                    f"{fmt_duration(self.timeout)} without a datagram from it)")
+        return "device output to the last sender"
+
+    # ---- asyncio.DatagramProtocol ----
+    def connection_made(self, transport) -> None:
+        self.transport = transport
+        if self.reply_to is not None:
+            host, port = self.reply_to
+            sock = transport.get_extra_info("socket")
+            if (sock is not None and sock.family == socket.AF_INET6
+                    and ipaddress.ip_address(host).version == 4):
+                host = f"::ffff:{host}"  # an IPv4 peer of a socket bound to an IPv6 address
+            self._set_peer((host, port), _udp_label(self.reply_to))
+
+    def connection_lost(self, exc) -> None:
+        self.transport = None
+
+    def error_received(self, exc: Exception) -> None:
+        # e.g. the peer's port is closed (ICMP port unreachable) or there is no route to it
+        self._error_log(f"udp error: {exc}")
 
     def datagram_received(self, data: bytes, addr) -> None:
         r = self.runner
-        # Access control: a TCP listener checks the allow-list in _on_client, but
-        # UDP has no accept hook — enforce the allow-list HERE. An unlisted source is
-        # dropped entirely, so a stray or spoofed datagram cannot become "the peer"
-        # and hijack the serial->net stream (this also protects read-only mappings).
+        # Access control: a TCP listener checks the allow-list in _on_client, but UDP has
+        # no accept hook, so it is checked HERE, for every datagram. An unlisted source is
+        # dropped entirely: it neither reaches the device nor becomes the peer. The check
+        # looks at the datagram's source address, which a sender can forge (README,
+        # Security); with a reply address the device's output can't be redirected.
         if not r._access.allowed(addr[0]):
+            self._refused_log(f"rejected datagram from {_udp_label(addr)}: not in allowed list")
             return
-        peer = next((c for c in r._clients if isinstance(c, _UdpPeer)), None)
-        if peer is None:
-            peer = _UdpPeer(r, addr)
-            r._clients.add(peer)
-            r._refresh_clients()
-            r._log(f"udp peer {addr[0]}:{addr[1]}")
-        elif peer.addr != addr:
-            peer.addr = addr
-            peer.peer = f"{addr[0]}:{addr[1]}"
-            r._refresh_clients()
+        if self.reply_to is None:
+            self._heard_from(addr)
         if r.mapping.network.read_only or not data:
             return
-        sw = r._link.writer
-        if sw is None or sw.is_closing():
+        if r._link.writer is None:
             r._drop(len(data), "the serial port is not open")
+        elif self._queued + len(data) > UDP_BACKLOG_MAX:
+            r._drop(len(data), f"the serial port cannot keep up with the datagrams "
+                               f"({self._queued} bytes waiting for it)")
+        else:
+            self._queue.append(data)
+            self._queued += len(data)
+            self._wake.set()
+
+    # ---- the peer ----
+    def _set_peer(self, addr, label: str = "") -> _UdpPeer:
+        r = self.runner
+        if self.peer is not None:
+            r._clients.discard(self.peer)
+        peer = self.peer = _UdpPeer(self, addr, label)
+        r._clients.add(peer)
+        r._refresh_clients()
+        return peer
+
+    def _heard_from(self, addr) -> None:
+        """No reply address: the sender of an allowed datagram gets the device's output
+        from now on. A new sender is logged (a change at most once a minute) and listed
+        with its own connection time."""
+        old = self.peer
+        if old is not None and old.addr == addr:
+            old.last_heard = time.monotonic()
             return
-        # traced and counted only when it is handed to the port
-        if r._tracer:
-            r._tracer.write("net>ser", data)
-        r._feed_traffic(TO_DEVICE, data)
-        with contextlib.suppress(Exception):
-            sw.write(data)  # datagram_received is sync; transport buffers
-        r.status.bytes_out += len(data)
+        peer = self._set_peer(addr)
+        if old is None:
+            self.runner._log(f"udp peer {peer.peer}")
+        else:
+            self._peer_log(f"udp peer is now {peer.peer} (was {old.peer})")
+
+    def _expired(self) -> bool:
+        """Forget the sender once it has sent nothing for the peer timeout."""
+        peer = self.peer
+        if (peer is None or not self.timeout
+                or time.monotonic() - peer.last_heard < self.timeout):
+            return False
+        r = self.runner
+        r._clients.discard(peer)
+        self.peer = None
+        r._refresh_clients()
+        r._log(f"udp peer {peer.peer} forgotten: no datagram for {fmt_duration(self.timeout)}")
+        return True
+
+    def send(self, peer: _UdpPeer, data: bytes) -> None:
+        """The device's output, to the peer (nothing once it has expired)."""
+        if self.transport is None or peer is not self.peer or self._expired():
+            return
+        with contextlib.suppress(Exception):  # a failed send reaches error_received
+            self.transport.sendto(data, peer.addr)
+
+    # ---- network -> serial ----
+    async def run(self) -> None:
+        """Write the queued datagrams to the serial port, oldest first: what has queued up
+        goes in one write that awaits drain(), like a TCP client's data, so the port's own
+        buffer stays at its high-water mark and the queue holds at most UDP_BACKLOG_MAX.
+        With a peer timeout, also forgets a sender that went quiet."""
+        r = self.runner
+        while True:
+            if self.timeout:
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self._wake.wait(), timeout=1.0)
+                self._expired()
+            else:
+                await self._wake.wait()
+            self._wake.clear()
+            if not self._queue:
+                continue
+            batch = self._queue[0] if len(self._queue) == 1 else b"".join(self._queue)
+            self._queue.clear()
+            try:
+                await r.serial_write(batch)
+            except Exception:  # the port went away mid-write: SerialLink reopens it
+                pass
+            finally:
+                self._queued -= len(batch)

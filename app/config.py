@@ -281,9 +281,18 @@ class NetworkSettings:
     protocol: str = "raw"  # raw | telnet | rfc2217
     bind_ip: str = "0.0.0.0"
     port: int = 4001
-    # client/udp connect-out target
+    # client mode: the connect-out target (UDP does not use these: see udp_peer_host)
     remote_host: str = ""
     remote_port: int = 0
+    # UDP: where the device's output goes. Blank (default): to the sender of the last
+    # datagram from an allowed IP, so a new sender takes it over. With a reply address
+    # (an IP and a port) it always goes there, whoever sends.
+    udp_peer_host: str = ""
+    udp_peer_port: int = 0
+    # UDP without a reply address: forget the last sender after this many seconds
+    # without a datagram from it (the output then goes nowhere until someone sends);
+    # 0 = never.
+    udp_peer_timeout_s: int = 0
     max_connections: int = 1
     kick_old_user: bool = False
     allowed_client_ips: list[str] = field(default_factory=list)
@@ -384,6 +393,35 @@ class NetworkSettings:
                     ipaddress.ip_network(normalize_cidr(cidr), strict=False)
                 except ValueError:
                     raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(label, repr(cidr))) from None
+
+
+def udp_peer_address(net: NetworkSettings) -> Optional[tuple[str, int]]:
+    """The reply address of a UDP mapping (udp_peer_host, udp_peer_port): where the
+    device's output always goes, or None when none is set (the last sender gets it).
+    Raises ValueError when it is not a host's IP address and a port; edits refuse that
+    (MappingConfig.validate_input), so only a hand-edited config has it."""
+    host = str(net.udp_peer_host or "").strip()
+    if not host:
+        return None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        raise ValueError(f"UDP reply address {host!r} is not an IP address") from None
+    if ip.is_unspecified:
+        raise ValueError(f"UDP reply address {host} is not a host's address")
+    port = net.udp_peer_port
+    if not _is_int(port) or not 1 <= port <= 65535:
+        raise ValueError(f"UDP reply port {port!r} is not between 1 and 65535")
+    return host, port
+
+
+def udp_peer_timeout(net: NetworkSettings) -> float:
+    """A UDP mapping's peer timeout in seconds, 0 = never. A stored value that is not a
+    number of seconds reads as 0, today's behaviour (edits refuse one: validate_input)."""
+    t = net.udp_peer_timeout_s
+    if _is_number(t) and math.isfinite(t) and t > 0:
+        return float(min(t, MAX_TIMER_S))
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +683,35 @@ class MappingConfig:
                 raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "
                                     "devices only (URLs such as socket:// or spy:// are not "
                                     "supported).").format(side.port))
+        if self.kind == "net" and self.network.mode == "udp":
+            self._validate_udp_peer()
+
+    def _validate_udp_peer(self) -> None:
+        """A UDP mapping's reply address and peer timeout (an edit's rules: a stored
+        malformed reply address makes the mapping fail to start, see udp_peer_address)."""
+        net = self.network
+        host = str(net.udp_peer_host or "").strip()
+        if host:
+            try:
+                ip = ipaddress.ip_address(host)
+            except ValueError:
+                ip = None
+            if ip is None or ip.is_unspecified:
+                raise ConfigError(_("The UDP reply address must be a host's IP address, not "
+                                    "{0}.").format(repr(host)))
+            if not _is_int(net.udp_peer_port) or not (1 <= net.udp_peer_port <= 65535):
+                raise ConfigError(_("The UDP reply port must be between 1 and 65535."))
+            try:
+                bind_v4 = ipaddress.ip_address(net.bind_ip).version == 4
+            except ValueError:
+                bind_v4 = False  # validate() reports a bad bind IP
+            if ip.version == 6 and bind_v4:
+                raise ConfigError(_("The UDP reply address {0} is IPv6, but the mapping listens "
+                                    "on an IPv4 address ({1}).").format(host, net.bind_ip))
+        timeout = net.udp_peer_timeout_s
+        if not _is_number(timeout) or not (0 <= timeout <= MAX_TIMER_S):
+            raise ConfigError(_("{0} must be between 0 (off) and {1} seconds.").format(
+                _("Peer timeout"), MAX_TIMER_S))
 
 
 # ---------------------------------------------------------------------------

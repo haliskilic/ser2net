@@ -36,7 +36,9 @@ See the README's **Security** section: bind the UI to `127.0.0.1` or enable TLS,
 login required, give people the least role they need, use access lists on the data
 ports, keep the cluster key secret, and let only trusted clients publish to the MQTT
 command topics of writable Modbus points (broker ACLs; TLS and credentials for the broker
-connection): ser2net does not authenticate MQTT commands itself.
+connection): ser2net does not authenticate MQTT commands itself. On a UDP mapping the
+access list checks a source address that can be forged: set a reply address, and on
+untrusted networks prefer TCP with TLS, or a firewall.
 
 ## Türkçe
 
@@ -73,4 +75,6 @@ girişi zorunlu tutun, herkese gereken en düşük rolü verin, veri portlarınd
 listesi kullanın, cluster anahtarını gizli tutun ve yazılabilir Modbus noktalarının MQTT
 komut topic'lerine yalnızca güvendiğiniz istemcilerin yayın yapmasına izin verin (broker
 ACL'leri; broker bağlantısı için TLS ve kimlik bilgisi): ser2net MQTT komutlarının
-kimliğini kendisi doğrulamaz.
+kimliğini kendisi doğrulamaz. UDP eşlemelerinde erişim listesi taklit edilebilen bir kaynak
+adresine bakar: bir yanıt adresi girin, güvenilmeyen ağlarda TLS'li TCP'yi ya da bir
+güvenlik duvarını tercih edin.

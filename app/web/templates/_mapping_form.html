@@ -151,6 +151,17 @@
       </label>
     </div>
 
+    <div data-show-when="network_mode=udp">
+      <div class="grid3">
+        <label>{{ _("Reply to IP") }} <span class="muted">({{ _("blank = the last sender") }})</span>
+          <input type="text" name="network_udp_peer_host" value="{{ mapping.network.udp_peer_host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.20') }}"></label>
+        <label>{{ _("Reply to port") }} <input type="number" name="network_udp_peer_port" min="1" max="65535" value="{{ mapping.network.udp_peer_port or '' }}"></label>
+        <label>{{ _("Peer timeout (s)") }} <span class="muted">({{ _("forget the last sender after this long without a datagram · 0 = never") }})</span>
+          <input type="number" name="network_udp_peer_timeout_s" min="0" value="{{ mapping.network.udp_peer_timeout_s }}"></label>
+      </div>
+      <p class="sub mb-sm">{{ _("The device’s output goes to the sender of the last datagram from an allowed IP, so any of them can take it over; with a reply address it always goes there. The allow-list checks a datagram’s source address, which can be forged: on an untrusted network use TCP with TLS, or a firewall.") }}</p>
+    </div>
+
     <div data-show-when="network_mode=server,client">
       <label class="chk"><input type="checkbox" name="network_tls" {% if mapping.network.tls %}checked{% endif %}> {{ _("TLS (encrypt the data bridge)") }}</label>
       <div class="grid2">

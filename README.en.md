@@ -52,7 +52,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 ## ✨ Features
 
 - **Transports:** TCP **server** (listen), TCP **client** (connect-out), **UDP**, and
-  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges.
+  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges. UDP sends the
+  device's output to the sender of the last datagram from an allowed IP, or always to a
+  fixed **reply address** (IP + port); a **peer timeout** forgets a sender that went quiet.
+  Datagrams wait for the serial port in a queue of at most 64 KiB: what a sender faster
+  than the line sends beyond that is dropped, counted and logged.
 - **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live changes to
   baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway).
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
@@ -116,8 +120,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `ser2net_mapping_bytes_out_total` in `/metrics`) are the bytes read from and written to
   the serial device, counted once however many clients share it (serial↔serial: A → B /
   B → A). Data from the network that could not be written to the device (its port was not
-  open) is counted as dropped (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`),
-  flagged on the dashboard and logged.
+  open, or a UDP datagram found the queue full) is counted as dropped (`bytes_dropped`,
+  `ser2net_mapping_bytes_dropped_total`), flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
@@ -310,6 +314,14 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 `0.0.0.0`/`::` in an allow/priority list means "any client". A mapping's serial port is a
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
+
+**UDP mappings:** `allowed_client_ips` is checked for every datagram, but what it checks is
+the datagram's source address, which a sender on the network can forge, so for UDP it is no
+authentication. Without a reply address, any allowed sender (or one forging an allowed
+address) takes the device's output over with a single datagram, even on a read-only
+mapping; the log notes each change of sender (at most once a minute). Set a **reply
+address** to keep the output on the right host. On untrusted networks use a TCP mapping with
+TLS, or a firewall.
 
 **MQTT commands (Modbus edge mode):** writable points take values from any client the
 broker lets publish to `<topic>/<point>/set` or, for Sparkplug B, to
