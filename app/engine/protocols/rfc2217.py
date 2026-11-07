@@ -9,6 +9,13 @@ the networking ourselves.
 PortManager writes its telnet replies/notifications by calling ``connection.write``;
 we capture those into a buffer that the bridge drains to the socket.
 
+The network stream is parsed by our own subclass (_PortManager.feed): the same state
+machine as PortManager.filter, which looks at every byte in Python and keeps whatever
+follows IAC SB without a limit, but data between commands goes through in bulk (a regex
+scan, bytes.replace) and a subnegotiation longer than MAX_SUBNEGOTIATION ends the session.
+Commands still go to PortManager's own handlers. Serial data is escaped with
+bytes.replace, which gives exactly what PortManager.escape yields byte by byte.
+
 Robustness: PortManager reads modem-status lines (CTS/DSR/RI/CD) and may toggle
 RTS/DTR/BREAK. Virtual ports (PTYs) and some USB adapters don't support those
 ioctls and raise OSError(ENOTTY), which would otherwise tear down the client. We
@@ -21,7 +28,11 @@ and baud/parity/databits/stopbits changes work.
 """
 from __future__ import annotations
 
-from .base import ProtocolSession
+from typing import Optional
+
+from serial import rfc2217 as _rfc2217
+
+from .base import MAX_SUBNEGOTIATION, ProtocolSession, data_run_end, subnegotiation_too_long
 
 _MODEM_READS = ("cts", "dsr", "ri", "cd")
 _LINE_WRITES = ("rts", "dtr", "break_condition")
@@ -92,26 +103,105 @@ class _NetConnection:
         self.buf.extend(data)
 
 
+_IAC, _SB, _SE = _rfc2217.IAC, _rfc2217.SB, _rfc2217.SE
+_NEGOTIATION = (_rfc2217.DO, _rfc2217.DONT, _rfc2217.WILL, _rfc2217.WONT)
+M_NORMAL, M_IAC_SEEN, M_NEGOTIATE = _rfc2217.M_NORMAL, _rfc2217.M_IAC_SEEN, _rfc2217.M_NEGOTIATE
+
+
+class _PortManager(_rfc2217.PortManager):
+    """pyserial's RFC 2217 server engine with a parser of our own in front of it (feed).
+    It keeps PortManager's parser state (mode, suboption, telnet_command), so the command
+    handlers and anything that looks at that state work as before."""
+
+    # PortManager's parser state (set in its __init__)
+    mode: int
+    suboption: Optional[bytearray]  # the subnegotiation under way (None: none)
+    telnet_command: bytes
+
+    def feed(self, data: bytes) -> bytes:
+        """Parse bytes from the network; returns those for the serial port. What filter()
+        does, but a run of data bytes and escaped IACs is passed on, or added to the
+        subnegotiation under way, in one go; only the bytes of a command go through the
+        state machine one at a time. Raises ProtocolError once a subnegotiation grows past
+        MAX_SUBNEGOTIATION."""
+        out = bytearray()
+        i, n = 0, len(data)
+        while i < n:
+            mode = self.mode
+            if mode == M_NORMAL:
+                end = data_run_end(data, i)
+                if end > i:
+                    run = data[i:end]
+                    if 0xFF in run:
+                        run = run.replace(b"\xff\xff", b"\xff")
+                    if self.suboption is None:
+                        out += run
+                    else:
+                        self._add_to_suboption(run)
+                    i = end
+                    if i == n:
+                        break
+                self.mode = M_IAC_SEEN  # data[i] is the IAC of a command
+                i += 1
+                continue
+            byte = data[i:i + 1]
+            i += 1
+            self.mode = M_NORMAL
+            if mode == M_NEGOTIATE:  # the option of a DO/DONT/WILL/WONT
+                self._telnet_negotiate_option(self.telnet_command, byte)
+            elif byte == _IAC:  # an escaped 0xFF split across two reads
+                if self.suboption is None:
+                    out += byte
+                else:
+                    self._add_to_suboption(byte)
+            elif byte == _SB:
+                self.suboption = bytearray()
+            elif byte == _SE:
+                if self.suboption is not None:  # an IAC SE without IAC SB is ignored
+                    suboption, self.suboption = bytes(self.suboption), None
+                    self._telnet_process_subnegotiation(suboption)
+            elif byte in _NEGOTIATION:
+                self.telnet_command = byte
+                self.mode = M_NEGOTIATE
+            else:
+                self._telnet_process_command(byte)
+        return bytes(out)
+
+    def filter(self, data):
+        """PortManager's generator interface, on top of feed()."""
+        out = self.feed(data)
+        if out:
+            yield out
+
+    def _add_to_suboption(self, data: bytes) -> None:
+        sub = self.suboption
+        assert sub is not None
+        if len(sub) + len(data) > MAX_SUBNEGOTIATION:
+            raise subnegotiation_too_long()
+        sub += data
+
+
 class Rfc2217Session(ProtocolSession):
     def __init__(self, serial_instance, poll_interval: float = 1.0, read_only: bool = False) -> None:
-        from serial.rfc2217 import PortManager
-
         self._conn = _NetConnection()
         safe_serial = (_ModemSafeSerial(serial_instance, read_only=read_only)
                        if serial_instance is not None else serial_instance)
         # PortManager.__init__ emits initial telnet negotiation into _conn.
-        self._pm = PortManager(safe_serial, self._conn)
+        self._pm = _PortManager(safe_serial, self._conn)
         self.poll_interval = poll_interval if poll_interval and poll_interval > 0 else 1.0
 
     def initial_net_bytes(self) -> bytes:
         return self.take_net_out()
 
     def from_network(self, data: bytes) -> bytes:
-        # filter() yields the serial-bound bytes; telnet replies go to _conn.write
-        return b"".join(self._pm.filter(data))
+        # the serial-bound bytes; telnet replies go to _conn.write
+        pm = self._pm
+        if pm.mode == M_NORMAL and pm.suboption is None and 0xFF not in data:
+            return data  # no command in this chunk: it all goes to the port as it is
+        return pm.feed(data)
 
     def from_serial(self, data: bytes) -> bytes:
-        return b"".join(self._pm.escape(data))
+        return data.replace(b"\xff", b"\xff\xff") if 0xFF in data else data
 
     def take_net_out(self) -> bytes:
         out = bytes(self._conn.buf)
