@@ -61,7 +61,8 @@ def routes(ctx: Ctx) -> list:
         data = auth.read_payload(state.config.secret_key, request.cookies.get(OIDC_COOKIE))
         code = request.query_params.get("code", "")
         st = request.query_params.get("state", "")
-        if not data or not code or not secrets.compare_digest(st, data.get("s", "")):
+        if not (data and code and st.isascii()  # (compare_digest raises on non-ASCII text)
+                and secrets.compare_digest(st, str(data.get("s", "")))):
             return render(request, "login.html", status_code=400, error=None, oidc_enabled=True,
                           oidc_error=_("SSO state mismatch — please try again."))
         claims = await asyncio.to_thread(oidc_auth.complete, oidc, data["r"], code, data["n"], state.log)
