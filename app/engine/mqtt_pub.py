@@ -184,6 +184,13 @@ class MqttPublisher:
         self._client = None
 
 
+def shown(value, limit: int = 40) -> str:
+    """repr() of a value that came in over MQTT, cut to ``limit`` characters: what a log line
+    or a .../set/result answer quotes of it (a payload can be as large as the broker allows)."""
+    text = repr(value)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 def _matches(pattern: str, topic: str) -> bool:
     """MQTT topic filter match ('+' one level, '#' the rest)."""
     p, t = pattern.split("/"), topic.split("/")

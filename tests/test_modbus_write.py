@@ -2,7 +2,8 @@
 
 Pure stdlib, cross-platform -- request PDUs are checked byte-for-byte against the
 examples in the Modbus Application Protocol spec v1.1b3 (section 6), plus the
-write-echo check, range errors and encode_value/decode_value round trips. Run:
+write-echo check, range errors and encode_value/decode_value round trips, and what a
+plain-MQTT /set value may be (one coil state or one number, never a list). Run:
     python3 tests/test_modbus_write.py
 """
 import os
@@ -275,6 +276,34 @@ def test_encode_value_errors():
     print("encode_value rejects out-of-range, non-finite and non-numeric values  OK")
 
 
+def test_parse_write_payload():
+    """What a plain-MQTT <topic>/<point>/set may carry: one coil state, or one number for a
+    holding register (encode_value then makes it the point's type). Never a JSON list,
+    which would write coils / registers beyond the point."""
+    from app.config import ModbusPoint
+    from app.engine.modbus_gateway import parse_write_payload as parse
+    coil = ModbusPoint(name="pump", fn=1, dtype="bool", writable=True)
+    reg = ModbusPoint(name="sp", fn=3, dtype="int16", writable=True)
+    for text, state in ((b"1", True), (b"on", True), (b" TRUE \n", True),
+                        (b"0", False), (b"Off", False), (b"false", False)):
+        assert parse(text, coil) is state, text
+    for bad in (b"[1, 1]", b"[1]", b"[]", b"2", b"-1", b"1.0", b"yes", b'"on"', b"", b"on off",
+                b"\xff"):
+        expect_value_error(parse, bad, coil, match="a coil takes one state")
+    for text, value in ((b"12", 12), (b"-12", -12), (b"+7", 7), (b"010", 10), (b"0x1F", 31),
+                        (b"-0x2", -2), (b"12.5", 12.5), (b".5", 0.5), (b"5.", 5.0),
+                        (b"1e3", 1000.0), (b"-2.5E-1", -0.25), (b" 3 ", 3)):
+        got = parse(text, reg)
+        assert got == value and type(got) is type(value), (text, got)
+    for bad in (b"[1, 2]", b"[1]", b"1_000", b"0b11", b"0o7", b"nan", b"inf", b"-Infinity",
+                b"1 2", b"true", b"", b"0x", b"1e", b"9" * 65):
+        expect_value_error(parse, bad, reg, match="not a number")
+    # an error quotes only the start of a large payload (it goes back to the broker)
+    assert len(expect_value_error(parse, b"[" + b"1," * 1967 + b"1]", coil)) < 120
+    assert len(expect_value_error(parse, b"9" * 100000, reg)) < 80
+    print("parse_write_payload: one coil state or one number; lists and other text refused  OK")
+
+
 def main():
     test_function_codes()
     test_read_bits_spec_examples()
@@ -290,7 +319,8 @@ def main():
     test_encode_value_vectors()
     test_encode_decode_round_trip()
     test_encode_value_errors()
-    print("\nPASS: Modbus writes + bit reads (FC1/2/5/6/15/16, encode_value)")
+    test_parse_write_payload()
+    print("\nPASS: Modbus writes + bit reads (FC1/2/5/6/15/16, encode_value, MQTT /set values)")
 
 
 if __name__ == "__main__":

@@ -5,13 +5,18 @@ map answering FC1/2/3/4/5/6/15/16) and talks to a fake MQTT client, so this runs
 anywhere without a broker or hardware. Checks:
   * coils / discrete inputs are polled (FC1/FC2) and published as 1/0;
   * <topic>/<point>/set writes a holding register (FC6, signed int16; FC16 for 32-bit)
-    or a coil (FC5, or FC15 for a JSON list), answers ok / error on .../set/result and
-    republishes the read-back value; read-only points get no subscription;
+    or a coil (FC5), answers ok / error on .../set/result and republishes the read-back
+    value; read-only points get no subscription;
+  * a command writes exactly its own point: a JSON list (or any other value that is not
+    one coil state / one number) is refused before anything reaches the bus, a point is
+    found by its exact topic (a '/' in a name can't redirect a write to another point),
+    a point that is not writable is never written, and error answers / log lines quote
+    at most a short prefix of a large payload;
   * Sparkplug B: NDEATH as the Will (bdSeq), NBIRTH after connect (bdSeq, Rebirth) and
     a DBIRTH per Modbus unit (devices unit1, unit2) with its points, DDATA per device
     only for changed values with seq counting on, a DCMD writes a point of that device
-    (not of another, and NCMD writes nothing), NCMD asks for a rebirth, the next session
-    gets bdSeq + 1, NDEATH on stop.
+    (not of another, and NCMD writes nothing), a coil takes only a Boolean, NCMD asks for
+    a rebirth (only with a Boolean true), the next session gets bdSeq + 1, NDEATH on stop.
 
 Run: python3 tests/test_modbus_mqtt_write.py
 """
@@ -29,6 +34,7 @@ from app.engine.modbus_gateway import ModbusGatewayRunner
 REGS = {10: 0, 20: 0, 21: 0, 0: 0x41BC, 1: 0x0000}   # input regs 0/1 = float32 23.5
 COILS = {0: False, 1: False, 2: False}
 DISCRETE = {5: True}
+SEEN = []   # every request PDU the fake slave got
 
 
 def free_port():
@@ -40,6 +46,7 @@ def free_port():
 
 
 def answer(pdu: bytes) -> bytes:
+    SEEN.append(pdu)
     fn = pdu[0]
     addr, qty = struct.unpack(">HH", pdu[1:5])
     if fn in (1, 2):
@@ -111,7 +118,7 @@ POINTS = [
 SP_POINTS = POINTS + [{"name": "level", "unit": 2, "fn": 3, "address": 30, "dtype": "uint16"}]
 
 
-async def gateway(fmt, slave_port, fake, points=POINTS):
+async def gateway(fmt, slave_port, fake, points=POINTS, logs=None):
     m = MappingConfig.from_dict({
         "name": "Line 3 PLC", "kind": "net", "serial": {"port": "fake", "baudrate": 9600},
         "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
@@ -119,18 +126,19 @@ async def gateway(fmt, slave_port, fake, points=POINTS):
         "mqtt": {"enabled": True, "host": "broker", "base_topic": "plant/a", "payload_format": fmt},
         "modbus_poll": {"interval_s": 0.1, "points": points}})
     m.validate()
-    r = ModbusGatewayRunner(m, logger=lambda _m: None)
+    log = logs.append if logs is not None else (lambda _m: None)
+    r = ModbusGatewayRunner(m, logger=log)
     r._resp_timeout = 0.5
     sr, sw = await asyncio.open_connection("127.0.0.1", slave_port)
     r._link.attach(sr, sw)
     if fmt == "sparkplug_b":
         from app.engine.sparkplug_node import SparkplugNode
-        r._sparkplug = SparkplugNode(m, lambda _m: None, r._write_soon)
+        r._sparkplug = SparkplugNode(m, log, r._write_soon)
         r._mqtt = r._sparkplug.publisher()
-    else:
+    else:  # what start() subscribes: each writable point's own /set topic
         from app.engine.mqtt_pub import MqttPublisher
-        subs = {f"plant/a/{p['name']}/set": r._on_set_message for p in points if p.get("writable")}
-        r._mqtt = MqttPublisher(m.mqtt, logger=lambda _m: None, client=fake, subscriptions=subs)
+        subs = dict.fromkeys(r._set_points, r._on_set_message)
+        r._mqtt = MqttPublisher(m.mqtt, logger=log, client=fake, subscriptions=subs)
     if fmt == "sparkplug_b":
         r._mqtt._client = fake
     r._mqtt.connect()
@@ -166,11 +174,11 @@ async def test_plain(slave_port):
         assert REGS[10] == 0xFFF4 and await wait(lambda: last(fake, "plant/a/setpoint") == b"-12")
         r._mqtt.handle_message("plant/a/total/set", b"70000")
         assert await wait(lambda: REGS[20] == 1 and REGS[21] == 70000 - 65536), REGS
+        fc16 = [p for p in SEEN if p[0] == 16]
+        assert fc16 and fc16[-1][:6] == bytes([16, 0, 20, 0, 2, 4]), "a uint32 is its own 2 registers"
         r._mqtt.handle_message("plant/a/pump/set", b"on")
         assert await wait(lambda: COILS[0] is True and last(fake, "plant/a/pump") == b"1")
-        r._mqtt.handle_message("plant/a/pump/set", b"[1, 0, 1]")
-        assert await wait(lambda: (COILS[0], COILS[1], COILS[2]) == (True, False, True)), COILS
-        print("plain: setpoint -12 (FC6), total 70000 (FC16), pump on (FC5), [1,0,1] (FC15); read back  OK")
+        print("plain: setpoint -12 (FC6), total 70000 (FC16), pump on (FC5); read back  OK")
 
         r._mqtt.handle_message("plant/a/setpoint/set", b"abc")
         assert await wait(lambda: (last(fake, "plant/a/setpoint/set/result") or b"").startswith(b"error: not a number"))
@@ -186,10 +194,97 @@ async def test_plain(slave_port):
         sw.close()
 
 
+# a writable coil next to a read-only one, and a writable point whose name has a '/'
+ONE_POINT = [
+    {"name": "pump", "unit": 1, "fn": 1, "address": 0, "dtype": "bool", "writable": True},
+    {"name": "valve", "unit": 1, "fn": 1, "address": 1, "dtype": "bool"},
+    {"name": "line/valve", "unit": 1, "fn": 1, "address": 2, "dtype": "bool", "writable": True},
+    {"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "writable": True},
+]
+
+
+async def test_plain_one_point(slave_port):
+    """A /set writes its own point and nothing else, whatever the payload."""
+    fake, logs = FakeMqtt(), []
+    r, sw = await gateway("plain", slave_port, fake, ONE_POINT, logs)
+    pts = {p.name: p for p in r.mapping.modbus_poll.points}
+    COILS.update({0: False, 1: False, 2: False})
+    SEEN.clear()
+
+    async def answer_of(point, payload):
+        topic = f"plant/a/{point}/set"
+        before = len([t for t, _p in fake.published if t == topic + "/result"])
+        r._mqtt.handle_message(topic, payload)
+        assert await wait(lambda: len([t for t, _p in fake.published
+                                       if t == topic + "/result"]) > before), (point, payload)
+        return last(fake, topic + "/result")
+
+    def writes():
+        return [p for p in SEEN if p[0] in (5, 6, 15, 16)]
+
+    try:
+        assert sorted(fake.subscribed) == ["plant/a/line/valve/set", "plant/a/pump/set",
+                                           "plant/a/setpoint/set"], fake.subscribed
+        # a JSON list on one coil is not several coils (the next one is read-only)
+        for bad in (b"[1, 1]", b"[1]", b"[" + b"1," * 1967 + b"1]", b"2", b"yes", b"1.0",
+                    b"true false", b'"on"', b"\x00"):
+            res = await answer_of("pump", bad)
+            assert res.startswith(b"error: a coil takes one state"), (bad[:20], res)
+            assert len(res) < 120, f"the answer quotes the whole payload: {len(res)} bytes"
+        await asyncio.sleep(0.1)
+        assert writes() == [] and COILS == {0: False, 1: False, 2: False}, (writes(), COILS)
+        print("plain: a JSON list / any non-state on a coil -> error, nothing on the bus  OK")
+
+        # the point is the topic's, exactly: 'line/valve' is not the read-only 'valve'
+        assert await answer_of("line/valve", b"1") == b"ok"
+        assert (COILS[1], COILS[2]) == (False, True), COILS
+        assert writes() == [bytes([5, 0, 2, 0xFF, 0])], writes()
+        r._on_set_message("plant/a/valve/set", b"1")      # not a writable point's topic
+        r._mqtt.handle_message("plant/a/valve/set", b"1")
+        await asyncio.sleep(0.1)
+        assert COILS[1] is False and last(fake, "plant/a/valve/set/result") is None
+        print("plain: a point is found by its exact topic; a read-only point is never written  OK")
+
+        # a register takes one number of its own type, nothing else
+        for bad in (b"[1, 2]", b"1_000", b"nan", b"inf", b"0b11", b"1 2", b"true", b"9" * 100000):
+            res = await answer_of("setpoint", bad)
+            assert res.startswith(b"error: not a number"), (bad[:20], res)
+            assert len(res) < 120, len(res)
+        assert (await answer_of("setpoint", b"1e400")).startswith(b"error: value must be a finite")
+        for text, raw in ((b"0x10", 16), (b"010", 10), (b"+7", 7), (b"-0x2", 0xFFFE), (b"12.6", 13)):
+            assert await answer_of("setpoint", text) == b"ok", text
+            assert REGS[10] == raw, (text, REGS[10])
+        assert all(p[0] == 6 for p in writes()[1:]), writes()
+        print("plain: registers take one decimal / 0x / fractional number, written as the "
+              "point's type; lists and other text -> error  OK")
+
+        # write_point itself (every command path ends there) takes one value of the type
+        SEEN.clear()
+        for point, value, match in ((pts["pump"], [True, True], "is a coil"),
+                                    (pts["pump"], 1, "is a coil"),
+                                    (pts["pump"], "true", "is a coil"),
+                                    (pts["valve"], True, "not writable"),
+                                    (pts["setpoint"], True, "takes a number"),
+                                    (pts["setpoint"], [1, 2], "takes a number"),
+                                    (pts["setpoint"], "5", "takes a number")):
+            try:
+                await r.write_point(point, value)
+            except ValueError as e:
+                assert match in str(e), (value, str(e))
+            else:
+                raise AssertionError(f"write_point({point.name}, {value!r}) was accepted")
+        assert SEEN == [], SEEN
+        assert all(len(line) < 300 for line in logs), max(logs, key=len)[:200]
+        print("plain: write_point refuses lists, wrong types and non-writable points; "
+              "log lines stay short  OK")
+    finally:
+        sw.close()
+
+
 async def test_sparkplug(slave_port):
-    fake = FakeMqtt()
+    fake, logs = FakeMqtt(), []
     REGS[10], REGS[30] = 5, 42
-    r, sw = await gateway("sparkplug_b", slave_port, fake, SP_POINTS)
+    r, sw = await gateway("sparkplug_b", slave_port, fake, SP_POINTS, logs)
     t = lambda kind, dev=None: sparkplug.topic("ser2net", kind, "Line_3_PLC", dev)  # noqa: E731
 
     def decoded(kind, dev=None):
@@ -251,7 +346,28 @@ async def test_sparkplug(slave_port):
                                                     value="false"))
         await asyncio.sleep(0.3)
         assert COILS[0] is False, "a String 'false' switched the coil on"
+        # ... nor by a number, and a point that isn't writable takes nothing
+        SEEN.clear()
+        for metric in (sparkplug.Metric(name="pump", datatype=sparkplug.DataType.Int32, value=1),
+                       sparkplug.Metric(name="pump", datatype=sparkplug.DataType.Double, value=1.0),
+                       sparkplug.Metric(name="temp", datatype=sparkplug.DataType.Float, value=1.0),
+                       sparkplug.Metric(name="alarm", datatype=sparkplug.DataType.Boolean, value=False),
+                       sparkplug.Metric(name="x" * 5000, datatype=sparkplug.DataType.Boolean, value=True)):
+            writes(t("DCMD", "unit1"), metric)
+        await asyncio.sleep(0.3)
+        assert COILS[0] is False and DISCRETE[5] is True, (COILS, DISCRETE)
+        assert not [p for p in SEEN if p[0] in (5, 6, 15, 16)], SEEN
+        assert all(len(line) < 300 for line in logs), max(logs, key=len)[:200]
+        writes(t("DCMD", "unit1"), sparkplug.Metric(name="pump", datatype=sparkplug.DataType.Boolean,
+                                                    value=True))
+        assert await wait(lambda: COILS[0] is True)
+        assert [p for p in SEEN if p[0] in (5, 6, 15, 16)] == [bytes([5, 0, 0, 0xFF, 0])], SEEN
         births = len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")), len(decoded("DBIRTH", "unit2"))
+        for value, datatype in ((1, sparkplug.DataType.Int32), ("true", sparkplug.DataType.String)):
+            writes(t("NCMD"), sparkplug.Metric(name="Node Control/Rebirth", datatype=datatype,
+                                               value=value))
+        again = len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")), len(decoded("DBIRTH", "unit2"))
+        assert again == births, "a rebirth needs a Boolean true"
         writes(t("NCMD"), sparkplug.Metric(name="Node Control/Rebirth",
                                            datatype=sparkplug.DataType.Boolean, value=True))
         again = len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")), len(decoded("DBIRTH", "unit2"))
@@ -283,6 +399,7 @@ async def main():
     srv = await asyncio.start_server(fake_slave, "127.0.0.1", port)
     try:
         await test_plain(port)
+        await test_plain_one_point(port)
         await test_sparkplug(port)
     finally:
         srv.close()

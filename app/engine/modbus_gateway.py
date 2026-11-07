@@ -20,16 +20,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
-from ..config import MappingConfig
+from ..config import MappingConfig, ModbusPoint
 from . import modbus, sockopts
 from .access import AccessPolicy, server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
 )
+from .mqtt_pub import shown
 from .serial_link import SerialLink
 
 if TYPE_CHECKING:
@@ -83,6 +85,11 @@ class ModbusGatewayRunner:
         self._sparkplug: Optional[SparkplugNode] = None  # payload format sparkplug_b
         self._write_tasks: set = set()
         self._poll_task: Optional[asyncio.Task] = None
+        # plain MQTT: the command topic of each writable point, matched exactly (a point
+        # name is never read back out of a topic)
+        base = mapping.mqtt.base_topic.rstrip("/")
+        self._set_points: dict[str, ModbusPoint] = {
+            f"{base}/{p.name}/set": p for p in mapping.modbus_poll.points if p.writable}
         self._access = AccessPolicy(mapping.network)
         # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
         baud = max(1, mapping.serial.baudrate)
@@ -146,10 +153,9 @@ class ModbusGatewayRunner:
                 self._mqtt = self._sparkplug.publisher()
             else:
                 from .mqtt_pub import MqttPublisher
-                base = mq.base_topic.rstrip("/")
-                subs = {f"{base}/{p.name}/set": self._on_set_message
-                        for p in self.mapping.modbus_poll.points if p.writable}
-                self._mqtt = MqttPublisher(mq, logger=self._log, subscriptions=subs)
+                self._mqtt = MqttPublisher(
+                    mq, logger=self._log,
+                    subscriptions=dict.fromkeys(self._set_points, self._on_set_message))
             self._mqtt.connect()
             self._poll_task = asyncio.create_task(
                 self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
@@ -279,21 +285,24 @@ class ModbusGatewayRunner:
             except asyncio.TimeoutError:
                 pass
 
-    # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug NCMD) ----
+    # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug DCMD) ----
     async def write_point(self, point, value) -> None:
-        """Write a value to a writable point (coils: FC5, or FC15 for a list of
-        states; holding registers: FC6 for 16-bit types, FC16 for 32-bit), check the
-        slave's reply, then read the point back and publish it."""
+        """Write one value to one writable point, and nothing beyond it: a coil takes a
+        bool (FC5), a holding register a number, encoded as the point's own type (FC6 for
+        a 16-bit type, FC16 for the two registers of a 32-bit one). Check the slave's
+        reply, then read the point back and publish it."""
         if not point.writable:
             raise ValueError(f"point {point.name!r} is not writable")
         if point.fn == modbus.READ_COILS:
-            # passed through unchanged: the PDU builders accept only bool / 0 / 1, so a
-            # stray value (a Sparkplug String "false", an Int 2) can't switch a coil ON
-            if isinstance(value, (list, tuple)):
-                pdu = modbus.write_multiple_coils_pdu(point.address, list(value))
-            else:
-                pdu = modbus.write_single_coil_pdu(point.address, value)
+            # only a bool: never a list (several coils), a number (a Sparkplug Int 2) or
+            # text (a Sparkplug String "false")
+            if not isinstance(value, bool):
+                raise ValueError(f"{point.name!r} is a coil: it takes true or false, "
+                                 f"not {shown(value)}")
+            pdu = modbus.write_single_coil_pdu(point.address, value)
         else:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{point.name!r} takes a number, not {shown(value)}")
             regs = modbus.encode_value(value, point.dtype, point.scale or 1.0)
             pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
                    else modbus.write_multiple_registers_pdu(point.address, regs))
@@ -312,7 +321,7 @@ class ModbusGatewayRunner:
                 await self.write_point(point, value)
             except Exception as e:
                 err = str(e) or type(e).__name__
-                self._log(f"write '{point.name}' = {value!r} failed: {err}")
+                self._log(f"write '{point.name}' = {shown(value)} failed: {err}")
             if done is not None:
                 done(err)
         task = asyncio.create_task(run(), name=f"modbus-write:{point.name}")
@@ -320,8 +329,9 @@ class ModbusGatewayRunner:
         task.add_done_callback(self._write_tasks.discard)
 
     def _on_set_message(self, topic: str, payload: bytes) -> None:
-        name = topic.rsplit("/", 2)[-2]
-        point = next((p for p in self.mapping.modbus_poll.points if p.name == name), None)
+        """Plain MQTT: a value for one writable point on its <base_topic>/<point>/set; the
+        outcome goes to .../set/result (ok, or error: …)."""
+        point = self._set_points.get(topic)
         if point is None or self._mqtt is None:
             return
         result = topic + "/result"
@@ -454,28 +464,30 @@ class ModbusGatewayRunner:
                       f"({len(self._clients)} total)")
 
 
+# a holding register's value: a decimal integer, 0x hex, or a decimal fraction / exponent
+_NUMBER = re.compile(r"[+-]?(?:0[xX][0-9a-fA-F]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)")
+_NUMBER_MAX_LEN = 64
+
+
 def parse_write_payload(payload: bytes, point):
-    """An MQTT write request's value: coils take 1/0, true/false, on/off (or a JSON
-    list of those for consecutive coils, FC15); registers a number."""
+    """The value of a plain-MQTT write to ``point``: one coil state (1/0, true/false or
+    on/off), or one number for a holding register (decimal, 0x hex, or a decimal fraction
+    or exponent; write_point encodes it as the point's type). Anything else, a JSON list
+    included, raises ValueError: a command writes the point it was sent to, nothing more."""
     text = payload.decode("utf-8", "replace").strip()
     if point.fn == modbus.READ_COILS:
-        if text.startswith("["):
-            import json
-            items = json.loads(text)
-            if not isinstance(items, list) or not items:
-                raise ValueError("expected a JSON list of coil states")
-            return [_coil(str(v)) for v in items]
         return _coil(text)
-    try:
-        return float(text) if any(c in text for c in ".eE") else int(text, 0)
-    except ValueError:
-        raise ValueError(f"not a number: {text!r}") from None
+    if len(text) > _NUMBER_MAX_LEN or not _NUMBER.fullmatch(text):
+        raise ValueError(f"not a number: {shown(text)}")
+    if "x" in text or "X" in text:
+        return int(text, 16)
+    return float(text) if any(c in text for c in ".eE") else int(text)
 
 
 def _coil(text: str) -> bool:
-    t = text.strip().lower()
+    t = text.lower()
     if t in ("1", "true", "on"):
         return True
     if t in ("0", "false", "off"):
         return False
-    raise ValueError(f"a coil takes 1/0, true/false or on/off, not {text!r}")
+    raise ValueError(f"a coil takes one state: 1/0, true/false or on/off, not {shown(text)}")

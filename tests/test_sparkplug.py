@@ -3,7 +3,8 @@
 Pure stdlib, cross-platform -- round-trips every supported datatype, checks the
 exact wire bytes of a small payload worked out by hand from the protobuf encoding
 rules, feeds the decoder unknown fields, truncated and random input, and covers
-the topic / id / seq / datatype helpers. Run:
+the topic / id / seq / datatype helpers; and the edge node's handling of NCMD / DCMD
+commands, with the bus write replaced by a recorder. Run:
     python3 tests/test_sparkplug.py
 """
 import math
@@ -462,6 +463,59 @@ def test_edge_node_message_flow():
     print("NBIRTH / alias NDATA / NCMD rebirth / NDEATH flow round-trips  OK")
 
 
+NODE_POINTS = [
+    {"name": "pump", "unit": 1, "fn": 1, "address": 0, "dtype": "bool", "writable": True},
+    {"name": "valve", "unit": 1, "fn": 1, "address": 1, "dtype": "bool"},
+    {"name": "level", "unit": 2, "fn": 3, "address": 0, "dtype": "uint16", "writable": True},
+]
+
+
+def edge_node(**network):
+    """A SparkplugNode for NODE_POINTS whose writes are recorded instead of reaching a bus,
+    and whose births are counted instead of published (no broker, no gateway)."""
+    from app.config import MappingConfig
+    from app.engine.sparkplug_node import SparkplugNode
+    m = MappingConfig.from_dict({
+        "name": "edge", "serial": {"port": "COM3"},
+        "network": dict({"protocol": "modbus", "port": 502}, **network),
+        "mqtt": {"enabled": True, "host": "h", "base_topic": "t", "payload_format": "sparkplug_b"},
+        "modbus_poll": {"points": NODE_POINTS}})
+    m.validate()
+    writes, logs, births = [], [], []
+    node = SparkplugNode(m, logs.append, lambda point, value: writes.append((point.name, value)))
+    node.birth = lambda: births.append(1)
+
+    def command(kind, device, *metrics):
+        topic = sparkplug.topic(node.group, kind, node.node, device)
+        payload = sparkplug.encode_payload(Payload(0, list(metrics), None), include_datatype=False)
+        (node.on_node_command if kind == "NCMD" else node.on_device_command)(topic, payload)
+    return node, command, writes, logs, births
+
+
+def test_node_commands():
+    """A DCMD writes only a writable point of its own device; an NCMD writes nothing and
+    asks for a rebirth only with a Boolean true; log lines quote long names short."""
+    _node, command, writes, logs, births = edge_node()
+    command("DCMD", "unit1", Metric("pump", T.Boolean, True), Metric("valve", T.Boolean, True),
+            Metric("level", T.UInt16, 5))           # level is a point of unit2
+    command("DCMD", "unit2", Metric("level", T.UInt16, 7))
+    command("DCMD", "unit9", Metric("level", T.UInt16, 9))   # no such device
+    command("NCMD", None, Metric("pump", T.Boolean, True))   # points are written with a DCMD
+    assert writes == [("pump", True), ("level", 7)], writes
+    assert sum("ignored (not a writable point)" in line for line in logs) == 2, logs
+    for value, datatype in ((1, T.Int32), ("true", T.String), (False, T.Boolean)):
+        command("NCMD", None, Metric(sparkplug.REBIRTH, datatype, value))
+    assert births == [], "a rebirth needs a Boolean true"
+    command("NCMD", None, Metric(sparkplug.REBIRTH, T.Boolean, True))
+    assert births == [1]
+    command("DCMD", "unit1", Metric("x" * 5000, T.Boolean, True))
+    command("NCMD", None, Metric("y" * 5000, T.Boolean, True))
+    assert writes == [("pump", True), ("level", 7)] and all(len(line) < 200 for line in logs), \
+        max(logs, key=len)[:120]
+    print("edge node: DCMD writes only its device's writable points, NCMD never writes, "
+          "rebirth only on Boolean true, long names logged short  OK")
+
+
 def main():
     test_varint_primitives()
     test_wire_bytes_by_hand()
@@ -476,7 +530,8 @@ def main():
     test_sanitize_id()
     test_datatype_for_modbus_values()
     test_edge_node_message_flow()
-    print("\nPASS: Sparkplug B payload codec")
+    test_node_commands()
+    print("\nPASS: Sparkplug B payload codec + edge node commands")
 
 
 if __name__ == "__main__":

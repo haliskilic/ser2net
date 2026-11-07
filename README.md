@@ -70,7 +70,9 @@ düzenlemeye gerek yok.
   Banner, open/close string ve `closeon` burada kullanılmaz (Modbus çerçevelerini bozar).
   **Edge modu:** coil ve register'ları periyodik okuyup MQTT'ye yayınlar (bool,
   uint/int/float 16/32, ölçek); `"writable": true` noktalar MQTT'den yazılır
-  (`<topic>/<nokta>/set` → FC5/FC15 coil, FC6/FC16 register). İstenirse **Sparkplug B**
+  (`<topic>/<nokta>/set`, yalnızca o noktaya tek değer: coil için FC5, holding register için
+  kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
+  `.../set/result`'ta `error: …` alır). İstenirse **Sparkplug B**
   edge node olarak, her Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH,
   `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
