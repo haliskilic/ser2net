@@ -88,11 +88,13 @@ def take_tcp_adu(buf: bytearray) -> tuple[int, int, bytes] | None:
 
 def exception_pdu(function: int, code: int) -> bytes:
     """A Modbus exception PDU: function|0x80 followed by the exception code.
-    Code 0x0B = gateway target device failed to respond (RTU timeout)."""
+    Code 0x0B = gateway target device failed to respond (RTU timeout), 0x0A = gateway
+    path unavailable (the serial port is down)."""
     return bytes([(function | 0x80) & 0xFF, code & 0xFF])
 
 
 ILLEGAL_FUNCTION = 0x01       # exception code: the function is not allowed here
+GATEWAY_PATH_UNAVAILABLE = 0x0A  # exception code: no path to the slaves (the port is down)
 GATEWAY_TARGET_FAILED = 0x0B  # exception code for a non-responding RTU slave
 
 # Requests that only read (Modbus Application Protocol v1.1b3): what a read-only gateway

@@ -83,7 +83,8 @@ def test_take_tcp_adu_streaming_and_errors():
 
 def test_exception_pdu():
     assert modbus.exception_pdu(0x03, modbus.GATEWAY_TARGET_FAILED) == bytes([0x83, 0x0B])
-    print("exception_pdu sets the high bit and the 0x0B gateway-timeout code  OK")
+    assert modbus.exception_pdu(0x10, modbus.GATEWAY_PATH_UNAVAILABLE) == bytes([0x90, 0x0A])
+    print("exception_pdu sets the high bit; 0x0B gateway-timeout, 0x0A path unavailable  OK")
 
 
 def test_read_request_allow_list():

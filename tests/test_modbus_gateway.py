@@ -6,7 +6,8 @@ _transaction path: a Modbus/TCP master -> gateway -> RTU slave -> back, includin
 transaction-id integrity and the gateway-timeout exception. With serial_io.open_serial
 replaced by that fake bus, the real start() / serial supervision runs too: the port
 goes away (its transport is closed, as the serial library does on an I/O error) and
-comes back, and the gateway must reopen it and report the outage. Masters are admitted
+comes back, and the gateway must reopen it and report the outage, answering 0x0A at once
+meanwhile (while a slow first open at start-up is waited for). Masters are admitted
 like bridge clients (allow-list, max connections, kick_old_user, priority IPs), and a
 read-only gateway answers anything that is not a read with exception 01 without
 touching the bus.
@@ -34,6 +35,7 @@ WRONG_UNIT = 7   # slave answers but with a different unit id (must be rejected)
 SLAVE_RESPONSE_PDU = bytes([0x03, 0x04, 0x00, 0x0A, 0x00, 0x0B])  # read regs: 2 words
 READ_PDU = bytes([0x03, 0x00, 0x00, 0x00, 0x02])
 TIMEOUT_PDU = bytes([0x83, modbus.GATEWAY_TARGET_FAILED])
+UNAVAILABLE_PDU = bytes([0x83, modbus.GATEWAY_PATH_UNAVAILABLE])
 
 
 def free_port():
@@ -100,12 +102,14 @@ class FakePort:
     fail as for an unplugged adapter; unplug() also closes the open port's transport,
     which is what the serial library does when a read or write on the port fails."""
 
-    def __init__(self, slave_port):
+    def __init__(self, slave_port, delay=0.0):
         self.slave_port = slave_port
         self.present = True
+        self.delay = delay  # an open that takes this long (a slow driver at start-up)
         self.opens = []  # the writer of each opened port
 
     async def open(self, settings):
+        await asyncio.sleep(self.delay)
         if not self.present:
             raise OSError(2, f"could not open port {settings.port}: No such file or directory")
         r, w = await asyncio.open_connection("127.0.0.1", self.slave_port)
@@ -117,12 +121,13 @@ class FakePort:
         self.opens[-1].transport.abort()
 
 
-def gateway_mapping(gw_port, options=None, **network):
+def gateway_mapping(gw_port, options=None, points=None, **network):
     return MappingConfig.from_dict({
         "name": "mb", "kind": "net", "serial": {"port": "/dev/ttyUSB-fake", "baudrate": 9600},
         "network": dict({"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
                          "port": gw_port, "max_connections": 4}, **network),
-        "options": dict({"modbus_response_timeout_s": 0.4}, **(options or {}))})
+        "options": dict({"modbus_response_timeout_s": 0.4}, **(options or {})),
+        "modbus_poll": {"interval_s": 0.1, "points": points or []}})
 
 
 @contextlib.asynccontextmanager
@@ -224,21 +229,28 @@ async def test_request_path(slave_port):
 
 async def test_reopen_after_port_loss(slave_port):
     """The port goes away while the gateway runs (no request in flight) and comes back:
-    the gateway reports the outage, answers 0x0B meanwhile, reopens the port and the
-    same master connection works again. A silent slave is not a lost port."""
+    the gateway reports the outage, answers 0x0A (gateway path unavailable) at once
+    meanwhile -- queued requests don't wait a response timeout each -- and polls nothing,
+    reopens the port, and the same master connection works again. A silent slave is not
+    a lost port."""
     port = FakePort(slave_port)
     real_open, serial_io.open_serial = serial_io.open_serial, port.open
     gw_port = free_port()
-    mapping = gateway_mapping(gw_port)
+    mapping = gateway_mapping(gw_port, points=[{"name": "level", "unit": RESPONSIVE_UNIT,
+                                                "fn": 3, "address": 0, "dtype": "uint16"}])
     logs = []
     runner = ModbusGatewayRunner(mapping, logger=logs.append)
     names = {mapping.id: mapping.name}
+    polled = []
+    runner._publish_values = polled.append  # what the poll loop would publish
+    poll = None
 
     def snap():
         return {mapping.id: runner.status.as_dict()}
 
     try:
         await runner.start()
+        poll = asyncio.create_task(runner._poll_loop())  # (start() polls only with MQTT on)
         assert await wait_for(lambda: runner.status.state == "running" and port.opens), \
             runner.status.as_dict()
         mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
@@ -263,39 +275,100 @@ async def test_reopen_after_port_loss(slave_port):
         print(f"port lost: state={runner.status.state}, reconnects={runner.status.reconnects}, "
               f"device_lost event ({lost[mapping.id]['last_error']})  OK")
 
-        # requests during the outage get the gateway-timeout exception
-        assert await request(mr, mw, 0x0103, RESPONSIVE_UNIT) == TIMEOUT_PDU
+        # requests during the outage get 0x0A at once: two masters with two requests each
+        # are answered within one response timeout (they used to wait one timeout apiece)
+        mr2, mw2 = await asyncio.open_connection("127.0.0.1", gw_port)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        for w, txns in ((mw, (0x0103, 0x0104)), (mw2, (0x0203, 0x0204))):
+            for txn in txns:
+                w.write(modbus.build_tcp_adu(txn, RESPONSIVE_UNIT, READ_PDU))
+
+        async def two_answers(r):
+            return [await read_tcp_adu(r) for _ in range(2)]
+        answers = sum(await asyncio.gather(two_answers(mr), two_answers(mr2)), [])
+        elapsed = loop.time() - started
+        assert sorted((t, p) for t, _u, p in answers) == [
+            (t, UNAVAILABLE_PDU) for t in (0x0103, 0x0104, 0x0203, 0x0204)], answers
+        assert elapsed < runner._resp_timeout, f"answered after {elapsed:.2f}s"
+        # nothing is polled meanwhile (the outage is logged once, by the link; only a read
+        # in flight when the port went away failed)
+        await asyncio.sleep(0.3)
+        quiet, seen = len(polled), len(logs)
+        await asyncio.sleep(0.3)
+        assert len(polled) == quiet, "polled while the port was down"
+        assert not any(line.startswith("poll ") for line in logs[seen:]), logs[seen:]
+        mw2.close()
+        print(f"port down: 4 requests from 2 masters -> 0x0A in {elapsed * 1000:.0f} ms, "
+              "nothing polled  OK")
 
         # it comes back: a second open, running again, the same master connection works
         port.present = True
         assert await wait_for(lambda: runner.status.state == "running" and len(port.opens) == 2,
                               timeout=20), runner.status.as_dict()
-        assert await request(mr, mw, 0x0104, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        assert await request(mr, mw, 0x0105, RESPONSIVE_UNIT) == SLAVE_RESPONSE_PDU
+        assert await wait_for(lambda: len(polled) > quiet), "polling resumes"
         events = notify.status_events(notify.snapshot(lost), snap(), names)
         assert [e[0] for e in events] == ["device_back"], events
         assert sum("serial open:" in line for line in logs) == 2, logs
         assert any("serial error:" in line for line in logs), logs
-        print("port back: reopened (2nd open), running, device_back event, master served again  OK")
+        print("port back: reopened (2nd open), running, device_back event, master served "
+              "again, polling resumes  OK")
         mw.close()
     finally:
         serial_io.open_serial = real_open
+        if poll is not None:
+            poll.cancel()
+            with suppress(asyncio.CancelledError):
+                await poll
         await asyncio.wait_for(runner.stop(), timeout=10)
     assert runner.status.state == "stopped" and not runner._link.is_open
 
 
 async def test_missing_port_at_start(slave_port):
     """A port that can't be opened while the listener comes up is reported at once, not
-    shown as running until the next attempt."""
+    shown as running until the next attempt, and masters get 0x0A at once."""
     port = FakePort(slave_port)
     port.present = False
     real_open, serial_io.open_serial = serial_io.open_serial, port.open
-    runner = ModbusGatewayRunner(gateway_mapping(free_port()), logger=lambda _m: None)
+    gw_port = free_port()
+    runner = ModbusGatewayRunner(gateway_mapping(gw_port), logger=lambda _m: None)
     try:
         await runner.start()
         st = runner.status
         assert st.state in ("reconnecting", "device-missing"), st.as_dict()
         assert "could not open" in st.last_error, st.as_dict()
-        print(f"port missing at start: state={st.state} right after start()  OK")
+        mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        assert await request(mr, mw, 1, RESPONSIVE_UNIT) == UNAVAILABLE_PDU
+        assert loop.time() - started < runner._resp_timeout
+        mw.close()
+        print(f"port missing at start: state={st.state} right after start(), 0x0A at once  OK")
+    finally:
+        serial_io.open_serial = real_open
+        await asyncio.wait_for(runner.stop(), timeout=10)
+
+
+async def test_slow_first_open(slave_port):
+    """Requests that arrive while the port's first open is still under way wait for it
+    (up to the response timeout, all together) and are served, not refused."""
+    port = FakePort(slave_port, delay=0.15)
+    real_open, serial_io.open_serial = serial_io.open_serial, port.open
+    gw_port = free_port()
+    # a response timeout well above the open's delay: the wait for the port is bounded by it
+    runner = ModbusGatewayRunner(gateway_mapping(gw_port, {"modbus_response_timeout_s": 2.0}),
+                                 logger=lambda _m: None)
+    try:
+        await runner.start()
+        assert not runner._link.is_open and not runner._link.down, "the first open is under way"
+        masters = [await asyncio.open_connection("127.0.0.1", gw_port) for _ in range(3)]
+        replies = await asyncio.gather(*(request(r, w, 0x10 + i, RESPONSIVE_UNIT)
+                                         for i, (r, w) in enumerate(masters)))
+        assert replies == [SLAVE_RESPONSE_PDU] * 3, replies
+        for _r, w in masters:
+            w.close()
+        print("slow first open: requests at start-up wait for the port and are served  OK")
     finally:
         serial_io.open_serial = real_open
         await asyncio.wait_for(runner.stop(), timeout=10)
@@ -431,6 +504,7 @@ async def main():
         await test_request_path(slave_port)
         await test_reopen_after_port_loss(slave_port)
         await test_missing_port_at_start(slave_port)
+        await test_slow_first_open(slave_port)
         await test_read_only()
         await test_master_admission(slave_port)
         await test_unused_options_logged(slave_port)
