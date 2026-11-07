@@ -136,6 +136,8 @@ _OPTIONAL_FORM_FIELDS = {
     "network_client_queue_max": ("network", ("client_queue_max",)),
     "opt_banner": ("options", ("banner",)),
     "opt_closeon": ("options", ("closeon",)),
+    # a checkbox (absent when unticked) shown for RFC 2217 mappings only
+    "opt_rfc2217_restore_on_disconnect_shown": ("options", ("rfc2217_restore_on_disconnect",)),
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
@@ -197,6 +199,9 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_trace_max_mb" in form:
         options["trace_max_mb"] = _num(form, "opt_trace_max_mb", 10.0, strict=strict, cast=float)
         options["trace_keep"] = _num(form, "opt_trace_keep", 3, strict=strict)
+    if "opt_rfc2217_restore_on_disconnect_shown" in form:
+        options["rfc2217_restore_on_disconnect"] = _checkbox(
+            form, "opt_rfc2217_restore_on_disconnect")
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),

@@ -760,6 +760,30 @@ class MappingRunner:
             for c in list(self._clients):
                 c.serial_changed(serial)
 
+    def _restore_port_settings(self) -> None:
+        """rfc2217_restore_on_disconnect: once the RFC 2217 client has left, put the port
+        back to this mapping's settings, so what comes next (the next client, the console,
+        MQTT, a trace) runs at what the mapping says. Only what the mapping sets and a
+        client can change over RFC 2217 (baud rate, data bits, parity, stop bits, flow
+        control): RTS/DTR stay as they are, since toggling them can reset a device."""
+        m = self.mapping
+        ser = self._link.serial
+        if (m.network.protocol != "rfc2217" or not m.options.rfc2217_restore_on_disconnect
+                or ser is None or self._clients or self._stop.is_set()):
+            return
+        restored = False
+        for name, value in serial_io.port_settings(m.serial).items():
+            try:
+                if getattr(ser, name) != value:
+                    setattr(ser, name, value)
+                    restored = True
+            except Exception as e:
+                self._log(f"serial setting not restored ({name} {value!r}): "
+                          f"{type(e).__name__}: {e}")
+        if restored:
+            self._log(f"serial settings restored to the mapping's ({m.serial.compact()}, "
+                      f"flow control {m.serial.flowcontrol}) after the RFC 2217 client left")
+
     async def _serial_open(self) -> bool:
         """Wait until the serial port is open; False when the mapping stops first."""
         link = self._link
@@ -867,6 +891,7 @@ class MappingRunner:
             why = f" — {client.close_reason}" if client.close_reason else ""
             self._log(f"client disconnected: {peer_label} after {held}{why} "
                       f"({len(self._clients)} total)")
+            self._restore_port_settings()
             # closestr to device when the last client leaves
             sw = self._link.writer
             if not self._clients and self.mapping.options.closestr and sw:
@@ -937,6 +962,7 @@ class MappingRunner:
                     held = fmt_duration(time.time() - client.connected_at)
                     why = f" — {client.close_reason}" if client.close_reason else ""
                     self._log(f"connect-out link to {target} closed after {held}{why}")
+                    self._restore_port_settings()
             except asyncio.CancelledError:
                 raise
             except Exception as e:

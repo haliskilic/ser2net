@@ -265,6 +265,33 @@ def test_mapping_form_udp_fields():
     print("mapping form: UDP reply address / peer timeout in one UDP-only block  OK")
 
 
+def test_mapping_form_rfc2217_restore():
+    """'Restore the serial settings when the RFC 2217 client leaves' is offered for RFC 2217
+    mappings only, its hidden presence marker in the same block (posted exactly when the
+    checkbox is offered), ticked when the option is on."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    for on in (False, True):
+        m = MappingConfig.from_dict({"id": "vc1", "name": "vc", "serial": {"port": "COM3"},
+                                     "network": {"protocol": "rfc2217", "port": 4001},
+                                     "options": {"rfc2217_restore_on_disconnect": on}})
+        root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                                ports=[], ips=[], error=None))
+        owners = []
+        for name in ("opt_rfc2217_restore_on_disconnect",
+                     "opt_rfc2217_restore_on_disconnect_shown"):
+            field = next(n for n in root.walk() if n.attrs.get("name") == name)
+            owners.append(next(a for a in field.ancestors() if "data-show-when" in a.attrs))
+            if name == "opt_rfc2217_restore_on_disconnect":
+                assert ("checked" in field.attrs) is on, field.attrs
+        assert owners[0] is owners[1], "the marker and the checkbox share one block"
+        assert owners[0].attrs["data-show-when"] == "network_protocol=rfc2217", owners[0].attrs
+    print("mapping form: the RFC 2217 restore option, for RFC 2217 mappings only  OK")
+
+
 def test_mqtt_command_tags():
     """The dashboard tags a Modbus mapping whose writable points take MQTT commands CMD,
     as a warning (CMD ⚠) when its broker connection has no TLS or no username; a read-only
@@ -317,6 +344,7 @@ def main():
     test_ports_table_and_assets()
     test_mapping_form_modbus_fields()
     test_mapping_form_udp_fields()
+    test_mapping_form_rfc2217_restore()
     test_mqtt_command_tags()
     print("\nPASS: UI markup contract")
 

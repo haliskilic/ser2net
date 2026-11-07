@@ -18,7 +18,10 @@ with the current setting, the client stays connected (no sockets, no serial hard
     has nothing to do; a reopened port that refuses the client's settings ends the
     session with the reason; a read-only session never configures the reopened port;
   - the bridge: SerialLink reports each change of its pyserial object, the runner hands
-    it to its RFC 2217 clients, and an RFC 2217 session never starts without a port.
+    it to its RFC 2217 clients, and an RFC 2217 session never starts without a port;
+  - with rfc2217_restore_on_disconnect the port goes back to the mapping's baud rate,
+    data bits, parity, stop bits and flow control once the client has left (RTS/DTR left
+    as they are); off (the default), what the client set stays.
 
 Run: python3 tests/test_rfc2217_settings.py
 """
@@ -369,11 +372,12 @@ def test_read_only_session_leaves_reopened_port_alone():
     print("read-only: a reopened port is not configured, its settings are reported  OK")
 
 
-def rfc2217_runner(logs, mode="server"):
+def rfc2217_runner(logs, mode="server", **options):
     net = {"protocol": "rfc2217", "bind_ip": "127.0.0.1", "port": 48503, "mode": mode}
     if mode == "client":
         net.update(remote_host="127.0.0.1", remote_port=48504)
-    m = MappingConfig.from_dict({"name": "r", "serial": {"port": "/dev/ttyX"}, "network": net})
+    m = MappingConfig.from_dict({"name": "r", "serial": {"port": "/dev/ttyX"}, "network": net,
+                                 "options": options})
     return bridge.MappingRunner(m, logger=logs.append)
 
 
@@ -437,6 +441,44 @@ async def _no_session_without_a_port():
     assert await asyncio.wait_for(wait, 1) is False
 
 
+async def _restore_on_disconnect():
+    for on in (True, False):
+        logs = []
+        runner = rfc2217_runner(logs, rfc2217_restore_on_disconnect=on)
+        ser = FakeSerial()  # the mapping's 9600 8N1, no flow control
+        runner._link.attach(asyncio.StreamReader(), _Writer(), ser, "/dev/ttyX")
+        # what an RFC 2217 client set
+        ser.baudrate, ser.parity, ser.stopbits, ser.rtscts, ser.dtr = 19200, "E", 2, True, False
+        client = object()
+        runner._clients.add(client)
+        runner._restore_port_settings()  # the client is still there: nothing yet
+        assert ser.baudrate == 19200
+        runner._clients.discard(client)
+        runner._restore_port_settings()
+        if on:
+            assert ser.settings() == (9600, 8, "N", 1, False, False, False), ser.settings()
+            assert ser.dtr is False, "RTS/DTR are left as they are"
+            assert any("serial settings restored to the mapping's (9600N81, flow control none)"
+                       in ln for ln in logs), logs
+        else:
+            assert ser.settings() == (19200, 8, "E", 2, False, True, False)
+            assert not any("restored" in ln for ln in logs), logs
+        # nothing to restore: nothing logged; and never while the mapping stops
+        n = len(logs)
+        runner._restore_port_settings()
+        assert len(logs) == n
+        ser.baudrate = 115200
+        runner._stop.set()
+        runner._restore_port_settings()
+        assert ser.baudrate == 115200
+
+
+def test_restore_on_disconnect():
+    asyncio.run(_restore_on_disconnect())
+    print("restore on disconnect: on, the port gets the mapping's settings back once the "
+          "client has left (not RTS/DTR); off, the client's stay  OK")
+
+
 def test_bridge_follows_the_port():
     asyncio.run(_bridge_follows_the_port())
     asyncio.run(_no_session_without_a_port())
@@ -457,6 +499,7 @@ def main():
     test_reopened_port_refusing_client_settings()
     test_read_only_session_leaves_reopened_port_alone()
     test_bridge_follows_the_port()
+    test_restore_on_disconnect()
     print("\nPASS: RFC 2217 refuses what it can't carry out with the current setting, and "
           "follows a reopened port")
 

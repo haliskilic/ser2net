@@ -12,7 +12,9 @@ speaking RFC 2217 bytes) against our server, over socat PTYs (Linux, needs socat
     stays connected (what it changes meanwhile is acknowledged and waits for the port),
     the reopened port is a new serial object that gets the client's settings (at the OS
     level too), data flows both ways and later changes reach the new port, not the old;
-  - a connect-out RFC 2217 mapping connects only once its serial port is open.
+  - a connect-out RFC 2217 mapping connects only once its serial port is open;
+  - what a client set stays on the port after it leaves (the default), or, with
+    rfc2217_restore_on_disconnect, the port goes back to the mapping's settings.
 
 socat links the PTYs under fixed names (pty,link=...), so a test can stop it (the device
 vanishes, as an unplugged USB adapter does) and start it again under the same path.
@@ -142,6 +144,13 @@ async def test_data_and_baud_change(folder):
         print("client received:", got2)
         assert got2 == b"pong", got2
         print("RFC2217 data + live baud change work  OK")
+
+        # by default what the client set stays when it leaves
+        await asyncio.to_thread(client.close)
+        client = None
+        assert await wait_for(lambda: sup.status(mapping.id)["client_count"] == 0)
+        await asyncio.sleep(0.2)
+        assert runner.serial_instance.baudrate == 19200
     finally:
         if client is not None:
             await asyncio.to_thread(client.close)
@@ -258,6 +267,32 @@ async def test_refused_values(folder):
 LOST = ("reconnecting", "device-missing")
 
 
+async def test_restore_on_disconnect(folder):
+    dev = Device(folder)
+    await dev.plug()
+    sup, mapping, logs = await start(dev, rfc2217_restore_on_disconnect=True)
+    client = None
+    try:
+        runner = sup._runners[mapping.id]
+        client = await asyncio.to_thread(open_client, mapping.network.port)  # 19200
+        await asyncio.to_thread(setattr, client, "stopbits", serial.STOPBITS_TWO)
+        ser = runner.serial_instance
+        assert (ser.baudrate, ser.stopbits) == (19200, 2)
+        await asyncio.to_thread(client.close)
+        client = None
+        assert await wait_for(lambda: any("serial settings restored" in ln for ln in logs)), logs
+        assert runner.serial_instance is ser and (ser.baudrate, ser.stopbits) == (9600, 1)
+        attrs = termios.tcgetattr(ser.fd)
+        assert attrs[4] == termios.B9600 and not attrs[2] & termios.CSTOPB, attrs
+        print("rfc2217_restore_on_disconnect: the port is back at the mapping's settings once "
+              "the client has left  OK")
+    finally:
+        if client is not None:
+            await asyncio.to_thread(client.close)
+        await sup.stop_all()
+        await dev.unplug()
+
+
 async def test_reopen_under_connected_client(folder):
     dev = Device(folder)
     await dev.plug()
@@ -365,10 +400,11 @@ async def main():
         await test_refused_values(folder)
         await test_reopen_under_connected_client(folder)
         await test_connect_out_waits_for_the_port(folder)
+        await test_restore_on_disconnect(folder)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
     print("\nPASS: RFC2217 data + live baud change, bounded subnegotiation, refused values, "
-          "reopened port, connect-out")
+          "reopened port, connect-out, restore on disconnect")
 
 
 if __name__ == "__main__":
