@@ -361,7 +361,9 @@ def routes(ctx: Ctx) -> list:
         upload = form.get("file")
         try:
             raw = await upload.read() if hasattr(upload, "read") else str(upload or "").encode()
-            plan = importer.parse_mappings_file(raw, getattr(upload, "filename", "") or "")
+            # parsing is bounded, but a big file still takes a moment: not on the event loop
+            plan = await asyncio.to_thread(importer.parse_mappings_file, raw,
+                                           getattr(upload, "filename", "") or "")
         except ConfigError as e:
             return await settings_get(request, error=_("Import failed: {0}").format(e))
         mode = form.get("mode", "merge")
@@ -630,7 +632,9 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/oidc", settings_oidc_post, methods=["POST"]),
         Route("/settings/cluster", settings_cluster_post, methods=["POST"]),
         Route("/settings/config/export", config_export),
-        Route("/settings/config/import", config_import, methods=["POST"]),
+        # the body is refused (413) past the import file limit, before it is spooled
+        Route("/settings/config/import", config_import, methods=["POST"],
+              max_body_size=importer.MAX_FILE_BYTES + 64 * 1024),  # + the form's other fields
         Route("/settings/config/import/apply", config_import_apply, methods=["POST"]),
         Route("/settings/notifications", settings_notifications_post, methods=["POST"]),
         Route("/settings/audit", audit_page),
