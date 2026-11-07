@@ -111,11 +111,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7   # drives the build scripts; the exe itself bundles PBS CPython
+      - uses: actions/setup-python@v7   # runs the tests; the exe itself bundles PBS CPython
         with:
           python-version: "3.12"
-      - name: Test-side dependencies (pefile for the bundle check)
-        run: pip install pefile
+      - name: Test-side dependencies (the app's own for the in-process checks, cryptography, pefile)
+        run: pip install -r requirements.txt cryptography pefile
       - name: Build with python-build-standalone (supported OpenSSL), version resource + icon, SBOM
         shell: pwsh
         run: pwsh tools/build_standalone_windows.ps1
