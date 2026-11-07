@@ -342,6 +342,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
+sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
+`viewer` sayılır ve açılış log'u bunu yazar.
 
 ---
 

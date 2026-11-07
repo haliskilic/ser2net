@@ -295,9 +295,10 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        role = form.get("api_token_role", "admin")
+        role = form.get("api_token_role")  # no field: a form from before token roles
+        role = "admin" if role is None else str(role).strip().lower()
         if role not in ROLES:
-            role = "admin"
+            return await settings_get(request, error=_("Invalid role."))
         token = auth.new_api_token()
         async with state.config_lock:
             state.config.api_token_hash = auth.hash_token(token)

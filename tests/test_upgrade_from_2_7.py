@@ -62,6 +62,8 @@ def test_roundtrip(original):
     # loading it notes nothing about it)
     assert (saved["ldap"]["tls_verify"], saved["ldap"]["ca_file"]) == (True, "")
     assert not [n for n in cfg.load_notes if "LDAP" in n], cfg.load_notes
+    # the API token keeps the role 2.7.1 saved (an unknown one would become viewer + a note)
+    assert cfg.api_token_role == "operator" and not [n for n in cfg.load_notes if "api_token" in n]
     print("load + validate + save: every 2.7.1 value kept (only the 2 trace paths -> names)  OK")
 
 

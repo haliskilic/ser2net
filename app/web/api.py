@@ -11,7 +11,7 @@ from __future__ import annotations
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ..config import ConfigError, MappingConfig, valid_mapping_id
+from ..config import ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
@@ -26,7 +26,8 @@ def _mapping_view(mapping, state) -> dict:
     UI, where viewers can't open the edit form or the export. Operator/admin tokens
     see the real value, so a GET -> PUT round trip keeps working for them."""
     view = mapping.to_dict()
-    if state.config.api_token_role == "viewer" and view["mqtt"].get("password"):
+    if (ROLE_RANK.get(state.config.api_token_role, 0) < ROLE_RANK["operator"]
+            and view["mqtt"].get("password")):
         view["mqtt"]["password"] = REDACTED
     view["status"] = state.supervisor.status(mapping.id)
     return view
