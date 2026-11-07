@@ -7,7 +7,8 @@ Portable part (any OS):
   * runtime.request_shutdown() — what the service's stop request calls, from another
     thread — stops a running server cleanly.
 Windows part (SER2NET_SERVICE_TESTS=1, as Administrator; CI runs it): install a
-service on a throwaway data directory, wait until the UI answers, kill the process
+service on a throwaway data directory, wait until the UI answers, set the admin's
+password with --set-password while it runs (the service applies it), kill the process
 and see the SCM restart it, stop it (clean shutdown in the log), remove it. Uses
 SER2NET_STANDALONE_BIN when set (the frozen exe), else python + ser2net.py.
 
@@ -24,7 +25,7 @@ import time
 import urllib.request
 import uuid
 
-from _server import ROOT, free_port, wait_port
+from _server import ROOT, Browser, free_port, wait_port
 
 from app import runtime, winservice
 from app.web.auth import hash_password
@@ -142,6 +143,12 @@ def test_real_service():
         q = sc("qc", name).stdout
         assert "AUTO_START" in q and "--service" in q and f'"{data}"' in q, q
         print(f"installed + running as service '{name}' (auto start), UI answers  OK")
+
+        p = subprocess.run(base + ["--data-dir", data, "--set-password", "admin"],
+                           input="svc-pass-2\n", capture_output=True, text=True, timeout=120)
+        assert p.returncode == 0 and "done by the running ser2net" in p.stdout, p.stdout + p.stderr
+        Browser(f"http://127.0.0.1:{port}").login("admin", "svc-pass-2")
+        print("--set-password while the service runs: the service applies it at once  OK")
 
         def service_procs():
             return [pr for pr in psutil.process_iter(["cmdline"])

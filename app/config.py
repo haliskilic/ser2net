@@ -1339,13 +1339,16 @@ class ConfigStore:
             data = json.load(fh)
         return AppConfig.from_dict(data)
 
-    def save(self, config: AppConfig) -> None:
+    def save(self, config: AppConfig, *, validate: bool = True) -> None:
         """Atomically persist config to a single file (validates first).
 
         Uses a temp file + os.replace so config.json is never partially written; the
         version being replaced is kept in backups/ first (see the class docstring).
+        validate=False is for a change the caller checked itself and that must not
+        fail on an unrelated setting (account recovery, app/accounts.py).
         """
-        config.validate()
+        if validate:
+            config.validate()
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
         self._backup_current(data)

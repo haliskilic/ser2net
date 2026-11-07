@@ -47,6 +47,17 @@ def hash_password(password: str) -> str:
     return f"scrypt${salt.hex()}${dk.hex()}"
 
 
+def is_password_hash(stored: str) -> bool:
+    """Is `stored` a hash_password() result ("scrypt$<salt hex>$<hash hex>")?"""
+    parts = str(stored).split("$")
+    if len(parts) != 3 or parts[0] != "scrypt":
+        return False
+    try:
+        return bool(bytes.fromhex(parts[1])) and bool(bytes.fromhex(parts[2]))
+    except ValueError:
+        return False
+
+
 def verify_password(password: str, stored: str) -> bool:
     try:
         scheme, salt_hex, hash_hex = stored.split("$", 2)

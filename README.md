@@ -138,7 +138,9 @@ düzenlemeye gerek yok.
   bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
-  login oran sınırı, sıkı güvenlik başlıkları, parola değişince oturum iptali.
+  login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
+  bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
+  sıfırlanır (bkz. Güvenlik).
   Güvenilir ağlar için giriş zorunluluğu **Ayarlar → Web arayüzü erişimi**'nden kapatılabilir
   (ziyaretçiler seçilen rolle parolasız kullanır; bkz. Güvenlik).
 - **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunur,
@@ -398,6 +400,39 @@ LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve 
 erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
 gösterilir ve açılışta loga yazılır.
 
+**Oturumlar:** çıkış yapınca o oturum sunucuda da biter (çerezin bir kopyası da artık
+çalışmaz). **Ayarlar → Kullanıcılar**'da admin bir kullanıcının tüm oturumlarını kapatabilir
+ya da yerel bir kullanıcıya yeni parola verebilir (bu da oturumlarını kapatır); herkes
+*Diğer oturumlarımı kapat* ile kendi diğer oturumlarını kapatabilir. **Ayarlar → Web arayüzü
+erişimi → Herkesin oturumunu kapat** yeni bir oturum anahtarı üretip admin'in kendi oturumu
+dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yedeğin kopyası sızmış
+olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
+kapalıyken o hesapların oturumları geçersizdir.
+
+**Parola unutuldu, giriş yapılamıyor, tarayıcı yok (hesap kurtarma):**
+`ser2net --set-password AD`, yerel `AD` hesabına yeni parola verir (terminalde iki kez
+sorulur; pipe ile verilirse stdin'in ilk satırı okunur) ve o hesabın tüm oturumlarını
+kapatır. Henüz olmayan bir ad **admin** olarak oluşturulur; tek admin bir LDAP/OIDC hesabıysa
+ve dizine ulaşılamıyorsa geri dönüş yolu budur. `ser2net --sign-out-all` web arayüzündeki
+tüm oturumları kapatır. İkisi de ser2net dururken de çalışırken de çalışır: çalışan örnek
+değişikliği hemen uygular, yeniden başlatmak gerekmez. Yapılandırmada başka hiçbir şey
+değişmez, önceki `config.json` `backups/` içinde kalır, işlem denetim kaydına yazılır, gizli
+hiçbir şey ekrana ya da loga yazılmaz. Servisle aynı `--data-dir`'i kullanın ve komutu
+ser2net'in çalıştığı hesapla çalıştırın (root ile çalıştırılırsa kendiliğinden veri dizininin
+sahibine geçer):
+
+| Kurulum | Komut |
+|---|---|
+| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
+| Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ser2net\data --set-password admin` |
+| Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
+
+**Tarayıcısız ilk admin:** ilk açılıştan önce `ser2net --set-password admin` çalıştırın
+(`config.json`'u oluşturur; `--reconfigure` ya da `SER2NET_BIND_IP` aksini söylemedikçe
+arayüz `127.0.0.1:8080`'de dinler) ya da Docker'da `SER2NET_ADMIN_PASSWORD_FILE`'ı parolayı
+içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` (varsayılan
+`admin`). Değişken yalnızca hiç hesap yokken kullanılır, sonraki açılışlar onu yok sayar.
+
 ### LAN cluster
 
 - **İmzalı istekler:** düğümler arasındaki her istek cluster anahtarıyla (ondan türetilen
@@ -489,7 +524,9 @@ ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken de
 logu ya da içe aktarma önizlemesi bunu belirtir.
 
 `config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
-temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin).
+temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin). Parola
+unutulduysa bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
+`admin-requests/` yalnızca komut satırından gelen bir isteği, çalışan örnek alana kadar tutar.
 
 **Bir kurulumu kopyalamak** (disk ya da VM imajı, kopyalanan veri klasörü ya da Docker
 volume'u): `config.json` düğümün kimliğini tutar — cluster ID'sini (`instance_id`) ve

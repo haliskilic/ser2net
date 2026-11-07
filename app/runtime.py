@@ -27,10 +27,10 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import console, standalone
+from . import accounts, console, standalone
 from .config import ConfigError, ConfigStore
 from .engine import netguard
-from .state import AppState
+from .state import AppState, write_audit_record
 from .web import httpguard
 from .web.server import build_app
 
@@ -69,7 +69,8 @@ def request_shutdown() -> None:
 
 def prepare_config(config_path: str, reconfigure: bool = False):
     """Load config.json (creating it on the first run, when the console asks for the
-    admin UI address) and apply SER2NET_BIND_IP / SER2NET_PORT. Returns (store, config)."""
+    admin UI address), apply SER2NET_BIND_IP / SER2NET_PORT and create the first admin
+    from SER2NET_ADMIN_PASSWORD_FILE. Returns (store, config)."""
     store = ConfigStore(config_path)
     first_run = not store.exists()
     config = store.load()
@@ -79,17 +80,22 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         bind_ip, port = console.choose_admin_bind(config.admin_ui)
         config.admin_ui.bind_ip = bind_ip
         config.admin_ui.port = port
+    admin, note = accounts.provision_from_env(config, os.environ)
+    if note:
+        config.load_notes.append(note)
     if first_run or reconfigure or env_set:
         store.save(config)
-    elif config.ids_created:
-        # config.json had no secret_key / instance_id (made by hand, or a downloaded
-        # backup put in its place): keep the new ones, or every restart would sign
-        # everyone out and give this node a new cluster identity
+    elif config.ids_created or admin:
+        # the first admin from the environment, or config.json had no secret_key /
+        # instance_id (made by hand, or a downloaded backup put in its place): keep them,
+        # or every restart would sign everyone out and give this node a new cluster id
         try:
             store.save(config)
         except (ConfigError, OSError) as e:
-            config.load_notes.append(f"WARNING: could not save the new session key and node "
-                                     f"id to {store.path}: {e}")
+            config.load_notes.append(f"WARNING: could not save {store.path}: {e}")
+    if admin:
+        write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
+                           "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin)
     return store, config
 
 

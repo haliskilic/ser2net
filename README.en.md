@@ -133,7 +133,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
-  login rate-limiting, strict security headers, session revocation on password change.
+  login rate-limiting, strict security headers; sessions end at logout, on a password
+  change, per user or for everyone (Settings), and a lost password is reset with
+  `ser2net --set-password` (see Security).
   For trusted networks the login requirement can be switched off under **Settings → Web
   UI access** (visitors then use the UI with a chosen role; see Security).
 - **Multi-user / RBAC:** `admin` / `operator` / `viewer` roles — viewer is read-only,
@@ -388,6 +390,39 @@ the login page. Behind a reverse proxy, the proxy must pass the original name in
 and managed after signing in, and open consoles are closed when access is revoked or the
 role changes. While it is on, the UI shows a warning and startup logs it.
 
+**Sessions:** logging out ends that session on the server (a copy of the cookie stops
+working too). Under **Settings → Users** an admin can sign a user out everywhere or set a
+local user's new password (which signs them out as well); everyone can *Sign out my other
+sessions*. **Settings → Web UI access → Sign out everyone** makes a new session key and
+ends every session at once, the admin's own excepted — use it when a copy of
+`config.json` or a backup may have leaked (downloaded backups leave the key out). While
+LDAP or OIDC is switched off, its accounts' sessions don't count.
+
+**Lost password, locked out, no browser (account recovery):**
+`ser2net --set-password NAME` sets a new password for the local account `NAME` (asked
+twice on the terminal; piped, the first line of stdin) and signs that account out
+everywhere. A name that doesn't exist yet is created as an **admin** — the way back in
+when the only admin is an LDAP/OIDC account and the directory is unreachable.
+`ser2net --sign-out-all` ends every web UI session. Both work with ser2net stopped or
+running: a running instance applies the change at once, no restart needed. Nothing else
+in the configuration changes, the previous `config.json` stays in `backups/`, the audit
+log records it, and nothing secret is printed or logged. Use the same `--data-dir` as the
+service and run it as the account ser2net runs as (as root, it switches to the data
+directory's owner by itself):
+
+| Install | Command |
+|---|---|
+| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
+| Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ser2net\data --set-password admin` |
+| Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
+
+**First admin without the browser:** run `ser2net --set-password admin` before the first
+start (it creates `config.json`; the UI then listens on `127.0.0.1:8080` unless
+`--reconfigure` or `SER2NET_BIND_IP` says otherwise), or — Docker — point
+`SER2NET_ADMIN_PASSWORD_FILE` at a file (a Docker secret) holding the password, with
+`SER2NET_ADMIN_USER` for the name (default `admin`). The variable is used only while there
+is no account at all; later starts ignore it.
+
 ### LAN cluster
 
 - **Signed requests:** every request between nodes is signed with (a key derived from)
@@ -474,7 +509,9 @@ replaced when the config is loaded or the file is imported; the start-up log or 
 preview says so.
 
 Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
-`backups/` is never restored by itself — delete it too if you want it gone).
+`backups/` is never restored by itself — delete it too if you want it gone). To get back in
+after a lost password, use `--set-password` instead (see Security): it keeps everything else.
+`admin-requests/` only holds a command-line request until the running instance takes it.
 
 **Copying an installation** (a disk or VM image, a copied data folder or Docker volume):
 `config.json` holds the node's identity — its cluster id (`instance_id`) and the key that

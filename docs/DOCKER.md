@@ -14,7 +14,35 @@ ser2net ships an official `Dockerfile` and an example `docker-compose.yml`.
    ```bash
    docker compose up -d
    ```
-3. Open `http://<host>:8080` and set the admin password on first access.
+3. Open `http://<host>:8080` and set the admin password on first access — or create the
+   first admin without the browser (next section).
+
+## First admin and account recovery
+
+- **Headless first admin:** give the container the password in a file (a Docker secret)
+  and point `SER2NET_ADMIN_PASSWORD_FILE` at it; `SER2NET_ADMIN_USER` sets the name
+  (default `admin`). It is used only while there is no account yet, and the password is
+  never logged:
+  ```yaml
+  services:
+    ser2net:
+      environment:
+        SER2NET_ADMIN_USER: "admin"
+        SER2NET_ADMIN_PASSWORD_FILE: /run/secrets/ser2net_admin
+      secrets: [ser2net_admin]
+  secrets:
+    ser2net_admin:
+      file: ./ser2net_admin.txt   # one line: the password (8+ characters)
+  ```
+- **Lost password / locked out:** set a new one on the running container — no restart,
+  nothing else changes, and that account is signed out everywhere (a name that doesn't
+  exist yet is created as an admin):
+  ```bash
+  docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin
+  ```
+  Non-interactive: `docker exec -i ser2net ... --set-password admin < password.txt`.
+  `... --sign-out-all` ends every web UI session. `docker exec` runs as root; the command
+  switches to the owner of `/data` before writing, so file ownership stays right.
 
 ## Plain docker run
 
