@@ -111,7 +111,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Observability:** per-mapping traffic trace (hex/timestamp, rotated files, downloadable
   from the UI), Prometheus `/metrics`, an audit log page, live log viewer, an in-browser
   **serial console** (xterm.js over WebSocket — watch traffic or type to the device) and a
-  timestamped **live hex view** of both directions.
+  timestamped **live hex view** of both directions. The dashboard's **In / Out** counters
+  (also `bytes_in` / `bytes_out` in `/api/v1/status`, `ser2net_mapping_bytes_in_total` /
+  `ser2net_mapping_bytes_out_total` in `/metrics`) are the bytes read from and written to
+  the serial device, counted once however many clients share it (serial↔serial: A → B /
+  B → A). Data from the network that could not be written to the device (its port was not
+  open) is counted as dropped (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`),
+  flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
@@ -266,7 +272,8 @@ a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCK
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
-- **/metrics:** Prometheus-format metrics (authenticated).
+- **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
+  its clients, bytes in / out / dropped, reconnects and dropped slow clients.
 
 ---
 

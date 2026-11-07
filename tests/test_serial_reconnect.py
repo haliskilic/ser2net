@@ -8,7 +8,8 @@ supervision (serial_link.SerialLink), so both must report the outage and reopen:
     the mapping is reconnecting (not running, not "in use"), a master gets 0x0A, and once
     it is back the same Modbus/TCP master connection is served again;
   - raw bridge: a connected TCP client gets the device's data again after it returns,
-    and its bytes reach the device.
+    and its bytes reach the device; what it sends meanwhile is counted as dropped, not as
+    written to the device.
 
 Run: python3 tests/test_serial_reconnect.py
 """
@@ -176,7 +177,8 @@ async def test_gateway_device_returns(folder):
 async def test_bridge_device_returns(folder):
     dev = Device(folder)
     await dev.plug()
-    sup = Supervisor(logger=lambda _m: None)
+    logs = []
+    sup = Supervisor(logger=logs.append)
     port = free_port()
     m = MappingConfig.from_dict({
         "name": "raw", "enabled": True, "serial": {"port": dev.port, "baudrate": 9600},
@@ -196,7 +198,15 @@ async def test_bridge_device_returns(folder):
         await dev.unplug()
         assert await wait_for(lambda: sup.status(m.id)["state"] in LOST), sup.status(m.id)
         end_w.close()
-        print(f"bridge: device gone -> {sup.status(m.id)['state']}  OK")
+        out_before = sup.status(m.id)["bytes_out"]
+        cw.write(b"lost")  # the client stays connected while the device is gone
+        await cw.drain()
+        assert await wait_for(lambda: sup.status(m.id)["bytes_dropped"] == 4), sup.status(m.id)
+        assert sup.status(m.id)["bytes_out"] == out_before
+        assert any("data for the device dropped: the serial port is not open" in line
+                   for line in logs), logs
+        print(f"bridge: device gone -> {sup.status(m.id)['state']}, client data counted as "
+              "dropped  OK")
 
         await dev.plug()
         assert await wait_for(lambda: sup.status(m.id)["state"] == "running", timeout=25), \
@@ -209,6 +219,8 @@ async def test_bridge_device_returns(folder):
         cw.write(b"to-dev")
         await cw.drain()
         assert await asyncio.wait_for(end_r.readexactly(6), timeout=5) == b"to-dev"
+        st = sup.status(m.id)
+        assert (st["bytes_in"], st["bytes_out"], st["bytes_dropped"]) == (11, 6, 4), st
         print("bridge: device back -> reopened, the connected client's data flows both ways  OK")
         cw.close()
     finally:

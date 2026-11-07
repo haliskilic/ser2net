@@ -36,7 +36,8 @@ class Runner(Protocol):
 
     def discard_traffic_monitor(self, mon: Any) -> None: ...
 
-    async def serial_write(self, data: bytes) -> None: ...
+    # the browser console typing to the device; False when nothing was written
+    async def serial_write(self, data: bytes) -> bool: ...
 
 
 def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None) -> Runner:
@@ -155,8 +156,10 @@ class Supervisor:
         return {mid: r.status.as_dict() for mid, r in list(self._runners.items())}
 
     def devices_in_use(self) -> set[str]:
-        out = set()
+        """The serial devices that running mappings hold open (for the Ports page): one per
+        mapping, both ports of a serial-to-serial bridge."""
+        out: set[str] = set()
         for r in list(self._runners.values()):
-            if r.status.state == "running" and r.status.device:
-                out.add(r.status.device)
+            if r.status.state == "running":
+                out.update(d for d in r.status.devices if d)
         return out
