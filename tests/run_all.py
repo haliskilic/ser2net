@@ -68,6 +68,7 @@ PORTABLE = [
     "test_sparkplug.py",
     "test_ser2net_import.py",
     "test_i18n.py",
+    "test_mapping_ids.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

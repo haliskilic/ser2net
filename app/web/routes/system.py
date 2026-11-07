@@ -24,7 +24,7 @@ def routes(ctx: Ctx) -> list:
         ]
         for m in state.config.mappings:
             st = statuses.get(m.id) or {}
-            lbl = f'mapping="{_metric_label(m.name)}",id="{m.id}"'
+            lbl = f'mapping="{_metric_label(m.name)}",id="{_metric_label(m.id)}"'
             running = 1 if st.get("state") == "running" else 0
             lines += [
                 f"ser2net_mapping_running{{{lbl}}} {running}",
@@ -77,6 +77,6 @@ def routes(ctx: Ctx) -> list:
 
 
 def _metric_label(name: str) -> str:
-    """Escape a mapping name for a Prometheus label value."""
+    """Escape a mapping name (or id) for a Prometheus label value."""
     return name.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
 

@@ -42,7 +42,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import TaskGroup
     from exceptiongroup import BaseExceptionGroup
 
-from ..config import MappingConfig
+from ..config import MappingConfig, mapping_file
 from . import serial_io, sockopts
 from .protocols import make_session
 from .protocols.base import ProtocolSession
@@ -106,8 +106,9 @@ def fmt_duration(secs: float) -> str:
 def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
     """Where a mapping's trace goes: <trace_dir>/<mapping id>-<file name>. The id
     prefix keeps two mappings with the same file name apart (and makes a mapping's
-    files easy to find); the name is already sanitised by config.trace_file_name."""
-    return os.path.join(trace_dir, f"{mapping.id}-{mapping.options.trace_both}")
+    files easy to find); the name is already sanitised by config.trace_file_name.
+    Raises ValueError if that would not be a file in trace_dir (config.mapping_file)."""
+    return mapping_file(trace_dir, mapping.id, f"-{mapping.options.trace_both}")
 
 
 def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log) -> Optional["Tracer"]:
@@ -117,7 +118,12 @@ def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log) -> Option
     if not trace_dir:
         log("trace not written: no data directory to keep it in")
         return None
-    tracer = Tracer(trace_path(trace_dir, mapping), mapping.options, log=log)
+    try:
+        path = trace_path(trace_dir, mapping)
+    except ValueError as e:
+        log(f"trace not written: {e}")
+        return None
+    tracer = Tracer(path, mapping.options, log=log)
     if not tracer.active:
         return None
     log(f"tracing traffic to {tracer.path}")

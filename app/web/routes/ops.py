@@ -2,10 +2,15 @@
 validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
-from ...config import ConfigError, MappingConfig
+from ...config import ConfigError, MappingConfig, valid_mapping_id
 from ...engine import portlist
 from ...i18n import _
 from .forms import _checkbox, _mapping_from_form, _preserve_unmanaged_fields
+
+
+def _gone() -> str:
+    return _("This mapping no longer exists (it may have been deleted in the meantime). "
+             "Close the form and add it again.")
 
 
 def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) -> None:
@@ -34,13 +39,19 @@ def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) ->
 async def save_mapping_from_form(state, form) -> tuple[bool, str]:
     """Parse a mapping form, validate, persist and (re)apply. Returns (ok, name)
     on success or (False, error). Shared by the local UI save and the cluster
-    remote-edit save (which runs the same form on the target node)."""
+    remote-edit save (which runs the same form on the target node).
+
+    The server owns mapping ids: a form without an id creates a mapping with a new
+    one, a form with an id edits that mapping and is refused when there is none."""
+    posted_id = form.get("id") or ""
     try:
         mapping = MappingConfig.from_dict(_mapping_from_form(form))
         # The form doesn't expose (or always post) every field; when editing, carry
         # those over so a save never silently wipes them (get_mapping is a sync
         # read — safe outside the config lock).
-        existing = state.config.get_mapping(mapping.id)
+        existing = state.config.get_mapping(posted_id) if valid_mapping_id(posted_id) else None
+        if posted_id and existing is None:
+            return False, _gone()
         _preserve_unmanaged_fields(mapping, existing, form)
         apply_usb_match(mapping, form, state.ports.get(), existing)
         mapping.validate()
@@ -51,8 +62,10 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
     # while a serial port is being (re)opened.
     async with state.config_lock:
         backup = list(state.config.mappings)
-        existing = state.config.get_mapping(mapping.id)
-        if existing:
+        if posted_id:
+            existing = state.config.get_mapping(mapping.id)
+            if existing is None:  # deleted while this request was being checked
+                return False, _gone()
             state.config.mappings[state.config.mappings.index(existing)] = mapping
         else:
             state.config.mappings.append(mapping)
@@ -94,8 +107,8 @@ async def delete_mapping(state, mid):
             state.config.mappings.remove(m)
             await state.asave()
             removed = m
-    if removed is not None:
-        await state.supervisor.remove_mapping(mid)
-        state.delete_mapping_log(mid)
-        state.delete_mapping_traces(mid)
+    if removed is not None:  # by the stored id, never the id from the request
+        await state.supervisor.remove_mapping(removed.id)
+        state.delete_mapping_log(removed.id)
+        state.delete_mapping_traces(removed.id)
     return removed

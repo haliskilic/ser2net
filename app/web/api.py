@@ -11,7 +11,7 @@ from __future__ import annotations
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ..config import ConfigError, MappingConfig
+from ..config import ConfigError, MappingConfig, valid_mapping_id
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
@@ -70,6 +70,8 @@ def build_api_routes(state):
 
     async def update_mapping(request):
         mid = request.path_params["mid"]
+        if not valid_mapping_id(mid):  # no mapping can have it (ids are checked on load)
+            return JSONResponse({"error": "not_found"}, status_code=404)
         try:
             body = await request.json()
         except Exception:

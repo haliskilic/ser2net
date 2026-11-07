@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import hashlib
 import ipaddress
 import json
 import math
@@ -55,6 +56,49 @@ class ConfigError(ValueError):
 
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+# A mapping id names the mapping's own files (logs/<id>.log, traces/<id>-<name>) and is
+# part of URLs, so it is 1-64 ASCII letters, digits or "_": never a path separator, ".",
+# ":" or NUL, and no "-" either (a mapping's traces are found by their "<id>-" prefix,
+# so an id "a" must not also match the traces of a mapping "a-b"). Generated ids
+# (_new_id) are 12 hex digits.
+_MAPPING_ID = re.compile(r"[A-Za-z0-9_]{1,64}")
+# device names Windows reserves, with any extension too (logs/NUL.log is the NUL device)
+_WINDOWS_DEVICE_NAME = re.compile(r"(?i:con|prn|aux|nul|com[0-9]|lpt[0-9])")
+
+
+def valid_mapping_id(value: Any) -> bool:
+    """True for a mapping id that is safe as a file name and in a URL (see _MAPPING_ID)."""
+    return (isinstance(value, str) and _MAPPING_ID.fullmatch(value) is not None
+            and _WINDOWS_DEVICE_NAME.fullmatch(value) is None)
+
+
+def _mapping_id_from(value: Any) -> str:
+    """The id of a mapping read from a config file, an import or a form: the value when it
+    is a valid id, a new one when there is none, else one derived from the value. The
+    derived id is the same on every load, so the mapping keeps its log and traces even
+    when the config is not saved again."""
+    if valid_mapping_id(value):
+        return value
+    if not value:
+        return _new_id()
+    return hashlib.sha256(repr(value).encode("utf-8", "backslashreplace")).hexdigest()[:12]
+
+
+def mapping_file(directory: str, mapping_id: Any, suffix: str = "") -> str:
+    """<directory>/<mapping id><suffix>: a mapping's own file, its log (logs/<id>.log) or a
+    trace (traces/<id>-<name>). Raises ValueError for an invalid mapping id, or when the
+    result would not be a file directly in `directory`, so no id or name can point
+    anywhere else."""
+    if not valid_mapping_id(mapping_id):
+        raise ValueError(f"not a valid mapping id: {mapping_id!r}")
+    name = f"{mapping_id}{suffix}"
+    path = os.path.join(directory, name)
+    if (os.path.basename(name) != name
+            or os.path.dirname(os.path.abspath(path)) != os.path.abspath(directory)):
+        raise ValueError(f"not a file in {directory}: {name!r}")
+    return path
 
 
 def lock_down_dir(directory: str) -> None:
@@ -521,9 +565,11 @@ class MappingConfig:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingConfig":
+        # every way into the config (file, import, form, REST, cluster) passes here, so an
+        # id that is not a valid mapping id never gets further (see _mapping_id_from)
         d = dict(d or {})
         return MappingConfig(
-            id=d.get("id") or _new_id(),
+            id=_mapping_id_from(d.get("id")),
             name=d.get("name", ""),
             enabled=bool(d.get("enabled", True)),
             kind=d.get("kind", "net"),
@@ -878,6 +924,12 @@ class AppConfig:
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
         for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
+            old_id = (raw or {}).get("id")
+            if old_id and old_id != m.id:
+                cfg.load_notes.append(
+                    f"mapping '{m.name}': its id {old_id!r} is not a valid mapping id (1-64 "
+                    f"letters, digits or '_'), so it is now {m.id}: the REST API and /metrics "
+                    "use the new id, and its log and traces start afresh under it")
             old = str(((raw or {}).get("options") or {}).get("trace_both") or "").strip()
             if old and old != m.options.trace_both:
                 cfg.load_notes.append(

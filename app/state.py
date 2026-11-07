@@ -21,7 +21,7 @@ from collections import deque
 from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 
-from .config import AppConfig, ConfigStore, lock_down_dir
+from .config import AppConfig, ConfigStore, lock_down_dir, mapping_file, valid_mapping_id
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
@@ -202,7 +202,8 @@ class AppState:
 
     # ---------------- per-mapping logs ----------------
     def mapping_log_path(self, mapping_id: str) -> str:
-        return os.path.join(self.logs_dir, f"{mapping_id}.log")
+        """logs/<mapping id>.log. Raises ValueError for anything but a valid mapping id."""
+        return mapping_file(self.logs_dir, mapping_id, ".log")
 
     def _attach_mapping_handler(self, lg: logging.Logger, mapping_id: str) -> None:
         try:
@@ -210,8 +211,8 @@ class AppState:
             fh = logging.FileHandler(self.mapping_log_path(mapping_id), encoding="utf-8")
             fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
             lg.addHandler(fh)
-        except OSError as e:
-            self.log(f"could not open mapping log for {mapping_id}: {e}")
+        except (OSError, ValueError) as e:
+            self.log(f"could not open mapping log for {mapping_id!r}: {e}")
 
     def _mapping_logger(self, mapping_id: str) -> logging.Logger:
         lg = self._mapping_loggers.get(mapping_id)
@@ -244,15 +245,15 @@ class AppState:
         per-mapping logs can grow to 100 MB, and loading all of that to show the last
         1000 lines wasted memory and blocked the event loop. Call via asyncio.to_thread
         from async handlers (the read still does blocking file I/O)."""
-        path = self.mapping_log_path(mapping_id)
         try:
+            path = self.mapping_log_path(mapping_id)
             size = os.path.getsize(path)
             with open(path, "rb") as fh:
                 if size > tail_bytes:
                     fh.seek(size - tail_bytes)
                     fh.readline()  # drop the partial first line after the seek
                 data = fh.read()
-        except OSError:
+        except (OSError, ValueError):
             return []
         lines = data.decode("utf-8", errors="replace").splitlines()
         return lines[-limit:][::-1]
@@ -264,12 +265,17 @@ class AppState:
                 with _suppress(Exception):
                     h.close()
                 lg.removeHandler(h)
-        with _suppress(OSError):  # log file may never have been created (FileNotFoundError)
+        # the log file may never have been created (FileNotFoundError)
+        with _suppress(OSError, ValueError):
             os.remove(self.mapping_log_path(mapping_id))
 
     # ---------------- per-mapping traces ----------------
     def trace_files(self, mapping_id: str) -> list[str]:
-        """A mapping's trace files in data/traces (current + rotated), newest first."""
+        """A mapping's trace files in data/traces (current + rotated), newest first. They
+        are the files named "<id>-..." (a valid mapping id has no "-", so the prefix of one
+        mapping never matches another's files); none for an invalid id."""
+        if not valid_mapping_id(mapping_id):
+            return []
         prefix = f"{mapping_id}-"
         try:
             names = [n for n in os.listdir(self.traces_dir) if n.startswith(prefix)]
