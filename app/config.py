@@ -1188,12 +1188,13 @@ class AppConfig:
         if not users and d.get("password_hash"):  # migrate legacy single-password config
             users = [User(username="admin", password_hash=d["password_hash"],
                           role="admin", pwd_version=int(d.get("pwd_version", 0)))]
+        token_role, token_note = _api_token_role(d)
         cfg = AppConfig(
             version=int(d.get("version", 1)),
             admin_ui=admin_ui,
             secret_key=d.get("secret_key") or secrets.token_hex(32),
             api_token_hash=d.get("api_token_hash", ""),
-            api_token_role=d.get("api_token_role", "admin") if d.get("api_token_role", "admin") in ROLES else "admin",
+            api_token_role=token_role,
             session_timeout_s=_session_timeout(d.get("session_timeout_s")),
             external_users_expire_days=_expire_days(d.get("external_users_expire_days")),
             users=users,
@@ -1223,6 +1224,8 @@ class AppConfig:
                 "different letter case: they become one account at that user's next "
                 "sign-in, which ends the sessions of the other spellings (deleting one in "
                 "Settings → Users deletes them all)")
+        if token_note:
+            cfg.load_notes.append(token_note)
         if cfg.ldap.enabled and cfg.ldap.uses_tls and "tls_verify" not in (d.get("ldap") or {}):
             cfg.load_notes.append(
                 "LDAP: the directory server's certificate is now checked (LDAPS / StartTLS): "
@@ -1413,6 +1416,24 @@ class AppConfig:
                           "addresses ({4} / {5}).").format(other, m.name, proto.upper(), m.network.port, bip, m.network.bind_ip)
                     )
             seen[(proto, m.network.bind_ip, m.network.port)] = m.name
+
+
+def _api_token_role(d: dict[str, Any]) -> tuple[str, str]:
+    """api_token_role from a config file, and a note when it had to be changed. No key
+    means a token from before token roles (v2.3), which had full access: admin. A role
+    in other letter case or with spaces is that role. Anything else is not a role, and
+    the token gets the least access (viewer, read-only) rather than a guess."""
+    if "api_token_role" not in d:
+        return "admin", ""
+    raw = d["api_token_role"]
+    role = raw.strip().lower() if isinstance(raw, str) else ""
+    if role in ROLES:
+        return role, ""
+    if not d.get("api_token_hash"):  # no token: generating one picks its role anyway
+        return "viewer", ""
+    return "viewer", (f"REST API: api_token_role {raw!r} is not one of {', '.join(ROLES)}, so the "
+                      "API token is read-only (viewer). For more, generate a new token with the "
+                      "role it needs under Settings → REST API token.")
 
 
 def _session_timeout(value: Any) -> int:
