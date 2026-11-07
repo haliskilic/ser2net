@@ -216,7 +216,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         data_dir = os.path.abspath(args.data_dir)
         config = os.path.abspath(args.config) if args.config else None
-        runtime.prepare_config(config_path, args.reconfigure)  # first run: asks for the UI address
+        # first run: asks for the UI address; warnings (e.g. a setting that was not saved)
+        # would otherwise only reach the service's log
+        _store, loaded = runtime.prepare_config(config_path, args.reconfigure)
+        for note in loaded.load_notes:
+            _write_utf8(note + "\n")
         return _service_call(lambda ws: ws.install(args.service_name, data_dir, config))
     if args.service:
         from app import winservice

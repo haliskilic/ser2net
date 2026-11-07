@@ -7,14 +7,17 @@
 #    v2.7.1 config.json is taken over by the ser2net user and the old admin
 #    password still signs in;
 # 3. a bind mount owned by another uid keeps its owner (the server runs as it);
-# 4. the first admin without the browser: `docker exec ... --set-password` on the running
-#    container (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
+# 4. a config.json with a setting this version rejects still starts: the setting is
+#    logged, the file is left as it is, the UI works (a restart rewrites nothing either);
+# 5. an unusable SER2NET_BIND_IP stops the start with one line, not a traceback;
+# 6. the first admin without the browser: `docker exec ... --set-password` on the running
+#    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PORT=18080
 fail() { echo "FAIL: $*"; docker logs s2n-smoke 2>&1 | tail -40 || true; exit 1; }
-cleanup() { docker rm -f s2n-smoke >/dev/null 2>&1 || true; docker volume rm -f s2n-smoke-a s2n-smoke-b >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f s2n-smoke >/dev/null 2>&1 || true; docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 cleanup
 
@@ -28,16 +31,16 @@ wait_healthy() {
     fail "not healthy after 60 s (status: $s)"
 }
 proc_status() { docker exec s2n-smoke sh -c 'grep -E "^(Uid|Gid|Groups):" /proc/1/status'; }
-signs_in() {  # signs_in USER PASSWORD: exit 0 when the UI accepts them
-    local jar csrf code
+# sign in through the form; prints the HTTP status (303 = signed in)
+sign_in() {
+    local jar csrf
     jar=$(mktemp)
     curl -fsS -c "$jar" -b "$jar" -o /dev/null "http://127.0.0.1:$PORT/login"
     csrf=$(awk '$6=="ser2net_csrf"{print $7}' "$jar")
-    code=$(curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{http_code}' \
+    curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{http_code}' \
         --data-urlencode "username=$1" --data-urlencode "password=$2" \
-        --data-urlencode "_csrf=$csrf" "http://127.0.0.1:$PORT/login")
+        --data-urlencode "_csrf=$csrf" "http://127.0.0.1:$PORT/login"
     rm -f "$jar"
-    [ "$code" = 303 ]
 }
 
 echo "== 1. fresh volume"
@@ -52,13 +55,19 @@ curl -fsS "http://127.0.0.1:$PORT/healthz" | grep -q ok || fail "/healthz"
 curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" | grep -q 303 || fail "no setup redirect"
 docker exec s2n-smoke sh -c 'stat -c "%u %a" /data /data/config.json'
 docker exec s2n-smoke sh -c '[ "$(stat -c %u /data/config.json)" = 10001 ]' || fail "config.json owner"
+before=$(docker exec s2n-smoke stat -c '%i %Y' /data/config.json)
+docker restart s2n-smoke >/dev/null
+wait_healthy
+after=$(docker exec s2n-smoke stat -c '%i %Y' /data/config.json)
+[ "$before" = "$after" ] || fail "a restart rewrote the unchanged config.json ($before -> $after)"
+docker exec s2n-smoke sh -c '[ -z "$(ls -A /data/backups 2>/dev/null)" ]' || fail "a restart made a backup"
 out=$(printf 'smoke-pass-1\n' | docker exec -i s2n-smoke python /app/ser2net.py --no-bootstrap \
     --data-dir /data --set-password admin 2>&1) || fail "docker exec --set-password: $out"
 grep -q "done by the running ser2net" <<<"$out" || fail "not handed to the running server: $out"
 docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "files not owned by 10001"
-signs_in admin smoke-pass-1 || fail "the admin made with docker exec did not sign in"
+[ "$(sign_in admin smoke-pass-1)" = 303 ] || fail "the admin made with docker exec did not sign in"
 docker rm -f s2n-smoke >/dev/null
-echo "fresh volume: healthy, uid 10001, keeps --group-add, no root group; first admin via docker exec  OK"
+echo "fresh volume: healthy, uid 10001, keeps --group-add, no root group; a restart leaves config.json alone; first admin via docker exec  OK"
 
 echo "== 2. upgrade from a root-owned v2.7.1 volume"
 docker run --rm --user 0 --entrypoint sh -v s2n-smoke-b:/data -v "$HERE/fixtures:/fx:ro" "$IMAGE" -c \
@@ -73,12 +82,7 @@ logs=$(docker logs s2n-smoke 2>&1)
 grep -q "handing it to user ser2net" <<<"$logs" || fail "no takeover message"
 docker exec s2n-smoke sh -c 'find /data ! -uid 10001 | head -5'
 docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "root-owned files left"
-jar=$(mktemp)
-curl -fsS -c "$jar" -b "$jar" -o /dev/null "http://127.0.0.1:$PORT/login"
-csrf=$(awk '$6=="ser2net_csrf"{print $7}' "$jar")
-code=$(curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{http_code}' \
-    --data-urlencode "username=admin" --data-urlencode "password=old-admin-pass-1" \
-    --data-urlencode "_csrf=$csrf" "http://127.0.0.1:$PORT/login")
+code=$(sign_in admin old-admin-pass-1)
 [ "$code" = 303 ] || fail "old admin password did not sign in ($code)"
 docker exec s2n-smoke sh -c 'ls /data/backups | head -3'
 docker exec s2n-smoke sh -c 'ls /data/backups/config-*.json >/dev/null' || fail "no backup of the 2.7.1 config"
@@ -96,7 +100,42 @@ docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$host_dir"
 echo "bind mount: runs as the folder's owner, host ownership untouched  OK"
 
-echo "== 4. first admin from SER2NET_ADMIN_PASSWORD_FILE"
+echo "== 4. a config.json with a setting this version rejects"
+# the classic case: a mapping (here a disabled one) names TLS files that are not in the container
+docker run --rm --user 0 --entrypoint python -v s2n-smoke-c:/data -v "$HERE/fixtures:/fx:ro" "$IMAGE" -c '
+import json, os
+c = json.load(open("/fx/config-2.7.1.json"))
+c["mappings"][1]["network"].update(tls=True, tls_cert="/certs/console.pem", tls_key="/certs/console.key")
+json.dump(c, open("/data/config.json", "w"), indent=2)
+for p in ("/data", "/data/config.json"):
+    os.chown(p, 10001, 10001)'
+sum_before=$(docker run --rm -v s2n-smoke-c:/data --entrypoint sha256sum "$IMAGE" /data/config.json)
+docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
+    -v s2n-smoke-c:/data "$IMAGE" >/dev/null
+wait_healthy
+logs=$(docker logs s2n-smoke 2>&1)
+grep -F "WARNING: config.json: mapping 'Telnet console': TLS file not found: /certs/console.pem" <<<"$logs" \
+    || fail "the rejected setting was not logged"
+grep -q "config.json was not updated at start-up" <<<"$logs" || fail "no 'not updated' note"
+grep -q "Traceback" <<<"$logs" && fail "traceback in the log"
+[ "$(docker exec s2n-smoke sha256sum /data/config.json)" = "$sum_before" ] || fail "config.json was rewritten"
+code=$(sign_in admin old-admin-pass-1)
+[ "$code" = 303 ] || fail "could not sign in to fix it ($code)"
+docker rm -f s2n-smoke >/dev/null
+echo "rejected setting: logged, config.json untouched, healthy, the UI signs in  OK"
+
+echo "== 5. an unusable SER2NET_BIND_IP"
+docker run -d --name s2n-smoke -e SER2NET_BIND_IP=not-an-ip "$IMAGE" >/dev/null
+code=$(timeout 60 docker wait s2n-smoke) || fail "did not stop"
+logs=$(docker logs s2n-smoke 2>&1)
+echo "$logs" | tail -3
+[ "$code" = 1 ] || fail "exit code $code"
+grep -q "SER2NET_BIND_IP must be an IP address" <<<"$logs" || fail "no clear message"
+grep -q "Traceback" <<<"$logs" && fail "traceback instead of a message"
+docker rm -f -v s2n-smoke >/dev/null
+echo "bad SER2NET_BIND_IP: exit 1 with one line, no traceback  OK"
+
+echo "== 6. first admin from SER2NET_ADMIN_PASSWORD_FILE"
 secret_dir=$(mktemp -d)
 printf 'env-pass-123\n' > "$secret_dir/pw"
 chmod 644 "$secret_dir/pw"
@@ -107,7 +146,7 @@ wait_healthy
 logs=$(docker logs s2n-smoke 2>&1)
 grep -q "admin account 'ops' created from SER2NET_ADMIN_PASSWORD_FILE" <<<"$logs" || fail "no admin from the env"
 grep -q "env-pass-123" <<<"$logs" && fail "the password is in the log"
-signs_in ops env-pass-123 || fail "the admin from SER2NET_ADMIN_PASSWORD_FILE did not sign in"
+[ "$(sign_in ops env-pass-123)" = 303 ] || fail "the admin from SER2NET_ADMIN_PASSWORD_FILE did not sign in"
 docker rm -f -v s2n-smoke >/dev/null  # -v: its anonymous /data volume too
 rm -rf "$secret_dir"
 echo "SER2NET_ADMIN_PASSWORD_FILE: the first admin signs in, the password is not logged  OK"

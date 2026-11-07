@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import logging
 import os
 import signal
@@ -35,23 +36,51 @@ from .web import httpguard
 from .web.server import build_app
 
 
-def _env_bind_override(admin) -> bool:
+def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
     """Apply SER2NET_BIND_IP / SER2NET_PORT env vars to the admin UI bind address.
 
     Lets a headless/containerized deployment set the bind address without the
     interactive console picker (which, being non-interactive in a container,
     would default to loopback and leave the UI unreachable behind a published
     port). Returns True if a bind IP was provided. Env wins on every start, so a
-    container's compose/run config stays the source of truth across restarts."""
+    container's compose/run config stays the source of truth across restarts.
+
+    Raises ConfigError for a SER2NET_BIND_IP that is not an IP address or a
+    SER2NET_PORT outside 1-65535 (the UI could not start on either). A SER2NET_PORT
+    that is not a number is ignored, as it always was, with a warning in `notes`."""
     ip = (os.environ.get("SER2NET_BIND_IP") or "").strip()
     if not ip:
         return False
-    admin.bind_ip = ip
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise ConfigError(f"SER2NET_BIND_IP must be an IP address (e.g. 0.0.0.0), "
+                          f"not {ip!r}") from None
     port = (os.environ.get("SER2NET_PORT") or "").strip()
+    number = None
     if port:
-        with contextlib.suppress(ValueError):
-            admin.port = int(port)
+        try:
+            number = int(port)
+        except ValueError:
+            if notes is not None:
+                notes.append(f"WARNING: SER2NET_PORT {port!r} is not a number and is ignored "
+                             f"— the admin UI uses port {admin.port}")
+        else:
+            if not 1 <= number <= 65535:
+                raise ConfigError(f"SER2NET_PORT must be a port number (1-65535), not {port!r}")
+    admin.bind_ip = ip
+    if number is not None:
+        admin.port = number
     return True
+
+
+def _os_error(e: OSError) -> str:
+    """'<file>: <reason>' for an OSError on a data file (one line, no traceback)."""
+    where = e.filename if e.filename is not None else ""
+    if e.filename2 is not None:
+        where = f"{where} -> {e.filename2}"
+    reason = e.strerror or str(e)
+    return f"{where}: {reason}" if where else reason
 
 
 # Stopping from another thread (the Windows service's stop request): request_shutdown()
@@ -70,32 +99,73 @@ def request_shutdown() -> None:
 def prepare_config(config_path: str, reconfigure: bool = False):
     """Load config.json (creating it on the first run, when the console asks for the
     admin UI address), apply SER2NET_BIND_IP / SER2NET_PORT and create the first admin
-    from SER2NET_ADMIN_PASSWORD_FILE. Returns (store, config)."""
-    store = ConfigStore(config_path)
-    first_run = not store.exists()
-    config = store.load()
+    from SER2NET_ADMIN_PASSWORD_FILE. Returns (store, config).
 
-    env_set = _env_bind_override(config.admin_ui)
+    A config.json that loads is never refused: what validate() rejects in it is logged
+    as a warning (config.load_notes) and the server starts with it, as a start without
+    the env vars always has (a mapping that can't start fails on its own). The file is
+    written back only when this start changes it (first run, --reconfigure, a new env
+    address, an upgrade's normalisation) and it is valid; a failing write is a warning
+    too. Fatal, with one line instead of a traceback: an unusable SER2NET_BIND_IP /
+    SER2NET_PORT, a config.json that can't be read or parsed, a first run that can't
+    create it."""
+    try:
+        store = ConfigStore(config_path)
+        first_run = not store.exists()
+        config = store.load()
+    except OSError as e:
+        raise SystemExit(f"ser2net: cannot read the configuration: {_os_error(e)}") from None
+    except (ValueError, TypeError, AttributeError) as e:  # not JSON, or not shaped like it
+        newest = store.backup_names()[:1]
+        restore = (f", or put back its newest backup ({os.path.join(store.backup_dir, newest[0])})"
+                   if newest else "")
+        raise SystemExit(f"ser2net: {store.path} is not a valid configuration ({e}) — fix "
+                         f"it{restore}") from None
+    notes = config.load_notes
+
+    try:
+        env_set = _env_bind_override(config.admin_ui, notes)
+    except ConfigError as e:
+        raise SystemExit(f"ser2net: {e}") from None
     if (first_run or reconfigure) and not env_set:
         bind_ip, port = console.choose_admin_bind(config.admin_ui)
         config.admin_ui.bind_ip = bind_ip
         config.admin_ui.port = port
     admin, note = accounts.provision_from_env(config, os.environ)
     if note:
-        config.load_notes.append(note)
-    if first_run or reconfigure or env_set:
-        store.save(config)
-    elif config.ids_created or admin:
-        # the first admin from the environment, or config.json had no secret_key /
-        # instance_id (made by hand, or a downloaded backup put in its place): keep them,
-        # or every restart would sign everyone out and give this node a new cluster id
-        try:
-            store.save(config)
-        except (ConfigError, OSError) as e:
-            config.load_notes.append(f"WARNING: could not save {store.path}: {e}")
+        notes.append(note)
+
+    problems = config.problems()
+    notes.extend(f"WARNING: config.json: {p}" for p in problems)
+    # also the first admin from the environment, or a config.json without secret_key /
+    # instance_id (made by hand, or a downloaded backup put in its place): keep them, or
+    # every restart would sign everyone out and give this node a new cluster id
+    if ((first_run or reconfigure or env_set) and not store.matches(config)
+            or config.ids_created or admin):
+        if first_run:
+            try:
+                store.save(config)
+            except OSError as e:
+                raise SystemExit(
+                    f"ser2net: cannot create the configuration: {_os_error(e)}") from None
+        elif problems:
+            notes.append("WARNING: config.json was not updated at start-up because of the "
+                         "setting(s) above; it keeps its current content until they are fixed")
+        else:
+            try:
+                store.save(config)
+            except OSError as e:  # read-only/full data dir, config.json mounted on its own
+                notes.append(f"WARNING: could not update config.json at start-up "
+                             f"({_os_error(e)}) — ser2net runs with these settings, but can't "
+                             "keep any change until config.json can be written (keep the data "
+                             "directory writable, and don't mount config.json on its own)")
     if admin:
         write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
                            "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin)
+    if problems:
+        notes.append("WARNING: ser2net starts with the setting(s) above anyway — what they "
+                     "affect may not work, and saving any change is refused until they are "
+                     "fixed (in the web UI, or in config.json)")
     return store, config
 
 
@@ -136,9 +206,25 @@ def loop_factory(choice: str) -> Optional[Callable[[], asyncio.AbstractEventLoop
     return None
 
 
+def _require_admin_tls(admin) -> None:
+    """The admin UI's TLS certificate and key must be readable, or the start stops here
+    with one line (uvicorn would fail later, with a traceback, after the bridges started).
+    No fallback to plain HTTP: it would send passwords in clear where TLS was set up."""
+    if not admin.tls_enabled:
+        return
+    for what, path in (("certificate", admin.tls_cert), ("key", admin.tls_key)):
+        try:
+            with open(path, "rb"):
+                pass
+        except OSError as e:
+            raise SystemExit(f"ser2net: cannot read the admin UI TLS {what}: {_os_error(e)} "
+                             "— fix admin_ui.tls_cert / tls_key in config.json") from None
+
+
 def main(config_path: str, reconfigure: bool = False) -> int:
     standalone.prepare()  # standalone Linux binary: find the system CA certificates
     store, config = prepare_config(config_path, reconfigure)
+    _require_admin_tls(config.admin_ui)
 
     choice, loop_note = event_loop_choice()
     try:
