@@ -480,7 +480,8 @@ class _Conn:
     strings: dict[str, str] = field(default_factory=dict)        # banner/openstr/... (raw)
     traces: dict[str, str] = field(default_factory=dict)         # both/read/write -> file
     trace_mods: dict[tuple[str, str], bool] = field(default_factory=dict)
-    access_given: bool = False                                   # remaddr was set
+    access_given: bool = False                    # remaddr gave an address (a client limit)
+    remaddr_set: bool = False                     # 3.x remaddr= (even empty): no default then
     holds: list[str] = field(default_factory=list)  # why it comes in disabled (else more open)
     ssl: Optional[dict[str, Any]] = None             # the accepter's ssl layer (_ssl_layer)
     remctl: bool = False                                         # 3.x RFC2217 flag
@@ -943,12 +944,14 @@ def _idle_timeout(c: _Conn, value: str) -> None:
 
 def _remaddr(c: _Conn, value: str) -> None:
     """remaddr=<addr>[;<addr>...] (allowed clients) -> allowed_client_ips. Only IP
-    addresses and subnets can be represented; source ports are not checked here."""
-    c.access_given = True
+    addresses and subnets can be represented; source ports are not checked here. An
+    address that can't be imported still limits the clients in ser2net (access_given):
+    without any other the mapping comes in disabled. No address = no limit, as there."""
     allowed = c.network.setdefault("allowed_client_ips", [])
     for entry in re.split(r"[;\s]+", value.strip()):
         if not entry:
             continue
+        c.access_given = True
         if entry.startswith("!"):
             c.note(_("remaddr {0}: connect-back addresses are not imported").format(entry))
             continue
@@ -966,6 +969,15 @@ def _remaddr(c: _Conn, value: str) -> None:
                    .format(entry))
         if host not in allowed:
             allowed.append(host)
+
+
+def _default_remaddr(c: _Conn, value: str) -> None:
+    """The default remaddr, for a connection that gives no client address itself."""
+    if value.strip() and not c.access_given:
+        _remaddr(c, value)
+        if c.access_given:
+            c.note(_("remaddr {0} comes from the defaults (the connection sets none)")
+                   .format(value.strip()))
 
 
 def _finish(c: _Conn) -> None:
@@ -1193,7 +1205,8 @@ class _Yaml:
             c.note(_("enable '{0}' is not on/off: imported disabled").format(enable))
         c.enabled = bool(b)
         for k, v in self.option_defaults.items():
-            _option(c, k, v)
+            if k != "remaddr":  # see below
+                _option(c, k, v)
         for key, value, _a in body.entries:
             k = key.lower()
             if k == "options":
@@ -1204,6 +1217,9 @@ class _Yaml:
                     c.note(_("options is not a mapping, ignored"))
             elif k not in ("accepter", "connector", "enable"):
                 _option(c, key, self.text(value, c.notes, key))  # timeout (and stray options)
+        # ser2net takes the default remaddr only for a connection that gives no address
+        # itself (an empty remaddr gives none); it never adds the two up
+        _default_remaddr(c, self.option_defaults.get("remaddr", ""))
 
 
 def _from_yaml(text: str, label: str) -> tuple[list[_Conn], list[str]]:
@@ -1327,9 +1343,12 @@ class _V3:
             _write_only(c, "rawlp")
         _idle_timeout(c, timeout)
         for name, value in self.defaults.items():
-            self.default(c, name, value)
+            if name != "remaddr":  # see below
+                self.default(c, name, value)
         for tok in options.split():
             self.token(c, tok)
+        if not c.remaddr_set:  # ser2net 3.x: the default only for a port without remaddr=
+            _default_remaddr(c, self.defaults.get("remaddr", ""))
         if c.remctl:
             if state == "telnet":
                 c.network["protocol"] = "rfc2217"
@@ -1346,9 +1365,6 @@ class _V3:
         elif name == "parity":
             if value.upper() in _V3_PARITY:
                 c.serial["parity"] = _V3_PARITY[value.upper()]
-        elif name == "remaddr":
-            if value:
-                _remaddr(c, value)
         elif name in ("max-connections", "kickolduser"):
             _option(c, name, value)
         elif _bool(value) is not None:  # xonxoff rtscts hangup_when_done nobreak remctl
@@ -1425,6 +1441,7 @@ class _V3:
         elif name == "max-connections":
             _option(c, name, value)
         elif name == "remaddr":
+            c.remaddr_set = True
             _remaddr(c, value)
         elif name in ("chardelay-scale", "chardelay-min", "chardelay-max", "dev-to-net-bufsize",
                       "net-to-dev-bufsize", "dev-to-tcp-bufsize", "tcp-to-dev-bufsize"):

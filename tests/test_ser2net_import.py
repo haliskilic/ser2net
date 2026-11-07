@@ -14,6 +14,7 @@ dicts plus warnings. Checks:
     Windows //./COMn, network/IPMI connectors skipped;
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
     trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
+  * the default remaddr only for a connection without addresses of its own (4.x / 3.x);
   * *(name), $(name), =(name) and *alias substitution; defaults; version 2 files;
   * YAML subset details: quotes, comments, flow [..]/{..}, block scalars, documents;
   * a 3.x ser2net.conf with BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/DEFAULT/
@@ -463,6 +464,83 @@ def test_options():
           "trace-both, timeout, enable: off, remaddr, read-only; the rest warned once  OK")
 
 
+REMADDR = r"""
+default:
+  name: remaddr
+  value: 10.0.0.0/8
+  class: ser2net
+connection: &own
+  accepter: tcp,7101
+  connector: serialdev,/dev/ttyS1
+  options:
+    remaddr: 192.168.1.5
+connection: &inherits
+  accepter: tcp,7102
+  connector: serialdev,/dev/ttyS2
+connection: &empty
+  accepter: tcp,7103
+  connector: serialdev,/dev/ttyS3
+  options:
+    remaddr: ""
+connection: &hostname
+  accepter: tcp,7104
+  connector: serialdev,/dev/ttyS4
+  options:
+    remaddr: workstation7,0
+connection: &connectback
+  accepter: tcp,7105
+  connector: serialdev,/dev/ttyS5
+  options:
+    remaddr: "!192.168.1.9,3000"
+connection: &twice
+  accepter: tcp,7106
+  connector: serialdev,/dev/ttyS6
+  options:
+    remaddr: 192.168.1.5
+    remaddr: 192.168.1.6;192.168.1.7,2000
+delete_default:
+  name: remaddr
+  class: ser2net
+connection: &nodefault
+  accepter: tcp,7107
+  connector: serialdev,/dev/ttyS7
+  options:
+    remaddr: ""
+"""
+
+
+def test_remaddr_default():
+    """ser2net uses the default remaddr only for a connection that gives no address of its
+    own; it never adds the two up (4.x: an empty remaddr gives none, 3.x: remaddr= counts)."""
+    maps, warns = parse(REMADDR)
+    acl = {n: m["network"].get("allowed_client_ips") for n, m in maps.items()}
+    assert acl["own"] == ["192.168.1.5"], acl
+    assert acl["inherits"] == ["10.0.0.0/8"] and has(warns, "inherits:", "from the defaults")
+    assert acl["empty"] == ["10.0.0.0/8"], acl  # 4.2+: an empty remaddr keeps the default
+    assert acl["twice"] == ["192.168.1.5", "192.168.1.6", "192.168.1.7"], acl
+    assert has(warns, "twice:", "192.168.1.7,2000", "not its port")
+    # own addresses that can't be imported: disabled, not opened to the default's range
+    for name in ("hostname", "connectback"):
+        assert not acl[name] and maps[name]["enabled"] is False, (name, acl[name])
+        assert has(warns, f"{name}:", "imported disabled rather than open")
+        assert not has(warns, f"{name}:", "from the defaults")
+    assert not acl["nodefault"] and maps["nodefault"]["enabled"] is True  # no limit, as there
+    assert not has(warns, "own:", "from the defaults") and not has(warns, "nodefault:", "remaddr")
+    conf = "\n".join(["DEFAULT:remaddr:10.1.1.1",
+                      "7201:raw:0:/dev/ttyS1:remaddr=10.2.2.2",
+                      "7202:raw:0:/dev/ttyS2:9600",
+                      "7203:raw:0:/dev/ttyS3:remaddr=hostx",
+                      "7204:raw:0:/dev/ttyS4:remaddr="])
+    maps, warns = parse(conf, "ser2net.conf")
+    acl = {n: m["network"].get("allowed_client_ips") for n, m in maps.items()}
+    assert acl["ser2net-7201"] == ["10.2.2.2"], acl
+    assert acl["ser2net-7202"] == ["10.1.1.1"] and has(warns, "ser2net-7202", "from the defaults")
+    assert not acl["ser2net-7203"] and maps["ser2net-7203"]["enabled"] is False
+    assert not acl["ser2net-7204"] and maps["ser2net-7204"]["enabled"] is True  # remaddr= set
+    print("remaddr: a connection's own addresses replace the default (4.x and 3.x); unusable "
+          "own addresses hold it disabled instead of falling back to the default  OK")
+
+
 SUBSTITUTION = r"""
 %YAML 1.1
 ---
@@ -763,6 +841,7 @@ def main():
     test_protections()
     test_connectors()
     test_options()
+    test_remaddr_default()
     test_substitution()
     test_defaults()
     test_yaml_syntax()
