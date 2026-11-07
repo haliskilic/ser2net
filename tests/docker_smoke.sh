@@ -15,12 +15,13 @@
 #    the image left are handed to the folder's owner and the old config signs in;
 #    mounted read-only, the start stops with the chown command to run on the host;
 # 7. a serial device passed with --device keeps the host's group (here 18, Fedora's
-#    dialout, not the image's 20): the server gets that group; a node it still can't
-#    open is reported;
+#    dialout, not the image's 20): the server gets that group (not a console's tty
+#    group); a node it still can't open is reported;
 # 8. the image holds what it runs and the license texts, not the tests, the offline
 #    wheels or the docs, and the app is compiled already;
 # 9. a read-only /data whose config.json needs updating still starts, with a warning;
-# 10. the first admin without the browser: `docker exec ... --set-password` on the running
+# 10. a host folder mounted inside /data (certificates, say) is never taken over;
+# 11. the first admin without the browser: `docker exec ... --set-password` on the running
 #    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
@@ -32,7 +33,7 @@ dev_dir=""
 fail() { echo "FAIL: $*"; docker logs s2n-smoke 2>&1 | tail -40 || true; exit 1; }
 cleanup() {
     docker rm -f s2n-smoke >/dev/null 2>&1 || true
-    docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d >/dev/null 2>&1 || true
+    docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d s2n-smoke-e >/dev/null 2>&1 || true
     for d in "$host_dir" "$dev_dir"; do [ -n "$d" ] && sudo rm -rf "$d"; done
     rm -f "$JAR"
 }
@@ -215,13 +216,19 @@ dev_dir=$(mktemp -d)
 # stand-ins for adapters (1:3 is /dev/null): one in group 18, one only root may open
 sudo mknod -m 660 "$dev_dir/ttyFAKE0" c 1 3 && sudo chgrp 18 "$dev_dir/ttyFAKE0"
 sudo mknod -m 600 "$dev_dir/ttyFAKE1" c 1 3
+# an i.MX UART name, and a console-style node in the tty group (5), which must not be added
+sudo mknod -m 660 "$dev_dir/ttyFAKE2" c 1 3 && sudo chgrp 4243 "$dev_dir/ttyFAKE2"
+sudo mknod -m 620 "$dev_dir/ttyFAKE3" c 1 3 && sudo chgrp 5 "$dev_dir/ttyFAKE3"
 docker run -d --name s2n-smoke --health-interval=1s -v s2n-smoke-a:/data \
-    --device "$dev_dir/ttyFAKE0:/dev/ttyUSB7" --device "$dev_dir/ttyFAKE1:/dev/ttyACM9" "$IMAGE" >/dev/null
+    --device "$dev_dir/ttyFAKE0:/dev/ttyUSB7" --device "$dev_dir/ttyFAKE1:/dev/ttyACM9" \
+    --device "$dev_dir/ttyFAKE2:/dev/ttymxc3" --device "$dev_dir/ttyFAKE3:/dev/ttyS9" "$IMAGE" >/dev/null
 wait_healthy
 docker exec s2n-smoke stat -c '%n %u:%g %a' /dev/ttyUSB7 /dev/ttyACM9
 st=$(proc_status); echo "$st"
 echo "$st" | grep -E "^Groups:" | grep -q -w 18 || fail "the device's group 18 was not added"
+echo "$st" | grep -E "^Groups:" | grep -q -w 4243 || fail "the ttymxc device's group was not added"
 echo "$st" | grep -E "^Groups:" | grep -q -w 0 && fail "root group kept"
+echo "$st" | grep -E "^Groups:" | grep -q -w 5 && fail "the tty group was added"
 logs=$(docker logs s2n-smoke 2>&1)
 grep -q "can't open /dev/ttyACM9" <<<"$logs" || fail "no warning for the node it can't open"
 grep -q "can't open /dev/ttyUSB7" <<<"$logs" && fail "false warning for /dev/ttyUSB7"
@@ -262,7 +269,23 @@ code=$(sign_in admin old-admin-pass-1)
 docker rm -f s2n-smoke >/dev/null
 echo "read-only /data: starts and signs in, the failed write is a warning  OK"
 
-echo "== 10. first admin from SER2NET_ADMIN_PASSWORD_FILE"
+echo "== 10. a host folder mounted inside /data"
+host_dir=$(mktemp -d)
+echo "not a real key" | sudo tee "$host_dir/key.pem" >/dev/null
+sudo chown -R 0:0 "$host_dir" && sudo chmod 600 "$host_dir/key.pem"
+docker run --rm --user 0 --entrypoint sh -v s2n-smoke-e:/data "$IMAGE" -c 'touch /data/stray'  # root's
+docker run -d --name s2n-smoke --health-interval=1s -v s2n-smoke-e:/data \
+    -v "$host_dir:/data/certs" "$IMAGE" >/dev/null
+wait_healthy
+docker exec s2n-smoke sh -c '[ "$(stat -c %u /data/stray)" = 10001 ]' || fail "the stray file was not taken over"
+[ "$(sudo stat -c %u "$host_dir")" = 0 ] && [ "$(sudo stat -c %u "$host_dir/key.pem")" = 0 ] \
+    || fail "the host folder mounted at /data/certs changed owner"
+docker rm -f s2n-smoke >/dev/null
+sudo rm -rf "$host_dir"
+host_dir=""
+echo "nested mount: the volume taken over, the host folder mounted inside it untouched  OK"
+
+echo "== 11. first admin from SER2NET_ADMIN_PASSWORD_FILE"
 secret_dir=$(mktemp -d)
 printf 'env-pass-123\n' > "$secret_dir/pw"
 chmod 644 "$secret_dir/pw"

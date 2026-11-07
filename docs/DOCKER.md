@@ -95,11 +95,14 @@ docker run -d --name ser2net --restart unless-stopped \
 
 - **Access.** Pass each port with `--device` (compose `devices:`). A device keeps its
   host's numeric group inside the container — 20 on Debian/Ubuntu, 18 on Fedora/RHEL —
-  and the entrypoint gives the server that group, so no `--group-add` is needed. A
-  device the server still can't open (mode `0600`, say) is reported at start:
-  `[ser2net] warning: uid … can't open /dev/…`. The 2.8.0 image doesn't do this yet:
-  give it `--group-add` with the host's numeric serial GID
-  (`getent group dialout | cut -d: -f3`).
+  and the entrypoint gives the server the group of every device it finds under a serial
+  name (`/dev/ttyUSB*`, `ttyACM*`, `ttyS*`, `ttyAMA*`, `ttymxc*`, … `/dev/rfcomm*`,
+  `/dev/serial/by-id/*`), so no `--group-add` is needed (a console's `tty` group is never
+  added). A device passed under another name inside the container
+  (`--device /dev/ttyUSB0:/dev/plc`) still needs `--group-add` with the host's numeric
+  serial GID (`getent group dialout | cut -d: -f3`), and so does the 2.8.0 image. A
+  device the server can't open (mode `0600`, say) is reported at start:
+  `[ser2net] warning: uid … can't open /dev/…`.
 - **A device missing at start** (an adapter unplugged at boot) makes Docker refuse to
   start the container, and the web UI is down with it. A renumbered adapter
   (`ttyUSB0` → `ttyUSB1`) isn't seen inside either. Both are what hot-plug avoids.
@@ -128,13 +131,15 @@ docker run -d --name ser2net --restart unless-stopped \
   `ser2net` once (logged), so **upgrading needs no manual step**. A bind-mounted folder
   owned by another user is used as that user, so the folder keeps its owner; files in it
   that an image wrote (owned by root, as with the images before v2.8, or by uid 10001)
-  are handed to the folder's owner first (logged). The groups given with `--group-add`
-  are kept, root's group is not. With `docker run --user …` the entrypoint just runs as
-  that user.
-- **When the files can't be taken over** (a read-only mount, NFS with `root_squash`),
-  the start stops with one line naming the file, its owner and mode, the account
-  ser2net runs as and the fix: run `sudo chown -R <uid>:<gid> <folder>` on the host,
-  for the folder mounted at `/data`.
+  are handed to the folder's owner first (logged). A volume or host folder mounted
+  inside `/data` (`-v /etc/letsencrypt:/data/certs`) is never taken over. The groups
+  given with `--group-add` are kept, root's group is not. With `docker run --user …` the
+  entrypoint just runs as that user.
+- **When files can't be taken over** (a read-only mount, NFS with `root_squash`), the
+  start goes on and ser2net says what it can't use: a `config.json` it can't read stops
+  the start with one line naming its owner and mode, the account ser2net runs as and the
+  fix — run `sudo chown -R <uid>:<gid> <folder>` on the host, for the folder mounted at
+  `/data`; a log it can't write is a warning.
 - **Rootless Podman** maps your own user to root inside the container: your
   bind-mounted folder looks root-owned there and would be handed to uid 10001 (a
   sub-uid on the host). Start it with `--userns=keep-id` (plus `--group-add keep-groups`
