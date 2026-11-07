@@ -11,7 +11,7 @@ import contextlib
 import sys
 from typing import Any
 
-from ..config import SerialSettings
+from ..config import SerialSettings, url_port
 
 _patched = False
 
@@ -91,16 +91,28 @@ def resolve_device(settings: SerialSettings) -> str:
     return settings.port
 
 
+def refuse_url(device: str) -> None:
+    """Raise ValueError for a port written as a URL (socket://, rfc2217://, spy://, loop://
+    ...): pyserial would hand it to a URL handler, which opens a network connection or a
+    file instead of a serial device. Edits refuse such ports (MappingConfig.validate_input);
+    this keeps a stored one (hand-edited, restored, older config) from ever being opened."""
+    if url_port(device):
+        raise ValueError(f"serial port {device!r} is a URL, not a serial device; "
+                         "URL ports are not opened")
+
+
 async def open_serial(settings: SerialSettings):
     """Open the serial port asynchronously.
 
     Returns (reader, writer, serial_instance, device_path). Raises
-    serial.SerialException / OSError if the device can't be opened.
+    serial.SerialException / OSError if the device can't be opened, ValueError for a
+    URL port (refuse_url).
     """
     import serial_asyncio_fast
 
     _patch_serial_asyncio_fast()
     device = resolve_device(settings)
+    refuse_url(device)  # the one place every serial port is opened
     kwargs: dict[str, Any] = dict(
         url=device,
         baudrate=settings.baudrate,

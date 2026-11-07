@@ -261,6 +261,14 @@ class SerialSettings:
         return f"{self.baudrate}{self.parity}{self.bytesize}{int(self.stopbits)}"
 
 
+def url_port(port: Any) -> bool:
+    """True for a serial port value that pyserial would open with a URL handler instead
+    of as a device: anything with "://" (socket://, rfc2217://, spy://, loop://, alt://,
+    hwgrep:// ...), which is what pyserial's serial_for_url dispatches on. A mapping only
+    opens serial devices (COM3, \\\\.\\COM10, /dev/ttyUSB0, /dev/serial/by-id/...)."""
+    return isinstance(port, str) and "://" in port
+
+
 # ---------------------------------------------------------------------------
 # Network side
 # ---------------------------------------------------------------------------
@@ -607,6 +615,22 @@ class MappingConfig:
             raise ConfigError(_("Sparkplug B publishes Modbus poll points: add points (and use "
                                 "protocol = modbus), or use the plain MQTT format."))
 
+    def serial_sides(self) -> list[SerialSettings]:
+        """The serial ports this mapping opens: A, and B for a serial-to-serial bridge."""
+        return [self.serial, self.serial_b] if self.kind == "serialbridge" else [self.serial]
+
+    def validate_input(self) -> None:
+        """The rules for a mapping that is being created or changed (web form, REST API,
+        import, cluster), checked there in addition to validate(). validate() must not
+        refuse them: a stored config has to keep loading and saving (Docker re-saves it on
+        every start), so a stored value they forbid is refused where it is used instead
+        (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url)."""
+        for side in self.serial_sides():
+            if url_port(side.port):
+                raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "
+                                    "devices only (URLs such as socket:// or spy:// are not "
+                                    "supported).").format(side.port))
+
 
 # ---------------------------------------------------------------------------
 # Global application config
@@ -936,6 +960,12 @@ class AppConfig:
                     f"mapping '{m.name}': its trace file is now traces/{m.id}-{m.options.trace_both} "
                     f"in the data directory (configured: {old!r}; traces are no longer written "
                     "outside it)")
+            for side in m.serial_sides():
+                if url_port(side.port):
+                    cfg.load_notes.append(
+                        f"mapping '{m.name}': its serial port {side.port!r} is a URL, not a "
+                        "device; URL ports are no longer opened, so the mapping does not start "
+                        "until a serial device is set")
         return cfg
 
     def to_dict(self) -> dict[str, Any]:

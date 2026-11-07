@@ -55,6 +55,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         _preserve_unmanaged_fields(mapping, existing, form)
         apply_usb_match(mapping, form, state.ports.get(), existing)
         mapping.validate()
+        mapping.validate_input()
     except (ValueError, ConfigError) as e:
         return False, str(e)
     # Hold the lock only to mutate + persist config; release it BEFORE the

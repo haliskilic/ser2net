@@ -49,7 +49,8 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
             raise ConfigError(_("Mapping #{0} is not an object.").format(i))
         try:
             m = MappingConfig.from_dict(item)
-        except (TypeError, ValueError) as e:
+            m.validate_input()
+        except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
         if item.get("id") and item["id"] != m.id:
             warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "
@@ -71,8 +72,10 @@ def _classic_ser2net(text: str, filename: str) -> ImportPlan:
     if not dicts:
         raise ConfigError(" ".join(warnings) or _("The file has no ser2net connections to import."))
     source = _("ser2net.yaml (ser2net 4.x)") if looks_yaml(text) else _("ser2net.conf (ser2net 3.x)")
-    return ImportPlan(source=source, mappings=[MappingConfig.from_dict(d) for d in dicts],
-                      warnings=warnings)
+    mappings = [MappingConfig.from_dict(d) for d in dicts]
+    for m in mappings:
+        m.validate_input()  # the converter skips URL devices already; this backs it up
+    return ImportPlan(source=source, mappings=mappings, warnings=warnings)
 
 
 def _match(existing: list[MappingConfig], m: MappingConfig):

@@ -661,5 +661,7 @@
   "⤓ Download": "⤓ İndir",
   "⤓ Export mappings (JSON)": "⤓ Eşlemeleri dışa aktar (JSON)",
   "This mapping no longer exists (it may have been deleted in the meantime). Close the form and add it again.": "Bu eşleme artık yok (bu arada silinmiş olabilir). Formu kapatıp eşlemeyi yeniden ekle.",
-  "Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, digits or _), so it gets a new one.": "Eşleme #{0} ({1}): {2} geçerli bir eşleme ID'si değil (1-64 harf, rakam ya da _), bu yüzden yeni bir ID alıyor."
+  "Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, digits or _), so it gets a new one.": "Eşleme #{0} ({1}): {2} geçerli bir eşleme ID'si değil (1-64 harf, rakam ya da _), bu yüzden yeni bir ID alıyor.",
+  "Serial port {0} is a URL, not a device: ser2net opens serial devices only (URLs such as socket:// or spy:// are not supported).": "Seri port {0} bir URL, cihaz değil: ser2net yalnızca seri cihazları açar (socket:// ya da spy:// gibi URL'ler desteklenmez).",
+  "device {0} is a URL, not a local serial port": "cihaz {0} bir URL, yerel bir seri port değil"
 }
