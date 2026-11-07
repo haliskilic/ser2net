@@ -16,7 +16,9 @@ IAC SE) has a size limit, MAX_SUBNEGOTIATION. Checked here:
   - CPU: plain data costs a small fraction of what the per-byte parsers took, and data
     full of escaped IACs (an erased flash image) still less than they did;
   - the bridge logs such a disconnect with its reason, and a client whose data does not
-    reach the port (read-only) lets other tasks run between its reads.
+    reach the port (read-only) lets other tasks run between its reads;
+  - the pyserial internals the RFC 2217 parser builds on are there (pyserial is pinned:
+    a version that renames them fails here first).
 
 Run: python3 tests/test_protocol_parsers.py
 """
@@ -189,6 +191,22 @@ def chunks_of(rng, data: bytes):
 
 
 # ---- RFC 2217 against pyserial -----------------------------------------------------
+
+def test_pyserial_internals():
+    """_PortManager keeps PortManager's parser state and calls its handlers."""
+    pm = pyserial_rfc2217.PortManager(FakeSerial(), Sink())
+    assert (pm.mode, pm.suboption, pm.telnet_command) == (pyserial_rfc2217.M_NORMAL, None, None)
+    assert {pyserial_rfc2217.M_NORMAL, pyserial_rfc2217.M_IAC_SEEN,
+            pyserial_rfc2217.M_NEGOTIATE} == {0, 1, 2}
+    for name in ("_telnet_process_subnegotiation", "_telnet_negotiate_option",
+                 "_telnet_process_command", "rfc2217_send_subnegotiation",
+                 "check_modem_lines", "filter", "escape"):
+        assert callable(getattr(pm, name, None)), name
+    for name in ("COM_PORT_OPTION", "SET_CONTROL", "SET_CONTROL_REQ_FLOW_SETTING",
+                 "SERVER_PURGE_DATA", "IAC", "SB", "SE", "DO", "DONT", "WILL", "WONT"):
+        assert isinstance(getattr(pyserial_rfc2217, name, None), bytes), name
+    print("pyserial: the PortManager state, handlers and constants the parser uses exist  OK")
+
 
 def _reference_rfc2217(chunks):
     ser, sink = FakeSerial(), Sink()
@@ -490,6 +508,7 @@ def test_endless_subnegotiation_over_tcp():
 
 
 def main():
+    test_pyserial_internals()
     test_rfc2217_same_as_pyserial()
     test_rfc2217_escape_same_as_pyserial()
     test_telnet_same_as_before()
