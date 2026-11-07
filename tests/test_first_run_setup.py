@@ -9,7 +9,10 @@
   * a second setup request that was let in before the first finished (its body still
     on the way) does not replace the first admin;
   * with SER2NET_ADMIN_PASSWORD_FILE set but unusable, setup in the browser stays closed;
-  * demoting yourself is refused when the other admins can't sign in (LDAP off).
+  * demoting yourself is refused when the other admins can't sign in (LDAP off);
+  * the user name fields (setup, sign-in, Add user) don't let a phone keyboard capitalise
+    or correct the name; setup and Add user also check the rule in the browser, and a
+    refused name is told which characters aren't allowed (a Turkish İ is easy to miss).
 
 Run: python3 tests/test_first_run_setup.py
 """
@@ -141,11 +144,49 @@ def test_last_usable_admin():
     print("demoting the only admin who can sign in is refused (the other one is LDAP, LDAP off)  OK")
 
 
+NO_AUTOFIX = 'autocapitalize="none" autocorrect="off" spellcheck="false"'
+LOCAL_RULE = ('maxlength="32" pattern="[A-Za-z0-9._\\-]{1,32}" title="Username must be 1-32 '
+              "characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.\"")
+
+
+def username_input(page: str) -> str:
+    """The <input ...> of the visible user name field (not a hidden one)."""
+    at = page.find('<input type="text" name="username"')
+    assert at >= 0, page[-1500:]
+    return page[at:page.find(">", at) + 1]
+
+
+def test_username_fields():
+    with Server(None) as srv:
+        b = Browser(srv.base)
+        _, _, page = b.get("/setup")
+        field = username_input(page)
+        assert NO_AUTOFIX in field and LOCAL_RULE in field, field
+        st, _, page = b.post("/setup", form("İsmail"))
+        assert st == 400, st
+        assert ("Username must be 1-32 characters: English letters (a-z, A-Z), digits, "
+                "&#39;.&#39;, &#39;_&#39; or &#39;-&#39;. Not allowed: &#39;İ&#39;") in page, \
+            page[page.find("banner error"):][:300]
+        b.setup("admin", PW)
+        _, _, page = Browser(srv.base).get("/login")
+        field = username_input(page)
+        assert NO_AUTOFIX in field and "pattern=" not in field and "maxlength" not in field, field
+        _, _, page = b.get("/settings")
+        field = username_input(page)
+        assert NO_AUTOFIX in field and LOCAL_RULE in field, field
+        st, _, page = b.post("/settings/users", {"username": "operatör 1", "role": "viewer",
+                                                 "password": PW, "password2": PW})
+        assert "Not allowed: &#39;ö&#39;, &#39; &#39;" in page, page[page.find("banner error"):][:300]
+    print("user name fields: no auto-capitalisation or correction; the rule is checked in the "
+          "browser and names the characters it refuses  OK")
+
+
 def main():
     test_foreign_host()
     test_second_setup_request()
     test_locked()
     test_last_usable_admin()
+    test_username_fields()
     print("\nPASS: first-run setup guard")
 
 

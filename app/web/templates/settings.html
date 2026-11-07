@@ -136,7 +136,7 @@
   <form method="post" action="/settings/users" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <div class="grid2">
-      <label>{{ _("Username") }} <input type="text" name="username" placeholder="{{ _('e.g. %(example)s', example='operator1') }}" required></label>
+      <label>{{ _("Username") }} <input type="text" name="username" placeholder="{{ _('e.g. %(example)s', example='operator1') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" pattern="[A-Za-z0-9._\-]{1,32}" title="{{ _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.") }}" required></label>
       <label>{{ _("Role") }}
         <select name="role">{% for r in roles %}<option value="{{ r }}" {% if r == 'viewer' %}selected{% endif %}>{{ r }}</option>{% endfor %}</select>
       </label>
@@ -186,11 +186,11 @@
     </label>
     <label class="chk"><input type="checkbox" name="ldap_tls_insecure" {% if not ldap.tls_verify %}checked{% endif %}> {{ _("Don’t check the server certificate (insecure: anyone on the network path could read the passwords)") }}</label>
     <label>{{ _("User DN template") }} <span class="muted">({{ _("direct bind") }} — AD: <span class="mono">{username}@corp.local</span>; LDAP: <span class="mono">uid={username},ou=people,dc=ex,dc=com</span>)</span>
-      <input type="text" name="ldap_user_dn_template" value="{{ ldap.user_dn_template }}" placeholder="{{ _('optional') }}">
+      <input type="text" name="ldap_user_dn_template" value="{{ ldap.user_dn_template }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false">
     </label>
     <p class="muted">{{ _("…or search + bind with a service account:") }}</p>
     <div class="grid2">
-      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com"></label>
+      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       <label>{{ _("Bind password") }} <input type="password" name="ldap_bind_password" placeholder="{% if ldap.bind_password %}{{ unchanged }}{% endif %}"></label>
     </div>
     <div class="grid2">
@@ -364,7 +364,7 @@
           </select></label>
       </div>
       <div class="grid2">
-        <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off"></label>
+        <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
         <label>{{ _("Password") }} <input type="password" name="notify_smtp_password" autocomplete="new-password" placeholder="{% if notify.smtp_password %}{{ unchanged }}{% endif %}"></label>
       </div>
     </fieldset>
