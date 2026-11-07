@@ -61,8 +61,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway). An RFC 2217
   request the port can't carry out (a malformed or reserved value, or one the serial port
   refuses) is answered with the current setting, as RFC 2217 says, and leaves the port as
-  it was; the client stays connected. A telnet or RFC 2217 subnegotiation longer than
-  1 KiB (real ones are a few bytes) ends that client's session, and the log says why.
+  it was; the client stays connected. An RFC 2217 client also stays connected while a lost
+  serial port is reopened, and the reopened port gets its settings (see
+  [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md)). A telnet or RFC 2217 subnegotiation longer
+  than 1 KiB (real ones are a few bytes) ends that client's session, and the log says why.
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.

@@ -417,10 +417,36 @@ class _ClientConn:
             with contextlib.suppress(Exception):
                 self.writer.transport.abort()
 
+    def serial_changed(self, serial) -> None:
+        """The runner's serial port was reopened (the new pyserial object) or closed
+        (None): an RFC 2217 session follows it. A reopened port that refuses the client's
+        settings ends the session (ProtocolError says which)."""
+        session = self._session
+        if session is None or self._closing:
+            return
+        try:
+            session.serial_changed(serial)
+        except ProtocolError as e:
+            self.kick(str(e))
+            return
+        ctrl = session.take_net_out()  # e.g. the modem lines as they are now
+        if ctrl:
+            with contextlib.suppress(asyncio.QueueFull):
+                self._out.put_nowait(ctrl)
+
     async def run(self) -> None:
         m = self.runner.mapping
         # Create the protocol session. RFC2217 needs the live serial instance.
         ser = self.runner.serial_instance
+        if m.network.protocol == "rfc2217" and ser is None:
+            # it drives the port, so it starts only while the port is open (a connect-out
+            # link can come up just after the port went away)
+            self._closing = True
+            self.close_reason = "the serial port is not open"
+            with contextlib.suppress(Exception):
+                self.writer.close()
+                await self.writer.wait_closed()
+            return
         self._session = make_session(m.network.protocol, ser,
                                      poll_interval=m.options.rfc2217_poll_modem_interval_s,
                                      read_only=m.network.read_only, log=self._protocol_log)
@@ -562,7 +588,8 @@ class MappingRunner:
         self._mqtt: Optional[MqttPublisher] = None  # optional MQTT publisher (serial -> broker)
         self._stop = asyncio.Event()
         # the serial port shared by server/client/udp (a serial<->serial bridge opens its own)
-        self._link = SerialLink(mapping.serial, self.status, self._stop, self._log)
+        self._link = SerialLink(mapping.serial, self.status, self._stop, self._log,
+                                on_change=self._serial_changed)
         self._access = AccessPolicy(mapping.network)
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
         co = mapping.options.closeon
@@ -725,6 +752,27 @@ class MappingRunner:
         await w.drain()
         return True
 
+    def _serial_changed(self, serial) -> None:
+        """SerialLink: the port was reopened (``serial``) or closed (None). An RFC 2217
+        session drives the port itself, so the connected client's session follows it: the
+        client stays connected through a reconnect and keeps its settings."""
+        if self.mapping.network.protocol == "rfc2217":
+            for c in list(self._clients):
+                c.serial_changed(serial)
+
+    async def _serial_open(self) -> bool:
+        """Wait until the serial port is open; False when the mapping stops first."""
+        link = self._link
+        if not link.is_open:
+            ready = asyncio.ensure_future(link.ready.wait())
+            stop = asyncio.ensure_future(self._stop.wait())
+            try:
+                await asyncio.wait((ready, stop), return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                ready.cancel()
+                stop.cancel()
+        return link.is_open and not self._stop.is_set()
+
     def _drop(self, n: int, why: str) -> None:
         """Count data for the device that is not written, and log it (rate-limited)."""
         if n <= 0:
@@ -870,6 +918,9 @@ class MappingRunner:
         target = f"{net.remote_host}:{net.remote_port}"
         backoff = Backoff()
         while not self._stop.is_set():
+            # an RFC 2217 session drives the serial port: connect out only while it is open
+            if net.protocol == "rfc2217" and not await self._serial_open():
+                break
             try:
                 reader, writer = await self._connect_out()
                 self._enable_keepalive(writer, target)

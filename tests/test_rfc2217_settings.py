@@ -10,10 +10,19 @@ with the current setting, the client stays connected (no sockets, no serial hard
     serial object: the answer, the cached value and the next change all use the old one;
     a flow control change the port refuses is undone in full, a purge that fails is
     still acknowledged;
-  - the bridge logs what a client sends that is refused at most once a minute.
+  - the bridge logs what a client sends that is refused at most once a minute;
+  - the serial port reopened under a connected client (a new pyserial object): the
+    session drives the new port, which is given the client's settings and line state,
+    and leaves the old one alone; while the port is closed the client's settings can be
+    read and changed (the reopened port gets them), the modem lines read low and a purge
+    has nothing to do; a reopened port that refuses the client's settings ends the
+    session with the reason; a read-only session never configures the reopened port;
+  - the bridge: SerialLink reports each change of its pyserial object, the runner hands
+    it to its RFC 2217 clients, and an RFC 2217 session never starts without a port.
 
 Run: python3 tests/test_rfc2217_settings.py
 """
+import asyncio
 import os
 import struct
 import sys
@@ -26,6 +35,7 @@ from serial.serialutil import SerialBase
 
 from app.config import MappingConfig
 from app.engine import bridge
+from app.engine.protocols.base import ProtocolError
 from app.engine.protocols.rfc2217 import Rfc2217Session
 
 IAC, SB, SE = 255, 250, 240
@@ -255,6 +265,22 @@ def test_failed_purge_is_acknowledged():
 class _Writer:
     def __init__(self):
         self.transport = self
+        self.aborted = False
+
+    def abort(self):
+        self.aborted = True
+
+    def write(self, data):
+        pass
+
+    def close(self):
+        pass
+
+    async def wait_closed(self):
+        pass
+
+    def is_closing(self):
+        return False
 
 
 def test_bridge_logs_refusals_once_a_minute():
@@ -272,6 +298,153 @@ def test_bridge_logs_refusals_once_a_minute():
     print("bridge: refused requests are logged with the client, at most once a minute  OK")
 
 
+# ---- the serial port reopened under a connected client ----------------------------
+
+WILL_COM_PORT = bytes([IAC, 251, COM_PORT_OPTION])
+MODEMSTATE = lambda n: answer(107, bytes([n]))  # noqa: E731
+
+
+def test_session_follows_a_reopened_port():
+    old, new = FakeSerial(), FakeSerial()
+    old.cts = old.dsr = True
+    s, logs = session_for(old)
+    s.from_network(WILL_COM_PORT)  # the client speaks RFC 2217: modem lines are reported
+    assert MODEMSTATE(0x30 | 0x03) in s.take_net_out()  # CTS, DSR (+ their change bits)
+    s.from_network(sb(1, 0, 0, 0x4B, 0) + sb(3, 3) + sb(5, 9) + sb(5, 12))  # 19200 E, DTR/RTS off
+    assert (old.baudrate, old.parity, old.dtr, old.rts) == (19200, "E", False, False)
+    s.take_net_out()
+
+    # the port is gone: the lines read low, settings are what the client knows and
+    # changes wait for the port; the old object is not touched any more
+    s.serial_changed(None)
+    assert s.take_net_out() == MODEMSTATE(0x03)  # CTS and DSR dropped
+    s.from_network(sb(1, 0, 0, 0, 0) + sb(1, 0, 0, 0x96, 0) + sb(12, 3) + sb(5, 8))
+    assert s.take_net_out() == BAUD(19200) + BAUD(38400) + answer(112, b"\x03") + CONTROL(8)
+    assert (old.baudrate, old.purges, old.dtr) == (19200, 0, False), "the old port was used"
+
+    # reopened: the new port gets the client's settings and line state
+    new.cts = True
+    s.serial_changed(new)
+    assert (new.baudrate, new.parity, new.bytesize, new.stopbits) == (38400, "E", 8, 1)
+    assert (new.dtr, new.rts) == (True, False)
+    assert s.take_net_out() == MODEMSTATE(0x10 | 0x01)
+    s.from_network(sb(1, 0, 0, 0xE1, 0) + sb(12, 1))  # 57600, purge
+    assert (new.baudrate, new.purges) == (57600, 1)
+    assert s.take_net_out() == BAUD(57600) + answer(112, b"\x01")
+    assert (old.baudrate, old.purges) == (19200, 0), "the old port was used"
+    assert not logs, logs
+    print("reopened port: the session drives the new one, which gets the client's settings "
+          "and lines; while the port is closed the old one is left alone  OK")
+
+
+def test_reopened_port_refusing_client_settings():
+    s, logs = session_for(FakeSerial())
+    s.from_network(sb(1, 0, 0x1E, 0x84, 0x80))  # 2000000
+    new = DriverSerial(_refuse_baud_above(1_000_000, serial.SerialException("SetCommState")))
+    new.baudrate = 9600
+    try:
+        s.serial_changed(new)
+    except ProtocolError as e:
+        assert str(e) == "the reopened serial port refused the client's settings " \
+                         "(baudrate 2000000)", e
+    else:
+        raise AssertionError("the session went on with settings the port refused")
+    assert new._baudrate == 9600, "the refused value stayed on the reopened port"
+    assert any("refused baudrate 2000000" in ln for ln in logs), logs
+    print("a reopened port that refuses the client's settings ends the session, saying "
+          "which  OK")
+
+
+def test_read_only_session_leaves_reopened_port_alone():
+    old, new = FakeSerial(), FakeSerial()
+    new.baudrate = 115200
+    s, _logs = session_for(old, read_only=True)
+    s.serial_changed(None)
+    s.from_network(sb(1, 0, 0, 0x4B, 0))
+    s.serial_changed(new)
+    assert new.settings() == (115200, 8, "N", 1, False, False, False)
+    s.take_net_out()
+    s.from_network(sb(1, 0, 0, 0, 0))
+    assert s.take_net_out() == BAUD(115200)  # the reopened port's own setting
+    print("read-only: a reopened port is not configured, its settings are reported  OK")
+
+
+def rfc2217_runner(logs, mode="server"):
+    net = {"protocol": "rfc2217", "bind_ip": "127.0.0.1", "port": 48503, "mode": mode}
+    if mode == "client":
+        net.update(remote_host="127.0.0.1", remote_port=48504)
+    m = MappingConfig.from_dict({"name": "r", "serial": {"port": "/dev/ttyX"}, "network": net})
+    return bridge.MappingRunner(m, logger=logs.append)
+
+
+async def _bridge_follows_the_port():
+    logs = []
+    runner = rfc2217_runner(logs)
+    first, second, third = FakeSerial(), FakeSerial(), DriverSerial(
+        _refuse_baud_above(1_000_000, serial.SerialException("SetCommState")))
+    third.baudrate = 9600
+    reader = asyncio.StreamReader()
+    runner._link.attach(reader, _Writer(), first, "/dev/ttyX")
+    conn = bridge._ClientConn(runner, asyncio.StreamReader(), _Writer(), "10.0.0.8", 4000)
+    conn._session = Rfc2217Session(runner.serial_instance, log=conn._protocol_log)
+    conn._session.take_net_out()
+    runner._clients.add(conn)
+    conn._session.from_network(sb(1, 0, 0, 0x4B, 0))
+    assert first.baudrate == 19200
+
+    await runner._link.close()  # the port went away
+    runner._link.attach(reader, _Writer(), second, "/dev/ttyX")  # and is back
+    assert second.baudrate == 19200 and not conn._closing
+    # a reopened port that refuses the client's settings: the client is disconnected
+    conn._session.from_network(sb(1, 0, 0x1E, 0x84, 0x80))
+    await runner._link.close()
+    runner._link.attach(reader, _Writer(), third, "/dev/ttyX")
+    assert conn._closing and conn.writer.aborted
+    assert conn.close_reason == "the reopened serial port refused the client's settings " \
+                                "(baudrate 2000000)", conn.close_reason
+
+    # other protocols' sessions are left alone
+    raw = bridge.MappingRunner(MappingConfig.from_dict({
+        "name": "raw", "serial": {"port": "/dev/ttyX"},
+        "network": {"protocol": "raw", "bind_ip": "127.0.0.1", "port": 48505}}),
+        logger=logs.append)
+    other = bridge._ClientConn(raw, asyncio.StreamReader(), _Writer(), "10.0.0.9", 1)
+    other.serial_changed = lambda _s: (_ for _ in ()).throw(AssertionError("called"))
+    raw._clients.add(other)
+    raw._link.attach(reader, _Writer(), FakeSerial(), "/dev/ttyX")
+    await raw._link.close()
+    assert not any("not taken up" in ln for ln in logs), logs
+
+
+async def _no_session_without_a_port():
+    logs = []
+    runner = rfc2217_runner(logs, mode="client")
+    w = _Writer()
+    conn = bridge._ClientConn(runner, asyncio.StreamReader(), w, "127.0.0.1", 48504)
+    await conn.run()  # the port is not open
+    assert conn._session is None and conn._closing
+    assert conn.close_reason == "the serial port is not open", conn.close_reason
+    # connect-out waits for the port, and gives up when the mapping stops meanwhile
+    wait = asyncio.ensure_future(runner._serial_open())
+    await asyncio.sleep(0.05)
+    assert not wait.done()
+    runner._link.attach(asyncio.StreamReader(), _Writer(), FakeSerial(), "/dev/ttyX")
+    assert await asyncio.wait_for(wait, 1) is True
+    await runner._link.close()
+    wait = asyncio.ensure_future(runner._serial_open())
+    await asyncio.sleep(0.05)
+    runner._stop.set()
+    assert await asyncio.wait_for(wait, 1) is False
+
+
+def test_bridge_follows_the_port():
+    asyncio.run(_bridge_follows_the_port())
+    asyncio.run(_no_session_without_a_port())
+    print("bridge: SerialLink's port changes reach the RFC 2217 client (a refusal "
+          "disconnects it with the reason); no RFC 2217 session without a port; "
+          "connect-out waits for it  OK")
+
+
 def main():
     test_malformed_values_answered_with_current_setting()
     test_valid_values_still_work()
@@ -280,7 +453,12 @@ def main():
     test_refused_flow_control_is_undone()
     test_failed_purge_is_acknowledged()
     test_bridge_logs_refusals_once_a_minute()
-    print("\nPASS: RFC 2217 refuses what it can't carry out with the current setting")
+    test_session_follows_a_reopened_port()
+    test_reopened_port_refusing_client_settings()
+    test_read_only_session_leaves_reopened_port_alone()
+    test_bridge_follows_the_port()
+    print("\nPASS: RFC 2217 refuses what it can't carry out with the current setting, and "
+          "follows a reopened port")
 
 
 if __name__ == "__main__":
