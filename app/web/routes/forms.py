@@ -129,6 +129,11 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
+    # not offered for a Modbus gateway, which has no per-client output buffer and can't
+    # send a banner or act on a close-on string (bytes outside Modbus frames)
+    "network_client_queue_max": ("network", ("client_queue_max",)),
+    "opt_banner": ("options", ("banner",)),
+    "opt_closeon": ("options", ("closeon",)),
 }
 
 
@@ -149,7 +154,6 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         "read_only": _checkbox(form, "network_read_only"),
         "allowed_client_ips": _split(form.get("network_allowed_client_ips", "")),
         "priority_client_ips": _split(form.get("network_priority_client_ips", "")),
-        "client_queue_max": _num(form, "network_client_queue_max", 2048, strict=strict),
         "tls": _checkbox(form, "network_tls"),
         "tls_cert": form.get("network_tls_cert", "").strip(),
         "tls_key": form.get("network_tls_key", "").strip(),
@@ -164,13 +168,16 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "network_connect_timeout_s" in form:
         network["connect_timeout_s"] = _num(form, "network_connect_timeout_s", 10.0,
                                             strict=strict, cast=float)
+    if "network_client_queue_max" in form:
+        network["client_queue_max"] = _num(form, "network_client_queue_max", 2048, strict=strict)
     options = {
-        "banner": form.get("opt_banner", ""),
         "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
-        "closeon": form.get("opt_closeon", ""),
         "trace_both": form.get("opt_trace_both", "").strip(),
         "trace_hexdump": _checkbox(form, "opt_trace_hexdump"),
     }
+    for key in ("banner", "closeon"):
+        if f"opt_{key}" in form:
+            options[key] = form.get(f"opt_{key}", "")
     if "opt_max_connection_time_s" in form:
         options["max_connection_time_s"] = _num(form, "opt_max_connection_time_s", 0,
                                                 strict=strict)

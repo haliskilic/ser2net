@@ -86,6 +86,47 @@ def test_exception_pdu():
     print("exception_pdu sets the high bit and the 0x0B gateway-timeout code  OK")
 
 
+def test_read_request_allow_list():
+    """What a read-only gateway still forwards: only requests known to read (an allow-list,
+    so a write-ish or unknown function code is refused rather than let through)."""
+    reads = [
+        bytes.fromhex("0100130013"), bytes.fromhex("0200c40016"),       # FC1/FC2 read bits
+        bytes.fromhex("03006b0003"), bytes.fromhex("0400080001"),       # FC3/FC4 registers
+        b"\x07", b"\x0b", b"\x0c", b"\x11",                             # exc. status, events, id
+        bytes.fromhex("140e0600040001000206000300090002"),             # FC20 read file record
+        bytes.fromhex("1804de"),                                       # FC24 read FIFO queue
+        bytes.fromhex("080000a537"),                                   # FC8/00 echo query data
+        bytes.fromhex("0800020000"),                                   # FC8/02 diagnostic register
+        *(bytes([8, 0, sub, 0, 0]) for sub in range(0x0B, 0x13)),      # FC8 counters
+        bytes.fromhex("2b0e0100"),                                     # FC43/14 device id
+    ]
+    for pdu in reads:
+        assert modbus.is_read_request(pdu), pdu.hex(" ")
+    refused = [
+        bytes.fromhex("0500acff00"), bytes.fromhex("0600010003"),       # FC5/FC6
+        bytes.fromhex("0f0013000a02cd01"), bytes.fromhex("100001000204000a0102"),  # 15/16
+        bytes.fromhex("1507060004000700"),                             # FC21 write file record
+        bytes.fromhex("16000400f20025"),                               # FC22 mask write
+        bytes.fromhex("1700030006000e00030600ff00ff00ff"),             # FC23 read/WRITE
+        bytes.fromhex("0800010000"), bytes.fromhex("080001ff00"),       # FC8/01 restart
+        bytes.fromhex("0800030a00"),                                   # FC8/03 change delimiter
+        bytes.fromhex("0800040000"),                                   # FC8/04 force listen only
+        bytes.fromhex("08000a0000"), bytes.fromhex("0800140000"),       # FC8 clear counters
+        bytes.fromhex("0800130000"), bytes.fromhex("0800ff0000"),       # FC8 reserved
+        b"\x08", b"\x08\x00",                                          # FC8 without a sub-function
+        bytes.fromhex("2b0d0000"), b"\x2b",                             # FC43 CANopen / no MEI type
+        b"\x00", b"\x09", b"\x0a", b"\x0d", b"\x0e",                    # invalid / legacy program
+        b"\x41\x00", b"\x48", b"\x64", b"\x6e",                          # user-defined ranges
+        b"\x83\x0b", b"\xff",                                           # exception codes, junk
+        b"",                                                           # empty PDU (MBAP length 1)
+    ]
+    for pdu in refused:
+        assert not modbus.is_read_request(pdu), pdu.hex(" ")
+    assert modbus.ILLEGAL_FUNCTION == 0x01
+    assert modbus.exception_pdu(0x06, modbus.ILLEGAL_FUNCTION) == bytes([0x86, 0x01])
+    print(f"read-only allow-list: {len(reads)} reads pass, {len(refused)} writes/unknown refused  OK")
+
+
 def test_gateway_conversion_chain():
     # what the gateway actually does: TCP request -> RTU -> (slave) -> RTU resp -> TCP
     req_pdu = bytes([0x03, 0x00, 0x00, 0x00, 0x02])
@@ -133,6 +174,7 @@ def main():
     test_tcp_adu_build_and_take()
     test_take_tcp_adu_streaming_and_errors()
     test_exception_pdu()
+    test_read_request_allow_list()
     test_gateway_conversion_chain()
     print("\nPASS: Modbus framing (RTU<->TCP)")
 

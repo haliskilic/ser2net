@@ -60,10 +60,14 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
   If the serial port goes away (a USB adapter unplugged), masters get `0x0B` meanwhile
   and the port is reopened like any mapping's (state `reconnecting`, device lost/back
-  notifications). **Edge mode:** also polls coils and registers on an interval and
-  publishes the decoded values to MQTT (bool, uint/int/float 16/32, scaling);
-  `"writable": true` points take values from MQTT (`<topic>/<point>/set` → FC5/FC15
-  coils, FC6/FC16 registers).
+  notifications). Masters are admitted like other clients (allowed IPs, max connections,
+  priority IPs, kick-old-user); a **read-only** gateway answers every request that is not
+  a read (writes such as FC5/6/15/16/22/23, diagnostics that restart or silence a slave,
+  unknown function codes) with exception `0x01` without putting it on the bus. Banner,
+  open/close strings and `closeon` don't apply (they would break the Modbus framing).
+  **Edge mode:** also polls coils and registers on an interval and publishes the decoded
+  values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
+  values from MQTT (`<topic>/<point>/set` → FC5/FC15 coils, FC6/FC16 registers).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
   NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
@@ -85,7 +89,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   table only redraws when it changed (no flicker, selections stay).
 - **Per-mapping access control:** allowed IP/CIDR list, **high-priority** client IPs
   (a priority client evicts the oldest when the port is full), max connections,
-  kick-old-user, read-only, banner, open/close strings, `closeon`.
+  kick-old-user, read-only, banner, open/close strings, `closeon` (a Modbus gateway uses
+  no banner, open/close strings or `closeon`).
 - **Connection lifecycle (per mapping, TCP):** **dead-peer detection via TCP keepalive**
   — a client or remote server that vanishes without a FIN/RST (power cut, cable pull,
   Wi-Fi/VPN/NAT drop) no longer stays `ESTABLISHED` forever: with the defaults (on ·

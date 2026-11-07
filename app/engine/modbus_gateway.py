@@ -10,20 +10,23 @@ echoing the transaction id so concurrent masters don't get crossed wires.
 Shares the lifecycle shape (and the H3/H4 fixes) of MappingRunner: the same
 supervised serial port (serial_link.SerialLink: reopened, and its USB identity
 re-resolved, whenever it is lost) plus an asyncio TCP server, both torn down
-cleanly on stop().
+cleanly on stop(). Masters are admitted by the same policy as bridge clients
+(access.AccessPolicy: allow-list, max connections, priority IPs, kick_old_user);
+a read-only gateway answers every request that is not known to be a read with
+exception 01 and never puts it on the bus. A banner, open/close strings and
+closeon don't apply: bytes outside Modbus frames would break the framing.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import ipaddress
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
-from ..config import MappingConfig, normalize_cidr
+from ..config import MappingConfig
 from . import modbus, sockopts
-from .access import server_ssl
+from .access import AccessPolicy, server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
 )
@@ -44,31 +47,20 @@ def _next_timer(idle_s: float, deadline: Optional[float]) -> Optional[float]:
     return min(waits) if waits else None
 
 
-def _parse_nets(cidrs):
-    nets = []
-    for c in cidrs:
-        with contextlib.suppress(ValueError):
-            nets.append(ipaddress.ip_network(normalize_cidr(c), strict=False))
-    return nets
-
-
-def _ip_in_nets(ip: str, nets) -> bool:
-    if not nets:
-        return False
-    with contextlib.suppress(ValueError):
-        addr = ipaddress.ip_address(ip)
-        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
-            addr = addr.ipv4_mapped
-        return any(addr in net for net in nets)
-    return False
-
-
 @dataclass(eq=False)
 class _Master:
     """A connected Modbus/TCP master (identity-hashed, so it can live in a set)."""
     writer: asyncio.StreamWriter
     peer: str
+    priority: bool = False          # admitted from priority_client_ips
     connected_at: float = field(default_factory=time.time)
+    close_reason: str = ""          # why the gateway dropped it (first cause wins)
+    refused: int = 0                # requests refused because the mapping is read-only
+
+    def kick(self, reason: str = "kicked") -> None:
+        self.close_reason = self.close_reason or reason
+        with contextlib.suppress(Exception):
+            self.writer.transport.abort()
 
 
 class ModbusGatewayRunner:
@@ -91,7 +83,7 @@ class ModbusGatewayRunner:
         self._sparkplug: Optional[SparkplugNode] = None  # payload format sparkplug_b
         self._write_tasks: set = set()
         self._poll_task: Optional[asyncio.Task] = None
-        self._allowed = _parse_nets(mapping.network.allowed_client_ips)
+        self._access = AccessPolicy(mapping.network)
         # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
         baud = max(1, mapping.serial.baudrate)
         self._gap = max(0.01, 3.5 * 11 / baud)
@@ -143,6 +135,7 @@ class ModbusGatewayRunner:
         except BaseException:
             await self.stop()
             raise
+        self._log_policy()
         # optional edge mode: poll Modbus registers off the bus and publish to MQTT
         # (plain topics, or as a Sparkplug B edge node); writable points take values back
         if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:
@@ -168,8 +161,7 @@ class ModbusGatewayRunner:
         if self._server is not None:
             self._server.close()
         for c in list(self._clients):
-            with contextlib.suppress(Exception):
-                c.writer.transport.abort()
+            c.kick("gateway stopped")
         for mon in list(self._monitors) + list(self._traffic):
             mon.close()
         self._monitors.clear()
@@ -360,13 +352,33 @@ class ModbusGatewayRunner:
         return bytes(buf)
 
     # ---------------- network side ----------------
+    def _log_policy(self) -> None:
+        """Log at start which of the mapping's options a Modbus gateway treats differently:
+        the ones it does not use, and what read-only means here."""
+        opts = self.mapping.options
+        unused = [name for name, value in (("banner", opts.banner), ("openstr", opts.openstr),
+                                           ("closestr", opts.closestr), ("closeon", opts.closeon))
+                  if value]
+        if unused:
+            self._log(f"not used by a Modbus gateway: {', '.join(unused)} "
+                      "(bytes outside Modbus frames would break the framing)")
+        if self.mapping.network.read_only:
+            self._log("read-only: requests from Modbus/TCP masters that are not reads get "
+                      "exception 01 (illegal function) and never reach the bus; MQTT/Sparkplug "
+                      "writes follow each point's writable flag")
+
+    def _refuse(self, master: _Master, pdu: bytes) -> bytes:
+        """Answer a request a read-only gateway does not forward: exception 01 (illegal
+        function). The first one per master connection is logged, the rest are counted."""
+        function = pdu[0] if pdu else 0
+        master.refused += 1
+        if master.refused == 1:
+            self._log(f"read-only: refused FC{function} from {master.peer} with exception 01 "
+                      "(further refusals for this master are only counted)")
+        return modbus.exception_pdu(function, modbus.ILLEGAL_FUNCTION)
+
     def _refresh_clients(self) -> None:
-        self.status.client_count = len(self._clients)
-        self.status.clients = sorted(
-            ({"peer": c.peer, "connected_at": c.connected_at, "priority": False}
-             for c in self._clients),
-            key=lambda d: d["connected_at"],
-        )
+        self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peername = writer.get_extra_info("peername") or ("?", 0)
@@ -374,22 +386,20 @@ class ModbusGatewayRunner:
         peer = f"{peer_ip}:{peername[1]}" if isinstance(peername, tuple) and len(peername) > 1 else peer_ip
         net = self.mapping.network
 
-        if self._allowed and not _ip_in_nets(peer_ip, self._allowed):
-            self._log(f"rejected {peer}: not in allowed list")
-            writer.close()
-            return
-        if len(self._clients) >= net.max_connections:
-            self._log(f"rejected {peer}: max connections reached")
+        # allow-list, then max connections (a priority master / kick_old_user makes room)
+        admission = self._access.admit(peer_ip, peer, self._clients, self._log)
+        if not admission.admitted:
             with contextlib.suppress(Exception):
                 writer.close()
             return
 
         if err := sockopts.apply_keepalive(writer, net):
             self._log(f"TCP keepalive not enabled for {peer}: {err}")
-        master = _Master(writer, peer)
+        master = _Master(writer, peer, priority=admission.priority)
         self._clients.add(master)
         self._refresh_clients()
-        self._log(f"modbus master connected: {peer} ({len(self._clients)} total)")
+        tag = " [priority]" if master.priority else ""
+        self._log(f"modbus master connected: {peer}{tag} ({len(self._clients)} total)")
         opts = self.mapping.options
         deadline = (time.monotonic() + opts.max_connection_time_s
                     if opts.max_connection_time_s > 0 else None)
@@ -422,7 +432,10 @@ class ModbusGatewayRunner:
                     if frame is None:
                         break
                     txn, unit, pdu = frame
-                    rpdu = await self._transaction(unit, pdu)
+                    if net.read_only and not modbus.is_read_request(pdu):
+                        rpdu = self._refuse(master, pdu)
+                    else:
+                        rpdu = await self._transaction(unit, pdu)
                     writer.write(modbus.build_tcp_adu(txn, unit, rpdu))
                     await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError, OSError) as e:
@@ -432,10 +445,12 @@ class ModbusGatewayRunner:
             self._refresh_clients()
             with contextlib.suppress(Exception):
                 writer.close()
+            reason = master.close_reason or reason
             if self._stop.is_set():
                 reason = "gateway stopped"
             held = fmt_duration(time.time() - master.connected_at)
-            self._log(f"modbus master disconnected: {peer} after {held} — {reason} "
+            refused = f", {master.refused} request(s) refused (read-only)" if master.refused else ""
+            self._log(f"modbus master disconnected: {peer} after {held} — {reason}{refused} "
                       f"({len(self._clients)} total)")
 
 
