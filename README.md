@@ -148,6 +148,8 @@ düzenlemeye gerek yok.
   otomatik olarak bir `admin` kullanıcısına geçer.
 - **LDAP / Active Directory auth (opsiyonel):** kullanıcılar dizine bind ederek doğrulanır;
   LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
+  LDAPS / StartTLS'te sunucunun sertifikası denetlenir (sistemin CA'ları ya da kendi CA
+  dosyanız).
 - **OIDC tek-oturum (SSO, opsiyonel):** Keycloak/Entra ID/Google/Okta ile authorization-code
   akışı; id_token doğrulanır (imza/iss/aud/exp/nonce), claim→rol eşlenir. `authlib` gerektirir.
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
@@ -239,8 +241,8 @@ Linux notları:
 - `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
   bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin.
-- Sertifika kontrolleri (TLS üzerinden MQTT, OIDC) için dağıtımın CA paketini, ayarlıysa
-  `SSL_CERT_FILE`'ı kullanır.
+- Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
+  paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır.
 
 `ser2net --about` sürümleri (Python, OpenSSL, bileşenler) gösterir; hata bildirirken
 ekleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini yazar
@@ -430,6 +432,25 @@ ile AD doğrudan bind'de, grupları okumak için hesap kullanıcı arama tabanı
 kendi domain'inin tamamında) userPrincipalName / sAMAccountName ile bulunur; *İç içe
 grupları da say* (yalnızca AD) kullanıcının başka gruplar üzerinden üyesi olduğu grupları
 da ekler.
+
+**TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
+Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika
+deposu, domain üyesi bir makinede AD CA'sı genellikle zaten oradadır) ve sunucu URI'sindeki
+host adını içermelidir: sertifikanın verildiği adı kullanın (`ldaps://dc01.corp.local`; IP
+adresini yalnızca sertifika o adresi içeriyorsa). Kendi CA'nız (Active Directory Certificate
+Services) ya da self-signed bir sertifika için **Ayarlar → LDAP → CA sertifika dosyası**'na o
+CA'nın sertifikasını girin: PEM ya da Windows'un dışa aktardığı DER (Docker: dosyayı `/data`
+volume'una koyun); o zaman yalnızca bu dosyadaki sertifikalara güvenilir. Kabul edilmeyen bir
+sertifika, nedeni ve ne ayarlanacağıyla all.log'a yazılır, Ayarlar da gösterir; o bağlantı
+üzerinden hiçbir şey gönderilmez. *Sunucu sertifikasını denetleme* denetimi kapatır, bu
+güvensizdir: ser2net ile dizin arasındaki ağdaki herkes parolaları okuyup herhangi biri olarak
+giriş yapabilir. Kapalıyken, ayrıca parolalar şifrelenmeden gidiyorsa (StartTLS olmadan
+`ldap://`) Ayarlar ve açılış logu uyarır. TLS üzerinden ser2net başka bir sunucuya
+yönlendirmeyi (referral) izlemez (o sunucunun sertifikası denetlenmeden kalırdı): URI'yi
+kullanıcıları ve gruplarını tutan bir sunucuya yöneltin. **2.8 ya da daha eski bir sürümden
+yükseltince**, sertifikaya güvenilmiyorsa LDAP girişi durur: CA sertifika dosyasını ayarlayın
+(yerel hesaplar çalışmaya devam eder; yerel admin yoksa `ser2net --set-password AD` ile bir
+tane oluşturun).
 
 **Parola unutuldu, giriş yapılamıyor, tarayıcı yok (hesap kurtarma):**
 `ser2net --set-password AD`, yerel `AD` hesabına yeni parola verir (terminalde iki kez

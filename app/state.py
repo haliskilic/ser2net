@@ -145,6 +145,10 @@ class AppState:
         # which no longer counts: (source, setting) -> details, shown in Settings until
         # that section is saved (in memory only)
         self.group_warnings: dict[tuple[str, str], dict] = {}
+        # the last LDAP sign-in that failed because the directory server's certificate was
+        # refused (or ldap.ca_file unusable), shown in Settings until the LDAP section is
+        # saved or a directory sign-in works (in memory only)
+        self.ldap_tls_problem: dict | None = None
         # uploaded imports waiting for the user to confirm the preview: token -> item
         self.pending_imports: dict[str, dict] = {}
         self.notifier = Notifier(self)

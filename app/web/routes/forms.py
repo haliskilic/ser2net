@@ -28,6 +28,11 @@ def _ldap_from_form(form, old) -> LdapSettings:
         "enabled": _checkbox(form, "ldap_enabled"),
         "server_uri": form.get("ldap_server_uri", "").strip(),
         "start_tls": _checkbox(form, "ldap_start_tls"),
+        # a form without these (rendered before they existed) keeps the stored values
+        "tls_verify": (not _checkbox(form, "ldap_tls_insecure")
+                       if "ldap_tls_shown" in form else old.tls_verify),
+        "ca_file": (form.get("ldap_ca_file", "").strip()
+                    if "ldap_tls_shown" in form else old.ca_file),
         "user_dn_template": form.get("ldap_user_dn_template", "").strip(),
         "bind_dn": form.get("ldap_bind_dn", "").strip(),
         "bind_password": pw if pw else old.bind_password,   # blank => keep the stored one

@@ -188,6 +188,15 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     if config.password_set and not admin.require_login:
         state.log(f"WARNING: web UI login is switched off — visitors without a session get "
                   f"the '{admin.anonymous_role}' role (Settings → Web UI access).")
+    ldap = config.ldap
+    if ldap.enabled and ldap.uses_tls and not ldap.tls_verify:
+        state.log("WARNING: LDAP: the directory server's certificate is not checked "
+                  "(ldap.tls_verify is false) — anyone on the network between ser2net and the "
+                  "directory could read the passwords and sign in as anyone. Set the CA "
+                  "certificate file instead (Settings → LDAP / Active Directory).")
+    elif ldap.enabled and ldap.sends_plaintext:
+        state.log("WARNING: LDAP sends the passwords unencrypted (ldap:// without StartTLS) — "
+                  "use ldaps:// or StartTLS (Settings → LDAP / Active Directory).")
 
     await state.start_engine()
     app = build_app(state)

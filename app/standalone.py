@@ -3,8 +3,8 @@
 The Linux binary carries its own OpenSSL, which looks for CA certificates where
 the distribution it was built on keeps them. Other distributions keep them
 elsewhere (RHEL/Fedora under /etc/pki, openSUSE in /etc/ssl/ca-bundle.pem…), so
-certificate checks — MQTT over TLS, OIDC discovery — would fail there for want of
-trust anchors. prepare() points OpenSSL at the system bundle through the standard
+certificate checks — MQTT over TLS, OIDC discovery, LDAPS / StartTLS — would fail there
+for want of trust anchors. prepare() points OpenSSL at the system bundle through the standard
 SSL_CERT_FILE variable, unless the admin already set SSL_CERT_FILE / SSL_CERT_DIR.
 Windows needs nothing: Python reads the Windows certificate store.
 """
@@ -53,4 +53,4 @@ def prepare(frozen: bool | None = None, platform: str = sys.platform, environ=No
     else:
         notes.append("WARNING: no system CA certificates found — install the ca-certificates "
                      "package or set SSL_CERT_FILE, otherwise certificate checks for MQTT over "
-                     "TLS and OIDC sign-in fail")
+                     "TLS, OIDC sign-in and LDAPS / StartTLS (unless ldap.ca_file is set) fail")

@@ -10,13 +10,20 @@ LDAP login is disabled with a log line saying which (app.optional) and local acc
 keep working. The actual bind/search is isolated so the role-mapping and shadow-user
 logic can be unit-tested without ldap3; the group -> role matching (OIDC claims use it
 too) is pure Python.
+
+LDAPS and StartTLS check the directory server's certificate and host name (tls_context:
+the system's CAs or ldap.ca_file); ldap3's own default checks nothing. A refused
+certificate is logged with what to set (TlsProblem); nothing is sent over that
+connection.
 """
 from __future__ import annotations
 
 import contextlib
 import re
+import ssl
 import unicodedata
 from dataclasses import dataclass
+from typing import Any
 
 from .. import optional
 from ..config import ROLE_RANK, User
@@ -182,6 +189,151 @@ def upsert_ldap_user(config, username: str, role: str) -> User:
     return config.upsert_external_user(username, role, "ldap")
 
 
+# ---------------- TLS: LDAPS and StartTLS ----------------
+class CaFileError(ValueError):
+    """ldap.ca_file can't be used: unreadable, or no certificate in it."""
+
+    def __init__(self, path: str, reason: str, unreadable: bool):
+        super().__init__(f"{path!r}: {reason}")
+        self.path, self.reason, self.unreadable = path, reason, unreadable
+
+
+def tls_context(settings) -> ssl.SSLContext:
+    """How an LDAPS / StartTLS connection checks the directory server: its certificate
+    must chain to a CA this system trusts (its CA bundle; Windows: its certificate
+    store) — or, with ca_file set, to a certificate in that file only (PEM, or DER as
+    Windows exports it) — and name the host of the server URI (OpenSSL's check, for DNS
+    names and IP addresses alike). tls_verify off: no check at all (insecure). Raises
+    CaFileError."""
+    if not settings.tls_verify:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    path = settings.ca_file.strip()
+    if not path:
+        return ssl.create_default_context()
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError as e:
+        raise CaFileError(path, f"can't read it: {e.strerror or e}", True) from None
+    trusted: ssl.SSLContext | None = None
+    try:   # PEM through OpenSSL's reader (several certificates, comments), else DER
+        if b"-----BEGIN" in data:
+            trusted = ssl.create_default_context(cafile=path)
+        elif data.strip():   # (empty cadata would mean the system's CAs)
+            trusted = ssl.create_default_context(cadata=data)
+    except (ssl.SSLError, ValueError, OSError):
+        trusted = None
+    if trusted is None or not trusted.cert_store_stats()["x509"]:
+        raise CaFileError(path, "it holds no certificate (PEM or DER)", False)
+    return trusted
+
+
+def _tls(settings, ldap3):
+    """The ldap3 Tls for both LDAPS and StartTLS: the handshake runs with tls_context()
+    and the host of the server URI, so Python's own certificate and host-name check
+    applies (ldap3 2.9.1's default Tls checks nothing, its optional check rejects IP
+    addresses on Python 3.12+) and SNI is sent."""
+    context = tls_context(settings)
+    base: Any = ldap3.Tls
+
+    class VerifyingTls(base):
+        def wrap_socket(self, connection, do_handshake=False):
+            connection.socket = context.wrap_socket(
+                connection.socket, server_side=False, do_handshake_on_connect=do_handshake,
+                server_hostname=connection.server.host)
+
+    return VerifyingTls(validate=ssl.CERT_REQUIRED if settings.tls_verify else ssl.CERT_NONE)
+
+
+_VERIFY_FAILED = re.compile(r"certificate verify failed: (.+?)(?: \(_ssl\.c:\d+\)|$)")
+_RECOVERY = ("Local accounts still sign in; if no admin can, `ser2net --set-password NAME` "
+             "with a new NAME creates a local admin account.")
+_INSECURE = ("Not checking the certificate (ldap.tls_verify: false) is insecure: anyone on "
+             "the network between ser2net and the directory could read the passwords.")
+
+
+def tls_failure(exc) -> str | None:
+    """OpenSSL's reason for refusing the server's certificate, from what a failed
+    connection raised, or None if it wasn't that. ldap3 re-raises the ssl error as its
+    own exception whose text is the repr of the original's arguments (quotes escaped),
+    for a host with several addresses one per address in its args."""
+    texts, todo, seen = [], [exc], set()
+    while todo:
+        e = todo.pop()
+        if id(e) in seen:
+            continue
+        seen.add(id(e))
+        if isinstance(e, (list, tuple)):
+            todo.extend(e)
+        elif isinstance(e, BaseException):
+            texts.append(str(e))
+            todo.extend([*e.args, e.__cause__, e.__context__])
+    for text in sorted(texts, key=lambda t: t.count("\\")):   # the least escaped first
+        if m := _VERIFY_FAILED.search(text):
+            return m.group(1).replace("\\", "").strip()   # no backslash in these reasons
+    return None
+
+
+@dataclass
+class TlsProblem:
+    """Why an LDAPS / StartTLS connection to the directory failed before anything was
+    sent over it: the certificate is not trusted ("certificate"), it was issued for
+    another name ("name"), or ca_file can't be used ("ca_file")."""
+    kind: str
+    reason: str      # OpenSSL's reason, or what is wrong with the CA file
+    uri: str
+    ca_file: str = ""
+    unreadable: bool = False   # kind ca_file: can't be read (else: no certificate in it)
+
+    def __str__(self) -> str:
+        """The all.log line: what failed and what to set."""
+        if self.kind == "ca_file":
+            return (f"LDAP: the CA certificate file {self.ca_file!r} (ldap.ca_file) can't be "
+                    f"used: {self.reason}, so LDAP sign-in over LDAPS / StartTLS fails until "
+                    f"it is corrected in Settings → LDAP / Active Directory. {_RECOVERY}")
+        head = (f"LDAP: the certificate of the directory server {self.uri} was not accepted "
+                f"({self.reason}), so LDAP sign-in fails until this is fixed (nothing was "
+                f"sent over that connection)")
+        if self.kind == "name":
+            fix = (": it was issued for another name. Use a name it was issued for in the "
+                   "server URI (an IP address works only if the certificate lists that "
+                   "address).")
+        elif self.ca_file:
+            fix = (f". The CA certificate file {self.ca_file!r} (ldap.ca_file) has to hold the "
+                   f"certificate of the CA that issued it (PEM or DER).")
+        else:
+            fix = (". If the directory's certificates come from your own CA (Active Directory "
+                   "Certificate Services) or are self-signed, set Settings → LDAP / Active "
+                   "Directory → CA certificate file (ldap.ca_file in config.json) to that CA's "
+                   "certificate (PEM or DER).")
+        return f"{head}{fix} {_INSECURE} {_RECOVERY}"
+
+
+def _tls_problem(exc, settings) -> TlsProblem | None:
+    if isinstance(exc, CaFileError):
+        return TlsProblem("ca_file", exc.reason, settings.server_uri, exc.path, exc.unreadable)
+    reason = tls_failure(exc) if settings.uses_tls else None
+    if reason is None:
+        return None
+    name = reason.startswith(("Hostname mismatch", "IP address mismatch"))
+    return TlsProblem("name" if name else "certificate", reason, settings.server_uri,
+                      settings.ca_file.strip())
+
+
+def _result_text(result) -> str:
+    """An LDAP error answer for a log line: description (code): message; referrals."""
+    text = f"{result.get('description')} ({result['result']})"
+    if result.get("message"):
+        text += ": " + " ".join(str(result["message"]).split())
+    if result.get("referrals"):
+        # not followed over TLS (authenticate): that server's certificate would go unchecked
+        text += "; it refers to " + ", ".join(str(r) for r in result["referrals"])
+    return text
+
+
 # ---------------- bind + group lookup (ldap3) ----------------
 class DirectoryGroups(list[str]):
     """The group DNs read for a user whose bind succeeded (authenticate).
@@ -214,9 +366,7 @@ class _GroupLookup:
         """Log why the groups could not be read, with the server's error, if any."""
         r = getattr(self.conn, "result", None) or {}
         if r.get("result"):   # an error answer, not just "no such entry"
-            what += f" — {r.get('description')} ({r['result']})"
-            if r.get("message"):
-                what += ": " + " ".join(str(r["message"]).split())
+            what += f" — {_result_text(r)}"
         self.log(f"LDAP: bound as {self.username!r}, but their groups could not be read: "
                  f"{what}")
 
@@ -337,11 +487,13 @@ class _GroupLookup:
 
 
 def authenticate(settings, username: str, password: str, logger=None,
-                 server=None, conn_factory=None) -> list[str] | None:
+                 server=None, conn_factory=None, on_tls_problem=None) -> list[str] | None:
     """Bind to LDAP as `username`/`password`; return the user's group DNs (a
     DirectoryGroups) on success or None on failure. Never raises on a bad bind.
     `server`/`conn_factory` are injection points for tests (an ldap3 MOCK_SYNC
-    server). Returns None if ldap3 is missing or fails to import (logged)."""
+    server). Returns None if ldap3 is missing or fails to import (logged). A refused
+    server certificate (or an unusable ca_file) is logged with what to set and passed
+    to on_tls_problem(TlsProblem)."""
     log = logger or (lambda _m: None)
     if not username or not password:   # empty password must not become an anonymous bind
         return None
@@ -355,7 +507,10 @@ def authenticate(settings, username: str, password: str, logger=None,
 
     def _default_factory(srv, user, pw):
         ab = ldap3.AUTO_BIND_TLS_BEFORE_BIND if settings.start_tls else ldap3.AUTO_BIND_NO_TLS
-        return ldap3.Connection(srv, user=user, password=pw, auto_bind=ab)
+        # over TLS, ldap3 would follow a referral to another server (with these
+        # credentials) without checking its certificate, or in plain text: it doesn't
+        return ldap3.Connection(srv, user=user, password=pw, auto_bind=ab,
+                                auto_referrals=not settings.uses_tls)
 
     def _unbind(conn) -> None:
         with contextlib.suppress(Exception):
@@ -367,7 +522,8 @@ def authenticate(settings, username: str, password: str, logger=None,
             # connect_timeout so a dead/unreachable directory fails the login fast
             # instead of hanging the worker thread on the OS socket timeout
             server = ldap3.Server(settings.server_uri, get_info=ldap3.NONE, connect_timeout=5,
-                                  use_ssl=settings.server_uri.lower().startswith("ldaps"))
+                                  use_ssl=settings.server_uri.lower().startswith("ldaps"),
+                                  tls=_tls(settings, ldap3) if settings.uses_tls else None)
         if settings.user_dn_template.strip():
             # direct bind: the supplied credentials bind as the templated DN (or AD
             # sign-in name: {username}@corp.local, CORP\{username})
@@ -384,6 +540,10 @@ def authenticate(settings, username: str, password: str, logger=None,
             flt = settings.user_search_filter.format(username=escape_filter_chars(username))
             svc.search(settings.user_search_base, flt, attributes=[settings.group_attr])
             if not svc.entries:
+                r = getattr(svc, "result", None) or {}
+                if r.get("result"):   # an error answer, not just "no such user"
+                    log(f"LDAP: the user search under {settings.user_search_base!r} failed — "
+                        f"{_result_text(r)}")
                 return None
             entry = svc.entries[0]
             user_dn = entry.entry_dn
@@ -396,5 +556,11 @@ def authenticate(settings, username: str, password: str, logger=None,
         finally:
             _unbind(svc)
     except Exception as e:  # bad bind / server error -> denied, never crash the login
-        log(f"LDAP authentication failed for {username!r}: {type(e).__name__}: {e}")
+        problem = _tls_problem(e, settings)
+        if problem is None:
+            log(f"LDAP authentication failed for {username!r}: {type(e).__name__}: {e}")
+            return None
+        log(str(problem))
+        if on_tls_problem is not None:
+            on_tls_problem(problem)
         return None

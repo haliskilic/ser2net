@@ -16,20 +16,29 @@ following nested groups. With ad=False it is a plain directory (OpenLDAP): DN bi
 only, no defaultNamingContext, an unknown matching rule matches nothing. Filters are
 single conditions (equality, presence, extensible match): pyasn1 can't decode ldap3's
 definitions of &, | and !. Every bind name and search is recorded (`binds`, `searches`).
+
+TLS: tls=<server ssl.SSLContext> answers LDAPS (uri ldaps://), with start_tls=True plain
+LDAP that takes the StartTLS extended operation; `host` is the name put in the uri (the
+socket listens on 127.0.0.1). Failed handshakes are recorded in `tls_errors`, binds over
+TLS in `tls_binds`. referrals={base DN: URL}: a search at or below that base gets a
+referral to the URL instead of entries (as AD answers for another domain).
 Needs ldap3 (its ASN.1 definitions, pyasn1).
 """
 from __future__ import annotations
 
 import socket
+import ssl
 import threading
 
-from ldap3.protocol.rfc4511 import (LDAPDN, AttributeDescription, AttributeValue, BindResponse,
-                                    LDAPMessage, LDAPString, MessageID, PartialAttribute,
-                                    PartialAttributeList, ProtocolOp, ResultCode,
+from ldap3.protocol.rfc4511 import (URI, LDAPDN, AttributeDescription, AttributeValue,
+                                    BindResponse, ExtendedResponse, LDAPMessage, LDAPString,
+                                    MessageID, PartialAttribute, PartialAttributeList,
+                                    ProtocolOp, Referral, ResponseName, ResultCode,
                                     SearchResultDone, SearchResultEntry, Vals)
 from pyasn1.codec.ber import decoder, encoder
 
 IN_CHAIN = "1.2.840.113556.1.4.1941"
+START_TLS = "1.3.6.1.4.1.1466.20037"
 
 
 def norm_dn(dn: str) -> str:
@@ -45,7 +54,9 @@ def is_dn(text: str) -> bool:
 
 class FakeDirectory:
     def __init__(self, entries: dict, passwords: dict, *, ad: bool = True,
-                 base: str = "DC=corp,DC=local", netbios: str = "CORP"):
+                 base: str = "DC=corp,DC=local", netbios: str = "CORP",
+                 tls: ssl.SSLContext | None = None, start_tls: bool = False,
+                 host: str = "127.0.0.1", referrals: dict | None = None):
         self.entries = {dn: {k.lower(): list(v) for k, v in attrs.items()}
                         for dn, attrs in entries.items()}
         self.passwords = {norm_dn(dn): pw for dn, pw in passwords.items()}
@@ -54,10 +65,16 @@ class FakeDirectory:
                                if rdn.strip().lower().startswith("dc="))
         self.binds: list[str] = []
         self.searches: list[tuple[str, int, str]] = []   # (base, scope, filter)
+        self.tls, self.start_tls = tls, start_tls
+        self.referrals = {norm_dn(dn): url for dn, url in (referrals or {}).items()}
+        self.tls_errors: list[str] = []   # server side of failed TLS handshakes
+        self.tls_binds: list[str] = []    # bind names that came over TLS
         self._sock = socket.socket()
         self._sock.bind(("127.0.0.1", 0))
         self._sock.listen(16)
-        self.uri = f"ldap://127.0.0.1:{self._sock.getsockname()[1]}"
+        self.port = self._sock.getsockname()[1]
+        scheme = "ldaps" if tls is not None and not start_tls else "ldap"
+        self.uri = f"{scheme}://{host}:{self.port}"
         self._stop = False
 
     def __enter__(self) -> "FakeDirectory":
@@ -156,6 +173,9 @@ class FakeDirectory:
         if not is_dn(base):
             return 34, []  # invalidDNSyntax: what AD answers for a UPN used as the base
         nbase = norm_dn(base)
+        for suffix, url in self.referrals.items():
+            if nbase == suffix or nbase.endswith("," + suffix):
+                return 10, [url]  # referral: that part of the tree is on another server
         if not any(norm_dn(dn) == nbase or norm_dn(dn).endswith("," + nbase)
                    for dn in [self.base, *self.entries]):
             return 32, []  # noSuchObject (the OUs above the entries exist)
@@ -173,9 +193,21 @@ class FakeDirectory:
         return 0, hits
 
     # ---- the wire format ----
-    def _client(self, conn: socket.socket) -> None:
-        buf = b""
+    def _wrap(self, conn: socket.socket):
+        """The server side of a TLS handshake: the TLS socket, or None (recorded)."""
         try:
+            return self.tls.wrap_socket(conn, server_side=True)
+        except (ssl.SSLError, OSError) as e:
+            self.tls_errors.append(f"{type(e).__name__}: {e}")
+            conn.close()
+            return None
+
+    def _client(self, sock: socket.socket) -> None:
+        buf, conn = b"", sock
+        try:
+            if self.tls is not None and not self.start_tls:   # LDAPS
+                if (conn := self._wrap(sock)) is None:
+                    return
             while True:
                 chunk = conn.recv(65536)
                 if not chunk:
@@ -184,29 +216,47 @@ class FakeDirectory:
                 while (size := _message_size(buf)) is not None and len(buf) >= size:
                     msg, _rest = decoder.decode(buf[:size], asn1Spec=LDAPMessage())
                     buf = buf[size:]
-                    if not self._handle(conn, msg):
+                    answer = self._handle(conn, msg)
+                    if answer == "start_tls":
+                        if (conn := self._wrap(conn)) is None:
+                            return
+                    elif not answer:
                         return
         except OSError:
             return
         finally:
-            conn.close()
+            (conn or sock).close()
 
-    def _handle(self, conn: socket.socket, msg) -> bool:
+    def _handle(self, conn: socket.socket, msg):
         mid, op = int(msg["messageID"]), msg["protocolOp"]
         kind = op.getName()
         if kind == "bindRequest":
             req = op["bindRequest"]
             auth = req["authentication"]
             pw = bytes(auth["simple"]).decode() if auth.getName() == "simple" else ""
+            if isinstance(conn, ssl.SSLSocket):
+                self.tls_binds.append(str(req["name"]))
             code = self._bind(str(req["name"]), pw)
             conn.sendall(_reply(mid, "bindResponse", _result(BindResponse(), code)))
             return True
         if kind == "searchRequest":
             code, hits = self._search(op["searchRequest"])
+            if code == 10:   # a referral: hits are its URLs
+                conn.sendall(_reply(mid, "searchResDone",
+                                    _result(SearchResultDone(), code, referrals=hits)))
+                return True
             for dn, attrs in hits:
                 conn.sendall(_reply(mid, "searchResEntry", _entry(dn, attrs)))
             conn.sendall(_reply(mid, "searchResDone", _result(SearchResultDone(), code)))
             return True
+        if kind == "extendedReq":
+            name = str(op["extendedReq"]["requestName"])
+            ok = (name == START_TLS and self.start_tls and self.tls is not None
+                  and not isinstance(conn, ssl.SSLSocket))
+            pdu = _result(ExtendedResponse(), 0 if ok else 2)   # 2: protocolError
+            pdu["responseName"] = ResponseName(name)
+            conn.sendall(_reply(mid, "extendedResp", pdu))
+            return "start_tls" if ok else True
         return False  # unbind (or anything else): hang up
 
 
@@ -220,10 +270,15 @@ def _message_size(buf: bytes):
     return None if len(buf) < 2 + n else 2 + n + int.from_bytes(buf[2:2 + n], "big")
 
 
-def _result(pdu, code: int):
+def _result(pdu, code: int, referrals=()):
     pdu["resultCode"] = ResultCode(code)
     pdu["matchedDN"] = LDAPDN("")
     pdu["diagnosticMessage"] = LDAPString("" if code == 0 else f"fake directory: error {code}")
+    if referrals:
+        ref = Referral()
+        for i, url in enumerate(referrals):
+            ref.setComponentByPosition(i, URI(url))
+        pdu["referral"] = ref
     return pdu
 
 
