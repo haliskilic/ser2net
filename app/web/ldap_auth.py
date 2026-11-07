@@ -21,12 +21,11 @@ from __future__ import annotations
 import contextlib
 import re
 import ssl
-import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
 from .. import optional
-from ..config import ROLE_RANK, User
+from ..config import ROLE_RANK, User, fold  # fold: how group names compare
 
 # LDAP_MATCHING_RULE_IN_CHAIN: Active Directory follows nested groups for this filter
 IN_CHAIN_RULE = "1.2.840.113556.1.4.1941"
@@ -48,15 +47,6 @@ GROUP_SETTINGS = (("admin_group", "admin"), ("operator_group", "operator"),
 
 _DN_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9-]*|[0-9]+(?:\.[0-9]+)*")
 _HEX = frozenset("0123456789abcdefABCDEF")
-
-
-def fold(text) -> str:
-    """How group names compare: NFC, every run of white space (no-break spaces too) as
-    one space, and letter case folded so that Turkish İ, I, ı and i are one letter —
-    str.lower() turns 'İ' into 'i' + U+0307 and leaves 'ı' as it is, so KALİTE and
-    Kalite, or BAKIM and Bakım, would differ."""
-    s = " ".join(unicodedata.normalize("NFC", str(text)).split())
-    return s.replace("\u0130", "i").replace("\u0131", "i").casefold().replace("i\u0307", "i")
 
 
 def _split_dn(text) -> list[list[tuple[str, str]]] | None:

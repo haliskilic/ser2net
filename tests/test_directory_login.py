@@ -15,7 +15,10 @@ repeats), or fails with SER2NET_OPTIONAL_TESTS=1.
     gets the default role logs the user's groups;
   * the nested-groups box is saved, and kept when a form without it is posted;
   * the OIDC callback: a missing or altered state is refused (400), a failed token
-    exchange too (401), with nothing saved.
+    exchange too (401), with nothing saved;
+  * a directory or provider account named like a local account (letter case aside) is
+    refused (403, logged and audited): the local admin keeps its source, role,
+    password and sessions.
 
 Run: python3 tests/test_directory_login.py
 """
@@ -78,6 +81,14 @@ def all_log(srv) -> str:
         return fh.read()
 
 
+def audit_log(srv) -> str:
+    try:
+        with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return ""
+
+
 def backups(srv) -> int:
     folder = os.path.join(srv.data, "backups")
     return len(os.listdir(folder)) if os.path.isdir(folder) else 0
@@ -88,7 +99,8 @@ def backups(srv) -> int:
 def ad_directory():
     from _ldap_server import FakeDirectory
     users = {"jdoe": [ADMINS], "ayse": ["CN=BİLGİ İŞLEM,OU=Gruplar," + BASE],
-             "mehmet": ["CN=Domain Users,CN=Users," + BASE, "CN=Kalite Kontrol,OU=Gruplar," + BASE]}
+             "mehmet": ["CN=Domain Users,CN=Users," + BASE, "CN=Kalite Kontrol,OU=Gruplar," + BASE],
+             "Admin": [ADMINS]}   # a directory account named like the local admin
     entries, passwords = {}, {}
     for account, groups in users.items():
         dn = f"CN={account},OU=People,{BASE}"
@@ -96,6 +108,27 @@ def ad_directory():
                        "userPrincipalName": [f"{account}@corp.local"], "memberOf": groups}
         passwords[dn] = f"pw-{account}"
     return FakeDirectory(entries, passwords)
+
+
+def local_name_refused(srv):
+    """The directory's "Admin" signs in with its directory password: "admin" is the local
+    admin's name (letter case aside), so the sign-in is refused, said so and recorded,
+    and the local account keeps its source, role, password and sessions."""
+    before = user_of(srv, "admin")
+    for typed in ("ADMIN", "Admin"):
+        st, _, page = Browser(srv.base).post("/login", {"username": typed, "password": "pw-Admin"})
+        assert st == 403, (typed, st)
+        assert "There is a local account named admin here" in page, page[-1500:]
+    # the local name itself is checked against the local password only (never LDAP)
+    st, _, page = Browser(srv.base).post("/login", {"username": "admin", "password": "pw-Admin"})
+    assert st == 401 and "Invalid username or password." in page, st
+    assert user_of(srv, "admin") == before
+    assert not [u for u in srv.saved_config()["users"] if u["source"] != "local"
+                and u["username"].lower() == "admin"], srv.saved_config()["users"]
+    assert ("LDAP login denied for 'ADMIN': the local account 'admin' has this name, and an "
+            "LDAP sign-in never takes over a local account") in all_log(srv), all_log(srv)[-1500:]
+    assert "\tldap_login_denied\tlocal account admin\tADMIN" in audit_log(srv), audit_log(srv)
+    Browser(srv.base).login("admin", PW)
 
 
 def ldap_form(d, **fields):
@@ -114,6 +147,10 @@ def test_ldap():
                            "user_dn_template": TEMPLATE, "admin_group": "admins",
                            "operator_group": "bilgi işlem", "default_role": ""}}
         with Server(config) as srv:
+            local_name_refused(srv)
+            print("LDAP: a sign-in under a local account's name (any letter case) is refused; "
+                  "the local admin stays as it was  OK")
+
             old = session_for(srv, "jdoe", 5)
             assert signed_in(srv, old)
 
@@ -337,10 +374,24 @@ def test_oidc():
         config = {"users": [local_admin(), shadow("sso.user", "oidc", 7)],
                   "oidc": {"enabled": True, "issuer": provider.issuer, "client_id": "ser2net",
                            "client_secret": "s3cret", "admin_group": "admins",
-                           "operator_group": "Bakım"}}
+                           "operator_group": "Bakım", "viewer_group": "ser2net-viewers"}}
         with Server(config, env={"SSL_CERT_FILE": os.path.join(tmp, "ca.pem")}) as srv:
             oidc_refused_callbacks(srv, provider)
             print("OIDC: callback without/with a wrong state 400, a refused code 401  OK")
+
+            # the provider's "admin" (or "Admin") is not the local admin
+            before = user_of(srv, "admin")
+            for name in ("admin", "Admin"):
+                st, page = oidc_sign_in(srv, provider, {"preferred_username": name,
+                                                        "groups": ["ser2net-viewers"]})
+                assert st == 403 and "There is a local account named admin here" in page, st
+            assert user_of(srv, "admin") == before, "the local admin was changed"
+            assert ("OIDC login denied for 'admin': the local account 'admin' has this name, "
+                    "and an OIDC sign-in never takes over a local account") in all_log(srv)
+            assert "\toidc_login_denied\tlocal account admin\tAdmin" in audit_log(srv)
+            Browser(srv.base).login("admin", PW)
+            print("OIDC: a sign-in under a local account's name is refused; the local admin "
+                  "stays as it was  OK")
 
             old = session_for(srv, "sso.user", 7)
             assert signed_in(srv, old)

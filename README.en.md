@@ -420,6 +420,14 @@ their next sign-in also ends the sessions they still had. AD direct bind with
 sAMAccountName under the user search base (blank: its whole domain) to read its groups;
 *Also count nested groups* (AD only) adds the groups a user is in through other groups.
 
+**LDAP / OIDC accounts:** someone who signs in through the directory (LDAP) or the identity
+provider (OIDC) for the first time gets an account here without a password; its role is
+worked out from their groups at every sign-in. Local accounts come first: an LDAP/OIDC
+sign-in under the name of a local account (letter case aside) is refused and written to
+all.log and the audit log (`ldap_login_denied` / `oidc_login_denied`); it never takes over
+the local account, turns it into an SSO account or demotes it. To move someone from a local
+account to SSO, delete the local account first (another admin must remain).
+
 **LDAP over TLS (LDAPS / StartTLS):** the directory server's certificate is checked. It
 must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: its
 certificate store, where a domain member usually has the AD CA already) and name the host

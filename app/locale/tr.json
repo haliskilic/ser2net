@@ -811,5 +811,6 @@
   "Don’t check the server certificate (insecure: anyone on the network path could read the passwords)": "Sunucu sertifikasını denetleme (güvensiz: aradaki ağdaki herkes parolaları okuyabilir)",
   "Not saved: the CA certificate file {0} can't be read.": "Kaydedilmedi: CA sertifika dosyası {0} okunamıyor.",
   "Not saved: the CA certificate file {0} holds no certificate (PEM or DER).": "Kaydedilmedi: CA sertifika dosyası {0} hiç sertifika içermiyor (PEM ya da DER).",
-  "Server certificate check": "Sunucu sertifikası denetimi"
+  "Server certificate check": "Sunucu sertifikası denetimi",
+  "There is a local account named {0} here, so you can't sign in under that name with SSO or a directory account. Sign in with that account’s password, or ask an admin to delete the local account first.": "Burada {0} adında yerel bir hesap var; bu yüzden bu adla SSO ya da dizin hesabıyla giriş yapamazsın. O hesabın parolasıyla giriş yap ya da bir admin'den önce yerel hesabı silmesini iste."
 }

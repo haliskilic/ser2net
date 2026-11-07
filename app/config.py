@@ -23,6 +23,7 @@ import re
 import secrets
 import tempfile
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
@@ -1060,6 +1061,21 @@ class NotificationSettings:
             raise ConfigError(_("The repeat interval must be between 0 and 86400 seconds."))
 
 
+def fold(text) -> str:
+    """How names compare where letter case doesn't count (LDAP and OIDC group names; an
+    LDAP/OIDC sign-in name against the local accounts' names): NFC, every run of white
+    space (no-break spaces too) as one space, and letter case folded so that Turkish İ,
+    I, ı and i are one letter — str.lower() turns 'İ' into 'i' + U+0307 and leaves 'ı'
+    as it is, so KALİTE and Kalite, or BAKIM and Bakım, would differ."""
+    s = " ".join(unicodedata.normalize("NFC", str(text)).split())
+    return s.replace("\u0130", "i").replace("\u0131", "i").casefold().replace("i\u0307", "i")
+
+
+class AccountNameError(ValueError):
+    """An LDAP/OIDC sign-in can't have an account under its name (upsert_external_user).
+    The text says why, for the log."""
+
+
 @dataclass
 class User:
     """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
@@ -1203,6 +1219,14 @@ class AppConfig:
     def get_user(self, username: str) -> Optional[User]:
         return next((u for u in self.users if u.username == username), None)
 
+    def named(self, name: str, source: Optional[str] = None) -> list[User]:
+        """The accounts (of `source`, if given) whose name is `name` apart from letter
+        case (fold: Turkish İ/ı too), the one spelled exactly so first."""
+        key = fold(name)
+        found = [u for u in self.users
+                 if (source is None or u.source == source) and fold(u.username) == key]
+        return sorted(found, key=lambda u: u.username != name)
+
     def admin_count(self) -> int:
         return sum(1 for u in self.users if u.role == "admin")
 
@@ -1222,7 +1246,12 @@ class AppConfig:
 
     def upsert_external_user(self, username: str, role: str, source: str) -> User:
         """Create or refresh a shadow account for an externally-authenticated user
-        (LDAP/OIDC). Bumps pwd_version when the role or source changes."""
+        (LDAP/OIDC). Bumps pwd_version when the role or source changes.
+        A sign-in through a directory or an identity provider never takes over, converts
+        or demotes a local account: raises AccountNameError when one has this name,
+        letter case aside."""
+        if local := self.named(username, "local"):
+            raise AccountNameError(f"the local account {local[0].username!r} has this name")
         u = self.get_user(username)
         if u is None:
             u = User(username=username, password_hash="", role=role, source=source,
