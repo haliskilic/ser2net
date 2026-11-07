@@ -219,7 +219,6 @@
   "Language": "Dil",
   "Last written": "Son yazma",
   "LDAP default role must be one of {0} or blank.": "LDAP varsayılan rolü şunlardan biri olmalı ya da boş kalmalı: {0}.",
-  "LDAP is enabled but <span class=\"mono\">ldap3</span> is not installed — LDAP login won’t work until you <span class=\"mono\">pip install ldap3</span> (local accounts still work).": "LDAP açık ama <span class=\"mono\">ldap3</span> kurulu değil — <span class=\"mono\">pip install ldap3</span> ile kurana kadar LDAP girişi çalışmaz (yerel hesaplar çalışmaya devam eder).",
   "LDAP is enabled but no server URI is set.": "LDAP açık ama sunucu adresi (URI) girilmemiş.",
   "LDAP needs either a user DN template (direct bind) or a bind DN + user search base (search+bind).": "LDAP için ya bir kullanıcı DN şablonu (doğrudan bind) ya da bind DN + kullanıcı arama tabanı (search+bind) gerekli.",
   "LDAP settings saved.": "LDAP ayarları kaydedildi.",
@@ -322,7 +321,6 @@
   "offline / unreachable": "çevrimdışı / ulaşılamıyor",
   "OIDC (SSO) settings saved.": "OIDC (SSO) ayarları kaydedildi.",
   "OIDC default role must be one of {0} or blank.": "OIDC varsayılan rolü şunlardan biri olmalı ya da boş kalmalı: {0}.",
-  "OIDC is enabled but <span class=\"mono\">authlib</span> is not installed — SSO won’t work until you <span class=\"mono\">pip install authlib</span>.": "OIDC açık ama <span class=\"mono\">authlib</span> kurulu değil — <span class=\"mono\">pip install authlib</span> ile kurana kadar SSO çalışmaz.",
   "OIDC issuer must be an https:// URL.": "OIDC issuer bir https:// adresi olmalı.",
   "OIDC needs an issuer, client ID and client secret.": "OIDC için issuer, client ID ve client secret gerekli.",
   "Older →": "Daha eski →",
@@ -795,5 +793,10 @@
   "At a sign-in at %(time)s, the %(setting)s “%(value)s” matched the group “%(group)s” of %(user)s only as part of its name. That no longer counts, so %(user)s could not sign in (before, they got %(was)s). Enter the group’s whole name, such as “%(name)s”, and save.": "%(time)s tarihindeki bir girişte %(setting)s “%(value)s”, %(user)s kullanıcısının “%(group)s” grubuyla yalnızca adının bir parçası olarak eşleşti. Bu artık eşleşme sayılmıyor; bu yüzden %(user)s giriş yapamadı (önceden %(was)s rolünü alıyordu). Grubun adının tamamını (ör. “%(name)s”) girip kaydet.",
   "A group setting is the whole name of one group, in any letter case (Turkish İ/ı too): its name (the CN, such as <span class=\"mono\">ser2net-admins</span>) or its full DN. Part of a name, such as <span class=\"mono\">admins</span> for ser2net-admins, doesn’t match.": "Bir grup ayarı, tek bir grubun adının tamamıdır ve büyük/küçük harf fark etmez (Türkçe İ/ı da): grubun adı (CN, ör. <span class=\"mono\">ser2net-admins</span>) ya da tam DN'i. Adın bir parçası eşleşmez, örneğin ser2net-admins için <span class=\"mono\">admins</span>.",
   "A group setting is the whole name of one group as the provider sends it, in any letter case (Turkish İ/ı too); of a path, the last part is enough: <span class=\"mono\">ser2net-admins</span> matches <span class=\"mono\">/team/ser2net-admins</span>. Part of a name, such as <span class=\"mono\">admins</span> for ser2net-admins, doesn’t match.": "Bir grup ayarı, tek bir grubun sağlayıcının gönderdiği biçimdeki adının tamamıdır ve büyük/küçük harf fark etmez (Türkçe İ/ı da); bir yolun son parçası yeterlidir: <span class=\"mono\">ser2net-admins</span>, <span class=\"mono\">/team/ser2net-admins</span> ile eşleşir. Adın bir parçası eşleşmez, örneğin ser2net-admins için <span class=\"mono\">admins</span>.",
-  "Also count nested groups (Active Directory: groups the user is in through another group)": "İç içe grupları da say (Active Directory: kullanıcının başka bir grup üzerinden üyesi olduğu gruplar)"
+  "Also count nested groups (Active Directory: groups the user is in through another group)": "İç içe grupları da say (Active Directory: kullanıcının başka bir grup üzerinden üyesi olduğu gruplar)",
+  "LDAP sign-in": "LDAP girişi",
+  "%(what)s is on, but <span class=\"mono\">%(package)s</span> is missing from this executable, which should contain it; please report this. Local accounts still work.": "%(what)s etkin, ama bu çalıştırılabilir dosyada olması gereken <span class=\"mono\">%(package)s</span> eksik; lütfen bunu bildir. Yerel hesaplar çalışmaya devam eder.",
+  "%(what)s is on, but <span class=\"mono\">%(package)s</span> is not installed, so it won’t work until you install it: <span class=\"mono\">%(command)s</span>. Local accounts still work.": "%(what)s etkin, ama <span class=\"mono\">%(package)s</span> kurulu değil; kurulana kadar çalışmaz: <span class=\"mono\">%(command)s</span>. Yerel hesaplar çalışmaya devam eder.",
+  "%(what)s is on, but <span class=\"mono\">%(package)s</span> is installed and failed to import, so it won’t work until that is fixed and ser2net restarted. Local accounts still work. The error: <span class=\"mono\">%(error)s</span>": "%(what)s etkin, ama <span class=\"mono\">%(package)s</span> kurulu olduğu hâlde yüklenemedi; bu düzeltilip ser2net yeniden başlatılana kadar çalışmaz. Yerel hesaplar çalışmaya devam eder. Hata: <span class=\"mono\">%(error)s</span>",
+  "SER2NET_LIB_OVERRIDE loads modules from <span class=\"mono\">%(folder)s</span> first; check the copy there.": "SER2NET_LIB_OVERRIDE modülleri önce <span class=\"mono\">%(folder)s</span> klasöründen yüklüyor; oradaki kopyayı kontrol et."
 }

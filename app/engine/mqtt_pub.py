@@ -6,7 +6,8 @@ A retained ``<base_topic>/status`` birth/death (online/offline, with an MQTT
 Last-Will) lets subscribers see link state.
 
 paho-mqtt is an OPTIONAL dependency (not in the offline bootstrap): if it isn't
-installed, publishing is disabled with a log line and the bridge runs normally.
+installed or fails to import, publishing is disabled with a log line saying which
+(app.optional) and the bridge runs normally.
 The paho client runs its own network thread (loop_start) and ``publish()`` is
 thread-safe, so feeding it from the asyncio serial loop never blocks the loop. That
 thread waits for its sockets with select.select(), which refuses descriptors at or above
@@ -20,6 +21,8 @@ import errno
 import math
 import select
 from typing import Any, Callable, Optional
+
+from .. import optional
 
 MAX_LINE_BUFFER = 65536  # drop the oldest bytes if a newline never arrives (no unbounded growth)
 
@@ -62,9 +65,9 @@ class MqttPublisher:
         if owned:
             try:
                 import paho.mqtt.client as mqtt
-            except ImportError:
-                self._log("MQTT enabled but paho-mqtt is not installed; publishing disabled "
-                          "(pip install paho-mqtt)")
+            except Exception as e:  # missing, or installed but failing to import
+                self._log("MQTT publishing disabled: "
+                          f"{optional.problem(e, 'paho-mqtt', 'paho.mqtt')}")
                 return False
             use_poll(mqtt)
             try:  # paho-mqtt 2.x: the current callback API (no deprecation warning)
