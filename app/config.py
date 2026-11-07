@@ -1471,15 +1471,20 @@ class AppConfig:
         self.tolerated = {key: content for key, _problem, content in broken}
         return [problem for _key, problem, _content in broken]
 
-    def validate_for_save(self) -> None:
+    def validate_for_save(self) -> dict[str, Any]:
         """What a save enforces: validate(), except that a part start-up accepted while
         broken (tolerate_problems) may stay broken as long as it is left as it was, and
         so may a clash it accepted. What a save changes or adds must validate, so one bad
         value can't block every other change (signing in with LDAP/OIDC, stopping a
-        mapping, fixing another broken part)."""
+        mapping, fixing another broken part).
+
+        Returns what is still accepted after this save (a part it fixed is held to the
+        rules again). ConfigStore.save commits that only once the file is written, so a
+        save that fails to write — and is rolled back by its caller — keeps the
+        acceptance it had."""
         if not self.tolerated:
             self.validate()
-            return
+            return {}
         still: dict[str, Any] = {}
         for key, _label, content, check in self._parts():
             try:
@@ -1500,7 +1505,7 @@ class AppConfig:
             if key not in self.tolerated:
                 raise error
             still[key] = None
-        self.tolerated = still
+        return still
 
 
 def _mapping_content(m: "MappingConfig") -> dict[str, Any]:
@@ -1621,8 +1626,7 @@ class ConfigStore:
         validate=False is for a change the caller checked itself and that must not
         fail on an unrelated setting (account recovery, app/accounts.py).
         """
-        if validate:
-            config.validate_for_save()
+        still_accepted = config.validate_for_save() if validate else config.tolerated
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
         self._backup_current(data)
@@ -1637,6 +1641,8 @@ class ConfigStore:
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+        # written: only now does a part this save fixed stop being accepted while broken
+        config.tolerated = still_accepted
         _fsync_dir(directory)
 
     # ----- backups -----

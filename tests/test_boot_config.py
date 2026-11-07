@@ -414,6 +414,66 @@ def test_write_failure_is_a_warning():
         shutil.rmtree(data, ignore_errors=True)
 
 
+@contextlib.contextmanager
+def full_disk():
+    """config.json's temp file can't be created (a full disk, a read-only data dir)."""
+    import app.config as config_module
+
+    real = config_module.tempfile.mkstemp
+
+    def mkstemp(*_a, **_k):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    config_module.tempfile.mkstemp = mkstemp
+    try:
+        yield
+    finally:
+        config_module.tempfile.mkstemp = real
+
+
+def test_failed_write_keeps_what_was_accepted():
+    """A save that validates but then can't be written is rolled back by its caller
+    (stopping or deleting a mapping); what start-up accepted while broken must stay
+    accepted too, or every later, unrelated save is refused until a restart."""
+    data = new_dir()
+    try:
+        store = ConfigStore(os.path.join(data, "config.json"))
+        cfg = AppConfig.from_dict({
+            "users": [{"username": "admin", "password_hash": hash_password("pw-12345678"),
+                       "role": "admin", "pwd_version": 1}],
+            "mappings": [{"id": f"c0000000000{i}", "name": n, "serial": {"port": "/dev/ttyX"},
+                          "network": {"mode": "server", "port": 4100 + i}}
+                         for i, n in ((1, "A"), (2, "B"))]})
+        assert len(cfg.tolerate_problems()) == 1  # both use /dev/ttyX: accepted at start-up
+        store.save(cfg)
+        b = cfg.get_mapping("c00000000002")
+        b.enabled = False  # stopping B would resolve the clash ...
+        with full_disk():
+            try:
+                store.save(cfg)
+            except OSError:
+                b.enabled = True  # ... but the write failed, so ops rolls the stop back
+            else:
+                raise AssertionError("the save was expected to fail")
+        cfg.users[0].pwd_version += 1  # an unrelated save afterwards (password change, sign-in)
+        store.save(cfg)
+        assert read_json(store.path)["users"][0]["pwd_version"] == 2
+        # a save that really resolves it is written and then holds the rule again
+        b.enabled = False
+        store.save(cfg)
+        assert not cfg.tolerated, cfg.tolerated
+        b.enabled = True
+        try:
+            store.save(cfg)
+        except ConfigError as e:
+            assert "both use serial port" in str(e), str(e)
+        else:
+            raise AssertionError("a clash resolved and re-introduced was accepted again")
+        print("a save that fails to write keeps what start-up accepted; a written fix ends it  OK")
+    finally:
+        shutil.rmtree(data, ignore_errors=True)
+
+
 def test_fatal_with_one_line():
     data = new_dir()
     path = os.path.join(data, "config.json")
@@ -529,6 +589,7 @@ def main():
     test_saves_refuse_only_new_problems()
     test_invalid_settings_still_start()
     test_write_failure_is_a_warning()
+    test_failed_write_keeps_what_was_accepted()
     test_fatal_with_one_line()
     test_real_process_has_no_traceback()
     print("\nPASS: start-up keeps going on a config.json that loads, rewrites it only on change")
