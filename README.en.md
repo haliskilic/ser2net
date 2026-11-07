@@ -222,8 +222,11 @@ run; config/logs are written to `data/` next to the binary.
 Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`) and
 the license texts, and the binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is signed
-on releases once a signing service is configured ([`docs/SIGNING.md`](docs/SIGNING.md)).
+`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is **not
+code-signed yet** (it will be once a signing service is configured —
+[`docs/SIGNING.md`](docs/SIGNING.md)), so SmartScreen may warn on first run; verify it on
+Windows with `Get-FileHash` against `SHA256SUMS` and `gh attestation verify`, then *More
+info → Run anyway* ([`docs/WINDOWS.md`](docs/WINDOWS.md)).
 
 Every pull request and release proves it (`tests/test_standalone.py`): the bundle may
 need nothing but OS-base libraries (glibc ≤ 2.28 / Windows system DLLs; Linux on x86_64
@@ -577,13 +580,18 @@ is no account at all; later starts ignore it.
   **Do not run as root.**
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
-  ser2net-windows-x64.exe --install-service --data-dir C:\ser2net\data
+  ser2net-windows-x64.exe --install-service
   ```
-  The service starts at boot, needs no signed-in user (LocalSystem) and restarts 5 s after
-  it crashes or exits with an error. On the first install the console asks for the UI
-  address. Remove it with `--uninstall-service` (the data folder is kept); run several
-  instances with different data folders via `--service-name`. Stop/start: `sc stop ser2net`
-  / `sc start ser2net` or *Services* (services.msc).
+  The exe copies itself to `C:\Program Files\ser2net\` (admin-only, so a standard user
+  can't replace the file the service runs as SYSTEM) and keeps its data in
+  `C:\ProgramData\ser2net\`. The service starts at boot, needs no signed-in user
+  (LocalSystem) and restarts 5 s after it crashes or exits with an error; the console asks
+  once for the UI address. Remove it with `--uninstall-service` (the data folder is kept);
+  run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
+  `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
+  newer exe upgrades it in place. **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
+  firewall rule you need to reach it from other hosts, changing the address, upgrading and
+  the SmartScreen warning on unsigned builds.
 - **Many mappings:** a running mapping keeps about three files open (its serial port, its
   listener and its log), plus one per connected client. At start ser2net raises its soft
   open-file limit toward the hard limit (at most 65536) and logs the result (`open files:

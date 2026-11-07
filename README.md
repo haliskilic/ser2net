@@ -230,8 +230,11 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`) ve lisans
 metinleri yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
 doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si, bir imzalama
-servisi tanımlandığında sürümlerde imzalanır ([`docs/SIGNING.md`](docs/SIGNING.md)).
+`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si **henüz
+imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
+[`docs/SIGNING.md`](docs/SIGNING.md)); bu yüzden ilk çalıştırmada SmartScreen uyarabilir.
+Windows'ta `Get-FileHash` ile `SHA256SUMS`'a karşı ve `gh attestation verify` ile
+doğrulayın, sonra *Ek bilgi → Yine de çalıştır* ([`docs/WINDOWS.md`](docs/WINDOWS.md)).
 
 Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
 - paketin içindekiler işletim sisteminin temel kütüphanelerinden (glibc ≤ 2.28 / Windows
@@ -593,13 +596,19 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   **root ile çalıştırmayın.**
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
-  ser2net-windows-x64.exe --install-service --data-dir C:\ser2net\data
+  ser2net-windows-x64.exe --install-service
   ```
+  Exe kendini `C:\Program Files\ser2net\` altına kopyalar (yalnızca yöneticilerin
+  değiştirebildiği bir yer; böylece sıradan bir kullanıcı, servisin SYSTEM olarak
+  çalıştırdığı dosyayı değiştiremez) ve verisini `C:\ProgramData\ser2net\` altında tutar.
   Servis açılışta başlar, kullanıcı oturumu gerektirmez (LocalSystem), çökerse ya da
-  hatayla çıkarsa 5 sn sonra yeniden başlar. İlk kurulumda arayüz adresi konsolda sorulur.
-  Kaldırmak: `--uninstall-service` (veri klasörü kalır). Farklı veri klasörleriyle birden
-  fazla örnek için `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net`
-  ya da *Hizmetler* (services.msc).
+  hatayla çıkarsa 5 sn sonra yeniden başlar; arayüz adresi ilk kurulumda konsolda sorulur.
+  Kaldırmak: `--uninstall-service` (veri klasörü kalır); birden fazla örnek için
+  `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net` ya da *Hizmetler*
+  (services.msc). Yeni bir exe ile `--install-service`'i yeniden çalıştırmak servisi
+  yerinde yükseltir. Başka hostlardan erişmek için gereken güvenlik duvarı kuralı, adres
+  değişimi, yükseltme ve imzasız derlemelerdeki SmartScreen uyarısı için
+  **[`docs/WINDOWS.md`](docs/WINDOWS.md)**.
 - **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
   dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
   açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar
