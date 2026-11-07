@@ -64,6 +64,12 @@
     </label>
     <button class="btn primary" type="submit">{{ _("Save access") }}</button>
   </form>
+  <form method="post" action="/settings/sessions/revoke-all" class="authform mt-sm"
+        data-confirm="{{ _('Sign everyone out of this web UI, on every device? You stay signed in here.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _("Ends every web UI session at once by making a new session key — also sessions signed with the key in an old copy of config.json or of a backup. You stay signed in here.") }}</p>
+    <button class="btn" type="submit">{{ _("Sign out everyone") }}</button>
+  </form>
 </section>
 
 <section class="panel panel-narrow">

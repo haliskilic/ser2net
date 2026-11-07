@@ -28,7 +28,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
 from . import console, standalone
-from .config import ConfigStore
+from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState
 from .web import httpguard
@@ -81,6 +81,15 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         config.admin_ui.port = port
     if first_run or reconfigure or env_set:
         store.save(config)
+    elif config.ids_created:
+        # config.json had no secret_key / instance_id (made by hand, or a downloaded
+        # backup put in its place): keep the new ones, or every restart would sign
+        # everyone out and give this node a new cluster identity
+        try:
+            store.save(config)
+        except (ConfigError, OSError) as e:
+            config.load_notes.append(f"WARNING: could not save the new session key and node "
+                                     f"id to {store.path}: {e}")
     return store, config
 
 

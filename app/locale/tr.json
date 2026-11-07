@@ -757,5 +757,9 @@
   "Sign out": "Oturumları kapat",
   "Set another user’s password": "Başka bir kullanıcının parolasını belirle",
   "For someone who forgot theirs; it also signs that user out everywhere. “Sign out” in the table ends a user’s sessions without changing anything else.": "Parolasını unutan biri için; kullanıcının tüm oturumları da kapatılır. Tablodaki “Oturumları kapat” ise başka hiçbir şeyi değiştirmeden yalnızca oturumları kapatır.",
-  "Set password": "Parolayı belirle"
+  "Set password": "Parolayı belirle",
+  "Everyone was signed out. You stay signed in here.": "Herkesin oturumu kapatıldı. Bu tarayıcıda oturumun açık kalıyor.",
+  "Sign everyone out of this web UI, on every device? You stay signed in here.": "Bu web arayüzündeki herkesin oturumu, tüm cihazlarda kapatılsın mı? Senin buradaki oturumun açık kalır.",
+  "Ends every web UI session at once by making a new session key — also sessions signed with the key in an old copy of config.json or of a backup. You stay signed in here.": "Yeni bir oturum anahtarı oluşturarak web arayüzündeki tüm oturumları bir anda kapatır — config.json'un ya da bir yedeğin eski bir kopyasındaki anahtarla imzalanmış oturumlar da dahil. Senin buradaki oturumun açık kalır.",
+  "Sign out everyone": "Herkesin oturumunu kapat"
 }
