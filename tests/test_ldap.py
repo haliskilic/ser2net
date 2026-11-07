@@ -10,6 +10,7 @@ RootDSE, nested groups. Those parts need ldap3 (the escape helpers the code uses
 it): without it they are skipped with a SKIP line (tests/run_all.py repeats it), and with
 SER2NET_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_ldap.py
 """
+import dataclasses
 import os
 import sys
 
@@ -19,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _names import OTHER_GROUP, SAME_GROUP
 from _optional import need
 
-from app.config import AppConfig, LdapSettings
+from app.config import AccountNameError, AppConfig, LdapSettings, User
 from app.web import ldap_auth
 
 OPER_GROUP = "cn=ser2net-operators,ou=groups,dc=ex,dc=com"
@@ -139,6 +140,39 @@ def test_upsert_ldap_user():
     assert again is not promoted and again.pwd_version != promoted.pwd_version
     print("upsert_ldap_user: creates shadow (random first version), refreshes role, bumps "
           "pwd_version on change  OK")
+
+
+def test_upsert_never_takes_a_local_account():
+    """An LDAP/OIDC sign-in under the name of a local account — in any letter case,
+    Turkish İ/ı too — is refused, and the local account stays exactly as it was (no
+    source change, no role from the directory, no session bump), so the only admin
+    can't be lost."""
+    cfg = AppConfig.from_dict({"users": [
+        {"username": "admin", "password_hash": "h", "role": "admin", "pwd_version": 7,
+         "source": "local"},
+        {"username": "ismail", "password_hash": "h2", "role": "operator", "pwd_version": 2,
+         "source": "local"},
+        {"username": "jdoe", "password_hash": "", "role": "viewer", "pwd_version": 3,
+         "source": "ldap"}]})
+    before = [dataclasses.asdict(u) for u in cfg.users]
+    for name, source, local in (("admin", "oidc", "admin"), ("admin", "ldap", "admin"),
+                                ("ADMIN", "ldap", "admin"), ("Admin", "oidc", "admin"),
+                                ("İSMAİL", "ldap", "ismail"), ("Ismail", "oidc", "ismail")):
+        try:
+            cfg.upsert_external_user(name, "viewer", source)
+        except AccountNameError as e:
+            assert f"the local account '{local}' has this name" in str(e), e
+        else:
+            raise AssertionError(f"{source} sign-in as {name!r} took over a local account")
+    assert [dataclasses.asdict(u) for u in cfg.users] == before
+    assert cfg.admin_count() == 1
+    # named(): every spelling, the exact one first; of one source if asked
+    cfg.users.append(User(username="JDoe", source="ldap", role="viewer"))
+    assert [u.username for u in cfg.named("JDOE")] == ["jdoe", "JDoe"]
+    assert [u.username for u in cfg.named("JDoe")] == ["JDoe", "jdoe"]
+    assert cfg.named("jdoe", "local") == [] and cfg.named("ADMIN", "local")[0].username == "admin"
+    assert [u.username for u in cfg.named("İsmail", "local")] == ["ismail"]
+    print("upsert_external_user: never takes over a local account (any letter case)  OK")
 
 
 # ---- authenticate() flow with a fake connection factory (needs ldap3 for escapes) ----
@@ -412,6 +446,7 @@ def main():
     test_turkish_names()
     test_partial_match_noted()
     test_upsert_ldap_user()
+    test_upsert_never_takes_a_local_account()
     test_empty_password_never_binds()
     if need("ldap3", what="authenticate() with ldap3: bind, search, AD sign-in names, "
                           "nested groups over the LDAP protocol"):

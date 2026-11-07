@@ -433,6 +433,14 @@ kendi domain'inin tamamında) userPrincipalName / sAMAccountName ile bulunur; *�
 grupları da say* (yalnızca AD) kullanıcının başka gruplar üzerinden üyesi olduğu grupları
 da ekler.
 
+**LDAP / OIDC hesapları:** dizinden (LDAP) ya da kimlik sağlayıcıdan (OIDC) ilk kez giriş
+yapan kişiye burada parolasız bir hesap açılır; rolü her girişte gruplarından yeniden
+belirlenir. Yerel hesaplar önce gelir: adı (büyük/küçük harf fark etmeksizin) bir yerel
+hesabın adı olan bir LDAP/OIDC girişi reddedilir, all.log'a ve denetim kaydına
+(`ldap_login_denied` / `oidc_login_denied`) yazılır; böyle bir giriş yerel hesabı asla
+devralmaz, SSO hesabına çevirmez ya da rolünü düşürmez. Birini yerel hesaptan SSO'ya
+taşımak için önce yerel hesabını silin (başka bir admin kalmalı).
+
 **TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
 Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika
 deposu, domain üyesi bir makinede AD CA'sı genellikle zaten oradadır) ve sunucu URI'sindeki

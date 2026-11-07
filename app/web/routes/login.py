@@ -8,7 +8,7 @@ import time
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
-from ...config import ConfigError, User, new_pwd_version
+from ...config import AccountNameError, ConfigError, User, new_pwd_version
 from ...engine import netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth
@@ -95,6 +95,45 @@ def routes(ctx: Ctx) -> list:
         state.log(f"{source.upper()}: {username!r} signed out everywhere: their groups give "
                   f"no role any more")
 
+    def _local_name_refused(request, source: str, username: str) -> str | None:
+        """A sign-in through the directory (LDAP) or the identity provider (OIDC) under
+        the name of a local account, letter case aside, is refused: it must never take
+        over, convert or demote that account (upsert_external_user refuses it too).
+        Logged, audited and notified like a failed sign-in. Returns the sign-in page's
+        message, or None when no local account has the name."""
+        local = state.config.named(username, "local")
+        if not local:
+            return None
+        ip, name = client_ip(request), local[0].username
+        state.log(f"{source.upper()} login denied for {username!r}: the local account {name!r} "
+                  f"has this name, and an {source.upper()} sign-in never takes over a local "
+                  f"account. To let them sign in with {source.upper()}, delete the local "
+                  f"account in Settings → Users (another admin must remain).")
+        ctx.audit(request, f"{source}_login_denied", f"local account {name}", user=username)
+        state.notifier.emit("login_failed", ip, "",
+                            f"{source.upper()} user {username!r} from {ip}: the name of a local account")
+        return _("There is a local account named {0} here, so you can't sign in under that "
+                 "name with SSO or a directory account. Sign in with that account’s password, "
+                 "or ask an admin to delete the local account first.").format(name)
+
+    def _refusal_page(request, source: str, message: str | None):
+        if source == "oidc":
+            return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
+                          oidc_error=message)
+        return render(request, "login.html", status_code=403, error=message,
+                      oidc_enabled=state.config.oidc.enabled)
+
+    async def _save_external(source: str, username: str, role: str) -> User | None:
+        """The saved shadow account of an LDAP/OIDC user who signed in; None when a local
+        account got this name while the sign-in waited for the lock."""
+        async with state.config_lock:
+            try:
+                user = state.config.upsert_external_user(username, role, source)
+            except AccountNameError:
+                return None
+            await state.asave()
+        return user
+
     # ---------------- OIDC single sign-on ----------------
     def _oidc_redirect_uri(request) -> str:
         cfg_uri = state.config.oidc.redirect_uri.strip()
@@ -143,6 +182,8 @@ def routes(ctx: Ctx) -> list:
         username = oidc_auth.username_from_claims(claims, oidc)
         if not username:
             state.log("OIDC login denied: the ID token names no user")
+        elif refusal := _local_name_refused(request, "oidc", username):
+            return _refusal_page(request, "oidc", refusal)
         role = username and _directory_role("oidc", username,
                                             oidc_auth.groups_from_claims(claims, oidc), oidc)
         if not username or not role:
@@ -150,9 +191,9 @@ def routes(ctx: Ctx) -> list:
                 await _end_refused_sessions("oidc", username)
             return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
                           oidc_error=_("Your account isn't mapped to a role."))
-        async with state.config_lock:
-            user = state.config.upsert_external_user(username, role, "oidc")
-            await state.asave()
+        user = await _save_external("oidc", username, role)
+        if user is None:   # a local account got the name meanwhile
+            return _refusal_page(request, "oidc", _local_name_refused(request, "oidc", username))
         refused.discard(("oidc", username))
         state.log(f"login: {username} ({role}, oidc) from {client_ip(request)}")
         ctx.audit(request, "oidc_login", username, user=username)
@@ -186,11 +227,14 @@ def routes(ctx: Ctx) -> list:
                 on_tls_problem=_note_tls_problem)
             if groups is not None:
                 state.ldap_tls_problem = None   # the connection to the directory works
+                if refusal := _local_name_refused(request, "ldap", username):
+                    return _refusal_page(request, "ldap", refusal)
                 role = _directory_role("ldap", username, groups, state.config.ldap)
                 if role:
-                    async with state.config_lock:
-                        authed = ldap_auth.upsert_ldap_user(state.config, username, role)
-                        await state.asave()
+                    authed = await _save_external("ldap", username, role)
+                    if authed is None:   # a local account got the name meanwhile
+                        return _refusal_page(request, "ldap",
+                                             _local_name_refused(request, "ldap", username))
                     refused.discard(("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
