@@ -783,13 +783,16 @@ class LdapSettings:
     """LDAP / Active Directory authentication. Users authenticate by binding to the
     directory; their group membership maps to a ser2net role. Two bind modes:
       - direct: user_dn_template (e.g. 'uid={username},ou=people,dc=ex,dc=com' or the
-        AD UPN '{username}@corp.local'); the credentials bind as that DN.
+        AD UPN '{username}@corp.local'); the credentials bind as that DN. An AD sign-in
+        name (user@domain, DOMAIN\\user) isn't a DN: the account is then found by
+        userPrincipalName / sAMAccountName in its domain, under user_search_base if set.
       - search+bind: bind as the service account (bind_dn/bind_password), find the user
         with user_search_filter under user_search_base, then re-bind as that DN.
     Group->role: a user in admin_group gets admin, operator_group -> operator, etc.;
     default_role applies when authenticated but in no mapped group (empty => deny). A
     group setting is a group's whole name (its CN) or DN, compared without regard to
-    letter case (ldap_auth.group_matches)."""
+    letter case (ldap_auth.group_matches). nested_groups (Active Directory) also
+    counts the groups a user is in through other groups."""
     enabled: bool = False
     server_uri: str = ""             # ldap://host:389 or ldaps://host:636
     start_tls: bool = False
@@ -803,6 +806,7 @@ class LdapSettings:
     operator_group: str = ""
     viewer_group: str = ""
     default_role: str = ""           # role when no group matched; "" => deny login
+    nested_groups: bool = False      # AD: LDAP_MATCHING_RULE_IN_CHAIN group search
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "LdapSettings":

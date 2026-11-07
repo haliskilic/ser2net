@@ -40,7 +40,9 @@ def routes(ctx: Ctx) -> list:
         if d.partial is not None:
             _warn_partial(source, username, d)
         if not d.setting:
-            why = f"no group setting matches their groups: {ldap_auth.group_names(groups)}"
+            why = ("their groups could not be read (see above)"
+                   if getattr(groups, "lookup_failed", False) else
+                   f"no group setting matches their groups: {ldap_auth.group_names(groups)}")
             if d.role:
                 state.log(f"{name} login for {username!r}: {why}; default role {d.role}")
             else:

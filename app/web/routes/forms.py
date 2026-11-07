@@ -43,6 +43,9 @@ def _ldap_from_form(form, old) -> LdapSettings:
         "operator_group": form.get("ldap_operator_group", "").strip(),
         "viewer_group": form.get("ldap_viewer_group", "").strip(),
         "default_role": form.get("ldap_default_role", "").strip(),
+        # a form without the box (rendered before it existed) keeps the stored value
+        "nested_groups": (_checkbox(form, "ldap_nested_groups")
+                          if "ldap_nested_groups_shown" in form else old.nested_groups),
     })
 
 
