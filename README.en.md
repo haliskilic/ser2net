@@ -498,7 +498,12 @@ owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the 
 inside aren't readable by other users:
 - `config.json` — admin IP, password hash, all mappings (atomic write).
 - `backups/` — the previous `config.json` before every change (newest 50). Download or
-  restore one under Settings → *Configuration backups*; a restore can be undone too.
+  restore one under Settings → *Configuration backups*. A restore first shows what changes
+  for sign-in and access, then brings back the mappings and settings; the user accounts
+  and passwords, the REST API token and the cluster key stay as they are unless you tick
+  the box to restore them too (that also signs everyone else out). *Only its mappings*
+  goes through the import preview. A restore can be undone too; a downloaded backup
+  leaves out the session key.
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins and config changes,
   who/from where/what (rotated). Searchable under Settings → *Audit log*, CSV export.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).

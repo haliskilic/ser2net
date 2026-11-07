@@ -11,6 +11,11 @@ up, so a wrong import or edit could not be undone. Checks:
     file with nothing to import is refused instead of emptying the mappings;
   * an admin can download (without the session key) and restore a backup; the restore
     is undoable, keeps the session working, and a backup without users is refused;
+  * a restore first shows what changes for sign-in and access. By default it brings back
+    mappings and settings but keeps the user accounts, passwords, REST API token and
+    cluster key (a deleted user, an old password or a revoked token stay gone, and no
+    session ends); restoring the accounts too is a choice, which then also signs
+    everyone else out; "Only its mappings" goes through the import preview;
   * viewers/operators can't reach backups.
 
 Run: python3 tests/test_backups_import.py
@@ -18,12 +23,14 @@ Run: python3 tests/test_backups_import.py
 import json
 import os
 import tempfile
+import urllib.error
+import urllib.request
 
 from _server import Browser, Server, free_port
 
 from app.config import BACKUPS_KEPT, AppConfig, ConfigError, ConfigStore, MappingConfig
 from app.importer import apply_import, parse_mappings_file, plan_rows
-from app.web.auth import hash_password
+from app.web.auth import hash_password, verify_password
 
 PW = "backup-pass-1"
 
@@ -177,10 +184,110 @@ def main():
         empty = os.path.join(store.backup_dir, "config-20000101T000000Z.json")
         with open(empty, "w") as fh:
             json.dump(AppConfig().to_dict(), fh)
-        st, _, page = admin.post("/settings/backups/restore", {"name": "config-20000101T000000Z.json"})
+        st, _, page = admin.post("/settings/backups/restore", {"name": "config-20000101T000000Z.json",
+                                                               "accounts": "on"})
         assert "has no user accounts" in page and srv.saved_config()["users"], "pre-setup backup restored"
-        print("a backup without user accounts is refused (would reopen first-run setup)  OK")
+        print("restoring the accounts of a backup without any is refused (would reopen setup)  OK")
+    test_restore_accounts()
     print("\nPASS: configuration backups + import preview / merge / replace")
+
+
+def api_status(base, token):
+    req = urllib.request.Request(base + "/api/v1/mappings", headers={"Authorization": f"Bearer {token}"})
+    try:
+        return urllib.request.urlopen(req, timeout=10).status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def account(cfg, name):
+    return next((u for u in cfg["users"] if u["username"] == name), None)
+
+
+def test_restore_accounts():
+    users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
+             {"username": "op", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
+    config = {"users": users, "mappings": [mapping("aaaaaaaaaaa1", "A", free_port()),
+                                           mapping("aaaaaaaaaaa2", "B", free_port())]}
+    with Server(config) as srv:
+        admin = Browser(srv.base)
+        admin.login("admin", PW)
+        disc = str(free_port())
+        assert admin.post("/settings/users", {"username": "gone", "role": "viewer",
+                                              "password": PW, "password2": PW})[0] == 200
+        st, _, page = admin.post("/settings/api-token", {"api_token_role": "operator"})
+        token = page.split('token-box">', 1)[1].split("<", 1)[0].strip()
+        assert admin.post("/settings/cluster", {"enabled": "on", "key": "old-cluster-key",
+                                                "discovery_port": disc})[0] == 200
+        # what config.json holds now is backed up by the next change: then revoke it all
+        assert admin.post("/settings/users/gone/delete")[0] == 200
+        assert admin.post("/settings/api-token/revoke")[0] == 200
+        new_op = "op-new-pass-2"
+        assert admin.post("/settings/users/password", {"username": "op", "password": new_op,
+                                                       "password2": new_op})[0] == 200
+        assert admin.post("/settings/cluster", {"enabled": "on", "key": "new-cluster-key",
+                                                "discovery_port": disc})[0] == 200
+        assert admin.post("/settings/access", {"anonymous_role": "viewer"})[0] == 200  # login off
+        store = ConfigStore(srv.config_path)
+        name = next(b["name"] for b in store.backups()
+                    if account(json.loads(store.read_backup(b["name"])), "gone")
+                    and json.loads(store.read_backup(b["name"]))["cluster"]["key"] == "old-cluster-key")
+
+        st, _, page = admin.get(f"/settings?restore={name}")
+        assert st == 200 and "Restore the configuration saved at" in page, page[:300]
+        for line in ("Login required: disabled → enabled", "Accounts it brings back: gone",
+                     "Accounts with another password or role: op",
+                     "The REST API token as it was then", "The cluster key as it was then"):
+            assert line in page, line
+        assert 'formaction="/settings/backups/restore-mappings"' in page
+        assert srv.saved_config()["users"][1]["username"] == "op", "a preview changes nothing"
+        print("restore preview: access setting changes, and what restoring the accounts would do  OK")
+
+        op = Browser(srv.base)
+        op.login("op", new_op)
+        st, _, page = admin.post("/settings/backups/restore", {"name": name})
+        assert "User accounts, the REST API token and the cluster key were kept" in page, \
+            page[page.find("banner"):][:400]
+        assert "Login required: disabled → enabled" in page
+        cfg = srv.saved_config()
+        assert [u["username"] for u in cfg["users"]] == ["admin", "op"], "a deleted user came back"
+        assert verify_password(new_op, account(cfg, "op")["password_hash"]), "an old password came back"
+        assert cfg["api_token_hash"] == "" and api_status(srv.base, token) == 401, "a revoked token came back"
+        assert cfg["cluster"]["key"] == "new-cluster-key" and cfg["admin_ui"]["require_login"] is True
+        assert op.get("/settings")[0] == 200, "no session ends when the accounts stay"
+        audit = open(os.path.join(srv.data, "audit.log"), encoding="utf-8").read()
+        assert f"{name}; accounts kept; Login required: disabled → enabled" in audit, audit[-500:]
+        print("restore: settings back; deleted user, old password, revoked token, key stay gone  OK")
+
+        st, _, page = admin.post("/settings/backups/restore", {"name": name, "accounts": "on"})
+        assert "Everyone else was signed out" in page, page[page.find("banner"):][:400]
+        cfg = srv.saved_config()
+        assert account(cfg, "gone") and verify_password(PW, account(cfg, "op")["password_hash"])
+        assert cfg["cluster"]["key"] == "old-cluster-key" and api_status(srv.base, token) == 200
+        assert op.get("/settings")[0] == 303, "restoring the accounts must end the other sessions"
+        assert admin.get("/settings")[0] == 200, "the admin who restored stays signed in"
+        print("restore with its accounts (chosen): they come back, everyone else is signed out  OK")
+
+        empty = json.loads(store.read_backup(name))
+        empty["users"] = [dict(u, role="viewer") for u in empty["users"]]
+        with open(os.path.join(store.backup_dir, "config-20000102T000000Z.json"), "w") as fh:
+            json.dump(empty, fh)
+        st, _, page = admin.post("/settings/backups/restore", {"name": "config-20000102T000000Z.json",
+                                                               "accounts": "on"})
+        assert "has no admin account" in page and account(srv.saved_config(), "admin")["role"] == "admin"
+        print("restoring accounts from a backup without an admin is refused  OK")
+
+        export = json.dumps({"version": 1, "mappings": [mapping("aaaaaaaaaaa1", "A", free_port())]})
+        st, _, page = admin.post("/settings/config/import", {}, files={"file": ("m.json", export.encode())})
+        assert [m["name"] for m in srv.saved_config()["mappings"]] == ["A"]
+        st, _, page = admin.post("/settings/backups/restore-mappings", {"name": name})
+        assert st == 200 and "Import preview" in page and "configuration backup (" in page, page[:300]
+        token = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+        st, _, page = admin.post("/settings/config/import/apply", {"token": token, "mode": "replace"})
+        assert "Imported 2 mappings" in page, page[page.find("banner"):][:300]
+        cfg = srv.saved_config()
+        assert [m["name"] for m in cfg["mappings"]] == ["A", "B"] and account(cfg, "gone")
+        print("Only its mappings: through the import preview; accounts and settings untouched  OK")
 
 
 if __name__ == "__main__":
