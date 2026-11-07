@@ -30,7 +30,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, console, i18n, standalone
+from . import accounts, console, datalock, i18n, standalone
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
@@ -251,21 +251,43 @@ def require_admin_tls(admin) -> None:
                              f"{_os_error(e)}{fix}") from None
 
 
+def hold_data_dir(config_path: str) -> str | None:
+    """Take the data directory's single-instance lock (app.datalock) before anything is
+    written there: a second ser2net on the same directory stops here with one line.
+    Returns a warning for the start-up log when the lock can't be taken (the start goes
+    on without it)."""
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    with contextlib.suppress(OSError):  # if it can't be created, loading config.json says why
+        os.makedirs(data_dir, exist_ok=True)
+    try:
+        return datalock.acquire(data_dir)
+    except datalock.Held as e:
+        raise SystemExit(f"ser2net: {e} — stop it first (a Windows service: sc stop ser2net; "
+                         "systemd: systemctl stop ser2net) or give this one its own "
+                         "--data-dir") from None
+
+
 def main(config_path: str, reconfigure: bool = False) -> int:
     standalone.prepare()  # standalone Linux binary: find the system CA certificates
-    store, config = prepare_config(config_path, reconfigure)
-    require_admin_tls(config.admin_ui)
-
-    choice, loop_note = event_loop_choice()
+    lock_note = hold_data_dir(config_path)
     try:
-        with Runner(loop_factory=loop_factory(choice)) as runner:
-            return runner.run(_serve(store, config, loop_note))
-    except KeyboardInterrupt:
-        return 0
-    except Exception:
-        # all.log too, not only stderr (a service has none to read); then exit with it
-        logging.getLogger("ser2net").exception("fatal error, ser2net stops")
-        raise
+        store, config = prepare_config(config_path, reconfigure)
+        if lock_note:
+            config.load_notes.append(lock_note)
+        require_admin_tls(config.admin_ui)
+
+        choice, loop_note = event_loop_choice()
+        try:
+            with Runner(loop_factory=loop_factory(choice)) as runner:
+                return runner.run(_serve(store, config, loop_note))
+        except KeyboardInterrupt:
+            return 0
+        except Exception:
+            # all.log too, not only stderr (a service has none to read); then exit with it
+            logging.getLogger("ser2net").exception("fatal error, ser2net stops")
+            raise
+    finally:
+        datalock.release(os.path.dirname(os.path.abspath(config_path)))
 
 
 def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
@@ -283,10 +305,15 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
     loop.set_exception_handler(handler)
 
 
+_as_service = False  # set by service_main so _serve can log the service-only warnings
+
+
 def service_main(config_path: str) -> int:
     """main() for the Windows service, which has no console: a start-up error that stops
     it (the one-line SystemExit) also goes to all.log next to config.json, where the
     admin looks for it."""
+    global _as_service
+    _as_service = True
     try:
         return main(config_path=config_path)
     except SystemExit as e:
@@ -313,6 +340,10 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     for lang in i18n.missing_catalogs():
         state.log(f"WARNING: the '{lang}' UI translation is missing from {i18n.LOCALE_DIR} "
                   "— the web UI shows English to visitors who pick it")
+    if _as_service and sys.platform == "win32":
+        from . import winservice
+        if warning := winservice.location_warning():
+            state.log(warning)
     state.prepare_first_run()
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:
         state.log("WARNING: admin UI is bound to a network address over plain HTTP — "

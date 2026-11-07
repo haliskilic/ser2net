@@ -56,6 +56,63 @@ def test_command_line():
     print("SCM command line quoted for exe / source; names validated  OK")
 
 
+def test_acl_decision_table():
+    """acl_offenders() is the pure core of the exe/folder permission check (the Windows
+    caller reads the ACEs through the API). Runs on any OS."""
+    w = winservice
+    everyone, auth_users = "S-1-1-0", "S-1-5-11"
+    user = "S-1-5-21-1-2-3-1001"
+    system, admins = "S-1-5-18", "S-1-5-32-544"
+    trusted_installer = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+    modify = w.FILE_WRITE_DATA | w.FILE_APPEND_DATA | w._DELETE
+    read = 0x00020000 | 0x1  # READ_CONTROL | FILE_READ_DATA
+
+    # a Program Files-style ACL: only SYSTEM / Administrators / TrustedInstaller may write
+    assert w.acl_offenders([(system, w.GENERIC_ALL, True), (admins, w.GENERIC_ALL, True),
+                            (trusted_installer, w.GENERIC_ALL, True), (auth_users, read, True)]) == []
+    # a C:\ser2net-style ACL: Authenticated Users inherit Modify -> escalation path
+    assert w.acl_offenders([(system, w.GENERIC_ALL, True), (admins, w.GENERIC_ALL, True),
+                            (auth_users, modify, True)]) == [auth_users]
+    # any specific non-admin user with write, or just the right to take ownership, counts
+    assert w.acl_offenders([(user, w.GENERIC_WRITE, True)]) == [user]
+    assert w.acl_offenders([(user, w.WRITE_OWNER, True)]) == [user]
+    assert w.acl_offenders([(everyone, modify, True)]) == [everyone]
+    # a deny ACE for the same SID cancels its allowed write
+    assert w.acl_offenders([(auth_users, modify, True), (auth_users, modify, False)]) == []
+    # read-only access is fine; several offenders come back sorted
+    assert w.acl_offenders([(auth_users, read, True)]) == []
+    assert w.acl_offenders([(user, w.GENERIC_WRITE, True),
+                            (everyone, modify, True)]) == sorted([user, everyone])
+    # off Windows the ACL reader can't run and never blocks an install
+    assert w.writable_by_non_admins(__file__) is None
+    assert w.location_warning() is None
+    print("ACL decision table: non-admin write on the exe/folder is flagged, deny honoured  OK")
+
+
+def test_install_locations():
+    """Where a frozen build installs itself and keeps a service's data (any OS)."""
+    w = winservice
+    old = {k: os.environ.get(k) for k in ("ProgramFiles", "ProgramData")}
+    os.environ["ProgramFiles"], os.environ["ProgramData"] = r"C:\PF", r"C:\PD"
+    try:
+        assert w.installed_exe_path("ser2net") == os.path.join(r"C:\PF", "ser2net", "ser2net.exe")
+        assert w.installed_exe_path("plant-2") == os.path.join(r"C:\PF", "ser2net", "plant-2.exe")
+        assert w.default_service_data_dir("ser2net") == os.path.join(r"C:\PD", "ser2net")
+        assert w.default_service_data_dir("plant-2") == os.path.join(r"C:\PD", "ser2net", "plant-2")
+        # the SCM command points at the admin-only copy for a frozen install
+        cmd = w.service_command("ser2net", r"C:\PD\ser2net", frozen=True,
+                                executable=w.installed_exe_path("ser2net"))
+        assert w.installed_exe_path("ser2net") in cmd and "--service" in cmd
+        # the firewall hint is a program-scoped netsh rule named after the service
+        fw = w.firewall_command("plant-2", exe=r"C:\PF\ser2net\plant-2.exe")
+        assert fw.startswith("netsh advfirewall firewall add rule") and "ser2net (plant-2)" in fw
+        assert r'program="C:\PF\ser2net\plant-2.exe"' in fw and "dir=in action=allow" in fw
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+    print("frozen install path under %ProgramFiles%, data under %ProgramData%  OK")
+
+
 def test_not_windows():
     if WINDOWS:
         return
@@ -133,9 +190,14 @@ def test_real_service():
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": port},
                    "users": [{"username": "admin", "password_hash": hash_password("svc-pass-1"),
                               "role": "admin", "pwd_version": 1}]}, fh)
+    # a CI runner's workspace is writable by non-admins, so a source-checkout install
+    # needs the override; the frozen exe installs itself to an admin-only folder and
+    # ignores it. Pass it either way so this test covers both legs.
+    install_cmd = base + ["--install-service", "--service-name", name, "--data-dir", data,
+                          "--allow-unsafe-location"]
     try:
-        p = subprocess.run(base + ["--install-service", "--service-name", name, "--data-dir", data],
-                           capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+        p = subprocess.run(install_cmd, capture_output=True, text=True, timeout=120,
+                           stdin=subprocess.DEVNULL)
         print(p.stdout.strip())
         assert p.returncode == 0, p.stdout + p.stderr
         assert "is running" in p.stdout
@@ -149,6 +211,15 @@ def test_real_service():
         assert p.returncode == 0 and "done by the running ser2net" in p.stdout, p.stdout + p.stderr
         Browser(f"http://127.0.0.1:{port}").login("admin", "svc-pass-2")
         print("--set-password while the service runs: the service applies it at once  OK")
+
+        # re-running --install-service upgrades the existing service in place (keeps its
+        # name, points it at the current build) instead of failing with 'already exists'
+        p = subprocess.run(install_cmd, capture_output=True, text=True, timeout=120,
+                           stdin=subprocess.DEVNULL)
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert "upgraded in place" in p.stdout, p.stdout + p.stderr
+        assert wait_for(lambda: healthy(port), 60), "the service did not come back after the upgrade"
+        print("re-run --install-service: upgraded in place, still running  OK")
 
         def service_procs():
             return [pr for pr in psutil.process_iter(["cmdline"])
@@ -178,6 +249,8 @@ def test_real_service():
 
 def main():
     test_command_line()
+    test_acl_decision_table()
+    test_install_locations()
     test_not_windows()
     test_request_shutdown()
     test_real_service()
