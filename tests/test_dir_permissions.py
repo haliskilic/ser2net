@@ -49,6 +49,23 @@ def has_entry(path: str, sid: str) -> bool:
         for s, _mask, allow, flags in sec[1])
 
 
+def mkdir_with_sddl(path: str, sddl: str) -> None:
+    """Create the folder `path` with the security descriptor `sddl` (Windows)."""
+    import ctypes
+
+    from app import winservice
+
+    s = winservice._secapi()
+    psd = ctypes.c_void_p()
+    assert s.advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        sddl, 1, ctypes.byref(psd), None), ctypes.get_last_error()
+    try:
+        sa = s.SECURITY_ATTRIBUTES(ctypes.sizeof(s.SECURITY_ATTRIBUTES), psd, False)
+        assert s.kernel.CreateDirectoryW(path, ctypes.byref(sa)), ctypes.get_last_error()
+    finally:
+        s.kernel.LocalFree(psd)
+
+
 def test_windows_owner_only_acl():
     from app import winservice
 
@@ -108,11 +125,11 @@ def test_windows_admin_owned_folders():
         sec = w.read_security(service)
         assert sec is not None and w.service_folder(*sec), icacls(service)
 
+        # created with the security descriptor Python 3.12.4+ gives mkdir(mode=0o700), on
+        # every Python here (icacls rewriting a folder's ACL into that shape left other
+        # entries in it on the older Pythons' runners)
         private = os.path.join(base, "private")
-        os.mkdir(private)
-        icacls(private, "/inheritance:r", "/grant:r", f"*{w.SYSTEM_SID}:(OI)(CI)F",
-               "/grant:r", f"*{w.ADMINS_SID}:(OI)(CI)F",
-               "/grant:r", f"*{w.OWNER_RIGHTS_SID}:(OI)(CI)F")
+        mkdir_with_sddl(private, "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)")
         icacls(private, "/setowner", f"*{w.ADMINS_SID}")
         sec = w.read_security(private)
         assert sec is not None and w.admin_only(*sec) and not has_entry(private, me), \
