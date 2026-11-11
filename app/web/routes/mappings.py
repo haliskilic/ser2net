@@ -202,8 +202,11 @@ def routes(ctx: Ctx) -> list:
             return _form_error(render, request, state, form, msg)
         state.log(f"mapping saved: {msg}")
         ctx.audit(request, "mapping_save", msg)
+        # the focus then: the mapping's Edit button (a new one's, once the table shows it)
+        focus = f"m-{saved.id}-edit"
         note = (notice(_("“{0}” saved, but it could not start: {1}").format(msg, saved.start_error),
-                       "warn") if saved.start_error else notice(_("“{0}” saved.").format(msg)))
+                       "warn", focus) if saved.start_error
+                else notice(_("“{0}” saved.").format(msg), focus=focus))
         return Response("", headers={**TRIGGER, **note})
 
     async def mapping_delete(request):

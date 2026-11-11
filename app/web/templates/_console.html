@@ -1,10 +1,10 @@
 <div class="form-head">
-  <h3>{{ _("Console — %(name)s", name=mapping_name|softbreak) }}</h3>
+  <h3 id="panel-title" tabindex="-1">{{ _("Console — %(name)s", name=mapping_name|softbreak) }}</h3>
   <div class="actions">
     {% if interactive %}<span class="muted" data-text-only>{{ _("type to send to the device") }}</span>
     {% else %}<span class="muted">{{ _("read-only") }}</span>{% endif %}
     <button type="button" class="btn sm" data-term-mode>{{ _("Hex view") }}</button>
-    <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
+    <button type="button" class="btn sm" id="console-close" data-cancel>{{ _("Close") }}</button>
   </div>
 </div>
 <p class="muted mb-sm" data-mode-help>{% if interactive %}{{ _("Text view: what the device sends; what you type goes to the device.") }}{% else %}{{ _("Text view: what the device sends.") }}{% endif %} {% if bridge %}{{ _("Hex view: both directions with timestamps (A → B / B → A).") }}{% elif to_device %}{{ _("Hex view: both directions with timestamps (from / to the device).") }}{% else %}{{ _("Hex view: what the device sends, with timestamps.") }}{% endif %}</p>

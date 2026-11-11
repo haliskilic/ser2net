@@ -469,6 +469,50 @@ def test_polled_controls_keep_their_ids():
     print("polled tables and the log panel: stable, unique ids; row buttons name their mapping  OK")
 
 
+def test_panel_openers_scroll_it_into_view():
+    """The form panel sits above the table: every button that opens it (Add, a row's Edit /
+    Log / Monitor / Trace, a peer's Edit) and the form itself (an error re-render) scroll
+    it into view (show:top); the log's and the traces' own refreshes don't (no jumping).
+    Each panel has a heading app.js can focus, and the form's error banner is an alert."""
+    env = make_templates().env
+    rows = parse(env.get_template("_mappings_body.html").render(
+        mappings=[MappingConfig.from_dict({"id": "t1", "name": "t", "serial": {"port": "COM3"},
+                                           "options": {"trace_both": "t.log"}})],
+        statuses={}, can_edit=True))
+    cluster = parse(env.get_template("_cluster_body.html").render(
+        can_edit=True, nodes=[{"name": "p", "self": False, "ip": "10.0.0.2", "port": 8080,
+                               "addr": "10.0.0.2:8080", "online": True,
+                               "mappings": [{"id": "x1", "name": "a", "enabled": True}]}]))
+    openers = [n for root in (rows, cluster, parse(dashboard())) for n in root.walk()
+               if n.attrs.get("hx-target") == "#form-panel"]
+    assert len(openers) == 4 + 1 + 1, [o.attrs for o in openers]   # Edit Log Monitor Trace / Edit / Add
+    for o in openers:
+        assert o.attrs.get("hx-swap") == "innerHTML show:top", o.attrs
+    form = parse(env.get_template("_mapping_form.html").render(
+        request=Page, mapping=MappingConfig(name="x"), is_new=False, modbus_points_json="",
+        ports=[], ips=[], error="Port 4001 is in use"))
+    f = next(n for n in form.walk() if n.tag == "form")
+    assert f.attrs["hx-swap"] == "innerHTML show:top", f.attrs
+    banner = next(n for n in form.walk() if "error" in n.classes())
+    assert banner.attrs.get("role") == "alert" and banner.attrs.get("tabindex") == "-1"
+    log = parse(env.get_template("_mapping_log.html").render(mid="t1", mapping_name="t",
+                                                            lines=[], content_hash="0"))
+    traces = parse(env.get_template("_mapping_traces.html").render(mid="t1", mapping_name="t",
+                                                                  files=[]))
+    console = parse(env.get_template("_console.html").render(mid="t1", mapping_name="t",
+                                                            interactive=True))
+    gone = parse(env.get_template("_mapping_log.html").render(gone=True))
+    for root in (form, log, traces, console, gone):
+        title = [n for n in root.walk() if n.attrs.get("id") == "panel-title"]
+        assert len(title) == 1 and title[0].tag == "h3" and title[0].attrs.get("tabindex") == "-1"
+    for root in (log, traces):
+        for n in root.walk():
+            if "hx-get" in n.attrs:
+                assert n.attrs.get("hx-swap") == "innerHTML", n.attrs
+    print("panel openers and the form scroll the panel into view, its own refreshes don't; "
+          "each panel has a focusable heading  OK")
+
+
 def test_app_js_inserts_no_server_html():
     """app.js puts server texts into the page with textContent: the only innerHTML it
     writes is the empty string (closing a panel), and nothing else parses HTML."""
@@ -494,6 +538,7 @@ def main():
     test_feedback_area()
     test_actions_hold_a_second_click()
     test_polled_controls_keep_their_ids()
+    test_panel_openers_scroll_it_into_view()
     test_app_js_inserts_no_server_html()
     print("\nPASS: UI markup contract")
 
