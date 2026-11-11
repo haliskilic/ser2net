@@ -1,3 +1,12 @@
+{% if gone %}
+<div class="form-head">
+  <h3>{{ _("Log") }}</h3>
+  <div class="actions">
+    <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
+  </div>
+</div>
+<p class="muted">{{ _("This mapping no longer exists: it was deleted.") }}</p>
+{% else %}
 <div hx-get="/api/mappings/{{ mid }}/log" hx-trigger="every 5s" hx-target="#form-panel" hx-swap="innerHTML">
   <div class="form-head">
     <h3>{{ _("Log — %(name)s", name=mapping_name|softbreak) }}</h3>
@@ -14,3 +23,4 @@
   <p class="muted">{{ _("No log entries yet for this mapping.") }}</p>
   {% endif %}
 </div>
+{% endif %}
