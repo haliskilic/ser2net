@@ -185,9 +185,17 @@ function initTerm(root) {
   if (!el) el = document.getElementById("term");
   if (!el || el._inited || typeof Terminal === "undefined") return;
   el._inited = true;
+  if (Terminal.strings) Terminal.strings.promptLabel = tr("terminal_input", "Terminal input");
   var term = new Terminal({ convertEol: true, fontSize: 13, scrollback: 5000,
                             theme: { background: "#0b0f14" } });
   el._term = term;
+  // xterm keeps Tab and Shift+Tab (it sends them to the device), so the keyboard could
+  // not leave the console: Shift+Tab leaves it — and Tab too where nothing typed goes to
+  // the device. (false: xterm leaves the key alone, and the browser moves the focus.)
+  var typing = el.getAttribute("data-interactive") === "1";
+  term.attachCustomKeyEventHandler(function (ev) {
+    return !(ev.key === "Tab" && (ev.shiftKey || !typing));
+  });
 
   // size the terminal to its container (FitAddon); refit after layout settles
   var fit = null;
@@ -331,7 +339,9 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     rows.sort(function (a, b) { var x = key(a), y = key(b); return x < y ? -1 : x > y ? 1 : 0; });
     rows.forEach(function (r) { body.appendChild(r); });
     var count = t.querySelector("[data-filter-count]");
-    if (count) count.textContent = (text || st) ? tr("shown", "{0} of {1} shown", shown, rows.length) : "";
+    var said = (text || st) ? tr("shown", "{0} of {1} shown", shown, rows.length) : "";
+    // a live region: set only when it changes (not at every refresh), so it is read once
+    if (count && count.textContent !== said) count.textContent = said;
     // forget selections of mappings that no longer exist
     var ids = new Set(rows.map(function (r) { return r.getAttribute("data-mid"); }));
     selected.forEach(function (id) { if (!ids.has(id)) selected.delete(id); });
@@ -342,7 +352,9 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     var t = tools(); if (!t) return;
     var bar = t.querySelector("[data-bulk]"); if (!bar) return;
     bar.hidden = selected.size === 0;
-    t.querySelector("[data-bulk-count]").textContent = tr("selected", "{0} selected", selected.size);
+    var count = t.querySelector("[data-bulk-count]");
+    var said = tr("selected", "{0} selected", selected.size);
+    if (count.textContent !== said) count.textContent = said;   // a live region, as above
   }
 
   document.addEventListener("input", function (e) {

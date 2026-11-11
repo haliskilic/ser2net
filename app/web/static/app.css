@@ -131,6 +131,10 @@ input[type=text], input[type=password], input[type=number], select, textarea {
   color: var(--text); border: 1px solid var(--border); border-radius: 7px; font-size: 13px;
 }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+/* a checkbox, radio button or file picker shows no border colour: it gets an outline */
+input[type=checkbox]:focus-visible, input[type=radio]:focus-visible, input[type=file]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 input[type=checkbox] { width: auto; margin: 0; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
 .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 18px; }

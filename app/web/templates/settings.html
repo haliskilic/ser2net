@@ -20,13 +20,13 @@
 <section class="panel panel-narrow">
   {% if is_anonymous %}
   <div class="panel-head"><h2>{{ _("Signed out (open access)") }}</h2></div>
-  {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
-  {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+  {% if ok %}<div class="banner ok" role="status">{{ ok }}</div>{% endif %}
+  {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
   <p>{{ _('Login is switched off for this UI, so you are using it without an account, with the <span class="mono">%(role)s</span> role. <a href="/login">Sign in</a> for your own role (or to change your password).', role=me.role) }}</p>
   {% else %}
   <div class="panel-head"><h2>{{ _("Change your password") }}</h2></div>
-  {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
-  {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+  {% if ok %}<div class="banner ok" role="status">{{ ok }}</div>{% endif %}
+  {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
   <form method="post" action="/settings/password" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label>{{ _("Current password") }} <input type="password" name="current" autocomplete="current-password" required></label>
@@ -96,7 +96,7 @@
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
+        <td class="mono"><span id="user-{{ loop.index }}-name">{{ u.username }}</span>{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
         <td>
           {% if u.source != 'local' %}
             <span class="mono">{{ u.role }}</span> <span class="muted">({{ _("from %(source)s", source=u.source|upper) }})</span>
@@ -104,10 +104,10 @@
           <form method="post" action="/settings/users/role" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
             <input type="hidden" name="username" value="{{ u.username }}">
-            <select name="role">
+            <select name="role" aria-label="{{ _('Role of %(user)s', user=u.username) }}">
               {% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>{% endfor %}
             </select>
-            <button class="btn sm" type="submit">{{ _("Set") }}</button>
+            <button class="btn sm" type="submit" aria-describedby="user-{{ loop.index }}-name">{{ _("Set") }}</button>
           </form>
           {% endif %}
         </td>
@@ -117,12 +117,12 @@
             <form method="post" action="/settings/users/signout" class="inline">
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
               <input type="hidden" name="username" value="{{ u.username }}">
-              <button class="btn sm" type="submit">{{ _("Sign out") }}</button>
+              <button class="btn sm" type="submit" aria-describedby="user-{{ loop.index }}-name">{{ _("Sign out") }}</button>
             </form>
             <form method="post" action="/settings/users/delete" class="inline">
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
               <input type="hidden" name="username" value="{{ u.username }}">
-              <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
+              <button class="btn sm danger" type="submit" aria-describedby="user-{{ loop.index }}-name">{{ _("Delete") }}</button>
             </form>
           </div>
           {% endif %}
@@ -439,7 +439,7 @@
   {% set p = import_preview %}
   <h3>{{ _("Import preview") }} <span class="muted">— {{ _("%(n)s mapping(s) from a %(source)s, mode: %(mode)s", n=p.count, source=p.source, mode=_("merge") if p.mode == 'merge' else _("replace")) }}</span></h3>
   {% for w in p.warnings %}<div class="banner warn">{{ w }}</div>{% endfor %}
-  {% if p.problem %}<div class="banner error">{{ _("This import can’t be applied: %(problem)s", problem=p.problem) }}</div>{% endif %}
+  {% if p.problem %}<div class="banner error" role="alert">{{ _("This import can’t be applied: %(problem)s", problem=p.problem) }}</div>{% endif %}
   <div class="table-scroll">
   <table class="grid">
     <thead><tr><th>{{ _("Mapping") }}</th><th>{{ _("Port / network") }}</th><th>{{ _("Change") }}</th></tr></thead>

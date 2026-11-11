@@ -513,6 +513,43 @@ def test_panel_openers_scroll_it_into_view():
           "each panel has a focusable heading  OK")
 
 
+def test_keyboard_and_screen_readers():
+    """A checkbox, radio button or file picker shows where the focus is (the border colour
+    the other fields get does nothing there); the console can be left with the keyboard
+    (xterm keeps Tab and Shift+Tab: app.js lets Shift+Tab go, Tab too in a read-only
+    console) and an operator's console says how; the dashboard's counts are live regions;
+    the audit log's filters have names; error banners are alerts."""
+    env = make_templates().env
+    css = open(os.path.join(ROOT, "app", "web", "static", "app.css"), encoding="utf-8").read()
+    rule = re.search(r"input\[type=checkbox\]:focus-visible[^{]*\{([^}]*)\}", css)
+    assert rule and "outline: 2px solid" in rule.group(1), "checkboxes need a focus outline"
+    for kind in ("radio", "file"):
+        assert f"input[type={kind}]:focus-visible" in css, kind
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert "attachCustomKeyEventHandler" in js and 'ev.key === "Tab"' in js and "ev.shiftKey" in js
+    assert 'promptLabel = tr("terminal_input"' in js, "the console's input has a translated name"
+    console = env.get_template("_console.html")
+    assert "Shift+Tab leaves the console" in console.render(mid="a", mapping_name="a", interactive=True)
+    assert "Shift+Tab" not in console.render(mid="a", mapping_name="a", interactive=False), \
+        "a read-only console: Tab leaves it as anywhere else"
+    root = parse(dashboard())
+    count = next(n for n in root.walk() if "data-filter-count" in n.attrs)
+    assert count.attrs.get("role") == "status", count.attrs
+    assert next(n for n in root.walk() if "data-bulk-count" in n.attrs).attrs.get("aria-live") == "polite"
+    audit = parse(env.get_template("audit.html").render(
+        request=Page, filters={"q": "", "action": "", "user": ""}, actions=["login"],
+        users=["admin"], qs="", total=0, pages=1, page=1, rows=[]))
+    form = next(n for n in audit.walk() if n.tag == "form" and n.attrs.get("action") == "/settings/audit")
+    for n in form.walk():
+        if n.tag in ("input", "select"):
+            assert n.attrs.get("aria-label"), n.attrs
+    for name in ("login.html", "setup.html"):
+        src = open(os.path.join(ROOT, "app", "web", "templates", name), encoding="utf-8").read()
+        assert 'class="banner error">' not in src and 'class="banner error" role="alert"' in src, name
+    print("focus outlines on checkboxes, a way out of the console, live counts, named audit "
+          "filters, error banners as alerts  OK")
+
+
 def test_app_js_inserts_no_server_html():
     """app.js puts server texts into the page with textContent: the only innerHTML it
     writes is the empty string (closing a panel), and nothing else parses HTML."""
@@ -539,6 +576,7 @@ def main():
     test_actions_hold_a_second_click()
     test_polled_controls_keep_their_ids()
     test_panel_openers_scroll_it_into_view()
+    test_keyboard_and_screen_readers()
     test_app_js_inserts_no_server_html()
     print("\nPASS: UI markup contract")
 

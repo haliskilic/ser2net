@@ -12,6 +12,7 @@ Checks:
     mapping's too); the answer itself stays as it was (status, empty body, HX-Trigger);
   * every self-refreshing panel — the ports, the fleet view, a mapping's log, like the
     mappings table — answers 204 while the browser shows its content already;
+  * Settings → Users: each role selector and row button names its user;
 
 Run: python3 tests/test_ui_feedback.py
 """
@@ -190,11 +191,25 @@ def test_unchanged_panels():
     print("ports, fleet view and log panels: 204 while unchanged  OK")
 
 
+def test_users_table_names():
+    with Server({"users": USERS}) as srv:
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        st, _, page = b.get("/settings")
+        assert st == 200
+        i = page.index('<span id="user-2-name">view</span>')
+        row = page[i:page.index("</tr>", i)]
+        assert 'aria-label="Role of view"' in row, row
+        assert row.count('aria-describedby="user-2-name"') == 3, "Set, Sign out, Delete"
+    print("users table: the role selector and the row buttons name their user  OK")
+
+
 def main():
     test_deleted_mapping_log()
     test_error_texts()
     test_notices()
     test_unchanged_panels()
+    test_users_table_names()
     print("\nPASS: dashboard request answers")
 
 

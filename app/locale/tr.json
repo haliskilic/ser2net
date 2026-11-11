@@ -865,5 +865,8 @@
   "“{0}” saved on {1}.": "“{0}” {1} üzerinde kaydedildi.",
   "“{0}” started on {1}.": "“{0}” {1} üzerinde başlatıldı.",
   "“{0}” stopped on {1}.": "“{0}” {1} üzerinde durduruldu.",
-  "“{0}” restarted on {1}.": "“{0}” {1} üzerinde yeniden başlatıldı."
+  "“{0}” restarted on {1}.": "“{0}” {1} üzerinde yeniden başlatıldı.",
+  "Terminal input": "Terminal girişi",
+  "Shift+Tab leaves the console": "Shift+Tab konsoldan çıkar",
+  "Role of %(user)s": "%(user)s kullanıcısının rolü"
 }
