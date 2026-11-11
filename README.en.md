@@ -611,6 +611,11 @@ is no account at all; later starts ignore it.
   `SER2NET_WINDOWS_LOOP=proactor` (for the service: a system environment variable) switches
   to the proactor loop, which has no such limit; it is new, so test serial timing (e.g.
   Modbus RTU) with it before relying on it. The start-up log names the loop in use.
+- **Serial writes on Windows** wait for the device, as on Linux: at most 8 KiB per port are
+  handed to the driver at a time, so a fast network sender is slowed to the serial line's
+  speed instead of filling the driver's queue. Should a serial driver misbehave with this,
+  `SER2NET_WINDOWS_SERIAL=pyserial` (for the service: a system environment variable) goes
+  back to how pyserial writes (no pacing); please report the adapter and driver.
 
 ---
 

@@ -15,6 +15,17 @@ whole process any more). Checked here, without a serial device:
     to while termios refuses pyserial 3.5's BOTHER placeholder, as glibc 2.42+ does for
     the standalone binary; a setting the OS refuses is a readable SerialException (Linux
     PTY, rates read back with TCGETS2);
+  - Windows writes (serial_compat.OverlappedWrites, driven through a stand-in for
+    pyserial's serial.win32 on any OS): each write has its own OVERLAPPED and keeps its data
+    until it completed, at most the write window in flight (then BlockingIOError); purged
+    writes count as done, a failed one is raised by the next write, a close cancels and
+    waits for them (and never frees one the driver did not let go of);
+  - the transport's Windows branch (tests/_windows_transport.py, in a child process; off
+    Windows its timer-driven code is loaded as on Windows): drain() waits for the device,
+    a graceful close with data left completes, a failing port is closed once;
+  - Windows only (the windows-latest CI legs): WindowsSerial is the class ports are opened
+    with (SER2NET_WINDOWS_SERIAL=pyserial: pyserial's), and OverlappedWrites works against
+    a real overlapped handle (a named pipe nobody reads, then reads in order; a cancel);
   - a missing upstream member makes it fall back to upstream's transport, and versions
     other than the checked ones are named in a start-up warning;
   - the upstream code each override replaces or relies on is pinned by a hash of its
@@ -36,10 +47,12 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
 
 import serial
 import serial_asyncio_fast as saf
 
+from _fake_win32 import FakeWin32
 from app.engine import serial_compat
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -340,6 +353,169 @@ def test_custom_baud_rates_on_new_glibc():
           "readable SerialException  OK")
 
 
+# ------------------------------------------------------------------ Windows writes
+def test_overlapped_writes():
+    win32 = FakeWin32()
+    w = serial_compat.OverlappedWrites(win32, 7, window=1000)
+    first, second = bytes(range(200)) * 3, b"b" * 600
+    assert w.write(first) == 600 and w.write(second) == 400, "the window is 1000 bytes"
+    assert w.pending() == 1000
+    try:
+        w.write(b"c")
+    except BlockingIOError:
+        pass
+    else:
+        raise AssertionError("past the window a write must raise BlockingIOError")
+    sent = [x[1] for x in win32.writes]
+    assert sent[0] is first, "the data WriteFile got must be the object kept alive"
+    assert len({id(x[0]) for x in win32.writes}) == 2, "each write needs its own OVERLAPPED"
+    assert len({x[0].hEvent for x in win32.writes}) == 2, "... and its own event"
+    assert all(d is x for d, (_ov, x) in zip(sent, w._pending)), "kept until completed"
+    assert win32.complete(600) == 600 and w.pending() == 400
+    assert win32.writes[0][0].hEvent in win32.closed, "a completed write's event is closed"
+    assert w.write(b"d" * 700) == 600
+    win32.purge()  # an RFC 2217 purge, reset_output_buffer(): the writes are aborted
+    assert w.pending() == 0, "purged writes count as done"
+    assert w.write(b"e" * 10) == 10
+    win32.fail_next()
+    try:
+        w.write(b"f")
+    except serial.SerialException as e:
+        assert "write failed" in str(e), e
+    else:
+        raise AssertionError("a write that failed must be raised by the next one")
+    assert w.write(b"g") == 1, "only once"
+    for code, raised in ((win32.ERROR_INVALID_USER_BUFFER, BlockingIOError),
+                         (win32.ERROR_OPERATION_ABORTED, BlockingIOError),
+                         (5, serial.SerialException)):
+        win32.refuse = code
+        try:
+            w.write(b"h")
+        except raised:
+            pass
+        else:
+            raise AssertionError(f"WriteFile error {code} must raise {raised.__name__}")
+        assert max(win32.closed) == max(win32.signaled), "the unused event must be closed"
+    win32.refuse = None
+    print("OverlappedWrites: own OVERLAPPED / event / data per write, at most the window in "
+          "flight, purged writes done, a failed one raised once, refusals mapped  OK")
+
+
+def test_overlapped_writes_cancel():
+    win32 = FakeWin32()
+    w = serial_compat.OverlappedWrites(win32, 7, window=1000)
+    w.write(b"a" * 300)
+    w.write(b"b" * 300)
+    w.cancel(wait_s=0.5)
+    assert w.pending() == 0 and not win32.pending()
+    assert all(x[0].hEvent in win32.closed for x in win32.writes)
+    abandoned = len(serial_compat._ABANDONED)
+    win32.ignore_cancel = True  # a driver that does not let go of a write
+    w.write(b"c" * 300)
+    t0 = time.monotonic()
+    w.cancel(wait_s=0.2)
+    assert time.monotonic() - t0 < 1.0
+    assert len(serial_compat._ABANDONED) == abandoned + 1, "an unfinished write must be kept"
+    assert win32.writes[-1][0].hEvent not in win32.closed
+    serial_compat._ABANDONED.pop()
+    print("OverlappedWrites: a close cancels the writes in flight and waits for them; one "
+          "the driver keeps is never freed  OK")
+
+
+def test_windows_transport_branch():
+    import subprocess
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_windows_transport.py")
+    out = subprocess.run([sys.executable, helper], capture_output=True, text=True, timeout=120)
+    sys.stdout.write("".join(f"  {line}\n" for line in out.stdout.splitlines()))
+    assert out.returncode == 0, out.stdout[-2000:] + out.stderr[-3000:]
+    print("the transport's Windows branch passes (tests/_windows_transport.py)  OK")
+
+
+def test_windows_serial_class():
+    if os.name != "nt":
+        print("SKIP (part): WindowsSerial / a real overlapped handle are checked on Windows "
+              "(CI windows-latest)")
+        return
+    assert serial_compat.serial_class() is serial_compat.WindowsSerial
+    with mock.patch.dict(os.environ, {serial_compat.WINDOWS_SERIAL_ENV: "pyserial"}):
+        assert serial_compat.serial_class() is serial.Serial
+    port = serial_compat.WindowsSerial()
+    try:
+        port.write(b"x")
+    except serial.PortNotOpenError:
+        pass
+    else:
+        raise AssertionError("a closed port must refuse a write")
+    try:
+        serial_compat.WindowsSerial("COM250")
+    except serial.SerialException:
+        pass
+    else:
+        raise AssertionError("COM250 should not exist on a CI runner")
+    print("WindowsSerial is the class ports are opened with; SER2NET_WINDOWS_SERIAL=pyserial "
+          "keeps pyserial's  OK")
+    _overlapped_writes_on_a_pipe()
+
+
+def _overlapped_writes_on_a_pipe():
+    """OverlappedWrites with the real serial.win32, on the write end of a named pipe opened
+    for overlapped I/O (as a COM port is): writes pend while nobody reads, the window fills,
+    the reader gets every byte in order, and a cancel ends the writes still in flight."""
+    import ctypes
+    from ctypes import wintypes
+
+    from serial import win32
+    k32 = ctypes.WinDLL("kernel32")
+    create_pipe = k32.CreateNamedPipeW
+    create_pipe.restype = wintypes.HANDLE
+    create_pipe.argtypes = [wintypes.LPCWSTR] + [wintypes.DWORD] * 6 + [ctypes.c_void_p]
+    name = rf"\\.\pipe\ser2net-test-{os.getpid()}"
+    outbound, overlapped_io = 0x00000002, 0x40000000
+    server = create_pipe(name, outbound | overlapped_io, 0, 1, 4096, 4096, 0, None)
+    assert server and server != win32.INVALID_HANDLE_VALUE, ctypes.WinError()
+    client = win32.CreateFile(name, win32.GENERIC_READ, 0, None, win32.OPEN_EXISTING, 0, 0)
+    assert client != win32.INVALID_HANDLE_VALUE, ctypes.WinError()
+    try:
+        w = serial_compat.OverlappedWrites(win32, server, window=32 * 1024)
+        sent = bytearray()
+        for i in range(64):
+            chunk = bytes([i]) * 2048
+            try:
+                n = w.write(chunk)
+            except BlockingIOError:
+                break
+            sent += chunk[:n]
+        else:
+            raise AssertionError("nobody reads the pipe: the window must fill")
+        assert w.pending() > 0, "writes to a pipe nobody reads must still be in flight"
+        got = bytearray()
+        buf = ctypes.create_string_buffer(65536)
+        n = wintypes.DWORD()
+        while len(got) < len(sent):
+            assert win32.ReadFile(client, buf, len(buf), ctypes.byref(n), None), ctypes.WinError()
+            got += buf.raw[:n.value]
+        assert got == sent, "the reader must get every byte, in order"
+        for _ in range(100):
+            if not w.pending():
+                break
+            time.sleep(0.01)
+        assert w.pending() == 0, "every write has completed once it was read"
+        for _ in range(64):
+            try:
+                w.write(b"z" * 2048)
+            except BlockingIOError:
+                break
+        abandoned = len(serial_compat._ABANDONED)
+        w.cancel()
+        assert w.pending() == 0 and len(serial_compat._ABANDONED) == abandoned, \
+            "a cancelled write on a pipe must end within the wait"
+    finally:
+        win32.CloseHandle(client)
+        win32.CloseHandle(server)
+    print("OverlappedWrites on a real overlapped handle: pending writes, the window, every "
+          "byte in order, a cancel  OK")
+
+
 # ------------------------------------------------------------------ upstream pins
 def upstream_functions(module_name):
     """{qualified name: source} of every function in ``module_name``'s file, read with ast
@@ -394,6 +570,19 @@ PINS = {
         "SerialTransport._abort": "1e1a86cd965c2613",
         "SerialTransport._call_connection_lost": "7e1a4f40149e1a9b",
         "connection_for_serial": "f03b285bf68e39db",
+        'SerialTransport._poll_write[os.name == "nt"]': "dc4e21ed43e1ca26",
+        'SerialTransport._ensure_writer[os.name == "nt"]': "a60d57465e66d3ab",
+        'SerialTransport._remove_writer[os.name == "nt"]': "aaaedc0e83fb6660",
+    },
+    "serial.serialwin32": {             # WindowsSerial
+        "Serial.__init__": "5cd96869f9600813",
+        "Serial.open": "68bea852df972437",
+        "Serial.write": "2d85a095d12f6e57",
+        "Serial._close": "eeca74a1fce8029d",
+        "Serial.cancel_write": "1d765c0bbdf0a5dd",
+        "Serial.flush": "aae40f7c68346341",
+        "Serial.out_waiting": "c25a96fb088c0035",
+        "Serial.reset_output_buffer": "8268fcf03953e692",
     },
 }
 
@@ -421,5 +610,9 @@ if __name__ == "__main__":
     test_requirements_pin_the_checked_versions()
     test_eagain_keeps_the_data_posix()
     test_custom_baud_rates_on_new_glibc()
+    test_overlapped_writes()
+    test_overlapped_writes_cancel()
+    test_windows_transport_branch()
+    test_windows_serial_class()
     test_upstream_pins()
     print("\nPASS: serial_compat's transport and the upstream code it builds on")

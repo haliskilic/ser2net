@@ -630,6 +630,11 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   değişkeni) böyle bir sınırı olmayan proactor loop'una geçirir; yeni olduğundan,
   güvenmeden önce seri zamanlamayı (ör. Modbus RTU) onunla deneyin. Kullanılan loop açılış
   log'unda yazar.
+- **Windows'ta seri yazmalar** Linux'taki gibi cihazı bekler: port başına sürücüye bir anda en
+  fazla 8 KiB verilir, böylece ağdan hızlı gönderen biri sürücünün kuyruğunu doldurmak yerine
+  seri hattın hızına yavaşlatılır. Bir seri sürücü bununla sorun çıkarırsa
+  `SER2NET_WINDOWS_SERIAL=pyserial` (servis için: sistem ortam değişkeni) pyserial'ın kendi
+  yazma biçimine (hız denetimi olmadan) döner; lütfen adaptörü ve sürücüyü bildirin.
 
 ---
 
