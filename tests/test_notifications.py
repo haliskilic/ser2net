@@ -3,7 +3,9 @@
 Checks:
   * status changes become the right events (device lost / back, start failed,
     clients connected / disconnected), none at start-up;
-  * only enabled events are sent, repeats are suppressed for repeat_s;
+  * only enabled events are sent, repeats are suppressed for repeat_s; a client that
+    reconnects (another port) is the same client for that; what is remembered for it
+    expires after repeat_s and is bounded (MAX_KEYS);
   * payload shape per webhook format (JSON, Slack, Teams card, Discord, Telegram);
   * real delivery to a local webhook and a local SMTP server; a failing endpoint is
     reported, not raised;
@@ -93,12 +95,55 @@ def test_events():
                    "clients": [{"peer": "10.0.0.5:5000"}]}}
     ev = notify.status_events(prev, lost, names)
     assert ("device_lost", "m1", "PLC", "device removed") in ev, ev
-    assert ("client_connected", "m1:10.0.0.5:5000", "PLC", "10.0.0.5:5000") in ev, ev
+    assert ("client_connected", "m1:10.0.0.5", "PLC", "10.0.0.5:5000") in ev, ev
     ev = notify.status_events(notify.snapshot(lost), running, names)
     assert [e[0] for e in ev] == ["device_back", "client_disconnected"], ev
     err = {"m1": {"state": "error", "last_error": "address in use", "clients": []}}
     assert notify.status_events(prev, err, names)[0][:1] == ("start_failed",)
     print("status changes -> device_lost / device_back / start_failed / client events  OK")
+
+
+def test_repeat_keys():
+    import time
+    from types import SimpleNamespace
+
+    s = NotificationSettings.from_dict({
+        "enabled": True, "events": ["client_connected", "client_disconnected", "login_failed"],
+        "repeat_s": 300, "webhook_url": "http://127.0.0.1:9/hook"})
+    st = SimpleNamespace(config=SimpleNamespace(notifications=s, mappings=[], admin_ui=AdminUI()),
+                         log=lambda m: None)
+    n = notify.Notifier(st)
+    names = {"m1": "PLC"}
+
+    def clients(*peers):
+        return {"m1": {"state": "running", "clients": [{"peer": p} for p in peers]}}
+
+    prev, sent = notify.snapshot(clients()), []
+    for port in range(5000, 5020):  # a client reconnecting from a new port each poll
+        now = clients(f"10.0.0.5:{port}", "2001:db8::7:6000")
+        sent += [ev[:2] for ev in notify.status_events(prev, now, names) if n.emit(*ev)]
+        prev = notify.snapshot(now)
+    assert sent == [("client_connected", "m1:10.0.0.5"), ("client_connected", "m1:2001:db8::7"),
+                    ("client_disconnected", "m1:10.0.0.5")], sent
+    assert len(n._last) == 3
+    # what can't hold a repeat back any more is forgotten (the watcher does it every poll)
+    s.repeat_s = 0
+    n._forget_expired()
+    assert not n._last
+    s.repeat_s = 0.3
+    assert n.emit("login_failed", "10.9.0.1", "", "x")
+    time.sleep(0.2)
+    assert n.emit("login_failed", "10.9.0.2", "", "x")
+    assert not n.emit("login_failed", "10.9.0.1", "", "x"), "a repeat doesn't renew it"
+    time.sleep(0.15)
+    n._forget_expired()
+    assert list(n._last) == [("login_failed", "10.9.0.2")], n._last
+    s.repeat_s = 300
+    for i in range(notify.MAX_KEYS + 50):
+        n.emit("login_failed", f"10.{i // 65536}.{i // 256 % 256}.{i % 256}", "", "x")
+    assert len(n._last) == notify.MAX_KEYS and ("login_failed", "10.9.0.2") not in n._last
+    print("repeat interval: a reconnecting client (new port) is one client; what is "
+          f"remembered expires after repeat_s, at most {notify.MAX_KEYS} keys  OK")
 
 
 def test_formats_and_validation():
@@ -202,6 +247,7 @@ def test_settings_ui(hook_port):
 
 def main():
     test_events()
+    test_repeat_keys()
     test_formats_and_validation()
     hook = serve(HTTPServer, Hook)
     smtp = serve(socketserver.ThreadingTCPServer, Smtp)
