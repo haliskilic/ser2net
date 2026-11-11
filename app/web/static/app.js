@@ -49,12 +49,14 @@ document.addEventListener("click", function (e) {
 
 // 1b) Surface server-side validation errors. htmx does NOT swap non-2xx responses
 //     by default, so a 400 from a form post (e.g. an invalid mapping) would silently
-//     do nothing — the user never sees why Save failed. For 400/422 (validation), let
-//     the re-rendered form fragment (with its error banner) swap into the panel.
-//     401/403 (auth/CSRF) are left as errors so they don't render a fragment.
+//     do nothing — the user never sees why Save failed. A 400/422 that is a
+//     re-rendered form (HTML, with its error banner) swaps into its panel. Any other
+//     answer — a plain-text 400 (Copy, bulk actions), 401, 403, 5xx — stays an
+//     error, and the feedback area (7) shows it.
 document.addEventListener("htmx:beforeSwap", function (e) {
-  var status = e.detail.xhr ? e.detail.xhr.status : 0;
-  if (status === 400 || status === 422) {
+  var xhr = e.detail.xhr, status = xhr ? xhr.status : 0;
+  if ((status === 400 || status === 422) &&
+      /^text\/html/i.test(xhr.getResponseHeader("Content-Type") || "")) {
     e.detail.shouldSwap = true;
     e.detail.isError = false;
   }
@@ -326,7 +328,9 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     if (!b) return;
     if (b.hasAttribute("data-bulk-clear")) { selected.clear(); apply(); return; }
     if (!selected.size || !window.htmx) return;
-    htmx.ajax("POST", "/api/mappings/bulk", { swap: "none", values: {
+    // the button is the source: its hx-disabled-elt holds a second click off while the
+    // request runs, and the feedback area (7) gets the answer
+    htmx.ajax("POST", "/api/mappings/bulk", { source: b, swap: "none", values: {
       action: b.getAttribute("data-bulk-action"), ids: Array.from(selected) } });
   });
 
@@ -359,3 +363,141 @@ document.addEventListener("visibilitychange", function () {
   if (!document.hidden && document.getElementById("cluster") && window.htmx)
     htmx.trigger(document.body, "refreshCluster");
 });
+
+// 7) Feedback: what an action did and why a request failed, in the two live regions of
+//    _shell.html — #ui-status (polite: the "X-Notice" header of a successful action)
+//    and #ui-alert (a failed request; the session ended; the server is unreachable).
+//    htmx shows nothing of a 4xx/5xx answer or a network error by itself. A server
+//    text goes in with textContent only, never as HTML. A panel that refreshes itself
+//    ("every Ns") is marked as not up to date while its refreshes fail, until the next
+//    answer that works (also a 204 "unchanged").
+//    The answers are taken from htmx:afterRequest, not htmx:responseError: when the
+//    element that asked was replaced meanwhile (a row button while the table
+//    refreshed), htmx sends afterRequest on to the nearest element still in the page,
+//    while responseError would go to the replaced one and be lost.
+var feedback = (function () {
+  var shown = {}, seq = 0;
+
+  function drop(key) {
+    var el = shown[key];
+    if (!el) return;
+    delete shown[key];
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // kind "ok" (status), "warn" or "error" (alert); link: {href, text, newTab}. The same
+  // text under the same key again changes nothing, so a refresh that keeps failing is
+  // announced once; a message without a key is always a new one. "ok" goes by itself.
+  function show(key, kind, text, link) {
+    var box = document.getElementById(kind === "ok" ? "ui-status" : "ui-alert");
+    if (!box || !text) return;
+    key = key || "n" + (++seq);
+    if (shown[key] && shown[key]._text === text) return;
+    drop(key);
+    var note = document.createElement("div");
+    note.className = "notice";
+    note._text = text;
+    note._key = key;
+    var banner = document.createElement("div");
+    banner.className = "banner " + (kind === "ok" ? "ok" : kind === "warn" ? "warn" : "error");
+    var msg = document.createElement("span");
+    msg.textContent = text;
+    banner.appendChild(msg);
+    if (link) {
+      var a = document.createElement("a");
+      a.href = link.href;
+      a.textContent = link.text;
+      if (link.newTab) { a.target = "_blank"; a.rel = "noopener"; }
+      banner.appendChild(document.createTextNode(" "));
+      banner.appendChild(a);
+    }
+    var x = document.createElement("button");
+    x.type = "button";
+    x.className = "link dismiss";
+    x.textContent = "×";
+    x.setAttribute("aria-label", tr("dismiss", "Dismiss"));
+    x.addEventListener("click", function () { drop(key); });
+    banner.appendChild(x);
+    note.appendChild(banner);
+    box.appendChild(note);
+    shown[key] = note;
+    while (box.children.length > 4) drop(box.firstChild._key);   // the newest few
+    if (kind === "ok") setTimeout(function () { if (shown[key] === note) drop(key); }, 6000);
+  }
+
+  return { show: show, drop: drop };
+})();
+
+(function () {
+  // the framework's own status texts (English, and saying no more than the status)
+  var STATUS_TEXTS = ["Bad Request", "Unauthorized", "Forbidden", "Not Found",
+    "Method Not Allowed", "Request Entity Too Large", "Content Too Large",
+    "Internal Server Error", "Bad Gateway", "Service Unavailable", "Gateway Timeout"];
+
+  // The server's message: its refusals (role, CSRF, sign-in to peers, a peer that
+  // didn't answer, validation) are plain text in the page's language. For anything
+  // else — JSON, a proxy's HTML error page, a bare status text — a translated one.
+  function errorText(xhr) {
+    var type = xhr.getResponseHeader("Content-Type") || "";
+    var body = (xhr.responseText || "").trim();
+    if (/^text\/plain/i.test(type) && body && body.length <= 2000 &&
+        STATUS_TEXTS.indexOf(body) === -1)
+      return body;
+    return xhr.status >= 500
+      ? tr("server_error", "Something went wrong on the server (HTTP {0}).", xhr.status)
+      : tr("failed", "That did not work (HTTP {0}).", xhr.status);
+  }
+
+  function polls(el) {
+    var t = el && el.getAttribute ? el.getAttribute("hx-trigger") : "";
+    return !!t && /\bevery\b/.test(t);
+  }
+  function pollKey(el) { return "poll " + (el.id || el.getAttribute("hx-get") || ""); }
+  function setStale(el, on) {
+    if (on) {
+      el.classList.add("stale");
+      el.setAttribute("data-stale", tr("stale", "not up to date"));
+    } else if (el.classList.contains("stale")) {
+      el.classList.remove("stale");
+      el.removeAttribute("data-stale");
+    }
+  }
+
+  // 401: the session ended (or was ended). Not a redirect: an open form would lose its
+  // unsaved changes. Signing in again (it keeps the CSRF cookie) brings the page back.
+  function sessionEnded() {
+    var here = location.pathname + location.search;
+    feedback.show("session", "error",
+                  tr("session_ended", "Your session has ended: this page is not up to date, and changes can’t be saved until you sign in again."),
+                  { href: "/login" + (here !== "/" ? "?next=" + encodeURIComponent(here) : ""),
+                    text: tr("sign_in", "Sign in") });
+  }
+
+  document.addEventListener("htmx:afterRequest", function (e) {
+    var d = e.detail, xhr = d.xhr, el = d.elt;
+    if (!xhr || !xhr.status) return;   // no answer: htmx:sendError (or an abort)
+    var poll = polls(el);
+    if (d.successful) {                // 2xx (204, 286 too) or a re-rendered form
+      feedback.drop("session");
+      feedback.drop("offline");
+      if (poll) { setStale(el, false); feedback.drop(pollKey(el)); }
+      var n = xhr.getResponseHeader("X-Notice");
+      if (n) {
+        try { n = JSON.parse(decodeURIComponent(n)); } catch (err) { n = null; }
+        if (n && n.text) feedback.show(null, n.kind === "warn" ? "warn" : "ok", String(n.text));
+      }
+      return;
+    }
+    if (poll) setStale(el, true);
+    if (xhr.status === 401) sessionEnded();
+    else feedback.show(poll ? pollKey(el) : null, "error", errorText(xhr));
+  });
+
+  // no answer at all: the server is down or the network is gone. The refreshes go on,
+  // and the first answer that works takes this away again.
+  document.addEventListener("htmx:sendError", function (e) {
+    var el = e.detail.elt;
+    if (polls(el)) setStale(el, true);
+    feedback.show("offline", "error", tr("offline", "The server can’t be reached: this page is not up to date. It updates again as soon as the server answers."));
+  });
+})();

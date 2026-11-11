@@ -75,10 +75,10 @@
           {# the peer by host + port only: the server looks up its address and scheme #}
           {% set peer = {"host": n.ip, "port": n.port, "mid": m.id} %}
           {% if m.enabled %}
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="stop")|tojson }}' hx-swap="none">{{ _("Stop") }}</button>
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="restart")|tojson }}' hx-swap="none">{{ _("Restart") }}</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="stop")|tojson }}' hx-swap="none" hx-disabled-elt="this">{{ _("Stop") }}</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="restart")|tojson }}' hx-swap="none" hx-disabled-elt="this">{{ _("Restart") }}</button>
           {% else %}
-            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="start")|tojson }}' hx-swap="none">{{ _("Start") }}</button>
+            <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="start")|tojson }}' hx-swap="none" hx-disabled-elt="this">{{ _("Start") }}</button>
           {% endif %}
           <button class="btn sm" hx-get="/api/cluster/peer-form?{{ peer|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
         </div></div>

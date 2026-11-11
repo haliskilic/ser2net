@@ -839,5 +839,11 @@
   "Automatic discovery": "Otomatik keşif",
   "An account named {0} here signs in another way (through the directory or SSO), so you can't sign in under that name like this. Ask an admin to delete that account first.": "Burada {0} adında başka bir yolla (dizin ya da SSO ile) giriş yapan bir hesap var; bu yüzden bu adla bu şekilde giriş yapamazsın. Bir admin'den önce o hesabı silmesini iste.",
   "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış.",
-  "This mapping no longer exists: it was deleted.": "Bu eşleme artık yok: silinmiş."
+  "This mapping no longer exists: it was deleted.": "Bu eşleme artık yok: silinmiş.",
+  "Dismiss": "Kapat",
+  "not up to date": "güncel değil",
+  "That did not work (HTTP {0}).": "Bu işlem yapılamadı (HTTP {0}).",
+  "Something went wrong on the server (HTTP {0}).": "Sunucuda bir hata oluştu (HTTP {0}).",
+  "The server can’t be reached: this page is not up to date. It updates again as soon as the server answers.": "Sunucuya ulaşılamıyor: bu sayfa güncel değil. Sunucu yanıt verir vermez yeniden güncellenir.",
+  "Your session has ended: this page is not up to date, and changes can’t be saved until you sign in again.": "Oturumun sona erdi: bu sayfa güncel değil ve yeniden giriş yapana kadar değişiklikler kaydedilemez."
 }

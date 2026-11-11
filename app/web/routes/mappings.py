@@ -206,8 +206,8 @@ def routes(ctx: Ctx) -> list:
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
         ok, name = await ops.apply_action(state, mid, action)
-        if not ok:
-            return PlainTextResponse(name, status_code=404)
+        if not ok:   # (ops answers in English: the REST API and the cluster peers use it too)
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
         state.log(f"mapping {action}: {name}")
         ctx.audit(request, f"mapping_{action}", name)
         return Response("", headers=TRIGGER)

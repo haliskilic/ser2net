@@ -58,10 +58,10 @@
           {% if can_edit %}
           <div class="btn-group">
             {% if m.enabled %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/stop" hx-swap="none">{{ _("Stop") }}</button>
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/restart" hx-swap="none">{{ _("Restart") }}</button>
+            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/stop" hx-swap="none" hx-disabled-elt="this">{{ _("Stop") }}</button>
+            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/restart" hx-swap="none" hx-disabled-elt="this">{{ _("Restart") }}</button>
             {% else %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/start" hx-swap="none">{{ _("Start") }}</button>
+            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/start" hx-swap="none" hx-disabled-elt="this">{{ _("Start") }}</button>
             {% endif %}
             <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/form" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
           </div>
@@ -71,9 +71,9 @@
             <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Monitor") }}</button>
             {% if can_edit and m.options.trace_both %}<button class="btn sm" hx-get="/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Trace") }}</button>{% endif %}
             {% if can_edit %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none">{{ _("Copy") }}</button>
+            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none" hx-disabled-elt="this">{{ _("Copy") }}</button>
             <button class="btn sm danger" hx-delete="/api/mappings/{{ m.id }}"
-                    hx-confirm="{{ _('Delete mapping “%(name)s”?', name=m.name) }}" hx-swap="none">{{ _("Delete") }}</button>
+                    hx-confirm="{{ _('Delete mapping “%(name)s”?', name=m.name) }}" hx-swap="none" hx-disabled-elt="this">{{ _("Delete") }}</button>
             {% endif %}
           </div>
         </div>

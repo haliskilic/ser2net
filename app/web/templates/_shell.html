@@ -24,4 +24,10 @@
 <main>
   {% block main %}{% endblock %}
 </main>
+{# what an action did and why a request failed (app.js "feedback"): live regions, so
+   screen readers announce what is put in them #}
+<div class="feedback">
+  <div id="ui-alert" role="alert" aria-atomic="false"></div>
+  <div id="ui-status" role="status" aria-atomic="false"></div>
+</div>
 {% endblock %}
