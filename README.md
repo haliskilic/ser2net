@@ -293,7 +293,7 @@ ardından `pip install --no-index --find-links vendor/wheels -r requirements-opt
 docker compose up -d        # önce docker-compose.yml'deki `devices:` ve `ports:` kısmını düzenleyin
 ```
 Compose olmadan [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) içindeki `docker run`
-komutunu kullanın (hazır imaj, `--restart unless-stopped`, eşleme portları,
+komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme portları,
 `/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (ya da `:2.8`, `:2.8.1`); `docker-compose.yml` bunu kullanır.
@@ -594,9 +594,11 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 ## ⚙️ Servis olarak çalıştırma
 
 - **Docker:** resmi `Dockerfile` + `docker-compose.yml` (bkz. yukarısı ve
-  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. Düz
-  `docker run` ile çalıştırıyorsanız `--restart unless-stopped` ekleyin (var olan bir
-  container için: `docker update --restart unless-stopped ser2net`).
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `init: true` ve
+  `stop_grace_period: 30s` (durdurma isteği ser2net'e ulaşır, ser2net bu süre içinde
+  kapanır), `/data` volume. Düz `docker run` ile çalıştırıyorsanız
+  `--restart unless-stopped --init --stop-timeout 30` ekleyin (var olan bir container için:
+  `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
   **root ile çalıştırmayın.**
