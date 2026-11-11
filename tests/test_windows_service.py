@@ -8,9 +8,12 @@ Portable part (any OS):
     thread — stops a running server cleanly.
 Windows part (SER2NET_SERVICE_TESTS=1, as Administrator; CI runs it): install a
 service on a throwaway data directory, wait until the UI answers, set the admin's
-password with --set-password while it runs (the service applies it), kill the process
-and see the SCM restart it, stop it (clean shutdown in the log), remove it. Uses
-SER2NET_STANDALONE_BIN when set (the frozen exe), else python + ser2net.py.
+password with --set-password while it runs (the service applies it; the request folder
+leaves SYSTEM read and delete, and no other account an entry), kill the process
+and see the SCM restart it, stop it (clean shutdown in the log), set the password again
+while it is stopped (the data directory stays SYSTEM's and Administrators' only), start
+it with that password, remove it. Uses SER2NET_STANDALONE_BIN when set (the frozen exe),
+else python + ser2net.py.
 
 Run: python3 tests/test_windows_service.py
 """
@@ -131,6 +134,30 @@ def test_acl_decision_table():
     assert not w.foreign_owner(user, user) and w.foreign_owner("S-1-5-21-1-2-3-1002", user)
     print("ACL decision table: inherit-only/CREATOR OWNER skipped, owners and the installer's "
           "own grant counted, Program Files passes, ancestors judged on rename rights  OK")
+
+    # admin_only(): what lock_down_dir() leaves as it is. The data directory install()
+    # hardens, and what an elevated command creates in it — admin-requests/ inherits it
+    # (Python before 3.12.4 ignores mkdir's mode on Windows) or gets mkdir(0o700)'s own
+    # protected ACL (SYSTEM, Administrators, OWNER RIGHTS): SYSTEM keeps full control of
+    # the request files either way, so the service can read and delete them
+    owner_rights = "S-1-3-4"
+    data_dir = [(system, full, True, oi_ci), (admins, full, True, oi_ci)]
+    inherited = [(sid, mask, True, inh | oi_ci) for sid, mask, _a, _f in data_dir]
+    mkdir_700 = data_dir + [(owner_rights, full, True, oi_ci)]
+    for aces in (data_dir, inherited, mkdir_700):
+        assert w.admin_only(admins, aces) and w.admin_only(system, aces), aces
+        assert any(sid == system and mask & 0x1 and mask & w._DELETE for sid, mask, *_r in aces)
+    # ... but not with lock_down_dir()'s own grant, a user as owner (who may rewrite the
+    # ACL), anyone else able to read it, or a NULL DACL (read_security: Everyone, all)
+    assert not w.admin_only(admins, data_dir + [(user, full, True, oi_ci)])
+    assert not w.admin_only(user, data_dir)
+    assert not w.admin_only(admins, data_dir + [(users, rx, True, inh | oi_ci)])
+    assert not w.admin_only(admins, [(everyone, w.GENERIC_ALL, True, 0)])
+    # a user's own data directory (lock_down_dir's ACL, or ProgramData's defaults)
+    assert not w.admin_only(user, [(user, full, True, oi_ci)] + data_dir)
+    print("admin_only(): a hardened data directory and the request folder an elevated "
+          "command makes in it (SYSTEM: read + delete); a user's grant, ownership or read "
+          "access is not  OK")
 
 
 def test_registered_command_read_back():
@@ -522,6 +549,33 @@ def wait_for(cond, timeout):
     return False
 
 
+def no_other_entries(path):
+    """No entry that allows an account other than SYSTEM / Administrators anything (the
+    CREATOR OWNER-style stand-ins aside), inherit-only ones included."""
+    sec = winservice.read_security(path)
+    return sec is not None and all(sid in winservice.SAFE_SIDS or sid.startswith("S-1-3-")
+                                   or not allow for sid, _mask, allow, _flags in sec[1])
+
+
+def system_rights(path):
+    """What SYSTEM's own (not inherit-only) entries allow on `path`."""
+    sec = winservice.read_security(path)
+    rights = 0
+    for sid, mask, allow, flags in (sec[1] if sec else []):
+        if sid == winservice.SYSTEM_SID and allow and not flags & winservice.INHERIT_ONLY_ACE:
+            rights |= mask
+    return rights
+
+
+def read_security_text(path):
+    sec = winservice.read_security(path)
+    if sec is None:
+        return "unreadable"
+    owner, aces = sec
+    return f"owner {winservice.sid_name(owner)}: " + ", ".join(
+        f"{winservice.sid_name(sid)} {mask:#x}{'' if allow else ' deny'}" for sid, mask, allow, _f in aces)
+
+
 def test_real_service():
     if not WINDOWS or os.environ.get("SER2NET_SERVICE_TESTS") != "1":
         print("SKIP real Windows service test (Windows + Administrator + SER2NET_SERVICE_TESTS=1)")
@@ -559,7 +613,14 @@ def test_real_service():
                            input="svc-pass-2\n", capture_output=True, text=True, timeout=120)
         assert p.returncode == 0 and "done by the running ser2net" in p.stdout, p.stdout + p.stderr
         Browser(f"http://127.0.0.1:{port}").login("admin", "svc-pass-2")
-        print("--set-password while the service runs: the service applies it at once  OK")
+        # the request folder the (elevated) command made: SYSTEM may read and delete what
+        # is in it, no other account has an entry (its owner is whatever the token gives)
+        requests = os.path.join(data, "admin-requests")
+        assert no_other_entries(requests) and system_rights(requests) & 0x10001 == 0x10001, \
+            read_security_text(requests)
+        assert not os.listdir(requests), os.listdir(requests)  # taken and answered
+        print("--set-password while the service runs: the service applies it at once; only "
+              "SYSTEM and Administrators have entries on the request folder  OK")
 
         # re-running --install-service while it runs upgrades it in place (stops it first,
         # keeps its name and — without --data-dir, as documented — the data directory it
@@ -598,6 +659,25 @@ def test_real_service():
         with open(os.path.join(data, "all.log"), encoding="utf-8") as fh:
             assert "shutting down — stopping all mappings" in fh.read(), "no clean shutdown"
         print("sc stop: clean shutdown (mappings stopped, logged)  OK")
+
+        # stopped: the command changes config.json itself, and the data directory stays
+        # SYSTEM's and Administrators' only (no grant for the account that ran it)
+        p = subprocess.run(base + ["--data-dir", data, "--set-password", "admin"],
+                           input="svc-pass-3\n", capture_output=True, text=True, timeout=120)
+        assert p.returncode == 0 and "new password set" in p.stdout, p.stdout + p.stderr
+        assert "done by the running ser2net" not in p.stdout, p.stdout
+        sec = winservice.read_security(data)
+        assert sec is not None and winservice.admin_only(*sec), read_security_text(data)
+        for path in (os.path.join(data, "config.json"), os.path.join(data, "backups")):
+            assert no_other_entries(path), (path, read_security_text(path))
+        r = sc("start", name)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert wait_for(lambda: healthy(port), 60), "the service did not start again"
+        Browser(f"http://127.0.0.1:{port}").login("admin", "svc-pass-3")
+        r = sc("stop", name)
+        assert wait_for(lambda: "STOPPED" in sc("query", name).stdout, 60), sc("query", name).stdout
+        print("--set-password while it is stopped: config.json changed, the data directory "
+              "still admin-only, the service starts with the new password  OK")
     finally:
         p = subprocess.run(base + ["--uninstall-service", "--service-name", name],
                            capture_output=True, text=True, timeout=120)
