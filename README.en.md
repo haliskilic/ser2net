@@ -284,7 +284,7 @@ Without compose, use the `docker run` command in
 [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) (the published image,
 `--restart unless-stopped`, the mapping ports, a `/dev/serial/by-id` device, log limits).
 Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(or `:2.8`, `:2.8.0`); `docker-compose.yml` uses it.
+(or `:2.8`, `:2.8.1`); `docker-compose.yml` uses it.
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
 `SER2NET_PORT` — the interactive picker can't run headless). Publish each mapping's port
 too (a new mapping gets 4001), or use the host network. A serial device's group is taken

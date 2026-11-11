@@ -1,8 +1,13 @@
 # ser2net — Roadmap
 
-> Current release: **v2.8.0**. CI is green across Linux + Windows × Python 3.10–3.13.
+> Current release: **v2.8.1**. CI is green across Linux + Windows × Python 3.10–3.13.
 
 ## Shipped
+
+> Milestone labels vs. tags: v1.0–v2.0 are their tags; v2.1a is `v2.1`; v2.1b, v2.2 and v2.3
+> shipped together as `v2.3.0` (the `v2.2` tag is Python 3.10 support and the offline
+> bundle); v2.4 is `v2.4.0`; v2.6 is `v2.6.0` plus `v2.6.1` (remote edit); later labels
+> match their `vX.Y.Z` tags.
 
 ### v1.0 — MVP
 - Serial↔TCP server bridge: raw / telnet / rfc2217
@@ -168,6 +173,27 @@
   Modbus write (FC 5/6/15/16) + Sparkplug B, classic `ser2net.yaml` import.
 - **Turkish UI (#32):** the web UI in Turkish and English (reverses the v2.3 decision); logs,
   audit log and REST API stay English.
+
+### v2.8.1 — security release (PRs [#42](https://github.com/haliskilic/ser2net/pull/42)–[#46](https://github.com/haliskilic/ser2net/pull/46))
+- **Engine inputs (#42):** mapping ids validated wherever they enter (completes 2.8.0's trace
+  confinement), serial ports must be devices, read-only enforced for Modbus masters and
+  MQTT / Sparkplug, single-point MQTT writes, bounded UDP queue and RFC 2217 subnegotiations,
+  the Modbus gateway reconnects; file-descriptor and connection limits (admin UI deadlines and
+  caps, allow-list before the TLS handshake, select-free serial reads).
+- **Fleet & import (#43):** signed cluster requests and replies (raw key only for older nodes,
+  switchable), peers called directly at their known address, planned key changes, a new
+  identity for copied installs; the classic ser2net import keeps protections or imports
+  disabled.
+- **Accounts (#44):** LDAPS / StartTLS certificate checks, whole-name group matching, no SSO
+  takeover of local or other-method accounts, OIDC hardening (PKCE, https-only), a guarded
+  first-run setup, server-side sign-out, credential-safe backup restore, account recovery from
+  the command line.
+- **Access (#45):** viewers see device output only and no traces; a fail-closed API token role;
+  request body limits and bounded failed-sign-in records; one route access matrix in CI.
+- **Distribution (#46):** the Windows service in an admin-only location with in-place upgrades
+  and an OpenSSL 3.5 build; one instance per data directory; Docker starts despite a rejected
+  setting and keeps mounted folders' owners; the standalone executables have the Turkish UI
+  again and survive temp cleaners.
 
 ---
 
