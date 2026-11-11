@@ -8,7 +8,8 @@ bus), reads the slave's RTU reply, and returns it to that master as Modbus/TCP â
 echoing the transaction id so concurrent masters don't get crossed wires. A request
 whose slave doesn't answer in time is answered with exception 0x0B (gateway target
 failed to respond); while the serial port is down, every request is answered with 0x0A
-(gateway path unavailable) at once. A broadcast (unit 0) write goes on the bus and, after
+(gateway path unavailable) at once, and so is one that was on the bus when the port went
+away. A broadcast (unit 0) write goes on the bus and, after
 the turnaround delay, gets the echo a slave would have sent; a read of unit 0 can't get a
 reply and is answered 0x0B at once, without touching the bus.
 
@@ -274,8 +275,10 @@ class ModbusGatewayRunner:
                         return reply
                     return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
                 rpdu = await self._read_reply(reader, unit, pdu, sent)
-            except (asyncio.TimeoutError, ConnectionError, OSError):
+            except asyncio.TimeoutError:  # (an OSError too, since Python 3.11)
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
+            except (ConnectionError, OSError):  # the port went away meanwhile
+                return modbus.exception_pdu(function, modbus.GATEWAY_PATH_UNAVAILABLE)
             if rpdu is None:  # no reply from that slave in time
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
             return rpdu

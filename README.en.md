@@ -83,7 +83,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   response timeout), with the echo a slave would send; a read of unit 0 gets `0x0B` at once
   without reaching the bus.
   If the serial port goes away (a USB adapter unplugged), masters get `0x0A` (gateway path
-  unavailable) at once meanwhile and the port is reopened like any mapping's (state
+  unavailable) at once meanwhile (so does a request waiting for its reply at that moment)
+  and the port is reopened like any mapping's (state
   `reconnecting`, device lost/back notifications). Masters are admitted like other
   clients (allowed IPs, max connections, priority IPs, kick-old-user); a **read-only**
   gateway answers every request that is not a read (writes such as FC5/6/15/16/22/23,

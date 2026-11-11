@@ -86,8 +86,8 @@ düzenlemeye gerek yok.
   yazma (FC5/6/15/16/22) hatta gönderilir ve 200 ms'lik dönüş beklemesinden (en çok yanıt
   süresi kadar) sonra bir slave'in vereceği yankıyla yanıtlanır; unit 0'a okuma hatta hiç
   gitmeden hemen `0x0B` alır. Seri port kaybolursa (USB
-  adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır ve
-  port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
+  adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır (o
+  anda yanıt bekleyen istek de) ve port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
   kayboldu/geri geldi bildirimleri).
   Master'lar diğer istemciler gibi kabul edilir (izinli IP'ler, max bağlantı, öncelikli
   IP'ler, eski-kullanıcıyı-at); **salt okunur** bir gateway okuma olmayan her isteği
