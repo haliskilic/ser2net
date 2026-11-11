@@ -836,5 +836,6 @@
   "Off by default: an account that stops signing in stays until you delete it. With a number of days, LDAP / OIDC accounts not signed in for that long are removed at once and then every hour, each logged and audited — never admins or local accounts; they come back at their next sign-in while the directory still gives them a role.": "Varsayılan olarak kapalı: giriş yapmayı bırakan bir hesap, sen silene kadar kalır. Bir gün sayısı girersen o kadar süredir giriş yapmamış LDAP / OIDC hesapları hemen ve sonra her saat kaldırılır, her biri loga ve denetim kaydına yazılır — admin'ler ve yerel hesaplar asla kaldırılmaz; dizin onlara hâlâ bir rol veriyorsa bir sonraki girişlerinde geri gelirler.",
   "Hex view: what the device sends, with timestamps.": "Hex görünümü: cihazın gönderdikleri, zaman damgasıyla.",
   "Legacy authentication": "Eski kimlik doğrulama",
-  "Automatic discovery": "Otomatik keşif"
+  "Automatic discovery": "Otomatik keşif",
+  "An account named {0} here signs in another way (through the directory or SSO), so you can't sign in under that name like this. Ask an admin to delete that account first.": "Burada {0} adında başka bir yolla (dizin ya da SSO ile) giriş yapan bir hesap var; bu yüzden bu adla bu şekilde giriş yapamazsın. Bir admin'den önce o hesabı silmesini iste."
 }

@@ -148,40 +148,52 @@ def test_upsert_never_takes_a_local_account():
     """An LDAP/OIDC sign-in under the name of a local account — in any letter case,
     Turkish İ/ı too — is refused, and the local account stays exactly as it was (no
     source change, no role from the directory, no session bump), so the only admin
-    can't be lost."""
+    can't be lost. The same for an account of the other sign-in method: an LDAP and an
+    OIDC user of one name may be two people."""
     cfg = AppConfig.from_dict({"users": [
         {"username": "admin", "password_hash": "h", "role": "admin", "pwd_version": 7,
          "source": "local"},
         {"username": "ismail", "password_hash": "h2", "role": "operator", "pwd_version": 2,
          "source": "local"},
         {"username": "jdoe", "password_hash": "", "role": "viewer", "pwd_version": 3,
-         "source": "ldap"}]})
+         "source": "ldap"},
+        {"username": "carol", "password_hash": "", "role": "admin", "pwd_version": 5,
+         "source": "oidc"}]})
     before = [dataclasses.asdict(u) for u in cfg.users]
-    for name, source, local in (("admin", "oidc", "admin"), ("admin", "ldap", "admin"),
-                                ("ADMIN", "ldap", "admin"), ("Admin", "oidc", "admin"),
-                                ("İSMAİL", "ldap", "ismail"), ("Ismail", "oidc", "ismail")):
+    for name, source, owner in (("admin", "oidc", "local account 'admin'"),
+                                ("admin", "ldap", "local account 'admin'"),
+                                ("ADMIN", "ldap", "local account 'admin'"),
+                                ("Admin", "oidc", "local account 'admin'"),
+                                ("İSMAİL", "ldap", "local account 'ismail'"),
+                                ("Ismail", "oidc", "local account 'ismail'"),
+                                ("jdoe", "oidc", "LDAP account 'jdoe'"),
+                                ("JDoe", "oidc", "LDAP account 'jdoe'"),
+                                ("carol", "ldap", "OIDC account 'carol'"),
+                                ("Carol", "ldap", "OIDC account 'carol'")):
         try:
             cfg.upsert_external_user(name, "viewer", source)
         except AccountNameError as e:
-            assert f"the local account '{local}' has this name" in str(e), e
+            assert f"the {owner} has this name" in str(e), e
         else:
-            raise AssertionError(f"{source} sign-in as {name!r} took over a local account")
+            raise AssertionError(f"{source} sign-in as {name!r} took over the {owner}")
     assert [dataclasses.asdict(u) for u in cfg.users] == before
-    assert cfg.admin_count() == 1
+    assert cfg.admin_count() == 2
+    assert cfg.taken_name("jdoe", "ldap") is None and cfg.taken_name("carol", "oidc") is None
     # named(): every spelling, the exact one first; of one source if asked
     cfg.users.append(User(username="JDoe", source="ldap", role="viewer"))
     assert [u.username for u in cfg.named("JDOE")] == ["jdoe", "JDoe"]
     assert [u.username for u in cfg.named("JDoe")] == ["JDoe", "jdoe"]
     assert cfg.named("jdoe", "local") == [] and cfg.named("ADMIN", "local")[0].username == "admin"
     assert [u.username for u in cfg.named("İsmail", "local")] == ["ismail"]
-    print("upsert_external_user: never takes over a local account (any letter case)  OK")
+    print("upsert_external_user: never takes over a local account, nor one of the other "
+          "sign-in method (any letter case)  OK")
 
 
 def test_upsert_letter_case():
     """A directory compares user names without regard to letter case, so jdoe, JDoe and
     JDOE are one LDAP account: the one spelled as typed, else the first; the others
     (earlier versions made one per spelling) go, ending their sessions. OIDC names stay
-    exact, and an exact name of the other source is taken over as before."""
+    exact; a name of the other source is refused."""
     cfg = AppConfig.from_dict({"users": [
         {"username": "admin", "password_hash": "h", "role": "admin", "source": "local"},
         {"username": "jdoe", "role": "admin", "pwd_version": 3, "source": "ldap"},
@@ -199,8 +211,13 @@ def test_upsert_letter_case():
     assert cfg.upsert_external_user("ISIK", "viewer", "ldap").username == "ısık"   # Turkish I/ı
     alice = cfg.upsert_external_user("alice", "viewer", "oidc")      # OIDC: exact names
     assert alice.username == "alice" and cfg.get_user("Alice").pwd_version == 4
-    bob = cfg.upsert_external_user("bob", "operator", "ldap")        # the other source: as before
-    assert bob.source == "ldap" and bob.pwd_version == 3 and len(cfg.named("bob")) == 1
+    try:                                                             # the other source: refused
+        cfg.upsert_external_user("bob", "operator", "ldap")
+        raise AssertionError("an LDAP sign-in took over the OIDC account")
+    except AccountNameError as e:
+        assert "the OIDC account 'bob' has this name" in str(e), e
+    bob = cfg.get_user("bob")
+    assert (bob.source, bob.role, bob.pwd_version) == ("oidc", "viewer", 2) and len(cfg.named("bob")) == 1
     print("upsert_external_user: an LDAP name in any letter case is one account; OIDC exact  OK")
 
 

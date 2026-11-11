@@ -1147,6 +1147,11 @@ class User:
     pwd_version: int = 0
     source: str = "local"
 
+    @property
+    def kind(self) -> str:
+        """How the account signs in, for messages: 'local', 'LDAP' or 'OIDC'."""
+        return self.source if self.source == "local" else self.source.upper()
+
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "User":
         d = dict(d or {})
@@ -1338,18 +1343,28 @@ class AppConfig:
             return self.named(name, "ldap")
         return [u for u in self.users if u.source == source and u.username == name]
 
+    def taken_name(self, username: str, source: str) -> Optional[User]:
+        """The account, letter case aside, that keeps an LDAP/OIDC sign-in (`source`)
+        from having one under this name: a local account, else one of the other sign-in
+        method. None when there is none."""
+        other = "oidc" if source == "ldap" else "ldap"
+        found = self.named(username, "local") or self.named(username, other)
+        return found[0] if found else None
+
     def upsert_external_user(self, username: str, role: str, source: str) -> User:
         """Create or refresh a shadow account for an externally-authenticated user
         (LDAP/OIDC). Bumps pwd_version when the role or source changes.
         A sign-in through a directory or an identity provider never takes over, converts
-        or demotes a local account: raises AccountNameError when one has this name,
-        letter case aside, or when the name can't be an account's (external_name_problem;
-        `username` is spelled as external_name() spells it).
+        or demotes another kind of account — a local one, or one of the other sign-in
+        method (an LDAP and an OIDC user of one name may be two people): raises
+        AccountNameError when one has this name, letter case aside, or when the name
+        can't be an account's (external_name_problem; `username` is spelled as
+        external_name() spells it).
         LDAP: the account is the one spelled like `username`, else the first in another
         letter case (external_accounts); the person's other LDAP accounts — made by
         earlier versions for each spelling — are removed, which ends their sessions."""
-        if local := self.named(username, "local"):
-            raise AccountNameError(f"the local account {local[0].username!r} has this name")
+        if taken := self.taken_name(username, source):
+            raise AccountNameError(f"the {taken.kind} account {taken.username!r} has this name")
         if (why := external_name_problem(username)) is not None:
             raise AccountNameError(why)
         same = self.external_accounts(username, source)
