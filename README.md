@@ -72,7 +72,12 @@ düzenlemeye gerek yok.
   log'a yazılır.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
-  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
+  RTU yanıtı yanıt süresi içinde gelmezse `0x0B` (gateway-timeout) exception; süre, istek
+  hatta tamamen gönderildikten sonra başlar. Bir yanıt, başlığının söylediği uzunluğa
+  ulaşınca biter (başlığı uzunluk vermeyen FC8, FC43 ya da kullanıcı tanımlı fonksiyon
+  kodlarında hat 50 ms sessiz kalınca); USB adaptörlerin gecikmesi ya da Windows'un saati
+  yanıtları bölmez. Yanıt olmayan baytlar atılır; trace'te `ser>drop` olarak, konsolda ve
+  hex görünümünde görünür. Seri port kaybolursa (USB
   adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır ve
   port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
   kayboldu/geri geldi bildirimleri).
