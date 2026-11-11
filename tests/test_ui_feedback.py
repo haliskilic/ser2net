@@ -15,6 +15,9 @@ Checks:
   * Settings → Users: each role selector and row button names its user;
   * a refused sign-in (401, 429) and a refused first-run setup fill in the user name
     typed, not "admin" again; a plain sign-in page still offers "admin";
+  * a page request without a session goes to /login?next=<that page> (not for the
+    dashboard, a form post or /api); the sign-in leads back there, also after a failed
+    try and across the language switch; a next that is not a page here leads to "/";
 
 Run: python3 tests/test_ui_feedback.py
 """
@@ -231,6 +234,39 @@ def test_typed_username_kept():
     print("sign-in and setup: a refused form keeps the user name typed  OK")
 
 
+def test_back_after_sign_in():
+    with Server({"users": USERS, "mappings": [mapping("fb0000000006", "Eta")]}) as srv:
+        b = Browser(srv.base)
+        st, h, _ = b.get("/settings/audit?q=x&action=login")
+        assert st == 303 and h.get("Location") == \
+            "/login?next=%2Fsettings%2Faudit%3Fq%3Dx%26action%3Dlogin", h.get("Location")
+        assert b.get("/")[1].get("Location") == "/login", "the dashboard: a plain sign-in page"
+        st, h, _ = b.post("/settings/access", {"require_login": "on"})
+        assert st == 303 and h.get("Location") == "/login", "a form post: no way back to it"
+        assert b.get("/api/mappings/fb0000000006/log")[0] == 401
+
+        nxt = "/settings/audit?q=x&action=login"
+        st, _, page = b.get("/login?" + urllib.parse.urlencode({"next": nxt}))
+        hidden = '<input type="hidden" name="next" value="/settings/audit?q=x&amp;action=login">'
+        assert st == 200 and hidden in page, page[page.find("<form"):][:400]
+        lang = re.search(r'href="(/lang/tr\?next=[^"]+)"', page).group(1)
+        st, h, _ = b.get(lang.replace("&amp;", "&"))
+        assert h.get("Location") == "/login?" + urllib.parse.urlencode({"next": nxt}), \
+            ("the language switch keeps the way back", h.get("Location"))
+        st, _, page = b.post("/login", {"username": "admin", "password": "wrong", "next": nxt})
+        assert st == 401 and hidden in page, "a failed try keeps it"
+        st, h, _ = b.post("/login", {"username": "admin", "password": PW, "next": nxt})
+        assert st == 303 and h.get("Location") == nxt, h.get("Location")
+        for bad in ("//evil.example/", "/\\evil.example/", "https://evil.example/",
+                    "/\t/evil.example/", "javascript:alert(1)", "settings"):
+            c = Browser(srv.base)
+            st, _, page = c.get("/login?" + urllib.parse.urlencode({"next": bad}))
+            assert 'name="next"' not in page, bad
+            st, h, _ = c.post("/login", {"username": "admin", "password": PW, "next": bad})
+            assert st == 303 and h.get("Location") == "/", (bad, h.get("Location"))
+    print("sign-in: back to the page whose session ended (a local one only)  OK")
+
+
 def main():
     test_deleted_mapping_log()
     test_error_texts()
@@ -238,6 +274,7 @@ def main():
     test_unchanged_panels()
     test_users_table_names()
     test_typed_username_kept()
+    test_back_after_sign_in()
     print("\nPASS: dashboard request answers")
 
 

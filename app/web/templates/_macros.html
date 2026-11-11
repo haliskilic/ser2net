@@ -11,7 +11,8 @@
 {% macro lang_switch(request, lang) -%}
 <span class="lang-switch" role="group" aria-label="{{ _('Language') }}">
   {%- for code, label in languages.items() -%}
-  <a href="/lang/{{ code }}?next={{ request.url.path|urlencode }}" hreflang="{{ code }}" lang="{{ code }}" title="{{ label }}"{% if code == lang %} aria-current="true" class="on"{% endif %}>{{ code|upper }}</a>
+  {#- back to this page, its query included (the sign-in page's ?next=, the audit log's filters) #}
+  <a href="/lang/{{ code }}?next={{ (request.url.path ~ ('?' ~ request.url.query if request.url.query else ''))|urlencode }}" hreflang="{{ code }}" lang="{{ code }}" title="{{ label }}"{% if code == lang %} aria-current="true" class="on"{% endif %}>{{ code|upper }}</a>
   {%- endfor -%}
 </span>
 {%- endmacro %}

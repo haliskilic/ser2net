@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import urllib.parse
 
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
@@ -68,6 +69,17 @@ QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
 
 def _wants_json(request) -> bool:
     return request.url.path.startswith("/api")
+
+
+def _login_url(request) -> str:
+    """The sign-in page for a page request without a session: with ?next= (where the
+    sign-in leads back to) for a page other than the dashboard; a POST (a form whose
+    session ended) goes back to the dashboard."""
+    path = request.url.path
+    if request.method != "GET" or path == "/":
+        return "/login"
+    here = path + ("?" + request.url.query if request.url.query else "")
+    return "/login?next=" + urllib.parse.quote(here, safe="")
 
 
 class GuardMiddleware(BaseHTTPMiddleware):
@@ -129,7 +141,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 if user is None:
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
-                    return RedirectResponse("/login", status_code=303)
+                    return RedirectResponse(_login_url(request), status_code=303)
                 request.state.user = user  # available to handlers for role checks
 
         response = await call_next(request)

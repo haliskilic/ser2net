@@ -16,7 +16,7 @@ from ...config import (
 from ...engine import netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth
-from .common import Ctx, csrf_failed
+from .common import Ctx, csrf_failed, local_path
 from .forms import _password_problem, _username_problem
 
 OIDC_COOKIE = "ser2net_oidc"
@@ -30,8 +30,11 @@ def routes(ctx: Ctx) -> list:
     state, render, client_ip, set_session = ctx.state, ctx.render, ctx.client_ip, ctx.set_session
 
     async def login_get(request):
+        # ?next=: the page to go back to (GuardMiddleware sends a page request without a
+        # session here with it; the dashboard's "session ended" link too)
         return render(request, "login.html", error=None,
-                      oidc_enabled=state.config.oidc.enabled)
+                      oidc_enabled=state.config.oidc.enabled,
+                      next=local_path(request.query_params.get("next"), ""))
 
     def _typed(form) -> str:
         """The user name a refused sign-in form had, to fill it in again: a retry that
@@ -161,12 +164,13 @@ def routes(ctx: Ctx) -> list:
         return _("Your user name from the directory or the identity provider can’t be used "
                  "here; an admin can see why in all.log.")
 
-    def _refusal_page(request, source: str, message: str | None, username: str = ""):
+    def _refusal_page(request, source: str, message: str | None, username: str = "",
+                      nxt: str = ""):
         if source == "oidc":
             return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
                           oidc_error=message)
         return render(request, "login.html", status_code=403, error=message,
-                      oidc_enabled=state.config.oidc.enabled, username=username)
+                      oidc_enabled=state.config.oidc.enabled, username=username, next=nxt)
 
     async def _save_external(source: str, username: str, role: str) -> User | None:
         """The saved shadow account of an LDAP/OIDC user who signed in; None when a local
@@ -216,10 +220,12 @@ def routes(ctx: Ctx) -> list:
             return render(request, "login.html", status_code=502, error=None,
                           oidc_enabled=True, oidc_error=_("SSO provider is unreachable."))
         resp = RedirectResponse(url, status_code=303)
+        # "x": the page to go back to after the sign-in (?next=, as for a password sign-in)
+        payload = {"s": st, "n": nonce, "r": redirect_uri, "v": verifier}
+        if nxt := local_path(request.query_params.get("next"), ""):
+            payload["x"] = nxt
         resp.set_cookie(OIDC_COOKIE,
-                        auth.sign_payload(state.config.secret_key,
-                                          {"s": st, "n": nonce, "r": redirect_uri, "v": verifier},
-                                          ttl_seconds=600),
+                        auth.sign_payload(state.config.secret_key, payload, ttl_seconds=600),
                         max_age=600, httponly=True, samesite="lax",
                         secure=state.config.admin_ui.tls_enabled, path="/auth/oidc")
         return resp
@@ -290,7 +296,8 @@ def routes(ctx: Ctx) -> list:
         refused.discard(_person("oidc", username))
         state.log(f"login: {user.username} ({role}, oidc) from {client_ip(request)}")
         ctx.audit(request, "oidc_login", user.username, user=user.username)
-        resp = RedirectResponse("/", status_code=303)
+        # a state cookie from before 2.9 has no "x": the dashboard
+        resp = RedirectResponse(local_path(data.get("x")), status_code=303)
         set_session(resp, request, user)
         resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
         return resp
@@ -301,17 +308,18 @@ def routes(ctx: Ctx) -> list:
         folded = name.casefold()
         return any(u.username.casefold() == folded for u in state.config.users)
 
-    def _login_failed(request, ip: str, username: str, typed: str):
+    def _login_failed(request, ip: str, username: str, typed: str, nxt: str):
         """Count, log, record and notify a failed sign-in; the sign-in page again, with
-        the name typed (`typed`). A name that is no account's is recorded as
-        auth.UNKNOWN_USER: what was typed may well be a password."""
+        the name typed (`typed`) and the page to go back to (`nxt`). A name that is no
+        account's is recorded as auth.UNKNOWN_USER: what was typed may well be a
+        password."""
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
         state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {label!r} from {ip}")
         _record_failure(ip, label, f"user {label!r} from {ip}")
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
-                      oidc_enabled=state.config.oidc.enabled, username=typed)
+                      oidc_enabled=state.config.oidc.enabled, username=typed, next=nxt)
 
     async def login_post(request):
         ip = client_ip(request)
@@ -319,15 +327,16 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         typed = _typed(form)
+        nxt = local_path(form.get("next"), "")   # the page to go back to (login_get)
         if state.rate_limiter.blocked(ip):
             return render(request, "login.html", status_code=429,
                           error=_("Too many attempts. Wait a few minutes and try again."),
-                          oidc_enabled=state.config.oidc.enabled, username=typed)
+                          oidc_enabled=state.config.oidc.enabled, username=typed, next=nxt)
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
         if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
-            return _login_failed(request, ip, username, typed)
+            return _login_failed(request, ip, username, typed, nxt)
         user = state.config.get_user(username)
         authed = None
         # local account: verify the scrypt hash off the event loop (it's slow on purpose)
@@ -343,13 +352,14 @@ def routes(ctx: Ctx) -> list:
             if groups is not None:
                 state.ldap_tls_problem = None   # the connection to the directory works
                 if refusal := _name_refused(request, "ldap", username):
-                    return _refusal_page(request, "ldap", refusal, typed)
+                    return _refusal_page(request, "ldap", refusal, typed, nxt)
                 role = _directory_role("ldap", username, groups, state.config.ldap)
                 if role:
                     authed = await _save_external("ldap", username, role)
                     if authed is None:   # a local account got the name meanwhile
                         return _refusal_page(request, "ldap",
-                                             _name_refused(request, "ldap", username), typed)
+                                             _name_refused(request, "ldap", username), typed,
+                                             nxt)
                     refused.discard(_person("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
@@ -357,10 +367,10 @@ def routes(ctx: Ctx) -> list:
             state.rate_limiter.reset(ip)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
             ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=authed.username)
-            resp = RedirectResponse("/", status_code=303)
+            resp = RedirectResponse(nxt or "/", status_code=303)
             set_session(resp, request, authed)
             return resp
-        return _login_failed(request, ip, username, typed)
+        return _login_failed(request, ip, username, typed, nxt)
 
     async def _sign_out_everywhere(username: str) -> None:
         """A logout the revocation list has no room for: end all of the account's

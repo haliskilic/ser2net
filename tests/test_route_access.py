@@ -330,16 +330,22 @@ class Client(Browser):
         return st, h, raw.decode("utf-8", "replace")
 
 
+def to_login(h) -> bool:
+    """A redirect to the sign-in page (a page request carries ?next=: where it leads back)."""
+    loc = h.get("Location") or ""
+    return loc == "/login" or loc.startswith("/login?next=")
+
+
 def gated(path, st, h, body) -> bool:
     """The session gate: sign in first."""
     if path.startswith("/api/"):
         return st == 401 and json.loads(body) == {"error": "unauthorized"}
-    return st == 303 and h.get("Location") == "/login"
+    return st == 303 and to_login(h)
 
 
 def passed(st, h, body) -> bool:
     """Got past every access check (whatever the handler answers then)."""
-    return not (st == 401 or (st == 303 and h.get("Location") == "/login")
+    return not (st == 401 or (st == 303 and to_login(h))
                 or (st == 403 and body.strip() in DENIALS) or st >= 500)
 
 
