@@ -1145,8 +1145,9 @@ def _key_hint(key: str) -> str:
 
 # ---------------- what a restore changes for sign-in and access ----------------
 def _setting_changes(old, new) -> list[str]:
-    """Sign-in / access settings that differ between two configurations (AppConfig or
-    the same fields), as lines for the user (and, in English, the audit log)."""
+    """Sign-in / access settings and the cluster's that differ between two configurations
+    (AppConfig or the same fields), as lines for the user (and, in English, the audit
+    log)."""
     def onoff(value) -> str:
         return _("enabled") if value else _("disabled")
 
@@ -1176,6 +1177,15 @@ def _setting_changes(old, new) -> list[str]:
 
     diff(_("Remove LDAP / OIDC accounts not signed in for"),
          days(old.external_users_expire_days), days(new.external_users_expire_days))
+    # the cluster's settings (its keys are credentials: _account_changes)
+    o, n = old.cluster, new.cluster
+    cluster = _("LAN cluster")
+    diff(cluster, onoff(o.enabled), onoff(n.enabled))
+    diff(f"{cluster} · {_('Legacy authentication')}", onoff(o.legacy_auth), onoff(n.legacy_auth))
+    diff(f"{cluster} · {_('Automatic discovery')}", onoff(o.discovery), onoff(n.discovery))
+    diff(f"{cluster} · {_('Discovery UDP port')}", o.discovery_port, n.discovery_port)
+    diff(f"{cluster} · {_('Advertise IP')}", o.advertise_ip or "—", n.advertise_ip or "—")
+    diff(f"{cluster} · {_('Manual peers')}", ", ".join(o.peers) or "—", ", ".join(n.peers) or "—")
     return out
 
 
