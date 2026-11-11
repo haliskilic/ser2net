@@ -3,8 +3,8 @@
   * opened by IP address / localhost, the setup page works as before (no code);
   * through another host name in Host, X-Forwarded-Host or Forwarded (the DNS-rebinding
     guard; a reverse proxy looks the same) it answers 403 and asks for the one-time code
-    from data/setup-code.txt; without it (or with a wrong one) nothing is created, with
-    it the admin is created and the file removed. The start-up log names the file,
+    from data/setup-code.txt; without it (or with a wrong one, non-ASCII too) nothing is
+    created, with it the admin is created and the file removed. The start-up log names the file,
     never the code;
   * a second setup request that was let in before the first finished (its body still
     on the way) does not replace the first admin;
@@ -79,9 +79,10 @@ def test_foreign_host():
         foreign = f"other-name.example:{port}"
         st, page = request(srv, "/setup", host=foreign, data=form("other"), browser=b)
         assert st == 403 and srv.saved_config()["users"] == [], "created an admin without the code"
-        st, page = request(srv, "/setup", host=foreign, data=dict(form("other"),
-                                                                    setup_code="0000-1111"), browser=b)
-        assert st == 403 and "not right" in page and srv.saved_config()["users"] == []
+        for wrong in ("0000-1111", "é", "ab\u0663"):  # non-ASCII: refused the same way
+            st, page = request(srv, "/setup", host=foreign, data=dict(form("other"),
+                                                                        setup_code=wrong), browser=b)
+            assert st == 403 and "not right" in page and srv.saved_config()["users"] == [], wrong
         assert "wrong setup code" in srv.output() and code not in srv.output()
         st, _ = request(srv, "/setup", host=foreign, data=dict(form("owner"),
                                                                  setup_code=code.upper()), browser=b)

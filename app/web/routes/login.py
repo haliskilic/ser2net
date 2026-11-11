@@ -108,38 +108,51 @@ def routes(ctx: Ctx) -> list:
         state.log(f"{source.upper()}: {username!r} signed out everywhere: their groups give "
                   f"no role any more")
 
+    def _record_failure(ip: str, user: str, notice: str, action: str = "login_failed",
+                        detail: str = "") -> None:
+        """The audit record (bounded: state.failed_logins) and the notification of a
+        failed or refused sign-in."""
+        state.failed_logins.add(ip, user, action, detail)
+        state.notifier.emit("login_failed", ip, "", notice)
+
     def _name_refused(request, source: str, username: str) -> str | None:
         """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
-        can't have an account under this name is refused: the name of a local account,
-        letter case aside — such a sign-in must never take over, convert or demote that
-        account (upsert_external_user refuses it too) — or a name no account can have
-        (external_name_problem). Logged, audited and notified like a failed sign-in.
-        Returns the sign-in page's message, or None when the name can be used."""
-        local = state.config.named(username, "local")
-        why = (f"the local account {local[0].username!r} has this name" if local
+        can't have an account under this name is refused: the name of a local account or
+        of one of the other sign-in method, letter case aside — such a sign-in must never
+        take over, convert or demote that account (upsert_external_user refuses it too) —
+        or a name no account can have (external_name_problem). Logged, audited (within
+        the failed sign-ins' limit) and notified like a failed sign-in. Returns the
+        sign-in page's message, or None when the name can be used."""
+        taken = state.config.taken_name(username, source)
+        why = (f"the {taken.kind} account {taken.username!r} has this name" if taken
                else external_name_problem(username))
         if why is None:
             return None
         ip, what = client_ip(request), source.upper()
-        if local:
+        if taken:
+            other = ("a local account" if taken.source == "local"
+                     else "an account of another sign-in method")
             state.log(f"{what} login denied for {username!r}: {why}, and an {what} sign-in "
-                      f"never takes over a local account. To let them sign in with {what}, "
-                      f"delete the local account in Settings → Users (another admin must "
-                      f"remain).")
+                      f"never takes over {other}. To let them sign in with {what}, delete the "
+                      f"{taken.kind} account in Settings → Users (another admin must remain).")
         else:
             hint = ("; Settings → Single sign-on (OIDC) → Username claim can name another "
                     "claim" if source == "oidc" else "")
             state.log(f"{what} login denied for {username!r}: no account can have this name "
                       f"here: {why}{hint}")
-        ctx.audit(request, f"{source}_login_denied",
-                  f"local account {local[0].username}" if local else why, user=username)
-        state.notifier.emit("login_failed", ip, "", f"{what} user {username!r} from {ip}: "
-                            + ("the name of a local account" if local else why))
-        if local:
+        _record_failure(ip, username, f"{what} user {username!r} from {ip}: "
+                        + (f"the name of a {taken.kind} account" if taken else why),
+                        f"{source}_login_denied",
+                        f"{taken.kind} account {taken.username}" if taken else why)
+        if taken and taken.source == "local":
             return _("There is a local account named {0} here, so you can't sign in under that "
                      "name with SSO or a directory account. Sign in with that account’s "
                      "password, or ask an admin to delete the local account first.").format(
-                         local[0].username)
+                         taken.username)
+        if taken:
+            return _("An account named {0} here signs in another way (through the directory or "
+                     "SSO), so you can't sign in under that name like this. Ask an admin to "
+                     "delete that account first.").format(taken.username)
         return _("Your user name from the directory or the identity provider can’t be used "
                  "here; an admin can see why in all.log.")
 
@@ -244,7 +257,8 @@ def routes(ctx: Ctx) -> list:
             return _provider_error(request, data, error)
         code = request.query_params.get("code", "")
         st = request.query_params.get("state", "")
-        if not data or not code or not _same(st, data.get("s")):
+        if (not data or not code or not _same(st, data.get("s"))
+                or not isinstance(data.get("r"), str) or not isinstance(data.get("n"), str)):
             return render(request, "login.html", status_code=400, error=None, oidc_enabled=True,
                           oidc_error=_("SSO state mismatch — please try again."))
         # "v": the PKCE verifier (a state cookie from before it was sent has none)
@@ -289,8 +303,7 @@ def routes(ctx: Ctx) -> list:
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
         state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {label!r} from {ip}")
-        state.failed_logins.add(ip, label)
-        state.notifier.emit("login_failed", ip, "", f"user {label!r} from {ip}")
+        _record_failure(ip, label, f"user {label!r} from {ip}")
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
                       oidc_enabled=state.config.oidc.enabled)
@@ -343,14 +356,32 @@ def routes(ctx: Ctx) -> list:
             return resp
         return _login_failed(request, ip, username)
 
+    async def _sign_out_everywhere(username: str) -> None:
+        """A logout the revocation list has no room for: end all of the account's
+        sessions instead (pwd_version + 1), which ends the copies of its cookies too."""
+        async with state.config_lock:
+            user = state.config.get_user(username)
+            if user is None:
+                return
+            user.pwd_version += 1
+            try:
+                await state.asave()
+            except (ConfigError, OSError) as e:  # still ended in memory, until a restart
+                state.log(f"could not save the sign-out of {username!r}: {e}")
+        state.revoked_sessions.forget(username)
+        state.log(f"{username!r} signed out everywhere: too many of its sessions were ended "
+                  "by a logout to remember each one")
+
     async def logout_post(request):
         form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         # the cookie is a signed token: end it on the server too, so a copy of it is
         # refused from now on (not just deleted in this browser)
-        state.revoked_sessions.add(state.config.secret_key,
-                                   request.cookies.get(auth.SESSION_COOKIE))
+        token = request.cookies.get(auth.SESSION_COOKIE)
+        full = state.revoked_sessions.add(state.config.secret_key, token)
+        if full is not None and auth.session_user(state.config, token) is not None:
+            await _sign_out_everywhere(full)
         if not ctx.is_anonymous(request):  # an open-access visitor had no session to end
             ctx.audit(request, "logout")
         resp = RedirectResponse("/login", status_code=303)

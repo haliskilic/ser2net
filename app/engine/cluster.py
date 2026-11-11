@@ -650,7 +650,16 @@ class ClusterDiscovery:
                      f"'{socket.gethostname()}' ({self.config.instance_id[:8]})")
             return
         loop = asyncio.get_running_loop()
-        port = int(self.cluster.discovery_port)
+        try:  # validate() rejects a bad one at save time; this guards a hand-edited config
+            port = int(self.cluster.discovery_port)
+            if not 1 <= port <= 65535:
+                raise ValueError
+        except (TypeError, ValueError):
+            raw = self.cluster.discovery_port
+            self.discovery_error = f"UDP discovery port {raw!r} is not a port number"
+            self.log(f"cluster: discovery port {raw!r} is not a port number — discovery "
+                     "disabled (manual peers still work)")
+            return
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         with contextlib.suppress(AttributeError, OSError):

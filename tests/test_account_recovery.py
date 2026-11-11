@@ -10,6 +10,12 @@
     running install closes the setup page;
   * the request files: taken by one side only, withdrawn when nobody takes them, an
     old one is not applied;
+  * the data directory's lock decides: held by a running instance -> handed to it
+    (also when its web UI can't be reached); free -> the command holds it (marked brief)
+    while it changes config.json, so a ser2net that starts meanwhile waits and then
+    loads the change; an instance that stops before taking the request -> the command
+    makes the change itself; another account command busy -> refused, saying so; where
+    the lock can't be used, /healthz decides as before;
   * SER2NET_ADMIN_PASSWORD_FILE (+ SER2NET_ADMIN_USER) creates the first admin at start
     and is ignored once accounts exist; problems are logged, the password never;
   * as root on a data directory owned by someone else, the command first becomes that
@@ -23,11 +29,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import types
 
 from _server import ROOT, Browser, Server
 
-from app import accounts
+from app import accounts, datalock
 from app.config import AppConfig
 from app.web.auth import hash_password, verify_password
 
@@ -121,6 +128,171 @@ def test_request_files():
     finally:
         shutil.rmtree(d, ignore_errors=True)
     print("request files: withdrawn when nobody takes them, taken once, answered; old ones not applied  OK")
+
+
+# Another process holding the data directory's lock for argv[4] seconds: "serve" takes
+# and answers requests (a running ser2net), "silent" doesn't, "brief" marks the lock as
+# an account command's.
+_HOLDER = (
+    "import sys, time; sys.path.insert(0, sys.argv[2])\n"
+    "from app import accounts, datalock\n"
+    "d, kind = sys.argv[1], sys.argv[3]\n"
+    "assert datalock.acquire(d, brief=kind == 'brief') is None\n"
+    "print('held', flush=True)\n"
+    "end = time.monotonic() + float(sys.argv[4])\n"
+    "while time.monotonic() < end:\n"
+    "    for rid, req in (accounts.take_requests(d) if kind == 'serve' else []):\n"
+    "        accounts.answer(d, rid, True, 'taken by the holder')\n"
+    "    time.sleep(0.1)\n"
+)
+
+# What runtime.main() does first, in another process: take the lock (waiting for an
+# account command), then read config.json.
+_START = (
+    "import sys, time; sys.path.insert(0, sys.argv[2])\n"
+    "from app import runtime\n"
+    "print('starting', flush=True)\n"
+    "runtime.hold_data_dir(sys.argv[1])\n"
+    "print(open(sys.argv[1], encoding='utf-8').read(), flush=True)\n"
+)
+
+_PROBE = (
+    "import sys; sys.path.insert(0, sys.argv[2])\n"
+    "from app import datalock\n"
+    "try:\n"
+    "    datalock.acquire(sys.argv[1])\n"
+    "    print('FREE')\n"
+    "except datalock.Held as e:\n"
+    "    print(f'HELD {e.pid} {e.brief}')\n"
+)
+
+
+def holder(d, kind, seconds):
+    p = subprocess.Popen([sys.executable, "-c", _HOLDER, d, ROOT, kind, str(seconds)],
+                         stdout=subprocess.PIPE, text=True)
+    assert p.stdout.readline().strip() == "held"
+    return p
+
+
+def test_lock_decides():
+    d = tempfile.mkdtemp(prefix="s2n_cli_lock_")
+    cfg = os.path.join(d, "config.json")
+    saved = (accounts.healthcheck.check, accounts.apply_here, accounts.WAIT_RUNNING_S,
+             accounts.WAIT_STOPPED_S, datalock.BRIEF_WAIT_S, datalock.acquire)
+    probes = []
+
+    def healthcheck(answer):
+        def check(path, timeout=5.0):
+            probes.append(path)
+            return answer, ""
+        return check
+
+    def pwd_version():
+        return account(config_of(d), "admin")["pwd_version"]
+
+    def set_password():
+        return accounts.submit({"action": "set_password", "username": "admin",
+                                "password_hash": hash_password(NEW)}, cfg)
+
+    p = None
+    try:
+        with open(cfg, "w") as fh:
+            json.dump({"users": [{"username": "admin", "password_hash": hash_password(PW),
+                                  "role": "admin", "pwd_version": 1}]}, fh)
+
+        # held by a running instance: handed over, even though /healthz can't be reached
+        accounts.healthcheck.check = healthcheck(False)
+        p = holder(d, "serve", 30)
+        out = set_password()
+        assert out == "taken by the holder (done by the running ser2net)", out
+        assert pwd_version() == 1 and not probes, "the holder decides, not the healthcheck"
+        assert not datalock.holds(d)
+        p.kill()
+        p.wait(10)
+        print("lock held by a running instance: handed over, /healthz not asked  OK")
+
+        # free: the command holds it (brief) while it changes config.json; a start that
+        # comes meanwhile waits, then loads the change
+        seen = {}
+
+        def apply_here_while_starting(request, config_path):
+            start = subprocess.Popen([sys.executable, "-c", _START, config_path, ROOT],
+                                     stdout=subprocess.PIPE, text=True)
+            assert start.stdout.readline().strip() == "starting"
+            time.sleep(1.0)  # its hold_data_dir() is waiting for this command now
+            assert start.poll() is None, "a start must wait while the command changes config.json"
+            seen["probe"] = subprocess.run([sys.executable, "-c", _PROBE, d, ROOT],
+                                           capture_output=True, text=True, timeout=60).stdout
+            seen["start"] = start
+            return saved[1](request, config_path)
+
+        accounts.apply_here = apply_here_while_starting
+        t = time.monotonic()
+        out = set_password()
+        assert "new password set for 'admin'" in out and "running ser2net" not in out, out
+        assert seen["probe"].strip() == f"HELD {os.getpid()} True", seen["probe"]
+        loaded = json.loads(seen["start"].communicate(timeout=60)[0])
+        assert account(loaded, "admin")["pwd_version"] == 2, "the start loaded config.json too early"
+        assert pwd_version() == 2 and probes == [cfg] and not datalock.holds(d)
+        assert time.monotonic() - t < accounts.WAIT_STOPPED_S + 10
+        assert os.listdir(os.path.join(d, accounts.REQUEST_DIR)) == [], "no request needed"
+        accounts.apply_here = saved[1]
+        print("lock free: held (brief) while config.json changes; a start meanwhile waits and "
+              "loads the change  OK")
+
+        # the holder stops before it takes the request: the command makes the change itself
+        p = holder(d, "silent", 1.5)
+        out = set_password()
+        assert "new password set for 'admin'" in out and "running ser2net" not in out, out
+        assert pwd_version() == 3
+        assert os.listdir(os.path.join(d, accounts.REQUEST_DIR)) == [], "the request was withdrawn"
+        p.wait(10)
+        print("an instance that stops before taking the request: the change is made here  OK")
+
+        # another account command still busy; a holder that doesn't take it
+        datalock.BRIEF_WAIT_S = 0.3
+        p = holder(d, "brief", 30)
+        try:
+            set_password()
+            raise AssertionError("not refused")
+        except accounts.AccountError as e:
+            assert "--set-password / --sign-out-all" in str(e) and "again in a moment" in str(e), e
+        p.kill()
+        p.wait(10)
+        accounts.WAIT_RUNNING_S = 0.5
+        p = holder(d, "silent", 30)
+        try:
+            set_password()
+            raise AssertionError("not refused")
+        except accounts.AccountError as e:
+            assert f"(process {p.pid}) did not take the request" in str(e), e
+        p.kill()
+        p.wait(10)
+        assert pwd_version() == 3
+        print("another account command busy, or an instance that doesn't take it: refused  OK")
+
+        # a ser2net from before the lock answers /healthz but holds no lock
+        accounts.healthcheck.check = healthcheck(True)
+        try:
+            set_password()
+            raise AssertionError("not refused")
+        except accounts.AccountError as e:
+            assert "an older version?" in str(e), e
+        # where the lock can't be used, /healthz decides (and a moment's wait), as before
+        accounts.healthcheck.check, accounts.WAIT_STOPPED_S = healthcheck(False), 0.3
+        datalock.acquire = lambda *a, **k: "WARNING: can't lock the data directory"
+        out = set_password()
+        assert "new password set for 'admin'" in out and pwd_version() == 4, out
+        print("no lock but /healthz answers: refused (older version); the lock can't be used: "
+              "/healthz decides  OK")
+    finally:
+        (accounts.healthcheck.check, accounts.apply_here, accounts.WAIT_RUNNING_S,
+         accounts.WAIT_STOPPED_S, datalock.BRIEF_WAIT_S, datalock.acquire) = saved
+        if p is not None:
+            p.kill()
+            p.wait(10)
+        datalock.release(d)
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_provision():
@@ -232,6 +404,9 @@ def test_running():
         assert "user_password_set\tadmin\t(command line)" in audit and "sessions_revoke_all" in audit
         assert not [n for n in os.listdir(os.path.join(srv.data, accounts.REQUEST_DIR))
                     if not n.startswith(".")], "request files left behind"
+        # its web UI out of the command's reach (another network namespace): still found
+        code, out = cli(srv.data, "--sign-out-all", env={"SER2NET_PORT": "1"})
+        assert code == 0 and "done by the running ser2net" in out, out
     print("running install: the instance applies it at once (old session refused, new password "
           "works, audited), --sign-out-all too  OK")
 
@@ -277,6 +452,7 @@ def test_env_admin():
 def main():
     test_apply()
     test_request_files()
+    test_lock_decides()
     test_provision()
     test_become_owner()
     test_offline()

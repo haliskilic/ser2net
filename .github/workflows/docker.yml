@@ -1,7 +1,8 @@
 name: Docker image
 
 # Builds the image for linux/amd64 and linux/arm64 and smoke-tests each natively
-# (tests/docker_smoke.sh: non-root, HEALTHCHECK, upgrade from a root-owned volume).
+# (tests/docker_smoke.sh: non-root, HEALTHCHECK, upgrades from a root-owned volume and a
+# bind mount, a config.json with a rejected setting, serial device groups, image contents).
 # Called by ci.yml and release.yml; release.yml then pushes the multi-arch image to
 # GHCR (its own job, with the write permissions this one doesn't need).
 on:

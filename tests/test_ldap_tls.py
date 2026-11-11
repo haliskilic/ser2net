@@ -368,6 +368,13 @@ def test_web(pki, folder):
                 _, _, page = admin.post("/settings/ldap", ldap_form(d.uri, ldap_ca_file=path))
                 assert "Not saved: the CA certificate file" in page and error in page, path
                 assert srv.saved_config()["ldap"].get("ca_file", "") == ""
+            # ... but not when it switches LDAP off: then the file isn't used
+            missing = os.path.join(folder, "nope.pem")
+            _, _, page = admin.post("/settings/ldap", ldap_form(d.uri, ldap_enabled=None,
+                                                                ldap_ca_file=missing))
+            assert "LDAP settings saved." in page, page[page.find("banner"):][:300]
+            saved = srv.saved_config()["ldap"]
+            assert saved["enabled"] is False and saved["ca_file"] == missing, saved
             _, _, page = admin.post("/settings/ldap", ldap_form(d.uri, ldap_ca_file=pki.ca.path))
             assert "LDAP settings saved." in page and "was not accepted" not in page
             saved = srv.saved_config()["ldap"]
@@ -379,8 +386,8 @@ def test_web(pki, folder):
                                                                 ldap_ca_file=None))
             assert "LDAP settings saved." in page
             assert srv.saved_config()["ldap"]["ca_file"] == pki.ca.path
-            print("web: the CA file is checked when saved; with it the sign-in works; an older "
-                  "form keeps it  OK")
+            print("web: the CA file is checked when LDAP is saved on (not when switched off); "
+                  "with it the sign-in works; an older form keeps it  OK")
 
             # the insecure opt-out: saved, warned about, logged
             _, _, page = admin.post("/settings/ldap", ldap_form(d.uri, ldap_tls_insecure="on"))

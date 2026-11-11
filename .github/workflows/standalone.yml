@@ -14,9 +14,19 @@ on:
         description: A release build (sign the Windows exe when configured)
         type: boolean
         default: false
+  workflow_dispatch:
+    inputs:
+      sign_dry_run:
+        description: Exercise the Windows signing/verify steps with a self-signed test certificate
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  # the SignPath signing step hands GITHUB_TOKEN to its connector to read the run and
+  # download the artifact, which needs Actions: read even on a public repo (the callers
+  # in ci.yml / release.yml grant the same, or the run fails at start-up)
+  actions: read
 
 jobs:
   linux:
@@ -101,21 +111,35 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7   # runs the tests; the exe itself bundles PBS CPython
         with:
           python-version: "3.12"
-      - name: Dependencies (incl. MQTT/LDAP/OIDC + cryptography), PyInstaller, test-side pefile
-        run: pip install -r requirements.txt -r requirements-optional.txt pyinstaller==6.22.3 pefile
-      - name: Build (with the license texts and SBOM of every bundled component)
-        run: |
-          python tools/third_party.py licenses build/THIRD-PARTY-LICENSES.txt --strict
-          python tools/third_party.py sbom build/ser2net.cdx.json --strict
-          pyinstaller --clean --noconfirm ser2net.spec
+      - name: Test-side dependencies (the app's own for the in-process checks, cryptography, pefile)
+        run: pip install -r requirements.txt cryptography pefile
+      - name: Build with python-build-standalone (supported OpenSSL), version resource + icon, SBOM
+        shell: pwsh
+        run: pwsh tools/build_standalone_windows.ps1
 
       # ---- code signing (releases only, when configured; docs/SIGNING.md) ----
-      - name: Sign with Azure Trusted Signing
+      # A self-signed dry run (workflow_dispatch) exercises the version resource + the
+      # Verify/copy steps on every change, without the signing account.
+      - name: Create a self-signed code-signing certificate (dry run)
+        id: dryrun
+        if: github.event_name == 'workflow_dispatch' && inputs.sign_dry_run && vars.WINDOWS_SIGNING == ''
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=ser2net signing dry run" `
+            -CertStoreLocation Cert:\CurrentUser\My -KeyUsage DigitalSignature -NotAfter (Get-Date).AddDays(1)
+          $ts = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
+          if (-not $ts) { $ts = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1).FullName }
+          & $ts sign /fd SHA256 /sha1 $cert.Thumbprint dist\ser2net.exe
+          # trust it on this runner only, so the Verify step below reports Valid
+          Export-Certificate -Cert $cert -FilePath dryrun.cer | Out-Null
+          Import-Certificate -FilePath dryrun.cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          "signed=true" >> $env:GITHUB_OUTPUT
+      - name: Sign with Azure Artifact Signing
         if: inputs.publish && vars.WINDOWS_SIGNING == 'azure'
-        uses: azure/trusted-signing-action@v2
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82  # v2.0.0 (was azure/trusted-signing-action)
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -137,22 +161,25 @@ jobs:
           if-no-files-found: error
       - name: Sign with SignPath
         if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
-        uses: signpath/github-action-submit-signing-request@v3
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3
         with:
           # connector-url: the action's default, which v3 moved to SignPath's Pipeline Connector
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          github-token: ${{ github.token }}   # needs the actions:read granted above
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
           github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
           wait-for-completion: true
+          # release policies usually need a manual approval, so wait well beyond the 600 s default
+          wait-for-completion-timeout-in-seconds: 1800
           output-artifact-directory: signed
       - name: Use the SignPath-signed exe
         if: inputs.publish && vars.WINDOWS_SIGNING == 'signpath'
         shell: pwsh
         run: Copy-Item signed\ser2net.exe dist\ser2net.exe -Force
       - name: Verify the Authenticode signature
-        if: inputs.publish && vars.WINDOWS_SIGNING != ''
+        if: (inputs.publish && vars.WINDOWS_SIGNING != '') || steps.dryrun.outputs.signed == 'true'
         shell: pwsh
         run: |
           $sig = Get-AuthenticodeSignature dist\ser2net.exe

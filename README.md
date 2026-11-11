@@ -230,8 +230,11 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`) ve lisans
 metinleri yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
 doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si, bir imzalama
-servisi tanımlandığında sürümlerde imzalanır ([`docs/SIGNING.md`](docs/SIGNING.md)).
+`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si **henüz
+imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
+[`docs/SIGNING.md`](docs/SIGNING.md)); bu yüzden ilk çalıştırmada SmartScreen uyarabilir.
+Windows'ta `Get-FileHash` ile `SHA256SUMS`'a karşı ve `gh attestation verify` ile
+doğrulayın, sonra *Ek bilgi → Yine de çalıştır* ([`docs/WINDOWS.md`](docs/WINDOWS.md)).
 
 Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
 - paketin içindekiler işletim sisteminin temel kütüphanelerinden (glibc ≤ 2.28 / Windows
@@ -243,7 +246,10 @@ Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
 Linux notları:
 - `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
-  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin.
+  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin. Çalıştığı sürece bu kopyayı
+  kilitli tutar ve erişim zamanlarını tazeler; böylece systemd-tmpfiles, tmpreaper gibi
+  geçici dosya temizleyicileri uzun süre çalışan bir binary'nin dosyalarını silmez.
+  Öldürülen bir sürecin geride bıraktığı kopya ise her zamanki gibi temizlenir.
 - Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
   paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır.
 
@@ -283,17 +289,20 @@ ardından `pip install --no-index --find-links vendor/wheels -r requirements-opt
 
 ### Docker
 ```bash
-docker compose up -d        # docker-compose.yml içindeki `devices:` satırını düzenleyin
-# veya:
-docker build -t ser2net . && docker run -d -p 8080:8080 \
-  --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
+docker compose up -d        # önce docker-compose.yml'deki `devices:` ve `ports:` kısmını düzenleyin
 ```
+Compose olmadan [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) içindeki `docker run`
+komutunu kullanın (hazır imaj, `--restart unless-stopped`, eşleme portları,
+`/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (ya da `:2.8`, `:2.8.0`); `docker-compose.yml` bunu kullanır.
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
-ayarlanır — başsız ortamda interaktif seçici çalışamaz). Süreç root olarak değil, `ser2net`
+ayarlanır — başsız ortamda interaktif seçici çalışamaz). Her eşlemenin portunu da yayınlayın
+(yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
+alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç root olarak değil, `ser2net`
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
-volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapmak gerekmez.
+volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
+olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez.
 İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Ayrıntılar:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
@@ -429,7 +438,10 @@ satır tutar, denetim kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bi
 yazıldığı gibi değil `(unknown user)` olarak kaydedilir (yanlış alana yazılmış bir parola
 olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnızca sayar ve o 10
 dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
-itemez. 256 karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
+itemez. Bir eşlemenin konsolunu ya da hex görünümünü açmak, hesap (açık erişimde: adres),
+eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 böyle kayıt yazılır,
+fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). 256 karakterden uzun
+adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
 çıkış formları 64 KB, yapılandırma içe aktarma 16 MB, geri kalan her şey (formlar, REST API)
 2 MB; daha büyüğü HTTP 413 alır.
 
@@ -458,7 +470,9 @@ belirlenir — son admin rolünü elinden alsa bile (all.log o zaman uyarır; `s
 harf fark etmeksizin) bir yerel hesabın adı olan bir LDAP/OIDC girişi reddedilir, all.log'a
 ve denetim kaydına (`ldap_login_denied` / `oidc_login_denied`) yazılır; böyle bir giriş
 yerel hesabı asla devralmaz, SSO hesabına çevirmez ya da rolünü düşürmez. Birini yerel
-hesaptan SSO'ya taşımak için önce yerel hesabını silin (başka bir admin kalmalı). Dizinler
+hesaptan SSO'ya taşımak için önce yerel hesabını silin (başka bir admin kalmalı). LDAP ile
+OIDC arasında da aynısı geçerli: öbür yöntemin bir hesabının adıyla yapılan giriş reddedilir
+(ikisi farklı kişiler olabilir); kişiyi taşımak için o hesabı silin. Dizinler
 gibi ser2net de LDAP adlarında büyük/küçük harfe bakmaz (Türkçe İ/ı dahil): `hkilic`,
 `Hkilic` ve `HKILIC` tek hesaptır; eski sürümlerin her yazılış için açtığı hesaplar o
 kişinin bir sonraki girişinde birleşir (diğer yazılışların oturumları kapanır), *Oturumları
@@ -530,7 +544,7 @@ sahibine geçer):
 | Kurulum | Komut |
 |---|---|
 | kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
-| Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ser2net\data --set-password admin` |
+| Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (servisin veri klasörü: `sc qc ser2net` gösterir) |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
 **Tarayıcısız ilk admin:** ilk açılıştan önce `ser2net --set-password admin` çalıştırın
@@ -579,19 +593,29 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 ## ⚙️ Servis olarak çalıştırma
 
 - **Docker:** resmi `Dockerfile` + `docker-compose.yml` (bkz. yukarısı ve
-  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume.
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. Düz
+  `docker run` ile çalıştırıyorsanız `--restart unless-stopped` ekleyin (var olan bir
+  container için: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
   **root ile çalıştırmayın.**
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
-  ser2net-windows-x64.exe --install-service --data-dir C:\ser2net\data
+  ser2net-windows-x64.exe --install-service
   ```
+  Exe kendini `C:\Program Files\ser2net\` altına kopyalar (yalnızca yöneticilerin
+  değiştirebildiği bir yer; böylece sıradan bir kullanıcı, servisin SYSTEM olarak
+  çalıştırdığı dosyayı değiştiremez) ve verisini `C:\ProgramData\ser2net\` altında tutar
+  (ikisini de yalnızca SYSTEM ve Administrators değiştirebilir).
   Servis açılışta başlar, kullanıcı oturumu gerektirmez (LocalSystem), çökerse ya da
-  hatayla çıkarsa 5 sn sonra yeniden başlar. İlk kurulumda arayüz adresi konsolda sorulur.
-  Kaldırmak: `--uninstall-service` (veri klasörü kalır). Farklı veri klasörleriyle birden
-  fazla örnek için `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net`
-  ya da *Hizmetler* (services.msc).
+  hatayla çıkarsa 5 sn sonra yeniden başlar; arayüz adresi ilk kurulumda konsolda sorulur.
+  Kaldırmak: `--uninstall-service` (veri klasörü kalır); birden fazla örnek için
+  `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net` ya da *Hizmetler*
+  (services.msc). Yeni bir exe ile `--install-service`'i yeniden çalıştırmak servisi
+  yerinde yükseltir ve servisin kullandığı veri klasörünü korur (2.8.0 servisinde de).
+  Başka hostlardan erişmek için gereken güvenlik duvarı kuralı, adres
+  değişimi, yükseltme ve imzasız derlemelerdeki SmartScreen uyarısı için
+  **[`docs/WINDOWS.md`](docs/WINDOWS.md)**.
 - **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
   dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
   açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar

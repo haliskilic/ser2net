@@ -4,6 +4,12 @@ Portable part (always runs): app.standalone points a frozen Linux build's
 bundled OpenSSL at the distribution's CA bundle (Debian/Ubuntu, RHEL/Fedora,
 openSUSE, Alpine layouts), leaves an admin's SSL_CERT_FILE / SSL_CERT_DIR alone,
 warns when there is none, and does nothing for source runs or on Windows.
+ser2net.spec bundles every data file the app reads at run time (each non-Python
+file under app/: templates, static assets, translations), read without PyInstaller.
+A one-file build keeps its unpacked directory from temp cleaners: access times are
+refreshed (modification times kept) and, on Linux, the directory is locked, so the
+real systemd-tmpfiles (242+, when installed) skips it even at age 0 while it still
+removes a directory a killed run left behind.
 
 Binary part — opt-in: SER2NET_STANDALONE_BIN=<built ser2net or ser2net.exe> (the
 CI 'standalone' jobs build the executables and set it):
@@ -17,7 +23,10 @@ CI 'standalone' jobs build the executables and set it):
      Settings → Generate self-signed certificate works (no openssl program); OIDC
      sign-in over certificate-checked HTTPS works (bundled OpenSSL + CA certificates):
      discovery, then the callback with the token exchange and the RS256 id_token
-     check (bundled authlib), which signs the user in;
+     check (bundled authlib), which signs the user in; TR / EN → Türkçe really shows
+     the Turkish UI. Linux: the unpacked copy is locked while it runs, and the checks
+     after start-up follow a systemd-tmpfiles sweep of $TMPDIR at age 0 that must
+     remove none of its files;
   3. every shared library the running processes mapped comes from the bundle or
      the OS base (Linux /proc/<pid>/maps, Windows module list);
   4. SER2NET_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
@@ -31,6 +40,7 @@ Run: python3 tests/test_standalone.py
 """
 import base64
 import datetime
+import glob
 import http.cookiejar
 import http.server
 import ipaddress
@@ -45,6 +55,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -123,6 +134,181 @@ def test_ca_bundle_choice():
     assert notes_for(True, "linux", {}, lambda p: False)[0].startswith("WARNING: no system CA")
     standalone.notes.clear()
     print("frozen Linux build finds the CA bundle on Debian/RHEL/openSUSE/Alpine layouts  OK")
+
+
+def posix_path(path):
+    return os.path.normpath(path).replace(os.sep, "/")
+
+
+def spec_datas():
+    """The data entries ser2net.spec hands PyInstaller, without PyInstaller: the spec
+    runs with stand-ins for collect_all() and the build steps."""
+    hooks = types.ModuleType("PyInstaller.utils.hooks")
+    hooks.collect_all = lambda package: ([], [], [])
+    fakes = {"PyInstaller": types.ModuleType("PyInstaller"),
+             "PyInstaller.utils": types.ModuleType("PyInstaller.utils"),
+             "PyInstaller.utils.hooks": hooks}
+    seen = {}
+
+    def analysis(scripts, **kw):
+        seen.update(kw)
+        return types.SimpleNamespace(scripts=scripts, pure=[], binaries=list(kw["binaries"]),
+                                     datas=list(kw["datas"]))
+
+    saved = {name: sys.modules.get(name) for name in fakes}
+    sys.modules.update(fakes)
+    try:
+        with open(os.path.join(ROOT, "ser2net.spec"), encoding="utf-8") as fh:
+            exec(compile(fh.read(), "ser2net.spec", "exec"),
+                 {"Analysis": analysis, "PYZ": lambda *a, **k: None, "EXE": lambda *a, **k: None})
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                del sys.modules[name]
+            else:
+                sys.modules[name] = module
+    return seen["datas"]
+
+
+def bundled_files(datas):
+    """Where every file of the (source, destination) entries lands in the bundle. As in
+    PyInstaller, a relative source is relative to the spec and a directory brings
+    everything below it."""
+    out = set()
+    for src, dest in datas:
+        for match in glob.glob(os.path.join(ROOT, src)):
+            if not os.path.isdir(match):
+                out.add(posix_path(os.path.join(dest, os.path.basename(match))))
+                continue
+            for d, _, files in os.walk(match):
+                for f in files:
+                    out.add(posix_path(os.path.join(dest, os.path.relpath(os.path.join(d, f), match))))
+    return out
+
+
+def app_data_files():
+    """Every file under app/ that isn't Python source or bytecode — what the code reads
+    next to itself at run time (in a frozen build: inside the bundle)."""
+    out = set()
+    for d, dirs, files in os.walk(os.path.join(ROOT, "app")):
+        dirs[:] = [x for x in dirs if x != "__pycache__" and not x.startswith(".")]
+        out.update(posix_path(os.path.relpath(os.path.join(d, f), ROOT)) for f in files
+                   if not f.startswith(".") and not f.endswith((".py", ".pyc", ".pyo")))
+    return out
+
+
+def test_spec_bundles_app_data():
+    from app import i18n
+    from app.web import server
+
+    datas = spec_datas()
+    for src, _ in datas:
+        assert glob.glob(os.path.join(ROOT, src)), f"ser2net.spec bundles {src}, which doesn't exist"
+    needed = app_data_files()
+    for d in (server.TEMPLATES_DIR, server.STATIC_DIR, i18n.LOCALE_DIR):
+        rel = posix_path(os.path.relpath(d, ROOT))
+        assert any(p.startswith(rel + "/") for p in needed), f"no files found in {rel}"
+    missing = sorted(needed - bundled_files(datas))
+    assert not missing, ("the app reads these at run time, but ser2net.spec leaves them out of "
+                         "the executables:\n  " + "\n  ".join(missing))
+    print(f"ser2net.spec bundles all {len(needed)} data files under app/ "
+          "(templates, static assets, translations)  OK")
+
+
+def assert_locked(path):
+    """What systemd-tmpfiles tries before it cleans a directory must fail (Linux)."""
+    import fcntl
+
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return
+    finally:
+        os.close(fd)
+    raise AssertionError(f"{path} is not locked, so systemd-tmpfiles would clean it")
+
+
+def tmpfiles_version():
+    exe = shutil.which("systemd-tmpfiles")
+    if not exe:
+        return 0
+    out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=60).stdout
+    m = re.match(r"systemd (\d+)", out)
+    return int(m.group(1)) if m else 0
+
+
+def sweep_with_tmpfiles(tmp):
+    """Clean tmp with the real systemd-tmpfiles at age 0 — everything counts as old, as
+    in /tmp for the daily systemd-tmpfiles-clean after 10 days. False when there is no
+    systemd-tmpfiles that honours directory locks (242+). A directory left behind by a
+    killed run goes in first and must be gone after, so the sweep surely ran."""
+    if tmpfiles_version() < 242:
+        return False
+    left = os.path.join(tmp, "_MEI_left_behind")
+    os.makedirs(os.path.join(left, "app"))
+    with open(os.path.join(left, "app", "base.html"), "w") as fh:
+        fh.write("x")
+    conf = tmp + ".tmpfiles.conf"
+    with open(conf, "w") as fh:
+        fh.write("e %s - - - 0\n" % tmp.replace("\\", "\\\\").replace(" ", "\\x20"))
+    out = subprocess.run([shutil.which("systemd-tmpfiles"), "--clean", conf],
+                         capture_output=True, text=True, timeout=120)
+    os.remove(conf)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert not os.path.exists(left), f"systemd-tmpfiles kept {left}: did it clean {tmp}?"
+    return True
+
+
+def test_unpacked_dir_kept():
+    """A one-file build's unpacked directory is kept from temp cleaners while it runs."""
+    work = tempfile.mkdtemp(prefix="ser2net_unpacked_")
+    try:
+        tmp = os.path.join(work, "tmp")
+        bundle = os.path.join(tmp, "_MEI0000beefcafe00")
+        catalog = os.path.join(bundle, "app", "locale", "tr.json")
+        os.makedirs(os.path.dirname(catalog))
+        with open(catalog, "w") as fh:
+            fh.write("{}")
+        entries = [bundle, os.path.join(bundle, "app"), os.path.dirname(catalog), catalog]
+        if not WINDOWS:  # PyInstaller links shared libraries on Linux
+            os.symlink(os.path.join("app", "locale", "tr.json"), os.path.join(bundle, "libssl.so.3"))
+            entries.append(os.path.join(bundle, "libssl.so.3"))
+        month_ago = (int(time.time()) - 30 * 86400) * 10**9  # whole seconds: exact on NTFS too
+        follow = os.utime not in os.supports_follow_symlinks
+        for p in entries:
+            os.utime(p, ns=(month_ago, month_ago), follow_symlinks=follow)
+        assert standalone.touch_tree(bundle) == len(entries)
+        for p in entries:
+            st = os.lstat(p)
+            assert st.st_atime_ns > month_ago + 29 * 86400 * 10**9, f"{p}: access time not refreshed"
+            assert st.st_mtime_ns == month_ago, f"{p}: modification time changed"
+        print("unpacked bundle: access times refreshed, modification times kept  OK")
+
+        standalone.notes.clear()
+        standalone.prepare(frozen=True, environ={"SSL_CERT_FILE": "/x"}, bundle=bundle)
+        note = standalone.notes[0]
+        assert note.startswith(f"standalone: unpacked in {bundle} ") and \
+            "access times refreshed every 6 h, so temp cleaners leave it alone" in note, note
+        onedir = os.path.join(work, "onedir", "_internal")
+        os.makedirs(onedir)
+        standalone.notes.clear()
+        standalone.prepare(frozen=True, platform="win32", environ={}, bundle=onedir)
+        standalone.prepare(frozen=False, platform="win32", environ={}, bundle=bundle)
+        assert standalone.notes == [], "nothing to keep: a one-folder build, a source run"
+        if not WINDOWS:
+            assert " — locked, " in note, note
+            assert_locked(bundle)
+            print("unpacked bundle: locked while the process runs  OK")
+            if sweep_with_tmpfiles(tmp):
+                assert os.path.isfile(catalog), "systemd-tmpfiles removed a file of the locked directory"
+                print("systemd-tmpfiles (age 0) skips the locked directory and still removes one "
+                      "a killed run left behind  OK")
+            else:
+                print("SKIP systemd-tmpfiles sweep: no systemd-tmpfiles 242+ here")
+    finally:
+        standalone.notes.clear()
+        shutil.rmtree(work, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- helpers
@@ -451,6 +637,34 @@ def bundle_problems_windows(bundle):
     return problems, f"{count} PE files"
 
 
+def check_version_resource(exe):
+    """The Windows exe carries a VS_VERSIONINFO built from app.__version__ (ser2net.spec
+    + tools/win_version_info.py), so Explorer shows a version/publisher instead of nothing
+    and the exe no longer uses PyInstaller's default console icon."""
+    import pefile
+
+    pe = pefile.PE(exe, fast_load=True)
+    pe.parse_data_directories(
+        directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
+    strings = {}
+    for info in getattr(pe, "FileInfo", []):
+        for entry in (info if isinstance(info, list) else [info]):
+            for table in getattr(entry, "StringTable", []) or []:
+                for key, val in table.entries.items():
+                    strings[key.decode("utf-8", "replace")] = val.decode("utf-8", "replace")
+    has_icon = any(getattr(e, "name", None) and e.name.string == b"RT_GROUP_ICON" or
+                   getattr(e, "id", None) == 14  # RT_GROUP_ICON
+                   for e in pe.DIRECTORY_ENTRY_RESOURCE.entries)
+    pe.close()
+    assert strings.get("ProductName") == "ser2net", strings
+    assert strings.get("OriginalFilename") == "ser2net.exe", strings
+    assert strings.get("ProductVersion") == __version__, strings
+    assert strings.get("FileVersion", "").startswith(__version__), strings
+    assert has_icon, "no RT_GROUP_ICON resource (custom icon not embedded)"
+    print(f"windows exe: version resource (ProductName={strings['ProductName']}, "
+          f"ProductVersion={strings['ProductVersion']}) and an icon  OK")
+
+
 def mapped_libraries(pids):
     """Every DLL / shared object the processes have mapped."""
     import psutil
@@ -550,13 +764,24 @@ def test_binary():
         assert version == f"ser2net {__version__}", f"--version printed {version!r}"
         print(f"{where}: --version -> {version}  OK")
 
+        # both platforms now ship a python-build-standalone interpreter with a supported
+        # OpenSSL (>= 3.5); a build that fell back to an EOL OpenSSL 3.0 must fail here
+        about = run.output(["--about"])
+        m = re.search(r"OpenSSL (\d+)\.(\d+)", about)
+        assert m and (int(m.group(1)), int(m.group(2))) >= (3, 5), \
+            f"{where}: bundled OpenSSL is below the supported 3.5 series:\n{about}"
+        print(f"{where}: --about reports {m.group(0)} (a supported series)  OK")
+
         licenses = run.output(["--licenses"])
         for needle in ("AGPL-3.0-only", "CPython", "OpenSSL", "ldap3 2.", "LGPL", "paho-mqtt",
                        "cryptography", "pyinstaller", "starlette", "pyserial"):
             assert needle in licenses, f"--licenses does not cover {needle!r}"
-        if not WINDOWS:  # python-build-standalone's statically linked native libraries
-            for lib in ("openssl-3", "libffi", "zlib", "mpdecimal"):
-                assert f"LICENSE.{lib} " in licenses, f"--licenses misses {lib}"
+        # python-build-standalone's native libraries (the python.org build folded these
+        # into its own LICENSE.txt; PBS — now used on Windows too — keeps them apart)
+        for lib in ("openssl-3", "libffi", "zlib"):
+            assert f"LICENSE.{lib} " in licenses, f"--licenses misses {lib}"
+        if not WINDOWS:
+            assert "LICENSE.mpdecimal " in licenses, "--licenses misses mpdecimal"
         print(f"{where}: --licenses covers ser2net, CPython/OpenSSL and every bundled package  OK")
 
         if not IMAGE:  # LGPL: the bundled ldap3 can be replaced without rebuilding
@@ -576,6 +801,16 @@ def test_binary():
         run.start(data)
         if not wait_port(ui, 90):
             raise AssertionError(f"UI did not come up {where}:\n" + read(run.log.name)[-3000:])
+        if not WINDOWS:  # the unpacked copy it runs from is locked; a real tmp cleaner skips it
+            bundle = extraction_dir(run.tmp)
+            assert_locked(bundle)
+            print(f"{where}: the unpacked bundle is locked while the binary runs  OK")
+            files = [os.path.join(d, f) for d, _, fs in os.walk(bundle) for f in fs]
+            if sweep_with_tmpfiles(run.tmp):
+                gone = [p for p in files if not os.path.lexists(p)]
+                assert not gone, f"systemd-tmpfiles removed {len(gone)} files of the running binary: {gone[:5]}"
+                print(f"{where}: systemd-tmpfiles (age 0) leaves all {len(files)} files alone; "
+                      "the checks below run after that sweep  OK")
         s = Session(f"http://127.0.0.1:{ui}")
         s.request("/login")
         st, _, _ = s.request("/login", {"username": "admin", "password": PASSWORD, "_csrf": s.csrf()})
@@ -604,6 +839,21 @@ def test_binary():
         assert st == 200 and "sso.user" in page, f"no session after the OIDC callback ({st})"
         assert "login: sso.user (admin, oidc)" in read(os.path.join(data, "all.log"))
         print(f"{where}: OIDC callback: token exchange, RS256 id_token check, signed in  OK")
+
+        # (before the certificate below: once TLS is configured, new cookies are Secure-only)
+        import markupsafe
+        with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as fh:
+            tr = json.load(fh)
+        st, headers, _ = s.request("/lang/tr?next=/settings")
+        assert st == 303 and headers and headers.get("Location") == "/settings", f"/lang/tr: {st}"
+        st, _, page = s.request("/settings")
+        english = [en for en in ("Settings", "Web UI access", "Change your password", "Default language")
+                   if str(markupsafe.escape(tr[en])) not in page]
+        assert st == 200 and 'lang="tr"' in page and not english, \
+            f"Turkish chosen, yet these stay English (translations not bundled?): {english} ({st})"
+        s.request("/lang/en?next=/settings")
+        print(f"{where}: TR / EN -> the Settings page is in Turkish (translations bundled)  OK")
+
         st, _, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
         assert "Self-signed certificate generated" in page, \
             re.sub(r"\s+", " ", page[page.find("banner"):][:300])
@@ -621,6 +871,10 @@ def test_binary():
         assert "client connected: 127.0.0.1" in log, log[-1500:]
         assert "MQTT publishing serial lines to 127.0.0.1" in log, "paho-mqtt missing from the bundle?"
         assert "not installed" not in log and "failed to import" not in log, log[-1500:]
+        assert "UI translation is missing" not in log, log[:1500]
+        kept = re.search(r"standalone: unpacked in [^\n]*_MEI[^\n]* — (locked, )?access times "
+                         r"refreshed every 6 h, so temp cleaners leave it alone", log)
+        assert kept and (WINDOWS or kept.group(1)), log[:1500]
         if IMAGE:
             assert f"TLS: using the system CA bundle {run.ca_path}" in log, \
                 f"binary did not pick {run.ca_path}:\n" + log[:1500]
@@ -640,6 +894,8 @@ def test_binary():
             problems, n = loaded_problems(bundle, pids)
             assert not problems, "running process uses outside libraries:\n  " + "\n  ".join(problems)
             print(f"running: all {n} mapped libraries come from the bundle or the OS  OK")
+            if WINDOWS:
+                check_version_resource(BIN)
     finally:
         run_ok = hasattr(run, "proc")
         if run_ok:
@@ -651,6 +907,8 @@ def test_binary():
 
 def main():
     test_ca_bundle_choice()
+    test_spec_bundles_app_data()
+    test_unpacked_dir_kept()
     test_binary()
 
 

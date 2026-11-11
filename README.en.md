@@ -222,8 +222,11 @@ run; config/logs are written to `data/` next to the binary.
 Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`) and
 the license texts, and the binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is signed
-on releases once a signing service is configured ([`docs/SIGNING.md`](docs/SIGNING.md)).
+`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is **not
+code-signed yet** (it will be once a signing service is configured —
+[`docs/SIGNING.md`](docs/SIGNING.md)), so SmartScreen may warn on first run; verify it on
+Windows with `Get-FileHash` against `SHA256SUMS` and `gh attestation verify`, then *More
+info → Run anyway* ([`docs/WINDOWS.md`](docs/WINDOWS.md)).
 
 Every pull request and release proves it (`tests/test_standalone.py`): the bundle may
 need nothing but OS-base libraries (glibc ≤ 2.28 / Windows system DLLs; Linux on x86_64
@@ -234,9 +237,11 @@ containers.
 
 Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
 group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
-mounted `noexec`, point `TMPDIR` at a directory that isn't. For certificate checks (MQTT
-over TLS, OIDC, LDAPS / StartTLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE`
-if set.
+mounted `noexec`, point `TMPDIR` at a directory that isn't. While it runs it keeps that
+copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
+don't delete it under a long-running instance; a copy left behind by a killed process
+still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS) it
+uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
 reports. `ser2net --licenses` prints the license text of every component inside the
@@ -273,18 +278,23 @@ standalone binary already bundles them.)
 
 ### Docker
 ```bash
-docker compose up -d        # edit the `devices:` line in docker-compose.yml first
-# or:
-docker build -t ser2net . && docker run -d -p 8080:8080 \
-  --device /dev/ttyUSB0 --group-add dialout -v ser2net-data:/data ser2net
+docker compose up -d        # edit `devices:` and `ports:` in docker-compose.yml first
 ```
+Without compose, use the `docker run` command in
+[`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) (the published image,
+`--restart unless-stopped`, the mapping ports, a `/dev/serial/by-id` device, log limits).
 Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (or `:2.8`, `:2.8.0`); `docker-compose.yml` uses it.
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
-`SER2NET_PORT` — the interactive picker can't run headless). The process runs as the
+`SER2NET_PORT` — the interactive picker can't run headless). Publish each mapping's port
+too (a new mapping gets 4001), or use the host network. A serial device's group is taken
+from the device itself, so `--group-add` isn't needed for the usual device names. The
+process runs as the
 `ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
-image is taken over on the first start, so upgrading needs no manual step. The image has
-a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCKER.md).
+image is taken over on the first start, and in a bind-mounted folder the files an older
+image wrote as root are handed to the folder's owner, so upgrading needs no manual step.
+The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
+[`docs/DOCKER.md`](docs/DOCKER.md).
 
 ---
 
@@ -416,6 +426,9 @@ and the audit log records them; a user name that is no account's is recorded as
 `(unknown user)`, never as typed (it may be a password typed into the wrong field). Past 20
 failed sign-ins in 10 minutes the audit log only counts them and sums them up in one record
 at the end of those 10 minutes, so a flood of attempts can't push the other records out.
+Opening a mapping's console or hex view is recorded once per account (with open access: per
+address), mapping and kind in 5 minutes, and at most 50 such records in 10 minutes, summed up
+the same way (all.log keeps a line for every one).
 Names over 256 characters aren't tried. Request bodies are limited too: the sign-in, setup
 and sign-out forms to 64 KB, a configuration import to 16 MB and everything else (forms,
 the REST API) to 2 MB; a larger one gets HTTP 413.
@@ -444,7 +457,9 @@ come first: an LDAP/OIDC sign-in under the name of a local account (letter case 
 refused and written to all.log and the audit log (`ldap_login_denied` /
 `oidc_login_denied`); it never takes over the local account, turns it into an SSO account or
 demotes it. To move someone from a local account to SSO, delete the local account first
-(another admin must remain). Like directories, ser2net ignores letter case in LDAP names
+(another admin must remain). The same holds between LDAP and OIDC: a sign-in under the name
+of an account of the other method is refused (the two may be different people); delete that
+account to move the person. Like directories, ser2net ignores letter case in LDAP names
 (Turkish İ/ı too): `hkilic`, `Hkilic` and `HKILIC` are one account; the accounts earlier
 versions made for each spelling merge at that person's next sign-in (the other spellings'
 sessions end), and *Sign out* and *Delete* cover all of them. OIDC names are compared
@@ -516,7 +531,7 @@ directory's owner by itself):
 | Install | Command |
 |---|---|
 | source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
-| Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ser2net\data --set-password admin` |
+| Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
 **First admin without the browser:** run `ser2net --set-password admin` before the first
@@ -562,19 +577,28 @@ is no account at all; later starts ignore it.
 ## ⚙️ Run as a service
 
 - **Docker:** official `Dockerfile` + `docker-compose.yml` (see above and
-  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume.
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. A plain
+  `docker run` needs `--restart unless-stopped` for that (an existing container:
+  `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
   **Do not run as root.**
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
-  ser2net-windows-x64.exe --install-service --data-dir C:\ser2net\data
+  ser2net-windows-x64.exe --install-service
   ```
-  The service starts at boot, needs no signed-in user (LocalSystem) and restarts 5 s after
-  it crashes or exits with an error. On the first install the console asks for the UI
-  address. Remove it with `--uninstall-service` (the data folder is kept); run several
-  instances with different data folders via `--service-name`. Stop/start: `sc stop ser2net`
-  / `sc start ser2net` or *Services* (services.msc).
+  The exe copies itself to `C:\Program Files\ser2net\` (admin-only, so a standard user
+  can't replace the file the service runs as SYSTEM) and keeps its data in
+  `C:\ProgramData\ser2net\` (both writable by SYSTEM and Administrators only). The
+  service starts at boot, needs no signed-in user
+  (LocalSystem) and restarts 5 s after it crashes or exits with an error; the console asks
+  once for the UI address. Remove it with `--uninstall-service` (the data folder is kept);
+  run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
+  `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
+  newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
+  service too). **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
+  firewall rule you need to reach it from other hosts, changing the address, upgrading and
+  the SmartScreen warning on unsigned builds.
 - **Many mappings:** a running mapping keeps about three files open (its serial port, its
   listener and its log), plus one per connected client. At start ser2net raises its soft
   open-file limit toward the hard limit (at most 65536) and logs the result (`open files:

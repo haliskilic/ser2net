@@ -70,6 +70,8 @@ class Ctx:
         cfg = self.state.config
         ttl = cfg.session_timeout_s  # Settings -> Web UI access -> session lifetime
         self.state.signins.note(user.username, user.source)   # its last sign-in
+        issued = self.state.sessions_issued
+        issued[user.username] = issued.get(user.username, 0) + 1
         response.set_cookie(
             auth.SESSION_COOKIE,
             auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),
@@ -93,13 +95,18 @@ class Ctx:
         u = current_user(request)
         return u is not None and u.source == "anonymous"
 
+    @staticmethod
+    def actor(request) -> str:
+        """Who acts, for the audit log: the signed-in user, "(no login)" for an
+        open-access visitor."""
+        u = current_user(request)
+        return (u.username if u.source != "anonymous" else "(no login)") if u is not None else ""
+
     def audit(self, request, action: str, detail: str = "", user: str | None = None) -> None:
         """An audit record for this request: client IP plus the acting user (the
         signed-in user unless given)."""
-        if user is None:
-            u = current_user(request)
-            user = (u.username if u.source != "anonymous" else "(no login)") if u is not None else ""
-        self.state.audit(client_ip(request), action, detail, user=user)
+        self.state.audit(client_ip(request), action, detail,
+                         user=self.actor(request) if user is None else user)
 
     def require_peer_access(self, request):
         """Cluster peer actions act on OTHER nodes with the shared key, so they need a

@@ -30,6 +30,7 @@ PORTABLE = [
     "test_config_validation.py",
     "test_dir_permissions.py",
     "test_env_bind.py",
+    "test_boot_config.py",
     "test_udp_acl.py",
     "test_rfc2217_readonly.py",
     "test_stop_with_clients.py",
@@ -74,6 +75,7 @@ PORTABLE = [
     "test_healthcheck.py",
     "test_upgrade_from_2_7.py",
     "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)
+    "test_single_instance.py",
     "test_notifications.py",
     "test_ports_usb_identity.py",
     "test_dashboard.py",

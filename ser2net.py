@@ -41,8 +41,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--version", action="version", version=f"ser2net {__version__}")
     p.add_argument(
         "--data-dir",
-        default=os.path.join(_app_dir(), "data"),
-        help="Directory for config.json, backups and logs (default: ./data).",
+        default=None,  # see below: whether it was given matters to --install-service
+        help="Directory for config.json, backups and logs (default: ./data; for "
+             "--install-service: the data directory the service already uses, or for a "
+             "new service from the standalone exe %%ProgramData%%\\ser2net).",
     )
     p.add_argument(
         "--config",
@@ -83,6 +85,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     svc.add_argument("--service-name", default="ser2net",
                      help="Name of the Windows service (default: ser2net); lets several "
                           "instances with different data directories run side by side.")
+    svc.add_argument("--allow-unsafe-location", action="store_true",
+                     help="Install the service from a source checkout even if a "
+                          "non-administrator can modify it (the standalone exe never needs "
+                          "this: it installs itself to an admin-only folder).")
     svc.add_argument("--service", action="store_true", help=argparse.SUPPRESS)  # used by the SCM
     p.add_argument(
         "--healthcheck",
@@ -99,7 +105,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                           "the first line of stdin.")
     one.add_argument("--sign-out-all", action="store_true",
                      help="End every web UI session (new session key), then exit.")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    args.data_dir_given = args.data_dir is not None
+    if args.data_dir is None:
+        args.data_dir = os.path.join(_app_dir(), "data")
+    return args
 
 
 def apply_lib_override() -> None:
@@ -214,17 +224,53 @@ def main(argv: list[str] | None = None) -> int:
     if args.install_service:
         if _service_call(lambda ws: ws.require_windows()):
             return 1
-        data_dir = os.path.abspath(args.data_dir)
-        config = os.path.abspath(args.config) if args.config else None
-        runtime.prepare_config(config_path, args.reconfigure)  # first run: asks for the UI address
-        return _service_call(lambda ws: ws.install(args.service_name, data_dir, config))
+        def prepare(service_config: str):
+            # runs once an existing service is stopped (the data directory then has no
+            # running instance). First run: asks for the UI address; warnings (e.g. a
+            # setting that was not saved) would otherwise only reach the service's log
+            _store, loaded = runtime.prepare_config(service_config, args.reconfigure)
+            for note in loaded.load_notes:
+                _write_utf8(note + "\n")
+            runtime.require_admin_tls(loaded.admin_ui)  # the service could not start without it
+            return loaded
+
+        # an upgrade keeps the data directory the service has unless --data-dir is given
+        done: dict = {}
+        rc = _service_call(lambda ws: done.update(config=ws.install(
+            args.service_name, args.data_dir if args.data_dir_given else None, args.config,
+            prepare=prepare, default_data_dir=os.path.abspath(args.data_dir),
+            allow_unsafe_location=args.allow_unsafe_location)))
+        if rc == 0 and done.get("config") is not None:
+            _print_firewall_hint(done["config"], args.service_name)
+        return rc
     if args.service:
         from app import winservice
 
         return winservice.run(args.service_name,
-                              lambda: runtime.main(config_path=config_path),
+                              lambda: runtime.service_main(config_path),
                               runtime.request_shutdown)
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
+
+
+def _print_firewall_hint(config, service_name: str) -> None:
+    """A LocalSystem service never sees the Windows Firewall prompt, so other hosts can't
+    reach the admin UI, the mapping ports or the cluster until a rule is added. Print the
+    exact command when anything listens beyond loopback (the firewall is not opened for
+    the user: secure by default)."""
+    admin = config.admin_ui
+    beyond_loopback = admin.bind_ip not in ("127.0.0.1", "::1", "localhost") or any(
+        m.enabled and getattr(m.network, "listens", False)
+        and m.network.bind_ip not in ("127.0.0.1", "::1") for m in config.mappings)
+    if not beyond_loopback:
+        return
+    from app import winservice
+
+    _write_utf8(
+        "\nWindows Firewall: this service listens for other hosts, which the firewall "
+        "blocks until you allow it (a service gets no prompt). From an elevated prompt:\n  "
+        + winservice.firewall_command(service_name) + "\n  (remove it later with: "
+        f'netsh advfirewall firewall delete rule name="{winservice.display_name(service_name)}")'
+        "\nSee docs/WINDOWS.md.\n")
 
 
 def _service_call(fn) -> int:

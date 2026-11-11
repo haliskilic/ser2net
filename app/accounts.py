@@ -6,17 +6,22 @@
     SER2NET_ADMIN_PASSWORD_FILE   (+ SER2NET_ADMIN_USER, default "admin") the first admin
                                   of an install without accounts, e.g. a Docker secret
 
-The commands work whether ser2net is running or not. While an instance of the same data
-directory runs, the change is handed to it: a request file in <data>/admin-requests/
-that the instance applies under its config lock, so its next save can't undo the change
-and sessions end at once (this also reaches an instance in another container that
-shares the data volume). Otherwise config.json is changed here, through ConfigStore,
-which keeps the version it replaces in backups/. Either way the change is written to
-audit.log. The password is asked twice on the terminal, or read from the first line of
-stdin when that is not a terminal; only its scrypt hash leaves this process, and
-nothing secret is printed or logged. Run as root on a data directory that belongs to
-another user (docker exec, sudo), the command first becomes that user, so the files it
-writes keep the owner the running ser2net needs.
+The commands work whether ser2net is running or not. The data directory's lock
+(app/datalock.py, <data>/ser2net.lock) tells which: while an instance of the same data
+directory holds it, the change is handed to that instance: a request file in
+<data>/admin-requests/ that it applies under its config lock, so its next save can't
+undo the change and sessions end at once (this also reaches an instance in another
+container or network namespace that shares the data directory). Otherwise the command
+takes the lock itself — a ser2net that starts meanwhile waits for it — and changes
+config.json here, through ConfigStore, which keeps the version it replaces in backups/.
+Where the lock can't be used (a read-only data directory, a network share without
+locks), and for a ser2net from before the lock, the web UI's /healthz tells whether one
+runs. Either way the change is written to audit.log. The password is asked twice on
+the terminal, or read from the first line of stdin when that is not a terminal; only
+its scrypt hash leaves this process, and nothing secret is printed or logged. Run as
+root on a data directory that belongs to another user (docker exec, sudo), the command
+first becomes that user, so the files it writes keep the owner the running ser2net
+needs.
 """
 from __future__ import annotations
 
@@ -32,15 +37,15 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from . import healthcheck
+from . import datalock, healthcheck
 from .config import ConfigStore, User, new_pwd_version
 from .web import auth
 
 REQUEST_DIR = "admin-requests"     # in the data directory
 POLL_S = 1.0                       # how often a running instance looks for requests
 REQUEST_MAX_AGE_S = 120.0          # an older request is answered "expired", not applied
-WAIT_RUNNING_S = 20.0              # /healthz answers: wait this long for the instance
-WAIT_STOPPED_S = 3.0               # it doesn't: still wait a moment (another container?)
+WAIT_RUNNING_S = 20.0              # an instance runs: wait this long for it to take it
+WAIT_STOPPED_S = 3.0               # no lock, no /healthz: still wait a moment (another container?)
 WAIT_ANSWER_S = 30.0               # taken: wait this long for its answer
 ACTOR = "(command line)"           # the audit log's user column
 _REQUEST_ID = re.compile(r"^[0-9a-f]{16}$")
@@ -244,13 +249,17 @@ def _read_answer(path: str) -> Optional[tuple[bool, str]]:
 
 
 def wait_answer(data_dir: str, request_id: str, take_s: float, answer_s: float = WAIT_ANSWER_S,
-                sleep=time.sleep) -> Optional[tuple[bool, str]]:
+                sleep=time.sleep, gone: Optional[Callable[[], bool]] = None
+                ) -> Optional[tuple[bool, str]]:
     """The command's side: a running instance's (ok, message), or None when no instance
-    took the request within take_s seconds (it is withdrawn then)."""
+    took the request within take_s seconds, or before gone() said it has stopped (it is
+    withdrawn then)."""
     d = _request_dir(data_dir)
     request_path, answer_path = (os.path.join(d, request_id + ext) for ext in (".req", ".res"))
     end = time.monotonic() + take_s
     while (result := _read_answer(answer_path)) is None and time.monotonic() < end:
+        if gone is not None and gone():
+            break
         sleep(0.2)
     if result is not None:
         return result
@@ -333,23 +342,73 @@ def apply_here(request: dict, config_path: str) -> str:
 
 
 def submit(request: dict, config_path: str) -> str:
-    """Hand the change to the running instance of this data directory, or make it here."""
+    """Hand the change to the running instance of this data directory, or make it here
+    while holding the data directory's lock."""
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    with contextlib.suppress(OSError):  # if it can't be created, the change itself says why
+        os.makedirs(data_dir, exist_ok=True)
+    try:
+        return _submit(request, config_path, data_dir)
+    finally:
+        datalock.release(data_dir)  # if this command took it
+
+
+def _done(result: tuple[bool, str]) -> str:
+    ok, message = result
+    if not ok:
+        raise AccountError(message)
+    return f"{message} (done by the running ser2net)"
+
+
+def _submit(request: dict, config_path: str, data_dir: str) -> str:
+    while True:
+        try:
+            note = datalock.acquire(data_dir, brief=True, wait=datalock.BRIEF_WAIT_S)
+        except datalock.Held as e:
+            if e.brief:  # another of these commands, still busy
+                raise AccountError(f"{e}; run this again in a moment") from None
+            if (message := _hand_over(request, data_dir, e.pid)) is not None:
+                return message
+            continue  # it stopped before taking the request: the lock is this command's now
+        break
     if not os.path.isfile(config_path):
         return apply_here(request, config_path)  # nothing can be running on it
-    data_dir = os.path.dirname(os.path.abspath(config_path))
+    # The lock is this command's, or can't be used here. A ser2net that runs without it
+    # (one from before the lock, or on a data directory that can't be locked) still
+    # answers /healthz; where the lock can't be used, also give one the healthcheck can't
+    # reach (another container) a moment to take the request.
     running = healthcheck.check(config_path, timeout=3)[0]
-    request_id = post_request(data_dir, request)
-    result = wait_answer(data_dir, request_id, WAIT_RUNNING_S if running else WAIT_STOPPED_S)
-    if result is not None:
-        ok, message = result
-        if not ok:
-            raise AccountError(message)
-        return f"{message} (done by the running ser2net)"
-    if running:
-        raise AccountError("ser2net is running on this data directory but did not take the "
-                           "request (an older version?). Stop it, run this command again, "
-                           "then start it.")
+    if running or note is not None:
+        request_id = post_request(data_dir, request)
+        result = wait_answer(data_dir, request_id, WAIT_RUNNING_S if running else WAIT_STOPPED_S)
+        if result is not None:
+            return _done(result)
+        if running:
+            raise AccountError("ser2net is running on this data directory but did not take the "
+                               "request (an older version?). Stop it, run this command again, "
+                               "then start it.")
     return apply_here(request, config_path)
+
+
+def _hand_over(request: dict, data_dir: str, pid: Optional[int]) -> Optional[str]:
+    """The instance holding the lock applies the request. None when it stopped before
+    taking it: then this command holds the lock and makes the change itself."""
+    def stopped() -> bool:
+        try:
+            return datalock.acquire(data_dir, brief=True) is None
+        except datalock.Held:
+            return False
+
+    request_id = post_request(data_dir, request)
+    result = wait_answer(data_dir, request_id, WAIT_RUNNING_S, gone=stopped)
+    if result is not None:
+        return _done(result)
+    if datalock.holds(data_dir):
+        return None
+    process = f" (process {pid})" if pid else ""
+    raise AccountError(f"the ser2net running with {data_dir}{process} did not take the request "
+                       f"within {WAIT_RUNNING_S:.0f} s. If it is still starting, run this "
+                       "command again once its web UI answers; otherwise see its log (all.log)")
 
 
 def main(args, config_path: str, stdin=None) -> int:

@@ -13,7 +13,7 @@ from starlette.routing import WebSocketRoute
 
 from ...engine.bridge import TO_DEVICE
 from .. import auth
-from .common import Ctx, console_interactive, sees_to_device
+from .common import Ctx, client_ip, console_interactive, sees_to_device
 
 CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
 
@@ -35,6 +35,14 @@ def routes(ctx: Ctx) -> list:
         websocket.state.user = ws_user  # like request.state.user (ctx.audit)
         return ws_user, token
 
+    def _record_open(websocket, action: str, mapping, detail: str) -> None:
+        """The audit record of a console or hex view opened, bounded (AppState.view_records):
+        per account — an open-access visitor: per address —, mapping and kind."""
+        ip, user = client_ip(websocket), ctx.actor(websocket)
+        who = (user, ip if ctx.is_anonymous(websocket) else "")
+        state.view_records.open(ip, user, action, f"{mapping.name} ({detail})",
+                                key=(*who, action, mapping.id))
+
     # ---------------- console (xterm over WebSocket) ----------------
     async def console_ws(websocket):
         cfg = state.config
@@ -55,8 +63,8 @@ def routes(ctx: Ctx) -> list:
         interactive = console_interactive(ws_user, mapping)
         peer = websocket.client.host if websocket.client else "?"
         state.log(f"[{mapping.name}] console opened by {ws_user.username} ({peer})")
-        ctx.audit(websocket, "console_open",
-                  f"{mapping.name} ({'interactive' if interactive else 'read-only'})")
+        _record_open(websocket, "console_open", mapping,
+                     "interactive" if interactive else "read-only")
 
         async def sender():
             while True:
@@ -127,8 +135,8 @@ def routes(ctx: Ctx) -> list:
         runner.add_traffic_monitor(mon)
         peer = websocket.client.host if websocket.client else "?"
         state.log(f"[{mapping.name}] hex view opened by {ws_user.username} ({peer})")
-        ctx.audit(websocket, "hex_view_open",
-                  f"{mapping.name} ({'both directions' if to_device else 'device output only'})")
+        _record_open(websocket, "hex_view_open", mapping,
+                     "both directions" if to_device else "device output only")
 
         async def sender():
             while True:

@@ -184,6 +184,9 @@ def main():
             async with websockets.connect(base + "/console", additional_headers=hdr) as ws:
                 await ws.send(b"viewer-typed")  # a viewer's console is read-only: dropped
                 await asyncio.sleep(0.5)
+            for _ in range(5):  # opened again and again: one audit record (all.log: each)
+                async with websockets.connect(base + "/console", additional_headers=hdr):
+                    pass
             async with websockets.connect(base + "/traffic", additional_headers=hdr) as ws:
                 _r, w = await asyncio.open_connection("127.0.0.1", 47350)
                 await asyncio.sleep(0.3)
@@ -216,7 +219,14 @@ def main():
         assert {("admin", "CON (interactive)"), ("view1", "CON (read-only)")} <= audit("console_open")
         assert {("admin", "CON (both directions)"),
                 ("view1", "CON (device output only)")} <= audit("hex_view_open"), audit("hex_view_open")
-        print("audit log: console and hex view opens recorded with user and mode  OK")
+        text = op.open("http://127.0.0.1:%d/settings/audit.csv?action=console_open" % UI,
+                       timeout=10).read().decode("utf-8")
+        users = [r["user"] for r in csv.DictReader(io.StringIO(text))]
+        assert users.count("view1") == 1, users
+        assert open(os.path.join(tmp, "all.log"), encoding="utf-8").read().count(
+            "[CON] console opened by view1") == 6
+        print("audit log: console and hex view opens recorded with user and mode, once per "
+              "account, mapping and kind in 5 minutes (all.log: every one)  OK")
 
         device.close()
         print("\nPASS: WebSocket console (auth + bidirectional)")

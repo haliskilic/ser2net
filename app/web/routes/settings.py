@@ -163,7 +163,9 @@ def routes(ctx: Ctx) -> list:
         return target, None
 
     async def settings_signout_others(request):
-        """Any signed-in user: end their own sessions elsewhere, keep this one."""
+        """Any signed-in user: end their own sessions elsewhere, keep this one. Nothing
+        to do (no save) when no session was issued for the account since its last
+        click (AppState.others_signed_out)."""
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
@@ -171,6 +173,10 @@ def routes(ctx: Ctx) -> list:
         if me is None or me.source == "anonymous":
             return await settings_get(request, error=_("Sign in to manage your sessions."))
         async with state.config_lock:
+            if state.others_signed_out.get(me.username) == (
+                    me.pwd_version, state.sessions_issued.get(me.username, 0)):
+                return await settings_get(request,
+                                          ok=_("Your other sessions are already signed out."))
             user, err = await _bump_sessions(me.username)
         if err:
             return await settings_get(request, error=err)
@@ -178,6 +184,8 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "sessions_signout_others", me.username)
         resp = await settings_get(request, ok=_("Your other sessions were signed out."))
         set_session(resp, request, user)
+        state.others_signed_out[user.username] = (user.pwd_version,
+                                                  state.sessions_issued.get(user.username, 0))
         return resp
 
     async def settings_tls_post(request):
@@ -345,9 +353,10 @@ def routes(ctx: Ctx) -> list:
         return ""
 
     def _ca_file_problem(ldap) -> str | None:
-        """Checked when the LDAP form is saved: the CA certificate file can be read and
-        holds a certificate."""
-        if not (ldap.tls_verify and ldap.ca_file.strip()):
+        """Checked when the LDAP form is saved with LDAP on over TLS (the only time the
+        file is used; switching LDAP off must work while it is missing): the CA
+        certificate file can be read and holds a certificate."""
+        if not (ldap.enabled and ldap.uses_tls and ldap.tls_verify and ldap.ca_file.strip()):
             return None
         try:
             ldap_auth.tls_context(ldap)
@@ -697,7 +706,7 @@ def routes(ctx: Ctx) -> list:
         candidate, _touched = importer.apply_import(current, plan.mappings, mode)
         problem = None
         try:
-            dataclasses.replace(state.config, mappings=candidate).validate()
+            dataclasses.replace(state.config, mappings=candidate).validate_for_save()
         except ConfigError as e:
             problem = str(e)
         preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
@@ -889,9 +898,11 @@ def routes(ctx: Ctx) -> list:
         if with_accounts and not restored.admin_count():
             return await settings_get(request, error=_("This backup has no admin account, so its "
                                                        "accounts can't be restored. Not restored."))
-        # never from the backup: the session key (renewed below with the accounts) and
-        # this node's cluster id; and unless asked, the accounts and credentials
-        keep = {"secret_key", "instance_id", "load_notes", "ids_created"}
+        # never from the backup: the session key (renewed below with the accounts), this
+        # node's cluster id and what start-up accepted while broken, so a restore is refused
+        # only for what it changes or adds (AppConfig.validate_for_save); and unless asked,
+        # the accounts and credentials
+        keep = {"secret_key", "instance_id", "load_notes", "ids_created", "tolerated"}
         if not with_accounts:
             keep |= {"users", "api_token_hash", "api_token_role"}
         notes = []
@@ -1142,8 +1153,9 @@ def _key_hint(key: str) -> str:
 
 # ---------------- what a restore changes for sign-in and access ----------------
 def _setting_changes(old, new) -> list[str]:
-    """Sign-in / access settings that differ between two configurations (AppConfig or
-    the same fields), as lines for the user (and, in English, the audit log)."""
+    """Sign-in / access settings and the cluster's that differ between two configurations
+    (AppConfig or the same fields), as lines for the user (and, in English, the audit
+    log)."""
     def onoff(value) -> str:
         return _("enabled") if value else _("disabled")
 
@@ -1173,6 +1185,15 @@ def _setting_changes(old, new) -> list[str]:
 
     diff(_("Remove LDAP / OIDC accounts not signed in for"),
          days(old.external_users_expire_days), days(new.external_users_expire_days))
+    # the cluster's settings (its keys are credentials: _account_changes)
+    o, n = old.cluster, new.cluster
+    cluster = _("LAN cluster")
+    diff(cluster, onoff(o.enabled), onoff(n.enabled))
+    diff(f"{cluster} · {_('Legacy authentication')}", onoff(o.legacy_auth), onoff(n.legacy_auth))
+    diff(f"{cluster} · {_('Automatic discovery')}", onoff(o.discovery), onoff(n.discovery))
+    diff(f"{cluster} · {_('Discovery UDP port')}", o.discovery_port, n.discovery_port)
+    diff(f"{cluster} · {_('Advertise IP')}", o.advertise_ip or "—", n.advertise_ip or "—")
+    diff(f"{cluster} · {_('Manual peers')}", ", ".join(o.peers) or "—", ", ".join(n.peers) or "—")
     return out
 
 

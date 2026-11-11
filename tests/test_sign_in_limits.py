@@ -13,7 +13,15 @@ Checks:
     characters, NEL and U+2028/U+2029 can't split one, all.log messages cut at 2000
     characters, no unread copy of the log kept in memory;
   * failed sign-ins past 20 in 10 minutes are counted, then summed up in one record;
+  * console / hex view opens: one record per account (open access: per address),
+    mapping and kind in 5 minutes, the next one saying how many it stands for; at most
+    50 in 10 minutes, then summed up;
+    directory sign-ins refused for their name (a local account's) count towards the
+    same limit;
   * the login rate limiter keeps a bounded number of addresses and failure times;
+  * logouts: one account's ended cookies are remembered up to its share; past that the
+    account is signed out everywhere (one save) instead of anyone's ended cookie being
+    forgotten;
   * an open-access visitor's sign-out adds no audit record.
 
 Most checks call the web app in this process (no socket); one boots a real server.
@@ -22,6 +30,7 @@ Run: python3 tests/test_sign_in_limits.py
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -34,7 +43,7 @@ from _server import Browser, Server
 
 import app.state as st
 from app.config import AppConfig, ConfigStore, LdapSettings
-from app.state import AppState, FailedLoginRecords
+from app.state import AppState, FailedLoginRecords, ViewRecords
 from app.web import auth, ldap_auth
 from app.web.server import MAX_BODY_BYTES, build_app
 
@@ -361,6 +370,136 @@ def test_failed_login_records():
           "record (at the window's end, the next sign-in or shutdown)  OK")
 
 
+def test_view_records():
+    got = []
+
+    def audit(ip, action, detail="", user=""):
+        got.append((ip, action, detail, user))
+
+    rec = ViewRecords(audit, limit=4, window_s=30, repeat_s=0.3)
+    anon = ("(no login)", "10.0.0.1", "console_open", "m1")
+    assert rec.open("10.0.0.1", "(no login)", "console_open", "CON (read-only)", anon)
+    for _ in range(5):  # the same visitor, mapping and kind again: counted
+        assert not rec.open("10.0.0.1", "(no login)", "console_open", "CON (read-only)", anon)
+    assert rec.open("10.0.0.2", "(no login)", "console_open", "CON (read-only)",
+                    ("(no login)", "10.0.0.2", "console_open", "m1")), "another address"
+    assert rec.open("10.0.0.1", "bob", "hex_view_open", "CON (device output only)",
+                    ("bob", "", "hex_view_open", "m1")), "another kind"
+    assert len(got) == 3, got
+    time.sleep(0.35)
+    assert rec.open("10.0.0.1", "(no login)", "console_open", "CON (read-only)", anon)
+    assert got[3][2].startswith("CON (read-only); opened 5 more times after ") and \
+        got[3][2].endswith(", not recorded one by one"), got[3]
+    for i in range(3):  # the window's 4 records are used up: counted, then summed up
+        assert not rec.open(f"10.0.1.{i}", "(no login)", "console_open", "X (read-only)",
+                            ("(no login)", f"10.0.1.{i}", "console_open", "m2"))
+    rec.flush()
+    ip, action, detail, user = got[4]
+    assert (ip, action, user) == ("", "console_open", "(no login)"), got[4]
+    assert detail.startswith("3 more console and hex view opens since "), detail
+    rec = ViewRecords(audit, limit=10**6, window_s=60, repeat_s=60)
+    rec.MAX_KEYS = 50
+    for i in range(200):
+        rec.open(f"10.9.{i // 256}.{i % 256}", "(no login)", "console_open", "X",
+                 ("(no login)", f"10.9.{i // 256}.{i % 256}", "console_open", "m"))
+    assert len(rec._seen) <= rec.MAX_KEYS
+    print("console / hex view opens: once per account or address, mapping and kind in the "
+          "repeat time (the next record counts the rest), at most the limit, then summed up; "
+          "keys bounded  OK")
+
+
+async def _directory_refusals(d: str) -> None:
+    state = _state(d, {
+        "users": [{"username": "admin", "password_hash": auth.hash_password(PW),
+                   "role": "admin", "pwd_version": 1}],
+        "notifications": {"enabled": True, "events": ["login_failed"], "repeat_s": 0},
+        "ldap": {"enabled": True, "server_uri": "ldap://127.0.0.1:1",
+                 "user_dn_template": "uid={username},ou=people,dc=ex,dc=com"}})
+    app = build_app(state)
+    limit = st.FAILED_LOGIN_RECORDS
+    for i in range(limit + 5):  # the directory knows "ADMIN": the local admin's name
+        s, _h, text, _r = await call(app, "POST", "/login",
+                                     form({"username": "ADMIN", "password": "dir-pass"}),
+                                     headers=FORM, client=f"10.2.0.{i + 1}")
+        assert s == 403 and "local account named admin" in text, (s, text[:160])
+    s, _h, _t, _r = await call(app, "POST", "/login",
+                               form({"username": "nobody", "password": "wrong-pass"}),
+                               headers=FORM, client="10.2.1.1")
+    assert s == 401, s
+    rows = _audit_rows(state)
+    assert [r[2] for r in rows] == ["ldap_login_denied"] * limit, rows
+    assert rows[0][3:] == ["local account admin", "ADMIN"], rows[0]
+    queued = 0
+    while not state.notifier._queue.empty():
+        queued += 1
+        state.notifier._queue.get_nowait()
+    assert queued == limit + 6, "notified like a failed sign-in"
+    await state.stop_engine()
+    rows = _audit_rows(state)
+    assert len(rows) == limit + 1 and rows[-1][2] == "login_failed", rows[-1]
+    assert rows[-1][3].startswith("6 more failed sign-ins since "), rows[-1]
+    assert all(r[2] != "ldap_login_denied" for r in rows[limit:]), rows[limit:]
+
+
+def test_directory_refusals_bounded():
+    d = tempfile.mkdtemp(prefix="s2n_limits_dir_")
+    real = ldap_auth.authenticate
+    ldap_auth.authenticate = lambda *a, **k: ["staff"]  # the directory accepts any password
+    try:
+        asyncio.run(_directory_refusals(d))
+    finally:
+        ldap_auth.authenticate = real
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+    print("directory sign-ins refused for a local account's name: recorded one by one within "
+          "the failed sign-ins' limit, then summed up with them  OK")
+
+
+async def _logouts(d: str) -> None:
+    state = _state(d, {"users": [
+        {"username": "admin", "password_hash": auth.hash_password(PW), "role": "admin",
+         "pwd_version": 1},
+        {"username": "bob", "password_hash": auth.hash_password(PW), "role": "viewer",
+         "pwd_version": 7}]})
+    app = build_app(state)
+    state.revoked_sessions.PER_USER = 3
+    secret = state.config.secret_key
+
+    async def logout(token):
+        s, h, _t, _r = await call(app, "POST", "/logout", form({}), headers={
+            **FORM, "Cookie": f"ser2net_csrf={CSRF}; ser2net_session={token}"})
+        assert s == 303 and h.get("location") == "/login", s
+
+    victim = auth.issue_session(secret, 3600, "admin", 1)
+    await logout(victim)  # someone else's cookie, ended earlier (a copy may exist)
+    bobs = [auth.issue_session(secret, 3600, "bob", 7) for _ in range(4)]
+    for t in bobs[:3]:
+        await logout(t)
+    assert state.config.get_user("bob").pwd_version == 7 and not os.path.exists(state.store.path)
+    live = auth.issue_session(secret, 3600, "bob", 7)  # bob's session in another browser
+    await logout(bobs[3])  # no room for it: bob is signed out everywhere
+    assert state.config.get_user("bob").pwd_version == 8
+    with open(state.store.path, encoding="utf-8") as fh:
+        saved = AppConfig.from_dict(json.load(fh)).get_user("bob")
+    assert saved.pwd_version == 8, "the sign-out must be saved"
+    for t in bobs + [live]:
+        assert auth.session_user(state.config, t, state.revoked_sessions) is None
+    assert victim in state.revoked_sessions, "another account's ended cookie was forgotten"
+    assert auth.session_user(state.config, victim, state.revoked_sessions) is None
+    assert "'bob' signed out everywhere: too many of its sessions" in _read(state.log_path)
+
+
+def test_revocation_list_full():
+    d = tempfile.mkdtemp(prefix="s2n_limits_logout_")
+    try:
+        asyncio.run(_logouts(d))
+    finally:
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+    print("logouts past an account's share: that account is signed out everywhere (saved); "
+          "another account's ended cookie stays refused  OK")
+
+
 def test_rate_limiter_bounds():
     lim = auth.LoginRateLimiter(max_attempts=3, window_s=0.3)
     for i in range(2000):
@@ -440,6 +579,9 @@ def test_live():
 def main():
     test_audit_and_log_caps()
     test_failed_login_records()
+    test_directory_refusals_bounded()
+    test_view_records()
+    test_revocation_list_full()
     test_rate_limiter_bounds()
     test_ldap_failure_line()
     test_in_process()
