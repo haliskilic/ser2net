@@ -24,6 +24,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
 
 from . import console, standalone
 from .config import ConfigStore
+from .engine import netguard
 from .state import AppState
 from .web.server import build_app
 
@@ -90,6 +91,21 @@ def main(config_path: str, reconfigure: bool = False) -> int:
         return 0
 
 
+def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
+    """What asyncio reports to its exception handler (an error in a callback, a listener
+    out of descriptors: "socket.accept() out of system resource") goes to all.log as well
+    as stderr, at most once a minute."""
+    say = netguard.LogEvery(log)
+
+    def handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        exc = context.get("exception")
+        detail = f" ({type(exc).__name__}: {exc})" if exc is not None else ""
+        say(f"event loop: {context.get('message') or 'error'}{detail}")
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+
+
 async def _serve(store: ConfigStore, config) -> int:
     import uvicorn
 
@@ -99,6 +115,10 @@ async def _serve(store: ConfigStore, config) -> int:
     state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
     for note in standalone.notes + config.load_notes:
         state.log(note)
+    for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config)):
+        if line:
+            state.log(line)
+    _log_loop_errors(asyncio.get_running_loop(), state.log)
     if not config.password_set:
         state.log("no admin password set yet — open the UI to complete first-run setup")
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:

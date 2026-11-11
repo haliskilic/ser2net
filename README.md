@@ -292,7 +292,8 @@ volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapm
   **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
-  düşürülen yavaş istemciler.
+  düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
+  `ser2net_fd_limit`, POSIX).
 
 ---
 
@@ -388,6 +389,12 @@ gösterilir ve açılışta loga yazılır.
   Kaldırmak: `--uninstall-service` (veri klasörü kalır). Farklı veri klasörleriyle birden
   fazla örnek için `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net`
   ya da *Hizmetler* (services.msc).
+- **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
+  dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
+  açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar
+  (`open files: …`); systemd unit'i `LimitNOFILE=65536` ayarlar, Docker'daki düşük bir
+  sert sınır `--ulimit nofile=65536` ile yükseltilir. Yapılandırılan eşlemeler sınıra
+  yaklaşınca açılış log'unda bir uyarı çıkar.
 
 ---
 

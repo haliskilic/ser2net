@@ -284,7 +284,8 @@ a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCK
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
-  its clients, bytes in / out / dropped, reconnects and dropped slow clients.
+  its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
+  process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX).
 
 ---
 
@@ -379,6 +380,12 @@ role changes. While it is on, the UI shows a warning and startup logs it.
   address. Remove it with `--uninstall-service` (the data folder is kept); run several
   instances with different data folders via `--service-name`. Stop/start: `sc stop ser2net`
   / `sc start ser2net` or *Services* (services.msc).
+- **Many mappings:** a running mapping keeps about three files open (its serial port, its
+  listener and its log), plus one per connected client. At start ser2net raises its soft
+  open-file limit toward the hard limit (at most 65536) and logs the result (`open files:
+  …`); the systemd unit sets `LimitNOFILE=65536`, and a low hard limit in Docker is raised
+  with `--ulimit nofile=65536`. The start-up log warns when the configured mappings need
+  close to the limit.
 
 ---
 
