@@ -69,7 +69,7 @@
   <input type="hidden" name="host" value="{{ remote.host }}">
   <input type="hidden" name="port" value="{{ remote.port }}">
   {% endif %}
-  {% if not is_new %}<input type="hidden" name="id" value="{{ mapping.id }}">{% endif %}
+  {% if not is_new %}<input type="hidden" name="id" value="{{ remote.id if remote else mapping.id }}">{% endif %}
 
   <div class="form-head">
     <h3>{{ _("New mapping") if is_new else _("Edit mapping") }}{% if remote %} <span class="tag">{{ _("on %(host)s", host=remote.host ~ ':' ~ remote.port) }}</span>{% endif %}</h3>
