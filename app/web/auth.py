@@ -30,6 +30,7 @@ import re
 import secrets
 import socket
 import time
+import unicodedata
 from collections import OrderedDict, deque
 
 SESSION_COOKIE = "ser2net_session"
@@ -84,6 +85,17 @@ def _parse(stored) -> tuple[tuple[int, int, int], bytes, bytes] | None:
     return cost, salt, expected
 
 
+def _prep(password: str) -> str:
+    """A password as it is hashed: Unicode NFKC, like the cluster key (engine/cluster.py
+    key_bytes), so that the same password typed on another device or pasted from
+    elsewhere is the same text - a letter with its accent as one character or two (NFD,
+    from macOS file names or some PDFs), a no-break space (macOS Option+Space, text from
+    Word or the web) for a space, full-width forms. Letters typed on a keyboard, Turkish
+    ones included, are NFKC already. Only for local accounts: a directory gets the
+    password as it was typed."""
+    return unicodedata.normalize("NFKC", password)
+
+
 def _scrypt(password: str, salt: bytes, cost: tuple[int, int, int], dklen: int) -> bytes:
     n, r, p = cost
     # the memory these parameters need (OpenSSL refuses more than 32 MiB unless told)
@@ -94,7 +106,7 @@ def _scrypt(password: str, salt: bytes, cost: tuple[int, int, int], dklen: int) 
 
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
-    dk = _scrypt(password, salt, _COST, _DKLEN)
+    dk = _scrypt(_prep(password), salt, _COST, _DKLEN)
     return f"scrypt:{_SCRYPT_N}:{_SCRYPT_R}:{_SCRYPT_P}${salt.hex()}${dk.hex()}"
 
 
@@ -117,13 +129,21 @@ def needs_rehash(stored: str) -> bool:
 
 
 def verify_password(password: str, stored: str) -> bool:
+    """Does `password` match `stored`? Checked as NFKC (_prep), the form every hash of
+    this version is made of; a hash in the format of older versions, which hashed the
+    password as typed, is also checked against that when it differs (one scrypt more,
+    only for a password that NFKC changes)."""
     parsed = _parse(stored)
     if parsed is None:
         return False
     cost, salt, expected = parsed
     try:
-        return hmac.compare_digest(_scrypt(password, salt, cost, len(expected)), expected)
-    except (ValueError, AttributeError, MemoryError):  # not text; out of memory
+        tries = [_prep(password)]
+        if str(stored).startswith("scrypt$") and password != tries[0]:
+            tries.append(password)
+        return any(hmac.compare_digest(_scrypt(pw, salt, cost, len(expected)), expected)
+                   for pw in tries)
+    except (ValueError, TypeError, MemoryError):  # not (encodable) text; out of memory
         return False
 
 
