@@ -88,10 +88,11 @@ def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
 
 
 class FailedLoginRecords:
-    """The login_failed records of the audit log: one by one up to FAILED_LOGIN_RECORDS in
-    a window of FAILED_LOGIN_WINDOW_S seconds; past that only counted until the window
-    ends, when one record says how many more there were, since when and from which
-    addresses. Used on the event loop."""
+    """The audit records of failed sign-ins (login_failed, and the ldap/oidc_login_denied
+    of a directory sign-in refused for its name): one by one up to FAILED_LOGIN_RECORDS
+    in a window of FAILED_LOGIN_WINDOW_S seconds; past that only counted until the window
+    ends, when one login_failed record says how many more there were, since when and
+    from which addresses. Used on the event loop."""
 
     MAX_ADDRESSES = 1000  # addresses counted one by one past the limit (others: in total)
 
@@ -107,16 +108,17 @@ class FailedLoginRecords:
         self._user: str | None = None     # the name all of those were for ("": several)
         self._timer: asyncio.TimerHandle | None = None
 
-    def add(self, ip: str, user: str) -> bool:
-        """A failed sign-in from `ip` for `user` (an account name or auth.UNKNOWN_USER):
-        True if it got its own record, False if it was only counted."""
+    def add(self, ip: str, user: str, action: str = "login_failed", detail: str = "") -> bool:
+        """A failed sign-in from `ip` for `user` (an account name or auth.UNKNOWN_USER),
+        recorded as `action` with `detail`: True if it got its own record, False if it
+        was only counted."""
         now = time.monotonic()
         if self._start is None or now - self._start >= self.window_s:
             self.flush()
             self._start, self._recorded = now, 0
         if self._recorded < self.limit:
             self._recorded += 1
-            self._audit(ip, "login_failed", "", user=user)
+            self._audit(ip, action, detail, user=user)
             return True
         if not self._more:
             self._since, self._user = time.strftime("%H:%M:%S"), user

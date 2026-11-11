@@ -13,6 +13,8 @@ Checks:
     characters, NEL and U+2028/U+2029 can't split one, all.log messages cut at 2000
     characters, no unread copy of the log kept in memory;
   * failed sign-ins past 20 in 10 minutes are counted, then summed up in one record;
+    directory sign-ins refused for their name (a local account's) count towards the
+    same limit;
   * the login rate limiter keeps a bounded number of addresses and failure times;
   * an open-access visitor's sign-out adds no audit record.
 
@@ -361,6 +363,53 @@ def test_failed_login_records():
           "record (at the window's end, the next sign-in or shutdown)  OK")
 
 
+async def _directory_refusals(d: str) -> None:
+    state = _state(d, {
+        "users": [{"username": "admin", "password_hash": auth.hash_password(PW),
+                   "role": "admin", "pwd_version": 1}],
+        "notifications": {"enabled": True, "events": ["login_failed"], "repeat_s": 0},
+        "ldap": {"enabled": True, "server_uri": "ldap://127.0.0.1:1",
+                 "user_dn_template": "uid={username},ou=people,dc=ex,dc=com"}})
+    app = build_app(state)
+    limit = st.FAILED_LOGIN_RECORDS
+    for i in range(limit + 5):  # the directory knows "ADMIN": the local admin's name
+        s, _h, text, _r = await call(app, "POST", "/login",
+                                     form({"username": "ADMIN", "password": "dir-pass"}),
+                                     headers=FORM, client=f"10.2.0.{i + 1}")
+        assert s == 403 and "local account named admin" in text, (s, text[:160])
+    s, _h, _t, _r = await call(app, "POST", "/login",
+                               form({"username": "nobody", "password": "wrong-pass"}),
+                               headers=FORM, client="10.2.1.1")
+    assert s == 401, s
+    rows = _audit_rows(state)
+    assert [r[2] for r in rows] == ["ldap_login_denied"] * limit, rows
+    assert rows[0][3:] == ["local account admin", "ADMIN"], rows[0]
+    queued = 0
+    while not state.notifier._queue.empty():
+        queued += 1
+        state.notifier._queue.get_nowait()
+    assert queued == limit + 6, "notified like a failed sign-in"
+    await state.stop_engine()
+    rows = _audit_rows(state)
+    assert len(rows) == limit + 1 and rows[-1][2] == "login_failed", rows[-1]
+    assert rows[-1][3].startswith("6 more failed sign-ins since "), rows[-1]
+    assert all(r[2] != "ldap_login_denied" for r in rows[limit:]), rows[limit:]
+
+
+def test_directory_refusals_bounded():
+    d = tempfile.mkdtemp(prefix="s2n_limits_dir_")
+    real = ldap_auth.authenticate
+    ldap_auth.authenticate = lambda *a, **k: ["staff"]  # the directory accepts any password
+    try:
+        asyncio.run(_directory_refusals(d))
+    finally:
+        ldap_auth.authenticate = real
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+    print("directory sign-ins refused for a local account's name: recorded one by one within "
+          "the failed sign-ins' limit, then summed up with them  OK")
+
+
 def test_rate_limiter_bounds():
     lim = auth.LoginRateLimiter(max_attempts=3, window_s=0.3)
     for i in range(2000):
@@ -440,6 +489,7 @@ def test_live():
 def main():
     test_audit_and_log_caps()
     test_failed_login_records()
+    test_directory_refusals_bounded()
     test_rate_limiter_bounds()
     test_ldap_failure_line()
     test_in_process()
