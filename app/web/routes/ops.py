@@ -2,6 +2,8 @@
 validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from ...config import ConfigError, MappingConfig, valid_mapping_id
 from ...engine import portlist
 from ...i18n import _
@@ -36,10 +38,17 @@ def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) ->
                                "this device by its USB identity”.").format(settings.port or _("This port")))
 
 
-async def save_mapping_from_form(state, form) -> tuple[bool, str]:
-    """Parse a mapping form, validate, persist and (re)apply. Returns (ok, name)
-    on success or (False, error). Shared by the local UI save and the cluster
-    remote-edit save (which runs the same form on the target node).
+class Saved(NamedTuple):
+    """A mapping a form saved: its id, and why it did not start ("" when it runs or is
+    disabled)."""
+    id: str
+    start_error: str
+
+
+async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
+    """Parse a mapping form, validate, persist and (re)apply. Returns (True, name,
+    Saved) on success or (False, error, None). Shared by the local UI save and the
+    cluster remote-edit save (which runs the same form on the target node).
 
     The server owns mapping ids: a form without an id creates a mapping with a new
     one, a form with an id edits that mapping and is refused when there is none."""
@@ -51,13 +60,13 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         # read — safe outside the config lock).
         existing = state.config.get_mapping(posted_id) if valid_mapping_id(posted_id) else None
         if posted_id and existing is None:
-            return False, _gone()
+            return False, _gone(), None
         _preserve_unmanaged_fields(mapping, existing, form)
         apply_usb_match(mapping, form, state.ports.get(), existing)
         mapping.validate()
         mapping.validate_input()
     except (ValueError, ConfigError) as e:
-        return False, str(e)
+        return False, str(e), None
     # Hold the lock only to mutate + persist config; release it BEFORE the
     # (potentially slow) supervisor call so other admin requests aren't blocked
     # while a serial port is being (re)opened.
@@ -66,7 +75,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         if posted_id:
             existing = state.config.get_mapping(mapping.id)
             if existing is None:  # deleted while this request was being checked
-                return False, _gone()
+                return False, _gone(), None
             state.config.mappings[state.config.mappings.index(existing)] = mapping
         else:
             state.config.mappings.append(mapping)
@@ -74,9 +83,9 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
             await state.asave()
         except ConfigError as e:
             state.config.mappings = backup
-            return False, str(e)
-    await state.supervisor.apply_mapping(mapping)
-    return True, mapping.name
+            return False, str(e), None
+    started, why = await state.supervisor.apply_mapping(mapping)
+    return True, mapping.name, Saved(mapping.id, "" if started else why)
 
 
 async def apply_action(state, mid, action) -> tuple[bool, str]:

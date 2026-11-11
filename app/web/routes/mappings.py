@@ -15,7 +15,9 @@ from ...config import ConfigError, MappingConfig
 from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
-from .common import TRIGGER, Ctx, console_interactive, sees_to_device
+from .common import (
+    TRIGGER, Ctx, action_done, console_interactive, notice, sees_to_device, start_failed,
+)
 from .forms import _form_error, _modbus_points_json
 
 
@@ -58,7 +60,8 @@ def routes(ctx: Ctx) -> list:
                 state.config.mappings.remove(dup)
                 return PlainTextResponse(_("Duplicate failed: {0}").format(e), status_code=400)
         ctx.audit(request, "mapping_duplicate", dup.name)
-        return Response("", headers=TRIGGER)
+        return Response("", headers={**TRIGGER, **notice(
+            _("Copied as “{0}” (disabled: it uses the same serial port).").format(dup.name))})
 
     async def api_status(request):
         resp = render(request, "_mappings_body.html",
@@ -84,14 +87,24 @@ def routes(ctx: Ctx) -> list:
         ids = [i for i in form.getlist("ids") if i]
         if not ids or len(ids) > 500:
             return PlainTextResponse(_("Select one or more mappings."), status_code=400)
-        done = []
+        done, failed = [], []
         for mid in ids:
             ok, name = await ops.apply_action(state, mid, action)
             if ok:
                 done.append(name)
                 ctx.audit(request, f"mapping_{action}", name)
+                if action != "stop" and start_failed(state, mid):
+                    failed.append(name)
         state.log(f"bulk {action}: {len(done)} mapping(s)")
-        return Response("", headers=TRIGGER)
+        n, total = len(done) - len(failed), len(ids)
+        text = (_("Started {0} of {1} selected mapping(s).") if action == "start" else
+                _("Stopped {0} of {1} selected mapping(s).") if action == "stop" else
+                _("Restarted {0} of {1} selected mapping(s).")).format(n, total)
+        if failed:
+            more = len(failed) - 5
+            text += " " + _("Could not start: {0}.").format(
+                ", ".join(failed[:5]) + (" " + _("(+{0} more)").format(more) if more > 0 else ""))
+        return Response("", headers={**TRIGGER, **notice(text, "warn" if failed else "ok")})
 
     # ---------------- mapping form ----------------
     # The form is for editing (operator+), and it renders stored secrets (the MQTT
@@ -182,21 +195,24 @@ def routes(ctx: Ctx) -> list:
         if deny := require_role(request, "operator"):
             return deny
         form = await request.form()
-        ok, msg = await ops.save_mapping_from_form(state, form)
-        if not ok:
+        ok, msg, saved = await ops.save_mapping_from_form(state, form)
+        if not ok or saved is None:
             return _form_error(render, request, state, form, msg)
         state.log(f"mapping saved: {msg}")
         ctx.audit(request, "mapping_save", msg)
-        return Response("", headers=TRIGGER)
+        note = (notice(_("“{0}” saved, but it could not start: {1}").format(msg, saved.start_error),
+                       "warn") if saved.start_error else notice(_("“{0}” saved.").format(msg)))
+        return Response("", headers={**TRIGGER, **note})
 
     async def mapping_delete(request):
         if deny := require_role(request, "operator"):
             return deny
         removed = await ops.delete_mapping(state, request.path_params["mid"])
-        if removed is not None:
-            state.log(f"mapping deleted: {removed.name}")
-            ctx.audit(request, "mapping_delete", removed.name)
-        return Response("", headers=TRIGGER)
+        if removed is None:
+            return Response("", headers=TRIGGER)
+        state.log(f"mapping deleted: {removed.name}")
+        ctx.audit(request, "mapping_delete", removed.name)
+        return Response("", headers={**TRIGGER, **notice(_("“{0}” deleted.").format(removed.name))})
 
     async def mapping_action(request):
         if deny := require_role(request, "operator"):
@@ -210,7 +226,10 @@ def routes(ctx: Ctx) -> list:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
         state.log(f"mapping {action}: {name}")
         ctx.audit(request, f"mapping_{action}", name)
-        return Response("", headers=TRIGGER)
+        why = start_failed(state, mid) if action != "stop" else ""
+        note = (notice(_("“{0}” could not start: {1}").format(name, why), "warn") if why
+                else notice(action_done(action, name)))
+        return Response("", headers={**TRIGGER, **note})
 
     return [
         Route("/", dashboard),

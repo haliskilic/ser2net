@@ -5,6 +5,9 @@ the helpers that used to be closures inside one big ``build_routes()`` live here
 """
 from __future__ import annotations
 
+import json
+import urllib.parse
+
 from starlette.responses import PlainTextResponse
 
 from ...config import ROLE_RANK
@@ -13,6 +16,31 @@ from .. import auth
 
 # HTMX response header: tells the dashboard to re-fetch the mappings table now
 TRIGGER = {"HX-Trigger": "refreshMappings"}
+
+
+def notice(text: str, kind: str = "ok") -> dict:
+    """The response header that has the dashboard (app.js, its feedback area) tell the
+    user what an action did: "ok" as a status message, "warn" as an alert. A header, so
+    the action's answer and its status stay what they are; JSON, percent-encoded (a
+    header value is Latin-1 only)."""
+    return {"X-Notice": urllib.parse.quote(json.dumps({"kind": kind, "text": text},
+                                                      ensure_ascii=False))}
+
+
+def action_done(action: str, name: str) -> str:
+    """What a start / stop / restart of the mapping `name` did, for notice()."""
+    if action == "start":
+        return _("“{0}” started.").format(name)
+    if action == "stop":
+        return _("“{0}” stopped.").format(name)
+    return _("“{0}” restarted.").format(name)
+
+
+def start_failed(state, mid: str) -> str:
+    """Why the mapping `mid` did not start, when it was just started or restarted and
+    its runner stopped with an error; else ""."""
+    st = state.supervisor.status(mid) or {}
+    return (st.get("last_error") or _("unknown error")) if st.get("state") == "error" else ""
 
 
 def client_ip(request) -> str:

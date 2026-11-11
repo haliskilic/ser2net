@@ -5,11 +5,17 @@ Checks:
     refresh) with a panel that says so, instead of a 404 every 5 seconds;
   * a refused or failed action answers plain text in the page's language (app.js shows
     it as it is), an ended session a 401 (app.js offers to sign in again);
+  * a successful action says what it did in its X-Notice header (percent-encoded JSON,
+    app.js shows it): save, start / stop / restart, bulk, copy, delete — as a warning
+    when a mapping did not start, with the reason, which also goes to its own log;
+    the answer itself stays as it was (status, empty body, HX-Trigger);
 
 Run: python3 tests/test_ui_feedback.py
 """
 import json
 import os
+import socket
+import urllib.parse
 
 from _server import ROOT, Browser, Server, free_port
 
@@ -63,9 +69,84 @@ def test_error_texts():
     print("refusals: plain text in the page's language; no session: 401  OK")
 
 
+def note(headers):
+    """The X-Notice of an answer: (kind, text), or None."""
+    raw = headers.get("X-Notice")
+    if raw is None:
+        return None
+    d = json.loads(urllib.parse.unquote(raw))
+    return d["kind"], d["text"]
+
+
+def test_notices():
+    busy = socket.socket()   # a port in use: a mapping that listens on it can't start
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    port = busy.getsockname()[1]
+    maps = [mapping("fb0000000003", "Gamma"), mapping("fb0000000004", "Delta", port=port)]
+    try:
+        with Server({"users": USERS, "mappings": maps}) as srv:
+            b = Browser(srv.base)
+            b.login("admin", PW)
+            form = {"id": "fb0000000003", "name": "Gamma", "kind": "net",
+                    "serial_port": "/dev/ser2net-feedback-g", "serial_baudrate": "9600",
+                    "network_mode": "server", "network_protocol": "raw",
+                    "network_bind_ip": "127.0.0.1", "network_port": str(free_port())}
+            st, h, body = b.post("/api/mappings/save", form, htmx=True)
+            assert st == 200 and body == "" and h.get("HX-Trigger") == "refreshMappings"
+            assert note(h) == ("ok", "“Gamma” saved."), note(h)
+
+            st, h, _ = b.post("/api/mappings/fb0000000003/start", htmx=True)
+            assert st == 200 and note(h) == ("ok", "“Gamma” started."), note(h)
+            st, h, _ = b.post("/api/mappings/fb0000000003/restart", htmx=True)
+            assert note(h) == ("ok", "“Gamma” restarted."), note(h)
+            st, h, _ = b.post("/api/mappings/fb0000000003/stop", htmx=True)
+            assert note(h) == ("ok", "“Gamma” stopped."), note(h)
+
+            st, h, _ = b.post("/api/mappings/fb0000000004/start", htmx=True)
+            kind, text = note(h)
+            assert st == 200 and kind == "warn" and text.startswith("“Delta” could not start: "), text
+            st, _, log = b.get("/api/mappings/fb0000000004/log")
+            assert "start failed: " in log, "the reason belongs in the mapping's own log too"
+            st, h, _ = b.post("/api/mappings/save", {**form, "id": "fb0000000004", "name": "Delta",
+                                                     "serial_port": "/dev/ser2net-feedback-d",
+                                                     "enabled": "on", "network_port": str(port)},
+                              htmx=True)
+            kind, text = note(h)
+            assert st == 200 and kind == "warn" and \
+                text.startswith("“Delta” saved, but it could not start: "), (kind, text)
+
+            st, h, body = b.post("/api/mappings/bulk", {"action": "restart",
+                                                        "ids": ["fb0000000003", "fb0000000004"]},
+                                 htmx=True)
+            assert st == 200 and h.get("HX-Trigger") == "refreshMappings", (st, body)
+            assert note(h) == ("warn", "Restarted 1 of 2 selected mapping(s). Could not start: "
+                                       "Delta."), note(h)
+            st, h, _ = b.post("/api/mappings/bulk", {"action": "stop",
+                                                     "ids": ["fb0000000003", "fb0000000004"]},
+                              htmx=True)
+            assert note(h) == ("ok", "Stopped 2 of 2 selected mapping(s)."), note(h)
+
+            st, h, _ = b.post("/api/mappings/fb0000000003/duplicate", htmx=True)
+            assert st == 200 and note(h) == (
+                "ok", "Copied as “Gamma (copy)” (disabled: it uses the same serial port)."), note(h)
+            st, h, _ = b.post("/api/mappings/fb0000000003", method="DELETE", htmx=True)
+            assert st == 200 and note(h) == ("ok", "“Gamma” deleted."), note(h)
+
+            # in Turkish, with the mapping's name as it is
+            b.op.addheaders = [("Accept-Language", "tr")]
+            st, h, _ = b.post("/api/mappings/fb0000000004/stop", htmx=True)
+            assert note(h) == ("ok", TR["“{0}” stopped."].format("Delta")), note(h)
+    finally:
+        busy.close()
+    print("action results: X-Notice says what was done, warns with the reason when a "
+          "mapping did not start (also in its log)  OK")
+
+
 def main():
     test_deleted_mapping_log()
     test_error_texts()
+    test_notices()
     print("\nPASS: dashboard request answers")
 
 

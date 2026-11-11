@@ -424,15 +424,24 @@ def test_manual_peer_and_remote_control():
         def csrf():
             return next(c.value for c in jar if c.name == "ser2net_csrf")
 
+        last = {}   # the headers of post_a's last answer
+
         def post_a(path, fields):
             req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}",
                                          data=urllib.parse.urlencode(fields).encode(), method="POST")
             req.add_header("Content-Type", "application/x-www-form-urlencoded")
             req.add_header("X-CSRF-Token", csrf())
             try:
-                return op.open(req, timeout=10).status
+                r = op.open(req, timeout=10)
             except urllib.error.HTTPError as e:
-                return e.code
+                r = e
+            last["headers"] = r.headers
+            return r.status if hasattr(r, "status") else r.code
+
+        def notice():
+            """What A's dashboard is told the last action did (X-Notice): (kind, text)."""
+            d = json.loads(urllib.parse.unquote(last["headers"].get("X-Notice", "null")))
+            return d and (d["kind"], d["text"])
 
         def get_a(path, header=True):
             req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}")
@@ -479,6 +488,7 @@ def test_manual_peer_and_remote_control():
         # becomes enabled
         assert post_a("/api/cluster/control-peer", acts["start"]) == 200, \
             "remote start should be accepted"
+        assert notice() == ("ok", f"“REMOTE1” started on 127.0.0.1:{ui_b}."), notice()
         for _ in range(20):
             _, body = raw_request(ui_b, "/api/cluster/local", hdr)
             if json.loads(body)["mappings"][0]["enabled"]:
@@ -544,6 +554,7 @@ def test_manual_peer_and_remote_control():
             time.sleep(0.1)
         assert json.loads(body)["mappings"][0]["serial"] == "/dev/ttyEDITED", \
             "remote edit did not change the peer's mapping"
+        assert notice() == ("ok", f"“REMOTE1” saved on 127.0.0.1:{ui_b}."), notice()
         html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
         assert "ttyEDITED" in html, "A's fleet view must show the edit at once"
         assert not trapped(trap), "the edit must be saved on the peer itself"
@@ -586,6 +597,24 @@ def test_manual_peer_and_remote_control():
             code, page = e.code, e.read().decode()
         assert code == 400 and "REMOTE2" in page, (code, page[:600])
         print("remote edit: the peer's own validation message is shown  OK")
+
+        # a peer's mapping that did not start: A says so, with the peer's reason
+        busy = socket.socket()
+        busy.bind(("127.0.0.1", 0))
+        busy.listen(1)
+        try:
+            assert post_a("/api/cluster/peer-save",
+                          {**edit, "network_port": str(busy.getsockname()[1])}) == 200
+            kind, text = notice()
+            assert kind == "warn" and text.startswith(
+                f"“REMOTE1” saved on 127.0.0.1:{ui_b}, but it could not start: "), (kind, text)
+            assert post_a("/api/cluster/control-peer", {**acts["stop"], "action": "restart"}) == 200
+            kind, text = notice()
+            assert kind == "warn" and text.startswith(
+                f"“REMOTE1” on 127.0.0.1:{ui_b} could not start: "), (kind, text)
+        finally:
+            busy.close()
+        print("remote save / restart that did not start: the peer's reason is shown  OK")
         assert not trapped(proxy), "peer calls must connect directly, never via a proxy"
         proxy.close()
         print("peer calls ignored HTTP(S)_PROXY / ALL_PROXY  OK")
@@ -682,15 +711,24 @@ def test_edit_on_a_peer_with_its_own_id():
         def csrf():
             return next(c.value for c in jar if c.name == "ser2net_csrf")
 
+        last = {}   # the headers of post_a's last answer
+
         def post_a(path, fields):
             req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}",
                                          data=urllib.parse.urlencode(fields).encode(), method="POST")
             req.add_header("Content-Type", "application/x-www-form-urlencoded")
             req.add_header("X-CSRF-Token", csrf())
             try:
-                return op.open(req, timeout=10).status
+                r = op.open(req, timeout=10)
             except urllib.error.HTTPError as e:
-                return e.code
+                r = e
+            last["headers"] = r.headers
+            return r.status if hasattr(r, "status") else r.code
+
+        def notice():
+            """What A's dashboard is told the last action did (X-Notice): (kind, text)."""
+            d = json.loads(urllib.parse.unquote(last["headers"].get("X-Notice", "null")))
+            return d and (d["kind"], d["text"])
 
         op.open(f"http://127.0.0.1:{ui_a}/setup")
         post_a("/setup", {"username": "admin", "password": "adminpass123",
