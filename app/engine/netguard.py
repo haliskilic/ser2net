@@ -47,7 +47,8 @@ FD_LIMIT_TARGET = 65536
 FD_BASE = 40
 
 # TLS on the listeners: the handshake must be over in this time; closing a TLS connection
-# waits this long for the peer's close_notify (Python 3.11+; 3.10 has no such setting)
+# waits this long for the peer's close_notify (asyncio's ssl_shutdown_timeout from Python
+# 3.11; on 3.10, _bound_close)
 TLS_HANDSHAKE_TIMEOUT_S = 15.0
 TLS_SHUTDOWN_TIMEOUT_S = 5.0
 # TLS handshakes in progress at once: in the process, and from one source address
@@ -366,6 +367,8 @@ async def start_tls(transport: Any, ctx: Any, protocol: asyncio.BaseProtocol) ->
     if tls is None or early.lost or tls.is_closing():
         transport.close()
         return False
+    if sys.version_info < (3, 11):  # pragma: no cover - Python 3.10 only
+        _bound_close(tls, transport)
     tls.set_protocol(protocol)
     protocol.connection_made(tls)
     if early.data and isinstance(protocol, asyncio.Protocol):
@@ -373,6 +376,22 @@ async def start_tls(transport: Any, ctx: Any, protocol: asyncio.BaseProtocol) ->
     if early.eof and isinstance(protocol, asyncio.Protocol):
         protocol.eof_received()
     return True
+
+
+def _bound_close(tls: Any, transport: Any) -> None:  # pragma: no cover - Python 3.10 only
+    """Python 3.10 has no ssl_shutdown_timeout: closing a TLS connection waits for the
+    peer's close_notify for as long as that takes, so a peer that never answers kept the
+    socket (and its place in the connection limits) open for good. Closing ``tls`` now
+    also aborts ``transport``, the socket under it, TLS_SHUTDOWN_TIMEOUT_S later if it is
+    still open (aborting a closed one does nothing)."""
+    loop = asyncio.get_running_loop()
+    close = tls.close
+
+    def bounded_close() -> None:
+        close()
+        loop.call_later(TLS_SHUTDOWN_TIMEOUT_S, transport.abort)
+
+    tls.close = bounded_close
 
 
 def describe_tls_error(exc: BaseException) -> str:

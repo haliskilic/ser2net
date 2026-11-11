@@ -148,7 +148,10 @@ class GuardedH11Protocol(H11Protocol):
         self._head_timer = None
         if not self.transport.is_closing():
             self.guard.timeouts += 1
-            self.transport.close()
+        # abort, not close: no response is pending, and closing a TLS connection waits for
+        # the client's close_notify, which a silent client never sends (on Python 3.10 for
+        # good). One already closing has had this long to send what was left.
+        self.transport.abort()
 
 
 def protocol_class(guard: AdminGuard) -> type[GuardedH11Protocol]:

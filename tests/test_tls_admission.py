@@ -147,6 +147,37 @@ async def test_allowed_handshake_and_capacity(cert, key):
     print("TLS listener: an allowed host's handshake, capacity and Busy after it  OK")
 
 
+async def test_close_does_not_wait_for_a_silent_client(cert, key):
+    """A TLS connection the server closes ("Busy" here) is gone TLS_SHUTDOWN_TIMEOUT_S
+    after the close even when the client never answers the close_notify (Python 3.10 has
+    no such timeout of its own)."""
+    from _server import closed_by_server, silent_tls_client
+
+    lines = []
+    port = free_port()
+    saved = netguard.TLS_SHUTDOWN_TIMEOUT_S
+    netguard.TLS_SHUTDOWN_TIMEOUT_S = 1.0
+    runner = await started(mapping(port, cert, key, max_connections=1), lines)
+    try:
+        _r1, w1 = await asyncio.open_connection("127.0.0.1", port, ssl=client_ctx())
+        for _ in range(50):
+            if runner.status.client_count == 1:
+                break
+            await asyncio.sleep(0.05)
+        raw = await asyncio.to_thread(silent_tls_client, port, client_ctx())
+        try:
+            took = await asyncio.to_thread(closed_by_server, raw, 4)
+        finally:
+            raw.close()
+        assert took < 3, f"the closed connection's socket stayed open {took:.1f} s"
+        w1.close()
+    finally:
+        netguard.TLS_SHUTDOWN_TIMEOUT_S = saved
+        await runner.stop()
+    print("TLS listener: a connection closed by the server is let go "
+          "TLS_SHUTDOWN_TIMEOUT_S later when the client never answers the close  OK")
+
+
 async def test_handshake_timeout_and_caps(cert, key):
     lines = []
     port = free_port()
@@ -311,6 +342,9 @@ async def test_start_tls_hand_over():
         def set_protocol(self, p):
             calls.append("set_protocol")
 
+        def close(self):
+            calls.append("tls close")
+
     class App(asyncio.Protocol):
         def connection_made(self, t):
             calls.append("connection_made")
@@ -389,6 +423,7 @@ async def main():
     await test_concurrent_handshakes(cert, key)
     await test_refused_before_the_handshake(cert, key)
     await test_allowed_handshake_and_capacity(cert, key)
+    await test_close_does_not_wait_for_a_silent_client(cert, key)
     await test_handshake_timeout_and_caps(cert, key)
 
 
