@@ -51,6 +51,13 @@ AUDIT_FIELD_MAX = (64, 64, 500, 256)
 # time says how many there were and from where (all.log keeps a line for every one).
 FAILED_LOGIN_RECORDS = 20
 FAILED_LOGIN_WINDOW_S = 600
+# Opening a mapping's console or hex view needs no more than the viewer role (none at all
+# with open access), so those records are bounded too: one per account (open access: per
+# address), mapping and kind in VIEW_REPEAT_S seconds — the next one says how many opens
+# it stands for — and at most VIEW_RECORDS in FAILED_LOGIN_WINDOW_S, then summed up as
+# for failed sign-ins (all.log keeps a line for every open).
+VIEW_REPEAT_S = 300
+VIEW_RECORDS = 50
 # first-run setup through a host name that isn't this machine's needs this file's code
 SETUP_CODE_FILE = "setup-code.txt"
 
@@ -87,19 +94,18 @@ def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
     return fields
 
 
-class FailedLoginRecords:
-    """The audit records of failed sign-ins (login_failed, and the ldap/oidc_login_denied
-    of a directory sign-in refused for its name): one by one up to FAILED_LOGIN_RECORDS
-    in a window of FAILED_LOGIN_WINDOW_S seconds; past that only counted until the window
-    ends, when one login_failed record says how many more there were, since when and
-    from which addresses. Used on the event loop."""
+class BoundedRecords:
+    """Audit records of something any visitor can cause as often as they like: one by
+    one up to `limit` in a window of `window_s` seconds; past that only counted until the
+    window ends, when one `summary` record says how many more `what` there were, since
+    when and from which addresses. Used on the event loop."""
 
     MAX_ADDRESSES = 1000  # addresses counted one by one past the limit (others: in total)
 
-    def __init__(self, audit, limit: int = FAILED_LOGIN_RECORDS,
-                 window_s: float = FAILED_LOGIN_WINDOW_S) -> None:
+    def __init__(self, audit, limit: int, window_s: float, summary: str, what: str) -> None:
         self._audit = audit  # AppState.audit
         self.limit, self.window_s = limit, window_s
+        self._summary, self._what = summary, what
         self._start: float | None = None  # time.monotonic() when the window began
         self._recorded = 0                # recorded one by one in this window
         self._more = 0                    # past the limit in this window: counted only
@@ -108,17 +114,16 @@ class FailedLoginRecords:
         self._user: str | None = None     # the name all of those were for ("": several)
         self._timer: asyncio.TimerHandle | None = None
 
-    def add(self, ip: str, user: str, action: str = "login_failed", detail: str = "") -> bool:
-        """A failed sign-in from `ip` for `user` (an account name or auth.UNKNOWN_USER),
-        recorded as `action` with `detail`: True if it got its own record, False if it
-        was only counted."""
+    def add(self, ip: str, user: str, action: str = "", detail: str = "") -> bool:
+        """One from `ip` by or for `user`, recorded as `action` (default: the summary's)
+        with `detail`: True if it got its own record, False if it was only counted."""
         now = time.monotonic()
         if self._start is None or now - self._start >= self.window_s:
             self.flush()
             self._start, self._recorded = now, 0
         if self._recorded < self.limit:
             self._recorded += 1
-            self._audit(ip, action, detail, user=user)
+            self._audit(ip, action or self._summary, detail, user=user)
             return True
         if not self._more:
             self._since, self._user = time.strftime("%H:%M:%S"), user
@@ -133,7 +138,7 @@ class FailedLoginRecords:
         return False
 
     def flush(self) -> None:
-        """Write the record of the failed sign-ins that were only counted so far, if any."""
+        """Write the record of the ones that were only counted so far, if any."""
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
@@ -145,10 +150,50 @@ class FailedLoginRecords:
         if rest:
             parts.append(f"{rest} from other addresses")
         ip = top[0][0] if len(parts) == 1 and not rest else ""  # one address: its column
-        self._audit(ip, "login_failed", f"{self._more} more failed sign-ins since "
+        self._audit(ip, self._summary, f"{self._more} more {self._what} since "
                     f"{self._since}, not recorded one by one: {', '.join(parts)}",
                     user=self._user or "")
         self._more, self._by_ip, self._user = 0, {}, None
+
+
+class FailedLoginRecords(BoundedRecords):
+    """The audit records of failed sign-ins (login_failed, and the ldap/oidc_login_denied
+    of a directory sign-in refused for its name): one by one up to FAILED_LOGIN_RECORDS
+    in FAILED_LOGIN_WINDOW_S seconds, then summed up in one login_failed record."""
+
+    def __init__(self, audit, limit: int = FAILED_LOGIN_RECORDS,
+                 window_s: float = FAILED_LOGIN_WINDOW_S) -> None:
+        super().__init__(audit, limit, window_s, "login_failed", "failed sign-ins")
+
+
+class ViewRecords(BoundedRecords):
+    """The console_open / hex_view_open records: one per `key` (account or address,
+    mapping, kind) in VIEW_REPEAT_S seconds — the opens in between are counted, and the
+    next record of that key says how many — and of those at most VIEW_RECORDS in
+    FAILED_LOGIN_WINDOW_S, then summed up in one console_open record."""
+
+    MAX_KEYS = 4096  # keys remembered (past that, an open is recorded within the limit)
+
+    def __init__(self, audit, limit: int = VIEW_RECORDS, window_s: float = FAILED_LOGIN_WINDOW_S,
+                 repeat_s: float = VIEW_REPEAT_S) -> None:
+        super().__init__(audit, limit, window_s, "console_open", "console and hex view opens")
+        self.repeat_s = repeat_s
+        self._seen: dict[tuple, list] = {}  # key -> [recorded (monotonic), opens since, at]
+
+    def open(self, ip: str, user: str, action: str, detail: str, key: tuple) -> bool:
+        """A console or hex view opened: True if it got its own record."""
+        now = time.monotonic()
+        seen = self._seen.get(key)
+        if seen is not None and now - seen[0] < self.repeat_s:
+            seen[1] += 1
+            return False
+        if seen is not None and seen[1]:
+            detail += f"; opened {seen[1]} more times after {seen[2]}, not recorded one by one"
+        if key not in self._seen and len(self._seen) >= self.MAX_KEYS:
+            self._seen = {k: v for k, v in self._seen.items() if now - v[0] < self.repeat_s}
+        if key in self._seen or len(self._seen) < self.MAX_KEYS:
+            self._seen[key] = [now, 0, time.strftime("%H:%M:%S")]
+        return self.add(ip, user, action, detail)
 
 
 def _parse_log_ts(line: str) -> float | None:
@@ -220,6 +265,7 @@ class AppState:
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
         self.failed_logins = FailedLoginRecords(self.audit)  # their audit records
+        self.view_records = ViewRecords(self.audit)          # console / hex view opens
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
         # when each account last signed in (from audit.log, then every session issued)
         self.signins = SignIns()
@@ -611,6 +657,7 @@ class AppState:
                     await task
         self._maint_task = self._requests_task = None
         self.failed_logins.flush()  # failed sign-ins counted but not recorded yet
+        self.view_records.flush()
         await self.notifier.stop()
         await self.cluster.stop()
         await self.supervisor.stop_all()

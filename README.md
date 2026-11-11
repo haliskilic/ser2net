@@ -438,7 +438,10 @@ satır tutar, denetim kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bi
 yazıldığı gibi değil `(unknown user)` olarak kaydedilir (yanlış alana yazılmış bir parola
 olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnızca sayar ve o 10
 dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
-itemez. 256 karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
+itemez. Bir eşlemenin konsolunu ya da hex görünümünü açmak, hesap (açık erişimde: adres),
+eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 böyle kayıt yazılır,
+fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). 256 karakterden uzun
+adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
 çıkış formları 64 KB, yapılandırma içe aktarma 16 MB, geri kalan her şey (formlar, REST API)
 2 MB; daha büyüğü HTTP 413 alır.
 

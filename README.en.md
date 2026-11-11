@@ -426,6 +426,9 @@ and the audit log records them; a user name that is no account's is recorded as
 `(unknown user)`, never as typed (it may be a password typed into the wrong field). Past 20
 failed sign-ins in 10 minutes the audit log only counts them and sums them up in one record
 at the end of those 10 minutes, so a flood of attempts can't push the other records out.
+Opening a mapping's console or hex view is recorded once per account (with open access: per
+address), mapping and kind in 5 minutes, and at most 50 such records in 10 minutes, summed up
+the same way (all.log keeps a line for every one).
 Names over 256 characters aren't tried. Request bodies are limited too: the sign-in, setup
 and sign-out forms to 64 KB, a configuration import to 16 MB and everything else (forms,
 the REST API) to 2 MB; a larger one gets HTTP 413.

@@ -13,6 +13,9 @@ Checks:
     characters, NEL and U+2028/U+2029 can't split one, all.log messages cut at 2000
     characters, no unread copy of the log kept in memory;
   * failed sign-ins past 20 in 10 minutes are counted, then summed up in one record;
+  * console / hex view opens: one record per account (open access: per address),
+    mapping and kind in 5 minutes, the next one saying how many it stands for; at most
+    50 in 10 minutes, then summed up;
     directory sign-ins refused for their name (a local account's) count towards the
     same limit;
   * the login rate limiter keeps a bounded number of addresses and failure times;
@@ -40,7 +43,7 @@ from _server import Browser, Server
 
 import app.state as st
 from app.config import AppConfig, ConfigStore, LdapSettings
-from app.state import AppState, FailedLoginRecords
+from app.state import AppState, FailedLoginRecords, ViewRecords
 from app.web import auth, ldap_auth
 from app.web.server import MAX_BODY_BYTES, build_app
 
@@ -367,6 +370,44 @@ def test_failed_login_records():
           "record (at the window's end, the next sign-in or shutdown)  OK")
 
 
+def test_view_records():
+    got = []
+
+    def audit(ip, action, detail="", user=""):
+        got.append((ip, action, detail, user))
+
+    rec = ViewRecords(audit, limit=4, window_s=30, repeat_s=0.3)
+    anon = ("(no login)", "10.0.0.1", "console_open", "m1")
+    assert rec.open("10.0.0.1", "(no login)", "console_open", "CON (read-only)", anon)
+    for _ in range(5):  # the same visitor, mapping and kind again: counted
+        assert not rec.open("10.0.0.1", "(no login)", "console_open", "CON (read-only)", anon)
+    assert rec.open("10.0.0.2", "(no login)", "console_open", "CON (read-only)",
+                    ("(no login)", "10.0.0.2", "console_open", "m1")), "another address"
+    assert rec.open("10.0.0.1", "bob", "hex_view_open", "CON (device output only)",
+                    ("bob", "", "hex_view_open", "m1")), "another kind"
+    assert len(got) == 3, got
+    time.sleep(0.35)
+    assert rec.open("10.0.0.1", "(no login)", "console_open", "CON (read-only)", anon)
+    assert got[3][2].startswith("CON (read-only); opened 5 more times after ") and \
+        got[3][2].endswith(", not recorded one by one"), got[3]
+    for i in range(3):  # the window's 4 records are used up: counted, then summed up
+        assert not rec.open(f"10.0.1.{i}", "(no login)", "console_open", "X (read-only)",
+                            ("(no login)", f"10.0.1.{i}", "console_open", "m2"))
+    rec.flush()
+    ip, action, detail, user = got[4]
+    assert (ip, action, user) == ("", "console_open", "(no login)"), got[4]
+    assert detail.startswith("3 more console and hex view opens since "), detail
+    rec = ViewRecords(audit, limit=10**6, window_s=60, repeat_s=60)
+    rec.MAX_KEYS = 50
+    for i in range(200):
+        rec.open(f"10.9.{i // 256}.{i % 256}", "(no login)", "console_open", "X",
+                 ("(no login)", f"10.9.{i // 256}.{i % 256}", "console_open", "m"))
+    assert len(rec._seen) <= rec.MAX_KEYS
+    print("console / hex view opens: once per account or address, mapping and kind in the "
+          "repeat time (the next record counts the rest), at most the limit, then summed up; "
+          "keys bounded  OK")
+
+
 async def _directory_refusals(d: str) -> None:
     state = _state(d, {
         "users": [{"username": "admin", "password_hash": auth.hash_password(PW),
@@ -539,6 +580,7 @@ def main():
     test_audit_and_log_caps()
     test_failed_login_records()
     test_directory_refusals_bounded()
+    test_view_records()
     test_revocation_list_full()
     test_rate_limiter_bounds()
     test_ldap_failure_line()
