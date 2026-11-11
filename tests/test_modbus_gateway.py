@@ -707,6 +707,37 @@ async def test_reopen_after_port_loss(slave_port):
     assert runner.status.state == "stopped" and not runner._link.is_open
 
 
+async def test_port_lost_during_request(slave_port):
+    """The port goes away while a request waits for its reply: the master gets 0x0A (gateway
+    path unavailable) as soon as the gateway notices, not 0x0B after the response timeout."""
+    port = FakePort(slave_port)
+    real_open, serial_io.open_serial = serial_io.open_serial, port.open
+    gw_port = free_port()
+    runner = ModbusGatewayRunner(gateway_mapping(gw_port, {"modbus_response_timeout_s": 3.0}),
+                                 logger=lambda _m: None)
+    try:
+        await runner.start()
+        assert await wait_for(lambda: runner._link.is_open), runner.status.as_dict()
+        mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        mw.write(modbus.build_tcp_adu(0x77, SILENT_UNIT, READ_PDU))  # never answered
+        await mw.drain()
+        await asyncio.sleep(0.2)
+        assert runner._bus_lock.locked(), "the request should be waiting for its reply"
+        port.unplug()
+        txn, _unit, rpdu = await read_tcp_adu(mr)
+        took = loop.time() - started
+        assert (txn, rpdu) == (0x77, UNAVAILABLE_PDU), (hex(txn), rpdu)
+        assert took < 1.5, f"answered after {took:.2f}s (the timeout is 3 s)"
+        mw.close()
+        print(f"port lost during a request: 0x0A after {took * 1000:.0f} ms, not 0x0B after "
+              "the timeout  OK")
+    finally:
+        serial_io.open_serial = real_open
+        await asyncio.wait_for(runner.stop(), timeout=10)
+
+
 async def test_missing_port_at_start(slave_port):
     """A port that can't be opened while the listener comes up is reported at once, not
     shown as running until the next attempt, and masters get 0x0A at once."""
@@ -919,6 +950,7 @@ async def main():
         await test_reply_must_answer_request()
         await test_broadcast()
         await test_reopen_after_port_loss(slave_port)
+        await test_port_lost_during_request(slave_port)
         await test_missing_port_at_start(slave_port)
         await test_slow_first_open(slave_port)
         await test_read_only()
