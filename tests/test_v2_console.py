@@ -1,8 +1,16 @@
 """v2.1a browser console: serial traffic over WebSocket (read + interactive write).
+
+Also: the hex view's traffic feed (both directions, timestamped) for an admin; a viewer
+gets a read-only console and a hex view of what the device sends only — never what a
+client sends to the device — and opening either is recorded in the audit log.
+
 Run: python3 tests/test_v2_console.py
 """
 import asyncio
+import contextlib
+import csv
 import http.cookiejar
+import io
 import json
 import os
 import re
@@ -146,6 +154,69 @@ def main():
         assert asyncio.run(ws_noauth()), "unauthenticated WS should be rejected"
         print("console: unauthenticated WS rejected  OK")
         asyncio.run(traffic_test())
+
+        # ---- a viewer: read-only console, hex view without what is sent to the device ----
+        post("/settings/users", {"_csrf": csrf(), "username": "view1", "role": "viewer",
+                                 "password": "viewerpass1", "password2": "viewerpass1"})
+        vjar = http.cookiejar.CookieJar()
+        vop = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(vjar))
+        vop.open("http://127.0.0.1:%d/login" % UI)
+        vop.open(urllib.request.Request(
+            "http://127.0.0.1:%d/login" % UI, method="POST", data=urllib.parse.urlencode({
+                "username": "view1", "password": "viewerpass1",
+                "_csrf": next(c.value for c in vjar if c.name == "ser2net_csrf")}).encode()))
+        vsession = next(c.value for c in vjar if c.name == "ser2net_session")
+
+        def console_view(opener):
+            return opener.open("http://127.0.0.1:%d/api/mappings/%s/console-view" % (UI, mid),
+                               timeout=10).read().decode()
+
+        page = console_view(vop)
+        assert 'data-interactive="0"' in page and "what the device sends, with timestamps" in page
+        assert "type to send to the device" not in page and "from / to the device" not in page
+        page = console_view(op)
+        assert 'data-interactive="1"' in page and "from / to the device" in page
+
+        async def viewer_test():
+            import struct
+            hdr = {"Cookie": f"ser2net_session={vsession}"}
+            base = f"ws://127.0.0.1:{UI}/api/mappings/{mid}"
+            async with websockets.connect(base + "/console", additional_headers=hdr) as ws:
+                await ws.send(b"viewer-typed")  # a viewer's console is read-only: dropped
+                await asyncio.sleep(0.5)
+            async with websockets.connect(base + "/traffic", additional_headers=hdr) as ws:
+                _r, w = await asyncio.open_connection("127.0.0.1", 47350)
+                await asyncio.sleep(0.3)
+                w.write(b"typed-secret"); await w.drain()
+                await asyncio.sleep(0.5)  # reaches the device well before its answer
+                await asyncio.to_thread(device.write, b"dev-reply"); await asyncio.to_thread(device.flush)
+                got, t0 = b"", time.time()
+                while b"dev-reply" not in got and time.time() - t0 < 10:
+                    frame = await asyncio.wait_for(ws.recv(), timeout=10)
+                    d, _ts = struct.unpack(">Bd", frame[:9])
+                    assert d == 0, f"a viewer's hex view got bytes sent to the device: {frame!r}"
+                    got += frame[9:]
+                assert b"dev-reply" in got and b"typed-secret" not in got, got
+                with contextlib.suppress(asyncio.TimeoutError):
+                    while True:  # nothing else may follow either
+                        frame = await asyncio.wait_for(ws.recv(), timeout=0.5)
+                        assert frame[0] == 0, f"a viewer's hex view got bytes sent to the device: {frame!r}"
+                w.close()
+            back = await asyncio.to_thread(device.read, 256)
+            assert b"typed-secret" in back and b"viewer-typed" not in back, back
+
+        asyncio.run(viewer_test())
+        print("viewer: read-only console, hex view shows only what the device sends  OK")
+
+        def audit(action):
+            text = op.open("http://127.0.0.1:%d/settings/audit.csv?action=%s" % (UI, action),
+                           timeout=10).read().decode("utf-8")
+            return {(r["user"], r["detail"]) for r in csv.DictReader(io.StringIO(text))}
+
+        assert {("admin", "CON (interactive)"), ("view1", "CON (read-only)")} <= audit("console_open")
+        assert {("admin", "CON (both directions)"),
+                ("view1", "CON (device output only)")} <= audit("hex_view_open"), audit("hex_view_open")
+        print("audit log: console and hex view opens recorded with user and mode  OK")
 
         device.close()
         print("\nPASS: WebSocket console (auth + bidirectional)")

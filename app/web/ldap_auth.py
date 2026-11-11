@@ -547,8 +547,8 @@ def authenticate(settings, username: str, password: str, logger=None,
             _unbind(svc)
     except Exception as e:  # bad bind / server error -> denied, never crash the login
         problem = _tls_problem(e, settings)
-        if problem is None:
-            log(f"LDAP authentication failed for {username!r}: {type(e).__name__}: {e}")
+        if problem is None:  # not the name typed, which may be a password (login_post logs it)
+            log(f"LDAP authentication failed: {type(e).__name__}: {e}")
             return None
         log(str(problem))
         if on_tls_problem is not None:

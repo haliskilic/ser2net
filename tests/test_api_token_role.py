@@ -1,9 +1,15 @@
 """REST API token roles: a 'viewer' token is read-only (Phase 2.3).
 
 The API bearer token now carries a role; viewer tokens may only GET, while
-operator/admin tokens may also create/modify. Spawns the real server. Run:
+operator/admin tokens may also create/modify. Spawns the real server. Also:
+  * api_token_role in config.json: no key -> admin (tokens from before roles), a role
+    in other case / with spaces -> that role, anything else -> viewer (never more
+    access) with a start-up log note; the config stays valid;
+  * Settings refuses a role that isn't one instead of making the token admin.
+Run:
     python3 tests/test_api_token_role.py
 """
+import copy
 import http.cookiejar
 import json
 import os
@@ -17,6 +23,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from _server import Browser, Server
+
+from app.config import AppConfig
+from app.web.auth import hash_password, hash_token
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 UI = 8097
@@ -63,7 +74,80 @@ def mapping(port, serial):
             "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": port}}
 
 
+def test_role_on_load():
+    token = {"api_token_hash": hash_token("s2n_t")}
+    cases = [({}, "admin"), ({"api_token_role": "operator"}, "operator"),
+             ({"api_token_role": "Viewer"}, "viewer"), ({"api_token_role": " OPERATOR "}, "operator"),
+             ({"api_token_role": "Admin"}, "admin")]
+    for extra, want in cases:
+        cfg = AppConfig.from_dict({**token, **extra})
+        assert cfg.api_token_role == want and not cfg.load_notes, (extra, cfg.api_token_role, cfg.load_notes)
+    for raw in ("read-only", "readonly", "ro", "root", "", None, 3, ["admin"]):
+        cfg = AppConfig.from_dict({**token, "api_token_role": raw})
+        cfg.validate()  # still a valid config: Docker re-saves it at every start
+        assert cfg.api_token_role == "viewer", (raw, cfg.api_token_role)
+        assert cfg.to_dict()["api_token_role"] == "viewer"
+        assert [n for n in cfg.load_notes if f"api_token_role {raw!r} is not one of" in n
+                and "read-only (viewer)" in n], (raw, cfg.load_notes)
+    # without a token the role does nothing (generating one picks it): no note
+    cfg = AppConfig.from_dict({"api_token_role": "read-only"})
+    assert cfg.api_token_role == "viewer" and not cfg.load_notes, cfg.load_notes
+    print("config: missing role -> admin, case/space variants kept, anything else -> viewer + note  OK")
+
+
+def test_unknown_role_in_config():
+    secret = "s2n_hand-edited-token"
+    config = {"users": [{"username": "admin", "password_hash": hash_password("tokenpass1"),
+                         "role": "admin", "pwd_version": 1}],
+              "api_token_hash": hash_token(secret), "api_token_role": "read-only",
+              "mappings": [dict(mapping(free_port(), "/dev/ser2net-token-role"),
+                                mqtt={"enabled": False, "password": "broker-secret"})]}
+    with Server(copy.deepcopy(config)) as srv:
+        base = srv.base
+
+        def call(method, path, token, body=None):
+            req = urllib.request.Request(base + path, method=method,
+                                         data=json.dumps(body).encode() if body is not None else None,
+                                         headers={"Authorization": f"Bearer {token}",
+                                                  "Content-Type": "application/json"})
+            try:
+                r = urllib.request.urlopen(req, timeout=10)
+            except urllib.error.HTTPError as e:
+                r = e
+            return r.status if hasattr(r, "status") else r.code, json.loads(r.read() or b"null")
+
+        assert "api_token_role 'read-only' is not one of admin, operator, viewer" in srv.output()
+        assert srv.saved_config()["api_token_role"] == "viewer"  # re-saved at start (Docker way)
+        st, doc = call("GET", "/api/v1/mappings", secret)
+        assert st == 200 and doc["mappings"][0]["mqtt"]["password"] == "********", doc
+        st, doc = call("POST", "/api/v1/mappings", secret, mapping(free_port(), "/dev/ttyNOPE"))
+        assert st == 403 and doc["error"] == "forbidden", (st, doc)
+        st, _ = call("DELETE", f"/api/v1/mappings/{srv.saved_config()['mappings'][0]['id']}", secret)
+        assert st == 403 and len(srv.saved_config()["mappings"]) == 1
+        print("config: an unknown api_token_role boots as a read-only token, logged  OK")
+
+        admin = Browser(base)
+        admin.login("admin", "tokenpass1")
+        for bad in ("superuser", "", "read-only"):
+            st, _, page = admin.post("/settings/api-token", {"api_token_role": bad})
+            assert st == 200 and "Invalid role." in page and "s2n_" not in page, (bad, st)
+        saved = srv.saved_config()
+        assert (saved["api_token_hash"], saved["api_token_role"]) == (hash_token(secret), "viewer")
+        assert call("GET", "/api/v1/status", secret)[0] == 200, "a refused form must keep the token"
+        st, _, page = admin.post("/settings/api-token", {"api_token_role": "Operator"})
+        new = re.search(r"s2n_[A-Za-z0-9_\-]+", page).group(0)
+        assert srv.saved_config()["api_token_role"] == "operator" and new != secret
+        assert call("GET", "/api/v1/status", secret)[0] == 401, "the old token must stop working"
+        assert call("GET", "/api/v1/mappings", new)[1]["mappings"][0]["mqtt"]["password"] == "broker-secret"
+        # a form without the field (written before token roles existed) still means admin
+        st, _, page = admin.post("/settings/api-token", {})
+        assert st == 200 and srv.saved_config()["api_token_role"] == "admin"
+        print("settings: a role that isn't one is refused (token kept); 'Operator' -> operator  OK")
+
+
 def main():
+    test_role_on_load()
+    test_unknown_role_in_config()
     tmp = tempfile.mkdtemp(prefix="ser2net_tok_")
     cfg = os.path.join(tmp, "config.json")
     with open(cfg, "w") as fh:

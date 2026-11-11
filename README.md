@@ -143,9 +143,11 @@ düzenlemeye gerek yok.
   sıfırlanır (bkz. Güvenlik).
   Güvenilir ağlar için giriş zorunluluğu **Ayarlar → Web arayüzü erişimi**'nden kapatılabilir
   (ziyaretçiler seçilen rolle parolasız kullanır; bkz. Güvenlik).
-- **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunur,
-  operator eşlemeleri yönetir, admin her şey + kullanıcı yönetimi. Tek-parola kurulumları
-  otomatik olarak bir `admin` kullanıcısına geçer.
+- **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunurdur
+  ve cihazların gönderdiklerini izler; operator eşlemeleri yönetir, cihazlara gönderilenleri
+  de görür (hex görünümü, trace dosyaları: cihaz isteminde yazılan bir parola da buraya
+  düşer); admin her şey + kullanıcı yönetimi. Tek-parola kurulumları otomatik olarak bir
+  `admin` kullanıcısına geçer.
 - **LDAP / Active Directory auth (opsiyonel):** kullanıcılar dizine bind ederek doğrulanır;
   LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
   LDAPS / StartTLS'te sunucunun sertifikası denetlenir (sistemin CA'ları ya da kendi CA
@@ -303,7 +305,10 @@ volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapm
   ağ modu (server/client/udp), protokol, bind/remote IP:port, erişim kuralları.
 - **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
-- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde cihaza yazılabilir.
+- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
+  cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
+  gönderdiklerini görür.
+- **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.
@@ -337,6 +342,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
+sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
+`viewer` sayılır ve açılış log'u bunu yazar.
 
 ---
 
@@ -415,6 +423,15 @@ erişimi → Herkesin oturumunu kapat** yeni bir oturum anahtarı üretip admin'
 dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yedeğin kopyası sızmış
 olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
 kapalıyken o hesapların oturumları geçersizdir.
+
+**Başarısız girişler** adres başına 5 dakikada 8 ile sınırlıdır. all.log her biri için bir
+satır tutar, denetim kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bir kullanıcı adı
+yazıldığı gibi değil `(unknown user)` olarak kaydedilir (yanlış alana yazılmış bir parola
+olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnızca sayar ve o 10
+dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
+itemez. 256 karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
+çıkış formları 64 KB, yapılandırma içe aktarma 16 MB, geri kalan her şey (formlar, REST API)
+2 MB; daha büyüğü HTTP 413 alır.
 
 **LDAP / OIDC grupları → roller:** bir grup ayarı (admin / operator / viewer grubu) tek bir
 grubu adlandırır ve yalnızca o grubun adının tamamıyla eşleşir, asla bir parçasıyla değil.
@@ -604,8 +621,9 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
   oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
   de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
-- `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler ve config değişiklikleri,
-  kim/nereden/ne (döner). Ayarlar → *Audit log*'da aranabilir, CSV olarak indirilebilir.
+- `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
+  konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
+  *Audit log*'da aranabilir, CSV olarak indirilebilir.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam

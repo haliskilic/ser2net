@@ -28,7 +28,7 @@ import re
 import secrets
 import socket
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 
 SESSION_COOKIE = "ser2net_session"
 CSRF_COOKIE = "ser2net_csrf"
@@ -200,6 +200,12 @@ def session_user(cfg, token: str | None, revoked: RevokedSessions | None = None)
 # and LDAP/OIDC names in parentheses are refused (config.external_name_problem). Identity
 # checks compare the source too (an older install may have such an account).
 ANONYMOUS_USERNAME = "(anonymous)"
+# What logs and the audit log name for a failed sign-in whose user name is no account's:
+# people type their password into that field. Not a valid account name either.
+UNKNOWN_USER = "(unknown user)"
+# The longest user name a sign-in is tried with (local names have at most 32 characters);
+# a longer one fails at once, without asking the directory.
+LOGIN_NAME_MAX = 256
 
 
 @functools.lru_cache(maxsize=1)
@@ -347,20 +353,38 @@ def csrf_token_matches(request, token) -> bool:
 # login rate limiter (per IP, sliding window)
 # --------------------------------------------------------------------------
 class LoginRateLimiter:
+    """Blocks an address after `max_attempts` failed sign-ins in `window_s` seconds.
+    Keeps the times of at most that many failures for at most MAX_ADDRESSES addresses
+    (when full, the one whose last failure is the oldest is forgotten), so addresses
+    that only ever fail don't add up in memory."""
+
+    MAX_ADDRESSES = 4096
+
     def __init__(self, max_attempts: int = 8, window_s: int = 300):
         self.max_attempts = max_attempts
         self.window_s = window_s
-        self._fails: dict[str, deque] = defaultdict(deque)
+        self._fails: OrderedDict[str, deque] = OrderedDict()
 
     def blocked(self, ip: str) -> bool:
+        q = self._fails.get(ip)
+        if q is None:
+            return False
         now = time.monotonic()
-        q = self._fails[ip]
         while q and now - q[0] > self.window_s:
             q.popleft()
+        if not q:
+            del self._fails[ip]
         return len(q) >= self.max_attempts
 
     def record_failure(self, ip: str) -> None:
-        self._fails[ip].append(time.monotonic())
+        q = self._fails.get(ip)
+        if q is None:
+            q = self._fails[ip] = deque(maxlen=self.max_attempts)
+            while len(self._fails) > self.MAX_ADDRESSES:
+                self._fails.popitem(last=False)
+        else:
+            self._fails.move_to_end(ip)
+        q.append(time.monotonic())
 
     def reset(self, ip: str) -> None:
         self._fails.pop(ip, None)
