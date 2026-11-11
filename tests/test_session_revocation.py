@@ -93,16 +93,24 @@ def test_revoked_list():
     other = auth.issue_session(cfg.secret_key, 600, "admin", 1)  # another sign-in, same second
     assert other != token
     assert auth.session_user(cfg, token, revoked) is not None
-    assert not revoked.add(cfg.secret_key, "garbage") and not revoked.add("other-key", token)
-    assert revoked.add(cfg.secret_key, token)
+    assert revoked.add(cfg.secret_key, "garbage") is None and "garbage" not in revoked
+    assert revoked.add("other-key", token) is None and token not in revoked
+    assert revoked.add(cfg.secret_key, token) is None and token in revoked
     assert auth.session_user(cfg, token, revoked) is None
     assert auth.session_user(cfg, token) is not None, "without the list: the old behaviour"
-    old_max, revoked.MAX_ENTRIES = revoked.MAX_ENTRIES, 1
-    try:
-        assert revoked.add(cfg.secret_key, other) and token not in revoked and other in revoked
-    finally:
-        revoked.MAX_ENTRIES = old_max
-    print("revocation list: only valid sessions are added, bounded, checked by session_user  OK")
+    # full: nothing remembered is forgotten; the account to sign out everywhere is named
+    revoked.MAX_ENTRIES = 1
+    assert revoked.add(cfg.secret_key, other) == "admin" and token in revoked and other not in revoked
+    del revoked.MAX_ENTRIES
+    revoked.PER_USER = 3
+    bobs = [auth.issue_session(cfg.secret_key, 600, "bob", 1) for _ in range(4)]
+    assert [revoked.add(cfg.secret_key, t) for t in bobs] == [None, None, None, "bob"]
+    assert revoked.add(cfg.secret_key, other) is None, "one account's share doesn't block another's"
+    revoked.forget("bob")
+    assert not any(t in revoked for t in bobs) and token in revoked and other in revoked
+    assert revoked.add(cfg.secret_key, bobs[3]) is None and bobs[3] in revoked
+    print("revocation list: only valid sessions are added, checked by session_user; when an "
+          "account's share or the list is full nothing is forgotten, the account is named  OK")
 
 
 def test_directory_switch():

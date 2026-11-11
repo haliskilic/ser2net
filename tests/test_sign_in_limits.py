@@ -16,6 +16,9 @@ Checks:
     directory sign-ins refused for their name (a local account's) count towards the
     same limit;
   * the login rate limiter keeps a bounded number of addresses and failure times;
+  * logouts: one account's ended cookies are remembered up to its share; past that the
+    account is signed out everywhere (one save) instead of anyone's ended cookie being
+    forgotten;
   * an open-access visitor's sign-out adds no audit record.
 
 Most checks call the web app in this process (no socket); one boots a real server.
@@ -24,6 +27,7 @@ Run: python3 tests/test_sign_in_limits.py
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -410,6 +414,51 @@ def test_directory_refusals_bounded():
           "the failed sign-ins' limit, then summed up with them  OK")
 
 
+async def _logouts(d: str) -> None:
+    state = _state(d, {"users": [
+        {"username": "admin", "password_hash": auth.hash_password(PW), "role": "admin",
+         "pwd_version": 1},
+        {"username": "bob", "password_hash": auth.hash_password(PW), "role": "viewer",
+         "pwd_version": 7}]})
+    app = build_app(state)
+    state.revoked_sessions.PER_USER = 3
+    secret = state.config.secret_key
+
+    async def logout(token):
+        s, h, _t, _r = await call(app, "POST", "/logout", form({}), headers={
+            **FORM, "Cookie": f"ser2net_csrf={CSRF}; ser2net_session={token}"})
+        assert s == 303 and h.get("location") == "/login", s
+
+    victim = auth.issue_session(secret, 3600, "admin", 1)
+    await logout(victim)  # someone else's cookie, ended earlier (a copy may exist)
+    bobs = [auth.issue_session(secret, 3600, "bob", 7) for _ in range(4)]
+    for t in bobs[:3]:
+        await logout(t)
+    assert state.config.get_user("bob").pwd_version == 7 and not os.path.exists(state.store.path)
+    live = auth.issue_session(secret, 3600, "bob", 7)  # bob's session in another browser
+    await logout(bobs[3])  # no room for it: bob is signed out everywhere
+    assert state.config.get_user("bob").pwd_version == 8
+    with open(state.store.path, encoding="utf-8") as fh:
+        saved = AppConfig.from_dict(json.load(fh)).get_user("bob")
+    assert saved.pwd_version == 8, "the sign-out must be saved"
+    for t in bobs + [live]:
+        assert auth.session_user(state.config, t, state.revoked_sessions) is None
+    assert victim in state.revoked_sessions, "another account's ended cookie was forgotten"
+    assert auth.session_user(state.config, victim, state.revoked_sessions) is None
+    assert "'bob' signed out everywhere: too many of its sessions" in _read(state.log_path)
+
+
+def test_revocation_list_full():
+    d = tempfile.mkdtemp(prefix="s2n_limits_logout_")
+    try:
+        asyncio.run(_logouts(d))
+    finally:
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+    print("logouts past an account's share: that account is signed out everywhere (saved); "
+          "another account's ended cookie stays refused  OK")
+
+
 def test_rate_limiter_bounds():
     lim = auth.LoginRateLimiter(max_attempts=3, window_s=0.3)
     for i in range(2000):
@@ -490,6 +539,7 @@ def main():
     test_audit_and_log_caps()
     test_failed_login_records()
     test_directory_refusals_bounded()
+    test_revocation_list_full()
     test_rate_limiter_bounds()
     test_ldap_failure_line()
     test_in_process()

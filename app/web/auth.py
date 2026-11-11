@@ -141,25 +141,52 @@ class RevokedSessions:
     A cookie is a stateless signed token: the browser deleting it at logout would leave
     a copy of it valid for the rest of its lifetime. Held in memory (a restart forgets
     the list) and never written to config.json, where a save on every logout would
-    push real changes out of the 50 backups. Keyed by the token's signature."""
+    push real changes out of the 50 backups. Keyed by the token's signature.
+
+    Bounded: at most PER_USER cookies of one account and MAX_ENTRIES in all. Past that
+    nothing remembered is forgotten (that would make someone's copied cookie valid
+    again): add() names the account instead, and the caller ends all of its sessions
+    (pwd_version + 1), after which its remembered cookies are moot (forget())."""
 
     MAX_ENTRIES = 10000
+    PER_USER = 100
 
     def __init__(self) -> None:
         self._until: dict[str, int] = {}  # signature -> the token's expiry (epoch seconds)
+        self._owner: dict[str, str] = {}  # signature -> the token's account name
+        self._count: dict[str, int] = {}  # account name -> its signatures in the list
 
-    def add(self, secret: str, token: str | None) -> bool:
-        """Refuse this token from now on (if it is a valid session at all)."""
+    def add(self, secret: str, token: str | None) -> str | None:
+        """Refuse this token from now on (if it is a valid session at all). Returns its
+        account's name when it can't be remembered (that account's share or the list is
+        full): the caller ends all of that account's sessions instead. Else None."""
         data = decode_session(secret, token)
         if data is None or token is None:
-            return False
+            return None
         now = int(time.time())
         for sig in [s for s, exp in self._until.items() if exp <= now]:
-            del self._until[sig]
-        while len(self._until) >= self.MAX_ENTRIES:  # full: drop the one closest to expiry
-            del self._until[min(self._until, key=self._until.__getitem__)]
-        self._until[token.rsplit(".", 1)[1]] = data["exp"]
-        return True
+            self._drop(sig)
+        sig, user = token.rsplit(".", 1)[1], data["u"]
+        if sig in self._until:
+            return None
+        if self._count.get(user, 0) >= self.PER_USER or len(self._until) >= self.MAX_ENTRIES:
+            return user
+        self._until[sig], self._owner[sig] = data["exp"], user
+        self._count[user] = self._count.get(user, 0) + 1
+        return None
+
+    def forget(self, username: str) -> None:
+        """Drop an account's cookies: all of its sessions were ended another way."""
+        for sig in [s for s, u in self._owner.items() if u == username]:
+            self._drop(sig)
+
+    def _drop(self, sig: str) -> None:
+        del self._until[sig]
+        user = self._owner.pop(sig)
+        if self._count[user] > 1:
+            self._count[user] -= 1
+        else:
+            del self._count[user]
 
     def __contains__(self, token: object) -> bool:
         if not isinstance(token, str) or "." not in token:
@@ -169,6 +196,8 @@ class RevokedSessions:
 
     def clear(self) -> None:
         self._until.clear()
+        self._owner.clear()
+        self._count.clear()
 
 
 def sign_payload(secret: str, data: dict, ttl_seconds: int = 600) -> str:
