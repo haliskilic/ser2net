@@ -224,7 +224,8 @@ def test_mapping_form_modbus_fields():
             user = None
     tpl = make_templates().env.get_template("_mapping_form.html")
     m = MappingConfig.from_dict({"id": "mb1", "name": "gw", "serial": {"port": "COM3"},
-                                 "network": {"protocol": "modbus", "port": 502}})
+                                 "network": {"protocol": "modbus", "port": 502},
+                                 "options": {"modbus_response_timeout_s": 0.8}})
     root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
                             ports=[], ips=[], error=None))
 
@@ -242,8 +243,12 @@ def test_mapping_form_modbus_fields():
     for name in ("mqtt_apply_retained_set", "mqtt_apply_retained_set_shown"):
         assert conditions(name) == ["mqtt_payload_format=plain", "network_protocol=modbus"], \
             (name, conditions(name))
+    # the response timeout: Modbus gateways only; the field is its own presence marker
+    assert conditions("opt_modbus_response_timeout_s") == ["network_protocol=modbus"]
+    field = next(n for n in root.walk() if n.attrs.get("name") == "opt_modbus_response_timeout_s")
+    assert field.attrs.get("value") == "0.8" and field.attrs.get("type") == "number", field.attrs
     print("mapping form: banner/close-on/client buffer not offered for modbus; the retained "
-          "/set option only for plain-format points  OK")
+          "/set option only for plain-format points; the response timeout for modbus  OK")
 
 
 def test_mapping_form_udp_fields():

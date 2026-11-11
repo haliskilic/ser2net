@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 
-from ...config import LdapSettings, MappingConfig, OidcSettings
+from ...config import MODBUS_TIMEOUT_DEFAULT_S, LdapSettings, MappingConfig, OidcSettings
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -152,6 +152,8 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_closeon": ("options", ("closeon",)),
     # a checkbox (absent when unticked) shown for RFC 2217 mappings only
     "opt_rfc2217_restore_on_disconnect_shown": ("options", ("rfc2217_restore_on_disconnect",)),
+    # Modbus gateways only (before 2.9 it was in config.json only)
+    "opt_modbus_response_timeout_s": ("options", ("modbus_response_timeout_s",)),
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
@@ -216,6 +218,11 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_rfc2217_restore_on_disconnect_shown" in form:
         options["rfc2217_restore_on_disconnect"] = _checkbox(
             form, "opt_rfc2217_restore_on_disconnect")
+    if "opt_modbus_response_timeout_s" in form:  # blank: the default
+        options["modbus_response_timeout_s"] = (
+            _num(form, "opt_modbus_response_timeout_s", MODBUS_TIMEOUT_DEFAULT_S,
+                 strict=strict, cast=float)
+            if form.get("opt_modbus_response_timeout_s", "").strip() else MODBUS_TIMEOUT_DEFAULT_S)
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),
@@ -304,7 +311,6 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     o.trace_timestamp = prev.trace_timestamp
     o.rfc2217_poll_modem_interval_s = prev.rfc2217_poll_modem_interval_s
     o.rfc2217_net_timeout_s = prev.rfc2217_net_timeout_s
-    o.modbus_response_timeout_s = prev.modbus_response_timeout_s
 
 
 def _form_error(render, request, state, form, message: str):
