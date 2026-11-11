@@ -855,5 +855,8 @@
   "MQTT is on, but a serial-to-serial bridge does not publish to MQTT: its MQTT settings are not used.": "MQTT açık, ama seri ↔ seri köprü MQTT'ye yayın yapmaz: MQTT ayarları kullanılmıyor.",
   "MQTT is on, but a Modbus gateway publishes only its poll points, and it has none: nothing is published. Add poll points, or turn MQTT off.": "MQTT açık, ama Modbus ağ geçidi yalnızca okuma noktalarını yayınlar ve hiç okuma noktası yok: hiçbir şey yayınlanmıyor. Okuma noktası ekle ya da MQTT'yi kapat.",
   "A close-on string is set, but a UDP mapping has no connections to close: it is not used.": "Bir kapatma dizesi ayarlı, ama bir UDP eşlemesinin kapatılacak bağlantısı yok: kullanılmıyor.",
-  "Publish the Modbus poll points to MQTT (add them below)": "Modbus okuma noktalarını MQTT'ye yayınla (noktaları aşağıya ekle)"
+  "Publish the Modbus poll points to MQTT (add them below)": "Modbus okuma noktalarını MQTT'ye yayınla (noktaları aşağıya ekle)",
+  "Allowed client IPs: these entries are not IP addresses or networks, so they are left out: {0}.": "İzin verilen istemci IP'leri: bu girdiler IP adresi ya da ağ değil, bu yüzden dışarıda bırakılıyor: {0}.",
+  "No entry is usable, so every client is refused.": "Kullanılabilir girdi yok, bu yüzden her istemci reddediliyor.",
+  "High-priority client IPs: these entries are not IP addresses or networks, so they are left out: {0}.": "Yüksek öncelikli istemci IP'leri: bu girdiler IP adresi ya da ağ değil, bu yüzden dışarıda bırakılıyor: {0}."
 }
