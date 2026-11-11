@@ -356,14 +356,32 @@ def routes(ctx: Ctx) -> list:
             return resp
         return _login_failed(request, ip, username)
 
+    async def _sign_out_everywhere(username: str) -> None:
+        """A logout the revocation list has no room for: end all of the account's
+        sessions instead (pwd_version + 1), which ends the copies of its cookies too."""
+        async with state.config_lock:
+            user = state.config.get_user(username)
+            if user is None:
+                return
+            user.pwd_version += 1
+            try:
+                await state.asave()
+            except (ConfigError, OSError) as e:  # still ended in memory, until a restart
+                state.log(f"could not save the sign-out of {username!r}: {e}")
+        state.revoked_sessions.forget(username)
+        state.log(f"{username!r} signed out everywhere: too many of its sessions were ended "
+                  "by a logout to remember each one")
+
     async def logout_post(request):
         form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         # the cookie is a signed token: end it on the server too, so a copy of it is
         # refused from now on (not just deleted in this browser)
-        state.revoked_sessions.add(state.config.secret_key,
-                                   request.cookies.get(auth.SESSION_COOKIE))
+        token = request.cookies.get(auth.SESSION_COOKIE)
+        full = state.revoked_sessions.add(state.config.secret_key, token)
+        if full is not None and auth.session_user(state.config, token) is not None:
+            await _sign_out_everywhere(full)
         if not ctx.is_anonymous(request):  # an open-access visitor had no session to end
             ctx.audit(request, "logout")
         resp = RedirectResponse("/login", status_code=303)
