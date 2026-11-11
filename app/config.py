@@ -119,10 +119,12 @@ def lock_down_dir(directory: str) -> None:
     so child files (config.json, the atomic temp files, per-mapping logs) pick up the
     same restriction. Best-effort: silently degrades if it cannot be applied (the
     posix path was the only one protected before — Windows was left world-readable
-    despite the docs claiming 0600). A directory only SYSTEM and Administrators can
-    use (a service's data directory, see app/winservice.py) is left as it is: an
-    elevated run (--set-password) must not give its own account's unelevated programs
-    a way to change what the service runs.
+    despite the docs claiming 0600). A service's data directory as --install-service
+    leaves it (only SYSTEM and Administrators can use it, see winservice.service_folder)
+    is left as it is: an elevated run (--set-password) must not give its own account's
+    unelevated programs a way to change what the service runs. Any other folder gets
+    the grant for the current user, also one an elevated administrator created private
+    to itself, so that account can still use it unelevated.
     """
     if os.name == "posix":
         with contextlib.suppress(OSError):
@@ -130,7 +132,7 @@ def lock_down_dir(directory: str) -> None:
         return
     if os.name == "nt":
         user = os.environ.get("USERNAME") or ""
-        if not user or _admin_only(directory):
+        if not user or _service_folder(directory):
             return
         import subprocess
 
@@ -155,16 +157,16 @@ def lock_down_dir(directory: str) -> None:
             subprocess.run(cmd, capture_output=True, timeout=15, check=False)
 
 
-def _admin_only(directory: str) -> bool:
-    """Windows: only SYSTEM and Administrators own or can use `directory` (False when
-    that can't be told)."""
+def _service_folder(directory: str) -> bool:
+    """Windows: `directory` is a service's data directory as --install-service leaves it,
+    or inherits from one (False when that can't be told)."""
     from . import winservice  # the Windows API through ctypes
 
     try:
         sec = winservice.read_security(directory)
     except Exception:  # best effort, like the rest of lock_down_dir
         return False
-    return sec is not None and winservice.admin_only(*sec)
+    return sec is not None and winservice.service_folder(*sec)
 
 
 def _is_int(value: Any) -> bool:

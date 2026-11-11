@@ -305,6 +305,7 @@ ADMINS_SID = "S-1-5-32-544"
 USERS_SID = "S-1-5-32-545"
 EVERYONE_SID = "S-1-1-0"
 TRUSTED_INSTALLER_SID = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+OWNER_RIGHTS_SID = "S-1-3-4"
 # The only accounts that may be able to change what a LocalSystem service runs. Any other
 # account — an administrator's own user account too, whose programs normally run without
 # elevation — counts as one that could.
@@ -351,10 +352,22 @@ ANY_ACCESS = 0xFFFFFFFF
 def admin_only(owner: Optional[str], aces) -> bool:
     """Pure decision (any OS): only SYSTEM / Administrators / TrustedInstaller own the
     file or folder or have any access to it, as a service's data directory once
-    --install-service has hardened it. Private already; lock_down_dir() leaves it so
-    (its grant for the account running ser2net would let that account's unelevated
-    programs change what the service runs)."""
+    --install-service has hardened it."""
     return not acl_offenders(aces, owner, rights=ANY_ACCESS)
+
+
+def service_folder(owner: Optional[str], aces) -> bool:
+    """Pure decision (any OS): a folder as --install-service leaves a service's data
+    directory, or one inheriting from it: admin_only(), and no OWNER RIGHTS entry.
+    lock_down_dir() leaves it as it is (its grant for the account running ser2net would
+    let that account's unelevated programs change what the service runs). A folder made
+    private to the account that created it — Python's mkdir(mode=0o700) gives SYSTEM,
+    Administrators and OWNER RIGHTS — is that account's own, even when an elevated
+    administrator made it and Administrators own it (Windows Server's default for
+    them): lock_down_dir() gives it that account's entry, so the folder stays usable
+    from its unelevated programs."""
+    return admin_only(owner, aces) and not any(
+        ace[0] == OWNER_RIGHTS_SID and ace[2] for ace in aces)
 
 
 def foreign_owner(owner: Optional[str], me: Optional[str]) -> bool:
@@ -1039,7 +1052,7 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
         _mkdir_admin_only(data_dir)
         loaded = prepare(config_path)
         # after prepare: loading the config may have added a grant for the installing
-        # account (lock_down_dir, on a folder that was not admin-only yet)
+        # account (lock_down_dir, on a folder that was not a service folder yet)
         _harden(data_dir, users_read=False)
         _require_protected([data_dir, os.path.join(data_dir, "config.json")], "The data directory")
         if not _inside(config_path, data_dir):

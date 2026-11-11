@@ -87,9 +87,10 @@ def test_acl_decision_table():
     assert w.acl_offenders([(auth_users, read, True)]) == []
     assert w.acl_offenders([(user, w.GENERIC_WRITE, True),
                             (everyone, modify, True)]) == sorted([user, everyone])
-    # off Windows the ACL reader can't run and never blocks an install
-    assert w.writable_by_non_admins(__file__) is None
-    assert w.location_warning() is None
+    if not WINDOWS:  # the ACL reader can't run and never blocks an install (Windows:
+        # test_acl_reader, on folders with known permissions)
+        assert w.writable_by_non_admins(__file__) is None
+        assert w.location_warning() is None
     print("ACL decision table: non-admin write on the exe/folder is flagged, deny honoured  OK")
 
     # real DACLs as the reader hands them over (sid, mask, allow, ace flags), and owners
@@ -158,6 +159,71 @@ def test_acl_decision_table():
     print("admin_only(): a hardened data directory and the request folder an elevated "
           "command makes in it (SYSTEM: read + delete); a user's grant, ownership or read "
           "access is not  OK")
+
+    # service_folder(): what lock_down_dir() leaves as it is — the data directory as
+    # install() leaves it and what inherits from it. A folder mkdir(0o700) made private to
+    # its creator is that account's own, even an elevated administrator's that
+    # Administrators own (Windows Server): lock_down_dir() gives the account its entry
+    for owner in (admins, system):
+        assert w.service_folder(owner, data_dir) and w.service_folder(owner, inherited)
+        assert not w.service_folder(owner, mkdir_700)
+        assert not w.service_folder(owner, [(sid, mask, True, inh | oi_ci)
+                                            for sid, mask, _a, _f in mkdir_700])
+    assert not w.service_folder(admins, data_dir + [(user, full, True, oi_ci)])
+    assert not w.service_folder(user, data_dir)
+    assert not w.service_folder(admins, data_dir + [(users, rx, True, inh | oi_ci)])
+    print("service_folder(): the hardened data directory and what inherits from it; not "
+          "a folder private to its creator (OWNER RIGHTS), a user's grant or ownership  OK")
+
+
+def icacls(*args):
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    return subprocess.run([os.path.join(root, "System32", "icacls.exe"), *args],
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_acl_reader():
+    """Windows: read_security() / writable_by_non_admins() / location_warning() on folders
+    this test gives known permissions (who may change the checkout depends on the machine;
+    on a CI runner it belongs to the runner's administrator account)."""
+    if not WINDOWS:
+        return
+    w = winservice
+    me = w._current_user_sid()
+    base = tempfile.mkdtemp(prefix="s2n_acl_")
+    folder = os.path.join(base, "program")
+    exe = os.path.join(folder, "ser2net.exe")
+    os.mkdir(folder)
+    with open(exe, "w") as fh:
+        fh.write("x")
+    saved = w._program_paths
+    try:
+        w._harden(folder, users_read=True)  # what install() leaves on %ProgramFiles%\ser2net
+        sec = w.read_security(folder)
+        if not me or sec is None or sec[0] != w.ADMINS_SID:
+            print("SKIP the ACL reader on real folders: making Administrators the owner "
+                  "needs an elevated prompt")
+            return
+        assert w.writable_by_non_admins(folder) == [] and w.writable_by_non_admins(exe) == [], \
+            (read_security_text(folder), read_security_text(exe))
+        w._program_paths = lambda frozen: [exe, folder]
+        assert w.location_warning() is None, w.location_warning()
+        # owned by this (administrator's) account: its unelevated programs could change it
+        assert icacls(folder, "/setowner", f"*{me}").returncode == 0
+        assert w.writable_by_non_admins(folder) == [w.sid_name(me)], read_security_text(folder)
+        assert w.writable_by_non_admins(exe) == [], read_security_text(exe)
+        assert icacls(folder, "/setowner", f"*{w.ADMINS_SID}").returncode == 0
+        # ... or given Modify (inherited by the exe)
+        assert icacls(folder, "/grant", f"*{me}:(OI)(CI)M").returncode == 0
+        assert w.writable_by_non_admins(exe) == [w.sid_name(me)], read_security_text(exe)
+        warning = w.location_warning() or ""
+        assert exe in warning and w.sid_name(me) in warning, warning
+    finally:
+        w._program_paths = saved
+        icacls(base, "/reset", "/T", "/C", "/Q")
+        shutil.rmtree(base, ignore_errors=True)
+    print("ACL reader on real folders: the hardened program folder passes; this account as "
+          "owner, or with Modify, is named, and the start-up warning says so  OK")
 
 
 def test_registered_command_read_back():
@@ -667,7 +733,7 @@ def test_real_service():
         assert p.returncode == 0 and "new password set" in p.stdout, p.stdout + p.stderr
         assert "done by the running ser2net" not in p.stdout, p.stdout
         sec = winservice.read_security(data)
-        assert sec is not None and winservice.admin_only(*sec), read_security_text(data)
+        assert sec is not None and winservice.service_folder(*sec), read_security_text(data)
         for path in (os.path.join(data, "config.json"), os.path.join(data, "backups")):
             assert no_other_entries(path), (path, read_security_text(path))
         r = sc("start", name)
@@ -693,6 +759,7 @@ def test_real_service():
 def main():
     test_command_line()
     test_acl_decision_table()
+    test_acl_reader()
     test_registered_command_read_back()
     test_upgrade_paths()
     test_install_locations()
