@@ -50,7 +50,9 @@ machine whose firewall matters. The standalone executable checks need a build
 `app/web/routes/` one module per UI area (`login`, `settings`, `mappings`, `console`,
 `cluster`, `system`) with shared helpers in `common`, `forms` and `ops` ·
 `app/web/api.py` the REST API · `app/config.py` the config model ·
-`tests/` one file per feature, collected by `tests/run_all.py`.
+`tests/` one file per feature, collected by `tests/run_all.py`. Every web route and
+WebSocket has an access class (who may use it, how CSRF is checked) in
+`tests/test_route_access.py`; a new route fails that test until it is classified there.
 
 ### Translations
 The web UI is English with a Turkish translation. Wrap every user-facing string:
@@ -112,6 +114,11 @@ Web arayüzü İngilizce, Türkçe çevirisiyle. Kullanıcıya görünen her met
 `{{ _("Save changes") }}`, Python'da `_("Port {0} is in use.").format(port)`. Türkçesini
 `app/locale/tr.json`'a ekleyin; `tests/test_i18n.py` eksik ya da kullanılmayan girdide ve yer
 tutucusunu ya da HTML etiketini kaybeden çeviride başarısız olur.
+
+### Route'lar
+Her web route'unun ve WebSocket'in bir erişim sınıfı vardır (kim kullanabilir, CSRF nasıl
+denetlenir): `tests/test_route_access.py`. Yeni bir route orada sınıflandırılana kadar bu
+test başarısız olur.
 
 ### Bağımlılıklar
 Çalışma zamanı sürümleri `requirements.txt`'te (Python 3.10 hattı işaretlerle korunur),

@@ -48,6 +48,7 @@ PORTABLE = [
     "test_modbus_frame.py",
     "test_modbus_gateway.py",
     "test_rbac.py",
+    "test_route_access.py",   # every route and WebSocket against the access matrix
     "test_mqtt_pub.py",
     "test_modbus_poll.py",
     "test_ldap.py",
@@ -69,6 +70,7 @@ PORTABLE = [
     "test_first_run_setup.py",
     "test_backups_import.py",
     "test_audit_log.py",
+    "test_sign_in_limits.py",  # request body limits, failed sign-in records, log caps
     "test_healthcheck.py",
     "test_upgrade_from_2_7.py",
     "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)

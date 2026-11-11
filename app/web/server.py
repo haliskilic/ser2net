@@ -16,6 +16,7 @@ from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
@@ -44,6 +45,10 @@ PUBLIC_PREFIXES = ("/static", "/auth/", "/lang/")  # /auth/oidc/*: the SSO flow;
 _CLUSTER_PEER_PATHS = {"/api/cluster/local", "/api/cluster/control",
                        "/api/cluster/mapping-data", "/api/cluster/mapping-save"}
 PUBLIC_PATHS = {"/login", "/setup", "/healthz", "/favicon.ico"} | _CLUSTER_PEER_PATHS
+
+# A request body larger than this is refused (413) before a handler reads it. A route can
+# set its own limit: the sign-in forms a smaller one, the configuration import a larger.
+MAX_BODY_BYTES = 2 * 1024 * 1024
 
 # High-frequency automatic UI refreshes — not logged to all.log to avoid flooding
 # the audit trail (the user actions that drive them ARE logged).
@@ -203,7 +208,11 @@ def make_templates() -> Jinja2Templates:
 def build_app(state) -> Starlette:
     templates = make_templates()
     routes = build_routes(templates, state, STATIC_DIR)
-    middleware = [Middleware(GuardMiddleware)]
+    # The body limit holds for every route, and sits inside GuardMiddleware: in front of
+    # it (Starlette(max_body_size=...)), a body over the limit would reach the handler as
+    # an exception group from BaseHTTPMiddleware's receive, a 500 instead of the 413.
+    middleware = [Middleware(GuardMiddleware),
+                  Middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY_BYTES)]
     app = Starlette(routes=routes, middleware=middleware)
     app.state.appstate = state
     app.state.templates = templates

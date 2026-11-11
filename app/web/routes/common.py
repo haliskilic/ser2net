@@ -32,6 +32,26 @@ def csrf_failed() -> PlainTextResponse:
     return PlainTextResponse(_("CSRF validation failed. Reload the page."), status_code=403)
 
 
+def has_role(user, role: str) -> bool:
+    """`user` (an account, the open-access pseudo-user or None) has `role` or a higher one."""
+    return user is not None and ROLE_RANK.get(user.role, 0) >= ROLE_RANK[role]
+
+
+def console_interactive(user, mapping) -> bool:
+    """Does what `user` types in the console of `mapping` go to the device? Only on a
+    network mapping that isn't read-only, and only for operators and admins."""
+    return mapping.kind == "net" and not mapping.network.read_only and has_role(user, "operator")
+
+
+def sees_to_device(user, mapping) -> bool:
+    """Does `user`'s hex view of `mapping` show what is sent TO the device? On a network
+    mapping that is what clients and web-console users type, passwords at a prompt the
+    device doesn't echo included (trace files record it too), so a viewer's hex view shows
+    only what the device sends. A serial↔serial bridge has a device on both ports, and its
+    console has always shown both directions."""
+    return mapping.kind != "net" or has_role(user, "operator")
+
+
 class Ctx:
     """The templates + shared AppState, and the per-request helpers built on them."""
 
@@ -60,15 +80,13 @@ class Ctx:
     @staticmethod
     def require_role(request, role):
         """Return a 403 response if the session user's role is below `role`, else None."""
-        u = current_user(request)
-        if u is None or ROLE_RANK.get(u.role, 0) < ROLE_RANK[role]:
+        if not has_role(current_user(request), role):
             return PlainTextResponse(_("Forbidden: requires the {0} role.").format(role), status_code=403)
         return None
 
     @staticmethod
     def can_edit(request) -> bool:
-        u = current_user(request)
-        return u is not None and ROLE_RANK.get(u.role, 0) >= ROLE_RANK["operator"]
+        return has_role(current_user(request), "operator")
 
     @staticmethod
     def is_anonymous(request) -> bool:
