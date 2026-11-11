@@ -351,6 +351,7 @@ def test_caps():
                    if ln.startswith('ser2net_connections_refused_total{reason="admin_ui"}')]
         assert refused and int(refused[0].split()[-1]) >= (2 if len(others) >= 2 else 1), metrics
         assert any(ln.startswith("ser2net_admin_connections ") for ln in metrics.splitlines())
+        assert "\nser2net_tls_handshakes_waiting 0\n" in metrics, metrics
     print("admin UI: per-address and total caps refuse at once (logged, counted in "
           "/metrics), other addresses served, everyone again once the idle ones close  OK")
 

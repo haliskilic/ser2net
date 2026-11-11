@@ -80,14 +80,15 @@ class AdminGuard:
 
     def begin_tls(self, transport: Any, protocol: asyncio.Protocol) -> None:
         task = netguard.begin_tls(transport, self.ssl, protocol, netguard.peer_label(transport),
-                                  self._failed)
+                                  self._failed, lambda msg: self._refused(f"admin UI: {msg}"))
         self._handshakes[transport] = task
         task.add_done_callback(lambda _t: self._handshakes.pop(transport, None))
 
     def close(self) -> None:
-        """Shutting down: end the TLS handshakes still in progress."""
-        for transport in list(self._handshakes):
+        """Shutting down: end the TLS handshakes still in progress (or waiting)."""
+        for transport, task in list(self._handshakes.items()):
             transport.abort()
+            task.cancel()
 
 
 class GuardedH11Protocol(H11Protocol):

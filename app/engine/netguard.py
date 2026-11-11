@@ -21,7 +21,11 @@ listener they reach, before they cost anything more:
     can't take the files that serial ports, logs and the configuration need;
   - TLS handshakes in progress hold a socket and a 256 KiB buffer each: at most
     TLS_HANDSHAKES_MAX at a time, TLS_HANDSHAKES_PER_IP from one address, each given
-    TLS_HANDSHAKE_TIMEOUT_S (asyncio's default is 60 s).
+    TLS_HANDSHAKE_TIMEOUT_S (asyncio's default is 60 s). A connection past those waits
+    for a handshake to end (first come, first served; reading paused, so it holds only
+    its socket) for up to TLS_HANDSHAKE_TIMEOUT_S, at most TLS_WAITING_PER_IP from one
+    address and TLS_WAITING_MAX in all: a client's burst of reconnects is served, not
+    refused. Past those too, a connection is refused.
   - Windows' SelectorEventLoop (``CappedSelectSelector``): select() takes at most 512
     sockets there, so connections are refused while it watches nearly that many.
 ``start_server`` is asyncio.start_server for a mapping's listener with that admission. For
@@ -54,6 +58,10 @@ TLS_SHUTDOWN_TIMEOUT_S = 5.0
 # TLS handshakes in progress at once: in the process, and from one source address
 TLS_HANDSHAKES_MAX = 128
 TLS_HANDSHAKES_PER_IP = 32
+# connections waiting for one of those to end (each for at most TLS_HANDSHAKE_TIMEOUT_S):
+# in the process, and from one source address
+TLS_WAITING_MAX = 256
+TLS_WAITING_PER_IP = 64
 # Windows' select() takes at most this many sockets in each of its sets (FD_SETSIZE);
 # incoming connections are refused once the event loop watches all but SELECT_HEADROOM
 # of them, which stay for listeners, connections out and UDP sockets
@@ -239,10 +247,14 @@ class Pool:
 
 class Budget:
     """Whether the process takes one more incoming connection, whichever listener it reaches
-    (one instance: ``BUDGET``), and the TLS handshakes in progress."""
+    (one instance: ``BUDGET``), and the TLS handshakes in progress and waiting."""
 
     def __init__(self) -> None:
         self.handshakes = Pool(TLS_HANDSHAKES_MAX, TLS_HANDSHAKES_PER_IP)
+        self.waiting = Pool(TLS_WAITING_MAX, TLS_WAITING_PER_IP)  # for a handshake to end
+        # each waiting connection -> (its address, its turn: True once it has a slot,
+        # False when it closed meanwhile); in the order they came
+        self._turns: dict[Any, tuple[str, asyncio.Future]] = {}
         self.refused: dict[str, int] = {}  # why -> connections refused for it (/metrics)
         # the event loop's selector when it is select() based (Windows; runtime.py sets it)
         self.selector: Optional[CappedSelectSelector] = None
@@ -278,11 +290,55 @@ class Budget:
         return ""
 
     def handshake_room(self, ip: str) -> str:
+        """"" when a TLS handshake from ``ip`` can start, or wait for one to end, else why
+        not (for the log)."""
         why = self.handshakes.full(ip)
         if why:
-            self.note_refused("tls_handshakes")
-            return f"too many TLS handshakes in progress ({why})"
+            waiting = self.waiting.full(ip)
+            if waiting:
+                self.note_refused("tls_handshakes")
+                return (f"too many TLS handshakes in progress ({why}) and waiting for one "
+                        f"to end ({waiting})")
         return ""
+
+    def enter_handshake(self, transport: Any, ip: str) -> None:
+        """Count an admitted TLS connection among the handshakes in progress, or, when
+        there is no room for it, among those waiting for one to end."""
+        if self.handshakes.full(ip):
+            self.waiting.add(transport, ip)
+            self._turns[transport] = (ip, asyncio.get_running_loop().create_future())
+        else:
+            self.handshakes.add(transport, ip)
+
+    async def handshake_turn(self, transport: Any) -> bool:
+        """Wait (up to TLS_HANDSHAKE_TIMEOUT_S) until ``transport`` may start its handshake:
+        False when no handshake ended for it in that time, or it closed meanwhile."""
+        if transport not in self._turns:
+            return True  # it had room at once
+        turn = self._turns[transport][1]
+        try:
+            await asyncio.wait((turn,), timeout=TLS_HANDSHAKE_TIMEOUT_S)
+        finally:
+            self._turns.pop(transport, None)
+            self.waiting.discard(transport)
+        return turn.done() and turn.result()
+
+    def handshake_done(self, transport: Any) -> None:
+        """A handshake is over (or never started): the connections waiting for one get
+        the room there is now, first come, first served."""
+        self.handshakes.discard(transport)
+        self.waiting.discard(transport)
+        for waiter, (ip, turn) in list(self._turns.items()):
+            if turn.done():
+                continue
+            if waiter.is_closing():
+                turn.set_result(False)
+            elif not self.handshakes.full(ip):
+                self.waiting.discard(waiter)
+                self.handshakes.add(waiter, ip)
+                turn.set_result(True)
+            elif self.handshakes.total and len(self.handshakes) >= self.handshakes.total:
+                break  # no room for anyone
 
     def note_refused(self, why: str) -> None:
         self.refused[why] = self.refused.get(why, 0) + 1
@@ -400,11 +456,14 @@ def describe_tls_error(exc: BaseException) -> str:
 
 
 def begin_tls(transport: Any, ctx: Any, protocol: asyncio.BaseProtocol, label: str,
-              failed: Callable[[str], None]) -> asyncio.Task:
+              failed: Callable[[str], None],
+              refused: Optional[Callable[[str], None]] = None) -> asyncio.Task:
     """Start the TLS handshake of an admitted connection: counted among the handshakes in
-    progress until it is over, run in a task (start_tls) that pauses reading first. A
-    failed handshake is reported to ``failed`` (rate-limit it: anyone can make one fail)."""
-    BUDGET.handshakes.add(transport, peer_ip(transport))
+    progress until it is over (or waiting for room among them first), run in a task
+    (start_tls) that pauses reading first. A failed handshake is reported to ``failed``, a
+    connection that waited in vain to ``refused`` (default: ``failed``; rate-limit both:
+    anyone can cause them)."""
+    BUDGET.enter_handshake(transport, peer_ip(transport))
 
     async def handshake() -> None:
         try:
@@ -414,11 +473,19 @@ def begin_tls(transport: Any, ctx: Any, protocol: asyncio.BaseProtocol, label: s
             # protocol that admits connections and be lost. The task's first step runs
             # after that callback and before the first read.
             transport.pause_reading()  # the ClientHello waits for the TLS protocol
+            if not await BUDGET.handshake_turn(transport):
+                if not transport.is_closing():
+                    BUDGET.note_refused("tls_handshakes")
+                    (refused or failed)(f"refused {label}: it waited "
+                                        f"{TLS_HANDSHAKE_TIMEOUT_S:g} seconds for a TLS "
+                                        "handshake to end")
+                transport.abort()
+                return
             await start_tls(transport, ctx, protocol)
         except Exception as e:  # the timeout, a bad ClientHello, the client went away
             failed(f"TLS handshake with {label} failed: {describe_tls_error(e)}")
         finally:
-            BUDGET.handshakes.discard(transport)
+            BUDGET.handshake_done(transport)
 
     return asyncio.get_running_loop().create_task(handshake())
 
@@ -457,8 +524,9 @@ class Listener:
 
     def close(self) -> None:
         self.server.close()
-        for transport in list(self._handshakes):
+        for transport, task in list(self._handshakes.items()):
             transport.abort()
+            task.cancel()  # (one waiting for a handshake to end, too)
 
     async def wait_closed(self) -> None:
         await self.server.wait_closed()
@@ -486,7 +554,7 @@ class Listener:
             transport.set_protocol(protocol)
             protocol.connection_made(transport)
             return
-        task = begin_tls(transport, self._ssl, protocol, label, self._failed)
+        task = begin_tls(transport, self._ssl, protocol, label, self._failed, self._refused)
         self._handshakes[transport] = task
         task.add_done_callback(lambda _t: self._handshakes.pop(transport, None))
 
