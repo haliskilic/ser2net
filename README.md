@@ -99,7 +99,8 @@ düzenlemeye gerek yok.
   (`<topic>/<nokta>/set`, yalnızca o noktaya tek değer: coil için FC5, holding register için
   kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
   `.../set/result`'ta `error: …` alır). Unit 0'daki bir nokta okunmaz; ona yazma broadcast
-  olarak gider ve geri okunmaz. **Salt okunur** bu yazmaları da reddeder (`error:
+  olarak gider ve geri okunmaz. Eşleme formu ve log, unit 0'daki ve seri hattın ayırdığı
+  248–255 unit'lerindeki noktalar için uyarır. **Salt okunur** bu yazmaları da reddeder (`error:
   mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler panoda
   **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker karar
   verir). İstenirse **Sparkplug B**

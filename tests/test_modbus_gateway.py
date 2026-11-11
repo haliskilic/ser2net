@@ -921,6 +921,29 @@ async def test_master_admission(slave_port):
     print("allow-list: a master outside it is dropped  OK")
 
 
+def test_unit_warnings_logged():
+    """Poll points on unit 0 (the broadcast address) or on 248-255 (reserved on a serial line)
+    stay allowed (a stored config must keep loading and saving); the gateway names them in a
+    warning at start."""
+    m = MappingConfig.from_dict({
+        "name": "mb", "kind": "net", "serial": {"port": "/dev/ttyUSB-fake"},
+        "network": {"mode": "server", "protocol": "modbus", "port": 1502},
+        "modbus_poll": {"points": [
+            {"name": "all", "unit": 0, "fn": 3, "address": 1, "dtype": "uint16", "writable": True},
+            {"name": "odd", "unit": 250, "fn": 3, "address": 1, "dtype": "uint16"},
+            {"name": "fine", "unit": 247, "fn": 3, "address": 1, "dtype": "uint16"}]}})
+    m.validate()
+    m.validate_input()
+    assert m.modbus_poll.broadcast_points == ["all"] and m.modbus_poll.reserved_unit_points == ["odd"]
+    logs = []
+    ModbusGatewayRunner(m, logger=logs.append)._log_policy()
+    assert any(line.startswith("warning: poll point(s) 'all' on unit 0, the broadcast address")
+               for line in logs), logs
+    assert any(line.startswith("warning: poll point(s) 'odd' on units 248-255") for line in logs)
+    assert not any("'fine'" in line for line in logs), logs
+    print("points on unit 0 / 248-255: allowed, warned about at start  OK")
+
+
 async def test_unused_options_logged(slave_port):
     """A banner, open string or close-on string would put bytes outside Modbus frames:
     the gateway sends none of them and says so once at start."""
@@ -957,6 +980,7 @@ async def main():
         await test_frame_without_function()
         await test_master_admission(slave_port)
         await test_unused_options_logged(slave_port)
+        test_unit_warnings_logged()
         print("\nPASS: Modbus RTU<->TCP gateway")
     finally:
         slave_srv.close()

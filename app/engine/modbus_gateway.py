@@ -551,6 +551,14 @@ class ModbusGatewayRunner:
             self._log("read-only: requests from Modbus/TCP masters that are not reads get "
                       "exception 01 (illegal function) and never reach the bus; MQTT/Sparkplug "
                       "writes to writable points are refused too")
+        poll = self.mapping.modbus_poll
+        if poll.broadcast_points:
+            self._log(f"warning: poll point(s) {_names(poll.broadcast_points)} on unit 0, the "
+                      "broadcast address: never read (no slave answers a broadcast); a write "
+                      "to one goes to every slave on the line and is not read back")
+        if poll.reserved_unit_points:
+            self._log(f"warning: poll point(s) {_names(poll.reserved_unit_points)} on units "
+                      "248-255, which a Modbus serial line reserves (slave addresses are 1-247)")
         mq = self.mapping.mqtt
         missing = [what for what, have in (("TLS", mq.tls), ("a username", mq.username))
                    if not have]
@@ -645,6 +653,10 @@ class ModbusGatewayRunner:
             refused = f", {master.refused} request(s) refused (read-only)" if master.refused else ""
             self._log(f"modbus master disconnected: {peer} after {held} — {reason}{refused} "
                       f"({len(self._clients)} total)")
+
+
+def _names(names: list[str]) -> str:
+    return ", ".join(repr(n) for n in names)
 
 
 # a holding register's value: a decimal integer, 0x hex, or a decimal fraction / exponent
