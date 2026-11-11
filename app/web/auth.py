@@ -4,7 +4,8 @@ The admin UI is network-exposed by design, so it is password-protected by defaul
   - scrypt password hashing (no extra dependency),
   - a stateless HMAC-signed session cookie (secret from AppConfig.secret_key),
   - double-submit-cookie CSRF protection on every state-changing request,
-  - a simple in-memory per-IP login rate limiter to blunt brute force.
+  - a simple in-memory per-IP login rate limiter to blunt brute force, and a cap on
+    how many password checks (and directory sign-ins) run at once (SlowWork).
 
 An admin may switch the login requirement off for trusted networks: a visitor
 without a session then gets a pseudo-user with ``admin_ui.anonymous_role``. That
@@ -18,6 +19,7 @@ setup code (AppState.prepare_first_run).
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import functools
 import hashlib
@@ -440,3 +442,31 @@ class LoginRateLimiter:
 
     def reset(self, ip: str) -> None:
         self._fails.pop(ip, None)
+
+
+# --------------------------------------------------------------------------
+# password checks and directory sign-ins: a few at a time
+# --------------------------------------------------------------------------
+class SlowWork:
+    """Runs slow sign-in work (scrypt: CPU time and 16 MiB each; a directory bind:
+    seconds when the server is slow) in worker threads, at most `limit` at a time; the
+    rest wait their turn. A burst of sign-ins thus can't take every thread of the shared
+    pool, where serial ports are opened and closed and config.json is saved too, nor
+    the memory of one scrypt job per request. busy(): `queue` jobs wait already — a
+    sign-in is answered 429 then instead of queueing as well."""
+
+    def __init__(self, limit: int, queue: int) -> None:
+        self.limit, self.queue = limit, queue
+        self._slots = asyncio.Semaphore(limit)
+        self._pending = 0  # running or waiting
+
+    def busy(self) -> bool:
+        return self._pending >= self.limit + self.queue
+
+    async def run(self, fn, /, *args, **kwargs):
+        self._pending += 1
+        try:
+            async with self._slots:
+                return await asyncio.to_thread(fn, *args, **kwargs)
+        finally:
+            self._pending -= 1

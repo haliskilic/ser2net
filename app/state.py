@@ -30,7 +30,7 @@ from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
 from .notify import Notifier
 from .signins import SignIns
-from .web.auth import LoginRateLimiter, RevokedSessions
+from .web.auth import LoginRateLimiter, RevokedSessions, SlowWork
 
 # Per-mapping log retention (automatic maintenance).
 LOG_MAX_BYTES = 100 * 1024 * 1024     # cap each mapping log at 100 MB
@@ -264,6 +264,9 @@ class AppState:
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
+        # password hashing and checks, directory (LDAP) sign-ins: a few at a time
+        self.password_work = SlowWork(limit=2, queue=8)
+        self.directory_work = SlowWork(limit=4, queue=16)
         self.failed_logins = FailedLoginRecords(self.audit)  # their audit records
         self.view_records = ViewRecords(self.audit)          # console / hex view opens
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout

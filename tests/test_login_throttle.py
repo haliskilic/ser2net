@@ -6,6 +6,8 @@ Checks:
     a sign-in that works resets the count;
   * without LDAP, a name that has no local account (unknown, or an LDAP/OIDC account) is
     checked against a dummy hash: the same work as a wrong password;
+  * password checks and directory sign-ins run a few at a time (auth.SlowWork); while
+    too many wait already, a sign-in is answered 429 without being tried or counted;
 
 Calls the web app in this process (no socket).
 Run: python3 tests/test_login_throttle.py
@@ -164,9 +166,59 @@ def test_unknown_names_cost_a_check():
     run(_unknown_names, {"users": [_user("admin"), sso]})
 
 
+# ---------------------------------------------------------------- a few checks at a time
+def test_slow_work_bounded():
+    import threading
+    import time
+
+    async def go():
+        work = auth.SlowWork(limit=2, queue=3)
+        lock, now, most = threading.Lock(), [0], [0]
+
+        def job(i):
+            with lock:
+                now[0] += 1
+                most[0] = max(most[0], now[0])
+            time.sleep(0.05)
+            with lock:
+                now[0] -= 1
+            return i
+
+        tasks = [asyncio.create_task(work.run(job, i)) for i in range(5)]
+        await asyncio.sleep(0)
+        assert work.busy(), "2 running + 3 waiting"
+        assert await asyncio.gather(*tasks) == list(range(5))
+        assert most[0] == 2 and not work.busy(), most
+
+    asyncio.run(go())
+    print("SlowWork: at most `limit` jobs at a time, busy() once `queue` wait  OK")
+
+
+async def _busy(d: str, config: dict) -> None:
+    state = _state(d, config)
+    state.password_work = auth.SlowWork(limit=1, queue=1)
+    app = build_app(state)
+    with CountingVerify(delay=0.3) as verify:
+        answers = await asyncio.gather(*(login(app, "admin", "wrong", client=f"10.1.0.{i}")
+                                         for i in range(4)))
+    statuses = sorted(a[0] for a in answers)
+    assert statuses == [401, 401, 429, 429], statuses
+    assert len(verify.calls) == 2
+    busy = [a for a in answers if a[0] == 429]
+    assert all("Too many sign-ins at the same time" in a[2] for a in busy)
+    assert len(state.rate_limiter._fails) == 2, "a sign-in that wasn't tried isn't counted"
+    print("too many password checks waiting: 429 (not tried, not counted)  OK")
+
+
+def test_busy_answers_429():
+    run(_busy, {"users": [_user("admin")]})
+
+
 def main():
     test_burst_counted_before_check()
     test_unknown_names_cost_a_check()
+    test_slow_work_bounded()
+    test_busy_answers_429()
     print("\nPASS: sign-in attempts are limited")
 
 
