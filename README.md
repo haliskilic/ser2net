@@ -295,7 +295,7 @@ Compose olmadan [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) içindeki `d
 komutunu kullanın (hazır imaj, `--restart unless-stopped`, eşleme portları,
 `/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(ya da `:2.8`, `:2.8.0`); `docker-compose.yml` bunu kullanır.
+(ya da `:2.8`, `:2.8.1`); `docker-compose.yml` bunu kullanır.
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
 ayarlanır — başsız ortamda interaktif seçici çalışamaz). Her eşlemenin portunu da yayınlayın
 (yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
