@@ -40,6 +40,7 @@ Run: python3 tests/test_route_access.py
 """
 from __future__ import annotations
 
+import http.client
 import http.cookiejar
 import json
 import re
@@ -47,7 +48,7 @@ import types
 import urllib.parse
 import urllib.request
 
-from _server import Browser, Server, free_port
+from _server import Browser, Server, _NoRedirect, free_port
 
 from app.web import server as web_server
 from app.web.auth import hash_password, hash_token
@@ -284,11 +285,36 @@ def probe_path(method: str, path: str) -> str:
     return re.sub(r"\{(\w+)\}", lambda m: PARAMS[m.group(1)], path)
 
 
+class _OneWriteConnection(http.client.HTTPConnection):
+    """Sends the request head and a body in one write, as a browser sends a small form.
+
+    Many probes are refused from the headers alone (no session, no token, no CSRF header),
+    and the server then closes the connection, as urllib asks it to. A body sent in a
+    second write can arrive after that close; Windows then resets the connection and the
+    client loses the answer it hasn't read yet."""
+
+    def _send_output(self, message_body=None, encode_chunked=False):
+        if isinstance(message_body, bytes) and not encode_chunked:
+            self._buffer.extend((b"", message_body))
+            msg = b"\r\n".join(self._buffer)
+            del self._buffer[:]
+            self.send(msg)
+            return
+        super()._send_output(message_body, encode_chunked)
+
+
+class _OneWriteHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_OneWriteConnection, req)
+
+
 class Client(Browser):
     """A browser (cookies, no redirects) that can leave out the CSRF token."""
 
     def __init__(self, base: str, name: str, rank: int = 0, account: bool = False):
         super().__init__(base)
+        self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar),
+                                              _NoRedirect(), _OneWriteHandler())
         self.name, self.rank, self.account = name, rank, account
 
     def send(self, method: str, path: str, csrf: bool = True, fields=None, headers=None,
