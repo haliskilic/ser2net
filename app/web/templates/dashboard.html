@@ -23,14 +23,14 @@
     </select>
     {% if can_edit %}
     <span class="bulk" data-bulk hidden>
-      <span class="muted" data-bulk-count></span>
+      <span class="muted" data-bulk-count aria-live="polite"></span>
       <button class="btn sm" type="button" data-bulk-action="start" hx-disabled-elt="this">{{ _("Start") }}</button>
       <button class="btn sm" type="button" data-bulk-action="stop" hx-disabled-elt="this">{{ _("Stop") }}</button>
       <button class="btn sm" type="button" data-bulk-action="restart" hx-disabled-elt="this">{{ _("Restart") }}</button>
       <button class="link" type="button" data-bulk-clear>{{ _("clear") }}</button>
     </span>
     {% endif %}
-    <span class="muted" data-filter-count></span>
+    <span class="muted" data-filter-count role="status"></span>
   </div>
   <div id="mappings"
        hx-get="/api/status"

@@ -2,6 +2,7 @@
   <h3 id="panel-title" tabindex="-1">{{ _("Console — %(name)s", name=mapping_name|softbreak) }}</h3>
   <div class="actions">
     {% if interactive %}<span class="muted" data-text-only>{{ _("type to send to the device") }}</span>
+    <span class="muted">{{ _("Shift+Tab leaves the console") }}</span>
     {% else %}<span class="muted">{{ _("read-only") }}</span>{% endif %}
     <button type="button" class="btn sm" data-term-mode>{{ _("Hex view") }}</button>
     <button type="button" class="btn sm" id="console-close" data-cancel>{{ _("Close") }}</button>

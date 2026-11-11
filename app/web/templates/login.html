@@ -7,8 +7,8 @@
   <div class="panel">
     <h1>⇄ ser2net</h1>
     <p class="muted">{{ _("Sign in to manage serial-to-network mappings.") }}</p>
-    {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
-    {% if oidc_error %}<div class="banner error">{{ oidc_error }}</div>{% endif %}
+    {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
+    {% if oidc_error %}<div class="banner error" role="alert">{{ oidc_error }}</div>{% endif %}
     {% if oidc_enabled %}
     <a class="btn primary w-full" href="/auth/oidc/login">{{ _("Sign in with SSO") }}</a>
     <p class="muted or-line">{{ _("— or —") }}</p>
