@@ -424,6 +424,19 @@ LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve 
 erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
 gösterilir ve açılışta loga yazılır.
 
+**Parolalar:** yerel hesapların parolaları scrypt hash'i olarak saklanır (N=2^14, r=8, p=5,
+OWASP'ın en düşük önerisi; hash maliyetini kendisi taşır, böylece maliyet ileride
+artırılabilir). 2.8.1 ya da daha eski bir sürümün yaptığı hash çalışmaya devam eder ve o
+hesabın bir sonraki girişinde bugünkü maliyetle yenilenir (oturumları sürer; `config.json`
+kaydedilir, öncekisi `backups/`'a gider). Parolalar Unicode NFKC olarak karşılaştırılır:
+aksanı tek karakter ya da iki karakter olan bir harf (macOS'tan ya da bir PDF'ten
+yapıştırılan metin), bölünmez boşlukla normal boşluk, tam genişlikli karakterler aynı
+parolayı verir. Dizine (LDAP) parola yazıldığı gibi gider. **2.8.1'e ya da daha eski bir
+sürüme dönerken:** o sürümler yenilenen hash'leri okuyamaz, yani 2.9 ile giriş yapmış bir
+hesap orada giriş yapamaz: `ser2net --set-password AD` ile (2.8.1) yeni parola verin; böyle
+bir komutu olmayan 2.8.0 ve öncesinde `backups/` içinden yükseltmeden önceki bir
+`config.json`'u geri koyun.
+
 **Oturumlar:** çıkış yapınca o oturum sunucuda da biter (çerezin bir kopyası da artık
 çalışmaz). **Ayarlar → Kullanıcılar**'da admin bir kullanıcının tüm oturumlarını kapatabilir
 ya da yerel bir kullanıcıya yeni parola verebilir (bu da oturumlarını kapatır); herkes
@@ -433,10 +446,19 @@ dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yede
 olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
 kapalıyken o hesapların oturumları geçersizdir.
 
-**Başarısız girişler** adres başına 5 dakikada 8 ile sınırlıdır. all.log her biri için bir
-satır tutar, denetim kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bir kullanıcı adı
-yazıldığı gibi değil `(unknown user)` olarak kaydedilir (yanlış alana yazılmış bir parola
-olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnızca sayar ve o 10
+**Başarısız girişler** adres başına 5 dakikada 8 (bir IPv6 adresi /64'üyle sayılır; reverse
+proxy arkasında tüm istemciler proxy'nin adresini paylaşır), kullanıcı adı başına da hangi
+adresten gelirse gelsin ve büyük/küçük harf fark etmeksizin 15 dakikada 10 ile sınırlıdır;
+sınırı aşan adres ya da ad, en eski başarısız denemeleri bu süreden eskiyene kadar HTTP 429
+alır. Hiçbir şey kalıcı olarak kilitlenmez; LDAP'ta dizine de daha sık sorulmaz, böylece bu
+denemeler dizinin kendi hesap kilitleme eşiğinin altında kalır. *Parolanı değiştir*
+bölümünde yanlış girilen mevcut parola da hesabın adına sayılır, all.log'a ve denetim
+kaydına (`password_change_failed`) yazılır. Parola kontrolleri aynı anda en çok iki, dizin
+girişleri dört tane çalışır; çok sayıda istek bekliyorsa yeni bir giriş denenmeden HTTP 429
+(*Aynı anda çok fazla giriş deneniyor*) alır. Yerel hesabı olmayan bir adın reddedilmesi de
+yanlış bir parola kadar sürer. all.log her başarısız giriş için bir satır tutar, denetim
+kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bir kullanıcı adı yazıldığı gibi değil
+`(unknown user)` olarak kaydedilir (yanlış alana yazılmış bir parola olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnızca sayar ve o 10
 dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
 itemez. Bir eşlemenin konsolunu ya da hex görünümünü açmak, hesap (açık erişimde: adres),
 eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 böyle kayıt yazılır,
