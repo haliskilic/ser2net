@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, ModbusPoint
-from . import modbus, sockopts
+from . import modbus, netguard, sockopts
 from .access import AccessPolicy, server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
@@ -77,7 +77,7 @@ class ModbusGatewayRunner:
         self.status = RunnerStatus(state="stopped")
         self.log = logger
         self._serial_task: Optional[asyncio.Task] = None
-        self._server: Optional[asyncio.Server] = None
+        self._server: Optional[netguard.Listener] = None
         self._stop = asyncio.Event()
         # the RTU bus; is_open / ready say whether requests can reach it right now
         self._link = SerialLink(mapping.serial, self.status, self._stop, self._log)
@@ -139,8 +139,9 @@ class ModbusGatewayRunner:
         self._serial_task = asyncio.create_task(
             self._link.run(self._link.hold_open), name=f"modbus-serial:{self.mapping.name}")
         try:
-            self._server = await asyncio.start_server(
-                self._on_client, host=net.bind_ip, port=net.port, ssl=server_ssl(net))
+            self._server = await netguard.start_server(
+                self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
+                allowed=self._access.allowed, log=self._log)
             self._log(f"modbus gateway listening on {net.bind_ip}:{net.port}"
                       f" ({'TLS, ' if net.tls else ''}{sockopts.describe(net)})")
         except BaseException:

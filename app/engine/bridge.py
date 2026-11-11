@@ -53,7 +53,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from exceptiongroup import BaseExceptionGroup
 
 from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
-from . import serial_io, sockopts
+from . import netguard, serial_io, sockopts
 from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
@@ -555,7 +555,7 @@ class MappingRunner:
         self.trace_dir = trace_dir  # where traces go (data/traces); None = tracing unavailable
         self.status = RunnerStatus(state="stopped")
         self.log = logger
-        self._server: Optional[asyncio.base_events.Server] = None
+        self._server: Optional[netguard.Listener] = None
         self._serial_task: Optional[asyncio.Task] = None
         self._main_task: Optional[asyncio.Task] = None       # client/udp/serialbridge driver
         self._udp_transport: Optional[asyncio.DatagramTransport] = None
@@ -634,8 +634,11 @@ class MappingRunner:
         # keeps the serial device open forever, so no other mapping can use that port.
         try:
             if net.mode == "server":
-                self._server = await asyncio.start_server(
-                    self._on_client, host=net.bind_ip, port=net.port, ssl=server_ssl(net))
+                # admission right after accept; a TLS client's allow-list check comes
+                # before its handshake (netguard.start_server)
+                self._server = await netguard.start_server(
+                    self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
+                    allowed=self._access.allowed, log=self._log)
                 self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
                           f"{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
             elif net.mode == "client":
