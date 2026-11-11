@@ -6,7 +6,9 @@
 # 2. upgrade: a volume written as root (as by the images before v2.8) holding a
 #    v2.7.1 config.json is taken over by the ser2net user and the old admin
 #    password still signs in;
-# 3. a bind mount owned by another uid keeps its owner (the server runs as it).
+# 3. a bind mount owned by another uid keeps its owner (the server runs as it);
+# 4. the first admin without the browser: `docker exec ... --set-password` on the running
+#    container (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -26,6 +28,17 @@ wait_healthy() {
     fail "not healthy after 60 s (status: $s)"
 }
 proc_status() { docker exec s2n-smoke sh -c 'grep -E "^(Uid|Gid|Groups):" /proc/1/status'; }
+signs_in() {  # signs_in USER PASSWORD: exit 0 when the UI accepts them
+    local jar csrf code
+    jar=$(mktemp)
+    curl -fsS -c "$jar" -b "$jar" -o /dev/null "http://127.0.0.1:$PORT/login"
+    csrf=$(awk '$6=="ser2net_csrf"{print $7}' "$jar")
+    code=$(curl -sS -c "$jar" -b "$jar" -o /dev/null -w '%{http_code}' \
+        --data-urlencode "username=$1" --data-urlencode "password=$2" \
+        --data-urlencode "_csrf=$csrf" "http://127.0.0.1:$PORT/login")
+    rm -f "$jar"
+    [ "$code" = 303 ]
+}
 
 echo "== 1. fresh volume"
 docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
@@ -39,8 +52,13 @@ curl -fsS "http://127.0.0.1:$PORT/healthz" | grep -q ok || fail "/healthz"
 curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" | grep -q 303 || fail "no setup redirect"
 docker exec s2n-smoke sh -c 'stat -c "%u %a" /data /data/config.json'
 docker exec s2n-smoke sh -c '[ "$(stat -c %u /data/config.json)" = 10001 ]' || fail "config.json owner"
+out=$(printf 'smoke-pass-1\n' | docker exec -i s2n-smoke python /app/ser2net.py --no-bootstrap \
+    --data-dir /data --set-password admin 2>&1) || fail "docker exec --set-password: $out"
+grep -q "done by the running ser2net" <<<"$out" || fail "not handed to the running server: $out"
+docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "files not owned by 10001"
+signs_in admin smoke-pass-1 || fail "the admin made with docker exec did not sign in"
 docker rm -f s2n-smoke >/dev/null
-echo "fresh volume: healthy, uid 10001, keeps --group-add, no root group  OK"
+echo "fresh volume: healthy, uid 10001, keeps --group-add, no root group; first admin via docker exec  OK"
 
 echo "== 2. upgrade from a root-owned v2.7.1 volume"
 docker run --rm --user 0 --entrypoint sh -v s2n-smoke-b:/data -v "$HERE/fixtures:/fx:ro" "$IMAGE" -c \
@@ -77,5 +95,21 @@ proc_status | grep -q -E "^Uid:\s+4321\s" || fail "should run as the folder's ow
 docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$host_dir"
 echo "bind mount: runs as the folder's owner, host ownership untouched  OK"
+
+echo "== 4. first admin from SER2NET_ADMIN_PASSWORD_FILE"
+secret_dir=$(mktemp -d)
+printf 'env-pass-123\n' > "$secret_dir/pw"
+chmod 644 "$secret_dir/pw"
+docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
+    -e SER2NET_ADMIN_USER=ops -e SER2NET_ADMIN_PASSWORD_FILE=/run/secrets/pw \
+    -v "$secret_dir/pw:/run/secrets/pw:ro" "$IMAGE" >/dev/null
+wait_healthy
+logs=$(docker logs s2n-smoke 2>&1)
+grep -q "admin account 'ops' created from SER2NET_ADMIN_PASSWORD_FILE" <<<"$logs" || fail "no admin from the env"
+grep -q "env-pass-123" <<<"$logs" && fail "the password is in the log"
+signs_in ops env-pass-123 || fail "the admin from SER2NET_ADMIN_PASSWORD_FILE did not sign in"
+docker rm -f -v s2n-smoke >/dev/null  # -v: its anonymous /data volume too
+rm -rf "$secret_dir"
+echo "SER2NET_ADMIN_PASSWORD_FILE: the first admin signs in, the password is not logged  OK"
 echo
 echo "PASS: Docker image smoke test"

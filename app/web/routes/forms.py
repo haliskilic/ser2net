@@ -22,17 +22,17 @@ def _password_problem(pw: str, pw2: str) -> str | None:
     return None
 
 
-def _module_present(name: str) -> bool:
-    import importlib.util
-    return importlib.util.find_spec(name) is not None
-
-
 def _ldap_from_form(form, old) -> LdapSettings:
     pw = form.get("ldap_bind_password", "")
     return LdapSettings.from_dict({
         "enabled": _checkbox(form, "ldap_enabled"),
         "server_uri": form.get("ldap_server_uri", "").strip(),
         "start_tls": _checkbox(form, "ldap_start_tls"),
+        # a form without these (rendered before they existed) keeps the stored values
+        "tls_verify": (not _checkbox(form, "ldap_tls_insecure")
+                       if "ldap_tls_shown" in form else old.tls_verify),
+        "ca_file": (form.get("ldap_ca_file", "").strip()
+                    if "ldap_tls_shown" in form else old.ca_file),
         "user_dn_template": form.get("ldap_user_dn_template", "").strip(),
         "bind_dn": form.get("ldap_bind_dn", "").strip(),
         "bind_password": pw if pw else old.bind_password,   # blank => keep the stored one
@@ -43,6 +43,9 @@ def _ldap_from_form(form, old) -> LdapSettings:
         "operator_group": form.get("ldap_operator_group", "").strip(),
         "viewer_group": form.get("ldap_viewer_group", "").strip(),
         "default_role": form.get("ldap_default_role", "").strip(),
+        # a form without the box (rendered before it existed) keeps the stored value
+        "nested_groups": (_checkbox(form, "ldap_nested_groups")
+                          if "ldap_nested_groups_shown" in form else old.nested_groups),
     })
 
 
@@ -64,11 +67,22 @@ def _oidc_from_form(form, old) -> OidcSettings:
     })
 
 
+_USERNAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+
 def _username_problem(username: str) -> str | None:
+    """A local account's name: ASCII letters, digits, '.', '_' or '-' (the setup and Users
+    forms check the same in the browser: pattern). Names the characters it refuses — a
+    phone keyboard can put in a Turkish İ unnoticed."""
     if not username:
         return _("Username is required.")
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,32}", username):
-        return _("Username must be 1-32 characters: letters, digits, '.', '_' or '-'.")
+        rule = _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', "
+                 "'_' or '-'.")
+        bad = [c for c in dict.fromkeys(username) if c not in _USERNAME_CHARS]
+        if bad:
+            rule += " " + _("Not allowed: {0}").format(", ".join(repr(c) for c in bad))
+        return rule
     return None
 
 

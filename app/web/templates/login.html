@@ -16,7 +16,7 @@
     <form method="post" action="/login" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
       <label>{{ _("Username") }}
-        <input type="text" name="username" value="admin" autocomplete="username" required>
+        <input type="text" name="username" value="admin" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
       </label>
       <label>{{ _("Password") }}
         <input type="password" name="password" autocomplete="current-password" required>

@@ -12,10 +12,12 @@ CI 'standalone' jobs build the executables and set it):
      SER2NET_MAX_GLIBC (default 2.28); Windows: VC++ runtime and Python inside;
   2. run with an EMPTY PATH (no python, no openssl, nothing to borrow) and no
      PYTHON* variables: --version; it boots and serves the UI; a raw TCP mapping
-     accepts a client; MQTT, LDAP and OIDC libraries are inside (no "not installed");
+     accepts a client; MQTT, LDAP and OIDC libraries are inside and import (no "not
+     installed", no "failed to import");
      Settings → Generate self-signed certificate works (no openssl program); OIDC
-     discovery over a certificate-checked HTTPS connection works (bundled OpenSSL
-     + CA certificates);
+     sign-in over certificate-checked HTTPS works (bundled OpenSSL + CA certificates):
+     discovery, then the callback with the token exchange and the RS256 id_token
+     check (bundled authlib), which signs the user in;
   3. every shared library the running processes mapped comes from the bundle or
      the OS base (Linux /proc/<pid>/maps, Windows module list);
   4. SER2NET_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
@@ -27,6 +29,7 @@ Test-side needs: cryptography; pyelftools (Linux) or pefile (Windows); docker fo
 
 Run: python3 tests/test_standalone.py
 """
+import base64
 import datetime
 import http.cookiejar
 import http.server
@@ -186,19 +189,63 @@ def make_test_pki(d):
     return paths
 
 
+def b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def rs256_jwt(key, kid, claims) -> str:
+    """An id_token signed with this RSA key (cryptography only: authlib is the binary's)."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    head = b64url(json.dumps({"alg": "RS256", "typ": "JWT", "kid": kid}).encode())
+    body = b64url(json.dumps(claims).encode())
+    signature = key.sign(f"{head}.{body}".encode(), padding.PKCS1v15(), hashes.SHA256())
+    return f"{head}.{body}.{b64url(signature)}"
+
+
+def rsa_jwk(key, kid) -> dict:
+    numbers = key.public_key().public_numbers()
+
+    def raw(n: int) -> bytes:
+        return n.to_bytes((n.bit_length() + 7) // 8, "big")
+
+    return {"kty": "RSA", "kid": kid, "use": "sig", "alg": "RS256",
+            "n": b64url(raw(numbers.n)), "e": b64url(raw(numbers.e))}
+
+
 class _Provider(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):  # noqa: N802 (http.server API)
-        if self.path != "/.well-known/openid-configuration":
-            self.send_error(404)
-            return
-        iss = self.server.issuer
-        body = json.dumps({"issuer": iss, "authorization_endpoint": iss + "/authorize",
-                           "token_endpoint": iss + "/token", "jwks_uri": iss + "/jwks"}).encode()
+    """Discovery, JWKS and a token endpoint whose id_token carries server.claims."""
+
+    def _json(self, doc) -> None:
+        body = json.dumps(doc).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self):  # noqa: N802 (http.server API)
+        iss = self.server.issuer
+        if self.path == "/.well-known/openid-configuration":
+            return self._json({"issuer": iss, "authorization_endpoint": iss + "/authorize",
+                               "token_endpoint": iss + "/token", "jwks_uri": iss + "/jwks"})
+        if self.path == "/jwks":
+            return self._json({"keys": [rsa_jwk(self.server.key, "k1")]})
+        self.send_error(404)
+
+    def do_POST(self):  # noqa: N802
+        if self.path != "/token":
+            return self.send_error(404)
+        form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                                     .decode())
+        if form.get("code") != ["CODE"] or form.get("client_secret") != ["s3cret"]:
+            return self.send_error(400)
+        now = int(time.time())
+        claims = dict(self.server.claims, iss=self.server.issuer, aud="ser2net", sub="s-1",
+                      iat=now, exp=now + 300)
+        self._json({"id_token": rs256_jwt(self.server.key, "k1", claims),
+                    "token_type": "Bearer", "access_token": "a"})
 
     def log_message(self, *args):
         pass
@@ -206,11 +253,15 @@ class _Provider(http.server.BaseHTTPRequestHandler):
 
 def start_provider(pki):
     """A fake OIDC provider over HTTPS with the test CA's server certificate."""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Provider)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(pki["server.pem"], pki["server.key"])
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     srv.issuer = f"https://127.0.0.1:{srv.server_address[1]}"
+    srv.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    srv.claims = {}
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
@@ -223,7 +274,8 @@ def write_config(data_dir, ui, raw_port, issuer, mqtt_port):
                    "pwd_version": 1}],
         "ldap": {"enabled": True, "server_uri": "ldap://127.0.0.1:1",
                  "user_dn_template": "uid={username},dc=example,dc=org"},
-        "oidc": {"enabled": True, "issuer": issuer, "client_id": "ser2net", "client_secret": "s3cret"},
+        "oidc": {"enabled": True, "issuer": issuer, "client_id": "ser2net", "client_secret": "s3cret",
+                 "admin_group": "ser2net-admins"},
         "mappings": [{"name": "standalone-raw", "serial": {"port": serial},
                       "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
                                   "port": raw_port},
@@ -514,6 +566,8 @@ def test_binary():
                 fh.write('__version__ = "0.0-override-test"\n')
             about = run.output(["--about"])
             assert re.search(r"ldap3\s+2\.\d", about), f"bundled ldap3 not found:\n{about}"
+            assert re.search(r"pyasn1\s+0\.\d", about), f"bundled pyasn1 not found:\n{about}"
+            assert "not installed" not in about and "failed to import" not in about, about
             about = run.output(["--about"], {"SER2NET_LIB_OVERRIDE": override})
             assert re.search(r"ldap3\s+0\.0-override-test", about), \
                 f"SER2NET_LIB_OVERRIDE did not replace ldap3:\n{about}"
@@ -529,6 +583,27 @@ def test_binary():
 
         st, _, page = s.request("/settings")
         assert st == 200 and "is not installed" not in page, "LDAP/OIDC library missing from the bundle"
+        assert "failed to import" not in page and "missing from this executable" not in page, \
+            "LDAP/OIDC library in the bundle does not import"
+        # (before a certificate is generated: from then on, until a restart, the sign-in
+        # cookies are marked Secure while the UI still answers over plain HTTP)
+        sso = Session(f"http://127.0.0.1:{ui}")
+        st, headers, page = sso.request("/auth/oidc/login")
+        location = headers.get("Location", "") if headers else ""
+        assert st == 303 and location.startswith(provider.issuer + "/authorize?"), \
+            f"OIDC discovery over HTTPS failed ({st}):\n" + read(os.path.join(data, "all.log"))[-1500:]
+        print(f"{where}: OIDC discovery over a certificate-checked HTTPS connection  OK")
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)
+        provider.claims = {"preferred_username": "sso.user", "groups": ["/plant/ser2net-admins"],
+                           "nonce": query["nonce"][0]}
+        st, headers, _ = sso.request("/auth/oidc/callback?" + urllib.parse.urlencode(
+            {"code": "CODE", "state": query["state"][0]}))
+        assert st == 303 and headers.get("Location") == "/", \
+            f"OIDC callback failed ({st}):\n" + read(os.path.join(data, "all.log"))[-1500:]
+        st, _, page = sso.request("/settings")
+        assert st == 200 and "sso.user" in page, f"no session after the OIDC callback ({st})"
+        assert "login: sso.user (admin, oidc)" in read(os.path.join(data, "all.log"))
+        print(f"{where}: OIDC callback: token exchange, RS256 id_token check, signed in  OK")
         st, _, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
         assert "Self-signed certificate generated" in page, \
             re.sub(r"\s+", " ", page[page.find("banner"):][:300])
@@ -538,11 +613,6 @@ def test_binary():
             os.path.join(data, "tls", "cert.pem"), os.path.join(data, "tls", "key.pem"))
         print(f"{where}: Settings -> Generate self-signed certificate, no openssl on PATH  OK")
 
-        st, headers, page = s.request("/auth/oidc/login")
-        location = headers.get("Location", "") if headers else ""
-        assert st == 303 and location.startswith(provider.issuer + "/authorize?"), \
-            f"OIDC discovery over HTTPS failed ({st}):\n" + read(os.path.join(data, "all.log"))[-1500:]
-        print(f"{where}: OIDC discovery over a certificate-checked HTTPS connection  OK")
 
         with socket.create_connection(("127.0.0.1", raw), timeout=5):
             time.sleep(0.8)
@@ -550,7 +620,7 @@ def test_binary():
         assert f"listening on 127.0.0.1:{raw} (raw, keepalive" in log, log[-1500:]
         assert "client connected: 127.0.0.1" in log, log[-1500:]
         assert "MQTT publishing serial lines to 127.0.0.1" in log, "paho-mqtt missing from the bundle?"
-        assert "not installed" not in log, log[-1500:]
+        assert "not installed" not in log and "failed to import" not in log, log[-1500:]
         if IMAGE:
             assert f"TLS: using the system CA bundle {run.ca_path}" in log, \
                 f"binary did not pick {run.ca_path}:\n" + log[:1500]

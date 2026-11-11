@@ -133,7 +133,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
-  login rate-limiting, strict security headers, session revocation on password change.
+  login rate-limiting, strict security headers; sessions end at logout, on a password
+  change, per user or for everyone (Settings), and a lost password is reset with
+  `ser2net --set-password` (see Security).
   For trusted networks the login requirement can be switched off under **Settings → Web
   UI access** (visitors then use the UI with a chosen role; see Security).
 - **Multi-user / RBAC:** `admin` / `operator` / `viewer` roles — viewer is read-only,
@@ -141,10 +143,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   single-password setups migrate automatically to one `admin` user.
 - **LDAP / Active Directory auth (optional):** users authenticate by binding to the
   directory; LDAP group membership maps to a role. Works alongside local accounts;
-  needs `ldap3`.
-- **OIDC single sign-on (optional):** authorization-code flow with Keycloak / Entra ID /
-  Google / Okta; the id_token is validated (signature/iss/aud/exp/nonce) and a claim maps
-  to a role. Needs `authlib`.
+  needs `ldap3`. LDAPS / StartTLS check the server's certificate (the system's CAs or
+  your own CA file).
+- **OIDC single sign-on (optional):** authorization-code flow with PKCE, with Keycloak /
+  Entra ID / Google / Okta; the id_token is validated (signature/iss/aud/exp/nonce) and a
+  claim maps to a role. Needs `authlib`.
 - **REST API:** a JSON API (`/api/v1`) for automation — mapping CRUD, start/stop/restart,
   status and ports; **bearer-token** auth (with a role — `viewer` is read-only); OpenAPI
   3.0 (`/api/v1/openapi.json`). The token is generated in Settings.
@@ -230,7 +233,8 @@ containers.
 Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
 group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
 mounted `noexec`, point `TMPDIR` at a directory that isn't. For certificate checks (MQTT
-over TLS, OIDC) it uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
+over TLS, OIDC, LDAPS / StartTLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE`
+if set.
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
 reports. `ser2net --licenses` prints the license text of every component inside the
@@ -243,7 +247,11 @@ Linux (in an old-glibc container, so the result runs on older distributions too)
 On first run:
 1. The **console** asks which local IP the admin UI binds to (machine IPs or custom)
    and a port (default 8080). Headless/service default is the safe **127.0.0.1**.
-2. Open the printed URL; **set the admin password** on the first screen.
+2. Open the printed URL; **set the admin password** on the first screen. Open it by the
+   machine's IP address or `localhost`: reached through another host name (a reverse
+   proxy, the Docker host's name) the setup page also asks for the one-time code in
+   `data/setup-code.txt`, so that no other web page can claim a new install (DNS
+   rebinding). No browser at hand: `ser2net --set-password admin` (see Security).
 3. From the dashboard, **+ Add mapping**: pick a COM/tty and map it to an IP:port.
 
 Change the bind IP later:
@@ -388,6 +396,120 @@ the login page. Behind a reverse proxy, the proxy must pass the original name in
 and managed after signing in, and open consoles are closed when access is revoked or the
 role changes. While it is on, the UI shows a warning and startup logs it.
 
+**Sessions:** logging out ends that session on the server (a copy of the cookie stops
+working too). Under **Settings → Users** an admin can sign a user out everywhere or set a
+local user's new password (which signs them out as well); everyone can *Sign out my other
+sessions*. **Settings → Web UI access → Sign out everyone** makes a new session key and
+ends every session at once, the admin's own excepted — use it when a copy of
+`config.json` or a backup may have leaked (downloaded backups leave the key out). While
+LDAP or OIDC is switched off, its accounts' sessions don't count.
+
+**LDAP / OIDC groups → roles:** a group setting (admin / operator / viewer group) names one
+group and matches only its whole name, never a part of it. For LDAP that is the group's
+name (its CN, e.g. `ser2net-admins`), the start of its DN (`cn=ser2net-admins,ou=groups`)
+or its full DN; for OIDC the value as the provider sends it, or its last part
+(`ser2net-admins` matches Keycloak's `/team/ser2net-admins` and `CORP\ser2net-admins`).
+Letter case doesn't matter, Turkish İ/I/ı/i included (`Bilgi İşlem` = `BİLGİ İŞLEM`). A
+setting that is only part of a group's name (`admins` for `ser2net-admins`, or just an OU of
+its DN) gives no role: all.log names the setting and the group in a WARNING at that user's
+sign-in, and Settings shows it until you save that section. If your only admins came from
+such a group, sign in with a local admin created by `ser2net --set-password NAME` (see
+below) and correct the setting. When a directory user's groups give no role any more,
+their next sign-in also ends the sessions they still had. AD direct bind with
+`{username}@corp.local` or `CORP\{username}` finds the account by userPrincipalName /
+sAMAccountName under the user search base (blank: its whole domain) to read its groups;
+*Also count nested groups* (AD only) adds the groups a user is in through other groups.
+
+**LDAP / OIDC accounts:** someone who signs in through the directory (LDAP) or the identity
+provider (OIDC) for the first time gets an account here without a password; its role is
+worked out from their groups at every sign-in — also when that takes the last admin role
+away (all.log then warns; `ser2net --set-password NAME` makes a local admin). Local accounts
+come first: an LDAP/OIDC sign-in under the name of a local account (letter case aside) is
+refused and written to all.log and the audit log (`ldap_login_denied` /
+`oidc_login_denied`); it never takes over the local account, turns it into an SSO account or
+demotes it. To move someone from a local account to SSO, delete the local account first
+(another admin must remain). Like directories, ser2net ignores letter case in LDAP names
+(Turkish İ/ı too): `hkilic`, `Hkilic` and `HKILIC` are one account; the accounts earlier
+versions made for each spelling merge at that person's next sign-in (the other spellings'
+sessions end), and *Sign out* and *Delete* cover all of them. OIDC names are compared
+exactly. A new local account's name can't differ from an existing one only in letter case.
+An LDAP/OIDC name can be any printable text (`CORP\jdoe`, `jdoe@corp.local`, names with `/`
+or `#`; such accounts can be signed out and deleted in the Users panel too); a sign-in under
+a name with control or invisible characters, longer than 255 characters or in parentheses is
+refused (all.log says why).
+
+**Unused LDAP / OIDC accounts:** **Settings → Users** shows each account's last sign-in
+(from the audit log and the sign-ins since; not written to config.json). Removing unused
+LDAP/OIDC accounts is **off by default**: an account that stops signing in stays until you
+delete it. To turn it on, set *Remove LDAP / OIDC accounts not signed in for (days)* in the
+same place (`external_users_expire_days`: 30–3650 days; 0 = off): LDAP/OIDC accounts not
+signed in for that long are then removed at once, at start-up and every hour, each written
+to all.log and the audit log (`user_expired`). Admins, local accounts and the last remaining
+accounts are never removed, and an account without any sign-in in the audit log only when
+the log goes back that far for its kind of sign-in. Deleting (or removing) an LDAP/OIDC
+account ends its sessions at once, but access is up to the directory: while a mapped group
+or the default role still applies, the person's next sign-in makes a new account.
+
+**OIDC (SSO):** the code request carries PKCE (S256). Every address the provider's discovery
+document gives (authorization, token, JWKS) and every redirect on the way must be https://
+(http:// only to this machine's loopback address): if a Keycloak behind a TLS-terminating
+proxy announces http:// addresses, SSO sign-in is refused and all.log says why (fix
+Keycloak's proxy / frontend URL settings), because the client secret, the code and the
+signing keys would travel in clear text. When the provider sends the user back with an error
+instead of a code (e.g. the user is not assigned to the application: `access_denied`), the
+error and its description go to all.log and the user sees a message for that error code;
+the token endpoint's error answers are logged too. An e-mail address the provider calls
+unverified (`email_verified: false`) is never used as the user name. If the discovery
+document names another issuer than the configured one, all.log warns once. The id_token's
+times (iat / nbf / exp) are accepted with up to 2 minutes of clock difference: keep the
+clocks of this server and of the provider synchronised (NTP); when a token is refused for its
+times, all.log says how many seconds this server's clock is behind or ahead of the
+provider's.
+
+**LDAP over TLS (LDAPS / StartTLS):** the directory server's certificate is checked. It
+must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: its
+certificate store, where a domain member usually has the AD CA already) and name the host
+in the server URI: use the name the certificate was issued for (`ldaps://dc01.corp.local`;
+an IP address only if the certificate lists it). For your own CA (Active Directory
+Certificate Services) or a self-signed certificate, set **Settings → LDAP → CA certificate
+file** to that CA's certificate, PEM or DER as Windows exports it (Docker: put it in the
+`/data` volume); then only the certificates in that file are trusted. A refused certificate
+is logged in all.log with the reason and what to set, and Settings shows it; nothing is
+sent over that connection. *Don't check the server certificate* turns the check off, which
+is insecure — anyone on the network between ser2net and the directory could read the
+passwords and sign in as anyone; Settings and the start-up log warn while it is off, and
+while passwords go unencrypted (`ldap://` without StartTLS). Over TLS ser2net doesn't
+follow a referral to another server (that server's certificate would go unchecked): point
+the URI at a server that holds the users and their groups. **After upgrading from 2.8 or
+older**, LDAP sign-in stops if the certificate isn't trusted: set the CA certificate file
+(local accounts keep working; without a local admin, create one with
+`ser2net --set-password NAME`).
+
+**Lost password, locked out, no browser (account recovery):**
+`ser2net --set-password NAME` sets a new password for the local account `NAME` (asked
+twice on the terminal; piped, the first line of stdin) and signs that account out
+everywhere. A name that doesn't exist yet is created as an **admin** — the way back in
+when the only admin is an LDAP/OIDC account and the directory is unreachable.
+`ser2net --sign-out-all` ends every web UI session. Both work with ser2net stopped or
+running: a running instance applies the change at once, no restart needed. Nothing else
+in the configuration changes, the previous `config.json` stays in `backups/`, the audit
+log records it, and nothing secret is printed or logged. Use the same `--data-dir` as the
+service and run it as the account ser2net runs as (as root, it switches to the data
+directory's owner by itself):
+
+| Install | Command |
+|---|---|
+| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
+| Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ser2net\data --set-password admin` |
+| Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
+
+**First admin without the browser:** run `ser2net --set-password admin` before the first
+start (it creates `config.json`; the UI then listens on `127.0.0.1:8080` unless
+`--reconfigure` or `SER2NET_BIND_IP` says otherwise), or — Docker — point
+`SER2NET_ADMIN_PASSWORD_FILE` at a file (a Docker secret) holding the password, with
+`SER2NET_ADMIN_USER` for the name (default `admin`). The variable is used only while there
+is no account at all; later starts ignore it.
+
 ### LAN cluster
 
 - **Signed requests:** every request between nodes is signed with (a key derived from)
@@ -459,7 +581,12 @@ owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the 
 inside aren't readable by other users:
 - `config.json` — admin IP, password hash, all mappings (atomic write).
 - `backups/` — the previous `config.json` before every change (newest 50). Download or
-  restore one under Settings → *Configuration backups*; a restore can be undone too.
+  restore one under Settings → *Configuration backups*. A restore first shows what changes
+  for sign-in and access, then brings back the mappings and settings; the user accounts
+  and passwords, the REST API token and the cluster key stay as they are unless you tick
+  the box to restore them too (that also signs everyone else out). *Only its mappings*
+  goes through the import preview. A restore can be undone too; a downloaded backup
+  leaves out the session key.
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins and config changes,
   who/from where/what (rotated). Searchable under Settings → *Audit log*, CSV export.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
@@ -467,6 +594,8 @@ inside aren't readable by other users:
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
   are reduced to the file name, which is logged at start-up.
 - `tls/` — certificate/key if self-signed is generated.
+- `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
+  only until the first admin account does.
 
 Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
@@ -474,7 +603,9 @@ replaced when the config is loaded or the file is imported; the start-up log or 
 preview says so.
 
 Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
-`backups/` is never restored by itself — delete it too if you want it gone).
+`backups/` is never restored by itself — delete it too if you want it gone). To get back in
+after a lost password, use `--set-password` instead (see Security): it keeps everything else.
+`admin-requests/` only holds a command-line request until the running instance takes it.
 
 **Copying an installation** (a disk or VM image, a copied data folder or Docker volume):
 `config.json` holds the node's identity — its cluster id (`instance_id`) and the key that

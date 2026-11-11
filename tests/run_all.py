@@ -8,10 +8,14 @@ tests (Linux only; requires the `socat` binary on PATH).
     python3 tests/run_all.py --socat    # + socat data-path tests (Linux)
     python3 tests/run_all.py -v         # also show the output of passing tests
 
-Exit code is non-zero if any selected test fails, so CI can gate on it.
+Exit code is non-zero if any selected test fails, so CI can gate on it. A passing test
+that skipped a part (a line starting with SKIP: an optional package, a tool or an opt-in
+environment variable is missing) has those lines repeated under its PASS line, and the
+summary lists it.
 """
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +23,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEST_TIMEOUT = 240  # seconds; longest real tests finish in ~7s, so this only traps hangs
+_SKIP_LINE = re.compile(r"^\s*SKIP\b")
 
 # Confirmed cross-platform (stdlib + ./lib; no socat, no real serial device).
 PORTABLE = [
@@ -47,6 +52,10 @@ PORTABLE = [
     "test_modbus_poll.py",
     "test_ldap.py",
     "test_oidc.py",
+    "test_directory_login.py",  # LDAP/OIDC sign-in end to end; skips without ldap3 / authlib
+    "test_external_accounts.py",  # LDAP/OIDC accounts in the Users panel (no directory needed)
+    "test_ldap_tls.py",       # LDAPS / StartTLS certificate checks; TLS parts need ldap3
+    "test_optional_packages.py",
     "test_cluster.py",
     "test_ui_markup.py",
     "test_ui_layout.py",      # browser layout check; skips without Playwright (CI 'ui' job runs it)
@@ -55,6 +64,9 @@ PORTABLE = [
     "test_vendor_wheels.py",
     "test_trace.py",
     "test_session_timeout.py",
+    "test_session_revocation.py",
+    "test_account_recovery.py",
+    "test_first_run_setup.py",
     "test_backups_import.py",
     "test_audit_log.py",
     "test_healthcheck.py",
@@ -103,7 +115,7 @@ SOCAT = [
 ]
 
 
-def run_one(name: str, verbose: bool = False) -> bool:
+def run_one(name: str, verbose: bool = False, skipped: list | None = None) -> bool:
     path = os.path.join(HERE, name)
     if not os.path.exists(path):
         print(f"SKIP  {name} (missing)")
@@ -131,8 +143,13 @@ def run_one(name: str, verbose: bool = False) -> bool:
     if not ok:
         sys.stdout.write(proc.stdout[-2000:])
         sys.stderr.write(proc.stderr[-2000:])
-    elif verbose:
-        sys.stdout.write("".join(f"      {ln}\n" for ln in proc.stdout[-4000:].splitlines()))
+        return ok
+    tail = proc.stdout[-4000:] if verbose else ""
+    skips = [ln.strip() for ln in proc.stdout.splitlines() if _SKIP_LINE.match(ln)]
+    shown = tail.splitlines() + [ln for ln in skips if ln not in tail]
+    sys.stdout.write("".join(f"      {ln}\n" for ln in shown))
+    if skips and skipped is not None:
+        skipped.append(name)
     return ok
 
 
@@ -149,8 +166,11 @@ def main(argv) -> int:
             print("note: --socat given but socat binary not found; skipping socat tests")
 
     print(f"running {len(selected)} test file(s)\n")
-    failed = [name for name in selected if not run_one(name, verbose)]
+    skipped: list[str] = []
+    failed = [name for name in selected if not run_one(name, verbose, skipped)]
     print(f"\n{'-' * 40}\n{len(selected) - len(failed)} passed, {len(failed)} failed")
+    if skipped:
+        print(f"{len(skipped)} passed with skipped parts (SKIP lines above): " + ", ".join(skipped))
     if failed:
         print("FAILED: " + ", ".join(failed))
         return 1

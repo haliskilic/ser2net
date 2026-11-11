@@ -58,6 +58,10 @@ def test_roundtrip(original):
     m0 = saved["mappings"][0]["options"]
     assert (m0["trace_max_mb"], m0["trace_keep"]) == (10.0, 3), "new settings must default"
     assert saved["session_timeout_s"] == 28800 and saved["admin_ui"]["require_login"] is True
+    # LDAPS in the fixture: its certificate is checked from now on (LDAP is off there, so
+    # loading it notes nothing about it)
+    assert (saved["ldap"]["tls_verify"], saved["ldap"]["ca_file"]) == (True, "")
+    assert not [n for n in cfg.load_notes if "LDAP" in n], cfg.load_notes
     print("load + validate + save: every 2.7.1 value kept (only the 2 trace paths -> names)  OK")
 
 

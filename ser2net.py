@@ -10,6 +10,7 @@ Run:
     python3 ser2net.py                 # normal start (first run asks bind IP on console)
     python3 ser2net.py --reconfigure   # re-pick the admin UI bind IP/port on the console
     python3 ser2net.py --about         # versions of the bundled components (for bug reports)
+    python3 ser2net.py --set-password admin   # lost the password? (also while it runs)
     python3 ser2net.py --help
 """
 from __future__ import annotations
@@ -89,6 +90,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Exit 0 if this data directory's running instance answers on /healthz, else 1 "
              "(Docker HEALTHCHECK, monitoring).",
     )
+    acc = p.add_argument_group("account recovery (works while ser2net runs, too)")
+    one = acc.add_mutually_exclusive_group()
+    one.add_argument("--set-password", metavar="USER",
+                     help="Set a new password for the local account USER and sign its "
+                          "sessions out (USER is created as an admin if it doesn't exist), "
+                          "then exit. The password is asked on the terminal, or read from "
+                          "the first line of stdin.")
+    one.add_argument("--sign-out-all", action="store_true",
+                     help="End every web UI session (new session key), then exit.")
     return p.parse_args(argv)
 
 
@@ -130,19 +140,24 @@ def print_about() -> int:
     import ssl
     from importlib import metadata
 
+    from app import optional
+
     lines = [f"ser2net {__version__}",
              f"Python {platform.python_version()} ({platform.python_implementation()}), "
              f"{ssl.OPENSSL_VERSION}",
              f"Platform: {platform.platform()} ({platform.machine()})",
              f"Build: {'standalone executable' if FROZEN else 'source'}"]
-    for dist, module in (("pyserial", "serial"), ("starlette", "starlette"),
-                         ("uvicorn", "uvicorn"), ("paho-mqtt", "paho.mqtt"),
-                         ("ldap3", "ldap3"), ("authlib", "authlib"),
-                         ("cryptography", "cryptography")):
-        try:
-            mod = __import__(module, fromlist=["__name__"])
-        except Exception:
-            lines.append(f"  {dist:13} not installed")
+    components = (("pyserial", "serial"), ("pyserial-asyncio-fast", "serial_asyncio_fast"),
+                  ("starlette", "starlette"), ("uvicorn", "uvicorn"),
+                  ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),
+                  ("authlib", "authlib"), ("cryptography", "cryptography"))
+    width = max(len(dist) for dist, _module in components)
+    for dist, module in components:
+        mod, problem = optional.load(module, dist, module)
+        if problem is not None:
+            # "not installed" only when it really isn't; else the error importing it raised
+            lines.append(f"  {dist:{width}} " + ("not installed" if problem.missing else
+                                                 f"failed to import: {problem.error}"))
             continue
         version = getattr(mod, "__version__", None)
         if not isinstance(version, str):
@@ -151,7 +166,7 @@ def print_about() -> int:
             except metadata.PackageNotFoundError:
                 version = "?"
         where = os.path.dirname(getattr(mod, "__file__", "") or "")
-        lines.append(f"  {dist:13} {version}  ({where})")
+        lines.append(f"  {dist:{width}} {version}  ({where})")
     _write_utf8("\n".join(lines) + "\n")
     return 0
 
@@ -187,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # 2. resolve config path
     config_path = args.config or os.path.join(args.data_dir, "config.json")
+
+    if args.set_password is not None or args.sign_out_all:
+        from app import accounts
+
+        return accounts.main(args, config_path)
 
     # 3. hand off
     from app import runtime

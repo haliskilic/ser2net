@@ -4,7 +4,18 @@
 {% set is_admin = me and me.role == 'admin' %}
 {% set is_operator = me and me.role in ['operator', 'admin'] %}
 {% set is_anonymous = me and me.source == 'anonymous' %}
+{% set my_name = me.username if me and not is_anonymous else none %}
 {% set unchanged = _('•••••• (unchanged)') %}
+{% macro group_warning(w) -%}
+{%- set setting = {'admin_group': _('Admin group'), 'operator_group': _('Operator group'), 'viewer_group': _('Viewer group')}[w.setting] -%}
+<div class="banner warn">{% if w.got %}{{ _('At a sign-in at %(time)s, the %(setting)s “%(value)s” matched the group “%(group)s” of %(user)s only as part of its name. That no longer counts, so %(user)s got %(got)s instead of %(was)s. Enter the group’s whole name, such as “%(name)s”, and save.', time=w.time, setting=setting, value=w.value, group=w.group, user=w.user, got=w.got, was=w.was, name=w.name) }}{% else %}{{ _('At a sign-in at %(time)s, the %(setting)s “%(value)s” matched the group “%(group)s” of %(user)s only as part of its name. That no longer counts, so %(user)s could not sign in (before, they got %(was)s). Enter the group’s whole name, such as “%(name)s”, and save.', time=w.time, setting=setting, value=w.value, group=w.group, user=w.user, was=w.was, name=w.name) }}{% endif %}</div>
+{%- endmacro %}
+{% macro tls_problem(p) -%}
+<div class="banner warn">{% if p.kind == 'ca_file' and p.unreadable %}{{ _('At a sign-in at %(time)s, the CA certificate file %(file)s could not be read, so LDAP sign-in failed. Correct “CA certificate file” below and save.', time=p.time, file=p.ca_file) }}{% elif p.kind == 'ca_file' %}{{ _('At a sign-in at %(time)s, the CA certificate file %(file)s held no certificate (PEM or DER), so LDAP sign-in failed. Correct “CA certificate file” below and save.', time=p.time, file=p.ca_file) }}{% elif p.kind == 'name' %}{{ _('At a sign-in at %(time)s, the certificate of the directory server %(uri)s was not accepted (%(reason)s): it was issued for another name, so LDAP sign-in failed; nothing was sent over that connection. Use a name the certificate was issued for in the server URI (an IP address only if the certificate lists it) and save.', time=p.time, uri=p.uri, reason=p.reason) }}{% elif p.ca_file %}{{ _('At a sign-in at %(time)s, the certificate of the directory server %(uri)s was not accepted (%(reason)s), so LDAP sign-in failed; nothing was sent over that connection. The CA certificate file %(file)s doesn’t hold the CA that issued it: enter a file with that CA’s certificate (PEM or DER) and save.', time=p.time, uri=p.uri, reason=p.reason, file=p.ca_file) }}{% else %}{{ _('At a sign-in at %(time)s, the certificate of the directory server %(uri)s was not accepted (%(reason)s), so LDAP sign-in failed; nothing was sent over that connection. If the directory’s certificates come from your own CA (such as Active Directory Certificate Services) or are self-signed, enter the file with that CA’s certificate (PEM or DER) as “CA certificate file” below and save.', time=p.time, uri=p.uri, reason=p.reason) }}{% endif %}</div>
+{%- endmacro %}
+{% macro package_problem(p, what) -%}
+<div class="banner warn">{% if p.missing and p.frozen %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is missing from this executable, which should contain it; please report this. Local accounts still work.', what=what, package=p.dist) }}{% elif p.missing %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is not installed, so it won’t work until you install it: <span class="mono">%(command)s</span>. Local accounts still work.', what=what, package=p.dist, command=p.hint) }}{% else %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is installed and failed to import, so it won’t work until that is fixed and ser2net restarted. Local accounts still work. The error: <span class="mono">%(error)s</span>', what=what, package=p.dist, error=p.error) }}{% if p.override %} {{ _('SER2NET_LIB_OVERRIDE loads modules from <span class="mono">%(folder)s</span> first; check the copy there.', folder=p.override) }}{% endif %}{% endif %}</div>
+{%- endmacro %}
 
 <section class="panel panel-narrow">
   {% if is_anonymous %}
@@ -22,6 +33,11 @@
     <label>{{ _("New password (min 8 chars)") }} <input type="password" name="password" autocomplete="new-password" required></label>
     <label>{{ _("Confirm new password") }} <input type="password" name="password2" autocomplete="new-password" required></label>
     <button class="btn primary" type="submit">{{ _("Update password") }}</button>
+  </form>
+  <form method="post" action="/settings/sessions/signout-others" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _("Ends your sign-ins in other browsers and on other devices; this one stays signed in.") }}</p>
+    <button class="btn" type="submit">{{ _("Sign out my other sessions") }}</button>
   </form>
   {% endif %}
 </section>
@@ -59,6 +75,12 @@
     </label>
     <button class="btn primary" type="submit">{{ _("Save access") }}</button>
   </form>
+  <form method="post" action="/settings/sessions/revoke-all" class="authform mt-sm"
+        data-confirm="{{ _('Sign everyone out of this web UI, on every device? You stay signed in here.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _("Ends every web UI session at once by making a new session key — also sessions signed with the key in an old copy of config.json or of a backup. You stay signed in here.") }}</p>
+    <button class="btn" type="submit">{{ _("Sign out everyone") }}</button>
+  </form>
 </section>
 
 <section class="panel panel-narrow">
@@ -69,18 +91,19 @@
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Users") }}</h2></div>
   <div class="table-scroll">
-  <table class="grid">
+  <table class="grid th-wrap">
     <thead><tr><th>{{ _("Username") }}</th><th>{{ _("Role") }}</th><th></th></tr></thead>
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if me.username == u.username %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}</td>
+        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
         <td>
           {% if u.source != 'local' %}
             <span class="mono">{{ u.role }}</span> <span class="muted">({{ _("from %(source)s", source=u.source|upper) }})</span>
           {% else %}
-          <form method="post" action="/settings/users/{{ u.username }}/role" class="inline">
+          <form method="post" action="/settings/users/role" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+            <input type="hidden" name="username" value="{{ u.username }}">
             <select name="role">
               {% for r in roles %}<option value="{{ r }}" {% if r == u.role %}selected{% endif %}>{{ r }}</option>{% endfor %}
             </select>
@@ -89,11 +112,19 @@
           {% endif %}
         </td>
         <td>
-          {% if me.username != u.username %}
-          <form method="post" action="/settings/users/{{ u.username }}/delete" class="inline">
-            <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-            <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
-          </form>
+          {% if u.username != my_name %}
+          <div class="row-actions">
+            <form method="post" action="/settings/users/signout" class="inline">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <button class="btn sm" type="submit">{{ _("Sign out") }}</button>
+            </form>
+            <form method="post" action="/settings/users/delete" class="inline">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
+            </form>
+          </div>
           {% endif %}
         </td>
       </tr>
@@ -102,10 +133,21 @@
   </table>
   </div>
   <p class="muted mb-sm">{{ _('Roles: <span class="mono">admin</span> (everything), <span class="mono">operator</span> (manage mappings), <span class="mono">viewer</span> (read-only).') }}</p>
+  {% if ldap.enabled or oidc.enabled or users|rejectattr("source", "equalto", "local")|list %}
+  <p class="muted mb-sm">{{ _("LDAP / OIDC accounts are made at their first sign-in, and every sign-in takes their role from the directory or the identity provider again. Delete signs such an account out at once, but whether that person can sign in again is up to the directory: while a mapped group or the default role still applies, their next sign-in makes a new account.") }}</p>
+  <form method="post" action="/settings/users/expiry" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Remove LDAP / OIDC accounts not signed in for (days)") }} <span class="muted">({{ _("0 = off, the default · %(min)s to %(max)s", min=expire_min, max=expire_max) }})</span>
+      <input type="number" name="expire_days" min="0" max="{{ expire_max }}" value="{{ expire_days }}" required>
+    </label>
+    <p class="muted">{{ _("Off by default: an account that stops signing in stays until you delete it. With a number of days, LDAP / OIDC accounts not signed in for that long are removed at once and then every hour, each logged and audited — never admins or local accounts; they come back at their next sign-in while the directory still gives them a role.") }}</p>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
+  {% endif %}
   <form method="post" action="/settings/users" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <div class="grid2">
-      <label>{{ _("Username") }} <input type="text" name="username" placeholder="{{ _('e.g. %(example)s', example='operator1') }}" required></label>
+      <label>{{ _("Username") }} <input type="text" name="username" placeholder="{{ _('e.g. %(example)s', example='operator1') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" pattern="[A-Za-z0-9._\-]{1,32}" title="{{ _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.") }}" required></label>
       <label>{{ _("Role") }}
         <select name="role">{% for r in roles %}<option value="{{ r }}" {% if r == 'viewer' %}selected{% endif %}>{{ r }}</option>{% endfor %}</select>
       </label>
@@ -116,12 +158,32 @@
     </div>
     <button class="btn" type="submit">{{ _("Add user") }}</button>
   </form>
+  {% set resettable = users|selectattr("source", "equalto", "local")|rejectattr("username", "equalto", my_name)|list %}
+  {% if resettable %}
+  <h3 class="mt-sm">{{ _("Set another user’s password") }}</h3>
+  <p class="muted mb-sm">{{ _("For someone who forgot theirs; it also signs that user out everywhere. “Sign out” in the table ends a user’s sessions without changing anything else.") }}</p>
+  <form method="post" action="/settings/users/password" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("User") }}
+      <select name="username">{% for u in resettable %}<option value="{{ u.username }}">{{ u.username }}</option>{% endfor %}</select>
+    </label>
+    <div class="grid2">
+      <label>{{ _("New password (min 8 chars)") }} <input type="password" name="password" autocomplete="new-password" required></label>
+      <label>{{ _("Confirm") }} <input type="password" name="password2" autocomplete="new-password" required></label>
+    </div>
+    <button class="btn" type="submit">{{ _("Set password") }}</button>
+  </form>
+  {% endif %}
 </section>
 
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>LDAP / Active Directory</h2></div>
   <p class="muted mb-sm">{{ _('Authenticate users against a directory; their group membership maps to a ser2net role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).') }}</p>
-  {% if ldap.enabled and not ldap_lib %}<div class="banner warn">{{ _('LDAP is enabled but <span class="mono">ldap3</span> is not installed — LDAP login won’t work until you <span class="mono">pip install ldap3</span> (local accounts still work).') }}</div>{% endif %}
+  {% if ldap_problem %}{{ package_problem(ldap_problem, _("LDAP sign-in")) }}{% endif %}
+  {% if ldap.enabled and ldap_tls_problem %}{{ tls_problem(ldap_tls_problem) }}{% endif %}
+  {% if ldap.enabled and ldap.uses_tls and not ldap.tls_verify %}<div class="banner warn">{{ _('The directory server’s certificate is not checked: anyone on the network between ser2net and the directory could read the passwords and sign in as anyone. Set the CA certificate file below and untick “Don’t check the server certificate” as soon as you can.') }}</div>
+  {% elif ldap.enabled and ldap.sends_plaintext %}<div class="banner warn">{{ _('Passwords go to the directory unencrypted (ldap:// without StartTLS): anyone on the network between ser2net and the directory can read them. Use ldaps:// or tick StartTLS.') }}</div>{% endif %}
+  {% for w in group_warnings.ldap %}{{ group_warning(w) }}{% endfor %}
   <form method="post" action="/settings/ldap" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label class="chk"><input type="checkbox" name="ldap_enabled" {% if ldap.enabled %}checked{% endif %}> {{ _("Enable LDAP / AD login") }}</label>
@@ -129,12 +191,17 @@
       <label>{{ _("Server URI") }} <input type="text" name="ldap_server_uri" value="{{ ldap.server_uri }}" placeholder="ldaps://dc.corp.local:636"></label>
       <label class="chk chk-pad"><input type="checkbox" name="ldap_start_tls" {% if ldap.start_tls %}checked{% endif %}> StartTLS</label>
     </div>
+    <input type="hidden" name="ldap_tls_shown" value="1">
+    <label>{{ _("CA certificate file") }} <span class="muted">({{ _("LDAPS / StartTLS: the server’s certificate must come from this CA; PEM or DER; blank = the CAs this system trusts") }})</span>
+      <input type="text" name="ldap_ca_file" value="{{ ldap.ca_file }}" placeholder="{{ _('optional') }}">
+    </label>
+    <label class="chk"><input type="checkbox" name="ldap_tls_insecure" {% if not ldap.tls_verify %}checked{% endif %}> {{ _("Don’t check the server certificate (insecure: anyone on the network path could read the passwords)") }}</label>
     <label>{{ _("User DN template") }} <span class="muted">({{ _("direct bind") }} — AD: <span class="mono">{username}@corp.local</span>; LDAP: <span class="mono">uid={username},ou=people,dc=ex,dc=com</span>)</span>
-      <input type="text" name="ldap_user_dn_template" value="{{ ldap.user_dn_template }}" placeholder="{{ _('optional') }}">
+      <input type="text" name="ldap_user_dn_template" value="{{ ldap.user_dn_template }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false">
     </label>
     <p class="muted">{{ _("…or search + bind with a service account:") }}</p>
     <div class="grid2">
-      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com"></label>
+      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       <label>{{ _("Bind password") }} <input type="password" name="ldap_bind_password" placeholder="{% if ldap.bind_password %}{{ unchanged }}{% endif %}"></label>
     </div>
     <div class="grid2">
@@ -155,6 +222,9 @@
       <label>{{ _("Operator group") }} <input type="text" name="ldap_operator_group" value="{{ ldap.operator_group }}" placeholder="ser2net-operators"></label>
       <label>{{ _("Viewer group") }} <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2net-viewers"></label>
     </div>
+    <p class="muted">{{ _('A group setting is the whole name of one group, in any letter case (Turkish İ/ı too): its name (the CN, such as <span class="mono">ser2net-admins</span>) or its full DN. Part of a name, such as <span class="mono">admins</span> for ser2net-admins, doesn’t match.') }}</p>
+    <input type="hidden" name="ldap_nested_groups_shown" value="1">
+    <label class="chk"><input type="checkbox" name="ldap_nested_groups" {% if ldap.nested_groups %}checked{% endif %}> {{ _("Also count nested groups (Active Directory: groups the user is in through another group)") }}</label>
     <button class="btn primary" type="submit">{{ _("Save LDAP") }}</button>
   </form>
 </section>
@@ -162,7 +232,8 @@
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Single sign-on (OIDC)") }}</h2></div>
   <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Redirect URI: <span class="mono">&lt;this-url&gt;/auth/oidc/callback</span>. Needs <span class="mono">authlib</span> (optional).') }}</p>
-  {% if oidc.enabled and not oidc_lib %}<div class="banner warn">{{ _('OIDC is enabled but <span class="mono">authlib</span> is not installed — SSO won’t work until you <span class="mono">pip install authlib</span>.') }}</div>{% endif %}
+  {% if oidc_problem %}{{ package_problem(oidc_problem, _("Single sign-on (OIDC)")) }}{% endif %}
+  {% for w in group_warnings.oidc %}{{ group_warning(w) }}{% endfor %}
   <form method="post" action="/settings/oidc" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label class="chk"><input type="checkbox" name="oidc_enabled" {% if oidc.enabled %}checked{% endif %}> {{ _("Enable SSO login") }}</label>
@@ -184,6 +255,7 @@
       <label>{{ _("Operator group") }} <input type="text" name="oidc_operator_group" value="{{ oidc.operator_group }}"></label>
       <label>{{ _("Viewer group") }} <input type="text" name="oidc_viewer_group" value="{{ oidc.viewer_group }}"></label>
     </div>
+    <p class="muted">{{ _('A group setting is the whole name of one group as the provider sends it, in any letter case (Turkish İ/ı too); of a path, the last part is enough: <span class="mono">ser2net-admins</span> matches <span class="mono">/team/ser2net-admins</span>. Part of a name, such as <span class="mono">admins</span> for ser2net-admins, doesn’t match.') }}</p>
     <label>{{ _("Default role") }} <span class="muted">({{ _("if no group matched") }})</span>
       <select name="oidc_default_role">
         <option value="" {% if not oidc.default_role %}selected{% endif %}>{{ _("— deny login —") }}</option>
@@ -303,7 +375,7 @@
           </select></label>
       </div>
       <div class="grid2">
-        <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off"></label>
+        <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
         <label>{{ _("Password") }} <input type="password" name="notify_smtp_password" autocomplete="new-password" placeholder="{% if notify.smtp_password %}{{ unchanged }}{% endif %}"></label>
       </div>
     </fieldset>
@@ -413,26 +485,43 @@
 {% if is_admin %}
 <section class="panel panel-narrow" id="backups">
   <div class="panel-head"><h2>{{ _("Configuration backups") }}</h2></div>
-  <p class="muted mb-sm">{{ _('Every change keeps the previous <span class="mono">config.json</span> in the data folder’s <span class="mono">backups/</span> (the newest 50). Restoring one replaces the whole configuration — mappings, users, settings — and is itself backed up first, so it can be undone. Backups contain password hashes and secrets: only admins see them.') }}</p>
+  <p class="muted mb-sm">{{ _('Every change keeps the previous <span class="mono">config.json</span> in the data folder’s <span class="mono">backups/</span> (the newest 50). Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. The configuration it replaces is backed up first, so a restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
+  {% if restore_preview %}
+  {% set rp = restore_preview %}
+  <h3 class="mt-sm">{{ _("Restore the configuration saved at %(time)s UTC", time=rp.time) }}</h3>
+  {% if rp.settings %}
+  <p class="mb-sm">{{ _("Sign-in and access settings it changes:") }}</p>
+  <ul>{% for line in rp.settings %}<li>{{ line }}</li>{% endfor %}</ul>
+  {% else %}
+  <p class="muted mb-sm">{{ _("It changes no sign-in or access setting.") }}</p>
+  {% endif %}
+  <form method="post" action="/settings/backups/restore" class="authform mb-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="name" value="{{ rp.name }}">
+    <label class="chk"><input type="checkbox" name="accounts" {% if not rp.accounts_ok %}disabled{% endif %}> {{ _("Also restore its user accounts, REST API token and cluster key (everyone else is signed out)") }}</label>
+    {% if rp.accounts %}<ul class="muted">{% for line in rp.accounts %}<li>{{ line }}</li>{% endfor %}</ul>
+    {% elif rp.accounts_ok %}<p class="muted">{{ _("Its accounts and credentials are the same as now.") }}</p>{% endif %}
+    {% for note in rp.notes %}<div class="banner warn">{{ note }}</div>{% endfor %}
+    <div class="row-actions start">
+      <button class="btn primary" type="submit">{{ _("Restore") }}</button>
+      <button class="btn" type="submit" formaction="/settings/backups/restore-mappings">{{ _("Only its mappings…") }}</button>
+      <a class="btn" href="/settings#backups">{{ _("Cancel") }}</a>
+    </div>
+  </form>
+  {% endif %}
   {% if backups %}
   <div class="table-scroll">
-  <table class="grid">
-    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Mappings") }}</th><th>{{ _("Users") }}</th><th class="col-actions"></th></tr></thead>
+  <table class="grid th-wrap">
+    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Contents") }}</th><th class="col-actions"></th></tr></thead>
     <tbody>
     {% for bk in backups %}
       <tr>
-        <td class="mono nowrap">{{ bk.time }}</td>
-        <td>{{ bk.mappings if bk.mappings is not none else '?' }}</td>
-        <td>{{ bk.users if bk.users is not none else '?' }}</td>
+        <td class="mono">{{ bk.time }}</td>
+        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}</td>
         <td class="col-actions">
           <div class="row-actions">
             <a class="btn sm" href="/settings/backups/{{ bk.name }}">{{ _("Download") }}</a>
-            <form method="post" action="/settings/backups/restore" class="inline"
-                  data-confirm="{{ _('Restore the configuration saved at %(time)s UTC? The current one is backed up first.', time=bk.time) }}">
-              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-              <input type="hidden" name="name" value="{{ bk.name }}">
-              <button class="btn sm" type="submit">{{ _("Restore") }}</button>
-            </form>
+            <a class="btn sm" href="/settings?restore={{ bk.name }}#backups">{{ _("Restore…") }}</a>
           </div>
         </td>
       </tr>

@@ -23,6 +23,7 @@ import re
 import secrets
 import tempfile
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
@@ -48,6 +49,12 @@ MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year
 SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
 SESSION_TIMEOUT_MAX_S = 30 * 86400
+# LDAP/OIDC accounts not signed in for this many days are removed (AppConfig
+# .external_users_expire_days, app/signins.py); 0 = never, the default: an admin turns it
+# on. At least the longest session lifetime, so no live session ends that way.
+EXPIRE_DAYS_DEFAULT = 0
+EXPIRE_DAYS_MIN = SESSION_TIMEOUT_MAX_S // 86400
+EXPIRE_DAYS_MAX = 3650
 
 
 class ConfigError(ValueError):
@@ -783,14 +790,25 @@ class LdapSettings:
     """LDAP / Active Directory authentication. Users authenticate by binding to the
     directory; their group membership maps to a ser2net role. Two bind modes:
       - direct: user_dn_template (e.g. 'uid={username},ou=people,dc=ex,dc=com' or the
-        AD UPN '{username}@corp.local'); the credentials bind as that DN.
+        AD UPN '{username}@corp.local'); the credentials bind as that DN. An AD sign-in
+        name (user@domain, DOMAIN\\user) isn't a DN: the account is then found by
+        userPrincipalName / sAMAccountName in its domain, under user_search_base if set.
       - search+bind: bind as the service account (bind_dn/bind_password), find the user
         with user_search_filter under user_search_base, then re-bind as that DN.
     Group->role: a user in admin_group gets admin, operator_group -> operator, etc.;
-    default_role applies when authenticated but in no mapped group (empty => deny)."""
+    default_role applies when authenticated but in no mapped group (empty => deny). A
+    group setting is a group's whole name (its CN) or DN, compared without regard to
+    letter case (ldap_auth.group_matches). nested_groups (Active Directory) also
+    counts the groups a user is in through other groups.
+    TLS (ldaps:// or StartTLS): the server's certificate must chain to a CA the system
+    trusts — or, with ca_file set, to one in that file only (PEM or DER) — and name the
+    host in server_uri (ldap_auth.tls_context). tls_verify=False skips the check
+    (insecure)."""
     enabled: bool = False
     server_uri: str = ""             # ldap://host:389 or ldaps://host:636
     start_tls: bool = False
+    tls_verify: bool = True          # check the server's certificate (LDAPS / StartTLS)
+    ca_file: str = ""                # CA certificate(s) to trust instead of the system's
     user_dn_template: str = ""       # direct-bind template (mutually exclusive with search)
     bind_dn: str = ""                # service account for search+bind
     bind_password: str = ""
@@ -801,12 +819,24 @@ class LdapSettings:
     operator_group: str = ""
     viewer_group: str = ""
     default_role: str = ""           # role when no group matched; "" => deny login
+    nested_groups: bool = False      # AD: LDAP_MATCHING_RULE_IN_CHAIN group search
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "LdapSettings":
         d = dict(d or {})
         known = {f.name for f in dataclasses.fields(LdapSettings)}
         return LdapSettings(**{k: v for k, v in d.items() if k in known})
+
+    @property
+    def uses_tls(self) -> bool:
+        """ldaps://, or StartTLS: the bind passwords travel encrypted."""
+        return self.server_uri.strip().lower().startswith("ldaps://") or bool(self.start_tls)
+
+    @property
+    def sends_plaintext(self) -> bool:
+        """Passwords over the network unencrypted: neither ldaps:// nor StartTLS, and no
+        ldapi:// (a local socket)."""
+        return not (self.uses_tls or self.server_uri.strip().lower().startswith("ldapi://"))
 
     def validate(self) -> None:
         if not self.enabled:
@@ -825,7 +855,8 @@ class LdapSettings:
 class OidcSettings:
     """OpenID Connect single sign-on (authorization-code flow). Endpoints are
     discovered from the issuer's /.well-known/openid-configuration. A claim
-    (groups_claim) maps to a ser2net role, like the LDAP group mapping."""
+    (groups_claim) maps to a ser2net role, like the LDAP group mapping: a group setting
+    is the whole value, or its last part (/team/name, DOMAIN\\name)."""
     enabled: bool = False
     issuer: str = ""                 # e.g. https://accounts.google.com or a Keycloak realm URL
     client_id: str = ""
@@ -1036,10 +1067,59 @@ class NotificationSettings:
             raise ConfigError(_("The repeat interval must be between 0 and 86400 seconds."))
 
 
+def fold(text) -> str:
+    """How names compare where letter case doesn't count (LDAP and OIDC group names, LDAP
+    user names, an LDAP/OIDC sign-in name or a new account's name against the existing
+    ones): NFC, every run of white space (no-break spaces too) as one space, and letter
+    case folded so that Turkish İ, I, ı and i are one letter — str.lower() turns 'İ'
+    into 'i' + U+0307 and leaves 'ı' as it is, so KALİTE and Kalite, or BAKIM and Bakım,
+    would differ."""
+    s = " ".join(unicodedata.normalize("NFC", str(text)).split())
+    return s.replace("\u0130", "i").replace("\u0131", "i").casefold().replace("i\u0307", "i")
+
+
+class AccountNameError(ValueError):
+    """An LDAP/OIDC sign-in can't have an account under its name (upsert_external_user).
+    The text says why, for the log."""
+
+
+EXTERNAL_NAME_MAX = 255   # an LDAP/OIDC account name (UPNs and e-mail addresses fit)
+
+
+def external_name(name) -> str:
+    """The one spelling an LDAP/OIDC sign-in name is kept in: NFC (the same name sent
+    decomposed is not another account), without white space around it."""
+    return unicodedata.normalize("NFC", str(name)).strip()
+
+
+def external_name_problem(name: str) -> Optional[str]:
+    """Why `name` (as external_name() spells it) can't name an LDAP/OIDC account, for the
+    log; None if it can. Any printable text works — DOMAIN\\user, user@domain, names with
+    / # ? % — because the Users panel sends names in form fields, not in URLs. But every
+    character must be visible: a control, format (such as a right-to-left override or a
+    zero-width space) or line-separator character would hide the real name in the Users
+    panel, the logs and the audit log. A name in parentheses is how the audit log marks
+    who acted without an account ("(no login)", "(command line)")."""
+    if not name:
+        return "it is empty"
+    if len(name) > EXTERNAL_NAME_MAX:
+        return f"it is longer than {EXTERNAL_NAME_MAX} characters"
+    hidden = sorted({c for c in name if unicodedata.category(c)[0] == "C"
+                     or unicodedata.category(c) in ("Zl", "Zp")})
+    if hidden:
+        return ("it contains control or invisible characters ("
+                + ", ".join(f"U+{ord(c):04X}" for c in hidden) + ")")
+    if name.startswith("(") and name.endswith(")"):
+        return ("a name in parentheses is how the audit log marks who acted without an "
+                "account, such as '(no login)'")
+    return None
+
+
 @dataclass
 class User:
     """A web-UI account. `role` gates what the user may do; `pwd_version` is bumped
-    on that user's password/role change to revoke only their existing sessions.
+    on that user's password/role change to revoke only their existing sessions (a new
+    account starts at a random value, see new_pwd_version).
     `source` is 'local' (password in password_hash) or 'ldap' (a shadow account whose
     role is derived from LDAP groups on each login; no local password)."""
     username: str = ""
@@ -1060,6 +1140,14 @@ class User:
         return u
 
 
+def new_pwd_version() -> int:
+    """The first pwd_version of a new account. A session cookie is checked against the
+    user name and this number only, so it is random rather than 1: an account deleted
+    and created again under the same name (or an LDAP/OIDC user signing in again after
+    being deleted) must not match the cookies the earlier account was given."""
+    return secrets.randbelow(2 ** 31)
+
+
 @dataclass
 class AppConfig:
     version: int = 1
@@ -1069,6 +1157,9 @@ class AppConfig:
     api_token_role: str = "admin"  # role granted by the API token (viewer = read-only)
     # lifetime of a web-UI sign-in (cookie + signed token); Settings -> Web UI access
     session_timeout_s: int = SESSION_TIMEOUT_DEFAULT_S
+    # LDAP/OIDC accounts not signed in for this many days are removed (0: never, the
+    # default); Settings -> Users
+    external_users_expire_days: int = EXPIRE_DAYS_DEFAULT
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
     users: list[User] = field(default_factory=list)
@@ -1082,6 +1173,9 @@ class AppConfig:
     mappings: list[MappingConfig] = field(default_factory=list)
     # What loading changed in an older config (logged at startup; never persisted).
     load_notes: list[str] = field(default_factory=list, repr=False, compare=False)
+    # Loading had to create secret_key / instance_id (config.json lacked them); the
+    # start-up saves them once (runtime.prepare_config). Never persisted.
+    ids_created: bool = field(default=False, repr=False, compare=False)
 
     # ----- (de)serialization -----
     @staticmethod
@@ -1101,6 +1195,7 @@ class AppConfig:
             api_token_hash=d.get("api_token_hash", ""),
             api_token_role=d.get("api_token_role", "admin") if d.get("api_token_role", "admin") in ROLES else "admin",
             session_timeout_s=_session_timeout(d.get("session_timeout_s")),
+            external_users_expire_days=_expire_days(d.get("external_users_expire_days")),
             users=users,
             ldap=LdapSettings.from_dict(d.get("ldap", {})),
             oidc=OidcSettings.from_dict(d.get("oidc", {})),
@@ -1111,6 +1206,31 @@ class AppConfig:
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
+        cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
+        raw_days = d.get("external_users_expire_days")
+        if raw_days is not None and raw_days != cfg.external_users_expire_days:
+            cfg.load_notes.append(
+                f"external_users_expire_days {raw_days!r} is not 0 (never) or "
+                f"{EXPIRE_DAYS_MIN}..{EXPIRE_DAYS_MAX} days: {cfg.external_users_expire_days} "
+                "is used")
+        spellings: dict[str, list[str]] = {}
+        for u in cfg.users:
+            if u.source == "ldap":
+                spellings.setdefault(fold(u.username), []).append(u.username)
+        for names in (n for n in spellings.values() if len(n) > 1):
+            cfg.load_notes.append(
+                f"LDAP accounts {', '.join(map(repr, names))} are one directory user, in "
+                "different letter case: they become one account at that user's next "
+                "sign-in, which ends the sessions of the other spellings (deleting one in "
+                "Settings → Users deletes them all)")
+        if cfg.ldap.enabled and cfg.ldap.uses_tls and "tls_verify" not in (d.get("ldap") or {}):
+            cfg.load_notes.append(
+                "LDAP: the directory server's certificate is now checked (LDAPS / StartTLS): "
+                "it must come from a CA this system trusts and name the host in the server "
+                "URI. If LDAP sign-in fails with a certificate error, all.log says why; for a "
+                "private CA (Active Directory Certificate Services) or a self-signed "
+                "certificate, set Settings → LDAP / Active Directory → CA certificate file "
+                "(ldap.ca_file). Local accounts are not affected.")
         for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
             old_id = (raw or {}).get("id")
             if old_id and old_id != m.id:
@@ -1140,6 +1260,7 @@ class AppConfig:
             "api_token_hash": self.api_token_hash,
             "api_token_role": self.api_token_role,
             "session_timeout_s": self.session_timeout_s,
+            "external_users_expire_days": self.external_users_expire_days,
             "users": [asdict(u) for u in self.users],
             "ldap": asdict(self.ldap),
             "oidc": asdict(self.oidc),
@@ -1158,15 +1279,61 @@ class AppConfig:
     def get_user(self, username: str) -> Optional[User]:
         return next((u for u in self.users if u.username == username), None)
 
+    def named(self, name: str, source: Optional[str] = None) -> list[User]:
+        """The accounts (of `source`, if given) whose name is `name` apart from letter
+        case (fold: Turkish İ/ı too), the one spelled exactly so first."""
+        key = fold(name)
+        found = [u for u in self.users
+                 if (source is None or u.source == source) and fold(u.username) == key]
+        return sorted(found, key=lambda u: u.username != name)
+
     def admin_count(self) -> int:
         return sum(1 for u in self.users if u.role == "admin")
 
+    def source_enabled(self, user: User) -> bool:
+        """False for an LDAP/OIDC account while that sign-in method is switched off:
+        its sessions end and it can't sign in until the method is on again."""
+        if user.source == "ldap":
+            return self.ldap.enabled
+        if user.source == "oidc":
+            return self.oidc.enabled
+        return True
+
+    def usable_admin_count(self) -> int:
+        """Admins who can sign in with the current settings (local accounts, and
+        LDAP/OIDC ones while their sign-in method is on)."""
+        return sum(1 for u in self.users if u.role == "admin" and self.source_enabled(u))
+
+    def external_accounts(self, name: str, source: str) -> list[User]:
+        """The accounts of the LDAP/OIDC user who signs in as `name`. An LDAP name is the
+        same name in any letter case (directories compare it that way, and a phone may
+        send "Jdoe" for jdoe): every LDAP account named so, the exact spelling first. An
+        OIDC name is compared exactly (a provider's "sub" is case-sensitive)."""
+        if source == "ldap":
+            return self.named(name, "ldap")
+        return [u for u in self.users if u.source == source and u.username == name]
+
     def upsert_external_user(self, username: str, role: str, source: str) -> User:
         """Create or refresh a shadow account for an externally-authenticated user
-        (LDAP/OIDC). Bumps pwd_version when the role or source changes."""
-        u = self.get_user(username)
+        (LDAP/OIDC). Bumps pwd_version when the role or source changes.
+        A sign-in through a directory or an identity provider never takes over, converts
+        or demotes a local account: raises AccountNameError when one has this name,
+        letter case aside, or when the name can't be an account's (external_name_problem;
+        `username` is spelled as external_name() spells it).
+        LDAP: the account is the one spelled like `username`, else the first in another
+        letter case (external_accounts); the person's other LDAP accounts — made by
+        earlier versions for each spelling — are removed, which ends their sessions."""
+        if local := self.named(username, "local"):
+            raise AccountNameError(f"the local account {local[0].username!r} has this name")
+        if (why := external_name_problem(username)) is not None:
+            raise AccountNameError(why)
+        same = self.external_accounts(username, source)
+        if len(same) > 1:
+            self.users = [x for x in self.users if not any(x is y for y in same[1:])]
+        u = same[0] if same else self.get_user(username)
         if u is None:
-            u = User(username=username, password_hash="", role=role, source=source, pwd_version=1)
+            u = User(username=username, password_hash="", role=role, source=source,
+                     pwd_version=new_pwd_version())
             self.users.append(u)
         elif u.role != role or u.source != source:
             u.role, u.source = role, source
@@ -1270,6 +1437,19 @@ def _epoch(value: Any) -> float:
     return t if math.isfinite(t) and t > 0 else 0.0
 
 
+def _expire_days(value: Any) -> int:
+    """external_users_expire_days from a config file: missing or unreadable -> the
+    default (0: never), 0 or less -> 0, anything else clamped into the supported range (a
+    hand-edited value must not stop a start; from_dict notes the change)."""
+    if value is None or isinstance(value, bool):
+        return EXPIRE_DAYS_DEFAULT
+    try:
+        days = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return EXPIRE_DAYS_DEFAULT
+    return 0 if days <= 0 else min(max(days, EXPIRE_DAYS_MIN), EXPIRE_DAYS_MAX)
+
+
 def _ip_overlaps(a: str, b: str) -> bool:
     if a == b:
         return True
@@ -1311,13 +1491,16 @@ class ConfigStore:
             data = json.load(fh)
         return AppConfig.from_dict(data)
 
-    def save(self, config: AppConfig) -> None:
+    def save(self, config: AppConfig, *, validate: bool = True) -> None:
         """Atomically persist config to a single file (validates first).
 
         Uses a temp file + os.replace so config.json is never partially written; the
         version being replaced is kept in backups/ first (see the class docstring).
+        validate=False is for a change the caller checked itself and that must not
+        fail on an unrelated setting (account recovery, app/accounts.py).
         """
-        config.validate()
+        if validate:
+            config.validate()
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
         self._backup_current(data)
@@ -1384,10 +1567,8 @@ class ConfigStore:
         out = []
         for name in self.backup_names():
             path = os.path.join(self.backup_dir, name)
-            info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None}
-            stamp = name[len("config-"):len("config-") + 15]
-            info["time"] = (f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} "
-                            f"{stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}")
+            info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
+                                    "time": backup_time(name)}
             try:
                 info["size"] = os.path.getsize(path)
                 with open(path, encoding="utf-8") as fh:
@@ -1406,6 +1587,13 @@ class ConfigStore:
             raise ConfigError(_("No such backup."))
         with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
             return fh.read()
+
+
+def backup_time(name: str) -> str:
+    """'config-20260101T120000Z.json' -> '2026-01-01 12:00:00' (UTC)."""
+    stamp = name[len("config-"):len("config-") + 15]
+    return (f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]} "
+            f"{stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}")
 
 
 def _backup_order(name: str) -> tuple:

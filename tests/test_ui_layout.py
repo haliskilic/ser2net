@@ -6,8 +6,9 @@ row buttons (Start/Stop/Restart/Edit/Log/Monitor/Copy/Delete) ended up outside i
 and the whole page scrolled sideways. This drives a real browser (Playwright +
 Chromium) against two real nodes — A shows B through a manual cluster peer — whose
 mappings use such values, at desktop, half-screen, tablet and phone widths, and
-checks the dashboard, the log / console / edit views and the settings page — in
-English and again in Turkish, whose texts are longer:
+checks the dashboard, the log / console / edit views, the settings page (users with row
+buttons, a backup's restore preview) — in English and again in Turkish, whose texts are
+longer:
 
   * the page never scrolls sideways and no table needs horizontal scrolling
     (wide windows: the table fits; narrow ones: its rows become cards);
@@ -142,11 +143,17 @@ def demo_mappings(prefix, raw_port):
     ]
 
 
-def start_node(cfg):
+def start_node(cfg, backup=False):
     tmp = tempfile.mkdtemp(prefix="ser2net_ui_")
     path = os.path.join(tmp, "config.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh)
+    if backup:  # an older version in backups/, for the restore preview
+        os.makedirs(os.path.join(tmp, "backups"))
+        with open(os.path.join(tmp, "backups", "config-20260101T000000Z.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(dict(cfg, admin_ui=dict(cfg["admin_ui"], require_login=False),
+                           users=cfg["users"][:1]), fh)
     # output to a file, never an unread pipe (a full pipe blocks the server)
     log = open(os.path.join(tmp, "server.log"), "wb")
     proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", path],
@@ -175,11 +182,14 @@ def main():
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "advertise_ip": "127.0.0.1"},
               "mappings": demo_mappings("B-", free_port())}
-    node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a}, "users": users,
+    # a second (long-named) account: the Users table's row buttons + the set-password form
+    others = [{"username": "night-shift.operator.building-b.east", "role": "operator",
+               "password_hash": hash_password(PASSWORD), "pwd_version": 1}]
+    node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a}, "users": users + others,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "peers": [f"127.0.0.1:{ui_b}"]},
               "mappings": demo_mappings("", raw_a)}
-    nodes = [start_node(node_a), start_node(node_b)]
+    nodes = [start_node(node_a, backup=True), start_node(node_b)]
     clients, problems, browser_errors = [], [], []
     base = f"http://127.0.0.1:{ui_a}"
     try:
@@ -243,6 +253,9 @@ def main():
                     page.goto(f"{base}/settings")
                     page.wait_for_selector("section.panel")
                     check(f"{lang} settings @{w}")
+                    page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
+                    page.wait_for_selector("#backups h3")
+                    check(f"{lang} restore preview @{w}")
 
             # the cluster panel polls every 5 s: not from a hidden tab, and at once when
             # the tab is shown again
