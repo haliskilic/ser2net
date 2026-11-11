@@ -16,6 +16,9 @@ up, so a wrong import or edit could not be undone. Checks:
     cluster key (a deleted user, an old password or a revoked token stay gone, and no
     session ends); restoring the accounts too is a choice, which then also signs
     everyone else out; "Only its mappings" goes through the import preview;
+  * the cluster key still accepted during a key change (previous_key/previous_until) is
+    kept or restored with the key; the legacy authentication and auto-discovery switches
+    come from the backup like any other setting;
   * viewers/operators can't reach backups.
 
 Run: python3 tests/test_backups_import.py
@@ -189,6 +192,7 @@ def main():
         assert "has no user accounts" in page and srv.saved_config()["users"], "pre-setup backup restored"
         print("restoring the accounts of a backup without any is refused (would reopen setup)  OK")
     test_restore_accounts()
+    test_restore_cluster_keys()
     print("\nPASS: configuration backups + import preview / merge / replace")
 
 
@@ -288,6 +292,51 @@ def test_restore_accounts():
         cfg = srv.saved_config()
         assert [m["name"] for m in cfg["mappings"]] == ["A", "B"] and account(cfg, "gone")
         print("Only its mappings: through the import preview; accounts and settings untouched  OK")
+
+
+
+def test_restore_cluster_keys():
+    users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1}]
+    with Server({"users": users, "mappings": []}) as srv:
+        admin = Browser(srv.base)
+        admin.login("admin", PW)
+        disc = str(free_port())
+
+        def cluster(key, **switches):
+            form = {"enabled": "on", "key": key, "discovery_port": disc, "keep_old_key": "on",
+                    "cluster_form": "2", **switches}
+            assert admin.post("/settings/cluster", form)[0] == 200
+            return srv.saved_config()["cluster"]
+
+        cluster("cluster-key-one-0123456789", legacy_auth="on", discovery="on")
+        then = cluster("cluster-key-two-0123456789", discovery="on")  # legacy off
+        assert then["previous_key"] == "cluster-key-one-0123456789" and then["previous_until"] > 0
+        now = cluster("cluster-key-three-0123456789", legacy_auth="on")  # discovery off
+        assert now["previous_key"] == "cluster-key-two-0123456789"
+        store = ConfigStore(srv.config_path)
+        name = next(b["name"] for b in store.backups()
+                    if json.loads(store.read_backup(b["name"]))["cluster"] == then)
+
+        st, _, page = admin.post("/settings/backups/restore", {"name": name})
+        assert "the cluster key were kept" in page, page[page.find("banner"):][:400]
+        c = srv.saved_config()["cluster"]
+        assert (c["key"], c["previous_key"], c["previous_until"]) == \
+            (now["key"], now["previous_key"], now["previous_until"]), c
+        assert (c["legacy_auth"], c["discovery"]) == (False, True), c
+        print("restore: the current and the still-accepted cluster key stay; switches restored  OK")
+
+        st, _, page = admin.post("/settings/backups/restore", {"name": name, "accounts": "on"})
+        assert "Everyone else was signed out" in page, page[page.find("banner"):][:400]
+        c = srv.saved_config()["cluster"]
+        assert (c["key"], c["previous_key"], c["previous_until"]) == \
+            (then["key"], then["previous_key"], then["previous_until"]), c
+        print("restore with its accounts: both cluster keys come from the backup  OK")
+
+        # same key, but the backup still accepts the previous one: the preview says so
+        assert cluster("", clear_previous_key="on", legacy_auth="on")["previous_key"] == ""
+        st, _, page = admin.get(f"/settings?restore={name}")
+        assert st == 200 and "The cluster key as it was then" in page, page[:300]
+        print("restore preview: a previous cluster key the backup accepts counts as a key change  OK")
 
 
 if __name__ == "__main__":

@@ -899,8 +899,11 @@ def routes(ctx: Ctx) -> list:
                     setattr(cur, f.name, getattr(restored, f.name))
             if with_accounts:
                 cur.secret_key = secrets.token_hex(32)
-            else:
-                cur.cluster = dataclasses.replace(cur.cluster, key=previous["cluster"].key)
+            else:  # both cluster keys are credentials: the key and the one still accepted
+                was = previous["cluster"]
+                cur.cluster = dataclasses.replace(cur.cluster, key=was.key,
+                                                  previous_key=was.previous_key,
+                                                  previous_until=was.previous_until)
                 if cur.cluster.enabled and not cur.cluster.key.strip():
                     cur.cluster.enabled = False
                     notes.append(_("The cluster stays off: this backup had it on, but its key "
@@ -1183,7 +1186,7 @@ def _account_changes(old, new) -> list[str]:
         out.append(_("Accounts with another password or role: {0}").format(", ".join(changed)))
     if (old.api_token_hash, old.api_token_role) != (new.api_token_hash, new.api_token_role):
         out.append(_("The REST API token as it was then (the current one stops working)"))
-    if old.cluster.key != new.cluster.key:
+    if (old.cluster.key, old.cluster.previous_key) != (new.cluster.key, new.cluster.previous_key):
         out.append(_("The cluster key as it was then"))
     return out
 
