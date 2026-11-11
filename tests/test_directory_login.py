@@ -107,7 +107,8 @@ def ad_directory():
     from _ldap_server import FakeDirectory
     users = {"jdoe": [ADMINS], "ayse": ["CN=BİLGİ İŞLEM,OU=Gruplar," + BASE],
              "mehmet": ["CN=Domain Users,CN=Users," + BASE, "CN=Kalite Kontrol,OU=Gruplar," + BASE],
-             "Admin": [ADMINS]}   # a directory account named like the local admin
+             "Admin": [ADMINS],   # a directory account named like the local admin
+             "alice": [ADMINS]}   # ... and one named like an OIDC account
     entries, passwords = {}, {}
     for account, groups in users.items():
         dn = f"CN={account},OU=People,{BASE}"
@@ -138,6 +139,20 @@ def local_name_refused(srv):
     Browser(srv.base).login("admin", PW)
 
 
+def other_method_refused(srv):
+    """The directory's "alice" signs in, but "alice" is an OIDC account here (another
+    person, perhaps): refused like a local name, and the OIDC account stays as it was."""
+    before = user_of(srv, "alice")
+    for typed in ("alice", "Alice"):
+        st, _, page = Browser(srv.base).post("/login", {"username": typed, "password": "pw-alice"})
+        assert st == 403, (typed, st)
+        assert "An account named alice here signs in another way" in page, page[-1500:]
+    assert user_of(srv, "alice") == before
+    assert ("LDAP login denied for 'alice': the OIDC account 'alice' has this name, and an "
+            "LDAP sign-in never takes over an account of another sign-in method") in all_log(srv)
+    assert "\tldap_login_denied\tOIDC account alice\talice" in audit_log(srv), audit_log(srv)
+
+
 def ldap_form(d, **fields):
     form = {"ldap_enabled": "on", "ldap_server_uri": d.uri,
             "ldap_user_dn_template": TEMPLATE, "ldap_admin_group": "admins",
@@ -154,6 +169,10 @@ def test_ldap():
                   "ldap": {"enabled": True, "server_uri": d.uri,
                            "user_dn_template": TEMPLATE, "admin_group": "admins",
                            "operator_group": "bilgi işlem", "default_role": ""}}
+        with Server(dict(config, users=[local_admin(), shadow("alice", "oidc", 21)])) as srv:
+            other_method_refused(srv)
+            print("LDAP: a sign-in under an OIDC account's name is refused; that account stays "
+                  "as it was  OK")
         with Server(config) as srv:
             assert "LDAP accounts 'jdoe', 'JDoe' are one directory user" in all_log(srv)
             local_name_refused(srv)

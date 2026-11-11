@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import functools
 import hashlib
 import ipaddress
 import json
@@ -118,7 +119,12 @@ def lock_down_dir(directory: str) -> None:
     so child files (config.json, the atomic temp files, per-mapping logs) pick up the
     same restriction. Best-effort: silently degrades if it cannot be applied (the
     posix path was the only one protected before — Windows was left world-readable
-    despite the docs claiming 0600).
+    despite the docs claiming 0600). A service's data directory as --install-service
+    leaves it (only SYSTEM and Administrators can use it, see winservice.service_folder)
+    is left as it is: an elevated run (--set-password) must not give its own account's
+    unelevated programs a way to change what the service runs. Any other folder gets
+    the grant for the current user, also one an elevated administrator created private
+    to itself, so that account can still use it unelevated.
     """
     if os.name == "posix":
         with contextlib.suppress(OSError):
@@ -126,7 +132,7 @@ def lock_down_dir(directory: str) -> None:
         return
     if os.name == "nt":
         user = os.environ.get("USERNAME") or ""
-        if not user:
+        if not user or _service_folder(directory):
             return
         import subprocess
 
@@ -149,6 +155,18 @@ def lock_down_dir(directory: str) -> None:
         cmd += ["/C", "/Q"]
         with contextlib.suppress(Exception):
             subprocess.run(cmd, capture_output=True, timeout=15, check=False)
+
+
+def _service_folder(directory: str) -> bool:
+    """Windows: `directory` is a service's data directory as --install-service leaves it,
+    or inherits from one (False when that can't be told)."""
+    from . import winservice  # the Windows API through ctypes
+
+    try:
+        sec = winservice.read_security(directory)
+    except Exception:  # best effort, like the rest of lock_down_dir
+        return False
+    return sec is not None and winservice.service_folder(*sec)
 
 
 def _is_int(value: Any) -> bool:
@@ -970,6 +988,9 @@ class ClusterSettings:
         known = {f.name for f in dataclasses.fields(ClusterSettings)}
         c = ClusterSettings(**{k: v for k, v in d.items() if k in known})
         c.peers = [str(p).strip() for p in (c.peers or []) if str(p).strip()]
+        # a hand-edited key of null or a number: "" (cluster off, which start-up reports) or
+        # the number as text, instead of failing wherever the key is used
+        c.key = "" if c.key is None else str(c.key)
         # the fields added after 2.8.0: a hand-edited value of the wrong type takes the default
         c.previous_key = c.previous_key if isinstance(c.previous_key, str) else ""
         c.previous_until = _epoch(c.previous_until)
@@ -1128,6 +1149,11 @@ class User:
     pwd_version: int = 0
     source: str = "local"
 
+    @property
+    def kind(self) -> str:
+        """How the account signs in, for messages: 'local', 'LDAP' or 'OIDC'."""
+        return self.source if self.source == "local" else self.source.upper()
+
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "User":
         d = dict(d or {})
@@ -1176,6 +1202,9 @@ class AppConfig:
     # Loading had to create secret_key / instance_id (config.json lacked them); the
     # start-up saves them once (runtime.prepare_config). Never persisted.
     ids_created: bool = field(default=False, repr=False, compare=False)
+    # Parts start-up accepted although validate() rejects them (tolerate_problems): part
+    # key -> its content then. Never persisted.
+    tolerated: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     # ----- (de)serialization -----
     @staticmethod
@@ -1316,18 +1345,28 @@ class AppConfig:
             return self.named(name, "ldap")
         return [u for u in self.users if u.source == source and u.username == name]
 
+    def taken_name(self, username: str, source: str) -> Optional[User]:
+        """The account, letter case aside, that keeps an LDAP/OIDC sign-in (`source`)
+        from having one under this name: a local account, else one of the other sign-in
+        method. None when there is none."""
+        other = "oidc" if source == "ldap" else "ldap"
+        found = self.named(username, "local") or self.named(username, other)
+        return found[0] if found else None
+
     def upsert_external_user(self, username: str, role: str, source: str) -> User:
         """Create or refresh a shadow account for an externally-authenticated user
         (LDAP/OIDC). Bumps pwd_version when the role or source changes.
         A sign-in through a directory or an identity provider never takes over, converts
-        or demotes a local account: raises AccountNameError when one has this name,
-        letter case aside, or when the name can't be an account's (external_name_problem;
-        `username` is spelled as external_name() spells it).
+        or demotes another kind of account — a local one, or one of the other sign-in
+        method (an LDAP and an OIDC user of one name may be two people): raises
+        AccountNameError when one has this name, letter case aside, or when the name
+        can't be an account's (external_name_problem; `username` is spelled as
+        external_name() spells it).
         LDAP: the account is the one spelled like `username`, else the first in another
         letter case (external_accounts); the person's other LDAP accounts — made by
         earlier versions for each spelling — are removed, which ends their sessions."""
-        if local := self.named(username, "local"):
-            raise AccountNameError(f"the local account {local[0].username!r} has this name")
+        if taken := self.taken_name(username, source):
+            raise AccountNameError(f"the {taken.kind} account {taken.username!r} has this name")
         if (why := external_name_problem(username)) is not None:
             raise AccountNameError(why)
         same = self.external_accounts(username, source)
@@ -1347,7 +1386,15 @@ class AppConfig:
         return next((m for m in self.mappings if m.id == mapping_id), None)
 
     def validate(self) -> None:
-        """Validate every mapping and cross-mapping invariants (unique IP:port)."""
+        """Validate every part (the admin UI settings, each section, each mapping) and the
+        cross-mapping invariants (unique IP:port, one mapping per serial port); raises
+        the first problem as ConfigError."""
+        for _key, _label, _content, check in self._parts():
+            check()
+        for _key, error in self._clashes():
+            raise error
+
+    def _validate_admin_ui(self) -> None:
         # TLS: both files required together, and they must exist/be readable so a
         # bad path fails fast at save time instead of crashing uvicorn at startup.
         cert, key = self.admin_ui.tls_cert, self.admin_ui.tls_key
@@ -1374,16 +1421,28 @@ class AppConfig:
                 SESSION_TIMEOUT_MIN_S <= self.session_timeout_s <= SESSION_TIMEOUT_MAX_S):
             raise ConfigError(_("Session lifetime must be between {0} minutes and {1} days.").format(SESSION_TIMEOUT_MIN_S // 60, SESSION_TIMEOUT_MAX_S // 86400))
 
-        self.ldap.validate()
-        self.oidc.validate()
-        self.cluster.validate()
-        self.notifications.validate()
-
-        seen: dict[tuple[str, str, int], str] = {}   # (proto, bind_ip, port) -> name
-        serial_owner: dict[str, tuple[str, str]] = {}  # device -> (mapping_id, name)
+    def _parts(self):
+        """validate()'s checks, one per part of the config, in order: (key, label,
+        content, check). content() is what tells whether a save changed the part; a
+        mapping's enabled flag is left out of it, since starting or stopping one changes
+        nothing its own check looks at (a serial port it then shares is a clash)."""
+        yield ("admin_ui", "admin UI", lambda: (asdict(self.admin_ui), self.session_timeout_s),
+               self._validate_admin_ui)
+        for key, label in (("ldap", "LDAP"), ("oidc", "OIDC"), ("cluster", "LAN cluster"),
+                           ("notifications", "notifications")):
+            section = getattr(self, key)
+            yield key, label, functools.partial(asdict, section), section.validate
         for m in self.mappings:
-            m.validate()
+            yield (f"mapping {m.id}", f"mapping '{m.name or m.id}'",
+                   functools.partial(_mapping_content, m), m.validate)
 
+    def _clashes(self) -> list[tuple[str, ConfigError]]:
+        """Every pair of mappings that would share a serial port or a listening port, keyed
+        by the resource and both mapping ids."""
+        found = []
+        serial_users: list[tuple[str, MappingConfig]] = []          # (device, mapping)
+        listeners: list[tuple[str, str, int, MappingConfig]] = []   # (proto, bind_ip, port, mapping)
+        for m in self.mappings:
             # A serial port can only be opened by one mapping. Flag two ENABLED
             # mappings that target the same literal device (skip dynamic VID/PID
             # `match` entries, whose device path is resolved at open time).
@@ -1394,13 +1453,12 @@ class AppConfig:
                 if m.kind == "serialbridge" and m.serial_b.port and not m.serial_b.match:
                     devices.append(m.serial_b.port)
                 for dev in devices:
-                    prev = serial_owner.get(dev)
-                    if prev is not None and prev[0] != m.id:
-                        raise ConfigError(
-                            _("Mappings '{0}' and '{1}' both use serial port {2} — a serial "
-                              "port can only be opened by one mapping.").format(prev[1], m.name, dev)
-                        )
-                    serial_owner[dev] = (m.id, m.name)
+                    for used, other in serial_users:
+                        if used == dev and other.id != m.id:
+                            found.append((f"serial {dev} {other.id} {m.id}", ConfigError(
+                                _("Mappings '{0}' and '{1}' both use serial port {2} — a serial "
+                                  "port can only be opened by one mapping.").format(other.name, m.name, dev))))
+                    serial_users.append((dev, m))
 
             # only listening mappings (server/udp) bind a port; client/serialbridge don't
             if m.kind != "net" or not m.network.listens:
@@ -1409,13 +1467,83 @@ class AppConfig:
             # bind different transports), so the clash key includes the transport.
             proto = "udp" if m.network.mode == "udp" else "tcp"
             # 0.0.0.0 collides with everything on that port; treat any overlap as a clash.
-            for (sproto, bip, bport), other in seen.items():
+            for sproto, bip, bport, other in listeners:
                 if sproto == proto and bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
-                    raise ConfigError(
+                    found.append((f"{proto} {m.network.port} {other.id} {m.id}", ConfigError(
                         _("Mappings '{0}' and '{1}' both use {2} port {3} on overlapping "
-                          "addresses ({4} / {5}).").format(other, m.name, proto.upper(), m.network.port, bip, m.network.bind_ip)
-                    )
-            seen[(proto, m.network.bind_ip, m.network.port)] = m.name
+                          "addresses ({4} / {5}).").format(other.name, m.name, proto.upper(), m.network.port, bip, m.network.bind_ip))))
+            listeners.append((proto, m.network.bind_ip, m.network.port, m))
+        return found
+
+    def _broken(self) -> list[tuple[str, str, Any]]:
+        """(key, problem, content) for every part validate() rejects and every clash."""
+        found = []
+        for key, label, content, check in self._parts():
+            try:
+                check()
+            except Exception as e:  # a hand-edited value of the wrong type raises others too
+                found.append((key, f"{label}: {e}", content()))
+        try:
+            found += [(key, str(error), None) for key, error in self._clashes()]
+        except Exception as e:  # mappings too broken to compare
+            found.append(("clashes", f"mappings: {e}", None))
+        return found
+
+    def problems(self) -> list[str]:
+        """Everything validate() rejects in this config, one line each, naming the part
+        (validate() stops at the first)."""
+        return [problem for _key, problem, _content in self._broken()]
+
+    def tolerate_problems(self) -> list[str]:
+        """Accept what this config breaks now and return it, one line each: later saves
+        may leave those parts as they are (validate_for_save). Start-up does this, since
+        a config.json that loads is never refused: an older release may have accepted
+        it, or a file it names may be missing on this machine (runtime.prepare_config)."""
+        broken = self._broken()
+        self.tolerated = {key: content for key, _problem, content in broken}
+        return [problem for _key, problem, _content in broken]
+
+    def validate_for_save(self) -> dict[str, Any]:
+        """What a save enforces: validate(), except that a part start-up accepted while
+        broken (tolerate_problems) may stay broken as long as it is left as it was, and
+        so may a clash it accepted. What a save changes or adds must validate, so one bad
+        value can't block every other change (signing in with LDAP/OIDC, stopping a
+        mapping, fixing another broken part).
+
+        Returns what is still accepted after this save (a part it fixed is held to the
+        rules again). ConfigStore.save commits that only once the file is written, so a
+        save that fails to write — and is rolled back by its caller — keeps the
+        acceptance it had."""
+        if not self.tolerated:
+            self.validate()
+            return {}
+        still: dict[str, Any] = {}
+        for key, _label, content, check in self._parts():
+            try:
+                check()
+            except Exception as e:
+                if key not in self.tolerated or content() != self.tolerated[key]:
+                    if isinstance(e, ConfigError):
+                        raise
+                    raise ConfigError(str(e)) from e
+                still[key] = self.tolerated[key]
+        try:
+            clashes = self._clashes()
+        except Exception as e:
+            if "clashes" not in self.tolerated:
+                raise ConfigError(str(e)) from e
+            clashes, still["clashes"] = [], None
+        for key, error in clashes:
+            if key not in self.tolerated:
+                raise error
+            still[key] = None
+        return still
+
+
+def _mapping_content(m: "MappingConfig") -> dict[str, Any]:
+    content = m.to_dict()
+    content.pop("enabled", None)
+    return content
 
 
 def _api_token_role(d: dict[str, Any]) -> tuple[str, str]:
@@ -1512,16 +1640,26 @@ class ConfigStore:
             data = json.load(fh)
         return AppConfig.from_dict(data)
 
+    def matches(self, config: AppConfig) -> bool:
+        """True when config.json already holds exactly this configuration, so saving it
+        would change nothing (start-up then leaves the file alone)."""
+        try:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                return json.load(fh) == json.loads(json.dumps(config.to_dict()))
+        except (OSError, ValueError):
+            return False
+
     def save(self, config: AppConfig, *, validate: bool = True) -> None:
-        """Atomically persist config to a single file (validates first).
+        """Atomically persist config to a single file (validates first: what start-up
+        accepted while broken may stay as it was, see AppConfig.validate_for_save).
 
         Uses a temp file + os.replace so config.json is never partially written; the
         version being replaced is kept in backups/ first (see the class docstring).
         validate=False is for a change the caller checked itself and that must not
-        fail on an unrelated setting (account recovery, app/accounts.py).
+        fail on an unrelated setting (account recovery, app/accounts.py; start-up right
+        after tolerate_problems(), runtime.prepare_config).
         """
-        if validate:
-            config.validate()
+        still_accepted = config.validate_for_save() if validate else config.tolerated
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
         self._backup_current(data)
@@ -1536,6 +1674,8 @@ class ConfigStore:
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+        # written: only now does a part this save fixed stop being accepted while broken
+        config.tolerated = still_accepted
         _fsync_dir(directory)
 
     # ----- backups -----

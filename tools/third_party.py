@@ -206,8 +206,11 @@ def write_sbom(out_path: str, strict: bool = False) -> None:
 
     components = []
     py = platform.python_version()
+    # CPE ids as well as the purl: CPE-based vulnerability scanners don't match pkg:generic
+    # purls, so without these they would miss the interpreter and OpenSSL entirely.
     components.append({"type": "library", "bom-ref": f"pkg:generic/cpython@{py}", "name": "cpython",
                        "version": py, "purl": f"pkg:generic/cpython@{py}",
+                       "cpe": f"cpe:2.3:a:python:python:{py}:*:*:*:*:*:*:*",
                        "licenses": [{"expression": "PSF-2.0"}],
                        "description": "bundled Python interpreter and standard library"})
     m = re.search(r"OpenSSL (\S+)", ssl.OPENSSL_VERSION)
@@ -215,6 +218,7 @@ def write_sbom(out_path: str, strict: bool = False) -> None:
         components.append({"type": "library", "bom-ref": f"pkg:generic/openssl@{m.group(1)}",
                            "name": "openssl", "version": m.group(1),
                            "purl": f"pkg:generic/openssl@{m.group(1)}",
+                           "cpe": f"cpe:2.3:a:openssl:openssl:{m.group(1)}:*:*:*:*:*:*:*",
                            "licenses": [{"expression": "Apache-2.0"}],
                            "description": "linked into the bundled interpreter"})
     dists = runtime_distributions(strict)

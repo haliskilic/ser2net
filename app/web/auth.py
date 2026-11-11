@@ -90,6 +90,17 @@ def _sign(secret: str, payload: str) -> str:
     return _b64e(hmac.new(secret.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).digest())
 
 
+def _payload_secret(secret: str) -> str:
+    """What sign_payload's tokens are signed with: derived from the session key, so that
+    such a token (the OIDC state cookie) is never a valid session cookie, nor a session
+    cookie a valid state."""
+    return hmac.new(secret.encode("utf-8"), b"ser2net signed payload", hashlib.sha256).hexdigest()
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def issue_session(secret: str, ttl_seconds: int, username: str, pwd_version: int = 0) -> str:
     # "n": two sign-ins in the same second still get different tokens, so a logout
     # (RevokedSessions) ends exactly one of them
@@ -114,9 +125,14 @@ def decode_session(secret: str, token: str | None) -> dict | None:
         data = json.loads(_b64d(payload))
     except (ValueError, json.JSONDecodeError):
         return None
-    if int(data.get("exp", 0)) <= int(time.time()):
+    if not isinstance(data, dict):
         return None
-    return {"u": str(data.get("u", "")), "v": int(data.get("v", 0)), "exp": int(data["exp"])}
+    user, version, exp = data.get("u", ""), data.get("v", 0), data.get("exp", 0)
+    if not (isinstance(user, str) and _is_int(version) and _is_int(exp)):
+        return None  # signed, but not a session token
+    if exp <= int(time.time()):
+        return None
+    return {"u": user, "v": version, "exp": exp}
 
 
 class RevokedSessions:
@@ -125,25 +141,52 @@ class RevokedSessions:
     A cookie is a stateless signed token: the browser deleting it at logout would leave
     a copy of it valid for the rest of its lifetime. Held in memory (a restart forgets
     the list) and never written to config.json, where a save on every logout would
-    push real changes out of the 50 backups. Keyed by the token's signature."""
+    push real changes out of the 50 backups. Keyed by the token's signature.
+
+    Bounded: at most PER_USER cookies of one account and MAX_ENTRIES in all. Past that
+    nothing remembered is forgotten (that would make someone's copied cookie valid
+    again): add() names the account instead, and the caller ends all of its sessions
+    (pwd_version + 1), after which its remembered cookies are moot (forget())."""
 
     MAX_ENTRIES = 10000
+    PER_USER = 100
 
     def __init__(self) -> None:
         self._until: dict[str, int] = {}  # signature -> the token's expiry (epoch seconds)
+        self._owner: dict[str, str] = {}  # signature -> the token's account name
+        self._count: dict[str, int] = {}  # account name -> its signatures in the list
 
-    def add(self, secret: str, token: str | None) -> bool:
-        """Refuse this token from now on (if it is a valid session at all)."""
+    def add(self, secret: str, token: str | None) -> str | None:
+        """Refuse this token from now on (if it is a valid session at all). Returns its
+        account's name when it can't be remembered (that account's share or the list is
+        full): the caller ends all of that account's sessions instead. Else None."""
         data = decode_session(secret, token)
         if data is None or token is None:
-            return False
+            return None
         now = int(time.time())
         for sig in [s for s, exp in self._until.items() if exp <= now]:
-            del self._until[sig]
-        while len(self._until) >= self.MAX_ENTRIES:  # full: drop the one closest to expiry
-            del self._until[min(self._until, key=self._until.__getitem__)]
-        self._until[token.rsplit(".", 1)[1]] = data["exp"]
-        return True
+            self._drop(sig)
+        sig, user = token.rsplit(".", 1)[1], data["u"]
+        if sig in self._until:
+            return None
+        if self._count.get(user, 0) >= self.PER_USER or len(self._until) >= self.MAX_ENTRIES:
+            return user
+        self._until[sig], self._owner[sig] = data["exp"], user
+        self._count[user] = self._count.get(user, 0) + 1
+        return None
+
+    def forget(self, username: str) -> None:
+        """Drop an account's cookies: all of its sessions were ended another way."""
+        for sig in [s for s, u in self._owner.items() if u == username]:
+            self._drop(sig)
+
+    def _drop(self, sig: str) -> None:
+        del self._until[sig]
+        user = self._owner.pop(sig)
+        if self._count[user] > 1:
+            self._count[user] -= 1
+        else:
+            del self._count[user]
 
     def __contains__(self, token: object) -> bool:
         if not isinstance(token, str) or "." not in token:
@@ -153,26 +196,29 @@ class RevokedSessions:
 
     def clear(self) -> None:
         self._until.clear()
+        self._owner.clear()
+        self._count.clear()
 
 
 def sign_payload(secret: str, data: dict, ttl_seconds: int = 600) -> str:
     """A short-lived HMAC-signed token carrying a small dict (e.g. the OIDC state +
-    nonce stashed in a cookie across the redirect)."""
+    nonce stashed in a cookie across the redirect), under a key of its own
+    (_payload_secret)."""
     payload = _b64e(json.dumps({**data, "exp": int(time.time()) + ttl_seconds}).encode("utf-8"))
-    return f"{payload}.{_sign(secret, payload)}"
+    return f"{payload}.{_sign(_payload_secret(secret), payload)}"
 
 
 def read_payload(secret: str, token: str | None) -> dict | None:
     if not token or "." not in token or not token.isascii():  # ours are ASCII
         return None
     payload, sig = token.rsplit(".", 1)
-    if not hmac.compare_digest(sig, _sign(secret, payload)):
+    if not hmac.compare_digest(sig, _sign(_payload_secret(secret), payload)):
         return None
     try:
         data = json.loads(_b64d(payload))
     except (ValueError, json.JSONDecodeError):
         return None
-    if int(data.get("exp", 0)) <= int(time.time()):
+    if not isinstance(data, dict) or not _is_int(data.get("exp")) or data["exp"] <= int(time.time()):
         return None
     return data
 

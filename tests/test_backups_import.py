@@ -192,6 +192,7 @@ def main():
         assert "has no user accounts" in page and srv.saved_config()["users"], "pre-setup backup restored"
         print("restoring the accounts of a backup without any is refused (would reopen setup)  OK")
     test_restore_accounts()
+    test_cluster_setting_changes()
     test_restore_cluster_keys()
     print("\nPASS: configuration backups + import preview / merge / replace")
 
@@ -295,6 +296,35 @@ def test_restore_accounts():
 
 
 
+def audit_detail(srv, action):
+    """The detail of the newest audit record with this action."""
+    with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
+        rows = [ln.split("\t") for ln in fh.read().split("\n") if ln]
+    return next(r[3] for r in reversed(rows) if r[2] == action)
+
+
+def test_cluster_setting_changes():
+    """What a restore without the accounts takes from the backup's cluster settings is
+    listed (preview, banner, audit log) like the sign-in settings."""
+    from app.web.routes.settings import _setting_changes
+
+    old = AppConfig()
+    new = AppConfig.from_dict({"cluster": {
+        "enabled": True, "legacy_auth": False, "discovery": False, "discovery_port": 41751,
+        "advertise_ip": "10.0.0.5", "peers": ["10.0.0.6:8080", "10.0.0.7:8080"], "key": "k"}})
+    assert _setting_changes(old, new) == [
+        "LAN cluster: disabled → enabled",
+        "LAN cluster · Legacy authentication: enabled → disabled",
+        "LAN cluster · Automatic discovery: enabled → disabled",
+        "LAN cluster · Discovery UDP port: 41750 → 41751",
+        "LAN cluster · Advertise IP: — → 10.0.0.5",
+        "LAN cluster · Manual peers: — → 10.0.0.6:8080, 10.0.0.7:8080"], _setting_changes(old, new)
+    same_but_key = AppConfig.from_dict({"cluster": {"key": "another"}})
+    assert _setting_changes(old, same_but_key) == [], "the key is an account change"
+    print("restore changes: the cluster's switch, legacy authentication, discovery, port, "
+          "advertised IP and peers are listed  OK")
+
+
 def test_restore_cluster_keys():
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1}]
     with Server({"users": users, "mappings": []}) as srv:
@@ -323,7 +353,12 @@ def test_restore_cluster_keys():
         assert (c["key"], c["previous_key"], c["previous_until"]) == \
             (now["key"], now["previous_key"], now["previous_until"]), c
         assert (c["legacy_auth"], c["discovery"]) == (False, True), c
-        print("restore: the current and the still-accepted cluster key stay; switches restored  OK")
+        for line in ("LAN cluster · Legacy authentication: enabled → disabled",
+                     "LAN cluster · Automatic discovery: disabled → enabled"):
+            assert line in page, page[page.find("banner"):][:600]
+            assert line in audit_detail(srv, "config_backup_restore"), line
+        print("restore: the current and the still-accepted cluster key stay; switches restored "
+              "and listed (banner, audit log)  OK")
 
         st, _, page = admin.post("/settings/backups/restore", {"name": name, "accounts": "on"})
         assert "Everyone else was signed out" in page, page[page.find("banner"):][:400]

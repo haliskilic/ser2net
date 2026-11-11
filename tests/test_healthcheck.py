@@ -34,10 +34,13 @@ def main():
     os.environ["SER2NET_PORT"] = "7001"
     try:
         assert healthcheck.target(cfg) == "https://[::1]:7001/healthz", "env must win (as at start)"
+        os.environ["SER2NET_PORT"] = "70x1"  # start-up ignores it, so must the check
+        assert healthcheck.target(cfg) == "https://[::1]:9/healthz", healthcheck.target(cfg)
     finally:
         del os.environ["SER2NET_PORT"]
     assert healthcheck.target(os.path.join(d, "missing.json")) == "http://127.0.0.1:8080/healthz"
-    print("target: wildcard -> loopback, TLS -> https, env overrides, no config -> defaults  OK")
+    print("target: wildcard -> loopback, TLS -> https, env overrides (not a non-numeric port), "
+          "no config -> defaults  OK")
 
     with Server({"users": []}) as srv:
         code, out = run_check(srv.data, {"SER2NET_PORT": str(srv.port)})

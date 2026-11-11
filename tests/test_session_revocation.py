@@ -93,16 +93,24 @@ def test_revoked_list():
     other = auth.issue_session(cfg.secret_key, 600, "admin", 1)  # another sign-in, same second
     assert other != token
     assert auth.session_user(cfg, token, revoked) is not None
-    assert not revoked.add(cfg.secret_key, "garbage") and not revoked.add("other-key", token)
-    assert revoked.add(cfg.secret_key, token)
+    assert revoked.add(cfg.secret_key, "garbage") is None and "garbage" not in revoked
+    assert revoked.add("other-key", token) is None and token not in revoked
+    assert revoked.add(cfg.secret_key, token) is None and token in revoked
     assert auth.session_user(cfg, token, revoked) is None
     assert auth.session_user(cfg, token) is not None, "without the list: the old behaviour"
-    old_max, revoked.MAX_ENTRIES = revoked.MAX_ENTRIES, 1
-    try:
-        assert revoked.add(cfg.secret_key, other) and token not in revoked and other in revoked
-    finally:
-        revoked.MAX_ENTRIES = old_max
-    print("revocation list: only valid sessions are added, bounded, checked by session_user  OK")
+    # full: nothing remembered is forgotten; the account to sign out everywhere is named
+    revoked.MAX_ENTRIES = 1
+    assert revoked.add(cfg.secret_key, other) == "admin" and token in revoked and other not in revoked
+    del revoked.MAX_ENTRIES
+    revoked.PER_USER = 3
+    bobs = [auth.issue_session(cfg.secret_key, 600, "bob", 1) for _ in range(4)]
+    assert [revoked.add(cfg.secret_key, t) for t in bobs] == [None, None, None, "bob"]
+    assert revoked.add(cfg.secret_key, other) is None, "one account's share doesn't block another's"
+    revoked.forget("bob")
+    assert not any(t in revoked for t in bobs) and token in revoked and other in revoked
+    assert revoked.add(cfg.secret_key, bobs[3]) is None and bobs[3] in revoked
+    print("revocation list: only valid sessions are added, checked by session_user; when an "
+          "account's share or the list is full nothing is forgotten, the account is named  OK")
 
 
 def test_directory_switch():
@@ -234,6 +242,23 @@ def test_signout_others(srv):
     assert signed_in(srv, cookie_of(a)), "this session must stay signed in"
     assert not signed_in(srv, tb)
     print("Sign out my other sessions: the others end, this one stays  OK")
+
+    # again, with no session issued since: nothing to end, config.json and its backups stay
+    backups = sorted(os.listdir(os.path.join(srv.data, "backups")))
+    version = next(u for u in srv.saved_config()["users"] if u["username"] == "admin")["pwd_version"]
+    for _ in range(5):
+        st, _, page = a.post("/settings/sessions/signout-others")
+        assert st == 200 and "Your other sessions are already signed out" in page
+    assert sorted(os.listdir(os.path.join(srv.data, "backups"))) == backups, "saved for nothing"
+    assert next(u for u in srv.saved_config()["users"]
+                if u["username"] == "admin")["pwd_version"] == version
+    assert signed_in(srv, cookie_of(a))
+    c = Browser(srv.base)  # a new sign-in elsewhere: the next click ends it
+    c.login("admin", PW)
+    st, _, page = a.post("/settings/sessions/signout-others")
+    assert st == 200 and "Your other sessions were signed out" in page
+    assert not signed_in(srv, cookie_of(c)) and signed_in(srv, cookie_of(a))
+    print("... clicked again with nothing new: no save; after a new sign-in it ends that one  OK")
 
 
 def test_recreated_user(srv, admin):

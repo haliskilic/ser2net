@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import logging
 import os
 import signal
+import stat
 import sys
 import threading
+import time
 from typing import Callable, Mapping, Optional
 
 # asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
@@ -27,7 +30,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, console, standalone
+from . import accounts, console, datalock, i18n, standalone
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
@@ -35,23 +38,76 @@ from .web import httpguard
 from .web.server import build_app
 
 
-def _env_bind_override(admin) -> bool:
+def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
     """Apply SER2NET_BIND_IP / SER2NET_PORT env vars to the admin UI bind address.
 
     Lets a headless/containerized deployment set the bind address without the
     interactive console picker (which, being non-interactive in a container,
     would default to loopback and leave the UI unreachable behind a published
     port). Returns True if a bind IP was provided. Env wins on every start, so a
-    container's compose/run config stays the source of truth across restarts."""
+    container's compose/run config stays the source of truth across restarts.
+
+    Raises ConfigError for a SER2NET_BIND_IP that is not an IP address or a
+    SER2NET_PORT outside 1-65535 (the UI could not start on either). A SER2NET_PORT
+    that is not a number is ignored, as it always was, with a warning in `notes`."""
     ip = (os.environ.get("SER2NET_BIND_IP") or "").strip()
     if not ip:
         return False
-    admin.bind_ip = ip
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise ConfigError(f"SER2NET_BIND_IP must be an IP address (e.g. 0.0.0.0), "
+                          f"not {ip!r}") from None
     port = (os.environ.get("SER2NET_PORT") or "").strip()
+    number = None
     if port:
-        with contextlib.suppress(ValueError):
-            admin.port = int(port)
+        try:
+            number = int(port)
+        except ValueError:
+            if notes is not None:
+                notes.append(f"WARNING: SER2NET_PORT {port!r} is not a number and is ignored "
+                             f"— the admin UI uses port {admin.port}")
+        else:
+            if not 1 <= number <= 65535:
+                raise ConfigError(f"SER2NET_PORT must be a port number (1-65535), not {port!r}")
+    admin.bind_ip = ip
+    if number is not None:
+        admin.port = number
     return True
+
+
+def _os_error(e: OSError, data_dir: str | None = None) -> str:
+    """'<file>: <reason>' for an OSError on a data file (one line, no traceback). A
+    permission error on POSIX adds who owns the file, who ser2net runs as and the fix."""
+    where = e.filename if e.filename is not None else ""
+    if e.filename2 is not None:
+        where = f"{where} -> {e.filename2}"
+    reason = e.strerror or str(e)
+    text = f"{where}: {reason}" if where else reason
+    if isinstance(e, PermissionError) and os.name == "posix" and e.filename is not None:
+        text += _access_hint(os.fsdecode(e.filename), data_dir)
+    return text
+
+
+def _access_hint(path: str, data_dir: str | None) -> str:
+    """The usual cause of a permission error on ser2net's files: another account left
+    them behind (a run with sudo, or a Docker image before v2.8, which ran as root)."""
+    me = f"{os.getuid()}:{os.getgid()}"
+    owner = "it can't be inspected"
+    for target, label in ((path, "it"), (os.path.dirname(path), "its folder")):
+        try:
+            st = os.stat(target)
+        except OSError:
+            continue
+        owner = f"{label} belongs to {st.st_uid}:{st.st_gid} (mode {stat.S_IMODE(st.st_mode):04o})"
+        break
+    if data_dir is None:
+        return f" — {owner} and ser2net runs as {me}: make it readable for that account"
+    fix = f"sudo chown -R {me} {data_dir}"
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        fix += " (in a container: on the host folder mounted there)"
+    return (f" — {owner} and ser2net runs as {me}: give the data directory to that "
+            f"account: {fix}")
 
 
 # Stopping from another thread (the Windows service's stop request): request_shutdown()
@@ -70,32 +126,73 @@ def request_shutdown() -> None:
 def prepare_config(config_path: str, reconfigure: bool = False):
     """Load config.json (creating it on the first run, when the console asks for the
     admin UI address), apply SER2NET_BIND_IP / SER2NET_PORT and create the first admin
-    from SER2NET_ADMIN_PASSWORD_FILE. Returns (store, config)."""
-    store = ConfigStore(config_path)
-    first_run = not store.exists()
-    config = store.load()
+    from SER2NET_ADMIN_PASSWORD_FILE. Returns (store, config).
 
-    env_set = _env_bind_override(config.admin_ui)
+    A config.json that loads is never refused: what validate() rejects in it is logged
+    as a warning (config.load_notes) and accepted (AppConfig.tolerate_problems), so the
+    server starts with it, as a start without the env vars always has (a mapping that
+    can't start fails on its own), and later saves only refuse what they change or add.
+    The file is written back only when this start changes it (first run, --reconfigure,
+    a new env address, an upgrade's normalisation); a failing write is a warning too.
+    Fatal, with one line instead of a traceback: an unusable SER2NET_BIND_IP /
+    SER2NET_PORT, a config.json that can't be read or parsed, a first run that can't
+    create it."""
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    try:
+        store = ConfigStore(config_path)
+        first_run = not store.exists()
+        config = store.load()
+    except OSError as e:
+        raise SystemExit(
+            f"ser2net: cannot read the configuration: {_os_error(e, data_dir)}") from None
+    except (ValueError, TypeError, AttributeError) as e:  # not JSON, or not shaped like it
+        newest = store.backup_names()[:1]
+        restore = (f", or put back its newest backup ({os.path.join(store.backup_dir, newest[0])})"
+                   if newest else "")
+        raise SystemExit(f"ser2net: {store.path} is not a valid configuration ({e}) — fix "
+                         f"it{restore}") from None
+    notes = config.load_notes
+
+    try:
+        env_set = _env_bind_override(config.admin_ui, notes)
+    except ConfigError as e:
+        raise SystemExit(f"ser2net: {e}") from None
     if (first_run or reconfigure) and not env_set:
         bind_ip, port = console.choose_admin_bind(config.admin_ui)
         config.admin_ui.bind_ip = bind_ip
         config.admin_ui.port = port
     admin, note = accounts.provision_from_env(config, os.environ)
     if note:
-        config.load_notes.append(note)
-    if first_run or reconfigure or env_set:
-        store.save(config)
-    elif config.ids_created or admin:
-        # the first admin from the environment, or config.json had no secret_key /
-        # instance_id (made by hand, or a downloaded backup put in its place): keep them,
-        # or every restart would sign everyone out and give this node a new cluster id
+        notes.append(note)
+
+    problems = config.tolerate_problems()
+    notes.extend(f"WARNING: config.json: {p}" for p in problems)
+    # also the first admin from the environment, or a config.json without secret_key /
+    # instance_id (made by hand, or a downloaded backup put in its place): keep them, or
+    # every restart would sign everyone out and give this node a new cluster id
+    if ((first_run or reconfigure or env_set) and not store.matches(config)
+            or config.ids_created or admin):
         try:
-            store.save(config)
-        except (ConfigError, OSError) as e:
-            config.load_notes.append(f"WARNING: could not save {store.path}: {e}")
+            # not validated: what this config breaks was accepted just above, so a check
+            # could only fail on a file it looks for that went away since, and that must
+            # not stop the start either (under a restart policy: over and over)
+            store.save(config, validate=False)
+        except OSError as e:  # read-only/full data dir, config.json mounted on its own
+            if first_run:
+                raise SystemExit(f"ser2net: cannot create the configuration: "
+                                 f"{_os_error(e, data_dir)}") from None
+            notes.append(f"WARNING: could not update config.json at start-up "
+                         f"({_os_error(e, data_dir)}) — ser2net runs with these settings, "
+                         "but can't keep any change until config.json can be written (keep "
+                         "the data directory writable, and don't mount config.json on its "
+                         "own)")
     if admin:
         write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
                            "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin)
+    if problems:
+        notes.append("WARNING: ser2net starts with the setting(s) above anyway — what they "
+                     "affect may not work. Fix them in the web UI (or in config.json); "
+                     "changes that leave them as they are can be saved meanwhile")
     return store, config
 
 
@@ -136,20 +233,67 @@ def loop_factory(choice: str) -> Optional[Callable[[], asyncio.AbstractEventLoop
     return None
 
 
+def require_admin_tls(admin) -> None:
+    """The admin UI's TLS certificate and key must be readable, or the start stops here
+    with one line (uvicorn would fail later, with a traceback, after the bridges started).
+    No fallback to plain HTTP: it would send passwords in clear where TLS was set up."""
+    if not admin.tls_enabled:
+        return
+    for field, what, path in (("tls_cert", "certificate", admin.tls_cert),
+                              ("tls_key", "key", admin.tls_key)):
+        if not isinstance(path, str):  # a hand edit: open(True) would open (and close) stdout
+            raise SystemExit(f"ser2net: admin_ui.{field} in config.json must be a file name, "
+                             f"not {path!r}")
+        try:
+            with open(path, "rb"):
+                pass
+        except OSError as e:
+            fix = ("" if isinstance(e, PermissionError)
+                   else " — fix admin_ui.tls_cert / tls_key in config.json")
+            raise SystemExit(f"ser2net: cannot read the admin UI TLS {what}: "
+                             f"{_os_error(e)}{fix}") from None
+
+
+def hold_data_dir(config_path: str) -> str | None:
+    """Take the data directory's single-instance lock (app.datalock) before anything is
+    written there: a second ser2net on the same directory stops here with one line; a
+    --set-password / --sign-out-all that is changing config.json is waited for.
+    Returns a warning for the start-up log when the lock can't be taken (the start goes
+    on without it)."""
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    with contextlib.suppress(OSError):  # if it can't be created, loading config.json says why
+        os.makedirs(data_dir, exist_ok=True)
+    try:
+        return datalock.acquire(data_dir, wait=datalock.BRIEF_WAIT_S)
+    except datalock.Held as e:
+        if e.brief:
+            raise SystemExit(f"ser2net: {e} — start again once it is done") from None
+        raise SystemExit(f"ser2net: {e} — stop it first (a Windows service: sc stop ser2net; "
+                         "systemd: systemctl stop ser2net) or give this one its own "
+                         "--data-dir") from None
+
+
 def main(config_path: str, reconfigure: bool = False) -> int:
     standalone.prepare()  # standalone Linux binary: find the system CA certificates
-    store, config = prepare_config(config_path, reconfigure)
-
-    choice, loop_note = event_loop_choice()
+    lock_note = hold_data_dir(config_path)
     try:
-        with Runner(loop_factory=loop_factory(choice)) as runner:
-            return runner.run(_serve(store, config, loop_note))
-    except KeyboardInterrupt:
-        return 0
-    except Exception:
-        # all.log too, not only stderr (a service has none to read); then exit with it
-        logging.getLogger("ser2net").exception("fatal error, ser2net stops")
-        raise
+        store, config = prepare_config(config_path, reconfigure)
+        if lock_note:
+            config.load_notes.append(lock_note)
+        require_admin_tls(config.admin_ui)
+
+        choice, loop_note = event_loop_choice()
+        try:
+            with Runner(loop_factory=loop_factory(choice)) as runner:
+                return runner.run(_serve(store, config, loop_note))
+        except KeyboardInterrupt:
+            return 0
+        except Exception:
+            # all.log too, not only stderr (a service has none to read); then exit with it
+            logging.getLogger("ser2net").exception("fatal error, ser2net stops")
+            raise
+    finally:
+        datalock.release(os.path.dirname(os.path.abspath(config_path)))
 
 
 def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
@@ -167,6 +311,25 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
     loop.set_exception_handler(handler)
 
 
+_as_service = False  # set by service_main so _serve can log the service-only warnings
+
+
+def service_main(config_path: str) -> int:
+    """main() for the Windows service, which has no console: a start-up error that stops
+    it (the one-line SystemExit) also goes to all.log next to config.json, where the
+    admin looks for it."""
+    global _as_service
+    _as_service = True
+    try:
+        return main(config_path=config_path)
+    except SystemExit as e:
+        if isinstance(e.code, str):
+            log = os.path.join(os.path.dirname(os.path.abspath(config_path)), "all.log")
+            with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
+                fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {e.code}\n")
+        raise
+
+
 async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     import uvicorn
 
@@ -180,6 +343,13 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
+    for lang in i18n.missing_catalogs():
+        state.log(f"WARNING: the '{lang}' UI translation is missing from {i18n.LOCALE_DIR} "
+                  "— the web UI shows English to visitors who pick it")
+    if _as_service and sys.platform == "win32":
+        from . import winservice
+        if warning := winservice.location_warning():
+            state.log(warning)
     state.prepare_first_run()
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:
         state.log("WARNING: admin UI is bound to a network address over plain HTTP — "

@@ -44,12 +44,15 @@ async def test_tcp_client():
         accepted["r"], accepted["w"] = reader, writer
         ev.set()
 
-    server = await asyncio.start_server(on_conn, "127.0.0.1", 48010)
+    # port 0: a fixed port in the ephemeral range can still be held by a closed client
+    # connection's TIME_WAIT (earlier tests open hundreds of them), and bind then fails
+    server = await asyncio.start_server(on_conn, "127.0.0.1", 0)
+    remote_port = server.sockets[0].getsockname()[1]
     sup = Supervisor(logger=lambda m: None)
     m = MappingConfig.from_dict({
         "name": "cli", "enabled": True, "serial": {"port": dev_a, "baudrate": 115200},
         "network": {"mode": "client", "protocol": "raw",
-                    "remote_host": "127.0.0.1", "remote_port": 48010}})
+                    "remote_host": "127.0.0.1", "remote_port": remote_port}})
     await sup.apply_mapping(m)
     await asyncio.wait_for(ev.wait(), timeout=3)
     await asyncio.sleep(0.3)
