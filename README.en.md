@@ -282,7 +282,8 @@ docker compose up -d        # edit `devices:` and `ports:` in docker-compose.yml
 ```
 Without compose, use the `docker run` command in
 [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) (the published image,
-`--restart unless-stopped`, the mapping ports, a `/dev/serial/by-id` device, log limits).
+`--restart unless-stopped`, `--init`, the mapping ports, a `/dev/serial/by-id` device, log
+limits).
 Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (or `:2.8`, `:2.8.1`); `docker-compose.yml` uses it.
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
@@ -577,9 +578,10 @@ is no account at all; later starts ignore it.
 ## ⚙️ Run as a service
 
 - **Docker:** official `Dockerfile` + `docker-compose.yml` (see above and
-  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. A plain
-  `docker run` needs `--restart unless-stopped` for that (an existing container:
-  `docker update --restart unless-stopped ser2net`).
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `init: true` and
+  `stop_grace_period: 30s` (a stop reaches ser2net, which finishes within that), `/data`
+  volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
+  that (an existing container: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
   **Do not run as root.**

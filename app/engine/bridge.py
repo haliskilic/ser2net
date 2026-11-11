@@ -698,8 +698,8 @@ class MappingRunner:
         self._monitors.clear()
         self._traffic.clear()
         if self._mqtt is not None:
-            self._mqtt.close()
-            self._mqtt = None
+            mqtt, self._mqtt = self._mqtt, None
+            await mqtt.aclose()
         if self._server is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)

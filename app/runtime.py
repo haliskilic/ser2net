@@ -313,6 +313,23 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
 
 _as_service = False  # set by service_main so _serve can log the service-only warnings
 
+# The most a stop takes (only a device, broker or client that stops answering makes it
+# take long): the admin UI's responses still under way, then everything else. The Docker
+# compose file gives the container 30 s (stop_grace_period) before it is killed.
+SHUTDOWN_HTTP_TIMEOUT_S = 5
+SHUTDOWN_ENGINE_TIMEOUT_S = 20.0
+
+
+async def stop_engine(state: AppState) -> None:
+    """state.stop_engine(), for at most SHUTDOWN_ENGINE_TIMEOUT_S: the mappings stop side
+    by side within their own budget (Supervisor.stop_all), so this only cuts off what
+    still hangs after that, and says so."""
+    try:
+        await asyncio.wait_for(state.stop_engine(), timeout=SHUTDOWN_ENGINE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        state.log(f"shutting down: still not done after {SHUTDOWN_ENGINE_TIMEOUT_S:g} s, "
+                  "exiting anyway")
+
 
 def service_main(config_path: str) -> int:
     """main() for the Windows service, which has no console: a start-up error that stops
@@ -370,40 +387,22 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         state.log("WARNING: LDAP sends the passwords unencrypted (ldap:// without StartTLS) — "
                   "use ldaps:// or StartTLS (Settings → LDAP / Active Directory).")
 
-    await state.start_engine()
-    app = build_app(state)
-
-    # the admin listener's connections: admitted (caps, budget) before TLS, which the
-    # protocol does itself, and each request head on a deadline (web/httpguard.py)
-    guard = state.admin_guard = httpguard.AdminGuard(admin, state.log)
-    uconfig = uvicorn.Config(
-        app,
-        host=admin.bind_ip,
-        port=admin.port,
-        loop="asyncio",
-        log_level="warning",
-        access_log=False,
-        http=httpguard.protocol_class(guard),
-    )
-    if admin.tls_enabled:
-        try:
-            guard.ssl = httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig)
-        except (OSError, ValueError) as e:  # ssl.SSLError is an OSError
-            state.log(f"admin UI: the TLS certificate could not be loaded: {e}")
-            await state.stop_engine()
-            raise
-    server = guard.server = uvicorn.Server(uconfig)
-    # uvicorn (>= 0.29) also traps SIGINT/SIGTERM while it serves, from the main
-    # thread only; both its handler and ours below just ask the server to exit.
-
     loop = asyncio.get_running_loop()
-    serve_task = asyncio.create_task(server.serve())
+    server: Optional[uvicorn.Server] = None
+    stop_asked = False
 
     def _request_shutdown() -> None:
-        server.should_exit = True
+        nonlocal stop_asked
+        stop_asked = True
+        if server is not None:
+            server.should_exit = True
 
-    # (not on Windows, and not outside the main thread — e.g. the Windows service
-    # thread; request_shutdown() covers those)
+    # Installed before the engine starts: a stop asked for meanwhile (a `docker stop` in
+    # the first seconds, where Python is PID 1 and a signal nobody handles is dropped) is
+    # kept, and the admin UI is then not started. uvicorn (>= 0.29) also traps SIGINT /
+    # SIGTERM while it serves, from the main thread only; both its handler and ours just
+    # ask the server to exit. (Not on Windows, and not outside the main thread, e.g. the
+    # Windows service thread: request_shutdown() covers those.)
     for sig in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(NotImplementedError, ValueError, RuntimeError, AttributeError):
             loop.add_signal_handler(sig, _request_shutdown)
@@ -414,15 +413,50 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     _shutdown_hooks.append(_from_other_thread)
     if _shutdown_requested.is_set():  # asked to stop before we were ready
         _request_shutdown()
+    guard = None
+    started = False
     try:
-        await serve_task
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        server.should_exit = True
-        with contextlib.suppress(Exception):
-            await serve_task
+        await state.start_engine()
+        started = True
+        app = build_app(state)
+
+        # the admin listener's connections: admitted (caps, budget) before TLS, which the
+        # protocol does itself, and each request head on a deadline (web/httpguard.py)
+        guard = state.admin_guard = httpguard.AdminGuard(admin, state.log)
+        uconfig = uvicorn.Config(
+            app,
+            host=admin.bind_ip,
+            port=admin.port,
+            loop="asyncio",
+            log_level="warning",
+            access_log=False,
+            http=httpguard.protocol_class(guard),
+            # at a stop, a response still under way (a large trace download) gets this
+            # long; the WebSockets (console, hex view) are closed at once
+            timeout_graceful_shutdown=SHUTDOWN_HTTP_TIMEOUT_S,
+        )
+        if admin.tls_enabled:
+            try:
+                guard.ssl = httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig)
+            except (OSError, ValueError) as e:  # ssl.SSLError is an OSError
+                state.log(f"admin UI: the TLS certificate could not be loaded: {e}")
+                raise
+        server = guard.server = uvicorn.Server(uconfig)
+        if stop_asked:
+            state.log("stop requested while starting — the admin UI is not started")
+        else:
+            serve_task = asyncio.create_task(server.serve())
+            try:
+                await serve_task
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                server.should_exit = True
+                with contextlib.suppress(Exception):
+                    await serve_task
     finally:
         _shutdown_hooks.remove(_from_other_thread)
-        guard.close()
-        state.log("shutting down — stopping all mappings")
-        await state.stop_engine()
+        if guard is not None:
+            guard.close()
+        if started:
+            state.log("shutting down — stopping all mappings")
+            await stop_engine(state)
     return 0

@@ -54,7 +54,7 @@ release tag).
 ## Plain docker run
 
 ```bash
-docker run -d --name ser2net --restart unless-stopped \
+docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   -p 8080:8080 -p 4001:4001 \
   --device /dev/serial/by-id/usb-FTDI_...-if00-port0:/dev/ttyUSB0 \
   --log-opt max-size=10m --log-opt max-file=3 \
@@ -65,6 +65,14 @@ docker run -d --name ser2net --restart unless-stopped \
 - `--restart unless-stopped` brings it back after a crash, a Docker restart or a power
   cut. A container started without it stays down until someone starts it by hand; add
   the policy to an existing one with `docker update --restart unless-stopped ser2net`.
+- `--init` (compose: `init: true`) runs a small init as the container's first process,
+  which passes `docker stop` on to ser2net; `--stop-timeout 30` (compose:
+  `stop_grace_period: 30s`) gives the stop 30 s before Docker kills the container.
+  ser2net finishes within that even when a device, an MQTT broker or a client stops
+  answering: an admin UI response under way gets 5 s, the mappings stop side by side in
+  at most 15 s, and output a serial device has not taken 2 s after its port closes is
+  dropped. (Docker's default is 10 s, after which unsent trace data and the last log
+  lines may be lost.)
 - To build the image yourself, run `docker build -t ser2net .` in a checkout and use
   `ser2net` as the image name.
 

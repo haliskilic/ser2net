@@ -15,6 +15,10 @@ from ..config import AppConfig, MappingConfig
 from . import serial_io
 from .bridge import MappingRunner, RunnerStatus
 
+# stop_all(): the runners stop side by side, for at most this long together; one that
+# takes longer is left to finish on its own (and logged), so it can't hold up the rest
+STOP_ALL_TIMEOUT_S = 15.0
+
 
 class Runner(Protocol):
     """What the supervisor and the web layer use of a mapping's runner: the transparent
@@ -82,6 +86,16 @@ def _build_runner(mapping: MappingConfig, logger, trace_dir: Optional[str]):
         return _Unbuildable(e)
 
 
+def _consume_error(task: asyncio.Future) -> None:
+    if not task.cancelled():
+        task.exception()  # a runner that failed to stop: nothing more to do about it
+
+
+def _name(runner: Any) -> str:
+    mapping = getattr(runner, "mapping", None)
+    return getattr(mapping, "name", None) or "?"
+
+
 class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
@@ -95,6 +109,7 @@ class Supervisor:
             lambda mapping: (lambda msg: self.log(f"[{mapping.name}] {msg}"))
         )
         self._lock = asyncio.Lock()
+        self._stopping: set[asyncio.Future] = set()  # stop_all()'s runners still stopping
 
     # ---------------- bulk ----------------
     async def start_all(self, config: AppConfig) -> None:
@@ -106,12 +121,25 @@ class Supervisor:
                 self._ensure_stopped_placeholder(m)
 
     async def stop_all(self) -> None:
+        """Stop every runner, side by side, waiting at most STOP_ALL_TIMEOUT_S: a runner
+        still stopping then (a device or broker that doesn't answer) is logged and left to
+        finish in the background, instead of keeping the others running (an import or a
+        restore stops all, then starts the new set) or the process from exiting."""
         async with self._lock:
             runners = list(self._runners.values())
             self._runners.clear()
-        for r in runners:
-            with contextlib.suppress(Exception):
-                await r.stop()
+        if not runners:
+            return
+        stops = {asyncio.ensure_future(r.stop()): r for r in runners}
+        for task in stops:
+            self._stopping.add(task)  # (a task left running must not be garbage-collected)
+            task.add_done_callback(self._stopping.discard)
+            task.add_done_callback(_consume_error)
+        _done, pending = await asyncio.wait(stops, timeout=STOP_ALL_TIMEOUT_S)
+        if pending:
+            names = ", ".join(sorted(_name(stops[t]) for t in pending))
+            self.log(f"stopping: {len(pending)} mapping(s) did not stop within "
+                     f"{STOP_ALL_TIMEOUT_S:g} s, left to finish on their own: {names}")
 
     # ---------------- per-mapping ----------------
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:

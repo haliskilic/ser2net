@@ -186,12 +186,12 @@ class ModbusGatewayRunner:
         for t in list(self._write_tasks):
             t.cancel()
         if self._sparkplug is not None:
-            self._sparkplug.close()  # NDEATH, then disconnect
-            self._sparkplug = None
+            sparkplug, self._sparkplug = self._sparkplug, None
             self._mqtt = None
+            await sparkplug.aclose()  # NDEATH, then disconnect
         elif self._mqtt is not None:
-            self._mqtt.close()
-            self._mqtt = None
+            mqtt, self._mqtt = self._mqtt, None
+            await mqtt.aclose()
         if self._server is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
