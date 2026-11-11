@@ -1624,7 +1624,8 @@ class ConfigStore:
         Uses a temp file + os.replace so config.json is never partially written; the
         version being replaced is kept in backups/ first (see the class docstring).
         validate=False is for a change the caller checked itself and that must not
-        fail on an unrelated setting (account recovery, app/accounts.py).
+        fail on an unrelated setting (account recovery, app/accounts.py; start-up right
+        after tolerate_problems(), runtime.prepare_config).
         """
         still_accepted = config.validate_for_save() if validate else config.tolerated
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)

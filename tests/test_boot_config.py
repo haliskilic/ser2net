@@ -14,7 +14,8 @@ way a container starts:
   * later saves refuse only what they change or add: stopping or deleting a mapping,
     fixing one broken part while others stay broken work; editing a broken part without
     fixing it, or adding a new clash, is refused with its error;
-  * a write that fails is a warning, not a crash;
+  * a write that fails is a warning, not a crash, and so is a file a check looks for
+    that goes away while the start saves;
   * what start-up adds for the accounts — the first admin from
     SER2NET_ADMIN_PASSWORD_FILE, the session key and cluster id of a config.json that
     had none — is saved once, also while a setting is accepted broken, and the next
@@ -73,7 +74,7 @@ def failing_save(exc):
     """ConfigStore.save raises `exc` (a read-only data dir, a config.json mounted alone)."""
     real = ConfigStore.save
 
-    def save(self, config):
+    def save(self, config, **_kw):
         raise exc
 
     ConfigStore.save = save
@@ -467,6 +468,45 @@ def test_write_failure_is_a_warning():
         shutil.rmtree(data, ignore_errors=True)
 
 
+def test_file_gone_while_saving():
+    """Start-up accepts what config.json breaks, then saves what it adds (here the session
+    key and cluster id of a hand-made file). A TLS file that a check found a moment ago
+    and that is gone by the save must not stop the start with a ConfigError."""
+    data = new_dir()
+    path = os.path.join(data, "config.json")
+    cert = os.path.join(data, "cert.pem")
+    real = AppConfig.tolerate_problems
+
+    def tolerate_then_lose_the_file(self):
+        found = real(self)
+        os.remove(cert)  # e.g. replaced by a certificate renewal just now
+        return found
+
+    try:
+        with open(cert, "w") as fh:
+            fh.write("not checked here")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"mappings": [{
+                "id": "d00000000001", "name": "tls", "serial": {"port": "/dev/s2n-missing"},
+                "network": {"mode": "server", "port": 4200, "tls": True, "tls_cert": cert,
+                            "tls_key": cert}}]}, fh)
+        AppConfig.tolerate_problems = tolerate_then_lose_the_file
+        with env(SER2NET_BIND_IP=None, SER2NET_PORT=None):
+            _store, cfg = runtime.prepare_config(path)
+        AppConfig.tolerate_problems = real
+        saved = read_json(path)
+        assert saved["secret_key"] == cfg.secret_key and saved["instance_id"], saved
+        assert saved["mappings"][0]["network"]["tls_cert"] == cert
+        with env(SER2NET_BIND_IP=None, SER2NET_PORT=None):
+            _store, cfg = runtime.prepare_config(path)
+        assert any("TLS file not found" in w for w in warnings(cfg)), cfg.load_notes
+        print("a file a check looks for, gone while start-up saves: saved anyway, the next "
+              "start warns about it  OK")
+    finally:
+        AppConfig.tolerate_problems = real
+        shutil.rmtree(data, ignore_errors=True)
+
+
 @contextlib.contextmanager
 def full_disk():
     """config.json's temp file can't be created (a full disk, a read-only data dir)."""
@@ -643,6 +683,7 @@ def main():
     test_invalid_settings_still_start()
     test_accounts_saved_once()
     test_write_failure_is_a_warning()
+    test_file_gone_while_saving()
     test_failed_write_keeps_what_was_accepted()
     test_fatal_with_one_line()
     test_real_process_has_no_traceback()
