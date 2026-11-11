@@ -345,6 +345,18 @@ def acl_offenders(aces, owner: Optional[str] = None, rights: int = DANGEROUS_RIG
     return sorted(out)
 
 
+ANY_ACCESS = 0xFFFFFFFF
+
+
+def admin_only(owner: Optional[str], aces) -> bool:
+    """Pure decision (any OS): only SYSTEM / Administrators / TrustedInstaller own the
+    file or folder or have any access to it, as a service's data directory once
+    --install-service has hardened it. Private already; lock_down_dir() leaves it so
+    (its grant for the account running ser2net would let that account's unelevated
+    programs change what the service runs)."""
+    return not acl_offenders(aces, owner, rights=ANY_ACCESS)
+
+
 def foreign_owner(owner: Optional[str], me: Optional[str]) -> bool:
     """True for an owner that is neither SYSTEM / Administrators / TrustedInstaller nor the
     installing account: whatever it put in a data directory can't be taken on trust."""
@@ -1026,7 +1038,8 @@ def _install_steps(api, scm, svc, previous, registered, name, data_dir, config, 
             _wait_lock_free(data_dir, 30)
         _mkdir_admin_only(data_dir)
         loaded = prepare(config_path)
-        # after prepare: loading the config re-adds a grant for the installing account
+        # after prepare: loading the config may have added a grant for the installing
+        # account (lock_down_dir, on a folder that was not admin-only yet)
         _harden(data_dir, users_read=False)
         _require_protected([data_dir, os.path.join(data_dir, "config.json")], "The data directory")
         if not _inside(config_path, data_dir):

@@ -28,7 +28,8 @@ Both folders end up owned by *Administrators*, with only SYSTEM and Administrato
 change them (Users may read and run the program) — not even your own account outside an
 elevated prompt, since a program you run unelevated must not be able to change what the
 service runs as SYSTEM. So run ser2net against the service's data directory only from an
-elevated prompt, with the service stopped. A new service won't take over a data folder
+elevated prompt, with the service stopped (or `--set-password`, also while it runs); it
+leaves the folder's permissions as they are. A new service won't take over a data folder
 that holds files owned by another account (a standard user can create folders in
 `C:\ProgramData`): check and delete it, or take it over, and install again.
 

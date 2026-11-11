@@ -119,7 +119,10 @@ def lock_down_dir(directory: str) -> None:
     so child files (config.json, the atomic temp files, per-mapping logs) pick up the
     same restriction. Best-effort: silently degrades if it cannot be applied (the
     posix path was the only one protected before — Windows was left world-readable
-    despite the docs claiming 0600).
+    despite the docs claiming 0600). A directory only SYSTEM and Administrators can
+    use (a service's data directory, see app/winservice.py) is left as it is: an
+    elevated run (--set-password) must not give its own account's unelevated programs
+    a way to change what the service runs.
     """
     if os.name == "posix":
         with contextlib.suppress(OSError):
@@ -127,7 +130,7 @@ def lock_down_dir(directory: str) -> None:
         return
     if os.name == "nt":
         user = os.environ.get("USERNAME") or ""
-        if not user:
+        if not user or _admin_only(directory):
             return
         import subprocess
 
@@ -150,6 +153,18 @@ def lock_down_dir(directory: str) -> None:
         cmd += ["/C", "/Q"]
         with contextlib.suppress(Exception):
             subprocess.run(cmd, capture_output=True, timeout=15, check=False)
+
+
+def _admin_only(directory: str) -> bool:
+    """Windows: only SYSTEM and Administrators own or can use `directory` (False when
+    that can't be told)."""
+    from . import winservice  # the Windows API through ctypes
+
+    try:
+        sec = winservice.read_security(directory)
+    except Exception:  # best effort, like the rest of lock_down_dir
+        return False
+    return sec is not None and winservice.admin_only(*sec)
 
 
 def _is_int(value: Any) -> bool:
