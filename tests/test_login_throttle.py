@@ -3,7 +3,9 @@
 Checks:
   * attempts are counted before the password is checked: a burst of concurrent wrong
     sign-ins from one address gets exactly `max_attempts` password checks, the rest 429;
-    a sign-in that works resets the count.
+    a sign-in that works resets the count;
+  * without LDAP, a name that has no local account (unknown, or an LDAP/OIDC account) is
+    checked against a dummy hash: the same work as a wrong password;
 
 Calls the web app in this process (no socket).
 Run: python3 tests/test_login_throttle.py
@@ -142,8 +144,29 @@ def test_burst_counted_before_check():
     run(_burst, {"users": [_user("admin")]})
 
 
+# ---------------------------------------------------------------- names without an account
+async def _unknown_names(d: str, config: dict) -> None:
+    state = _state(d, config)
+    app = build_app(state)
+    with CountingVerify() as verify:
+        for i, name in enumerate(("nobody", "sso-user", "admin")):
+            assert (await login(app, name, "wrong", client=f"10.0.0.{i}"))[0] == 401
+    assert verify.calls[:2] == [auth.DUMMY_HASH] * 2, verify.calls
+    assert verify.calls[2] == state.config.get_user("admin").password_hash
+    assert auth.is_password_hash(auth.DUMMY_HASH) and not auth.verify_password("", auth.DUMMY_HASH)
+    print("LDAP off: an unknown name and an OIDC account's name are checked against a dummy "
+          "hash, like a wrong password  OK")
+
+
+def test_unknown_names_cost_a_check():
+    sso = {"username": "sso-user", "password_hash": "", "role": "viewer", "source": "oidc",
+           "pwd_version": 1}
+    run(_unknown_names, {"users": [_user("admin"), sso]})
+
+
 def main():
     test_burst_counted_before_check()
+    test_unknown_names_cost_a_check()
     print("\nPASS: sign-in attempts are limited")
 
 

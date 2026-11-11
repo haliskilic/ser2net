@@ -49,6 +49,12 @@ def hash_password(password: str) -> str:
     return f"scrypt${salt.hex()}${dk.hex()}"
 
 
+# What a sign-in under a name that has no local account is checked against while there is
+# no directory to ask: a hash of a password nobody knows, so that such a sign-in takes as
+# long as a wrong password and the answer's timing doesn't tell which names have one.
+DUMMY_HASH = f"scrypt${secrets.token_hex(16)}${secrets.token_hex(_DKLEN)}"
+
+
 def is_password_hash(stored: str) -> bool:
     """Is `stored` a hash_password() result ("scrypt$<salt hex>$<hash hex>")?"""
     parts = str(stored).split("$")
