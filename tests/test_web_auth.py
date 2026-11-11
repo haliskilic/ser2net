@@ -1,6 +1,8 @@
 """Web auth lifecycle: CSRF enforcement, login rate-limiting, and session
 revocation on password change (pwd_version); a cookie, CSRF token or SSO state with
-bytes no token has (non-ASCII) is a mismatch (4xx), not a server error.
+bytes no token has (non-ASCII) is a mismatch (4xx), not a server error; the SSO state
+cookie and the session cookie are signed with different keys, so neither is taken for
+the other, and a signed token with fields of other types is no session.
 Run: python3 tests/test_web_auth.py
 """
 import http.client
@@ -177,6 +179,44 @@ def test_oidc_state_odd_values():
     print("SSO callback: non-ASCII state or state cookie -> 400  OK")
 
 
+def test_token_kinds():
+    secret = "s" * 64
+    state_cookie = auth.sign_payload(secret, {"s": "abc", "n": "n", "r": "https://h/cb",
+                                              "v": "pkce-verifier"})
+    session = auth.issue_session(secret, 600, "admin", 1)
+    assert auth.decode_session(secret, state_cookie) is None
+    assert auth.read_payload(secret, session) is None
+    assert auth.read_payload(secret, state_cookie)["v"] == "pkce-verifier"
+    assert auth.decode_session(secret, session)["u"] == "admin"
+
+    def signed(doc):  # what only the holder of the session key could make
+        payload = auth._b64e(json.dumps(doc).encode())
+        return f"{payload}.{auth._sign(secret, payload)}"
+
+    exp = int(time.time()) + 600
+    for doc in ({"u": "admin", "v": "x", "exp": exp}, {"u": 5, "v": 1, "exp": exp},
+                {"u": "admin", "v": 1, "exp": "soon"}, {"u": "admin", "v": True, "exp": exp},
+                {"u": "admin", "v": 1}, ["admin", 1], "admin"):
+        assert auth.decode_session(secret, signed(doc)) is None, doc
+    assert auth.decode_session(secret, signed({"u": "admin", "v": 1, "exp": exp})), \
+        "a token as 2.8 issued it (no 'n')"
+    with Server({"secret_key": secret,
+                 "users": [{"username": "admin", "role": "admin", "pwd_version": 1,
+                            "password_hash": auth.hash_password("adminpass123")}],
+                 "oidc": {"enabled": True, "issuer": "https://idp.example.com",
+                          "client_id": "ser2net", "client_secret": "sek"}}) as srv:
+        for path in ("/", "/settings", "/api/mappings"):
+            st = raw(srv.port, "GET", path, {"Cookie": "ser2net_session=" + state_cookie})
+            assert st in (303, 401), (path, st)
+        st = raw(srv.port, "GET", "/auth/oidc/callback?code=x&state=",
+                 {"Cookie": "ser2net_oidc=" + session})
+        assert st == 400, st
+        assert "Traceback" not in srv.output()
+    print("SSO state cookie as the session cookie, and the reverse: refused, no server "
+          "error; odd field types are no session  OK")
+
+
 if __name__ == "__main__":
     main()
     test_oidc_state_odd_values()
+    test_token_kinds()

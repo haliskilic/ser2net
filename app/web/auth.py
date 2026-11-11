@@ -90,6 +90,17 @@ def _sign(secret: str, payload: str) -> str:
     return _b64e(hmac.new(secret.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).digest())
 
 
+def _payload_secret(secret: str) -> str:
+    """What sign_payload's tokens are signed with: derived from the session key, so that
+    such a token (the OIDC state cookie) is never a valid session cookie, nor a session
+    cookie a valid state."""
+    return hmac.new(secret.encode("utf-8"), b"ser2net signed payload", hashlib.sha256).hexdigest()
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def issue_session(secret: str, ttl_seconds: int, username: str, pwd_version: int = 0) -> str:
     # "n": two sign-ins in the same second still get different tokens, so a logout
     # (RevokedSessions) ends exactly one of them
@@ -114,9 +125,14 @@ def decode_session(secret: str, token: str | None) -> dict | None:
         data = json.loads(_b64d(payload))
     except (ValueError, json.JSONDecodeError):
         return None
-    if int(data.get("exp", 0)) <= int(time.time()):
+    if not isinstance(data, dict):
         return None
-    return {"u": str(data.get("u", "")), "v": int(data.get("v", 0)), "exp": int(data["exp"])}
+    user, version, exp = data.get("u", ""), data.get("v", 0), data.get("exp", 0)
+    if not (isinstance(user, str) and _is_int(version) and _is_int(exp)):
+        return None  # signed, but not a session token
+    if exp <= int(time.time()):
+        return None
+    return {"u": user, "v": version, "exp": exp}
 
 
 class RevokedSessions:
@@ -157,22 +173,23 @@ class RevokedSessions:
 
 def sign_payload(secret: str, data: dict, ttl_seconds: int = 600) -> str:
     """A short-lived HMAC-signed token carrying a small dict (e.g. the OIDC state +
-    nonce stashed in a cookie across the redirect)."""
+    nonce stashed in a cookie across the redirect), under a key of its own
+    (_payload_secret)."""
     payload = _b64e(json.dumps({**data, "exp": int(time.time()) + ttl_seconds}).encode("utf-8"))
-    return f"{payload}.{_sign(secret, payload)}"
+    return f"{payload}.{_sign(_payload_secret(secret), payload)}"
 
 
 def read_payload(secret: str, token: str | None) -> dict | None:
     if not token or "." not in token or not token.isascii():  # ours are ASCII
         return None
     payload, sig = token.rsplit(".", 1)
-    if not hmac.compare_digest(sig, _sign(secret, payload)):
+    if not hmac.compare_digest(sig, _sign(_payload_secret(secret), payload)):
         return None
     try:
         data = json.loads(_b64d(payload))
     except (ValueError, json.JSONDecodeError):
         return None
-    if int(data.get("exp", 0)) <= int(time.time()):
+    if not isinstance(data, dict) or not _is_int(data.get("exp")) or data["exp"] <= int(time.time()):
         return None
     return data
 
