@@ -156,12 +156,43 @@ document.addEventListener("submit", function (e) {
   if (f && !window.confirm(f.getAttribute("data-confirm"))) e.preventDefault();
 });
 
-// 3) Cancel/Close buttons clear the form/log panel. Done via a delegated
-//    listener (not inline onclick, which the Content-Security-Policy blocks).
+// 3) Unsaved changes in the mapping form. The form is "dirty" once a field was changed
+//    (an input / change event, nothing else: a form nobody touched never asks) or when it
+//    came back from a failed save (data-dirty="1": the values shown are not saved).
+//    Cancel and anything else that would replace the panel — a row's Edit / Log /
+//    Monitor / Trace, + Add mapping, a peer's Edit — ask before they throw the changes
+//    away; leaving or reloading the page gets the browser's own question.
+function dirtyForm() {
+  var f = document.querySelector("#form-panel form.mform");
+  return f && f.getAttribute("data-dirty") === "1" ? f : null;
+}
+function mayDiscard() {
+  return !dirtyForm() ||
+    window.confirm(tr("discard_changes", "Discard the unsaved changes in the open form?"));
+}
+function markDirty(e) {
+  var f = e.target.closest ? e.target.closest("form.mform") : null;
+  if (f) f.setAttribute("data-dirty", "1");
+}
+document.addEventListener("input", markDirty);
+document.addEventListener("change", markDirty);
+document.addEventListener("htmx:beforeRequest", function (e) {
+  var f = dirtyForm();
+  if (f && e.detail.target === document.getElementById("form-panel") &&
+      !f.contains(e.detail.elt) && !mayDiscard())
+    e.preventDefault();
+});
+window.addEventListener("beforeunload", function (e) {
+  if (dirtyForm()) { e.preventDefault(); e.returnValue = ""; }
+});
+
+// 3a) Cancel/Close buttons clear the form/log panel. Done via a delegated
+//     listener (not inline onclick, which the Content-Security-Policy blocks).
 document.addEventListener("click", function (e) {
   var btn = e.target.closest("[data-cancel]");
   if (btn) {
     e.preventDefault();
+    if (!mayDiscard()) return;
     closeTerm();
     var panel = document.getElementById("form-panel");
     if (panel) panel.innerHTML = "";
@@ -493,11 +524,14 @@ var feedback = (function () {
   // 401: the session ended (or was ended). Not a redirect: an open form would lose its
   // unsaved changes. Signing in again (it keeps the CSRF cookie) brings the page back.
   function sessionEnded() {
-    var here = location.pathname + location.search;
+    var here = location.pathname + location.search, keep = !!dirtyForm();
     feedback.show("session", "error",
                   tr("session_ended", "Your session has ended: this page is not up to date, and changes can’t be saved until you sign in again."),
                   { href: "/login" + (here !== "/" ? "?next=" + encodeURIComponent(here) : ""),
-                    text: tr("sign_in", "Sign in") });
+                    // with unsaved changes open here: sign in in another tab, then save here
+                    text: keep ? tr("sign_in_tab", "Sign in in a new tab (keeps the open form)")
+                               : tr("sign_in", "Sign in"),
+                    newTab: keep });
   }
 
   document.addEventListener("htmx:afterRequest", function (e) {

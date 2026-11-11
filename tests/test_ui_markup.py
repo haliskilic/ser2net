@@ -550,6 +550,26 @@ def test_keyboard_and_screen_readers():
           "filters, error banners as alerts  OK")
 
 
+def test_unsaved_form_is_guarded():
+    """A form shown again after a failed save holds values that are not saved: it comes
+    marked dirty (data-dirty), so app.js asks before Cancel, another panel or leaving the
+    page throws them away; a fresh form is not (it only gets dirty by being edited)."""
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig(name="x")
+
+    def form(error):
+        root = parse(tpl.render(request=Page, mapping=m, is_new=False, modbus_points_json="",
+                                ports=[], ips=[], error=error))
+        return next(n for n in root.walk() if n.tag == "form")
+    assert form("Port 4001 is in use").attrs.get("data-dirty") == "1"
+    assert "data-dirty" not in form(None).attrs
+    texts = json.loads(next(n for n in parse(dashboard()).walk() if n.tag == "body").attrs["data-i18n"])
+    assert texts.get("discard_changes") and texts.get("sign_in_tab")
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert '"beforeunload"' in js and 'tr("discard_changes"' in js
+    print("mapping form: re-shown after a failed save it counts as unsaved; the guard's texts  OK")
+
+
 def test_app_js_inserts_no_server_html():
     """app.js puts server texts into the page with textContent: the only innerHTML it
     writes is the empty string (closing a panel), and nothing else parses HTML."""
@@ -577,6 +597,7 @@ def main():
     test_polled_controls_keep_their_ids()
     test_panel_openers_scroll_it_into_view()
     test_keyboard_and_screen_readers()
+    test_unsaved_form_is_guarded()
     test_app_js_inserts_no_server_html()
     print("\nPASS: UI markup contract")
 
