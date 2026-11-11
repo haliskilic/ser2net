@@ -398,6 +398,25 @@ def write_multiple_registers_pdu(address: int, registers: list[int]) -> bytes:
                   count >> 8, count & 0xFF, len(data)]) + data
 
 
+BROADCAST = 0  # unit 0: every slave on the line carries out a write, and none answers
+
+
+def broadcast_reply(pdu: bytes) -> Optional[bytes]:
+    """What a gateway answers a master for a broadcast (unit 0), which no slave answers:
+    for a well-formed write, the reply each slave would give it as a unicast, its echo
+    (FC5, FC6, FC22: the whole request; FC15, FC16: its first 5 bytes, as
+    check_write_response expects). None for anything else."""
+    function = pdu[0] if pdu else 0
+    if function in (WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER) and len(pdu) == 5:
+        return bytes(pdu)
+    if function == 22 and len(pdu) == 7:  # mask write register
+        return bytes(pdu)
+    if (function in (WRITE_MULTIPLE_COILS, WRITE_MULTIPLE_REGISTERS) and len(pdu) >= 6
+            and len(pdu) == 6 + pdu[5]):
+        return bytes(pdu[:5])
+    return None
+
+
 def check_write_response(pdu: bytes, request: bytes) -> None:
     """Check a slave's reply to a write ``request`` PDU; returns None if the write was
     acknowledged. FC5/FC6 replies echo the request exactly, FC15/FC16 replies echo its

@@ -82,7 +82,10 @@ düzenlemeye gerek yok.
   gateway, sıradaki isteği göndermeden önce hattın 250 ms'ye kadar (en çok yanıt süresi
   kadar) sessiz kalmasını bekler; geç gelen bir yanıt böylece sıradaki master'a ya da poll
   noktasına verilmez, atılır ve geç kalan slave loglanır. Yanıt olmayan baytlar atılır;
-  trace'te `ser>drop` olarak, konsolda ve hex görünümünde görünür. Seri port kaybolursa (USB
+  trace'te `ser>drop` olarak, konsolda ve hex görünümünde görünür. Broadcast (unit 0) bir
+  yazma (FC5/6/15/16/22) hatta gönderilir ve 200 ms'lik dönüş beklemesinden (en çok yanıt
+  süresi kadar) sonra bir slave'in vereceği yankıyla yanıtlanır; unit 0'a okuma hatta hiç
+  gitmeden hemen `0x0B` alır. Seri port kaybolursa (USB
   adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır ve
   port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
   kayboldu/geri geldi bildirimleri).
@@ -95,7 +98,8 @@ düzenlemeye gerek yok.
   uint/int/float 16/32, ölçek); `"writable": true` noktalar MQTT'den yazılır
   (`<topic>/<nokta>/set`, yalnızca o noktaya tek değer: coil için FC5, holding register için
   kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
-  `.../set/result`'ta `error: …` alır). **Salt okunur** bu yazmaları da reddeder (`error:
+  `.../set/result`'ta `error: …` alır). Unit 0'daki bir nokta okunmaz; ona yazma broadcast
+  olarak gider ve geri okunmaz. **Salt okunur** bu yazmaları da reddeder (`error:
   mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler panoda
   **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker karar
   verir). İstenirse **Sparkplug B**

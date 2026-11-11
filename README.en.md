@@ -78,7 +78,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   line has been quiet for 250 ms (at most the response timeout) before it sends the next
   one, so a late reply is dropped, and the late slave logged, instead of being handed to
   the next master or poll point. Bytes that are not the reply are dropped and show up in
-  the trace as `ser>drop`, in the console and in the hex view.
+  the trace as `ser>drop`, in the console and in the hex view. A broadcast (unit 0) write
+  (FC5/6/15/16/22) goes on the bus and is answered, after a 200 ms turnaround (at most the
+  response timeout), with the echo a slave would send; a read of unit 0 gets `0x0B` at once
+  without reaching the bus.
   If the serial port goes away (a USB adapter unplugged), masters get `0x0A` (gateway path
   unavailable) at once meanwhile and the port is reopened like any mapping's (state
   `reconnecting`, device lost/back notifications). Masters are admitted like other
@@ -91,7 +94,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
   values from MQTT (`<topic>/<point>/set`, one value for that point only: FC5 for a coil,
   FC6/FC16 for a holding register's own one or two registers; a JSON list or other text
-  gets `error: …` on `.../set/result`). **Read-only** refuses these writes too (`error:
+  gets `error: …` on `.../set/result`). A point on unit 0 is never read; a write to it is
+  broadcast and not read back. **Read-only** refuses these writes too (`error:
   mapping is read-only`; a refused DCMD is logged), and the dashboard marks a mapping that
   takes MQTT writes with **CMD** (see Security: the broker decides who may send them).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
