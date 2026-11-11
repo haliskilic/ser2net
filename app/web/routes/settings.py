@@ -118,9 +118,20 @@ def routes(ctx: Ctx) -> list:
         cur = form.get("current", "")
         new = form.get("password", "")
         new2 = form.get("password2", "")
-        if user is None or not await state.password_work.run(auth.verify_password, cur,
-                                                             user.password_hash):
+        if user is None:
             return await settings_get(request, error=_("Current password is incorrect."))
+        # wrong current passwords count like failed sign-ins under this name (a session
+        # someone else got hold of must not be a way to guess the password itself)
+        if state.name_limiter.blocked(user.username):
+            return await settings_get(request, error=_("Too many attempts. Wait a few minutes "
+                                                       "and try again."))
+        state.name_limiter.record_failure(user.username)
+        if not await state.password_work.run(auth.verify_password, cur, user.password_hash):
+            state.log(f"password change for {user.username} refused: wrong current password "
+                      f"(from {ctx.client_ip(request)})")
+            ctx.audit(request, "password_change_failed", user.username)
+            return await settings_get(request, error=_("Current password is incorrect."))
+        state.name_limiter.reset(user.username)
         err = _password_problem(new, new2)
         if err:
             return await settings_get(request, error=err)

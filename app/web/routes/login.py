@@ -293,11 +293,26 @@ def routes(ctx: Ctx) -> list:
     # sign-ins not tried because too many were being checked already: logged once a minute
     busy_note = netguard.LogEvery(lambda msg: state.log(msg))
 
+    def _note_name_paused(label: str, username: str) -> None:
+        """Log when failed attempts (from any address) pause sign-ins under a name: that is
+        what keeps someone guessing one account's password from many addresses below the
+        directory's own lock-out."""
+        lim = state.name_limiter
+        if lim.blocked(username):
+            name = "a name that is no account's" if label == auth.UNKNOWN_USER else repr(label)
+            state.log(f"sign-ins under {name} are refused for now: {lim.max_attempts} "
+                      f"failed in {lim.window_s // 60} minutes (from any address)")
+
     def _is_account_name(name: str) -> bool:
         """Is `name` an account's (letter case aside)? Only then does a failed sign-in
         record the name typed."""
         folded = name.casefold()
         return any(u.username.casefold() == folded for u in state.config.users)
+
+    def _too_many(request):
+        return render(request, "login.html", status_code=429,
+                      error=_("Too many attempts. Wait a few minutes and try again."),
+                      oidc_enabled=state.config.oidc.enabled)
 
     def _login_failed(request, ip: str, username: str):
         """Log, record and notify a failed sign-in (login_post counted it already); the
@@ -306,6 +321,7 @@ def routes(ctx: Ctx) -> list:
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
         state.log(f"failed login for {label!r} from {ip}")
         _record_failure(ip, label, f"user {label!r} from {ip}")
+        _note_name_paused(label, username)
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
                       oidc_enabled=state.config.oidc.enabled)
@@ -316,15 +332,15 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         if state.rate_limiter.blocked(ip):
-            return render(request, "login.html", status_code=429,
-                          error=_("Too many attempts. Wait a few minutes and try again."),
-                          oidc_enabled=state.config.oidc.enabled)
+            return _too_many(request)
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
         if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
             state.rate_limiter.record_failure(ip)
             return _login_failed(request, ip, username)
+        if state.name_limiter.blocked(username):  # from any address: that name only
+            return _too_many(request)
         user = state.config.get_user(username)
         local = user is not None and user.source == "local"
         directory = not local and state.config.ldap.enabled
@@ -337,10 +353,11 @@ def routes(ctx: Ctx) -> list:
                           error=_("Too many sign-ins at the same time. Try again in a "
                                   "moment."),
                           oidc_enabled=state.config.oidc.enabled)
-        # counted as failed before the password is checked, in the same step as the check
-        # above (no await between them): concurrent attempts can't all get past the limit
-        # while the first ones are still being checked. A sign-in that works resets it.
+        # counted as failed before the password is checked, in the same step as the checks
+        # above (no await between them): concurrent attempts can't all get past the limits
+        # while the first ones are still being checked. A sign-in that works resets them.
         state.rate_limiter.record_failure(ip)
+        state.name_limiter.record_failure(username)
         authed = None
         # local account: verify the scrypt hash off the event loop (it's slow on purpose)
         if local:
@@ -369,6 +386,7 @@ def routes(ctx: Ctx) -> list:
             await work.run(auth.verify_password, password, auth.DUMMY_HASH)
         if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
+            state.name_limiter.reset(authed.username)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
             ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=authed.username)
             resp = RedirectResponse("/", status_code=303)
