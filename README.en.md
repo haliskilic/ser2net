@@ -328,9 +328,11 @@ device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, 
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
 address (128 in all). Capacity, `kick_old_user` and the "Busy" line still come after the
-handshake. The admin UI closes a connection that sends no complete request within
-`admin_ui.request_timeout_s` (10 s) of connecting or of its last response (a console
-WebSocket is not timed), and takes at most `admin_ui.max_connections` (256) connections
+handshake. The admin UI closes a connection that sends no complete request head within
+`admin_ui.request_timeout_s` (10 s) of connecting or of its last response, whose request
+body then stops coming (the body gets that time plus a second per KiB that arrives), or
+whose client takes nothing of a response for that long (a console WebSocket is not
+timed), and takes at most `admin_ui.max_connections` (256) connections
 at once, `admin_ui.max_connections_per_ip` (64) from one address; its TLS handshake has the
 same limits as a mapping's. These keys are in `config.json` only (0 = no limit); behind a
 reverse proxy every user has the proxy's address, so raise the per-address limit if

@@ -9,6 +9,10 @@ event loop stopped). Now, on a real server:
   - a connection must send a complete request head within admin_ui.request_timeout_s of
     connecting and of the end of each response, or it is closed; a slow but complete head
     is served; an upgraded WebSocket (the console) is not timed;
+  - a request body has to keep coming too (one that stops, or is trickled after the app
+    answered without reading it, is closed in time; a slow but steady one is read), and a
+    client that takes nothing of its response for request_timeout_s is dropped, while a
+    slow reader gets all of it;
   - at most admin_ui.max_connections_per_ip from one address and admin_ui.max_connections
     in all; past that a connection is closed at once and the refusal is logged (at most
     once a minute), while other addresses keep working; 600 idle sockets from one address
@@ -28,7 +32,7 @@ import tempfile
 import threading
 import time
 
-from _server import Browser, Server, closed_by_server, silent_tls_client
+from _server import Browser, Server, closed_by_server, free_port, silent_tls_client
 
 from app.config import AppConfig
 from app.web.auth import hash_password
@@ -137,6 +141,159 @@ def test_request_deadline():
             s.close()
     print("admin UI: idle and half-sent request heads closed after request_timeout_s (also "
           "after a response); a slow but complete head is served  OK")
+
+
+def response(s: socket.socket) -> tuple[bytes, bytes]:
+    """One response on ``s``: (status line, body), the body read to its Content-Length."""
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = s.recv(4096)
+        assert chunk, f"closed before a response ({buf[:80]!r})"
+        buf += chunk
+    head, body = buf.split(b"\r\n\r\n", 1)
+    length = next((int(ln.split(b":")[1]) for ln in head.split(b"\r\n")
+                   if ln.lower().startswith(b"content-length:")), 0)
+    while len(body) < length:
+        chunk = s.recv(65536)
+        assert chunk, "closed in the middle of a response"
+        body += chunk
+    return head.split(b"\r\n", 1)[0], body
+
+
+def test_request_body_deadline():
+    form = b"Content-Type: application/x-www-form-urlencoded\r\n"
+    with Server(config()) as srv:  # request_timeout_s 2
+        port = srv.port
+        stuck = connect(port)  # a body that stops coming
+        stuck.sendall(b"POST /login HTTP/1.1\r\nHost: x\r\n" + form +
+                      b"Content-Length: 100\r\n\r\nusername=a")
+        assert closed_within(stuck, 6) < 4, "a request body that stops coming kept the socket"
+        early = connect(port)  # answered before its body is in, the body then trickled
+        early.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\nContent-Length: 50\r\n\r\n")
+        assert response(early) == (b"HTTP/1.1 200 OK", b"ok")
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < 6 and still_open(early):
+            with contextlib.suppress(OSError):
+                early.sendall(b"x")
+            time.sleep(0.3)
+        assert time.monotonic() - t0 < 4, "a body trickled after the response kept the socket"
+        steady = connect(port)  # slow, but steady: 1.25 KB/s for longer than the deadline
+        body = b"username=nobody&password=" + b"x" * 3975
+        steady.sendall(b"POST /login HTTP/1.1\r\nHost: x\r\n" + form +
+                       f"Content-Length: {len(body)}\r\n\r\n".encode())
+        t0 = time.monotonic()
+        for i in range(0, len(body), 500):
+            steady.sendall(body[i:i + 500])
+            time.sleep(0.4)
+        assert time.monotonic() - t0 > 3
+        status, _page = response(steady)
+        assert status.startswith(b"HTTP/1.1 "), status
+        assert get(steady) == b"ok", "the connection must stay usable after a slow body"
+        for s in (stuck, early, steady):
+            s.close()
+    print("admin UI: a request body that stops or trickles is closed after request_timeout_s "
+          "(also one answered before it was read); a slow but steady body is read  OK")
+
+
+def test_send_deadline():
+    """In-process: a real uvicorn server with the guard and a minimal app that answers with
+    300 KB. The server's sockets get a small send buffer, as on a slow network path (on
+    loopback the kernel takes a whole response at once, and nothing would wait)."""
+    import asyncio
+    import types
+
+    import uvicorn
+
+    from app.web import httpguard
+
+    payload = b"x" * 300_000
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-length", str(len(payload)).encode())]})
+        for i in range(0, len(payload), 65536):
+            await send({"type": "http.response.body", "body": payload[i:i + 65536],
+                        "more_body": i + 65536 < len(payload)})
+
+    admin = types.SimpleNamespace(max_connections=0, max_connections_per_ip=0,
+                                  request_timeout_s=2)
+    guard = httpguard.AdminGuard(admin, lambda _msg: None)
+    paused = []
+
+    class Protocol(httpguard.protocol_class(guard)):
+        def connection_made(self, transport):
+            if self._accepted is None:
+                transport.get_extra_info("socket").setsockopt(socket.SOL_SOCKET,
+                                                              socket.SO_SNDBUF, 4096)
+            super().connection_made(transport)
+
+        def pause_writing(self):
+            paused.append(True)
+            super().pause_writing()
+
+    def small_window(port: int) -> socket.socket:
+        s = socket.socket()
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)  # before connect
+        s.settimeout(10)
+        s.connect(("127.0.0.1", port))
+        s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+        return s
+
+    def stalled(port: int) -> int:
+        """Reads nothing for a while, then all there is: how many bytes came."""
+        with small_window(port) as s:
+            time.sleep(6)
+            got = 0
+            s.settimeout(5)
+            with contextlib.suppress(OSError):
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    got += len(chunk)
+            return got
+
+    def slow_reader(port: int) -> tuple[int, float]:
+        """Reads 16 KB every 0.2 s: (body bytes it got, seconds it took)."""
+        with small_window(port) as s:
+            t0 = time.monotonic()
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                buf += s.recv(4096)
+            got = len(buf.split(b"\r\n\r\n", 1)[1])
+            while got < len(payload):
+                chunk = s.recv(16384)
+                if not chunk:
+                    break
+                got += len(chunk)
+                time.sleep(0.2)
+            return got, time.monotonic() - t0
+
+    async def main():
+        port = free_port()
+        server = guard.server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=port, loop="asyncio", log_level="warning",
+            lifespan="off", http=Protocol))
+        task = asyncio.create_task(server.serve())
+        while not server.started:
+            await asyncio.sleep(0.05)
+        try:
+            got = await asyncio.to_thread(stalled, port)
+            if not paused:
+                print("  (SKIP the stalled client: the kernel took the whole response here)")
+            else:
+                assert got < len(payload), "a client that takes nothing kept its response"
+                assert guard.timeouts >= 1
+            got, took = await asyncio.to_thread(slow_reader, port)
+            assert got == len(payload), f"a slow reader was cut off after {got} bytes"
+            assert took > 2.5, f"the slow reader took {took:.1f} s, not longer than the deadline"
+        finally:
+            server.should_exit = True
+            await task
+
+    asyncio.run(main())
+    print("admin UI: a connection whose client takes nothing of its response for "
+          "request_timeout_s is aborted; a slow reader gets the whole response  OK")
 
 
 def test_websocket_is_not_timed():
@@ -296,6 +453,8 @@ def test_limits_normalized_on_load():
 if __name__ == "__main__":
     test_limits_normalized_on_load()
     test_request_deadline()
+    test_request_body_deadline()
+    test_send_deadline()
     test_websocket_is_not_timed()
     test_caps()
     test_many_idle_sockets()
