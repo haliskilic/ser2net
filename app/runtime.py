@@ -27,10 +27,10 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import console, standalone
-from .config import ConfigStore
+from . import accounts, console, standalone
+from .config import ConfigError, ConfigStore
 from .engine import netguard
-from .state import AppState
+from .state import AppState, write_audit_record
 from .web import httpguard
 from .web.server import build_app
 
@@ -69,7 +69,8 @@ def request_shutdown() -> None:
 
 def prepare_config(config_path: str, reconfigure: bool = False):
     """Load config.json (creating it on the first run, when the console asks for the
-    admin UI address) and apply SER2NET_BIND_IP / SER2NET_PORT. Returns (store, config)."""
+    admin UI address), apply SER2NET_BIND_IP / SER2NET_PORT and create the first admin
+    from SER2NET_ADMIN_PASSWORD_FILE. Returns (store, config)."""
     store = ConfigStore(config_path)
     first_run = not store.exists()
     config = store.load()
@@ -79,8 +80,22 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         bind_ip, port = console.choose_admin_bind(config.admin_ui)
         config.admin_ui.bind_ip = bind_ip
         config.admin_ui.port = port
+    admin, note = accounts.provision_from_env(config, os.environ)
+    if note:
+        config.load_notes.append(note)
     if first_run or reconfigure or env_set:
         store.save(config)
+    elif config.ids_created or admin:
+        # the first admin from the environment, or config.json had no secret_key /
+        # instance_id (made by hand, or a downloaded backup put in its place): keep them,
+        # or every restart would sign everyone out and give this node a new cluster id
+        try:
+            store.save(config)
+        except (ConfigError, OSError) as e:
+            config.load_notes.append(f"WARNING: could not save {store.path}: {e}")
+    if admin:
+        write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
+                           "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin)
     return store, config
 
 
@@ -165,8 +180,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
-    if not config.password_set:
-        state.log("no admin password set yet — open the UI to complete first-run setup")
+    state.prepare_first_run()
     if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:
         state.log("WARNING: admin UI is bound to a network address over plain HTTP — "
                   "the password and session cookies travel unencrypted. Configure TLS "
@@ -174,6 +188,15 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     if config.password_set and not admin.require_login:
         state.log(f"WARNING: web UI login is switched off — visitors without a session get "
                   f"the '{admin.anonymous_role}' role (Settings → Web UI access).")
+    ldap = config.ldap
+    if ldap.enabled and ldap.uses_tls and not ldap.tls_verify:
+        state.log("WARNING: LDAP: the directory server's certificate is not checked "
+                  "(ldap.tls_verify is false) — anyone on the network between ser2net and the "
+                  "directory could read the passwords and sign in as anyone. Set the CA "
+                  "certificate file instead (Settings → LDAP / Active Directory).")
+    elif ldap.enabled and ldap.sends_plaintext:
+        state.log("WARNING: LDAP sends the passwords unencrypted (ldap:// without StartTLS) — "
+                  "use ldaps:// or StartTLS (Settings → LDAP / Active Directory).")
 
     await state.start_engine()
     app = build_app(state)

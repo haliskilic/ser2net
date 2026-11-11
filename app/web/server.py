@@ -110,7 +110,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 return RedirectResponse("/", status_code=303)
             if not is_public:
                 token = request.cookies.get(auth.SESSION_COOKIE)
-                user = auth.request_user(cfg, token, request.headers)
+                user = auth.request_user(cfg, token, request.headers, state.revoked_sessions)
                 if user is None:
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)

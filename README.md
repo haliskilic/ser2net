@@ -138,7 +138,9 @@ düzenlemeye gerek yok.
   bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
-  login oran sınırı, sıkı güvenlik başlıkları, parola değişince oturum iptali.
+  login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
+  bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
+  sıfırlanır (bkz. Güvenlik).
   Güvenilir ağlar için giriş zorunluluğu **Ayarlar → Web arayüzü erişimi**'nden kapatılabilir
   (ziyaretçiler seçilen rolle parolasız kullanır; bkz. Güvenlik).
 - **Çok-kullanıcı / RBAC:** `admin` / `operator` / `viewer` rolleri — viewer salt-okunur,
@@ -146,8 +148,11 @@ düzenlemeye gerek yok.
   otomatik olarak bir `admin` kullanıcısına geçer.
 - **LDAP / Active Directory auth (opsiyonel):** kullanıcılar dizine bind ederek doğrulanır;
   LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
-- **OIDC tek-oturum (SSO, opsiyonel):** Keycloak/Entra ID/Google/Okta ile authorization-code
-  akışı; id_token doğrulanır (imza/iss/aud/exp/nonce), claim→rol eşlenir. `authlib` gerektirir.
+  LDAPS / StartTLS'te sunucunun sertifikası denetlenir (sistemin CA'ları ya da kendi CA
+  dosyanız).
+- **OIDC tek-oturum (SSO, opsiyonel):** Keycloak/Entra ID/Google/Okta ile PKCE'li
+  authorization-code akışı; id_token doğrulanır (imza/iss/aud/exp/nonce), claim→rol eşlenir.
+  `authlib` gerektirir.
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
   durum ve portlar; **bearer-token** kimlik doğrulama (rol seçilebilir — `viewer`
   salt-okunur); OpenAPI 3.0 (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
@@ -237,8 +242,8 @@ Linux notları:
 - `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
   bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin.
-- Sertifika kontrolleri (TLS üzerinden MQTT, OIDC) için dağıtımın CA paketini, ayarlıysa
-  `SSL_CERT_FILE`'ı kullanır.
+- Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
+  paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır.
 
 `ser2net --about` sürümleri (Python, OpenSSL, bileşenler) gösterir; hata bildirirken
 ekleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini yazar
@@ -252,7 +257,11 @@ Kendin derlemek için:
 İlk çalıştırmada:
 1. **Konsolda** arayüzün hangi IP'den erişileceği sorulur (makine IP'leri veya custom)
    ve port (varsayılan 8080). Başsız/servis ortamında güvenli varsayılan **127.0.0.1**.
-2. Tarayıcıda açılan adrese gidin; **ilk ekranda admin parolasını belirleyin**.
+2. Tarayıcıda açılan adrese gidin; **ilk ekranda admin parolasını belirleyin**. Sayfayı
+   makinenin IP adresiyle ya da `localhost` ile açın: başka bir host adıyla (reverse proxy,
+   Docker host'unun adı) gelindiğinde kurulum sayfası ayrıca `data/setup-code.txt`
+   içindeki tek kullanımlık kodu ister; böylece başka bir web sayfası yeni bir kurulumu ele
+   geçiremez (DNS rebinding). Tarayıcı yoksa: `ser2net --set-password admin` (bkz. Güvenlik).
 3. Panodan **+ Eşleme ekle** ile COM/tty seçip IP:port'a eşleyin.
 
 Bind IP'yi sonradan değiştirmek:
@@ -398,6 +407,121 @@ LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve 
 erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
 gösterilir ve açılışta loga yazılır.
 
+**Oturumlar:** çıkış yapınca o oturum sunucuda da biter (çerezin bir kopyası da artık
+çalışmaz). **Ayarlar → Kullanıcılar**'da admin bir kullanıcının tüm oturumlarını kapatabilir
+ya da yerel bir kullanıcıya yeni parola verebilir (bu da oturumlarını kapatır); herkes
+*Diğer oturumlarımı kapat* ile kendi diğer oturumlarını kapatabilir. **Ayarlar → Web arayüzü
+erişimi → Herkesin oturumunu kapat** yeni bir oturum anahtarı üretip admin'in kendi oturumu
+dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yedeğin kopyası sızmış
+olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
+kapalıyken o hesapların oturumları geçersizdir.
+
+**LDAP / OIDC grupları → roller:** bir grup ayarı (admin / operator / viewer grubu) tek bir
+grubu adlandırır ve yalnızca o grubun adının tamamıyla eşleşir, asla bir parçasıyla değil.
+LDAP'ta bu grubun adı (CN'i, ör. `ser2net-admins`), DN'inin baş kısmı
+(`cn=ser2net-admins,ou=groups`) ya da tam DN'idir; OIDC'de sağlayıcının gönderdiği değer
+ya da onun son parçasıdır (`ser2net-admins`, Keycloak'un `/team/ser2net-admins` değeriyle
+ve `CORP\ser2net-admins` ile eşleşir). Büyük/küçük harf fark etmez, Türkçe İ/I/ı/i dahil
+(`Bilgi İşlem` = `BİLGİ İŞLEM`). Bir grubun adının yalnızca bir parçası olan ayar
+(`ser2net-admins` için `admins` ya da DN'indeki yalnızca bir OU) rol vermez: o kullanıcı
+giriş yaptığında all.log'a ayarı ve grubu belirten bir WARNING yazılır, Ayarlar da o bölümü
+kaydedene kadar bunu gösterir. Admin'leriniz yalnızca böyle bir gruptan geliyorsa
+`ser2net --set-password AD` ile oluşturulan yerel bir admin'le girin (aşağıya bakın) ve
+ayarı düzeltin. Grupları artık rol vermeyen bir dizin kullanıcısının bir sonraki girişi,
+hâlâ açık olan oturumlarını da kapatır. `{username}@corp.local` ya da `CORP\{username}`
+ile AD doğrudan bind'de, grupları okumak için hesap kullanıcı arama tabanında (boşsa
+kendi domain'inin tamamında) userPrincipalName / sAMAccountName ile bulunur; *İç içe
+grupları da say* (yalnızca AD) kullanıcının başka gruplar üzerinden üyesi olduğu grupları
+da ekler.
+
+**LDAP / OIDC hesapları:** dizinden (LDAP) ya da kimlik sağlayıcıdan (OIDC) ilk kez giriş
+yapan kişiye burada parolasız bir hesap açılır; rolü her girişte gruplarından yeniden
+belirlenir — son admin rolünü elinden alsa bile (all.log o zaman uyarır; `ser2net
+--set-password AD` yerel bir admin oluşturur). Yerel hesaplar önce gelir: adı (büyük/küçük
+harf fark etmeksizin) bir yerel hesabın adı olan bir LDAP/OIDC girişi reddedilir, all.log'a
+ve denetim kaydına (`ldap_login_denied` / `oidc_login_denied`) yazılır; böyle bir giriş
+yerel hesabı asla devralmaz, SSO hesabına çevirmez ya da rolünü düşürmez. Birini yerel
+hesaptan SSO'ya taşımak için önce yerel hesabını silin (başka bir admin kalmalı). Dizinler
+gibi ser2net de LDAP adlarında büyük/küçük harfe bakmaz (Türkçe İ/ı dahil): `hkilic`,
+`Hkilic` ve `HKILIC` tek hesaptır; eski sürümlerin her yazılış için açtığı hesaplar o
+kişinin bir sonraki girişinde birleşir (diğer yazılışların oturumları kapanır), *Oturumları
+kapat* ve *Sil* hepsine uygulanır. OIDC adları birebir karşılaştırılır. Yeni bir yerel
+hesabın adı mevcut bir adla yalnızca büyük/küçük harfte ayrılamaz. LDAP/OIDC adı
+yazdırılabilir her metin olabilir (`CORP\jdoe`, `jdoe@corp.local`, `/` ya da `#` içeren
+adlar; bu hesaplar da Kullanıcılar panelinden kapatılıp silinebilir); denetim karakteri ya
+da görünmez karakter içeren, 255 karakterden uzun ya da parantez içindeki bir adla giriş
+reddedilir (nedeni all.log'da).
+
+**Kullanılmayan LDAP / OIDC hesapları:** **Ayarlar → Kullanıcılar** her hesabın son girişini
+gösterir (denetim kaydından ve o andan sonraki girişlerden; config.json'a yazılmaz).
+Kullanılmayan LDAP/OIDC hesaplarının kaldırılması **varsayılan olarak kapalıdır**: giriş
+yapmayı bırakan bir hesap, siz silene kadar kalır. Açmak için aynı yerde *Giriş yapılmayan
+LDAP / OIDC hesaplarını kaldırma süresi (gün)* değerini girin (`external_users_expire_days`:
+30–3650 gün; 0 = kapalı): o kadar süredir giriş yapmamış LDAP/OIDC hesapları o zaman hemen,
+açılışta ve her saat kaldırılır, her biri all.log'a ve denetim kaydına (`user_expired`)
+yazılır. Admin'ler, yerel hesaplar ve son kalan hesaplar hiçbir zaman kaldırılmaz; denetim
+kaydında hiç girişi olmayan bir hesap ise ancak kayıt o türden girişler için o kadar geriye
+gidiyorsa kaldırılır. Bir LDAP/OIDC hesabının silinmesi ya da kaldırılması oturumlarını
+hemen kapatır, ama erişime dizin karar verir: eşlenen bir grup ya da varsayılan rol geçerli
+oldukça kişinin bir sonraki girişi yeni bir hesap oluşturur.
+
+**OIDC (SSO):** kod isteği PKCE (S256) taşır. Sağlayıcının keşif belgesinde verdiği tüm
+adresler (yetkilendirme, token, JWKS) ve yoldaki yönlendirmeler https:// olmalıdır (http://
+yalnızca bu makinenin loopback adresine): TLS sonlandıran bir proxy arkasındaki Keycloak
+http:// adresler bildirirse SSO girişi reddedilir ve all.log nedenini yazar (Keycloak'ın
+proxy / frontend URL ayarlarını düzeltin), çünkü client secret, kod ve imza anahtarları açık
+metin giderdi. Sağlayıcı kod yerine bir hatayla dönerse (ör. kullanıcı uygulamaya atanmamış:
+`access_denied`) hata ve açıklaması all.log'a yazılır, kullanıcı hata koduna göre bir mesaj
+görür; token endpoint'inin hata yanıtları da loglanır. Sağlayıcının doğrulanmamış dediği
+(`email_verified: false`) bir e-posta adresi kullanıcı adı olamaz. Keşif belgesindeki issuer
+yapılandırılandan farklıysa all.log bir kez uyarır. id_token'ın zamanları (iat / nbf / exp)
+2 dakikalık saat farkıyla kabul edilir: bu sunucunun ve sağlayıcının saatlerini senkron tutun
+(NTP); bir token zamanı yüzünden reddedilirse all.log bu sunucunun saatinin sağlayıcınınkinden
+kaç saniye geri ya da ileri olduğunu yazar.
+
+**TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
+Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika
+deposu, domain üyesi bir makinede AD CA'sı genellikle zaten oradadır) ve sunucu URI'sindeki
+host adını içermelidir: sertifikanın verildiği adı kullanın (`ldaps://dc01.corp.local`; IP
+adresini yalnızca sertifika o adresi içeriyorsa). Kendi CA'nız (Active Directory Certificate
+Services) ya da self-signed bir sertifika için **Ayarlar → LDAP → CA sertifika dosyası**'na o
+CA'nın sertifikasını girin: PEM ya da Windows'un dışa aktardığı DER (Docker: dosyayı `/data`
+volume'una koyun); o zaman yalnızca bu dosyadaki sertifikalara güvenilir. Kabul edilmeyen bir
+sertifika, nedeni ve ne ayarlanacağıyla all.log'a yazılır, Ayarlar da gösterir; o bağlantı
+üzerinden hiçbir şey gönderilmez. *Sunucu sertifikasını denetleme* denetimi kapatır, bu
+güvensizdir: ser2net ile dizin arasındaki ağdaki herkes parolaları okuyup herhangi biri olarak
+giriş yapabilir. Kapalıyken, ayrıca parolalar şifrelenmeden gidiyorsa (StartTLS olmadan
+`ldap://`) Ayarlar ve açılış logu uyarır. TLS üzerinden ser2net başka bir sunucuya
+yönlendirmeyi (referral) izlemez (o sunucunun sertifikası denetlenmeden kalırdı): URI'yi
+kullanıcıları ve gruplarını tutan bir sunucuya yöneltin. **2.8 ya da daha eski bir sürümden
+yükseltince**, sertifikaya güvenilmiyorsa LDAP girişi durur: CA sertifika dosyasını ayarlayın
+(yerel hesaplar çalışmaya devam eder; yerel admin yoksa `ser2net --set-password AD` ile bir
+tane oluşturun).
+
+**Parola unutuldu, giriş yapılamıyor, tarayıcı yok (hesap kurtarma):**
+`ser2net --set-password AD`, yerel `AD` hesabına yeni parola verir (terminalde iki kez
+sorulur; pipe ile verilirse stdin'in ilk satırı okunur) ve o hesabın tüm oturumlarını
+kapatır. Henüz olmayan bir ad **admin** olarak oluşturulur; tek admin bir LDAP/OIDC hesabıysa
+ve dizine ulaşılamıyorsa geri dönüş yolu budur. `ser2net --sign-out-all` web arayüzündeki
+tüm oturumları kapatır. İkisi de ser2net dururken de çalışırken de çalışır: çalışan örnek
+değişikliği hemen uygular, yeniden başlatmak gerekmez. Yapılandırmada başka hiçbir şey
+değişmez, önceki `config.json` `backups/` içinde kalır, işlem denetim kaydına yazılır, gizli
+hiçbir şey ekrana ya da loga yazılmaz. Servisle aynı `--data-dir`'i kullanın ve komutu
+ser2net'in çalıştığı hesapla çalıştırın (root ile çalıştırılırsa kendiliğinden veri dizininin
+sahibine geçer):
+
+| Kurulum | Komut |
+|---|---|
+| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
+| Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ser2net\data --set-password admin` |
+| Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
+
+**Tarayıcısız ilk admin:** ilk açılıştan önce `ser2net --set-password admin` çalıştırın
+(`config.json`'u oluşturur; `--reconfigure` ya da `SER2NET_BIND_IP` aksini söylemedikçe
+arayüz `127.0.0.1:8080`'de dinler) ya da Docker'da `SER2NET_ADMIN_PASSWORD_FILE`'ı parolayı
+içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` (varsayılan
+`admin`). Değişken yalnızca hiç hesap yokken kullanılır, sonraki açılışlar onu yok sayar.
+
 ### LAN cluster
 
 - **İmzalı istekler:** düğümler arasındaki her istek cluster anahtarıyla (ondan türetilen
@@ -474,7 +598,12 @@ kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), 
 içindeki dosyalar başka kullanıcılarca okunamaz:
 - `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
 - `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
-  *Configuration backups*'tan indirilir ya da geri yüklenir; geri yükleme de geri alınabilir.
+  *Yapılandırma yedekleri*'nden indirilir ya da geri yüklenir. Geri yükleme önce giriş ve
+  erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
+  kullanıcı hesapları ve parolaları, REST API token'ı ve cluster anahtarı, onları da geri
+  yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
+  oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
+  de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
 - `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler ve config değişiklikleri,
   kim/nereden/ne (döner). Ayarlar → *Audit log*'da aranabilir, CSV olarak indirilebilir.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
@@ -482,6 +611,8 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
   yollar dosya adına indirgenir ve açılışta log'a yazılır.
 - `tls/` — self-signed üretilirse sertifika/anahtar.
+- `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
+  ilk admin hesabı oluşana kadar durur.
 
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
@@ -489,7 +620,9 @@ ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken de
 logu ya da içe aktarma önizlemesi bunu belirtir.
 
 `config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
-temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin).
+temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin). Parola
+unutulduysa bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
+`admin-requests/` yalnızca komut satırından gelen bir isteği, çalışan örnek alana kadar tutar.
 
 **Bir kurulumu kopyalamak** (disk ya da VM imajı, kopyalanan veri klasörü ya da Docker
 volume'u): `config.json` düğümün kimliğini tutar — cluster ID'sini (`instance_id`) ve

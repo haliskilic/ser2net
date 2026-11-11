@@ -12,7 +12,9 @@ only applies when every host name the request claims (Host, and X-Forwarded-Host
 Forwarded from a reverse proxy) is an IP literal, ``localhost`` or this machine's
 own name — a page on an attacker's domain that DNS-rebinds to this UI carries the
 attacker's host name, so it never gets anonymous access (CSRF still applies to
-everything, and cluster peer actions always need a real login).
+everything, and cluster peer actions always need a real login). The first-run setup
+page has the same guard (claims_own_host); through another name it needs the one-time
+setup code (AppState.prepare_first_run).
 """
 from __future__ import annotations
 
@@ -47,6 +49,17 @@ def hash_password(password: str) -> str:
     return f"scrypt${salt.hex()}${dk.hex()}"
 
 
+def is_password_hash(stored: str) -> bool:
+    """Is `stored` a hash_password() result ("scrypt$<salt hex>$<hash hex>")?"""
+    parts = str(stored).split("$")
+    if len(parts) != 3 or parts[0] != "scrypt":
+        return False
+    try:
+        return bool(bytes.fromhex(parts[1])) and bool(bytes.fromhex(parts[2]))
+    except ValueError:
+        return False
+
+
 def verify_password(password: str, stored: str) -> bool:
     try:
         scheme, salt_hex, hash_hex = stored.split("$", 2)
@@ -78,17 +91,20 @@ def _sign(secret: str, payload: str) -> str:
 
 
 def issue_session(secret: str, ttl_seconds: int, username: str, pwd_version: int = 0) -> str:
+    # "n": two sign-ins in the same second still get different tokens, so a logout
+    # (RevokedSessions) ends exactly one of them
     payload = _b64e(json.dumps(
-        {"exp": int(time.time()) + ttl_seconds, "u": username, "v": int(pwd_version)}
+        {"exp": int(time.time()) + ttl_seconds, "u": username, "v": int(pwd_version),
+         "n": secrets.token_urlsafe(6)}
     ).encode("utf-8"))
     return f"{payload}.{_sign(secret, payload)}"
 
 
 def decode_session(secret: str, token: str | None) -> dict | None:
     """Verify a session cookie's signature + expiry and return its payload
-    ({"u": username, "v": pwd_version}), or None if invalid/expired. The caller
-    must still confirm the user exists and that pwd_version matches (so a password
-    change revokes only that user's sessions)."""
+    ({"u": username, "v": pwd_version, "exp": expiry}), or None if invalid/expired.
+    The caller must still confirm the user exists and that pwd_version matches (so a
+    password change revokes only that user's sessions)."""
     if not token or "." not in token or not token.isascii():  # ours are ASCII
         return None
     payload, sig = token.rsplit(".", 1)
@@ -100,7 +116,43 @@ def decode_session(secret: str, token: str | None) -> dict | None:
         return None
     if int(data.get("exp", 0)) <= int(time.time()):
         return None
-    return {"u": str(data.get("u", "")), "v": int(data.get("v", 0))}
+    return {"u": str(data.get("u", "")), "v": int(data.get("v", 0)), "exp": int(data["exp"])}
+
+
+class RevokedSessions:
+    """Session cookies ended by a logout, remembered until they would expire anyway.
+
+    A cookie is a stateless signed token: the browser deleting it at logout would leave
+    a copy of it valid for the rest of its lifetime. Held in memory (a restart forgets
+    the list) and never written to config.json, where a save on every logout would
+    push real changes out of the 50 backups. Keyed by the token's signature."""
+
+    MAX_ENTRIES = 10000
+
+    def __init__(self) -> None:
+        self._until: dict[str, int] = {}  # signature -> the token's expiry (epoch seconds)
+
+    def add(self, secret: str, token: str | None) -> bool:
+        """Refuse this token from now on (if it is a valid session at all)."""
+        data = decode_session(secret, token)
+        if data is None or token is None:
+            return False
+        now = int(time.time())
+        for sig in [s for s, exp in self._until.items() if exp <= now]:
+            del self._until[sig]
+        while len(self._until) >= self.MAX_ENTRIES:  # full: drop the one closest to expiry
+            del self._until[min(self._until, key=self._until.__getitem__)]
+        self._until[token.rsplit(".", 1)[1]] = data["exp"]
+        return True
+
+    def __contains__(self, token: object) -> bool:
+        if not isinstance(token, str) or "." not in token:
+            return False
+        exp = self._until.get(token.rsplit(".", 1)[1])
+        return exp is not None and exp > time.time()
+
+    def clear(self) -> None:
+        self._until.clear()
 
 
 def sign_payload(secret: str, data: dict, ttl_seconds: int = 600) -> str:
@@ -125,14 +177,18 @@ def read_payload(secret: str, token: str | None) -> dict | None:
     return data
 
 
-def session_user(cfg, token: str | None):
+def session_user(cfg, token: str | None, revoked: RevokedSessions | None = None):
     """Resolve a session cookie to the live User it authenticates, or None.
-    Confirms the signed username still exists and its pwd_version is current."""
+    Confirms the signed username still exists, its pwd_version is current and its
+    sign-in method (LDAP/OIDC) is still on, and that the session was not ended by a
+    logout (``revoked``)."""
     data = decode_session(cfg.secret_key, token)
-    if data is None:
+    if data is None or (revoked is not None and token in revoked):
         return None
     user = cfg.get_user(data["u"])
     if user is None or user.pwd_version != data["v"]:
+        return None
+    if not cfg.source_enabled(user):  # LDAP/OIDC switched off: its accounts are signed out
         return None
     return user
 
@@ -140,8 +196,9 @@ def session_user(cfg, token: str | None):
 # --------------------------------------------------------------------------
 # optional anonymous access (login requirement switched off by an admin)
 # --------------------------------------------------------------------------
-# Not a valid account name (see routes._username_problem), so it can never collide
-# with a real user.
+# Not a valid account name: local names can't hold parentheses (forms._username_problem)
+# and LDAP/OIDC names in parentheses are refused (config.external_name_problem). Identity
+# checks compare the source too (an older install may have such an account).
 ANONYMOUS_USERNAME = "(anonymous)"
 
 
@@ -194,6 +251,17 @@ def _claimed_hosts(headers) -> list:
     return hosts
 
 
+def claims_own_host(headers) -> bool:
+    """Every host name the request claims is this machine (is_own_host): the
+    DNS-rebinding guard of open access and first-run setup."""
+    return all(is_own_host(h) for h in _claimed_hosts(headers))
+
+
+def foreign_host(headers) -> str:
+    """The first claimed host name that is not this machine ('' if there is none)."""
+    return next((h for h in _claimed_hosts(headers) if not is_own_host(h)), "")
+
+
 def anonymous_user(cfg, headers):
     """The pseudo-user for a visitor without a session, or None when login is
     required (the default), setup isn't done yet, or a claimed host isn't this
@@ -202,18 +270,18 @@ def anonymous_user(cfg, headers):
     ui = cfg.admin_ui
     if ui.require_login or not cfg.password_set:
         return None
-    if not all(is_own_host(h) for h in _claimed_hosts(headers)):
+    if not claims_own_host(headers):
         return None
     from ..config import User
 
     return User(username=ANONYMOUS_USERNAME, role=ui.anonymous_role, source="anonymous")
 
 
-def request_user(cfg, token: str | None, headers):
+def request_user(cfg, token: str | None, headers, revoked: RevokedSessions | None = None):
     """The user a request acts as: its session's user, else the anonymous pseudo-user
     when the login requirement is off, else None (must sign in). ``headers`` is the
-    request's (or WebSocket's) header mapping."""
-    return session_user(cfg, token) or anonymous_user(cfg, headers)
+    request's (or WebSocket's) header mapping; ``revoked`` the logged-out sessions."""
+    return session_user(cfg, token, revoked) or anonymous_user(cfg, headers)
 
 
 # --------------------------------------------------------------------------

@@ -84,6 +84,7 @@ table.grid td { overflow-wrap: anywhere; }
 table.grid th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; white-space: nowrap; }
 table.grid tr:hover td { background: rgba(255,255,255,.02); }
 table.list { min-width: 52rem; }     /* mappings + cluster: narrower than this, scroll */
+table.grid.th-wrap th { white-space: normal; }  /* small tables: long (Turkish) headers wrap */
 table.ports { min-width: 40rem; }
 .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 /* row buttons come in two groups (run controls | log, monitor, copy, delete): one

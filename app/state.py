@@ -12,9 +12,11 @@ fully resets the system — those are the only two state files.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import re
+import secrets
 import sys
 import time
 from collections import deque
@@ -22,12 +24,14 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from .config import AppConfig, ConfigStore, lock_down_dir, mapping_file, valid_mapping_id
+from . import accounts
+from .config import AppConfig, ConfigStore, User, lock_down_dir, mapping_file, valid_mapping_id
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
 from .notify import Notifier
-from .web.auth import LoginRateLimiter
+from .signins import SignIns
+from .web.auth import LoginRateLimiter, RevokedSessions
 
 # Per-mapping log retention (automatic maintenance).
 LOG_MAX_BYTES = 100 * 1024 * 1024     # cap each mapping log at 100 MB
@@ -37,10 +41,35 @@ LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at star
 ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
 ALL_LOG_BACKUPS = 5                    # keep 5 rotations (~60 MB total worst case)
 AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup kept)
+# first-run setup through a host name that isn't this machine's needs this file's code
+SETUP_CODE_FILE = "setup-code.txt"
 
 
 # control characters (incl. tab / CR / LF) that must not reach an audit record
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
+                       user: str = "") -> None:
+    """Append one record to the audit log at `path`: one line, tab-separated: time,
+    client IP, action, detail, user (the user column was added in v2.8 — older lines
+    have four fields). Control characters in any field become spaces, so a crafted
+    mapping name can't forge an extra record. Rotated past AUDIT_LOG_MAX_BYTES (one
+    backup kept). Best effort: never raises."""
+    fields = [time.strftime("%Y-%m-%d %H:%M:%S"), actor_ip, action, detail[:500], user]
+    line = "\t".join(_CONTROL.sub(" ", str(f)) for f in fields)
+    try:
+        # size-based rotation (keep one backup) so audit.log can't grow forever
+        if os.path.getsize(path) > AUDIT_LOG_MAX_BYTES:
+            with _suppress(OSError):
+                os.replace(path, path + ".1")
+    except OSError:
+        pass  # file doesn't exist yet
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
 
 
 def _parse_log_ts(line: str) -> float | None:
@@ -112,6 +141,17 @@ class AppState:
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
+        self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
+        # when each account last signed in (from audit.log, then every session issued)
+        self.signins = SignIns()
+        # LDAP/OIDC group settings that matched a sign-in's group only as part of its name,
+        # which no longer counts: (source, setting) -> details, shown in Settings until
+        # that section is saved (in memory only)
+        self.group_warnings: dict[tuple[str, str], dict] = {}
+        # the last LDAP sign-in that failed because the directory server's certificate was
+        # refused (or ldap.ca_file unusable), shown in Settings until the LDAP section is
+        # saved or a directory sign-in works (in memory only)
+        self.ldap_tls_problem: dict | None = None
         # uploaded imports waiting for the user to confirm the preview: token -> item
         self.pending_imports: dict[str, dict] = {}
         self.notifier = Notifier(self)
@@ -119,7 +159,11 @@ class AppState:
         self.started_at = time.time()
         # the admin UI listener's connection guard (runtime.py; None in tests without one)
         self.admin_guard: Any = None
+        # first-run setup (see prepare_first_run)
+        self.setup_code = ""
+        self.setup_locked = False
         self._maint_task: asyncio.Task | None = None
+        self._requests_task: asyncio.Task | None = None
         # per-mapping logs can contain raw serial traffic; keep the logs dir private
         # on both platforms (POSIX 0700 / Windows owner-only ACL).
         for d in (self.logs_dir, self.traces_dir):
@@ -161,25 +205,9 @@ class AppState:
         return os.path.join(self.data_dir, "audit.log")
 
     def audit(self, actor_ip: str, action: str, detail: str = "", user: str = "") -> None:
-        """Append a config-change audit record, separate from all.log. One line per
-        record, tab-separated: time, client IP, action, detail, user (the user column
-        was added in v2.8 — older lines have four fields). Control characters in any
-        field become spaces, so a crafted mapping name can't forge an extra record."""
-        fields = [time.strftime("%Y-%m-%d %H:%M:%S"), actor_ip, action, detail[:500], user]
-        line = "\t".join(_CONTROL.sub(" ", str(f)) for f in fields)
-        apath = self.audit_path
-        try:
-            # size-based rotation (keep one backup) so audit.log can't grow forever
-            if os.path.getsize(apath) > AUDIT_LOG_MAX_BYTES:
-                with _suppress(OSError):
-                    os.replace(apath, apath + ".1")
-        except OSError:
-            pass  # file doesn't exist yet
-        try:
-            with open(apath, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except OSError:
-            pass
+        """Append a config-change audit record (write_audit_record), separate from
+        all.log, and note it in all.log."""
+        write_audit_record(self.audit_path, actor_ip, action, detail, user)
         who = f" by {user}" if user else ""
         self._logger.info(_CONTROL.sub(" ", f"AUDIT {actor_ip} {action} {detail}{who}").rstrip())
 
@@ -336,9 +364,132 @@ class AppState:
                     self._attach_mapping_handler(lg, mid)
 
     async def _log_maintenance_loop(self) -> None:
+        await self.load_sign_ins()
         while True:
             await self.run_log_maintenance()
+            try:
+                await self.expire_external_accounts()
+            except Exception as e:  # never let maintenance crash the loop
+                self.log(f"removing unused LDAP/OIDC accounts failed: {e}")
             await asyncio.sleep(LOG_MAINTENANCE_INTERVAL)
+
+    # ---------------- sign-ins: last sign-in, unused LDAP/OIDC accounts ----------------
+    async def load_sign_ins(self) -> None:
+        """Read the sign-ins on record in the audit log (app/signins.py)."""
+        try:
+            await asyncio.to_thread(lambda: self.signins.load(self.read_audit()))
+        except Exception as e:  # still usable: sign-ins from now on count
+            self.signins.loaded = True
+            self.log(f"could not read the sign-ins in the audit log: {e}")
+
+    async def expire_external_accounts(self) -> list[User]:
+        """Remove the LDAP/OIDC accounts not signed in for external_users_expire_days
+        (SignIns.expired: never local accounts, admins or the last accounts). Each is
+        logged and audited; returns them."""
+        days = self.config.external_users_expire_days
+        async with self.config_lock:
+            gone = self.signins.expired(self.config.users, days)
+            if not gone:
+                return []
+            before = self.config.users
+            self.config.users = [u for u in before if not any(u is g for g in gone)]
+            try:  # removing accounts can't make a valid config invalid: like the CLI's
+                await asyncio.to_thread(self.store.save, self.config, validate=False)
+            except OSError as e:
+                self.config.users = before
+                self.log(f"could not save the removal of unused LDAP/OIDC accounts: {e}")
+                return []
+        for u in gone:
+            last = self.signins.last(u)
+            seen = time.strftime("%Y-%m-%d", time.localtime(last)) if last else "none on record"
+            self.log(f"{u.source.upper()} account {u.username!r} ({u.role}) removed: no sign-in "
+                     f"for {days} days (last: {seen}). It is made again at their next sign-in "
+                     f"while {u.source.upper()} still gives them a role.")
+            self.audit("local", "user_expired",
+                       f"{u.username}: {u.source}, no sign-in for {days} days (last: {seen})",
+                       user="(maintenance)")
+        return gone
+
+    # ---------------- first-run setup ----------------
+    @property
+    def setup_code_path(self) -> str:
+        return os.path.join(self.data_dir, SETUP_CODE_FILE)
+
+    def prepare_first_run(self, environ=None) -> None:
+        """While there is no account, the setup page creates the first admin. Opened by
+        this machine's IP address or name it just works; through any other name (DNS
+        rebinding, but also a reverse proxy or Docker's host name) it asks for a one-time
+        code, which is written to setup-code.txt in the data directory — never to a log.
+        With SER2NET_ADMIN_PASSWORD_FILE / _USER set the admin comes from there, and the
+        page stays closed if that failed."""
+        environ = os.environ if environ is None else environ
+        if self.config.password_set:
+            self.first_run_done()
+            return
+        if accounts.provision_requested(environ):
+            self.setup_locked = True
+            self.log("first-run setup in the browser is closed: SER2NET_ADMIN_PASSWORD_FILE / "
+                     "SER2NET_ADMIN_USER is set but created no admin (see above). Fix it and "
+                     "restart, or run: ser2net --set-password <name>")
+            return
+        self.setup_code = "-".join(secrets.token_hex(2) for _ in range(5))
+        try:
+            fd = os.open(self.setup_code_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(self.setup_code + "\n")
+            where = f"asks for the one-time code in {self.setup_code_path}"
+        except OSError as e:
+            where = f"can't be used (could not write {self.setup_code_path}: {e})"
+        self.log("no admin account yet: open the web UI by this machine's IP address or "
+                 f"localhost to create one (through another host name the setup page {where}), "
+                 "or run: ser2net --set-password <name>")
+
+    def setup_code_ok(self, value: str) -> bool:
+        def norm(s: str) -> str:
+            return "".join(c for c in s.lower() if c.isalnum())
+        return bool(self.setup_code) and hmac.compare_digest(norm(value), norm(self.setup_code))
+
+    def first_run_done(self) -> None:
+        """The first admin exists: the setup code is no longer needed."""
+        self.setup_code = ""
+        with _suppress(OSError):
+            os.remove(self.setup_code_path)
+
+    # ---------------- `ser2net --set-password` / `--sign-out-all` while running ----------------
+    async def _account_requests_loop(self) -> None:
+        while True:
+            await asyncio.sleep(accounts.POLL_S)
+            try:
+                await self.handle_account_requests()
+            except Exception as e:  # never let a bad request end the loop
+                self.log(f"command-line request failed: {e}")
+
+    async def handle_account_requests(self) -> None:
+        """Apply what the command line left in <data>/admin-requests/ (app/accounts.py)."""
+        for request_id, request in await asyncio.to_thread(accounts.take_requests, self.data_dir):
+            ok, message = await self._apply_account_request(request)
+            await asyncio.to_thread(accounts.answer, self.data_dir, request_id, ok, message)
+
+    async def _apply_account_request(self, request) -> tuple[bool, str]:
+        if request is None:
+            return False, "the request was unreadable or too old; run the command again"
+        async with self.config_lock:
+            try:
+                change = accounts.apply(self.config, request)
+            except accounts.AccountError as e:
+                return False, str(e)
+            try:  # like the command itself: an unrelated bad setting must not block this
+                await asyncio.to_thread(self.store.save, self.config, validate=False)
+            except OSError as e:
+                change.undo()
+                return False, f"could not save config.json: {e}"
+        if change.action == "sessions_revoke_all":
+            self.revoked_sessions.clear()  # signed with the old key: dead anyway
+        if change.first_admin:
+            self.first_run_done()
+        self.log(f"command line: {change.message}")
+        self.audit("local", change.action, change.detail, user=accounts.ACTOR)
+        return True, change.message
 
     def save(self) -> None:
         """Persist config atomically (validates first; raises ConfigError on bad config)."""
@@ -358,13 +509,16 @@ class AppState:
         await self.notifier.start()
         # run an immediate pass, then hourly, to enforce log retention
         self._maint_task = asyncio.create_task(self._log_maintenance_loop(), name="log-maintenance")
+        self._requests_task = asyncio.create_task(self._account_requests_loop(),
+                                                  name="account-requests")
 
     async def stop_engine(self) -> None:
-        if self._maint_task is not None:
-            self._maint_task.cancel()
-            with _suppress(asyncio.CancelledError):
-                await self._maint_task
-            self._maint_task = None
+        for task in (self._maint_task, self._requests_task):
+            if task is not None:
+                task.cancel()
+                with _suppress(asyncio.CancelledError):
+                    await task
+        self._maint_task = self._requests_task = None
         await self.notifier.stop()
         await self.cluster.stop()
         await self.supervisor.stop_all()
