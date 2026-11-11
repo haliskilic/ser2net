@@ -72,8 +72,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   within the response timeout, which starts once the request has gone out on the line. A
   reply ends when it is as long as its header says (after 50 ms of silence for function
   codes whose header doesn't size the reply: FC8, FC43, user-defined ones), so the latency
-  of USB adapters and the Windows clock don't cut replies; bytes that are not the reply are
-  dropped and show up in the trace as `ser>drop`, in the console and in the hex view.
+  of USB adapters and the Windows clock don't cut replies. A reply has to answer its
+  request (the same function or its exception, the byte count of the quantity read, a
+  write's echo), and after a request that got no reply in time the gateway waits until the
+  line has been quiet for 250 ms (at most the response timeout) before it sends the next
+  one, so a late reply is dropped, and the late slave logged, instead of being handed to
+  the next master or poll point. Bytes that are not the reply are dropped and show up in
+  the trace as `ser>drop`, in the console and in the hex view.
   If the serial port goes away (a USB adapter unplugged), masters get `0x0A` (gateway path
   unavailable) at once meanwhile and the port is reopened like any mapping's (state
   `reconnecting`, device lost/back notifications). Masters are admitted like other

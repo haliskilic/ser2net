@@ -85,10 +85,48 @@ def rtu_reply_length(head: bytes | bytearray) -> Optional[int]:
     return None
 
 
+# write requests whose reply is their echo: the whole request, or its first 5 bytes
+# (function, start address, quantity)
+_ECHO_REPLY = frozenset({5, 6, 22})
+_ECHO_HEAD_REPLY = frozenset({15, 16})
+
+
+def reply_mismatch(request: bytes, reply: bytes) -> str:
+    """Why the PDU ``reply`` is not the answer to the PDU ``request``, or "" when it can be.
+    It has to be an exception for the request's function, or carry that function and: for
+    a read of bits or registers (FC1-4, FC23) the byte count the quantity read gives; for
+    a write, its echo (FC5, FC6, FC22: the whole request; FC15, FC16: its first 5 bytes).
+    Other functions are matched by function code only.
+
+    A read's reply carries no address, so the reply to an earlier read of the same unit,
+    function and quantity passes: only waiting for the line to go quiet after a request
+    that got no reply in time keeps such a late reply apart (the gateway does)."""
+    function = request[0] if request else 0
+    if not reply:
+        return "an empty reply"
+    if reply[0] == (function | 0x80) & 0xFF:
+        return ""
+    if reply[0] != function:
+        return f"an FC{reply[0]} reply to FC{function}"
+    if function in (1, 2, 3, 4, 23) and len(request) >= 5:
+        quantity = int.from_bytes(request[3:5], "big")
+        want = (quantity + 7) // 8 if function in (1, 2) else 2 * quantity
+        got = reply[1] if len(reply) > 1 else 0
+        if got != want:
+            unit = "bit" if function in (1, 2) else "register"
+            return f"{got} data bytes for {quantity} {unit}(s) of FC{function}"
+    elif function in _ECHO_REPLY or function in _ECHO_HEAD_REPLY:
+        echo = bytes(request) if function in _ECHO_REPLY else bytes(request[:5])
+        if bytes(reply) != echo:
+            return f"an FC{function} reply that is not the request's echo ({bytes(reply).hex(' ')})"
+    return ""
+
+
 class ReplyScan(NamedTuple):
     span: Optional[tuple[int, int]]  # buf[start:end] is the reply (None: not found)
     pending: bool  # a frame from the unit has begun and may still be completed
     started: bool  # a frame from the unit began in buf at all
+    rejected: str = ""  # why the last whole frame from the unit was not the reply
 
 
 def find_reply(buf: bytes | bytearray, unit: int, request: bytes, *,
@@ -98,13 +136,15 @@ def find_reply(buf: bytes | bytearray, unit: int, request: bytes, *,
     (the late tail of an earlier reply, noise), which are skipped.
 
     A reply starts with ``unit`` and the request's function code (or its exception code),
-    is as long as its header says (rtu_reply_length) and passes its CRC. ``quiet``: the
-    line has gone quiet since buf's last byte, so a frame whose length its header does not
-    give, or that fails its CRC at that length (a slave that miscounts), may end with buf:
-    it is then tried as a whole too."""
+    is as long as its header says (rtu_reply_length), passes its CRC and answers the
+    request (reply_mismatch); a whole frame that answers something else is skipped too.
+    ``quiet``: the line has gone quiet since buf's last byte, so a frame whose length its
+    header does not give, or that fails its CRC at that length (a slave that miscounts),
+    may end with buf: it is then tried as a whole too."""
     function = request[0] if request else 0
     starts = (function, (function | 0x80) & 0xFF)
     pending = started = False
+    rejected = ""
     for start in range(len(buf) - 1):
         if buf[start] != unit or buf[start + 1] not in starts:
             continue
@@ -122,11 +162,14 @@ def find_reply(buf: bytes | bytearray, unit: int, request: bytes, *,
             ends.append(len(buf))
         for end in ends:
             try:
-                rtu_unwrap(bytes(buf[start:end]))
+                _unit, pdu = rtu_unwrap(bytes(buf[start:end]))
             except ValueError:
                 continue
-            return ReplyScan((start, end), pending, started)
-    return ReplyScan(None, pending, started)
+            why = reply_mismatch(request, pdu)
+            if not why:
+                return ReplyScan((start, end), pending, started, rejected)
+            rejected = why
+    return ReplyScan(None, pending, started, rejected)
 
 
 def build_tcp_adu(txn: int, unit: int, pdu: bytes) -> bytes:

@@ -76,8 +76,12 @@ düzenlemeye gerek yok.
   hatta tamamen gönderildikten sonra başlar. Bir yanıt, başlığının söylediği uzunluğa
   ulaşınca biter (başlığı uzunluk vermeyen FC8, FC43 ya da kullanıcı tanımlı fonksiyon
   kodlarında hat 50 ms sessiz kalınca); USB adaptörlerin gecikmesi ya da Windows'un saati
-  yanıtları bölmez. Yanıt olmayan baytlar atılır; trace'te `ser>drop` olarak, konsolda ve
-  hex görünümünde görünür. Seri port kaybolursa (USB
+  yanıtları bölmez. Yanıt isteğe uymalıdır (aynı fonksiyon ya da onun exception'ı, okunan
+  adede uyan bayt sayısı, yazmanın yankısı); zamanında yanıt alamayan bir istekten sonra
+  gateway, sıradaki isteği göndermeden önce hattın 250 ms'ye kadar (en çok yanıt süresi
+  kadar) sessiz kalmasını bekler; geç gelen bir yanıt böylece sıradaki master'a ya da poll
+  noktasına verilmez, atılır ve geç kalan slave loglanır. Yanıt olmayan baytlar atılır;
+  trace'te `ser>drop` olarak, konsolda ve hex görünümünde görünür. Seri port kaybolursa (USB
   adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır ve
   port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
   kayboldu/geri geldi bildirimleri).

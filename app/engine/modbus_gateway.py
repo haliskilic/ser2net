@@ -48,6 +48,10 @@ READ_CHUNK = 512
 # 3.5 characters, if that is longer): well above the latency of USB serial adapters (16 ms
 # by default on FTDI chips) and the 15.6 ms clock of the event loop on Windows.
 SILENCE_S = 0.05
+# After a request that got no reply in time (or bytes that were not its reply), the line
+# has to be quiet this long (at most the response timeout) before the next request goes
+# out: a reply that comes late is dropped then, not taken for the next request's.
+GUARD_S = 0.25
 # Log lines about one slave's replies (cut short, not matching): at most one per this many
 # seconds per kind and unit; the ones in between are counted into the next.
 NOTE_EVERY_S = 60.0
@@ -110,6 +114,10 @@ class ModbusGatewayRunner:
         self._gap = max(SILENCE_S, 3.5 * self._char_s)
         self._resp_timeout = mapping.options.modbus_response_timeout_s or 1.0
         self._notes: dict[tuple[str, int], tuple[float, int]] = {}  # see _note
+        # the line may still carry a reply to an earlier request (see _settle): the last
+        # request that got none in time, as (unit, PDU)
+        self._dirty = False
+        self._unanswered: Optional[tuple[int, bytes]] = None
 
     def _log(self, msg: str) -> None:
         if self.log:
@@ -364,21 +372,34 @@ class ModbusGatewayRunner:
     # ---------------- reading the RTU line ----------------
     async def _settle(self, reader) -> None:
         """Before a request goes out: drop what the line holds, bytes no request is waiting
-        for. A line that never goes quiet holds the request back by at most the time a
-        whole frame takes."""
+        for. After a request that got no reply in time (or bytes that were not its reply),
+        first wait until the line has been quiet for the guard time, so that a reply that
+        comes late is dropped here and not taken for this request's (a read's reply carries
+        no address), and say which slave answered late. A line that never goes quiet holds
+        the request back by at most a whole frame's time more."""
         loop = asyncio.get_running_loop()
-        end = loop.time() + 0.001 + modbus.MAX_ADU * self._char_s
+        dirty, self._dirty = self._dirty, False
+        late, self._unanswered = self._unanswered, None
+        quiet = max(min(GUARD_S, self._resp_timeout), 3.5 * self._char_s) if dirty else 0.001
+        end = loop.time() + quiet + modbus.MAX_ADU * self._char_s
         got = bytearray()
         while (left := end - loop.time()) > 0:
             try:
-                chunk = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=min(0.001, left))
+                chunk = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=min(quiet, left))
             except asyncio.TimeoutError:
                 break
             if not chunk:
                 raise ConnectionError("serial EOF")
             got += chunk
-        if got:
-            self._dropped(got)
+        if not got:
+            return
+        self._dropped(got)
+        if late is not None and modbus.find_reply(got, *late, quiet=True).span is not None:
+            unit, request = late
+            self._note("late", unit, f"unit {unit} answered FC{request[0]} after the response "
+                       f"timeout ({self._resp_timeout:g} s); the late reply was dropped. Raise "
+                       "the mapping's response timeout if the slave needs longer")
+        else:
             self._note("stray", -1, f"dropped {len(got)} byte(s) on the serial line that no "
                        "request was waiting for")
 
@@ -389,7 +410,9 @@ class ModbusGatewayRunner:
         The reply has to begin within the response timeout and may then take as long as a
         whole frame needs. It is complete as soon as it is as long as its header says (or
         when the line goes quiet, for a reply whose header does not say), not after a fixed
-        pause: see modbus.find_reply. Bytes around it are dropped."""
+        pause, and has to answer the request (function, byte count, echo): see
+        modbus.find_reply. Bytes around it, and frames that answer something else, are
+        dropped; the next request then waits for a quiet line first (_settle)."""
         loop = asyncio.get_running_loop()
         deadline = sent + self._resp_timeout
         finish = deadline + modbus.MAX_ADU * self._char_s + self._gap
@@ -403,6 +426,8 @@ class ModbusGatewayRunner:
                 self._dropped(buf[:start])
                 self._delivered(bytes(buf[start:end]))
                 self._dropped(buf[end:])
+                if dropped or start or end < len(buf):
+                    self._dirty = True  # more of what came first may be on its way
                 return bytes(buf[start + 1:end - 2])
             left = (finish if scan.pending else deadline) - loop.time()
             if left <= 0:
@@ -422,10 +447,12 @@ class ModbusGatewayRunner:
                 self._dropped(buf[:-modbus.MAX_ADU])
                 dropped += len(buf) - modbus.MAX_ADU
                 del buf[:-modbus.MAX_ADU]
+        self._dirty = True
+        self._unanswered = (unit, request)
         if buf or dropped:
             self._dropped(buf)
-            what = ("a frame from it that is cut short or fails its CRC" if scan.started
-                    else "no frame from it")
+            what = scan.rejected or ("a frame from it that is cut short or fails its CRC"
+                                     if scan.started else "none of them answers it")
             self._note("bad", unit, f"unit {unit}: no usable reply to FC{request[0]} within "
                        f"{self._resp_timeout:g} s; dropped {dropped + len(buf)} byte(s) "
                        f"({what})")
