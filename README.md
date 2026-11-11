@@ -293,7 +293,9 @@ volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapm
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
   düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
-  `ser2net_fd_limit`, POSIX).
+  `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren TLS el sıkışmaları ve
+  kabulden hemen sonra reddedilen bağlantılar (`ser2net_connections_refused_total`, nedene
+  göre).
 
 ---
 
@@ -334,9 +336,15 @@ port olarak kabul edilmez.
 **Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
 anda en fazla 32 (toplamda 128) el sıkışma yürür. Kapasite, `kick_old_user` ve "Busy" satırı
-yine el sıkışmadan sonra gelir. Süreç açık dosya sınırına yaklaşınca eşlemelere gelen yeni
-bağlantılar log'a bir satır yazılarak reddedilir; böylece seri portlar, log'lar ve
-yapılandırma ihtiyaç duydukları dosyaları açabilir.
+yine el sıkışmadan sonra gelir. Yönetim arayüzü, bağlandıktan ya da son yanıttan sonra
+`admin_ui.request_timeout_s` (10 sn) içinde tam bir istek göndermeyen bağlantıyı kapatır
+(konsol WebSocket'i süreye tabi değildir) ve aynı anda en fazla `admin_ui.max_connections`
+(256), bir adresten en fazla `admin_ui.max_connections_per_ip` (64) bağlantı kabul eder;
+TLS el sıkışması bir eşleminkiyle aynı sınırlara tabidir. Bu anahtarlar yalnızca
+`config.json`'dadır (0 = sınır yok); bir reverse proxy arkasında tüm kullanıcılar proxy'nin
+adresinden gelir, gerekirse adres başına sınırı yükseltin. Süreç açık dosya sınırına
+yaklaşınca yeni bağlantılar (her eşlemeye ve arayüze) log'a bir satır yazılarak reddedilir;
+böylece seri portlar, log'lar ve yapılandırma ihtiyaç duydukları dosyaları açabilir.
 
 **UDP eşlemeleri:** `allowed_client_ips` her datagram için denetlenir, ama baktığı şey
 datagram'ın kaynak adresidir ve ağdaki bir gönderici bu adresi taklit edebilir; yani UDP'de

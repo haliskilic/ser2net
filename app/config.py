@@ -734,10 +734,40 @@ class AdminUI:
     anonymous_role: str = "viewer"
     # web UI language when a visitor hasn't picked one: auto (the browser's), en, tr
     language: str = "auto"
+    # Connections to the UI's listener: at most this many open at once in all, and from
+    # one source address (0 = no limit; config.json only). A connection must send a
+    # complete request head within request_timeout_s of connecting, and of the end of the
+    # previous response (0 = no limit); a WebSocket (the console) is not timed.
+    max_connections: int = 256
+    max_connections_per_ip: int = 64
+    request_timeout_s: int = 10
 
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
+
+
+# admin_ui connection limits: (default, lowest value other than 0, highest)
+_ADMIN_LIMITS = {"max_connections": (256, 16, 65535),
+                 "max_connections_per_ip": (64, 8, 65535),
+                 "request_timeout_s": (10, 1, 3600)}
+
+
+def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
+    """Put an admin_ui connection limit that is not a usable whole number back to its
+    default (0, no limit, stays 0; a value below the lowest goes up to it), with a load
+    note: a hand-edited config.json must not keep the UI from starting, nor make it unusable."""
+    for name, (default, low, high) in _ADMIN_LIMITS.items():
+        value = getattr(admin, name)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= high:
+            fixed = default
+        elif 0 < value < low:
+            fixed = low
+        else:
+            continue
+        setattr(admin, name, fixed)
+        notes.append(f"admin_ui.{name} {value!r} is not usable (0 = no limit, else "
+                     f"{low}-{high}); using {fixed}")
 
 
 UI_LANGUAGES = ("auto", "en", "tr")
@@ -1033,6 +1063,7 @@ class AppConfig:
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
+        _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
             old_id = (raw or {}).get("id")
             if old_id and old_id != m.id:

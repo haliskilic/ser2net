@@ -26,6 +26,7 @@ from . import console, standalone
 from .config import ConfigStore
 from .engine import netguard
 from .state import AppState
+from .web import httpguard
 from .web.server import build_app
 
 
@@ -132,6 +133,9 @@ async def _serve(store: ConfigStore, config) -> int:
     await state.start_engine()
     app = build_app(state)
 
+    # the admin listener's connections: admitted (caps, budget) before TLS, which the
+    # protocol does itself, and each request head on a deadline (web/httpguard.py)
+    guard = state.admin_guard = httpguard.AdminGuard(admin, state.log)
     uconfig = uvicorn.Config(
         app,
         host=admin.bind_ip,
@@ -139,10 +143,16 @@ async def _serve(store: ConfigStore, config) -> int:
         loop="asyncio",
         log_level="warning",
         access_log=False,
-        ssl_certfile=admin.tls_cert or None,
-        ssl_keyfile=admin.tls_key or None,
+        http=httpguard.protocol_class(guard),
     )
-    server = uvicorn.Server(uconfig)
+    if admin.tls_enabled:
+        try:
+            guard.ssl = httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig)
+        except (OSError, ValueError) as e:  # ssl.SSLError is an OSError
+            state.log(f"admin UI: the TLS certificate could not be loaded: {e}")
+            await state.stop_engine()
+            raise
+    server = guard.server = uvicorn.Server(uconfig)
     # uvicorn (>= 0.29) also traps SIGINT/SIGTERM while it serves, from the main
     # thread only; both its handler and ours below just ask the server to exit.
 
@@ -172,6 +182,7 @@ async def _serve(store: ConfigStore, config) -> int:
             await serve_task
     finally:
         _shutdown_hooks.remove(_from_other_thread)
+        guard.close()
         state.log("shutting down — stopping all mappings")
         await state.stop_engine()
     return 0

@@ -29,6 +29,16 @@ def routes(ctx: Ctx) -> list:
             lines.append(f"ser2net_open_fds {fds}")
         if fd_limit is not None:
             lines.append(f"ser2net_fd_limit {fd_limit}")
+        guard = getattr(state, "admin_guard", None)
+        if guard is not None:
+            lines.append(f"ser2net_admin_connections {len(guard.connections)}")
+        budget = netguard.BUDGET
+        lines.append(f"ser2net_tls_handshakes_in_progress {len(budget.handshakes)}")
+        # connections refused right after accept: near the open-file limit, too many TLS
+        # handshakes, the admin UI's own limits (and, Windows, the event loop's socket limit)
+        for why in netguard.REFUSAL_REASONS:
+            lines.append(f'ser2net_connections_refused_total{{reason="{why}"}} '
+                         f"{budget.refused.get(why, 0)}")
         for m in state.config.mappings:
             st = statuses.get(m.id) or {}
             lbl = f'mapping="{_metric_label(m.name)}",id="{_metric_label(m.id)}"'

@@ -285,7 +285,9 @@ a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCK
   token**, mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
-  process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX).
+  process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
+  the admin UI's connections, TLS handshakes in progress and the connections refused right
+  after accept (`ser2net_connections_refused_total`, by reason).
 
 ---
 
@@ -326,9 +328,15 @@ device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, 
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
 address (128 in all). Capacity, `kick_old_user` and the "Busy" line still come after the
-handshake. When the process gets close to its open-file limit, new connections to a
-mapping are refused with a log line, so serial ports, logs and the configuration
-keep the files they need.
+handshake. The admin UI closes a connection that sends no complete request within
+`admin_ui.request_timeout_s` (10 s) of connecting or of its last response (a console
+WebSocket is not timed), and takes at most `admin_ui.max_connections` (256) connections
+at once, `admin_ui.max_connections_per_ip` (64) from one address; its TLS handshake has the
+same limits as a mapping's. These keys are in `config.json` only (0 = no limit); behind a
+reverse proxy every user has the proxy's address, so raise the per-address limit if
+needed. When the process gets close to its open-file limit, new connections (to any
+mapping or the UI) are refused with a log line, so serial ports, logs and the
+configuration keep the files they need.
 
 **UDP mappings:** `allowed_client_ips` is checked for every datagram, but what it checks is
 the datagram's source address, which a sender on the network can forge, so for UDP it is no
