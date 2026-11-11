@@ -262,6 +262,10 @@ def _shown(value: Any, limit: int = 60) -> str:
 
 _TRUE_WORDS = ("true", "1", "on", "yes")
 _FALSE_WORDS = ("false", "0", "off", "no", "")
+# Field metadata of a switch that protects something (login, TLS, certificate checks,
+# read-only): text turns it off only when it is empty, as before 2.9.0 — so an upgrade
+# never weakens a hand-edited config whose "false" in quotes kept it on (_read_fields)
+_PROTECTIVE = {"protective": True}
 
 
 def _text_number(text: str) -> Any:
@@ -382,6 +386,16 @@ def _read_fields(cls, d: dict[str, Any], notes: list[FieldNote], path: str = "",
             out[f.name] = _field_default(f)
             continue
         ok, read = _coerce(value, hint)
+        if ok and read is False and isinstance(value, str) and value and f.metadata.get("protective"):
+            notes.append(FieldNote(
+                path + f.name, "replaced", value, True,
+                why=f"{path}{f.name} {_shown(value)} is text, so it is read as true, as before: "
+                    "this protective switch is turned off only by false (without quotes)",
+                warning=_("{0} {1} is text, so it is read as true, as before: this protective "
+                          "switch is turned off only by false (without quotes).").format(
+                    path + f.name, _shown(value))))
+            out[f.name] = True
+            continue
         if not ok:
             if fallback and f.name in fallback:
                 read = fallback[f.name]
@@ -578,7 +592,7 @@ class NetworkSettings:
     # these IPs/CIDRs is admitted by kicking an existing client (oldest non-priority
     # first), regardless of kick_old_user.
     priority_client_ips: list[str] = field(default_factory=list)
-    read_only: bool = False
+    read_only: bool = field(default=False, metadata=_PROTECTIVE)
     # Per-client outbound (serial->network) buffer, in chunks. A client slower than
     # the serial source is dropped once this fills. Worst-case memory per client is
     # ~client_queue_max * 64KB; raise for bursty high-throughput links.
@@ -597,7 +611,7 @@ class NetworkSettings:
     # Windows, ~2 min on Linux).
     connect_timeout_s: float = 10.0
     # Per-mapping TLS for the data bridge (server/client TCP). Both files required.
-    tls: bool = False
+    tls: bool = field(default=False, metadata=_PROTECTIVE)
     tls_cert: str = ""
     tls_key: str = ""
 
@@ -778,7 +792,7 @@ class MqttSettings:
     port: int = 1883
     base_topic: str = ""        # e.g. "ser2net/plc1"; serial lines publish to <base_topic>
     qos: int = 0                # 0 | 1 | 2
-    tls: bool = False
+    tls: bool = field(default=False, metadata=_PROTECTIVE)
     username: str = ""
     password: str = ""
     client_id: str = ""         # blank => auto
@@ -1094,7 +1108,7 @@ class AdminUI:
     # Web-UI login can be switched off from Settings (trusted networks only): visitors
     # without a session then act with anonymous_role. Signing in still works, and the
     # REST API keeps its bearer token.
-    require_login: bool = True
+    require_login: bool = field(default=True, metadata=_PROTECTIVE)
     anonymous_role: str = "viewer"
     # web UI language when a visitor hasn't picked one: auto (the browser's), en, tr
     language: str = "auto"
@@ -1163,8 +1177,9 @@ class LdapSettings:
     (insecure)."""
     enabled: bool = False
     server_uri: str = ""             # ldap://host:389 or ldaps://host:636
-    start_tls: bool = False
-    tls_verify: bool = True          # check the server's certificate (LDAPS / StartTLS)
+    start_tls: bool = field(default=False, metadata=_PROTECTIVE)
+    # check the server's certificate (LDAPS / StartTLS)
+    tls_verify: bool = field(default=True, metadata=_PROTECTIVE)
     ca_file: str = ""                # CA certificate(s) to trust instead of the system's
     user_dn_template: str = ""       # direct-bind template (mutually exclusive with search)
     bind_dn: str = ""                # service account for search+bind

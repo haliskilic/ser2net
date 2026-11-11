@@ -4,7 +4,8 @@ Mappings come in as JSON from config.json, the REST API, imports and the mapping
 Modbus-points field. Checked here:
   * a value sent as text is read as the setting's type when that needs no guess
     ("false" -> false, "1" -> 1, "0.1" -> 0.1), so "false" no longer starts a mapping or
-    makes a point writable, and a text scale no longer breaks the published values;
+    makes a point writable, and a text scale no longer breaks the published values — but
+    a protective switch (login, TLS, read-only) keeps reading text as true, as before;
   * a value that can't be read so is refused by an edit (validate_input, with the
     setting's path) and, in config.json, takes the default with a load note — never a
     refusal of the whole file (validate() gains no rule);
@@ -57,11 +58,11 @@ def test_text_values_read_as_meant():
         "name": "m", "enabled": "false",
         "serial": {"port": "COM1", "baudrate": "19200", "stopbits": "1.5",
                    "advanced": {"rs485_enabled": "on"}},
-        "network": {"port": "4002", "read_only": "0", "allowed_client_ips": "10.0.0.0/8"},
+        "network": {"port": "4002", "kick_old_user": "0", "allowed_client_ips": "10.0.0.0/8"},
         "mqtt": {"enabled": "FALSE", "qos": "1"}})
     assert m.enabled is False, "'false' must not start the mapping"
     assert (m.serial.baudrate, m.serial.stopbits, m.serial.advanced.rs485_enabled) == (19200, 1.5, True)
-    assert (m.network.port, m.network.read_only, m.mqtt.enabled, m.mqtt.qos) == (4002, False, False, 1)
+    assert (m.network.port, m.network.kick_old_user, m.mqtt.enabled, m.mqtt.qos) == (4002, False, False, 1)
     assert m.network.allowed_client_ips == ["10.0.0.0/8"], "a bare text is a one-entry list"
     m.validate()
     m.validate_input()  # an edit takes them as meant, without a word
@@ -82,6 +83,31 @@ def test_text_values_read_as_meant():
     assert modbus.decode_value(b"\x00\x05", p1.dtype, p1.scale) == 0.5, "scale is a number now"
     print("text values: 'false' / '0' / '1' / '19200' / '0.1' read as meant; writable "
           "'false' is read-only, scale '0.1' multiplies  OK")
+
+
+def test_protective_switches_need_false():
+    """A switch that protects something (login, TLS, certificate checks, read-only) took any
+    text as true before: "false" in quotes kept it on. An upgrade must not turn it off, so
+    for these only a real false (or "") does; the text reads as true, with a warning."""
+    m = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM1"},
+                                 "network": {"read_only": "false", "tls": "0"},
+                                 "mqtt": {"tls": "off"}})
+    assert (m.network.read_only, m.network.tls, m.mqtt.tls) == (True, True, True)
+    m.validate_input()  # warned about, not refused
+    assert any('network.read_only "false" is text, so it is read as true' in w
+               for w in m.input_warnings()), m.input_warnings()
+    off = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM1"},
+                                   "network": {"read_only": False, "tls": ""}})
+    assert (off.network.read_only, off.network.tls) == (False, False)
+    cfg = AppConfig.from_dict({"admin_ui": {"require_login": "false"},
+                               "ldap": {"tls_verify": "no", "start_tls": "false"}})
+    assert cfg.admin_ui.require_login is True
+    assert (cfg.ldap.tls_verify, cfg.ldap.start_tls) == (True, True)
+    assert ('config.json: admin_ui.require_login "false" is text, so it is read as true, as '
+            "before: this protective switch is turned off only by false (without quotes)"
+            in cfg.load_notes), cfg.load_notes
+    print("protective switches (login, TLS, certificate check, read-only): text keeps "
+          "them on, as before; only false turns them off  OK")
 
 
 def test_nulls():
@@ -309,6 +335,7 @@ def test_api_server_error_is_json():
 
 def main():
     test_text_values_read_as_meant()
+    test_protective_switches_need_false()
     test_nulls()
     test_edits_refuse_what_cannot_be_read()
     test_poll_interval()
