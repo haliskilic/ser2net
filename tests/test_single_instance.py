@@ -5,6 +5,9 @@ first's and lose its edits. runtime.main() takes an exclusive lock on <data>/ser
 before writing and holds it until it stops; a second start stops with one line naming the
 holder, and --healthcheck / --install-service only test the lock, never hold it. Where the
 lock can't be taken (read-only data dir) the start goes on, with a warning in the log.
+A --set-password / --sign-out-all holds it briefly ("<pid> brief") while it changes
+config.json: a start waits for it (and refuses, saying so, if it takes too long), while
+an ordinary holder is refused at once.
 
 Run: python3 tests/test_single_instance.py
 """
@@ -13,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 from _server import ROOT, free_port, wait_port
 
@@ -31,7 +35,7 @@ _PROBE = (
     "    print('ACQUIRED' + (' WARN ' + note if note else ''))\n"
     "    l.release(sys.argv[1])\n"
     "except l.Held as e:\n"
-    "    print(f'HELD {e.pid}')\n"
+    "    print(f'HELD {e.pid}' + (' brief' if e.brief else ''))\n"
     "print('HOLDER', l.holder(sys.argv[1]))\n"
 )
 
@@ -112,6 +116,72 @@ def test_second_server_refuses_to_start():
         _rmtree(d)
 
 
+# Holds the lock in another process (brief or not) for argv[3] seconds.
+_HOLD = (
+    "import sys, time; sys.path.insert(0, sys.argv[2]); sys.path.insert(0, sys.argv[2] + '/lib')\n"
+    "from app import datalock as l\n"
+    "assert l.acquire(sys.argv[1], brief=sys.argv[4] == 'brief') is None\n"
+    "print('held', flush=True)\n"
+    "time.sleep(float(sys.argv[3]))\n"
+)
+
+
+def hold(data_dir, seconds, kind):
+    p = subprocess.Popen([sys.executable, "-c", _HOLD, data_dir, ROOT, str(seconds), kind],
+                         stdout=subprocess.PIPE, text=True)
+    assert p.stdout.readline().strip() == "held"
+    return p
+
+
+def test_a_start_waits_for_a_brief_holder():
+    """What runtime.main() does first (hold_data_dir): it waits while an account command
+    holds the lock, and refuses an ordinary holder without waiting for it."""
+    d = tempfile.mkdtemp(prefix="s2n_lock_brief_")
+    cfg = os.path.join(d, "config.json")
+    saved = datalock.BRIEF_WAIT_S
+    p = None
+    try:
+        p = hold(d, 3, "brief")
+        held = time.monotonic()
+        assert probe(d).startswith(f"HELD {p.pid} brief"), probe(d)
+        assert runtime.hold_data_dir(cfg) is None
+        assert time.monotonic() - held >= 2.5, "taken while the account command still held it"
+        assert p.wait(10) == 0
+        datalock.release(d)
+        print("a start waits while --set-password / --sign-out-all holds the lock  OK")
+
+        datalock.BRIEF_WAIT_S = 0.3
+        p = hold(d, 30, "brief")
+        try:
+            runtime.hold_data_dir(cfg)
+            raise AssertionError("taken while held")
+        except SystemExit as e:
+            assert "--set-password / --sign-out-all" in str(e.code) and \
+                "start again once it is done" in str(e.code), e.code
+        p.kill()
+        p.wait(10)
+
+        datalock.BRIEF_WAIT_S = 30.0
+        p = hold(d, 30, "server")
+        assert datalock.holder(d) == p.pid
+        t = time.monotonic()
+        try:
+            runtime.hold_data_dir(cfg)
+            raise AssertionError("taken while held")
+        except SystemExit as e:
+            assert "already running with the data directory" in str(e.code), e.code
+        assert time.monotonic() - t < 5, "an ordinary holder must be refused without the wait"
+        print("... and refuses, saying so, when it takes too long; another ser2net is refused "
+              "at once  OK")
+    finally:
+        datalock.BRIEF_WAIT_S = saved
+        if p is not None:
+            p.kill()
+            p.wait(10)
+        datalock.release(d)
+        _rmtree(d)
+
+
 def _rmtree(d):
     import shutil
     shutil.rmtree(d, ignore_errors=True)
@@ -120,6 +190,7 @@ def _rmtree(d):
 def main():
     test_lock_blocks_a_second_process()
     test_readonly_dir_falls_back_with_a_warning()
+    test_a_start_waits_for_a_brief_holder()
     test_second_server_refuses_to_start()
     print("\nPASS: single-instance data-directory lock")
 
