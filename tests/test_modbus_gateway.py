@@ -377,10 +377,11 @@ async def test_wire_time():
 
 def register_slave(delay_of=lambda address: 0.0):
     """MemoryBus answers of a slave whose holding register N holds N, each read answered
-    ``delay_of(address)`` seconds after its request came."""
+    ``delay_of(address)`` seconds after its request came (None: never)."""
     def answer(unit, pdu):
         address, count = int.from_bytes(pdu[1:3], "big"), int.from_bytes(pdu[3:5], "big")
-        return [(delay_of(address), regs_reply(unit, count, base=address))]
+        delay = delay_of(address)
+        return [] if delay is None else [(delay, regs_reply(unit, count, base=address))]
     return answer
 
 
@@ -401,6 +402,20 @@ async def test_late_reply_dropped():
     assert len(late) == 1 and "0.3 s" in late[0], logs
     print("late reply: dropped while the line settles, the next read gets its own value, "
           "the late unit is logged  OK")
+
+    # the wait is counted from the request that got no reply: a request that comes once
+    # the line has been quiet that long (the next poll cycle, a slower master) waits for
+    # nothing; a late reply that came meanwhile is still dropped
+    for late_by, quick in ((None, True), (0.35, False)):
+        runner, bus = memory_gateway(register_slave(lambda a, d=late_by: d if a == 100 else 0.0),
+                                     timeout=0.3)
+        assert await runner._transaction(1, modbus.read_pdu(3, 100, 2)) == TIMEOUT_PDU
+        await asyncio.sleep(GUARD_S + 0.1)
+        rpdu, took = await timed(runner._transaction(1, modbus.read_pdu(3, 200, 2)))
+        assert regs_of(rpdu) == [200, 201], (late_by, rpdu)
+        assert took < (GUARD_S / 2 if quick else GUARD_S + 0.15), (late_by, took)
+    print("a request once the line has been quiet for the guard time: no wait; a late reply "
+          "in the buffer is dropped  OK")
 
     # the poll path and a queueing slave (it answers every request 0.35 s after it came,
     # in order): whatever times out, no point ever gets another point's value

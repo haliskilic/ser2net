@@ -51,9 +51,9 @@ READ_CHUNK = 512
 # 3.5 characters, if that is longer): well above the latency of USB serial adapters (16 ms
 # by default on FTDI chips) and the 15.6 ms clock of the event loop on Windows.
 SILENCE_S = 0.05
-# After a request that got no reply in time (or bytes that were not its reply), the line
-# has to be quiet this long (at most the response timeout) before the next request goes
-# out: a reply that comes late is dropped then, not taken for the next request's.
+# After a request that got no reply in time (or bytes after its reply), the line has to
+# be quiet this long (at most the response timeout) before the next request goes out: a
+# reply that comes late is dropped then, not taken for the next request's.
 GUARD_S = 0.25
 # After a broadcast (unit 0), which no slave answers: the time the slaves get to carry it
 # out before the next request goes out (the Modbus serial line specification's turnaround
@@ -121,9 +121,10 @@ class ModbusGatewayRunner:
         self._gap = max(SILENCE_S, 3.5 * self._char_s)
         self._resp_timeout = modbus_response_timeout(mapping.options)
         self._notes: dict[tuple[str, int], tuple[float, int]] = {}  # see _note
-        # the line may still carry a reply to an earlier request (see _settle): the last
-        # request that got none in time, as (unit, PDU)
-        self._dirty = False
+        # the line may still carry a reply to an earlier request (see _settle): since when
+        # (loop time; None: it does not), and the last request that got none in time, as
+        # (unit, PDU)
+        self._dirty: Optional[float] = None
         self._unanswered: Optional[tuple[int, bytes]] = None
 
     def _log(self, msg: str) -> None:
@@ -398,25 +399,29 @@ class ModbusGatewayRunner:
     # ---------------- reading the RTU line ----------------
     async def _settle(self, reader) -> None:
         """Before a request goes out: drop what the line holds, bytes no request is waiting
-        for. After a request that got no reply in time (or bytes that were not its reply),
-        first wait until the line has been quiet for the guard time, so that a reply that
-        comes late is dropped here and not taken for this request's (a read's reply carries
-        no address), and say which slave answered late. A line that never goes quiet holds
-        the request back by at most a whole frame's time more."""
+        for. After a request that got no reply in time (or bytes after its reply), first
+        make sure the line has been quiet for the guard time since then, so that a reply
+        that comes late is dropped here and not taken for this request's (a read's reply
+        carries no address), and say which slave answered late. A line that never goes
+        quiet holds the request back by at most a whole frame's time more."""
         loop = asyncio.get_running_loop()
-        dirty, self._dirty = self._dirty, False
+        since, self._dirty = self._dirty, None
         late, self._unanswered = self._unanswered, None
-        quiet = max(min(GUARD_S, self._resp_timeout), 3.5 * self._char_s) if dirty else 0.001
-        end = loop.time() + quiet + modbus.MAX_ADU * self._char_s
+        guard = 0.0 if since is None else max(min(GUARD_S, self._resp_timeout),
+                                              3.5 * self._char_s)
+        last = loop.time() if since is None else since  # the last sign of life on the line
+        end = loop.time() + guard + modbus.MAX_ADU * self._char_s
         got = bytearray()
         while (left := end - loop.time()) > 0:
+            wait = max(0.001, last + guard - loop.time())  # 1 ms: take what is buffered
             try:
-                chunk = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=min(quiet, left))
+                chunk = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=min(wait, left))
             except asyncio.TimeoutError:
                 break
             if not chunk:
                 raise ConnectionError("serial EOF")
             got += chunk
+            last = loop.time()
         if not got:
             return
         self._dropped(got)
@@ -455,7 +460,7 @@ class ModbusGatewayRunner:
                 if dropped or end < len(buf):
                     # bytes after the reply: more may be on its way (bytes only in front of
                     # it, such as an adapter's echo of the request, are no reason to wait)
-                    self._dirty = True
+                    self._dirty = loop.time()
                 return bytes(buf[start + 1:end - 2])
             left = (finish if scan.pending else deadline) - loop.time()
             if left <= 0:
@@ -475,7 +480,7 @@ class ModbusGatewayRunner:
                 self._dropped(buf[:-modbus.MAX_ADU])
                 dropped += len(buf) - modbus.MAX_ADU
                 del buf[:-modbus.MAX_ADU]
-        self._dirty = True
+        self._dirty = loop.time()
         self._unanswered = (unit, request)
         if buf or dropped:
             self._dropped(buf)
@@ -503,7 +508,7 @@ class ModbusGatewayRunner:
             got += chunk
         if got:
             self._dropped(got)
-            self._dirty = True
+            self._dirty = loop.time()
             self._note("stray", modbus.BROADCAST, f"dropped {len(got)} byte(s) that came after "
                        "a broadcast to unit 0, which no slave may answer")
 
