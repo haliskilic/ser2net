@@ -337,6 +337,30 @@ def test_mqtt_command_tags():
           "read-only is RO only  OK")
 
 
+def test_mapping_form_kick_hint():
+    """A server mapping with "Kick old client" on and no allow-list says, in its form, that any
+    host reaching the port can take the connection over; with an allow-list, or without
+    kicking, it says nothing."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    for kick, allowed, shown in ((True, [], True), (True, ["10.0.0.0/24"], False),
+                                 (False, [], False)):
+        m = MappingConfig.from_dict({"id": "kh1", "name": "kh", "serial": {"port": "COM3"},
+                                     "network": {"port": 4001, "kick_old_user": kick,
+                                                 "allowed_client_ips": allowed}})
+        root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                                ports=[], ips=[], error=None))
+        hint = next((n for n in root.walk() if "data-kick-hint" in n.attrs), None)
+        assert (hint is not None) is shown, (kick, allowed)
+        if hint is not None:
+            owner = next(a for a in hint.ancestors() if "data-show-when" in a.attrs)
+            assert owner.attrs["data-show-when"] == "network_mode=server", owner.attrs
+    print("mapping form: kick_old_user without an allow-list is pointed out (server mode)  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
@@ -345,6 +369,7 @@ def main():
     test_mapping_form_modbus_fields()
     test_mapping_form_udp_fields()
     test_mapping_form_rfc2217_restore()
+    test_mapping_form_kick_hint()
     test_mqtt_command_tags()
     print("\nPASS: UI markup contract")
 
