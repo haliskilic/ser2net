@@ -297,11 +297,10 @@ def routes(ctx: Ctx) -> list:
         return any(u.username.casefold() == folded for u in state.config.users)
 
     def _login_failed(request, ip: str, username: str):
-        """Count, log, record and notify a failed sign-in; the sign-in page again. A
-        name that is no account's is recorded as auth.UNKNOWN_USER: what was typed may
-        well be a password."""
+        """Log, record and notify a failed sign-in (login_post counted it already); the
+        sign-in page again. A name that is no account's is recorded as
+        auth.UNKNOWN_USER: what was typed may well be a password."""
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
-        state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {label!r} from {ip}")
         _record_failure(ip, label, f"user {label!r} from {ip}")
         return render(request, "login.html", status_code=401,
@@ -320,6 +319,10 @@ def routes(ctx: Ctx) -> list:
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
+        # counted as failed before the password is checked, in the same step as the check
+        # above (no await between them): concurrent attempts can't all get past the limit
+        # while the first ones are still being checked. A sign-in that works resets it.
+        state.rate_limiter.record_failure(ip)
         if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
             return _login_failed(request, ip, username)
         user = state.config.get_user(username)
