@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
+from app.engine import serial_io
 from app.engine.bridge import MappingRunner
 
 
@@ -59,8 +60,34 @@ async def test_failed_start_cleans_serial_task():
     print("failed start() cleaned up the serial task / listener (no device leak)  OK")
 
 
+async def test_missing_device_reported_at_start():
+    """A serial port that fails to open while the listener comes up must not be shown as
+    running (start() used to overwrite the supervisor's state at its end)."""
+    async def missing(settings):
+        raise OSError(2, f"could not open port {settings.port}: No such file or directory")
+
+    m = MappingConfig.from_dict({
+        "name": "no-dev", "enabled": True,
+        "serial": {"port": "/dev/does-not-exist", "baudrate": 115200},
+        "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
+                    "port": _free_port()},
+    })
+    runner = MappingRunner(m, logger=lambda _msg: None)
+    real_open, serial_io.open_serial = serial_io.open_serial, missing
+    try:
+        await runner.start()
+        st = runner.status
+        assert st.state in ("reconnecting", "device-missing"), st.as_dict()
+        assert "could not open" in st.last_error, st.as_dict()
+        print(f"missing device at start: state={st.state} right after start()  OK")
+    finally:
+        serial_io.open_serial = real_open
+        await asyncio.wait_for(runner.stop(), timeout=10)
+
+
 async def main():
     await test_failed_start_cleans_serial_task()
+    await test_missing_device_reported_at_start()
     print("\nPASS: start() failure cleanup (H4)")
 
 

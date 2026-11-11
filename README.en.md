@@ -52,17 +52,45 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 ## ✨ Features
 
 - **Transports:** TCP **server** (listen), TCP **client** (connect-out), **UDP**, and
-  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges.
+  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges. UDP sends the
+  device's output to the sender of the last datagram from an allowed IP, or always to a
+  fixed **reply address** (IP + port); a **peer timeout** forgets a sender that went quiet.
+  Datagrams wait for the serial port in a queue of at most 64 KiB: what a sender faster
+  than the line sends beyond that is dropped, counted and logged.
 - **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live changes to
-  baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway).
+  baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway). An RFC 2217
+  request the port can't carry out (a malformed or reserved value, or one the serial port
+  refuses) is answered with the current setting, as RFC 2217 says, and leaves the port as
+  it was; the client stays connected. An RFC 2217 client also stays connected while a lost
+  serial port is reopened, and the reopened port gets its settings; optionally the port
+  returns to the mapping's settings when the client leaves (see
+  [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md)). A telnet or RFC 2217 subnegotiation longer
+  than 1 KiB (real ones are a few bytes) ends that client's session, and the log says why.
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
+  If the serial port goes away (a USB adapter unplugged), masters get `0x0A` (gateway path
+  unavailable) at once meanwhile and the port is reopened like any mapping's (state
+  `reconnecting`, device lost/back notifications). Masters are admitted like other
+  clients (allowed IPs, max connections, priority IPs, kick-old-user); a **read-only**
+  gateway answers every request that is not a read (writes such as FC5/6/15/16/22/23,
+  diagnostics that restart or silence a slave, unknown function codes) with exception
+  `0x01` without putting it on the bus. Banner, open/close strings and `closeon` don't
+  apply (they would break the Modbus framing).
   **Edge mode:** also polls coils and registers on an interval and publishes the decoded
   values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
-  values from MQTT (`<topic>/<point>/set` → FC5/FC15 coils, FC6/FC16 registers).
+  values from MQTT (`<topic>/<point>/set`, one value for that point only: FC5 for a coil,
+  FC6/FC16 for a holding register's own one or two registers; a JSON list or other text
+  gets `error: …` on `.../set/result`). **Read-only** refuses these writes too (`error:
+  mapping is read-only`; a refused DCMD is logged), and the dashboard marks a mapping that
+  takes MQTT writes with **CMD** (see Security: the broker decides who may send them).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
   NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
+  A command is written once, when it is published: a retained `/set` that the broker sends
+  again after a reconnect, a restart or a configuration save is ignored (and logged)
+  unless **Re-apply a retained /set after every connect** is ticked; a retained Sparkplug
+  NCMD/DCMD is always ignored, an empty message (clearing a retained one) is not a
+  command, and a command published while ser2net is not connected is not delivered later.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -82,7 +110,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   table only redraws when it changed (no flicker, selections stay).
 - **Per-mapping access control:** allowed IP/CIDR list, **high-priority** client IPs
   (a priority client evicts the oldest when the port is full), max connections,
-  kick-old-user, read-only, banner, open/close strings, `closeon`.
+  kick-old-user, read-only, banner, open/close strings, `closeon` (a Modbus gateway uses
+  no banner, open/close strings or `closeon`).
 - **Connection lifecycle (per mapping, TCP):** **dead-peer detection via TCP keepalive**
   — a client or remote server that vanishes without a FIN/RST (power cut, cable pull,
   Wi-Fi/VPN/NAT drop) no longer stays `ESTABLISHED` forever: with the defaults (on ·
@@ -93,7 +122,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Observability:** per-mapping traffic trace (hex/timestamp, rotated files, downloadable
   from the UI), Prometheus `/metrics`, an audit log page, live log viewer, an in-browser
   **serial console** (xterm.js over WebSocket — watch traffic or type to the device) and a
-  timestamped **live hex view** of both directions.
+  timestamped **live hex view** of both directions. The dashboard's **In / Out** counters
+  (also `bytes_in` / `bytes_out` in `/api/v1/status`, `ser2net_mapping_bytes_in_total` /
+  `ser2net_mapping_bytes_out_total` in `/metrics`) are the bytes read from and written to
+  the serial device, counted once however many clients share it (serial↔serial: A → B /
+  B → A). Data from the network that could not be written to the device (its port was not
+  open, or a UDP datagram found the queue full) is counted as dropped (`bytes_dropped`,
+  `ser2net_mapping_bytes_dropped_total`), flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
@@ -248,7 +283,12 @@ a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCK
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
-- **/metrics:** Prometheus-format metrics (authenticated).
+- **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
+  its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
+  process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
+  the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
+  the connections refused right after accept (`ser2net_connections_refused_total`, by
+  reason).
 
 ---
 
@@ -282,7 +322,53 @@ The UI is **password-protected by default** and binds to **127.0.0.1** by defaul
 Exposing it to the network requires an explicit IP choice at startup and warns when
 bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mapping
 `allowed_client_ips`. Raw TCP is plaintext — be careful on untrusted networks. A bare
-`0.0.0.0`/`::` in an allow/priority list means "any client".
+`0.0.0.0`/`::` in an allow/priority list means "any client". A mapping's serial port is a
+device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
+`loop://`, ...) are not accepted as a port.
+
+**Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
+the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
+address (128 in all). More connections wait up to 15 s for one of those to end (at most 64
+from one address, 256 in all), so a client's burst of reconnects is served rather than
+refused. Capacity, `kick_old_user` and the "Busy" line still come after the handshake. The admin UI closes a connection that sends no complete request head within
+`admin_ui.request_timeout_s` (10 s) of connecting or of its last response, whose request
+body then stops coming (the body gets that time plus a second per KiB that arrives), or
+whose client takes nothing of a response for that long (a console WebSocket is not
+timed), and takes at most `admin_ui.max_connections` (256) connections
+at once, `admin_ui.max_connections_per_ip` (64) from one address; its TLS handshake has the
+same limits as a mapping's. These keys are in `config.json` only (0 = no limit); behind a
+reverse proxy every user has the proxy's address, so raise the per-address limit if
+needed. When the process gets close to its open-file limit, new connections (to any
+mapping or the UI) are refused with a log line, so serial ports, logs and the
+configuration keep the files they need.
+
+**UDP mappings:** `allowed_client_ips` is checked for every datagram, but what it checks is
+the datagram's source address, which a sender on the network can forge, so for UDP it is no
+authentication. Without a reply address, any allowed sender (or one forging an allowed
+address) takes the device's output over with a single datagram, even on a read-only
+mapping; the log notes each change of sender (at most once a minute). Set a **reply
+address** to keep the output on the right host. On untrusted networks use a TCP mapping with
+TLS, or a firewall.
+
+**MQTT commands (Modbus edge mode):** writable points take values from any client the
+broker lets publish to `<topic>/<point>/set` or, for Sparkplug B, to
+`spBv1.0/<group>/NCMD/<node>` and `spBv1.0/<group>/DCMD/<node>/<device>`. ser2net does not
+authenticate these clients itself, and `allowed_client_ips` covers only the Modbus/TCP port,
+so the broker's access rules (ACLs) are the authorization: let only the clients that must
+switch outputs publish to the command topics, and connect to the broker with TLS and a
+username/password. **Read-only** refuses every write. The dashboard marks a mapping that
+takes MQTT writes with **CMD**, and with **CMD ⚠** (plus a warning in its log at start)
+when its broker connection has no TLS or no username. A Mosquitto `acl_file` for the base
+topic `plant/line3`, for example:
+```
+user ser2net
+topic readwrite plant/line3/#
+user scada
+topic write plant/line3/+/set
+topic read plant/line3/#
+user historian
+topic read plant/line3/#
+```
 
 **Open access (optional):** for trusted networks only, an admin can untick "Require
 login" under **Settings → Web UI access** and give visitors a role (`viewer` read-only /
@@ -313,6 +399,18 @@ role changes. While it is on, the UI shows a warning and startup logs it.
   address. Remove it with `--uninstall-service` (the data folder is kept); run several
   instances with different data folders via `--service-name`. Stop/start: `sc stop ser2net`
   / `sc start ser2net` or *Services* (services.msc).
+- **Many mappings:** a running mapping keeps about three files open (its serial port, its
+  listener and its log), plus one per connected client. At start ser2net raises its soft
+  open-file limit toward the hard limit (at most 65536) and logs the result (`open files:
+  …`); the systemd unit sets `LimitNOFILE=65536`, and a low hard limit in Docker is raised
+  with `--ulimit nofile=65536`. The start-up log warns when the configured mappings need
+  close to the limit.
+- **Many connections on Windows:** the event loop ser2net uses there (`select()`) watches at
+  most 512 sockets (listeners, clients, the UI's connections). Near that, new connections
+  are refused with a log line, and the service keeps running. The environment variable
+  `SER2NET_WINDOWS_LOOP=proactor` (for the service: a system environment variable) switches
+  to the proactor loop, which has no such limit; it is new, so test serial timing (e.g.
+  Modbus RTU) with it before relying on it. The start-up log names the loop in use.
 
 ---
 
@@ -331,6 +429,11 @@ inside aren't readable by other users:
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
   are reduced to the file name, which is logged at start-up.
 - `tls/` — certificate/key if self-signed is generated.
+
+Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
+new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
+replaced when the config is loaded or the file is imported; the start-up log or the import
+preview says so.
 
 Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
 `backups/` is never restored by itself — delete it too if you want it gone).

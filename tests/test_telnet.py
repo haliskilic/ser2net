@@ -70,6 +70,11 @@ async def main():
     print("client received:", out.hex())
     assert out == b"x\xff\xffy", out.hex()
 
+    # the counters count what the device sent / got, not the telnet encoding of it
+    st = sup.status(mapping.id)
+    assert (st["bytes_in"], st["bytes_out"]) == (3, 5), st
+    print("counters: device bytes only (no IAC doubling, no negotiation)  OK")
+
     w.close()
     device.close()
     await sup.stop_all()

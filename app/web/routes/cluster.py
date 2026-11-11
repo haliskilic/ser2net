@@ -10,19 +10,78 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import re
 import socket
 import time
+from urllib.parse import quote
 
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
-from ...config import MappingConfig
+from ...config import ConfigError, MappingConfig, trace_file_name
 from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
 from .common import Ctx
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
+
+# The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
+# forwards only these to a peer, so a value the browser adds beyond the form is never
+# relayed with the shared key.
+_PEER_FORM_FIELDS = {"id", "name", "kind", "enabled"}
+_PEER_FORM_PREFIXES = ("serial_", "network_", "opt_", "mqtt_", "modbus_")
+
+
+def _peer_below_2_8(version: str) -> bool:
+    """True when a peer's reported version is older than 2.8 (or unknown): such a node
+    stores a trace file name as a path and opens it, so it must not be handed a new one."""
+    parts = re.findall(r"\d+", version or "")
+    try:
+        return (int(parts[0]), int(parts[1])) < (2, 8)
+    except (IndexError, ValueError):
+        return True
+
+
+def _peer_save_fields(form, peer_mapping, peer_version):
+    """The fields cluster_peer_save forwards to a peer's key-guarded mapping-save, or an
+    error to show instead. Only the known mapping-form fields are forwarded (never a raw
+    value the browser added), the submission is validated locally (so a URL serial port
+    never reaches the peer), and the trace file is reduced to a sanitised name — kept as
+    the peer stored it when unchanged, and refused as a new name for a pre-2.8 peer.
+    Returns (fields, None) or (None, error)."""
+    if not peer_mapping:
+        return None, _("This mapping no longer exists on the peer; reload the fleet view.")
+    try:
+        MappingConfig.from_dict(_build_mapping_dict(form, strict=False)).validate_input()
+    except (ValueError, ConfigError) as e:
+        return None, str(e)
+    peer_raw = str(((peer_mapping.get("options") or {}).get("trace_both")) or "").strip()
+    submitted = form.get("opt_trace_both", "").strip()
+    if submitted == trace_file_name(peer_raw):
+        out_trace = peer_raw  # unchanged: keep the peer's own stored value (legacy path too)
+    else:
+        out_trace = trace_file_name(submitted)
+        if out_trace and _peer_below_2_8(peer_version):
+            return None, _("This cluster node is older than 2.8 and would store a trace file "
+                           "name as a path. Upgrade it to 2.8 or newer before setting a trace "
+                           "file for it here.")
+    fields = [(k, v) for k, v in form.multi_items()
+              if k != "opt_trace_both"
+              and (k in _PEER_FORM_FIELDS or k.startswith(_PEER_FORM_PREFIXES))]
+    fields.append(("opt_trace_both", out_trace))
+    return fields, None
+
+
+def _remote(scheme, host, port, peer_id, mapping) -> dict:
+    """The fleet view's edit form for a peer's mapping: where it is saved, and under which
+    id. That is the id the peer itself keys the mapping by, sent back to it unchanged: a
+    v2.7/v2.8 peer may keep an id that this node would not take (``mapping`` carries the
+    id derived from it here, which that peer has never heard of). This node uses it only
+    to address the mapping on the peer, never for a file or path of its own."""
+    if not isinstance(peer_id, str) or not peer_id:
+        peer_id = mapping.id
+    return {"scheme": scheme, "host": host, "port": port, "id": peer_id}
 
 
 def _mapping_kind_label(m) -> str:
@@ -229,18 +288,22 @@ def routes(ctx: Ctx) -> list:
             return err
         scheme, host, port = peer
         mid = request.query_params.get("mid", "")
-        data = await state.cluster.get_peer(scheme, host, port, f"/api/cluster/mapping-data?mid={mid}")
-        if not data or "mapping" not in data:
+        data = await state.cluster.get_peer(
+            scheme, host, port, f"/api/cluster/mapping-data?mid={quote(mid, safe='')}")
+        if not data or not isinstance(data.get("mapping"), dict):
             return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
         mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
                       modbus_points_json=_modbus_points_json(mapping),
                       ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
-                      remote={"scheme": scheme, "host": host, "port": port}, error=None)
+                      remote=_remote(scheme, host, port, data["mapping"].get("id"), mapping),
+                      error=None)
 
     async def cluster_peer_save(request):
-        """Browser-facing proxy: forward an edited mapping form to the peer's key-guarded
-        save (peer fields stripped); on a peer error, re-render the form with it."""
+        """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
+        Only the known mapping-form fields are relayed, validated locally first, and the
+        trace file is reduced to a sanitised name (see _peer_save_fields); the mapping must
+        already exist on the peer. On a peer or validation error, re-render the form."""
         if deny := require_peer_access(request):
             return deny
         form = await request.form()
@@ -248,26 +311,41 @@ def routes(ctx: Ctx) -> list:
         if err:
             return err
         scheme, host, port = peer
-        skip = {"_peer_scheme", "_peer_host", "_peer_port", "_csrf", "scheme", "host", "port"}
-        fields = [(k, v) for k, v in form.multi_items() if k not in skip]
+        mid = form.get("id", "")
+
+        # Fetch the peer's current mapping (for the stored trace value + to confirm it
+        # exists — the fleet view only edits) and its version, concurrently.
+        data, local = await asyncio.gather(
+            state.cluster.get_peer(scheme, host, port,
+                                   f"/api/cluster/mapping-data?mid={quote(mid, safe='')}"),
+            state.cluster.get_peer(scheme, host, port, "/api/cluster/local"))
+
+        def _reload(msg):
+            try:
+                mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+                if data and data.get("mapping"):
+                    _preserve_unmanaged_fields(mapping, MappingConfig.from_dict(data["mapping"]), form)
+            except Exception:
+                mapping = MappingConfig(name=form.get("name", ""))
+            return render(request, "_mapping_form.html", status_code=400, mapping=mapping,
+                          is_new=False, modbus_points_json=_modbus_points_json(mapping),
+                          ports=portlist.visible((data or {}).get("ports", [])),
+                          ips=(data or {}).get("ips", []),
+                          remote=_remote(scheme, host, port, mid, mapping), error=msg)
+
+        if not data:
+            return _reload(_("The peer rejected the change or was unreachable."))
+        fields, ferr = _peer_save_fields(form, data.get("mapping"),
+                                         (local or {}).get("version", ""))
+        if ferr:
+            return _reload(ferr)
         res = await state.cluster.post_peer(scheme, host, port, "/api/cluster/mapping-save", fields)
         if res and res.get("ok"):
             state.log(f"cluster: edited '{res.get('name', '')}' on {host}:{port}")
             ctx.audit(request, "cluster_edit", f"{host}:{port}/{res.get('name', '')}")
             return Response("", headers={"HX-Trigger": "refreshCluster"})
-        msg = (res or {}).get("error") or _("The peer rejected the change or was unreachable.")
-        data = await state.cluster.get_peer(scheme, host, port,
-                                            f"/api/cluster/mapping-data?mid={form.get('id', '')}")
-        try:
-            mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
-            if data and data.get("mapping"):
-                _preserve_unmanaged_fields(mapping, MappingConfig.from_dict(data["mapping"]), form)
-        except Exception:
-            mapping = MappingConfig(name=form.get("name", ""))
-        return render(request, "_mapping_form.html", status_code=400, mapping=mapping, is_new=False,
-                      modbus_points_json=_modbus_points_json(mapping),
-                      ports=portlist.visible((data or {}).get("ports", [])), ips=(data or {}).get("ips", []),
-                      remote={"scheme": scheme, "host": host, "port": port}, error=msg)
+        return _reload((res or {}).get("error") or _("The peer rejected the change or was "
+                                                     "unreachable."))
 
     return [
         Route("/api/cluster/status", cluster_status),

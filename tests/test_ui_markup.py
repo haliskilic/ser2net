@@ -10,7 +10,8 @@ portable test guards the template side of the contract on every platform:
     every data cell (not the name, not the buttons) has a data-label for the
     phone card layout; each row spans exactly as many columns as the header;
   * a mapping name / device path full of HTML is rendered escaped;
-  * the static assets carry ?v=<version> (fresh CSS/JS right after an upgrade).
+  * the static assets carry ?v=<version> (fresh CSS/JS right after an upgrade);
+  * the mapping form does not offer a Modbus gateway the options it doesn't use.
 
 Run: python3 tests/test_ui_markup.py
 """
@@ -135,6 +136,7 @@ def test_mappings_table():
     tpl = make_templates().env.get_template("_mappings_body.html")
     statuses = {"m1": {"state": "reconnecting", "last_error": f"could not open port {BY_ID}",
                        "client_count": 2, "dropped_clients": 1, "bytes_in": 10, "bytes_out": 20,
+                       "bytes_dropped": 7,
                        "clients": [{"peer": "127.0.0.1:50000", "duration": "3m", "priority": True}]}}
     for can_edit in (True, False):
         out = tpl.render(mappings=mappings(), statuses=statuses, can_edit=can_edit)
@@ -145,6 +147,13 @@ def test_mappings_table():
         assert n_btn == (7 + 6 + 7 if can_edit else 2 * 3), f"unexpected button count {n_btn}"
         err = next(n for n in root.walk() if "err-small" in n.classes())
         assert err.attrs.get("title", "").endswith(BY_ID), "full error belongs in the tooltip"
+        # the counters say what they count; dropped data is flagged in the same cell
+        th = [n for n in root.walk() if n.tag == "th"][5]
+        assert th.attrs.get("title", "").startswith("In: bytes read from the serial device"), th.attrs
+        cell = next(n for n in root.walk() if n.attrs.get("data-label") == "In / Out")
+        warn = [n for n in cell.walk() if "err-small" in n.classes()]
+        assert len(warn) == 1 and "not written to the serial device" in warn[0].attrs["title"], warn
+        assert out.count("7 bytes dropped") == 1, "only the mapping that dropped data is flagged"
     empty = tpl.render(mappings=[], statuses={}, can_edit=True)
     check_table_contract(empty, "empty mappings table")
     print("mappings table: wrapper, card labels, buttons in their cell, escaping  OK")
@@ -194,11 +203,174 @@ def test_ports_table_and_assets():
     print("ports table contract + versioned static asset URLs  OK")
 
 
+def test_mapping_form_modbus_fields():
+    """The Modbus gateway uses no connect banner, close-on string or client buffer, so the
+    form shows those only for raw / telnet / rfc2217 (app.js hides and disables a
+    data-show-when block); Read-only, kick and priority IPs apply to masters and stay."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig.from_dict({"id": "mb1", "name": "gw", "serial": {"port": "COM3"},
+                                 "network": {"protocol": "modbus", "port": 502}})
+    root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                            ports=[], ips=[], error=None))
+
+    def conditions(name):
+        field = next(n for n in root.walk() if n.attrs.get("name") == name)
+        return [a.attrs["data-show-when"] for a in field.ancestors() if "data-show-when" in a.attrs]
+
+    for name in ("opt_banner", "opt_closeon", "network_client_queue_max"):
+        assert "network_protocol=raw,telnet,rfc2217" in conditions(name), (name, conditions(name))
+    for name in ("network_read_only", "network_kick_old_user", "network_priority_client_ips",
+                 "network_allowed_client_ips", "opt_idle_timeout_s"):
+        assert not any(c.startswith("network_protocol=") for c in conditions(name)), name
+    # plain-format /set only (Sparkplug commands are never retained); the hidden marker
+    # sits with the checkbox, so it is posted exactly when the checkbox is offered
+    for name in ("mqtt_apply_retained_set", "mqtt_apply_retained_set_shown"):
+        assert conditions(name) == ["mqtt_payload_format=plain", "network_protocol=modbus"], \
+            (name, conditions(name))
+    print("mapping form: banner/close-on/client buffer not offered for modbus; the retained "
+          "/set option only for plain-format points  OK")
+
+
+def test_mapping_form_udp_fields():
+    """The UDP reply address and peer timeout are offered for UDP only, in one block whose
+    timeout field is the presence marker (forms.py _OPTIONAL_FORM_FIELDS), next to a note
+    that the allow-list checks a forgeable source address."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig.from_dict({"id": "u1", "name": "udp", "serial": {"port": "COM3"},
+                                 "network": {"mode": "udp", "port": 4001,
+                                             "udp_peer_host": "10.0.0.9", "udp_peer_port": 5000,
+                                             "udp_peer_timeout_s": 30}})
+    out = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                     ports=[], ips=[], error=None)
+    root = parse(out)
+    block = None
+    for name, value in (("network_udp_peer_host", "10.0.0.9"), ("network_udp_peer_port", "5000"),
+                        ("network_udp_peer_timeout_s", "30")):
+        field = next(n for n in root.walk() if n.attrs.get("name") == name)
+        assert field.attrs.get("value") == value, (name, field.attrs)
+        owner = next(a for a in field.ancestors() if "data-show-when" in a.attrs)
+        assert owner.attrs["data-show-when"] == "network_mode=udp", (name, owner.attrs)
+        assert block in (None, owner), "one block, shown and posted together"
+        block = owner
+    assert any(n.tag == "p" for n in block.walk()), "the note belongs to the UDP block"
+    assert "source address, which can be forged" in out
+    print("mapping form: UDP reply address / peer timeout in one UDP-only block  OK")
+
+
+def test_mapping_form_rfc2217_restore():
+    """'Restore the serial settings when the RFC 2217 client leaves' is offered for RFC 2217
+    mappings only, its hidden presence marker in the same block (posted exactly when the
+    checkbox is offered), ticked when the option is on."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    for on in (False, True):
+        m = MappingConfig.from_dict({"id": "vc1", "name": "vc", "serial": {"port": "COM3"},
+                                     "network": {"protocol": "rfc2217", "port": 4001},
+                                     "options": {"rfc2217_restore_on_disconnect": on}})
+        root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                                ports=[], ips=[], error=None))
+        owners = []
+        for name in ("opt_rfc2217_restore_on_disconnect",
+                     "opt_rfc2217_restore_on_disconnect_shown"):
+            field = next(n for n in root.walk() if n.attrs.get("name") == name)
+            owners.append(next(a for a in field.ancestors() if "data-show-when" in a.attrs))
+            if name == "opt_rfc2217_restore_on_disconnect":
+                assert ("checked" in field.attrs) is on, field.attrs
+        assert owners[0] is owners[1], "the marker and the checkbox share one block"
+        assert owners[0].attrs["data-show-when"] == "network_protocol=rfc2217", owners[0].attrs
+    print("mapping form: the RFC 2217 restore option, for RFC 2217 mappings only  OK")
+
+
+def test_mqtt_command_tags():
+    """The dashboard tags a Modbus mapping whose writable points take MQTT commands CMD,
+    as a warning (CMD ⚠) when its broker connection has no TLS or no username; a read-only
+    one is RO and never CMD. The mapping form shows the same warning as a banner."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+
+    def gw(mid, mqtt=None, writable=True, **network):
+        return MappingConfig.from_dict({
+            "id": mid, "name": mid, "serial": {"port": "COM3"},
+            "network": dict({"protocol": "modbus", "port": 502}, **network),
+            "mqtt": dict({"enabled": True, "host": "b", "base_topic": "plant/a"}, **(mqtt or {})),
+            "modbus_poll": {"points": [{"name": "pump", "fn": 1, "dtype": "bool",
+                                        "writable": writable}]}})
+    env = make_templates().env
+    rows, form = env.get_template("_mappings_body.html"), env.get_template("_mapping_form.html")
+
+    def row(m):
+        out = rows.render(mappings=[m], statuses={}, can_edit=False)
+        check_table_contract(out, f"mappings table ({m.id})")
+        return out
+
+    def form_of(m):
+        return form.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                           ports=[], ips=[], error=None)
+
+    for m in (gw("open"), gw("tls_only", {"tls": True}), gw("user_only", {"username": "u"})):
+        out = row(m)
+        assert ">CMD ⚠</span>" in out and "tag tag-danger" in out, (m.id, out)
+        assert 'class="banner warn"' in form_of(m), m.id
+    secure = gw("secure", {"tls": True, "username": "u"})
+    out = row(secure)
+    assert ">CMD</span>" in out and "tag-danger" not in out, out
+    assert 'class="banner warn"' not in form_of(secure)
+    read_only = gw("ro", read_only=True)
+    assert ">RO</span>" in row(read_only) and ">CMD" not in row(read_only)
+    assert 'class="banner warn"' not in form_of(read_only)
+    for m in (gw("mqtt_off", {"enabled": False}), gw("no_writable", writable=False)):
+        assert ">CMD" not in row(m) and 'class="banner warn"' not in form_of(m), m.id
+    print("CMD tag (⚠ without TLS / username) and the form warning follow MQTT writes; "
+          "read-only is RO only  OK")
+
+
+def test_mapping_form_kick_hint():
+    """A server mapping with "Kick old client" on and no allow-list says, in its form, that any
+    host reaching the port can take the connection over; with an allow-list, or without
+    kicking, it says nothing."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    for kick, allowed, shown in ((True, [], True), (True, ["10.0.0.0/24"], False),
+                                 (False, [], False)):
+        m = MappingConfig.from_dict({"id": "kh1", "name": "kh", "serial": {"port": "COM3"},
+                                     "network": {"port": 4001, "kick_old_user": kick,
+                                                 "allowed_client_ips": allowed}})
+        root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                                ports=[], ips=[], error=None))
+        hint = next((n for n in root.walk() if "data-kick-hint" in n.attrs), None)
+        assert (hint is not None) is shown, (kick, allowed)
+        if hint is not None:
+            owner = next(a for a in hint.ancestors() if "data-show-when" in a.attrs)
+            assert owner.attrs["data-show-when"] == "network_mode=server", owner.attrs
+    print("mapping form: kick_old_user without an allow-list is pointed out (server mode)  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
     test_cluster_table()
     test_ports_table_and_assets()
+    test_mapping_form_modbus_fields()
+    test_mapping_form_udp_fields()
+    test_mapping_form_rfc2217_restore()
+    test_mapping_form_kick_hint()
+    test_mqtt_command_tags()
     print("\nPASS: UI markup contract")
 
 

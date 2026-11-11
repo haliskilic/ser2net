@@ -9,13 +9,38 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 
 from ..config import AppConfig, MappingConfig
-from .bridge import MappingRunner
+from . import serial_io
+from .bridge import MappingRunner, RunnerStatus
 
 
-def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None):
+class Runner(Protocol):
+    """What the supervisor and the web layer use of a mapping's runner: the transparent
+    bridge (bridge.MappingRunner) or the Modbus gateway (modbus_gateway.ModbusGatewayRunner)."""
+
+    mapping: MappingConfig
+    status: RunnerStatus
+
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    # browser console (what the device sends) and live hex view (both directions)
+    def add_monitor(self, mon: Any) -> None: ...
+
+    def discard_monitor(self, mon: Any) -> None: ...
+
+    def add_traffic_monitor(self, mon: Any) -> None: ...
+
+    def discard_traffic_monitor(self, mon: Any) -> None: ...
+
+    # the browser console typing to the device; False when nothing was written
+    async def serial_write(self, data: bytes) -> bool: ...
+
+
+def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None) -> Runner:
     """Pick the runner for a mapping: the Modbus RTU<->TCP gateway when the network
     protocol is 'modbus', otherwise the transparent serial<->network bridge."""
     if mapping.kind == "net" and mapping.network.protocol == "modbus":
@@ -28,7 +53,7 @@ class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
                  trace_dir: Optional[str] = None):
-        self._runners: dict[str, MappingRunner] = {}
+        self._runners: dict[str, Runner] = {}
         self.trace_dir = trace_dir  # data/traces: the only place traces are written
         self._order: list[str] = []
         self.log = logger or (lambda m: None)
@@ -83,6 +108,9 @@ class Supervisor:
             runner.status.state = "stopped"
             return True, "disabled"
         try:
+            # a stored URL port fails the start once, instead of retrying it forever
+            for side in mapping.serial_sides():
+                serial_io.refuse_url(side.port)
             await runner.start()
             return True, "started"
         except Exception as e:
@@ -115,7 +143,7 @@ class Supervisor:
                 await runner.stop()
 
     # ---------------- status ----------------
-    def get_runner(self, mapping_id: str):
+    def get_runner(self, mapping_id: str) -> Optional[Runner]:
         return self._runners.get(mapping_id)
 
     def status(self, mapping_id: str) -> Optional[dict]:
@@ -128,8 +156,10 @@ class Supervisor:
         return {mid: r.status.as_dict() for mid, r in list(self._runners.items())}
 
     def devices_in_use(self) -> set[str]:
-        out = set()
+        """The serial devices that running mappings hold open (for the Ports page): one per
+        mapping, both ports of a serial-to-serial bridge."""
+        out: set[str] = set()
         for r in list(self._runners.values()):
-            if r.status.state == "running" and r.status.device:
-                out.add(r.status.device)
+            if r.status.state == "running":
+                out.update(d for d in r.status.devices if d)
         return out

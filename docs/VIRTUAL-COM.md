@@ -21,6 +21,26 @@ ser.baudrate = 115200          # applied on the remote port over RFC2217
 This path is covered by `tests/test_rfc2217.py` (a real `rfc2217://` client against
 the server, including a live baud change), so interop is verified in CI.
 
+What the server does with an RFC 2217 client's settings:
+
+- A setting the remote port can't take (a value the serial driver refuses, or a
+  malformed or reserved one) is answered with the current setting, as RFC 2217 says,
+  and the port keeps it; pySerial then raises `ValueError: remote rejected value`, and
+  the connection stays up.
+- If the serial device goes away (a USB adapter unplugged), the client stays connected
+  while ser2net reopens the port; settings it changes meanwhile are answered and take
+  effect when the port is back. The reopened port is given the client's baud rate, data
+  bits, parity, stop bits, flow control and RTS/DTR, so the session goes on as before
+  (if the reopened port refuses one of them, the client is disconnected and the log says
+  which). A connect-out (`client` mode) RFC 2217 mapping connects only while its serial
+  port is open.
+- By default what a client set stays on the port after it leaves, until the port is
+  reopened. Tick **Restore the serial settings when the RFC 2217 client leaves**
+  (`options.rfc2217_restore_on_disconnect`) to put the port back to the mapping's baud
+  rate, data bits, parity, stop bits and flow control when the client disconnects, so the
+  next client, the web console, MQTT and a trace see what the mapping says. RTS/DTR are
+  left as they are, because toggling them resets many boards (ESP32/Arduino auto-reset).
+
 ## 2. Linux — a real `/dev/tty*` for legacy apps (free, socat)
 
 `socat` creates a pseudo-terminal that your app opens like a normal serial port:

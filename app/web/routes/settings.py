@@ -574,6 +574,8 @@ def routes(ctx: Ctx) -> list:
         await state.cluster.stop()
         await state.cluster.start()
         state.log(f"configuration restored from backup {name}")
+        for note in restored.load_notes:  # what loading the backup changed, as at start-up
+            state.log(note)
         ctx.audit(request, "config_backup_restore", name)
         return await settings_get(request, ok=_("Restored {0}; the configuration it replaced "
                                                 "was backed up too. A changed admin UI address "

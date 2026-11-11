@@ -335,6 +335,123 @@ def test_form_conn_options_parse_and_preserve():
     print("form: keepalive/connect-timeout/max-time parsed when posted, kept when absent  OK")
 
 
+def test_form_modbus_fields_not_offered():
+    """The mapping form leaves the connect banner, close-on string and client buffer out
+    for a Modbus gateway (it uses none of them). Absent => the stored values are kept on
+    edit and a new mapping gets the defaults; a form that posts them (another protocol,
+    an older cluster peer's form) still sets them."""
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502"}
+    existing = MappingConfig.from_dict({
+        "name": "gw", "serial": {"port": "COM7"},
+        "network": {"protocol": "modbus", "port": 502, "client_queue_max": 8192},
+        "options": {"banner": "Welcome \\N", "closeon": "BYE"}})
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.options.banner, m.options.closeon, m.network.client_queue_max
+
+    assert parsed(dict(base, id=existing.id)) == ("Welcome \\N", "BYE", 8192)
+    assert parsed(base) == ("", "", 2048)
+    posted = dict(base, id=existing.id, network_protocol="raw", opt_banner="",
+                  opt_closeon="logout", network_client_queue_max="4096")
+    assert parsed(posted) == ("", "logout", 4096)
+    print("form: banner/close-on/client buffer kept when a Modbus form leaves them out  OK")
+
+
+def test_form_apply_retained_set():
+    """'Re-apply a retained /set' is a checkbox (absent when unticked) shown only for
+    plain-format Modbus points, so its hidden marker says whether the form had it: without
+    the marker (Sparkplug format, an older cluster peer's form) the stored value is kept on
+    edit and a new mapping gets the default, off."""
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502"}
+    existing = MappingConfig.from_dict({"name": "gw", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "modbus", "port": 502},
+                                        "mqtt": {"apply_retained_set": True}})
+    assert MappingConfig().mqtt.apply_retained_set is False, "off by default"
+    assert MappingConfig.from_dict({"mqtt": {}}).mqtt.apply_retained_set is False
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.mqtt.apply_retained_set
+
+    marker = {"mqtt_apply_retained_set_shown": "1"}
+    assert parsed(dict(base, id=existing.id)) is True, "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, **marker)) is False, "shown and unticked: off"
+    assert parsed(dict(base, id=existing.id, mqtt_apply_retained_set="on", **marker)) is True
+    assert parsed(base) is False and parsed(dict(base, **marker)) is False
+    assert parsed(dict(base, mqtt_apply_retained_set="on", **marker)) is True
+    print("form: apply_retained_set kept when the form leaves it out, set when shown  OK")
+
+
+def test_form_rfc2217_restore_on_disconnect():
+    """'Restore the serial settings when the RFC 2217 client leaves' is a checkbox (absent
+    when unticked) shown for RFC 2217 mappings only, so its hidden marker says whether the
+    form had it: without the marker (another protocol, an older cluster peer's form) the
+    stored value is kept on edit and a new mapping gets the default, off."""
+    base = {"name": "vc", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "rfc2217",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+    existing = MappingConfig.from_dict({"name": "vc", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "rfc2217", "port": 4001},
+                                        "options": {"rfc2217_restore_on_disconnect": True}})
+    assert MappingConfig().options.rfc2217_restore_on_disconnect is False, "off by default"
+    assert MappingConfig.from_dict({"options": {}}).options.rfc2217_restore_on_disconnect is False
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.options.rfc2217_restore_on_disconnect
+
+    marker = {"opt_rfc2217_restore_on_disconnect_shown": "1"}
+    on = {"opt_rfc2217_restore_on_disconnect": "on"}
+    assert parsed(dict(base, id=existing.id)) is True, "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, **marker)) is False, "shown and unticked: off"
+    assert parsed(dict(base, id=existing.id, **marker, **on)) is True
+    assert parsed(base) is False and parsed(dict(base, **marker)) is False
+    assert parsed(dict(base, **marker, **on)) is True
+    print("form: rfc2217_restore_on_disconnect kept when the form leaves it out, set when "
+          "shown  OK")
+
+
+def test_form_udp_reply_fields():
+    """The reply address and peer timeout are shown (and posted) for UDP only. Without
+    them (another mode, an older cluster peer's form) the stored values are kept on edit
+    and a new mapping gets the defaults: the last sender, never forgotten."""
+    base = {"name": "u", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "udp", "network_protocol": "raw",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+    existing = MappingConfig.from_dict({
+        "name": "u", "serial": {"port": "COM7"},
+        "network": {"mode": "udp", "udp_peer_host": "10.0.0.9", "udp_peer_port": 5000,
+                    "udp_peer_timeout_s": 30}})
+    fresh = MappingConfig()
+    assert (fresh.network.udp_peer_host, fresh.network.udp_peer_port,
+            fresh.network.udp_peer_timeout_s) == ("", 0, 0)
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        n = m.network
+        return n.udp_peer_host, n.udp_peer_port, n.udp_peer_timeout_s
+
+    shown = {"network_udp_peer_host": " 192.168.1.20 ", "network_udp_peer_port": "4002",
+             "network_udp_peer_timeout_s": "60"}
+    assert parsed(dict(base, **shown)) == ("192.168.1.20", 4002, 60)
+    cleared = {"network_udp_peer_host": "", "network_udp_peer_port": "",
+               "network_udp_peer_timeout_s": ""}
+    assert parsed(dict(base, id=existing.id, **cleared)) == ("", 0, 0), "blank = off"
+    assert parsed(dict(base, id=existing.id)) == ("10.0.0.9", 5000, 30), "absent: kept"
+    assert parsed(dict(base, id=existing.id, network_mode="server")) == ("10.0.0.9", 5000, 30)
+    assert parsed(base) == ("", 0, 0)
+    print("form: UDP reply address / peer timeout parsed when shown, kept when absent  OK")
+
+
 def test_web_access_settings():
     cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
     assert cfg.admin_ui.require_login is True, "login must be required by default"
@@ -352,6 +469,10 @@ def main():
     test_connection_lifecycle_defaults_and_upgrade()
     test_connection_lifecycle_validation()
     test_form_conn_options_parse_and_preserve()
+    test_form_modbus_fields_not_offered()
+    test_form_apply_retained_set()
+    test_form_rfc2217_restore_on_disconnect()
+    test_form_udp_reply_fields()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

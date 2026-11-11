@@ -48,6 +48,47 @@ def wait_port(port: int, timeout: float = 20) -> bool:
     return False
 
 
+def silent_tls_client(port: int, ctx, timeout: float = 5) -> socket.socket:
+    """A TLS client that completes its handshake (``ctx``) with 127.0.0.1:``port`` and
+    then neither reads nor answers anything, not even the server's close_notify. Returns
+    the plain socket under it: ``closed_by_server`` tells when the server really let go."""
+    import ssl
+
+    raw = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    tls = ctx.wrap_bio(incoming, outgoing)
+    while True:
+        try:
+            tls.do_handshake()
+            break
+        except ssl.SSLWantReadError:
+            raw.sendall(outgoing.read())
+            data = raw.recv(65536)
+            if not data:
+                raise ConnectionError("closed during the TLS handshake") from None
+            incoming.write(data)
+    raw.sendall(outgoing.read())  # the client's last handshake message
+    return raw
+
+
+def closed_by_server(raw: socket.socket, seconds: float) -> float:
+    """Seconds until the server closed the plain socket ``raw`` (whatever it sent before);
+    raises AssertionError when it is still open after ``seconds``."""
+    t0 = time.monotonic()
+    while True:
+        left = seconds - (time.monotonic() - t0)
+        if left <= 0:
+            raise AssertionError(f"the server kept the connection open past {seconds} s")
+        raw.settimeout(left)
+        try:
+            if not raw.recv(65536):
+                return time.monotonic() - t0
+        except socket.timeout:
+            continue  # checked at the top
+        except OSError:  # reset
+            return time.monotonic() - t0
+
+
 class Server:
     def __init__(self, config: dict | None = None, data_dir: str | None = None, env=None):
         self.tmp = tempfile.mkdtemp(prefix="s2n_e2e_")

@@ -55,17 +55,47 @@ düzenlemeye gerek yok.
 ## ✨ Özellikler
 
 - **Taşıma modları:** TCP **sunucu** (dinleme), TCP **istemci** (dışarı bağlanma),
-  **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**.
+  **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**. UDP,
+  cihazın çıktısını izinli bir IP'den gelen son datagram'ın göndericisine ya da her zaman
+  sabit bir **yanıt adresine** (IP + port) gönderir; **karşı uç zaman aşımı** sessiz kalan
+  göndericiyi unutturur. Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler:
+  hattan hızlı gönderen birinin bunu aşan datagram'ları atılır, sayılır ve loglanır.
 - **Protokoller:** `raw`, `telnet` (8-bit temiz), `rfc2217` (uzaktan canlı
-  baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway).
+  baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway). Portun
+  yerine getiremediği bir RFC 2217 isteği (bozuk ya da ayrılmış bir değer veya seri portun
+  reddettiği bir değer) RFC 2217'nin dediği gibi güncel ayarla yanıtlanır ve portu olduğu
+  gibi bırakır; istemci bağlı kalır. Kaybolan seri port yeniden açılırken de RFC 2217
+  istemcisi bağlı kalır ve yeniden açılan port onun ayarlarını alır; istenirse istemci
+  ayrılınca port eşlemenin ayarlarına döner (bkz.
+  [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md)). 1 KiB'tan uzun bir telnet ya da RFC 2217
+  alt müzakeresi (gerçekleri birkaç bayttır) o istemcinin oturumunu sonlandırır; nedeni
+  log'a yazılır.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
-  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. **Edge modu:** coil ve
-  register'ları periyodik okuyup MQTT'ye yayınlar (bool, uint/int/float 16/32, ölçek);
-  `"writable": true` noktalar MQTT'den yazılır (`<topic>/<nokta>/set` → FC5/FC15 coil,
-  FC6/FC16 register). İstenirse **Sparkplug B** edge node olarak, her Modbus unit'i bir
-  cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH, `seq` ile DBIRTH/DDATA, DCMD ile yazma,
-  NCMD ile rebirth.
+  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
+  adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır ve
+  port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
+  kayboldu/geri geldi bildirimleri).
+  Master'lar diğer istemciler gibi kabul edilir (izinli IP'ler, max bağlantı, öncelikli
+  IP'ler, eski-kullanıcıyı-at); **salt okunur** bir gateway okuma olmayan her isteği
+  (FC5/6/15/16/22/23 gibi yazmalar, slave'i yeniden başlatan ya da susturan tanılama
+  komutları, bilinmeyen fonksiyon kodları) hatta göndermeden `0x01` exception ile yanıtlar.
+  Banner, open/close string ve `closeon` burada kullanılmaz (Modbus çerçevelerini bozar).
+  **Edge modu:** coil ve register'ları periyodik okuyup MQTT'ye yayınlar (bool,
+  uint/int/float 16/32, ölçek); `"writable": true` noktalar MQTT'den yazılır
+  (`<topic>/<nokta>/set`, yalnızca o noktaya tek değer: coil için FC5, holding register için
+  kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
+  `.../set/result`'ta `error: …` alır). **Salt okunur** bu yazmaları da reddeder (`error:
+  mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler panoda
+  **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker karar
+  verir). İstenirse **Sparkplug B**
+  edge node olarak, her Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH,
+  `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth. Bir komut yayınlandığında bir
+  kez yazılır: broker'ın yeniden bağlanma, yeniden başlatma ya da config kaydından sonra
+  tekrar gönderdiği retained bir `/set`, **Retained /set komutunu her bağlantıdan sonra
+  yeniden uygula** işaretli değilse yok sayılır (ve loglanır); retained bir Sparkplug
+  NCMD/DCMD her zaman yok sayılır, boş bir mesaj (retained mesajı temizleyen) komut
+  değildir ve ser2net bağlı değilken yayınlanan bir komut sonradan iletilmez.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -85,7 +115,8 @@ düzenlemeye gerek yok.
   Tablo yalnızca değiştiğinde yenilenir (titreme yok, seçimler korunur).
 - **Erişim kontrolü (eşleme başına):** izinli IP/CIDR listesi, **yüksek-öncelikli**
   istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at,
-  salt-okunur, banner, open/close string, `closeon`.
+  salt-okunur, banner, open/close string, `closeon` (Modbus gateway banner, open/close
+  string ve `closeon` kullanmaz).
 - **Bağlantı yaşam döngüsü (eşleme başına, TCP):** **TCP keepalive ile ölü bağlantı
   tespiti** — FIN/RST göndermeden kaybolan istemci ya da uzak sunucu (elektrik kesintisi,
   kablo çekilmesi, Wi-Fi/VPN/NAT düşmesi) artık sonsuza dek `ESTABLISHED` kalmaz:
@@ -96,7 +127,13 @@ düzenlemeye gerek yok.
 - **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp, döner dosyalar,
   arayüzden indirilir), Prometheus `/metrics`, audit log ekranı, canlı log görüntüleyici,
   **tarayıcı-içi seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz) ve
-  iki yönlü, zaman damgalı **canlı hex görünümü**.
+  iki yönlü, zaman damgalı **canlı hex görünümü**. Panodaki **Gelen / Giden** sayaçları
+  (`/api/v1/status`'ta `bytes_in` / `bytes_out`, `/metrics`'te
+  `ser2net_mapping_bytes_in_total` / `ser2net_mapping_bytes_out_total`) seri cihazdan
+  okunan ve cihaza yazılan baytlardır; cihazı kaç istemci paylaşırsa paylaşsın bir kez
+  sayılır (serial↔serial: A → B / B → A). Ağdan gelip cihaza yazılamayan veri (port açık
+  değilken ya da bir UDP datagram'ı kuyruğu dolu bulduğunda) atılmış sayılır
+  (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`), panoda işaretlenir ve loglanır.
 - **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
   bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
@@ -253,7 +290,12 @@ volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapm
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.
-- **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı).
+- **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
+  çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
+  düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
+  `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren ve sıra bekleyen TLS
+  el sıkışmaları ve kabulden hemen sonra reddedilen bağlantılar
+  (`ser2net_connections_refused_total`, nedene göre).
 
 ---
 
@@ -287,7 +329,54 @@ Arayüz **varsayılan olarak parola korumalı**. Varsayılan bind **127.0.0.1**;
 için açılışta IP seçimi gerekir ve TLS'siz ağ bind'inde uyarı verilir. LAN'a açılan
 kurulumlarda TLS (`admin_ui.tls_*`) ve eşleme bazlı `allowed_client_ips` önerilir.
 Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde tek başına
-`0.0.0.0`/`::` "herkes" demektir.
+`0.0.0.0`/`::` "herkes" demektir. Bir eşlemenin seri portu yalnızca cihaz yolu ya da COM
+adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
+port olarak kabul edilmez.
+
+**Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
+TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
+anda en fazla 32 (toplamda 128) el sıkışma yürür. Fazlası, bunlardan birinin bitmesini 15 sn'ye
+kadar bekler (bir adresten en fazla 64, toplamda 256 bağlantı); böylece bir istemcinin toplu
+yeniden bağlanması reddedilmez, sırayla karşılanır. Kapasite, `kick_old_user` ve "Busy"
+satırı yine el sıkışmadan sonra gelir. Yönetim arayüzü, bağlandıktan ya da son yanıttan sonra
+`admin_ui.request_timeout_s` (10 sn) içinde tam bir istek başlığı göndermeyen, ardından
+istek gövdesi gelmeyi kesen (gövdeye bu süre artı gelen her KiB için bir saniye tanınır) ya
+da bir yanıttan bu süre boyunca hiçbir şey almayan bağlantıyı kapatır (konsol WebSocket'i
+süreye tabi değildir) ve aynı anda en fazla `admin_ui.max_connections`
+(256), bir adresten en fazla `admin_ui.max_connections_per_ip` (64) bağlantı kabul eder;
+TLS el sıkışması bir eşleminkiyle aynı sınırlara tabidir. Bu anahtarlar yalnızca
+`config.json`'dadır (0 = sınır yok); bir reverse proxy arkasında tüm kullanıcılar proxy'nin
+adresinden gelir, gerekirse adres başına sınırı yükseltin. Süreç açık dosya sınırına
+yaklaşınca yeni bağlantılar (her eşlemeye ve arayüze) log'a bir satır yazılarak reddedilir;
+böylece seri portlar, log'lar ve yapılandırma ihtiyaç duydukları dosyaları açabilir.
+
+**UDP eşlemeleri:** `allowed_client_ips` her datagram için denetlenir, ama baktığı şey
+datagram'ın kaynak adresidir ve ağdaki bir gönderici bu adresi taklit edebilir; yani UDP'de
+izin listesi kimlik doğrulama değildir. Yanıt adresi yoksa izinli her gönderici (ya da izinli
+bir adresi taklit eden biri) tek bir datagram'la cihazın çıktısını devralır, salt okunur
+eşlemede bile; göndericinin her değişimi loga yazılır (en fazla dakikada bir). Çıktıyı doğru
+makinede tutmak için bir **yanıt adresi** girin. Güvenilmeyen ağlarda TLS'li bir TCP eşlemesi
+ya da bir güvenlik duvarı kullanın.
+
+**MQTT komutları (Modbus edge modu):** yazılabilir noktalar, broker'ın `<topic>/<nokta>/set`
+topic'ine ya da Sparkplug B'de `spBv1.0/<group>/NCMD/<node>` ve
+`spBv1.0/<group>/DCMD/<node>/<cihaz>` topic'lerine yayın yapmasına izin verdiği her
+istemciden değer alır. ser2net bu istemcilerin kimliğini kendisi doğrulamaz ve
+`allowed_client_ips` yalnızca Modbus/TCP portunu kapsar; asıl yetkilendirme broker'ın erişim
+kurallarıdır (ACL): komut topic'lerine yalnızca çıkışları anahtarlaması gereken istemciler
+yayın yapabilsin, broker'a TLS ve kullanıcı adı/parola ile bağlanın. **Salt okunur** her
+yazmayı reddeder. MQTT'den yazma alan eşlemeler panoda **CMD**, broker bağlantısında TLS ya
+da kullanıcı adı yoksa **CMD ⚠** etiketiyle gösterilir (ayrıca açılışta loga uyarı düşer).
+Örneğin `plant/line3` ana topic'i için bir Mosquitto `acl_file`:
+```
+user ser2net
+topic readwrite plant/line3/#
+user scada
+topic write plant/line3/+/set
+topic read plant/line3/#
+user historian
+topic read plant/line3/#
+```
 
 **Parolasız erişim (isteğe bağlı):** yalnızca güvenilir ağlar için, bir admin
 **Ayarlar → Web arayüzü erişimi**'nden giriş zorunluluğunu kapatıp ziyaretçilere bir rol
@@ -319,6 +408,19 @@ gösterilir ve açılışta loga yazılır.
   Kaldırmak: `--uninstall-service` (veri klasörü kalır). Farklı veri klasörleriyle birden
   fazla örnek için `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net`
   ya da *Hizmetler* (services.msc).
+- **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
+  dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
+  açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar
+  (`open files: …`); systemd unit'i `LimitNOFILE=65536` ayarlar, Docker'daki düşük bir
+  sert sınır `--ulimit nofile=65536` ile yükseltilir. Yapılandırılan eşlemeler sınıra
+  yaklaşınca açılış log'unda bir uyarı çıkar.
+- **Windows'ta çok sayıda bağlantı:** ser2net'in orada kullandığı event loop (`select()`) en
+  fazla 512 soketi izler (dinleyiciler, istemciler, arayüz bağlantıları). Bu sınıra
+  yaklaşınca yeni bağlantılar log'a bir satır yazılarak reddedilir ve servis çalışmaya
+  devam eder. `SER2NET_WINDOWS_LOOP=proactor` ortam değişkeni (servis için: sistem ortam
+  değişkeni) böyle bir sınırı olmayan proactor loop'una geçirir; yeni olduğundan,
+  güvenmeden önce seri zamanlamayı (ör. Modbus RTU) onunla deneyin. Kullanılan loop açılış
+  log'unda yazar.
 
 ---
 
@@ -337,6 +439,11 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
   yollar dosya adına indirgenir ve açılışta log'a yazılır.
 - `tls/` — self-signed üretilirse sertifika/anahtar.
+
+Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
+içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
+ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış
+logu ya da içe aktarma önizlemesi bunu belirtir.
 
 `config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
 temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin).
