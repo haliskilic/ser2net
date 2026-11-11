@@ -78,6 +78,7 @@ PORTABLE = [
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
     "test_fd_limits.py",
     "test_tls_admission.py",
+    "test_admin_limits.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

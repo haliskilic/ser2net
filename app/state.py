@@ -20,6 +20,7 @@ import time
 from collections import deque
 from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
+from typing import Any
 
 from .config import AppConfig, ConfigStore, lock_down_dir, mapping_file, valid_mapping_id
 from .engine.cluster import ClusterDiscovery
@@ -116,6 +117,8 @@ class AppState:
         self.notifier = Notifier(self)
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()
+        # the admin UI listener's connection guard (runtime.py; None in tests without one)
+        self.admin_guard: Any = None
         self._maint_task: asyncio.Task | None = None
         # per-mapping logs can contain raw serial traffic; keep the logs dir private
         # on both platforms (POSIX 0700 / Windows owner-only ACL).

@@ -252,7 +252,7 @@ class Budget:
         if limit is not None:
             used = self._files_in_use()
             if used is not None and used >= limit - fd_reserve(limit):
-                self._note("open_files")
+                self.note_refused("open_files")
                 return (f"{used} of this process's {limit} open files are in use (the rest "
                         "is kept for serial ports, logs and the configuration)")
         self._admitted += 1
@@ -261,15 +261,17 @@ class Budget:
     def handshake_room(self, ip: str) -> str:
         why = self.handshakes.full(ip)
         if why:
-            self._note("tls_handshakes")
+            self.note_refused("tls_handshakes")
             return f"too many TLS handshakes in progress ({why})"
         return ""
 
-    def _note(self, why: str) -> None:
+    def note_refused(self, why: str) -> None:
         self.refused[why] = self.refused.get(why, 0) + 1
 
 
 BUDGET = Budget()
+# why a connection can be refused right after accept (Budget.refused keys, for /metrics)
+REFUSAL_REASONS = ("open_files", "tls_handshakes", "admin_ui")
 
 
 class _Early(asyncio.Protocol):
@@ -321,6 +323,25 @@ async def start_tls(transport: Any, ctx: Any, protocol: asyncio.BaseProtocol) ->
 def describe_tls_error(exc: BaseException) -> str:
     text = str(exc) or type(exc).__name__
     return text if isinstance(exc, ConnectionError) else f"{type(exc).__name__}: {text}"
+
+
+def begin_tls(transport: Any, ctx: Any, protocol: asyncio.BaseProtocol, label: str,
+              failed: Callable[[str], None]) -> asyncio.Task:
+    """Start the TLS handshake of an admitted connection: reading paused, counted among the
+    handshakes in progress until it is over, run in a task (start_tls). A failed handshake
+    is reported to ``failed`` (rate-limit it: anyone can make one fail)."""
+    transport.pause_reading()  # the ClientHello waits for the TLS protocol
+    BUDGET.handshakes.add(transport, peer_ip(transport))
+
+    async def handshake() -> None:
+        try:
+            await start_tls(transport, ctx, protocol)
+        except Exception as e:  # the timeout, a bad ClientHello, the client went away
+            failed(f"TLS handshake with {label} failed: {describe_tls_error(e)}")
+        finally:
+            BUDGET.handshakes.discard(transport)
+
+    return asyncio.get_running_loop().create_task(handshake())
 
 
 class _Gate(asyncio.Protocol):
@@ -386,19 +407,9 @@ class Listener:
             transport.set_protocol(protocol)
             protocol.connection_made(transport)
             return
-        transport.pause_reading()  # the ClientHello waits for the TLS protocol
-        BUDGET.handshakes.add(transport, peer_ip(transport))
-        self._handshakes[transport] = self._loop.create_task(
-            self._handshake(transport, protocol, label))
-
-    async def _handshake(self, transport: Any, protocol: asyncio.Protocol, label: str) -> None:
-        try:
-            await start_tls(transport, self._ssl, protocol)
-        except Exception as e:  # the timeout, a bad ClientHello, the client went away
-            self._failed(f"TLS handshake with {label} failed: {describe_tls_error(e)}")
-        finally:
-            BUDGET.handshakes.discard(transport)
-            self._handshakes.pop(transport, None)
+        task = begin_tls(transport, self._ssl, protocol, label, self._failed)
+        self._handshakes[transport] = task
+        task.add_done_callback(lambda _t: self._handshakes.pop(transport, None))
 
 
 async def start_server(client_connected_cb: Callable, host: str, port: int, *, ssl: Any = None,
