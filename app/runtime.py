@@ -173,7 +173,10 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     if ((first_run or reconfigure or env_set) and not store.matches(config)
             or config.ids_created or admin):
         try:
-            store.save(config)
+            # not validated: what this config breaks was accepted just above, so a check
+            # could only fail on a file it looks for that went away since, and that must
+            # not stop the start either (under a restart policy: over and over)
+            store.save(config, validate=False)
         except OSError as e:  # read-only/full data dir, config.json mounted on its own
             if first_run:
                 raise SystemExit(f"ser2net: cannot create the configuration: "
