@@ -401,6 +401,12 @@ role changes. While it is on, the UI shows a warning and startup logs it.
   …`); the systemd unit sets `LimitNOFILE=65536`, and a low hard limit in Docker is raised
   with `--ulimit nofile=65536`. The start-up log warns when the configured mappings need
   close to the limit.
+- **Many connections on Windows:** the event loop ser2net uses there (`select()`) watches at
+  most 512 sockets (listeners, clients, the UI's connections). Near that, new connections
+  are refused with a log line, and the service keeps running. The environment variable
+  `SER2NET_WINDOWS_LOOP=proactor` (for the service: a system environment variable) switches
+  to the proactor loop, which has no such limit; it is new, so test serial timing (e.g.
+  Modbus RTU) with it before relying on it. The start-up log names the loop in use.
 
 ---
 
