@@ -274,8 +274,9 @@ def test_upstream_internals():
     assert "except serial.SerialException" in read_ready, read_ready
     init = inspect.getsource(saf.SerialTransport.__init__)
     assert "self._serial.timeout = 0" in init and "self._serial.write_timeout = 0" in init
-    assert list(inspect.signature(saf.connection_for_serial).parameters) == [
-        "loop", "protocol_factory", "serial_instance"]
+    init_code = saf.SerialTransport.__init__.__code__  # (its annotations don't evaluate on 3.14)
+    assert init_code.co_varnames[:init_code.co_argcount] == (
+        "self", "loop", "protocol", "serial_instance")
     if "select.select" not in inspect.getsource(serialposix.Serial.read):
         print("note: pyserial's read() no longer uses select(); serial_compat may be simpler now")
     print("pyserial / pyserial-asyncio-fast internals serial_compat relies on are there  OK")

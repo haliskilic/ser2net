@@ -3,64 +3,21 @@
 Kept separate from the bridge so the device-resolution and pyserial-config
 mapping live in one place. ``resolve_device`` re-resolves a stable hardware
 identity (VID/PID/serial) to a current device path so COMx / ttyUSB* renumbering
-doesn't break a mapping across reconnects. The port class and the stream on top of it
-are serial_compat's (POSIX: reads without select(), one descriptor per port).
+doesn't break a mapping across reconnects. The port class, the transport and the stream
+on top of them are serial_compat's (which also holds ser2net's fixes for pyserial and
+pyserial-asyncio-fast).
 """
 from __future__ import annotations
 
-import contextlib
 import sys
 from typing import Any
 
 from ..config import SerialSettings, url_port
 
-_patched = False
-
 # StreamReader high-water for the serial side. The default (64 KB) makes the reader
 # pause/resume frequently under load; we read promptly in the bridge and apply our
 # own per-client backpressure, so a larger buffer keeps the serial read flowing.
 SERIAL_STREAM_LIMIT = 1024 * 1024
-
-
-def _patch_serial_asyncio_fast() -> None:
-    """Fix a writer-deregistration bug in serial_asyncio_fast 0.16.
-
-    Upstream's SerialTransport._write_ready() drains the write buffer but never
-    calls _remove_writer() once the buffer empties. The fd-writer (POSIX
-    add_writer / Windows polled _poll_write) therefore stays armed, and the next
-    writable event re-enters _write_ready() with an empty buffer, hitting
-    `assert data, "Write buffer should not be empty"` and busy-looping. This only
-    manifests when a serial write hits EAGAIN/partial (i.e. under sustained or
-    concurrent load — exactly the many-ports case), so we patch it to deregister
-    the writer when the buffer is empty, mirroring CPython's selector transport.
-    """
-    global _patched
-    if _patched:
-        return
-    import serial_asyncio_fast as saf
-
-    T = saf.SerialTransport
-    if getattr(T, "_ser2net_write_ready_patched", False):
-        _patched = True
-        return
-
-    def _write_ready(self) -> None:
-        if not self._write_buffer:
-            self._remove_writer()
-            return
-        if len(self._write_buffer) == 1:
-            data = self._write_buffer.pop()
-        else:
-            data = b"".join(self._write_buffer)
-            self._write_buffer.clear()
-        self._write_data(data)
-        self._maybe_resume_protocol()  # may append to the buffer
-        if not self._write_buffer and not self._closing:
-            self._remove_writer()
-
-    T._write_ready = _write_ready  # type: ignore[method-assign]
-    T._ser2net_write_ready_patched = True  # type: ignore[attr-defined]
-    _patched = True
 
 
 def _match_port(p: Any, want: dict[str, Any]) -> bool:
@@ -123,7 +80,6 @@ async def open_serial(settings: SerialSettings):
     serial.SerialException / OSError if the device can't be opened, ValueError for a
     URL port (refuse_url).
     """
-    _patch_serial_asyncio_fast()
     device = resolve_device(settings)
     refuse_url(device)  # the one place every serial port is opened
     kwargs: dict[str, Any] = port_settings(settings)
@@ -136,12 +92,7 @@ async def open_serial(settings: SerialSettings):
     from . import serial_compat
 
     reader, writer = await serial_compat.open_stream(device, SERIAL_STREAM_LIMIT, **kwargs)
-    # upstream reads only 1024 bytes per readiness event (it even has a TODO to
-    # raise this); a larger read drains the OS buffer faster and lowers CPU/latency
-    # under sustained or full-duplex load.
-    transport: Any = writer.transport  # serial_asyncio_fast.SerialTransport
-    with contextlib.suppress(Exception):
-        transport._max_read_size = 65536
+    transport: Any = writer.transport  # serial_compat.Transport
     ser = transport.serial
 
     # apply RTS/DTR start state (only when explicitly on/off). Some backends/adapters
