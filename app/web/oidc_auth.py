@@ -88,12 +88,17 @@ class _SecureRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_OPENER = urllib.request.build_opener(_SecureRedirects)
+def _opener() -> urllib.request.OpenerDirector:
+    """A new one for each request: urllib's HTTPS handler loads the CA certificates when
+    it is made (Python 3.12+), and the standalone Linux binary points OpenSSL at the
+    system's CA bundle (app/standalone.py: SSL_CERT_FILE) only after this module is
+    imported. One made at import would trust no provider there."""
+    return urllib.request.build_opener(_SecureRedirects)
 
 
 def _get_json(url: str, timeout: float = 8):
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with _OPENER.open(req, timeout=timeout) as r:  # noqa: S310 (secure_url checked it)
+    with _opener().open(req, timeout=timeout) as r:  # noqa: S310 (secure_url checked it)
         return json.loads(r.read())
 
 
@@ -103,7 +108,7 @@ def _post_form(url: str, data: dict, timeout: float = 8):
                                  headers={"Content-Type": "application/x-www-form-urlencoded",
                                           "Accept": "application/json"})
     try:
-        with _OPENER.open(req, timeout=timeout) as r:  # noqa: S310
+        with _opener().open(req, timeout=timeout) as r:  # noqa: S310
             return json.loads(r.read())
     except urllib.error.HTTPError as e:   # an OAuth error answer: say what it was
         raise TokenEndpointError(f"the token endpoint refused the code: HTTP {e.code} "
