@@ -5,19 +5,27 @@ with no broker and without paho-mqtt installed. Verifies that complete
 newline-delimited serial lines are published to the base topic, partial lines are
 buffered, CR is stripped, and online/offline status is published with retain; and that
 a command subscription handles a command when it is published, not the broker's retained
-replay of it (unless accept_retained), and never an empty message.
+replay of it (unless accept_retained), and never an empty message. Also that paho's
+network thread waits with poll(), not select() (which refuses descriptors >= 1024), and
+with paho-mqtt installed: a publisher whose broker socket is above 1024 connects and
+publishes (to a minimal broker on 127.0.0.1).
 
 Run: python3 tests/test_mqtt_pub.py
 """
 import asyncio
+import inspect
 import os
+import select
+import socket
 import sys
+import threading
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MqttSettings
-from app.engine.mqtt_pub import MqttPublisher
+from app.engine.mqtt_pub import MqttPublisher, PollSelect, use_poll
 
 
 class FakeClient:
@@ -151,12 +159,147 @@ def test_retained_commands():
     print("paho on_message passes msg.retain through to the event loop  OK")
 
 
+def test_poll_select_answers_like_select():
+    a, b = socket.socketpair()
+    try:
+        ps = PollSelect()
+        assert ps.select([a], [a], [], 0) == select.select([a], [a], [], 0) == ([], [a], [])
+        b.send(b"x")
+        assert ps.select([a, b], [], [], 1) == select.select([a, b], [], [], 1) == ([a], [], [])
+        a.recv(10)
+        t0 = time.monotonic()
+        assert ps.select([a], [], [], 0.2) == ([], [], [])
+        assert 0.15 <= time.monotonic() - t0 < 2, "the timeout is honoured"
+        for bad, exc in ((None, TypeError), ("x", TypeError), (-1, ValueError)):
+            try:
+                ps.select([bad], [], [], 0)
+            except exc:
+                pass
+            else:
+                raise AssertionError(f"{bad!r} must raise {exc.__name__}, as select() does")
+        gone = socket.socket()
+        fd = gone.fileno()
+        gone.close()
+        try:
+            ps.select([fd], [], [], 0)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("a closed descriptor must raise OSError, as select() does")
+        assert ps.error is select.error, "the rest is the real select module"
+    finally:
+        a.close()
+        b.close()
+    print("PollSelect: same answers, timeout and errors as select.select()  OK")
+
+
+def test_poll_select_above_fd_setsize():
+    from _fds import high_fds
+
+    with high_fds():
+        a, b = socket.socketpair()
+    try:
+        assert a.fileno() >= 1024, a.fileno()
+        try:
+            select.select([a], [], [], 0)
+            print("note: this select() takes descriptors >= 1024")
+        except ValueError:
+            pass  # what paho's thread ran into
+        b.send(b"x")
+        assert PollSelect().select([a], [a], [], 1) == ([a], [a], [])
+    finally:
+        a.close()
+        b.close()
+    print("PollSelect: a socket at descriptor >= 1024 is waited on  OK")
+
+
+class MiniBroker(threading.Thread):
+    """Just enough MQTT 3.1.1 for one publisher: CONNACK, PINGRESP, the topics it publishes."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.sock = socket.create_server(("127.0.0.1", 0))
+        self.port = self.sock.getsockname()[1]
+        self.connected = threading.Event()
+        self.topics = []
+
+    def run(self):
+        self.sock.settimeout(20)
+        try:
+            conn, _ = self.sock.accept()
+        except OSError:
+            return
+        conn.settimeout(20)
+        f = conn.makefile("rb")
+        with conn, f:
+            while True:
+                head = f.read(1)
+                if not head:
+                    return
+                n, shift = 0, 0
+                while True:
+                    byte = f.read(1)[0]
+                    n |= (byte & 0x7F) << shift
+                    shift += 7
+                    if not byte & 0x80:
+                        break
+                body = f.read(n)
+                kind = head[0] >> 4
+                if kind == 1:  # CONNECT
+                    conn.sendall(b"\x20\x02\x00\x00")
+                    self.connected.set()
+                elif kind == 3:  # PUBLISH (QoS 0)
+                    self.topics.append(body[2:2 + int.from_bytes(body[:2], "big")].decode())
+                elif kind == 12:  # PINGREQ
+                    conn.sendall(b"\xd0\x00")
+                elif kind == 14:  # DISCONNECT
+                    return
+
+
+def test_paho_publisher_above_fd_setsize():
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        print("SKIP paho-mqtt end to end: paho-mqtt is not installed")
+        return
+    from _fds import high_fds
+
+    assert "select.select(" in inspect.getsource(mqtt.Client._loop), \
+        "paho's network loop no longer calls select.select(): check use_poll()"
+    broker = MiniBroker()
+    broker.start()
+    pub = MqttPublisher(MqttSettings(enabled=True, host="127.0.0.1", port=broker.port,
+                                     base_topic="plant/meter", qos=0), logger=lambda _m: None)
+    try:
+        with high_fds():  # paho's sockets (broker connection, wake-up pair) land >= 1024
+            assert pub.connect() is True
+            assert isinstance(mqtt.select, PollSelect) and use_poll(mqtt), \
+                "the publisher's paho client must wait with poll()"
+            assert broker.connected.wait(10), "paho did not connect"
+            assert pub._client.socket().fileno() >= 1024, pub._client.socket().fileno()
+        pub.feed(b"42.5 kWh\n")
+        end = time.monotonic() + 10
+        while "plant/meter" not in broker.topics and time.monotonic() < end:
+            time.sleep(0.05)
+        assert "plant/meter" in broker.topics, broker.topics
+    finally:
+        pub.close()
+    print("paho publisher with its broker socket at descriptor >= 1024 connects and "
+          "publishes  OK")
+
+
 def main():
     test_lines_published_and_buffered()
     test_disabled_until_connected()
     test_will_is_set_for_lwt()
     test_retained_commands()
-    print("\nPASS: MQTT publisher (line buffering + birth/death, retained commands)")
+    if os.name == "posix":
+        test_poll_select_answers_like_select()
+        test_poll_select_above_fd_setsize()
+        test_paho_publisher_above_fd_setsize()
+    else:
+        print("SKIP PollSelect: POSIX only (Windows' select() limits the count, not the value)")
+    print("\nPASS: MQTT publisher (line buffering + birth/death, retained commands, poll())")
 
 
 if __name__ == "__main__":
