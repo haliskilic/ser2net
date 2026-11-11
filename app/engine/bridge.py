@@ -52,6 +52,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import TaskGroup
     from exceptiongroup import BaseExceptionGroup
 
+from .. import i18n
 from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
 from . import netguard, serial_io, sockopts
 from .netguard import LogEvery as _LogEvery
@@ -331,6 +332,14 @@ class RunnerStatus:
         }
 
 
+def log_ignored_settings(mapping: MappingConfig, log) -> None:
+    """At a runner's start: each setting of the mapping that does nothing, in English
+    (MappingConfig.ignored_settings; the edit form shows the same)."""
+    with i18n.english():
+        for text in mapping.ignored_settings():
+            log(f"warning: {text}")
+
+
 def _render_banner(template: str, mapping: MappingConfig, device: str, peer: str) -> bytes:
     s = (
         template.replace("\\d", device)
@@ -571,6 +580,9 @@ class MappingRunner:
         self._access = AccessPolicy(mapping.network)
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
         co = mapping.options.closeon
+        # nothing to close on UDP (ignored_settings says so at start)
+        if mapping.kind == "net" and mapping.network.mode == "udp":
+            co = ""
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
 
@@ -610,6 +622,7 @@ class MappingRunner:
     async def start(self) -> None:
         self._stop.clear()
         self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+        log_ignored_settings(self.mapping, self._log)
 
         if self.mapping.kind == "serialbridge":
             self._main_task = asyncio.create_task(

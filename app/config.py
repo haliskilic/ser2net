@@ -589,7 +589,18 @@ class NetworkSettings:
                   path: str = "") -> "NetworkSettings":
         d = dict(d or {})
         notes = [] if notes is None else notes
-        return NetworkSettings(**_read_fields(NetworkSettings, d, notes, path))
+        net = NetworkSettings(**_read_fields(NetworkSettings, d, notes, path))
+        # a UDP mapping has no connection to negotiate telnet on, so it always ran raw: say
+        # so (validate() refuses RFC 2217 and Modbus over UDP, but older releases took telnet)
+        if net.mode == "udp" and net.protocol == "telnet":
+            notes.append(FieldNote(
+                path + "protocol", "replaced", "telnet", "raw",
+                why=f"{path}protocol telnet is not supported over UDP: raw is used (as it "
+                    "always was: no telnet negotiation or escaping over UDP)",
+                warning=_("Telnet is not supported over UDP, so the protocol is raw (as it "
+                          "always was in effect).")))
+            net.protocol = "raw"
+        return net
 
     def validate(self) -> None:
         if self.mode not in NET_MODES:
@@ -964,6 +975,23 @@ class MappingConfig:
                 and not self.modbus_poll.points):
             raise ConfigError(_("Sparkplug B publishes Modbus poll points: add points (and use "
                                 "protocol = modbus), or use the plain MQTT format."))
+
+    def ignored_settings(self) -> list[str]:
+        """Settings this mapping has that do nothing, in the current language: the runner
+        logs them when it starts (in English), the edit form and the REST API show them.
+        validate() accepts them, as earlier versions did."""
+        out = []
+        if self.mqtt.enabled and self.kind == "serialbridge":
+            out.append(_("MQTT is on, but a serial-to-serial bridge does not publish to MQTT: "
+                         "its MQTT settings are not used."))
+        elif (self.mqtt.enabled and self.kind == "net" and self.network.protocol == "modbus"
+              and not self.modbus_poll.points):
+            out.append(_("MQTT is on, but a Modbus gateway publishes only its poll points, and "
+                         "it has none: nothing is published. Add poll points, or turn MQTT off."))
+        if self.kind == "net" and self.network.mode == "udp" and self.options.closeon:
+            out.append(_("A close-on string is set, but a UDP mapping has no connections to "
+                         "close: it is not used."))
+        return out
 
     def serial_sides(self) -> list[SerialSettings]:
         """The serial ports this mapping opens: A, and B for a serial-to-serial bridge."""

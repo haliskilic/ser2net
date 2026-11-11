@@ -372,6 +372,53 @@ def test_mapping_form_kick_hint():
     print("mapping form: kick_old_user without an allow-list is pointed out (server mode)  OK")
 
 
+def test_mapping_form_protocols_and_ignored_settings():
+    """UDP offers raw only (app.js hides and disables an <option> whose data-show-when
+    doesn't hold, and picks the first one left); the MQTT box says what a Modbus gateway
+    publishes; a setting the mapping has but doesn't use is pointed out at the top."""
+    import re
+
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+
+    def render(d):
+        m = MappingConfig.from_dict({"id": "pr1", "name": "pr", "serial": {"port": "COM3"}, **d})
+        return tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                          ports=[], ips=[], error=None)
+
+    out = render({"network": {"mode": "server", "protocol": "telnet"}})
+    select = next(n for n in parse(out).walk() if n.attrs.get("name") == "network_protocol")
+    options = {o.attrs["value"]: o.attrs.get("data-show-when")
+               for o in select.walk() if o.tag == "option"}
+    assert options == {"raw": None, "telnet": "network_mode=server,client",
+                       "rfc2217": "network_mode=server,client",
+                       "modbus": "network_mode=server,client"}, options
+    box = out[out.index('name="mqtt_enabled"'):]
+    box = box[:box.index("</label>")]
+    assert ('<span data-show-when="network_protocol=raw,telnet,rfc2217">Publish serial lines '
+            'to MQTT</span><span data-show-when="network_protocol=modbus">Publish the Modbus '
+            'poll points to MQTT (add them below)</span>') in box, box
+
+    def banners(html_text):
+        return re.findall(r'<div class="banner warn">(.*?)</div>', html_text)
+
+    assert banners(out) == [], banners(out)
+    mqtt = {"enabled": True, "host": "b", "base_topic": "t"}
+    assert banners(render({"kind": "serialbridge", "serial_b": {"port": "COM4"},
+                           "mqtt": mqtt})) == [
+        "MQTT is on, but a serial-to-serial bridge does not publish to MQTT: its MQTT "
+        "settings are not used."]
+    assert "nothing is published" in banners(render(
+        {"network": {"protocol": "modbus", "port": 502}, "mqtt": mqtt}))[0]
+    assert "no connections to close" in banners(render(
+        {"network": {"mode": "udp"}, "options": {"closeon": "BYE"}}))[0]
+    print("mapping form: raw only over UDP, the MQTT box per protocol, unused settings "
+          "pointed out  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
@@ -381,6 +428,7 @@ def main():
     test_mapping_form_udp_fields()
     test_mapping_form_rfc2217_restore()
     test_mapping_form_kick_hint()
+    test_mapping_form_protocols_and_ignored_settings()
     test_mqtt_command_tags()
     print("\nPASS: UI markup contract")
 

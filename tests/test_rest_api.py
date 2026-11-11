@@ -171,6 +171,22 @@ def main():
         print("typed values: 'false'/'19200' read as meant, unknown keys in `warnings`, "
               "an unreadable value -> 400 naming it  OK")
 
+        # ---- settings that do nothing are named too ----
+        udp = dict(new, name="api-udp", enabled=False,
+                   network={"mode": "udp", "protocol": "telnet", "bind_ip": "127.0.0.1",
+                            "port": free_port()},
+                   mqtt={"enabled": True, "host": "broker", "base_topic": "t"},
+                   options={"closeon": "BYE"})
+        code, made = api("POST", "/api/v1/mappings", token=token, body=udp, expect=201)
+        assert made["network"]["protocol"] == "raw", made["network"]
+        assert made["warnings"] == [
+            "Telnet is not supported over UDP, so the protocol is raw (as it always was in "
+            "effect).",
+            "A close-on string is set, but a UDP mapping has no connections to close: it is "
+            "not used."], made["warnings"]
+        api("DELETE", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
+        print("telnet over UDP saved as raw, unused close-on named in `warnings`  OK")
+
         # ---- a save that fails for another reason: JSON 500, nothing left in memory ----
         if os.name == "posix" and os.geteuid() != 0:
             os.chmod(tmp, 0o500)  # config.json can't be replaced

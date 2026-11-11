@@ -59,7 +59,11 @@ düzenlemeye gerek yok.
   cihazın çıktısını izinli bir IP'den gelen son datagram'ın göndericisine ya da her zaman
   sabit bir **yanıt adresine** (IP + port) gönderir; **karşı uç zaman aşımı** sessiz kalan
   göndericiyi unutturur. Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler:
-  hattan hızlı gönderen birinin bunu aşan datagram'ları atılır, sayılır ve loglanır.
+  hattan hızlı gönderen birinin bunu aşan datagram'ları atılır, sayılır ve loglanır. UDP
+  her zaman raw'dır (kayıtlı bir `telnet` `raw` okunur; fiilen hep böyle çalışıyordu) ve
+  bir kapatma dizesinin kapatacağı bağlantısı yoktur. Hiçbir etkisi olmayan bir ayar — bu,
+  serial↔serial köprüde MQTT, okuma noktası olmayan bir Modbus gateway'de MQTT — eşleme
+  başlarken loglanır, düzenleme formunda ve REST API yanıtındaki `warnings`'te gösterilir.
 - **Protokoller:** `raw`, `telnet` (8-bit temiz), `rfc2217` (uzaktan canlı
   baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway). Portun
   yerine getiremediği bir RFC 2217 isteği (bozuk ya da ayrılmış bir değer veya seri portun
