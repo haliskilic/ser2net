@@ -129,29 +129,31 @@ def test_left_alone_unless_changed():
     try:
         with env(**CONTAINER):
             runtime.prepare_config(path)  # first run: created (no console picker: env set)
-            assert os.path.isfile(path) and backups(data) == []
-            before = file_state(path)
+            assert os.path.isfile(path) and len(backups(data)) == 1, "the file written is kept"
+            before, kept = file_state(path), backups(data)
             _store, cfg = runtime.prepare_config(path)
             assert file_state(path) == before, "an unchanged config.json was rewritten"
-            assert backups(data) == [] and warnings(cfg) == [], (backups(data), cfg.load_notes)
-        print("same settings on the next start: config.json not rewritten, no backup  OK")
+            assert backups(data) == kept and warnings(cfg) == [], (backups(data), cfg.load_notes)
+        print("same settings on the next start: config.json not rewritten, no new backup  OK")
 
         with env(SER2NET_BIND_IP="0.0.0.0", SER2NET_PORT="9090"):
             runtime.prepare_config(path)
         with open(path, encoding="utf-8") as fh:
             assert json.load(fh)["admin_ui"]["port"] == 9090
-        assert len(backups(data)) == 1, backups(data)
-        print("a new SER2NET_PORT: saved, the previous file backed up  OK")
+        assert len(backups(data)) == 2, backups(data)
+        print("a new SER2NET_PORT: saved, and kept in backups/ next to the previous file  OK")
 
         shutil.copy(FIXTURE, path)  # an upgrade: 2.8 adds keys and moves the trace paths
         with env(**CONTAINER):
             runtime.prepare_config(path)
             with open(path, encoding="utf-8") as fh:
                 assert "session_timeout_s" in json.load(fh)
-            newest = ConfigStore(path).backup_names()[0]
-            with open(os.path.join(data, "backups", newest), encoding="utf-8") as fh, \
+            newest, replaced = ConfigStore(path).backup_names()[:2]
+            with open(os.path.join(data, "backups", replaced), encoding="utf-8") as fh, \
                     open(FIXTURE, encoding="utf-8") as orig:
                 assert json.load(fh) == json.load(orig), "the 2.7.1 file must be backed up"
+            with open(os.path.join(data, "backups", newest), encoding="utf-8") as fh:
+                assert fh.read() == read_text(path), "the newest backup is config.json"
             before, kept = file_state(path), backups(data)
             runtime.prepare_config(path)
             assert file_state(path) == before and backups(data) == kept
@@ -350,8 +352,9 @@ def test_invalid_settings_still_start():
         assert by["baud-typo"]["serial"]["baudrate"] == 0
         assert by["ok"]["serial"]["baudrate"] == 19200, "a text value is saved as its number"
         assert saved["cluster"]["discovery_port"] == 70000 and "tolerated" not in saved
-        assert len(backups(srv.data)) == 1
-        with open(os.path.join(srv.data, "backups", backups(srv.data)[0]), encoding="utf-8") as fh:
+        oldest_first = ConfigStore(srv.config_path).backup_names()[::-1]
+        assert len(oldest_first) == 2, oldest_first  # the original, and the new file
+        with open(os.path.join(srv.data, "backups", oldest_first[0]), encoding="utf-8") as fh:
             assert json.load(fh) == written, "the original file must be backed up"
         with urllib.request.urlopen(srv.base + "/healthz", timeout=10) as r:
             assert r.read().strip() == b"ok"
@@ -419,7 +422,7 @@ def test_accounts_saved_once():
             assert (saved["cluster"]["discovery_port"], saved["mappings"][3]["network"]["tls_cert"],
                     saved["mappings"][4]["serial"]["baudrate"]) == (70000, MISSING, 0), \
                 "the broken parts must stay as they were"
-            assert len(backups(data)) == 1, backups(data)
+            assert len(backups(data)) == 2, backups(data)  # the file it replaced, and the new one
             assert "admin account 'boss' created from SER2NET_ADMIN_PASSWORD_FILE" in cfg.load_notes
             assert "first_run_setup\tSER2NET_ADMIN_PASSWORD_FILE\tboss" in \
                 read_text(os.path.join(data, "audit.log"))

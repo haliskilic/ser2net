@@ -21,7 +21,7 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig
+from app.config import AppConfig, ConfigStore
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
 # what 2.8 changes in a 2.7.1 config on purpose (path -> file name; see config.trace_file_name)
@@ -80,10 +80,12 @@ def main():
         log = srv.output()
         assert "its trace file is now traces/aaaa00000001-plc1.trace" in log, log[-1500:]
         assert "is not a valid mapping id" not in log, "a 2.7.1 mapping id was replaced"
-        backups = os.listdir(os.path.join(srv.data, "backups"))
-        assert len(backups) == 1, backups
+        backups = ConfigStore(srv.config_path).backup_names()[::-1]  # oldest first
+        assert len(backups) == 2, backups  # the 2.7.1 file, then the one it was replaced by
         with open(os.path.join(srv.data, "backups", backups[0]), encoding="utf-8") as fh:
             assert json.load(fh) == boot, "the backup must be the untouched 2.7.1 file"
+        with open(os.path.join(srv.data, "backups", backups[1]), encoding="utf-8") as fh:
+            assert json.load(fh) == srv.saved_config(), "the newest backup is config.json"
         print("boot (re-save): trace move logged, the 2.7.1 config.json kept in data/backups  OK")
 
         for user, pw in (("admin", "old-admin-pass-1"), ("op1", "old-op-pass-1"),

@@ -485,7 +485,9 @@
 {% if is_admin %}
 <section class="panel panel-narrow" id="backups">
   <div class="panel-head"><h2>{{ _("Configuration backups") }}</h2></div>
-  <p class="muted mb-sm">{{ _('Every change keeps the previous <span class="mono">config.json</span> in the data folder’s <span class="mono">backups/</span> (the newest 50). Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. The configuration it replaces is backed up first, so a restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
+  <p class="muted mb-sm">{{ _('Every change keeps the <span class="mono">config.json</span> it writes in the data folder’s <span class="mono">backups/</span>, and the one it replaces if that isn’t there yet (the newest 50; the one in use is marked), so the current configuration is kept there too, also when an older version takes over. Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. A restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
+  {% if newer_writer %}<div class="banner warn">{{ _('At start-up, config.json had been written by ser2net %(newer)s, a newer version than this one (%(this)s). What only that version knows is not used here, and it is left out when this version saves config.json. The backups below keep the file as that version left it: restore it after upgrading again.', newer=newer_writer, this=asset_version) }}</div>{% endif %}
+  {% if unknown_keys %}<div class="banner warn">{{ _('At start-up, config.json had settings this version doesn’t know: %(keys)s. They are not used here, and they are left out when config.json is saved; the backups below keep the file with them.', keys=(unknown_keys[:10] | join(', ')) ~ (' …' if unknown_keys | length > 10 else '')) }}</div>{% endif %}
   {% if restore_preview %}
   {% set rp = restore_preview %}
   <h3 class="mt-sm">{{ _("Restore the configuration saved at %(time)s UTC", time=rp.time) }}</h3>
@@ -512,12 +514,13 @@
   {% if backups %}
   <div class="table-scroll">
   <table class="grid th-wrap">
-    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Contents") }}</th><th class="col-actions"></th></tr></thead>
+    <thead><tr><th>{{ _("Saved (UTC)") }}</th><th>{{ _("Contents") }}</th><th>{{ _("Written by") }}</th><th class="col-actions"></th></tr></thead>
     <tbody>
     {% for bk in backups %}
       <tr>
-        <td class="mono">{{ bk.time }}</td>
+        <td class="mono">{{ bk.time }}{% if bk.current %} <span class="tag">{{ _("in use") }}</span>{% endif %}</td>
         <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}</td>
+        <td>{{ ("ser2net " ~ bk.written_by) if bk.written_by else _("2.8.1 or older") }}</td>
         <td class="col-actions">
           <div class="row-actions">
             <a class="btn sm" href="/settings/backups/{{ bk.name }}">{{ _("Download") }}</a>

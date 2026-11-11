@@ -2,8 +2,9 @@
 
 Before v2.8 "Import" replaced every mapping at once and config.json was never backed
 up, so a wrong import or edit could not be undone. Checks:
-  * every change keeps the replaced config.json in data/backups (no duplicates,
-    newest 50 kept; names that aren't ours are rejected);
+  * every save keeps the config.json it writes in data/backups, and the one it
+    replaces when that isn't kept yet (no duplicates, newest 50 kept; names that aren't
+    ours are rejected);
   * the import form first previews (nothing changes), then merges — same name =
     update keeping the id, new = add, others untouched — or replaces;
   * a 2.7-style one-step POST still replaces everything (scripts keep working);
@@ -49,21 +50,40 @@ def test_store_backups():
     d = tempfile.mkdtemp(prefix="s2n_bk_")
     store = ConfigStore(os.path.join(d, "config.json"))
     cfg = AppConfig()
+
+    def newest_is_current():
+        with open(store.path, encoding="utf-8") as fh:
+            return store.read_backup(store.backup_names()[0]) == fh.read()
+
     store.save(cfg)
-    assert store.backup_names() == [], "the first save has nothing to back up"
+    assert len(store.backup_names()) == 1 and newest_is_current(), \
+        "the first save keeps what it wrote"
     cfg.session_timeout_s = 3600
     store.save(cfg)
     store.save(cfg)  # same content again: no new file
     names = store.backup_names()
-    assert len(names) == 1, names
-    assert json.loads(store.read_backup(names[0]))["session_timeout_s"] == 28800
+    assert len(names) == 2 and newest_is_current(), names
+    assert json.loads(store.read_backup(names[1]))["session_timeout_s"] == 28800
     for i in range(BACKUPS_KEPT + 5):
         cfg.session_timeout_s = 600 + i
         store.save(cfg)
     names = store.backup_names()
     assert len(names) == BACKUPS_KEPT, len(names)
-    newest = json.loads(store.read_backup(names[0]))["session_timeout_s"]
-    assert newest == 600 + BACKUPS_KEPT + 3, newest  # the version before the last save
+    assert newest_is_current(), "the newest backup is what config.json holds"
+    before = json.loads(store.read_backup(names[1]))["session_timeout_s"]
+    assert before == 600 + BACKUPS_KEPT + 3, before  # the version before the last save
+    # config.json edited by hand (or by an older release): kept before it is replaced
+    with open(store.path, "r+", encoding="utf-8") as fh:
+        doc = json.load(fh)
+        doc["session_timeout_s"] = 7200
+        fh.seek(0)
+        fh.truncate()
+        json.dump(doc, fh)
+    cfg.session_timeout_s = 900
+    store.save(cfg)
+    names = store.backup_names()
+    assert json.loads(store.read_backup(names[1]))["session_timeout_s"] == 7200, names
+    assert newest_is_current()
     for bad in ("../config.json", "config.json", "config-20260101T000000Z.json.x", ""):
         try:
             store.read_backup(bad)
@@ -73,7 +93,9 @@ def test_store_backups():
             raise AssertionError(f"read_backup accepted {bad!r}")
     info = store.backups()[0]
     assert info["mappings"] == 0 and info["users"] == 0 and len(info["time"]) == 19, info
-    print(f"store: each change backs up the old file, no duplicates, newest {BACKUPS_KEPT} kept  OK")
+    assert info["current"] is True and store.backups()[1]["current"] is False
+    print(f"store: each save keeps what it wrote (and the file it replaces if not kept yet), "
+          f"no duplicates, newest {BACKUPS_KEPT} kept  OK")
 
 
 def test_planner():
