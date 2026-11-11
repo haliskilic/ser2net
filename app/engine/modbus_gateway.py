@@ -8,7 +8,9 @@ bus), reads the slave's RTU reply, and returns it to that master as Modbus/TCP â
 echoing the transaction id so concurrent masters don't get crossed wires. A request
 whose slave doesn't answer in time is answered with exception 0x0B (gateway target
 failed to respond); while the serial port is down, every request is answered with 0x0A
-(gateway path unavailable) at once.
+(gateway path unavailable) at once. A broadcast (unit 0) write goes on the bus and, after
+the turnaround delay, gets the echo a slave would have sent; a read of unit 0 can't get a
+reply and is answered 0x0B at once, without touching the bus.
 
 Shares the lifecycle shape (and the H3/H4 fixes) of MappingRunner: the same
 supervised serial port (serial_link.SerialLink: reopened, and its USB identity
@@ -52,6 +54,10 @@ SILENCE_S = 0.05
 # has to be quiet this long (at most the response timeout) before the next request goes
 # out: a reply that comes late is dropped then, not taken for the next request's.
 GUARD_S = 0.25
+# After a broadcast (unit 0), which no slave answers: the time the slaves get to carry it
+# out before the next request goes out (the Modbus serial line specification's turnaround
+# delay, 100-200 ms; at most the response timeout).
+TURNAROUND_S = 0.2
 # Log lines about one slave's replies (cut short, not matching): at most one per this many
 # seconds per kind and unit; the ones in between are counted into the next.
 NOTE_EVERY_S = 60.0
@@ -234,6 +240,10 @@ class ModbusGatewayRunner:
         function = pdu[0] if pdu else 0
         if self._link.down:  # the port is gone (reconnecting): answer now, don't queue
             return modbus.exception_pdu(function, modbus.GATEWAY_PATH_UNAVAILABLE)
+        if unit == modbus.BROADCAST and modbus.is_read_request(pdu):
+            # no slave answers a broadcast, so a read of unit 0 can't get a reply: nothing
+            # goes on the bus, and the master gets at once what it got after the timeout
+            return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
         if not self._link.is_open:
             # the first open at start-up is still under way: wait a little for it, outside
             # the bus lock, so queued requests wait together and not one timeout each
@@ -256,8 +266,14 @@ class ModbusGatewayRunner:
                 self.status.bytes_out += len(rtu_req)
                 # drain() returns once the OS has the request, which then still takes
                 # its time on the line: the response timeout starts after that
-                rpdu = await self._read_reply(reader, unit, pdu,
-                                              loop.time() + len(rtu_req) * self._char_s)
+                sent = loop.time() + len(rtu_req) * self._char_s
+                if unit == modbus.BROADCAST:
+                    await self._turnaround(reader, sent)
+                    reply = modbus.broadcast_reply(pdu)
+                    if reply is not None:  # a write: what each slave would have answered
+                        return reply
+                    return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
+                rpdu = await self._read_reply(reader, unit, pdu, sent)
             except (asyncio.TimeoutError, ConnectionError, OSError):
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
             if rpdu is None:  # no reply from that slave in time
@@ -288,8 +304,10 @@ class ModbusGatewayRunner:
         poll = self.mapping.modbus_poll
         while not self._stop.is_set():
             values = {}
-            # while the port is gone there is nothing to read (the link logs the outage)
-            points = poll.points if not self._link.down else []
+            # while the port is gone there is nothing to read (the link logs the outage); a
+            # point on unit 0 is never read: no slave answers a broadcast
+            points = ([p for p in poll.points if p.unit != modbus.BROADCAST]
+                      if not self._link.down else [])
             for p in points:
                 try:
                     values[p.name] = await self._read_point(p)
@@ -308,8 +326,9 @@ class ModbusGatewayRunner:
         """Write one value to one writable point, and nothing beyond it: a coil takes a
         bool (FC5), a holding register a number, encoded as the point's own type (FC6 for
         a 16-bit type, FC16 for the two registers of a 32-bit one). Check the slave's
-        reply, then read the point back and publish it. A read-only mapping writes nothing
-        (checked here, at write time, for every command path)."""
+        reply, then read the point back and publish it; a point on unit 0 is a broadcast,
+        carried out by every slave and answered by none, so it is not read back. A read-only
+        mapping writes nothing (checked here, at write time, for every command path)."""
         if self.mapping.network.read_only:
             raise ValueError("mapping is read-only")
         if not point.writable:
@@ -329,6 +348,10 @@ class ModbusGatewayRunner:
                    else modbus.write_multiple_registers_pdu(point.address, regs))
         rpdu = await self._transaction(point.unit, pdu)
         modbus.check_write_response(rpdu, pdu)
+        if point.unit == modbus.BROADCAST:
+            self._log(f"wrote '{point.name}' = {value!r} (broadcast to unit 0, FC{pdu[0]}; "
+                      "not read back)")
+            return
         self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]})")
         with contextlib.suppress(Exception):
             self._publish_values({point.name: await self._read_point(point)})
@@ -457,6 +480,27 @@ class ModbusGatewayRunner:
                        f"{self._resp_timeout:g} s; dropped {dropped + len(buf)} byte(s) "
                        f"({what})")
         return None
+
+    async def _turnaround(self, reader, sent: float) -> None:
+        """After a broadcast, which no slave answers: keep the bus until the request is out
+        (``sent``) and the slaves have had the turnaround time to carry it out. What comes
+        meanwhile is dropped."""
+        loop = asyncio.get_running_loop()
+        end = sent + min(TURNAROUND_S, self._resp_timeout)
+        got = bytearray()
+        while (left := end - loop.time()) > 0:
+            try:
+                chunk = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=left)
+            except asyncio.TimeoutError:
+                break
+            if not chunk:
+                raise ConnectionError("serial EOF")
+            got += chunk
+        if got:
+            self._dropped(got)
+            self._dirty = True
+            self._note("stray", modbus.BROADCAST, f"dropped {len(got)} byte(s) that came after "
+                       "a broadcast to unit 0, which no slave may answer")
 
     def _delivered(self, frame: bytes) -> None:
         self.status.bytes_in += len(frame)

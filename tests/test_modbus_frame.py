@@ -285,6 +285,25 @@ def test_reply_mismatch():
           "(function, byte count, echo); find_reply skips them  OK")
 
 
+def test_broadcast_reply():
+    """A broadcast (unit 0) gets no reply from any slave; for a well-formed write the gateway
+    answers with the echo a slave would send, which check_write_response accepts."""
+    writes = [bytes.fromhex("0500acff00"), bytes.fromhex("0600010003"),
+              bytes.fromhex("16000400f20025"), bytes.fromhex("0f0013000a02cd01"),
+              bytes.fromhex("100001000204000a0102")]
+    for pdu in writes:
+        reply = modbus.broadcast_reply(pdu)
+        assert reply == (pdu[:5] if pdu[0] in (15, 16) else pdu), pdu.hex(" ")
+        if pdu[0] != 22:
+            modbus.check_write_response(reply, pdu)
+    for pdu in (bytes.fromhex("0300000002"), bytes.fromhex("06000100"),   # a read, a short FC6
+                bytes.fromhex("0f0013000a03cd01"),                        # a wrong byte count
+                bytes.fromhex("080001ff00"), b"\x41\x00", b""):          # FC8, user-defined
+        assert modbus.broadcast_reply(pdu) is None, pdu.hex(" ")
+    assert modbus.BROADCAST == 0
+    print("broadcast_reply: the echo of a well-formed FC5/6/15/16/22, None otherwise  OK")
+
+
 def main():
     test_register_read_and_decode()
     test_crc_and_rtu_known_vector()
@@ -297,6 +316,7 @@ def main():
     test_rtu_reply_length()
     test_find_reply()
     test_reply_mismatch()
+    test_broadcast_reply()
     print("\nPASS: Modbus framing (RTU<->TCP)")
 
 

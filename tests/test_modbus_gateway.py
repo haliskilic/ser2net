@@ -37,7 +37,7 @@ from app import notify
 from app.config import MappingConfig
 from app.engine import modbus, serial_io
 from app.engine.bridge import FROM_DEVICE, open_tracer
-from app.engine.modbus_gateway import GUARD_S, SILENCE_S, ModbusGatewayRunner
+from app.engine.modbus_gateway import GUARD_S, SILENCE_S, TURNAROUND_S, ModbusGatewayRunner
 
 RESPONSIVE_UNIT = 1
 SILENT_UNIT = 9
@@ -448,6 +448,46 @@ async def test_reply_must_answer_request():
           "uint32 point -> 0x0B and a log line  OK")
 
 
+async def test_broadcast():
+    """Unit 0 is a broadcast: every slave carries out a write and none answers. A write goes
+    on the bus and gets, after the turnaround delay (not the response timeout), the echo a
+    slave would have sent; a read of unit 0 is answered 0x0B at once and never put on the
+    bus; anything else is put on the bus and answered 0x0B after the turnaround."""
+    runner, bus = memory_gateway(timeout=1.0)
+    writes = [modbus.write_single_register_pdu(1, 3), modbus.write_single_coil_pdu(5, True),
+              modbus.write_multiple_registers_pdu(10, [1, 2, 3]),
+              modbus.write_multiple_coils_pdu(0, [True, False, True]),
+              bytes.fromhex("16000400f20025")]
+    for pdu in writes:
+        reply, took = await timed(runner._transaction(modbus.BROADCAST, pdu))
+        assert reply == modbus.broadcast_reply(pdu) and reply is not None, (pdu.hex(" "), reply)
+        assert TURNAROUND_S * 0.8 <= took < TURNAROUND_S + 0.25, took
+    assert bus.requests == [(0, pdu) for pdu in writes], bus.requests
+    print(f"broadcast writes: on the bus, echoed after the turnaround ({took * 1000:.0f} ms, "
+          "not the 1 s timeout)  OK")
+
+    bus.requests.clear()
+    for pdu in (modbus.read_pdu(3, 0, 2), modbus.read_bits_pdu(1, 0, 8), bytes.fromhex("080000a537")):
+        reply, took = await timed(runner._transaction(modbus.BROADCAST, pdu))
+        assert reply == bytes([pdu[0] | 0x80, 0x0B]) and took < 0.1, (pdu.hex(" "), reply, took)
+    assert bus.requests == [], "a read of unit 0 must not reach the bus"
+    reply, took = await timed(runner._transaction(modbus.BROADCAST, b"\x41\x00"))
+    assert reply == b"\xc1\x0b" and took < TURNAROUND_S + 0.25, (reply, took)
+    assert bus.requests == [(0, b"\x41\x00")], bus.requests
+    print("unit 0 reads: 0x0B at once, nothing on the bus; other codes: sent, then 0x0B  OK")
+
+    # a short response timeout caps the turnaround; a slave that answers a broadcast anyway
+    # is dropped and does not reach the next request
+    runner, bus = memory_gateway(lambda u, p: [(0.01, modbus.rtu_wrap(u, p))] if u == 0 else
+                                 [(0, regs_reply(u, 2, base=5))], timeout=0.05)
+    pdu = modbus.write_single_register_pdu(1, 3)
+    reply, took = await timed(runner._transaction(modbus.BROADCAST, pdu))
+    assert reply == pdu and took < 0.2, (reply, took)
+    assert regs_of(await runner._transaction(1, modbus.read_pdu(3, 5, 2))) == [5, 6]
+    print("broadcast: the turnaround is at most the response timeout; a reply to it is "
+          "dropped  OK")
+
+
 class ThreadSlave:
     """An RTU slave on a plain socket served by a thread, so that the pauses inside a reply
     are real (time.sleep), not event-loop timers: each request is answered with
@@ -852,6 +892,7 @@ async def main():
         await test_split_reply_real_pauses()
         await test_late_reply_dropped()
         await test_reply_must_answer_request()
+        await test_broadcast()
         await test_reopen_after_port_loss(slave_port)
         await test_missing_port_at_start(slave_port)
         await test_slow_first_open(slave_port)

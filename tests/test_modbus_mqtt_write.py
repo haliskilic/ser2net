@@ -22,7 +22,8 @@ anywhere without a broker or hardware. Checks:
     is not written again after a reconnect or by a new runner unless the mapping opts in,
     a retained NCMD / DCMD never is, and an empty message (clearing one) is no command;
   * Read-only refuses MQTT / Sparkplug writes as well (checked when a command arrives),
-    and the start-up log warns about commands over a broker link without TLS / username.
+    and the start-up log warns about commands over a broker link without TLS / username;
+  * a writable point on unit 0 is a broadcast: written (ok), not read back, never polled.
 
 Run: python3 tests/test_modbus_mqtt_write.py
 """
@@ -94,8 +95,10 @@ async def fake_slave(reader, writer):
             with suppress(ValueError):
                 unit, pdu = modbus.rtu_unwrap(bytes(buf))
                 buf.clear()
-                writer.write(modbus.rtu_wrap(unit, answer(pdu)))
-                await writer.drain()
+                reply = answer(pdu)
+                if unit != modbus.BROADCAST:  # a broadcast is carried out, never answered
+                    writer.write(modbus.rtu_wrap(unit, reply))
+                    await writer.drain()
 
 
 class Msg:
@@ -448,6 +451,38 @@ async def test_retained_replay(slave_port):
     print("sparkplug: retained NCMD / DCMD ignored on subscribe, a live DCMD is written  OK")
 
 
+async def test_broadcast_point(slave_port):
+    """A writable point on unit 0 is a broadcast: every slave carries out the write and none
+    answers it, so a /set is answered ok without a read-back, and the point is never
+    polled (it would only time out every cycle)."""
+    fake, logs = FakeMqtt(), []
+    points = [{"name": "all", "unit": 0, "fn": 3, "address": 10, "dtype": "int16",
+               "writable": True},
+              {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"}]
+    r, sw = await gateway("plain", slave_port, fake, points, logs)
+    poll = asyncio.create_task(r._poll_loop())
+    SEEN.clear()
+    REGS[10] = 0
+    try:
+        assert await wait(lambda: last(fake, "plant/a/temp") == b"23.5")
+        r._mqtt.handle_message("plant/a/all/set", b"7")
+        assert await wait(lambda: last(fake, "plant/a/all/set/result") == b"ok"), fake.published
+        assert REGS[10] == 7
+        await asyncio.sleep(0.35)  # a few more poll cycles
+        assert last(fake, "plant/a/all") is None, "a broadcast point is not read back or polled"
+        assert [p[0] for p in SEEN if p[0] != 4] == [6], SEEN  # the write; no FC3 read
+        assert any(m == "wrote 'all' = 7 (broadcast to unit 0, FC6; not read back)"
+                   for m in logs), logs
+        assert not any(m.startswith("poll 'all'") or "failed" in m for m in logs), logs
+        print("unit 0 point: an MQTT write is broadcast (ok, no read-back), never polled  OK")
+    finally:
+        r._stop.set()
+        poll.cancel()
+        with suppress(BaseException):
+            await poll
+        sw.close()
+
+
 async def test_read_only(slave_port):
     """Read-only refuses MQTT and Sparkplug writes too: a /set gets error: mapping is
     read-only, a DCMD is logged and dropped, and nothing reaches the bus. It is checked when
@@ -632,6 +667,7 @@ async def main():
         await test_plain_one_point(port)
         await test_retained_replay(port)
         await test_read_only(port)
+        await test_broadcast_point(port)
         await test_sparkplug(port)
     finally:
         srv.close()
