@@ -5,8 +5,9 @@ The Notifier watches the supervisor's status snapshot (every POLL_S seconds) and
 turns state changes into events; the login route reports failed sign-ins itself.
 Each enabled event is sent to the configured webhook (generic JSON, Slack, Microsoft
 Teams Workflows, Discord or Telegram) and/or by e-mail (SMTP), from a worker task so
-a slow endpoint never holds anything up. The same event for the same mapping is sent
-at most once per ``repeat_s``, and at most MAX_PER_MINUTE messages go out per minute.
+a slow endpoint never holds anything up. The same event for the same mapping (client
+events: and client address; failed sign-ins: per address) is sent at most once per
+``repeat_s``, and at most MAX_PER_MINUTE messages go out per minute.
 Standard library only (urllib, smtplib).
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ from .i18n import _
 POLL_S = 2.0
 MAX_PER_MINUTE = 20
 TIMEOUT_S = 10.0
+MAX_KEYS = 4096  # events remembered for the repeat interval (the oldest go first)
 
 def title(event: str) -> str:
     """The event's name in the notification language (see Notifier.deliver)."""
@@ -65,10 +67,17 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
         if state == "error" and old_state != "error":
             events.append(("start_failed", mid, name, st.get("last_error") or ""))
         for p in sorted(peers - old_peers):
-            events.append(("client_connected", f"{mid}:{p}", name, p))
+            events.append(("client_connected", f"{mid}:{_client_host(p)}", name, p))
         for p in sorted(old_peers - peers):
-            events.append(("client_disconnected", f"{mid}:{p}", name, p))
+            events.append(("client_disconnected", f"{mid}:{_client_host(p)}", name, p))
     return events
+
+
+def _client_host(peer: str) -> str:
+    """A client's address without its port ("ip:port" -> "ip"): a client that reconnects
+    comes from another port, and is still the same one for the repeat interval."""
+    host, sep, port = str(peer).rpartition(":")
+    return host if sep and host and port.isdigit() else str(peer)
 
 
 def snapshot(statuses: dict) -> dict:
@@ -173,17 +182,31 @@ class Notifier:
         last = self._last.get((event, key))
         if last is not None and now - last < s.repeat_s:
             return False
+        self._last.pop((event, key), None)  # added at the end: in the order of their times
         self._last[(event, key)] = now
+        while len(self._last) > MAX_KEYS:
+            del self._last[next(iter(self._last))]
         try:
             self._queue.put_nowait((event, mapping, detail))
         except asyncio.QueueFull:
             return False
         return True
 
+    def _forget_expired(self) -> None:
+        """Drop the events sent longer than repeat_s ago: they can't hold a repeat back
+        any more (a client event is kept per address, a failed sign-in per IP)."""
+        cutoff = time.monotonic() - self.settings.repeat_s
+        while self._last:
+            key, when = next(iter(self._last.items()))
+            if when > cutoff:
+                break
+            del self._last[key]
+
     async def _watch(self) -> None:
         while True:
             await asyncio.sleep(POLL_S)
             try:
+                self._forget_expired()
                 statuses = self.state.supervisor.all_status()
                 names = {m.id: m.name for m in self.state.config.mappings}
                 for event, key, name, detail in status_events(self._prev, statuses, names):
