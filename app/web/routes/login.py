@@ -276,6 +276,16 @@ def routes(ctx: Ctx) -> list:
         resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
         return resp
 
+    def _login_failed(request, ip: str, username: str):
+        """Count, log, record and notify a failed sign-in; the sign-in page again."""
+        state.rate_limiter.record_failure(ip)
+        state.log(f"failed login for {username!r} from {ip}")
+        state.failed_logins.add(ip, username)
+        state.notifier.emit("login_failed", ip, "", f"user {username!r} from {ip}")
+        return render(request, "login.html", status_code=401,
+                      error=_("Invalid username or password."),
+                      oidc_enabled=state.config.oidc.enabled)
+
     async def login_post(request):
         ip = client_ip(request)
         form = await request.form(**FORM_LIMITS)
@@ -288,6 +298,8 @@ def routes(ctx: Ctx) -> list:
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
+        if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
+            return _login_failed(request, ip, username)
         user = state.config.get_user(username)
         authed = None
         # local account: verify the scrypt hash off the event loop (it's slow on purpose)
@@ -320,13 +332,7 @@ def routes(ctx: Ctx) -> list:
             resp = RedirectResponse("/", status_code=303)
             set_session(resp, request, authed)
             return resp
-        state.rate_limiter.record_failure(ip)
-        state.log(f"failed login for {username!r} from {ip}")
-        ctx.audit(request, "login_failed", "", user=username)
-        state.notifier.emit("login_failed", ip, "", f"user {username!r} from {ip}")
-        return render(request, "login.html", status_code=401,
-                      error=_("Invalid username or password."),
-                      oidc_enabled=state.config.oidc.enabled)
+        return _login_failed(request, ip, username)
 
     async def logout_post(request):
         form = await request.form(**FORM_LIMITS)
@@ -336,7 +342,8 @@ def routes(ctx: Ctx) -> list:
         # refused from now on (not just deleted in this browser)
         state.revoked_sessions.add(state.config.secret_key,
                                    request.cookies.get(auth.SESSION_COOKIE))
-        ctx.audit(request, "logout")
+        if not ctx.is_anonymous(request):  # an open-access visitor had no session to end
+            ctx.audit(request, "logout")
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(auth.SESSION_COOKIE, path="/")
         return resp

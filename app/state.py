@@ -19,7 +19,6 @@ import re
 import secrets
 import sys
 import time
-from collections import deque
 from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
@@ -41,23 +40,38 @@ LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at star
 ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
 ALL_LOG_BACKUPS = 5                    # keep 5 rotations (~60 MB total worst case)
 AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup kept)
+# One all.log message is cut after this many characters: a request (a sign-in attempt, a
+# URL) needs no account, and must not write megabytes into the log at a time.
+LOG_MESSAGE_MAX = 2000
+# what an audit record keeps of its client IP, action, detail and user (characters)
+AUDIT_FIELD_MAX = (64, 64, 500, 256)
+# Failed sign-ins need no account. So that they can't push the other records out of
+# audit.log, at most FAILED_LOGIN_RECORDS of them are recorded one by one in
+# FAILED_LOGIN_WINDOW_S seconds; the others are counted, and one record at the end of that
+# time says how many there were and from where (all.log keeps a line for every one).
+FAILED_LOGIN_RECORDS = 20
+FAILED_LOGIN_WINDOW_S = 600
 # first-run setup through a host name that isn't this machine's needs this file's code
 SETUP_CODE_FILE = "setup-code.txt"
 
 
-# control characters (incl. tab / CR / LF) that must not reach an audit record
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# characters that must not reach an audit record: control characters (tab / CR / LF and
+# the C1 ones such as NEL included) and the Unicode line and paragraph separators
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
-                       user: str = "") -> None:
+                       user: str = "") -> list[str]:
     """Append one record to the audit log at `path`: one line, tab-separated: time,
     client IP, action, detail, user (the user column was added in v2.8 — older lines
-    have four fields). Control characters in any field become spaces, so a crafted
-    mapping name can't forge an extra record. Rotated past AUDIT_LOG_MAX_BYTES (one
-    backup kept). Best effort: never raises."""
-    fields = [time.strftime("%Y-%m-%d %H:%M:%S"), actor_ip, action, detail[:500], user]
-    line = "\t".join(_CONTROL.sub(" ", str(f)) for f in fields)
+    have four fields). Each field is cut to its AUDIT_FIELD_MAX, and control characters
+    in it become spaces, so a crafted mapping name can't forge an extra record. Rotated
+    past AUDIT_LOG_MAX_BYTES (one backup kept). Best effort: never raises. Returns the
+    fields as written."""
+    fields = [time.strftime("%Y-%m-%d %H:%M:%S")] + [
+        _CONTROL.sub(" ", str(value)[:limit])
+        for value, limit in zip((actor_ip, action, detail, user), AUDIT_FIELD_MAX, strict=True)]
+    line = "\t".join(fields)
     try:
         # size-based rotation (keep one backup) so audit.log can't grow forever
         if os.path.getsize(path) > AUDIT_LOG_MAX_BYTES:
@@ -70,6 +84,69 @@ def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
             fh.write(line + "\n")
     except OSError:
         pass
+    return fields
+
+
+class FailedLoginRecords:
+    """The login_failed records of the audit log: one by one up to FAILED_LOGIN_RECORDS in
+    a window of FAILED_LOGIN_WINDOW_S seconds; past that only counted until the window
+    ends, when one record says how many more there were, since when and from which
+    addresses. Used on the event loop."""
+
+    MAX_ADDRESSES = 1000  # addresses counted one by one past the limit (others: in total)
+
+    def __init__(self, audit, limit: int = FAILED_LOGIN_RECORDS,
+                 window_s: float = FAILED_LOGIN_WINDOW_S) -> None:
+        self._audit = audit  # AppState.audit
+        self.limit, self.window_s = limit, window_s
+        self._start: float | None = None  # time.monotonic() when the window began
+        self._recorded = 0                # recorded one by one in this window
+        self._more = 0                    # past the limit in this window: counted only
+        self._since = ""                  # when the first of those came (wall clock)
+        self._by_ip: dict[str, int] = {}
+        self._user: str | None = None     # the name all of those were for ("": several)
+        self._timer: asyncio.TimerHandle | None = None
+
+    def add(self, ip: str, user: str) -> bool:
+        """A failed sign-in from `ip` for the user name `user`: True if it got its own
+        record, False if it was only counted."""
+        now = time.monotonic()
+        if self._start is None or now - self._start >= self.window_s:
+            self.flush()
+            self._start, self._recorded = now, 0
+        if self._recorded < self.limit:
+            self._recorded += 1
+            self._audit(ip, "login_failed", "", user=user)
+            return True
+        if not self._more:
+            self._since, self._user = time.strftime("%H:%M:%S"), user
+            with _suppress(RuntimeError):  # no event loop: the next add() or flush() writes it
+                self._timer = asyncio.get_running_loop().call_later(
+                    self._start + self.window_s - now, self.flush)
+        elif user != self._user:
+            self._user = ""
+        self._more += 1
+        if ip in self._by_ip or len(self._by_ip) < self.MAX_ADDRESSES:
+            self._by_ip[ip] = self._by_ip.get(ip, 0) + 1
+        return False
+
+    def flush(self) -> None:
+        """Write the record of the failed sign-ins that were only counted so far, if any."""
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        if not self._more:
+            return
+        top = sorted(self._by_ip.items(), key=lambda item: -item[1])[:3]
+        parts = [f"{n} from {ip}" for ip, n in top]
+        rest = self._more - sum(n for _ip, n in top)
+        if rest:
+            parts.append(f"{rest} from other addresses")
+        ip = top[0][0] if len(parts) == 1 and not rest else ""  # one address: its column
+        self._audit(ip, "login_failed", f"{self._more} more failed sign-ins since "
+                    f"{self._since}, not recorded one by one: {', '.join(parts)}",
+                    user=self._user or "")
+        self._more, self._by_ip, self._user = 0, {}, None
 
 
 def _parse_log_ts(line: str) -> float | None:
@@ -127,7 +204,6 @@ class AppState:
     def __init__(self, store: ConfigStore, config: AppConfig):
         self.store = store
         self.config = config
-        self.logs: deque[str] = deque(maxlen=1000)
         self.data_dir = os.path.dirname(os.path.abspath(store.path))
         # all.log lives next to config.json; per-mapping logs live in data/logs/
         self.log_path = os.path.join(self.data_dir, "all.log")
@@ -141,6 +217,7 @@ class AppState:
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
+        self.failed_logins = FailedLoginRecords(self.audit)  # their audit records
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
         # when each account last signed in (from audit.log, then every session issued)
         self.signins = SignIns()
@@ -197,8 +274,9 @@ class AppState:
         return logger
 
     def log(self, msg: str) -> None:
+        if len(msg) > LOG_MESSAGE_MAX:
+            msg = f"{msg[:LOG_MESSAGE_MAX]}… ({len(msg) - LOG_MESSAGE_MAX} more characters)"
         self._logger.info(msg)
-        self.logs.append(msg)
 
     @property
     def audit_path(self) -> str:
@@ -207,9 +285,10 @@ class AppState:
     def audit(self, actor_ip: str, action: str, detail: str = "", user: str = "") -> None:
         """Append a config-change audit record (write_audit_record), separate from
         all.log, and note it in all.log."""
-        write_audit_record(self.audit_path, actor_ip, action, detail, user)
+        _time, ip, action, detail, user = write_audit_record(self.audit_path, actor_ip, action,
+                                                             detail, user)
         who = f" by {user}" if user else ""
-        self._logger.info(_CONTROL.sub(" ", f"AUDIT {actor_ip} {action} {detail}{who}").rstrip())
+        self._logger.info(f"AUDIT {ip} {action} {detail}{who}".rstrip())
 
     def read_audit(self) -> list[dict]:
         """Every audit record (audit.log.1 + audit.log), newest first. Blocking file
@@ -218,7 +297,9 @@ class AppState:
         for path in (self.audit_path + ".1", self.audit_path):
             try:
                 with open(path, encoding="utf-8", errors="replace") as fh:
-                    lines = fh.read().splitlines()
+                    # only a line feed ends a record (CRLF reads as one): splitlines()
+                    # would also cut one at a U+2028 or NEL that an older version kept
+                    lines = fh.read().split("\n")
             except OSError:
                 continue
             for ln in lines:
@@ -519,6 +600,7 @@ class AppState:
                 with _suppress(asyncio.CancelledError):
                     await task
         self._maint_task = self._requests_task = None
+        self.failed_logins.flush()  # failed sign-ins counted but not recorded yet
         await self.notifier.stop()
         await self.cluster.stop()
         await self.supervisor.stop_all()
