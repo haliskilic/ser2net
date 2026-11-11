@@ -153,8 +153,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   single table**, each row tagged with its host (name + IP) and each node's **health**
   (uptime · version · running/total). Operators can **remotely start/stop/restart and edit**
   a peer's mappings from that view. For routed/L3 networks broadcast can't reach, add
-  **manual peers** (host:port). Trust = the **same shared key** on every node; off by
-  default, enable under Settings → LAN cluster.
+  **manual peers** (host:port). Trust = the **same shared key** on every node (any
+  characters, Turkish letters too; it is Unicode-normalised (NFKC) before use, so the same
+  key typed or pasted elsewhere matches); off by default, enable under Settings → LAN cluster.
+  Requests between nodes are **signed** with the key instead of carrying it (only nodes
+  running 2.8.0 or older still get the key itself; see Security → LAN cluster). Peers are
+  always contacted directly, never through an HTTP proxy (`HTTP(S)_PROXY` / `ALL_PROXY`
+  apply to webhooks and SSO only).
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
@@ -162,7 +167,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as
-  warnings.
+  warnings, and a connection that would be more open here (a gtlssh login or TLS client
+  certificates, TLS whose certificate is not on this host, a write-only device) comes in
+  disabled.
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
   notifications use as well. Logs, the audit log and the REST API stay English.
@@ -381,6 +388,37 @@ the login page. Behind a reverse proxy, the proxy must pass the original name in
 and managed after signing in, and open consoles are closed when access is revoked or the
 role changes. While it is on, the UI shows a warning and startup logs it.
 
+### LAN cluster
+
+- **Signed requests:** every request between nodes is signed with (a key derived from)
+  the cluster key — method, path, body, both nodes' ids, a time and a one-time nonce —
+  and so is every reply. Between such nodes the key itself is never sent, a captured
+  request can't be sent again (to that node or another), and a reply can't be altered. The nodes' clocks need not
+  agree: a node learns each peer's clock from its signed beacons and replies. Refused
+  requests are logged once per address and change (`cluster: refused …`) and recorded in the
+  audit log (`cluster_auth_failed`).
+- **Older nodes (legacy authentication):** nodes running 2.8.0 or older only know the raw
+  key, sent in every request. While *Legacy authentication* is ticked (Settings → LAN
+  cluster; on by default, so a rolling upgrade doesn't split the fleet) a node accepts it and
+  uses it with exactly those nodes: ones whose beacon says they are older (at the address the
+  beacon advertises), and manual peers that refuse a signed request the way older releases do
+  (never one that has answered a signed request). An older node that advertises no LAN
+  address (no default route: its beacon says 127.0.0.1) is only managed from other nodes once
+  it is added there as a manual peer; the fleet view says so. The fleet view tags these nodes
+  **unsigned key** and lists them in a banner. **Once every node is upgraded, untick it on
+  every node.**
+- **The key:** anyone on the network can try to guess a weak key offline from the beacons,
+  and the key lets a node start, stop and change the mappings of every other node: use at
+  least 16 random characters (*Generate a new key and save* makes one, shown once). The
+  Settings page never shows the stored key; a blank field keeps it.
+- **Changing the key:** *planned* — on each node enter the new key (or generate it on one and
+  copy it) with *keep accepting the current one for 7 days* ticked; nodes not changed yet keep
+  working, and the fleet view tags them **previous key**. When every node has it, tick *Stop
+  accepting the previous key* on each. *Leaked* — untick *keep accepting*, so the old key is
+  refused at once, and change it on every node; until then the fleet view shows **cluster key
+  rejected** for the nodes not changed yet, and a banner lists the nodes that broadcast with a
+  different key. *Auto-discovery* can be switched off where only manual peers are used.
+
 ---
 
 ## ⚙️ Run as a service
@@ -437,6 +475,14 @@ preview says so.
 
 Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
 `backups/` is never restored by itself — delete it too if you want it gone).
+
+**Copying an installation** (a disk or VM image, a copied data folder or Docker volume):
+`config.json` holds the node's identity — its cluster id (`instance_id`) and the key that
+signs sign-ins (`secret_key`). Copies would hide each other in the cluster, and a sign-in to
+one would be valid on the other. Delete both entries from `config.json` before taking the
+image (new ones are made at the next start). Copies that already run are reported in the log,
+the fleet view and Settings → LAN cluster; there, *Give this node a new identity* gives one of
+them a new id and session key (everyone signed in to it is signed out).
 
 **Session lifetime:** Settings → *Web UI access* → *Session lifetime* (default 8 hours).
 **Import:** shows a preview first; choose *merge* (update mappings with the same name, add

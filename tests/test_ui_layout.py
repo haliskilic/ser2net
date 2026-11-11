@@ -13,7 +13,9 @@ English and again in Turkish, whose texts are longer:
     (wide windows: the table fits; narrow ones: its rows become cards);
   * every element stays inside its panel; row buttons stay inside their cell
     and never overlap; no cell's content overflows the cell;
-  * the browser reports no errors (e.g. a Content-Security-Policy violation).
+  * the browser reports no errors (e.g. a Content-Security-Policy violation);
+  * the cluster panel isn't refreshed while the tab is hidden (each refresh makes the
+    node ask every peer) and is refreshed as soon as the tab is shown again.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -241,6 +243,24 @@ def main():
                     page.goto(f"{base}/settings")
                     page.wait_for_selector("section.panel")
                     check(f"{lang} settings @{w}")
+
+            # the cluster panel polls every 5 s: not from a hidden tab, and at once when
+            # the tab is shown again
+            page.set_viewport_size({"width": 1280, "height": 900})
+            dashboard()
+            polls = []
+            page.on("request", lambda r: "/api/cluster/status" in r.url and polls.append(r.url))
+            set_hidden = ("h => { Object.defineProperty(document, 'hidden', {configurable: true, "
+                          "get: () => h}); document.dispatchEvent(new Event('visibilitychange')); }")
+            page.evaluate(set_hidden, True)
+            page.wait_for_timeout(6500)
+            if polls:
+                problems.append(f"a hidden tab refreshed the cluster panel {len(polls)}x")
+            page.evaluate(set_hidden, False)
+            page.wait_for_timeout(1500)
+            if not polls:
+                problems.append("showing the tab again did not refresh the cluster panel")
+            print("cluster panel: no refresh while the tab is hidden, one when shown")
             browser.close()
 
         assert not problems, "layout problems:\n  " + "\n  ".join(problems)
