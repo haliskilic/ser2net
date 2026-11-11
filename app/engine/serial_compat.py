@@ -18,15 +18,21 @@ does things such a transport never needs, or gets wrong:
   - write() tries again while the OS refuses a write for now (EAGAIN), and with
     write_timeout 0 never stops trying: while a device took no data (CTS low, XOFF, a
     PTY nobody reads), the event loop spun in it and nothing else ran (pyserial #280,
-    fix PR #883 not merged).
+    fix PR #883 not merged);
+  - for a baud rate with no termios constant (250000, 74880, 31250, ...) it hands
+    termios.tcsetattr() the BOTHER placeholder, which glibc 2.42 and later refuse
+    (EINVAL) through the cfsetispeed() / cfsetospeed() versions a program built for an
+    older glibc uses, as the standalone Linux executable is: every port at such a rate
+    failed to open on Ubuntu 26.04, Fedora 43 and later.
 
 ``PosixSerial`` closes those pipes once the port is open, writes with one os.write (an
 EAGAIN is raised as BlockingIOError: the transport keeps the data and waits for the port
-to be writable) and reads with os.read alone: the transport only reads after the loop has
-seen the port readable. An empty read then means the device went away (a hung-up tty
-reads empty and also refuses the input-queue ioctl), unless the bytes were taken in the
-meantime, by a purge or another reader (the port still answers the ioctl): the read is
-then just empty, as pyserial's would be.
+to be writable), reads with os.read alone (the transport only reads after the loop has
+seen the port readable; an empty read then means the device went away, as a hung-up tty
+reads empty and also refuses the input-queue ioctl, unless the bytes were taken in the
+meantime by a purge or another reader: the read is then just empty, as pyserial's would
+be), and sets a rate without a termios constant the way pyserial's master branch does
+(70d18864): 38400 through tcsetattr, then the real rate with the TCSETS2 ioctl.
 Windows keeps pyserial's own class (overlapped I/O, polled by the transport).
 
 ``Transport`` is pyserial-asyncio-fast's SerialTransport with:
@@ -69,6 +75,8 @@ READ_SIZE = 65536  # bytes the transport reads per readiness event (upstream: 10
 
 
 if os.name == "posix":
+    import termios
+
     from serial import serialposix, serialutil
 
     class PosixSerial(serialposix.Serial):
@@ -78,6 +86,7 @@ if os.name == "posix":
 
         fd: Any  # pyserial's: the port's descriptor while it is open, else None
         is_open: bool
+        _baudrate: Any  # pyserial's: the rate asked for
 
         def open(self) -> None:
             super().open()
@@ -98,6 +107,31 @@ if os.name == "posix":
                 if fd is not None:
                     with contextlib.suppress(OSError):
                         os.close(fd)
+
+        def _reconfigure_port(self, force_update: bool = False) -> None:
+            """pyserial's, with a baud rate that has no termios constant set as pyserial's
+            master branch does (70d18864): 3.5 hands tcsetattr() the BOTHER placeholder,
+            which glibc 2.42 and later refuse through the cfsetispeed() / cfsetospeed() of
+            an executable built for an older glibc (the standalone Linux binary). The port
+            is set to 38400 first, then to the real rate with the TCSETS2 ioctl, which
+            glibc has no part in. A termios error (the driver refused a setting) is raised
+            as SerialException, with what was asked for."""
+            rate = self._baudrate
+            try:
+                if _needs_placeholder(self, rate):
+                    self._baudrate = 38400
+                    try:
+                        super()._reconfigure_port(force_update)
+                    finally:
+                        self._baudrate = rate
+                    self._set_special_baudrate(rate)
+                else:
+                    super()._reconfigure_port(force_update)
+            except termios.error as e:
+                reason = e.args[1] if len(e.args) > 1 else e
+                raise serial.SerialException(
+                    f"could not configure {self.portstr} for {self._baudrate} baud, "
+                    f"{self._bytesize}{self._parity}{self._stopbits:g}: {reason}") from e
 
         def read(self, size: int = 1) -> bytes:
             if not self.is_open:
@@ -142,6 +176,19 @@ if os.name == "posix":
 
         def cancel_write(self) -> None:
             """Nothing to cancel: a write never waits."""
+
+    def _needs_placeholder(port: Any, rate: Any) -> bool:
+        """Whether pyserial would hand tcsetattr() the BOTHER placeholder for ``rate``: a
+        rate with neither a termios constant nor an entry in the platform's table, on a
+        platform that has BOTHER (Linux; elsewhere pyserial uses 38400 itself)."""
+        if not hasattr(serialposix, "BOTHER"):
+            return False
+        try:
+            rate = int(rate)
+        except (TypeError, ValueError):
+            return False  # pyserial refuses it with its own message
+        return (not hasattr(termios, f"B{rate}")
+                and rate not in getattr(port, "BAUDRATE_CONSTANTS", {}))
 
 
 def serial_class() -> type:

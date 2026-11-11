@@ -26,11 +26,14 @@ CI 'standalone' jobs build the executables and set it):
      check (bundled authlib), which signs the user in; TR / EN → Türkçe really shows
      the Turkish UI. Linux: the unpacked copy is locked while it runs, and the checks
      after start-up follow a systemd-tmpfiles sweep of $TMPDIR at age 0 that must
-     remove none of its files;
+     remove none of its files; a mapping on a PTY at 250000 baud (no termios constant:
+     glibc 2.42+, e.g. Fedora 43+ / Ubuntu 26.04, refused how pyserial 3.5 set such a
+     rate from a binary built for glibc 2.28) opens and relays the device's data;
   3. every shared library the running processes mapped comes from the bundle or
      the OS base (Linux /proc/<pid>/maps, Windows module list);
   4. SER2NET_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
-     of that distribution (no Python, no openssl, empty PATH) instead. The test CA
+     of that distribution (no Python, no openssl, empty PATH) instead (the host's
+     /dev/pts is mounted at /dev/hostpts for the PTY mapping). The test CA
      is mounted over the CA bundle the image has (or, for base images that ship
      without ca-certificates, at SER2NET_STANDALONE_CA=<the distribution's path>),
      so the OIDC check also proves the binary found it on its own.
@@ -452,7 +455,25 @@ def start_provider(pki):
     return srv
 
 
-def write_config(data_dir, ui, raw_port, issuer, mqtt_port):
+# a rate without a termios constant (pyserial 3.5's BOTHER placeholder, which glibc 2.42+
+# refuses through the old cfsetispeed() the glibc-2.28 build binds)
+CUSTOM_BAUD = 250000
+
+
+def open_pty():
+    """(master fd, the slave's path as the binary sees it) for the custom-baud mapping;
+    None on Windows. In a container the host's /dev/pts is mounted at /dev/hostpts."""
+    if WINDOWS:
+        return None
+    master, slave = os.openpty()
+    path = os.ttyname(slave)
+    os.close(slave)  # the binary opens it by name
+    if IMAGE:
+        path = "/dev/hostpts/" + os.path.basename(path)
+    return master, path
+
+
+def write_config(data_dir, ui, raw_port, issuer, mqtt_port, pty=None, baud_port=0):
     serial = "COM250" if WINDOWS and not IMAGE else "/dev/ttyNOPE250"
     cfg = {
         "admin_ui": {"bind_ip": "127.0.0.1", "port": ui},
@@ -468,6 +489,11 @@ def write_config(data_dir, ui, raw_port, issuer, mqtt_port):
                       "mqtt": {"enabled": True, "host": "127.0.0.1", "port": mqtt_port,
                                "base_topic": "ser2net/standalone"}}],
     }
+    if pty:
+        cfg["mappings"].append({
+            "name": "standalone-baud", "serial": {"port": pty[1], "baudrate": CUSTOM_BAUD},
+            "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
+                        "port": baud_port}})
     os.makedirs(data_dir, exist_ok=True)
     with open(os.path.join(data_dir, "config.json"), "w", encoding="utf-8") as fh:
         json.dump(cfg, fh)
@@ -502,8 +528,9 @@ class Launch:
         if not IMAGE:
             return [BIN] + args
         user = [] if WINDOWS else ["--user", f"{os.getuid()}:{os.getgid()}"]
+        pts = [] if WINDOWS else ["-v", "/dev/pts:/dev/hostpts"]  # the PTY mapping's device
         return ["docker", "run", "--rm", "--init", "--name", self.name, "--network", "host", *user,
-                "-e", "HOME=/work", "-e", "TMPDIR=/work/tmp", "-e", "PATH=/work/emptybin",
+                *pts, "-e", "HOME=/work", "-e", "TMPDIR=/work/tmp", "-e", "PATH=/work/emptybin",
                 "-v", f"{self.work}:/work", "-v", f"{BIN}:/opt/ser2net/ser2net:ro",
                 "-v", f"{self.pki['ca.pem']}:{self.ca_path}:ro",
                 IMAGE, "/opt/ser2net/ser2net"] + [a.replace(self.work, "/work") for a in args]
@@ -756,8 +783,9 @@ def test_binary():
     data = os.path.join(work, "data")
     pki = make_test_pki(work)
     provider = start_provider(pki)
-    ui, raw, mqtt = free_port(), free_port(), free_port()
-    write_config(data, ui, raw, provider.issuer, mqtt)
+    ui, raw, mqtt, baud = free_port(), free_port(), free_port(), free_port()
+    pty = open_pty()
+    write_config(data, ui, raw, provider.issuer, mqtt, pty, baud)
     run = Launch(work, pki)
     try:
         version = run.version()
@@ -882,6 +910,9 @@ def test_binary():
             assert "TLS: CA certificates from SSL_CERT_FILE" in log, log[:1500]
         print(f"{where}: UI, raw TCP mapping, MQTT/LDAP/OIDC libraries present  OK")
 
+        if pty:
+            check_custom_baud(pty, baud, data, where)
+
         if not IMAGE:
             import psutil
             bundle = extraction_dir(run.tmp)
@@ -900,9 +931,37 @@ def test_binary():
         run_ok = hasattr(run, "proc")
         if run_ok:
             run.stop()
+        if pty:
+            os.close(pty[0])
         provider.shutdown()
         shutil.rmtree(work, ignore_errors=True)
     print(f"\nPASS: standalone executable {where}")
+
+
+def check_custom_baud(pty, port, data, where):
+    """The PTY mapping at CUSTOM_BAUD is open (not "device missing") and relays what the
+    device sends to a client."""
+    master, path = pty
+    log_path = os.path.join(data, "all.log")
+    opened = f"[standalone-baud] serial open: {path} @ {CUSTOM_BAUD}N81"
+    deadline = time.time() + 20
+    while opened not in read(log_path) and time.time() < deadline:
+        time.sleep(0.2)
+    log = read(log_path)
+    assert opened in log, f"{where}: the {CUSTOM_BAUD} baud port did not open:\n" + "\n".join(
+        ln for ln in log.splitlines() if "standalone-baud" in ln)[-1500:]
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as c:
+        time.sleep(0.5)
+        os.write(master, b"at 250000 baud\n")
+        c.settimeout(5)
+        got = b""
+        while len(got) < 15:
+            chunk = c.recv(100)
+            if not chunk:
+                break
+            got += chunk
+    assert got == b"at 250000 baud\n", f"{where}: the device's data did not arrive: {got!r}"
+    print(f"{where}: a PTY mapping at {CUSTOM_BAUD} baud opens and relays the device's data  OK")
 
 
 def main():
