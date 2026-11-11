@@ -150,6 +150,45 @@ def main():
         api("GET", "/api/v1/ports", token=token, expect=200)
         print("status + ports endpoints  OK")
 
+        # ---- values of another JSON type, unknown keys ----
+        typed = dict(new, name="api-typed", enabled="false",
+                     serial={"port": "/dev/ttyTEST2", "baudrate": "19200", "baud": 115200},
+                     network={"mode": "server", "bind_ip": "127.0.0.1", "port": str(free_port())})
+        code, made = api("POST", "/api/v1/mappings", token=token, body=typed, expect=201)
+        assert made["enabled"] is False and made["serial"]["baudrate"] == 19200, made
+        assert made["status"]["state"] == "stopped", "'false' must not start the mapping"
+        assert made["warnings"] == ["Not settings of this version, so they are ignored: "
+                                    "serial.baud."], made
+        code, again = api("PUT", f"/api/v1/mappings/{made['id']}", token=token, body=made,
+                          expect=200)  # a GET -> PUT round trip (status, warnings) is clean
+        assert "warnings" not in again, again
+        code, err = api("POST", "/api/v1/mappings", token=token, expect=400,
+                        body=dict(new, name="bad", serial={"port": "/dev/ttyTEST3",
+                                                           "baudrate": "fast"}))
+        assert err == {"error": "validation",
+                       "detail": 'serial.baudrate: "fast" is not a whole number.'}, err
+        api("DELETE", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
+        print("typed values: 'false'/'19200' read as meant, unknown keys in `warnings`, "
+              "an unreadable value -> 400 naming it  OK")
+
+        # ---- a save that fails for another reason: JSON 500, nothing left in memory ----
+        if os.name == "posix" and os.geteuid() != 0:
+            os.chmod(tmp, 0o500)  # config.json can't be replaced
+            try:
+                code, err = api("POST", "/api/v1/mappings", token=token,
+                                body=dict(new, name="unsaved",
+                                          network={"mode": "server", "bind_ip": "127.0.0.1",
+                                                   "port": free_port()}))
+            finally:
+                os.chmod(tmp, 0o700)
+            assert code == 500 and err == {"error": "internal",
+                                           "detail": "internal server error"}, (code, err)
+            code, listing = api("GET", "/api/v1/mappings", token=token, expect=200)
+            assert [x["name"] for x in listing["mappings"]] == ["api-renamed"], listing
+            print("failed save: JSON 500, the mapping is not kept in memory  OK")
+        else:
+            print("SKIP: failed-save check needs a POSIX non-root run")
+
         # ---- delete ----
         api("DELETE", f"/api/v1/mappings/{mid}", token=token, expect=200)
         api("GET", f"/api/v1/mappings/{mid}", token=token, expect=404)

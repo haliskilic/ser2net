@@ -34,6 +34,23 @@ def _mapping_view(mapping, state) -> dict:
     return view
 
 
+def _edit_view(mapping, state) -> dict:
+    """The response to a create / update: the mapping as stored, and when there are any,
+    the `warnings` about what was sent (keys that are no setting, a setting replaced by a
+    supported one)."""
+    view = _mapping_view(mapping, state)
+    warnings = mapping.input_warnings()
+    if warnings:
+        view["warnings"] = warnings
+    return view
+
+
+# what a mapping in a request can make from_dict / validate raise besides ConfigError:
+# values of the wrong type are read as the right one (config._read_fields), so these only
+# guard against a check that still trips over one
+_BAD_INPUT = (ValueError, TypeError, AttributeError, OverflowError)
+
+
 def build_api_routes(state):
     async def list_mappings(request):
         return JSONResponse({"mappings": [_mapping_view(m, state) for m in state.config.mappings]})
@@ -54,24 +71,25 @@ def build_api_routes(state):
         if not isinstance(body, dict):
             return JSONResponse({"error": "invalid_json", "detail": "object expected"}, status_code=400)
         body.pop("id", None)         # the server assigns the id
-        body.pop("status", None)     # read-only field
         try:
             mapping = MappingConfig.from_dict(body)
             mapping.validate()
             mapping.validate_input()
-        except (ValueError, ConfigError) as e:
+        except _BAD_INPUT as e:  # ConfigError is a ValueError
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         async with state.config_lock:
             state.config.mappings.append(mapping)
             try:
                 await state.asave()
-            except ConfigError as e:
+            except Exception as e:  # not saved: not created either
                 state.config.mappings.remove(mapping)
+                if not isinstance(e, ConfigError):
+                    raise
                 return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping created: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_create", mapping.name, user="api-token")
-        return JSONResponse(_mapping_view(mapping, state), status_code=201)
+        return JSONResponse(_edit_view(mapping, state), status_code=201)
 
     async def update_mapping(request):
         mid = request.path_params["mid"]
@@ -86,12 +104,11 @@ def build_api_routes(state):
         if not isinstance(body, dict):
             return JSONResponse({"error": "invalid_json", "detail": "object expected"}, status_code=400)
         body["id"] = mid             # PUT replaces the mapping with this id
-        body.pop("status", None)
         try:
             mapping = MappingConfig.from_dict(body)
             mapping.validate()
             mapping.validate_input()
-        except (ValueError, ConfigError) as e:
+        except _BAD_INPUT as e:  # ConfigError is a ValueError
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         async with state.config_lock:
             existing = state.config.get_mapping(mid)
@@ -101,13 +118,15 @@ def build_api_routes(state):
             state.config.mappings[state.config.mappings.index(existing)] = mapping
             try:
                 await state.asave()
-            except ConfigError as e:
+            except Exception as e:  # not saved: not changed either
                 state.config.mappings = backup
+                if not isinstance(e, ConfigError):
+                    raise
                 return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping updated: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_update", mapping.name, user="api-token")
-        return JSONResponse(_mapping_view(mapping, state))
+        return JSONResponse(_edit_view(mapping, state))
 
     async def delete_mapping(request):
         mid = request.path_params["mid"]
@@ -160,7 +179,11 @@ def openapi_spec(admin) -> dict:
     """Hand-written OpenAPI 3.0 description of the REST API (Starlette has no
     auto-generation). Kept deliberately compact: mappings are an open object so
     the spec doesn't have to mirror every serial/network field."""
-    mapping_obj = {"type": "object", "description": "A serial<->network mapping (see config model)."}
+    mapping_obj = {"type": "object", "description": (
+        "A serial<->network mapping (see config model). A value may be sent as text "
+        "(\"9600\", \"false\"); one that is not of the setting's type is refused (400). "
+        "Responses to a create / update list in `warnings` the keys that are no setting "
+        "(ignored) and settings that do nothing.")}
     error_obj = {"type": "object", "properties": {"error": {"type": "string"},
                                                   "detail": {"type": "string"}}}
     bearer: list[dict[str, list[str]]] = [{"bearerAuth": []}]
@@ -194,7 +217,7 @@ def openapi_spec(admin) -> dict:
                 "post": {"summary": "Create a mapping", "security": bearer,
                          "requestBody": {"required": True, "content": {"application/json": {
                              "schema": {"$ref": "#/components/schemas/Mapping"}}}},
-                         "responses": {"201": {"description": "created"},
+                         "responses": {"201": {"description": "created (see `warnings`)"},
                                        "400": {"description": "validation error"}}},
             },
             "/mappings/{mid}": {
@@ -206,7 +229,7 @@ def openapi_spec(admin) -> dict:
                 "put": {"summary": "Replace a mapping", "security": bearer,
                         "requestBody": {"required": True, "content": {"application/json": {
                             "schema": {"$ref": "#/components/schemas/Mapping"}}}},
-                        "responses": {"200": {"description": "updated"},
+                        "responses": {"200": {"description": "updated (see `warnings`)"},
                                       "400": {"description": "validation error"},
                                       "404": {"description": "not found"}}},
                 "delete": {"summary": "Delete a mapping", "security": bearer,

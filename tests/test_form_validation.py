@@ -84,6 +84,23 @@ def main():
         assert "<form" in body and 'name="name"' in body, "response is not the swappable form fragment"
         print("invalid save -> 400 with a swappable form fragment + visible error  OK")
 
+        # the Modbus points field is raw JSON: a value of the wrong type is named, not a 500
+        gateway = {"name": "GW", "kind": "net", "network_mode": "server",
+                   "network_protocol": "modbus", "network_bind_ip": "127.0.0.1",
+                   "network_port": "5099", "serial_port": "/dev/ttyUSB-gw",
+                   "serial_baudrate": "9600"}
+        for points, needle in (
+                ('[{"name":"t","unit":"one","fn":3,"address":0,"dtype":"uint16"}]',
+                 "modbus_poll.points[0].unit: &#34;one&#34; is not a whole number."),
+                ('[1]', "modbus_poll.points[0] must be a JSON object, not 1."),
+                ('[{"name":null,"unit":1,"fn":3,"address":0,"dtype":"uint16"}]',
+                 "Each Modbus poll point needs a name.")):
+            r = post("/api/mappings/save", dict(gateway, modbus_points=points))
+            status = getattr(r, "code", getattr(r, "status", None))
+            body = r.read().decode("utf-8", "replace")
+            assert status == 400 and needle in body, (status, points, body[:600])
+        print("Modbus points of the wrong type -> 400 naming the point's setting  OK")
+
         # sanity: a valid mapping saves (200 + refresh trigger), proving the path works
         r2 = post("/api/mappings/save", {
             "name": "Good", "kind": "net", "enabled": "",
