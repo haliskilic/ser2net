@@ -382,14 +382,19 @@ def describe_tls_error(exc: BaseException) -> str:
 
 def begin_tls(transport: Any, ctx: Any, protocol: asyncio.BaseProtocol, label: str,
               failed: Callable[[str], None]) -> asyncio.Task:
-    """Start the TLS handshake of an admitted connection: reading paused, counted among the
-    handshakes in progress until it is over, run in a task (start_tls). A failed handshake
-    is reported to ``failed`` (rate-limit it: anyone can make one fail)."""
-    transport.pause_reading()  # the ClientHello waits for the TLS protocol
+    """Start the TLS handshake of an admitted connection: counted among the handshakes in
+    progress until it is over, run in a task (start_tls) that pauses reading first. A
+    failed handshake is reported to ``failed`` (rate-limit it: anyone can make one fail)."""
     BUDGET.handshakes.add(transport, peer_ip(transport))
 
     async def handshake() -> None:
         try:
+            # Paused here, not in the caller (a protocol's connection_made): the transport
+            # starts reading in a callback of its own after connection_made, and on Python
+            # 3.10 that start ignores an earlier pause, so the ClientHello would reach the
+            # protocol that admits connections and be lost. The task's first step runs
+            # after that callback and before the first read.
+            transport.pause_reading()  # the ClientHello waits for the TLS protocol
             await start_tls(transport, ctx, protocol)
         except Exception as e:  # the timeout, a bad ClientHello, the client went away
             failed(f"TLS handshake with {label} failed: {describe_tls_error(e)}")

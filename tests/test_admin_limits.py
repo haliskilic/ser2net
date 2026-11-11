@@ -25,6 +25,7 @@ import os
 import socket
 import ssl
 import tempfile
+import threading
 import time
 
 from _server import Browser, Server
@@ -242,6 +243,24 @@ def test_https():
         with ctx.wrap_socket(connect(srv.port)) as s:
             assert get(s) == b"ok"
             assert s.version() is not None
+        # real clients at once, each sending its ClientHello right after connect
+        barrier = threading.Barrier(12)
+        answers: list = []
+
+        def client() -> None:
+            try:
+                barrier.wait(5)
+                with ctx.wrap_socket(connect(srv.port, timeout=5)) as s:
+                    answers.append(get(s))
+            except (OSError, AssertionError, threading.BrokenBarrierError) as e:
+                answers.append(f"{type(e).__name__}: {e}")
+
+        threads = [threading.Thread(target=client) for _ in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert answers == [b"ok"] * 12, f"HTTPS clients at once: {answers}"
         with ctx.wrap_socket(connect(srv.port)) as s:  # handshake done, then nothing
             assert closed_within(s, 6) < 4, "an idle TLS connection must be closed in time"
         with connect(srv.port) as plain:  # plain HTTP on the TLS port gets no answer
@@ -249,8 +268,8 @@ def test_https():
             plain.settimeout(5)
             with contextlib.suppress(OSError):
                 assert not plain.recv(100).startswith(b"HTTP/1.1 200")
-    print("admin UI over HTTPS: TLS after admission, served; an idle TLS connection is "
-          "closed in time  OK")
+    print("admin UI over HTTPS: TLS after admission, 12 clients at once served; an idle TLS "
+          "connection is closed in time  OK")
 
 
 def test_limits_normalized_on_load():
