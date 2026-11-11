@@ -143,6 +143,9 @@
       <label>{{ _("High-priority client IPs / CIDRs") }} <span class="muted">({{ _("kick an existing client when full") }})</span>
         <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.10') }}">
       </label>
+      {% if mapping.network.kick_old_user and not mapping.network.allowed_client_ips %}
+      <p class="sub mb-sm" data-kick-hint>{{ _("“Kick old client” is on and no allowed client IPs are set: any host that can reach this port can take the connection over from the client using it.") }}</p>
+      {% endif %}
     </div>
 
     <div data-show-when="network_mode=server,udp">
