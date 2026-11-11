@@ -616,6 +616,19 @@ class ModbusPoll:
             points=[ModbusPoint.from_dict(p) for p in d.get("points", [])],
         )
 
+    @property
+    def broadcast_points(self) -> list[str]:
+        """The names of the points on unit 0, the broadcast address: never read (no slave
+        answers a broadcast), and a write to one goes to every slave. Allowed, with a
+        warning in the log and the mapping form."""
+        return [p.name for p in self.points if p.unit == 0]
+
+    @property
+    def reserved_unit_points(self) -> list[str]:
+        """The names of the points on units 248-255, which a Modbus serial line reserves
+        (slave addresses are 1-247). Allowed, with a warning like broadcast_points."""
+        return [p.name for p in self.points if _is_int(p.unit) and 248 <= p.unit <= 255]
+
     def validate(self) -> None:
         if not self.points:
             return

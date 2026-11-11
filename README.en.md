@@ -96,7 +96,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   values from MQTT (`<topic>/<point>/set`, one value for that point only: FC5 for a coil,
   FC6/FC16 for a holding register's own one or two registers; a JSON list or other text
   gets `error: …` on `.../set/result`). A point on unit 0 is never read; a write to it is
-  broadcast and not read back. **Read-only** refuses these writes too (`error:
+  broadcast and not read back. The mapping form and the log warn about points on unit 0
+  and on units 248–255, which a serial line reserves. **Read-only** refuses these writes too (`error:
   mapping is read-only`; a refused DCMD is logged), and the dashboard marks a mapping that
   takes MQTT writes with **CMD** (see Security: the broker decides who may send them).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):

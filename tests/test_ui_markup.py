@@ -15,9 +15,11 @@ portable test guards the template side of the contract on every platform:
 
 Run: python3 tests/test_ui_markup.py
 """
+import html
 import html.parser
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -377,6 +379,47 @@ def test_mapping_form_kick_hint():
     print("mapping form: kick_old_user without an allow-list is pointed out (server mode)  OK")
 
 
+def test_mapping_form_unit_warnings():
+    """Poll points on unit 0 (broadcast: never read, written to every slave) or on the
+    reserved units 248-255 are kept, and the form says so in a warning naming them
+    (escaped); points on 1-247 get none."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+
+    def warnings(units):
+        m = MappingConfig.from_dict({
+            "id": "uw1", "name": "gw", "serial": {"port": "COM3"},
+            "network": {"protocol": "modbus", "port": 502},
+            "modbus_poll": {"points": [{"name": f"p<{u}>", "unit": u, "fn": 3, "address": 0,
+                                        "dtype": "uint16", "writable": u == 0}
+                                       for u in units]}})
+        out = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                         ports=[], ips=[], error=None)
+        for n in (n for n in parse(out).walk() if "data-unit-warning" in n.attrs):
+            owner = next(a for a in n.ancestors() if "data-show-when" in a.attrs)
+            assert owner.attrs["data-show-when"] == "network_protocol=modbus", owner.attrs
+        return [html.unescape(t) for t in
+                re.findall(r"<div class=\"banner warn\" data-unit-warning>(.*?)</div>", out)]
+
+    assert warnings([1, 17, 247]) == []
+    both = warnings([1, 0, 248, 255])
+    assert len(both) == 2, both
+    assert "unit 0, the broadcast address: p<0>." in both[0], both[0]
+    assert "units 248–255" in both[1] and "p<248>, p<255>." in both[1], both[1]
+    out = tpl.render(request=Req, mapping=MappingConfig.from_dict({
+        "id": "uw2", "name": "gw", "serial": {"port": "COM3"},
+        "network": {"protocol": "modbus", "port": 502},
+        "modbus_poll": {"points": [{"name": "<b>x</b>", "unit": 0, "fn": 3, "address": 0,
+                                    "dtype": "uint16"}]}}),
+        is_new=False, modbus_points_json="", ports=[], ips=[], error=None)
+    assert "&lt;b&gt;x&lt;/b&gt;" in out and "<b>x</b>" not in out, "point names are escaped"
+    print("mapping form: points on unit 0 / 248-255 named in a warning (escaped); none for "
+          "1-247  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
@@ -387,6 +430,7 @@ def main():
     test_mapping_form_rfc2217_restore()
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()
+    test_mapping_form_unit_warnings()
     print("\nPASS: UI markup contract")
 
 
