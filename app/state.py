@@ -528,8 +528,10 @@ class AppState:
                  "or run: ser2net --set-password <name>")
 
     def setup_code_ok(self, value: str) -> bool:
-        def norm(s: str) -> str:
-            return "".join(c for c in s.lower() if c.isalnum())
+        """The one-time code, letter case, dashes and spaces aside (compared as bytes: a
+        str with non-ASCII text would make compare_digest raise)."""
+        def norm(s: str) -> bytes:
+            return "".join(c for c in s.lower() if c.isalnum()).encode()
         return bool(self.setup_code) and hmac.compare_digest(norm(value), norm(self.setup_code))
 
     def first_run_done(self) -> None:
