@@ -8,13 +8,18 @@ Last-Will) lets subscribers see link state.
 paho-mqtt is an OPTIONAL dependency (not in the offline bootstrap): if it isn't
 installed, publishing is disabled with a log line and the bridge runs normally.
 The paho client runs its own network thread (loop_start) and ``publish()`` is
-thread-safe, so feeding it from the asyncio serial loop never blocks the loop.
+thread-safe, so feeding it from the asyncio serial loop never blocks the loop. That
+thread waits for its sockets with select.select(), which refuses descriptors at or above
+FD_SETSIZE (1024); on POSIX the client waits with poll() instead (``PollSelect``).
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Callable, Optional
+import errno
+import math
+import select
+from typing import Any, Callable, Optional
 
 MAX_LINE_BUFFER = 65536  # drop the oldest bytes if a newline never arrives (no unbounded growth)
 
@@ -61,6 +66,7 @@ class MqttPublisher:
                 self._log("MQTT enabled but paho-mqtt is not installed; publishing disabled "
                           "(pip install paho-mqtt)")
                 return False
+            use_poll(mqtt)
             try:  # paho-mqtt 2.x: the current callback API (no deprecation warning)
                 self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                                            client_id=self._s.client_id or "")
@@ -201,6 +207,68 @@ class MqttPublisher:
             self._client.loop_stop()
             self._client.disconnect()
         self._client = None
+
+
+class PollSelect:
+    """Stands in for the select module inside paho-mqtt's client module. Its network
+    thread waits on the broker socket with select.select(), which raises ValueError for a
+    descriptor >= FD_SETSIZE (1024): in a process with more files open than that, paho
+    took every such wait for a lost connection and reconnected forever, without a word.
+    select() here answers the same call with poll(), which has no such limit; everything
+    else is the real select module."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(select, name)
+
+    @staticmethod
+    def select(rlist, wlist, xlist, timeout=None):
+        """select.select(), with its errors for a bad argument: TypeError for something
+        that is not a descriptor, ValueError for a negative one, OSError (EBADF) for one
+        that is not open."""
+        if timeout is not None and timeout < 0:
+            raise ValueError("timeout must be non-negative")
+        lists = [[(_fd(o), o) for o in objs] for objs in (rlist, wlist, xlist)]
+        poller = select.poll()
+        wanted: dict[int, int] = {}
+        for (entries, flag) in zip(lists, (select.POLLIN, select.POLLOUT, select.POLLPRI),
+                                   strict=True):
+            for fd, _o in entries:
+                wanted[fd] = wanted.get(fd, 0) | flag
+        for fd, flags in wanted.items():
+            poller.register(fd, flags)
+        ms = None if timeout is None else math.ceil(timeout * 1000)
+        events = dict(poller.poll(ms))
+        if any(ev & select.POLLNVAL for ev in events.values()):
+            raise OSError(errno.EBADF, "Bad file descriptor")
+        # what select() reports for each poll() result (as Linux maps them)
+        readable = select.POLLIN | select.POLLHUP | select.POLLERR
+        writable = select.POLLOUT | select.POLLERR
+        return ([o for fd, o in lists[0] if events.get(fd, 0) & readable],
+                [o for fd, o in lists[1] if events.get(fd, 0) & writable],
+                [o for fd, o in lists[2] if events.get(fd, 0) & select.POLLPRI])
+
+
+def _fd(obj) -> int:
+    fd = obj if isinstance(obj, int) else getattr(obj, "fileno", None)
+    if callable(fd):
+        fd = fd()
+    if not isinstance(fd, int):
+        raise TypeError("argument must be an int, or have a fileno() method.")
+    if fd < 0:
+        raise ValueError(f"file descriptor cannot be a negative integer ({fd})")
+    return fd
+
+
+def use_poll(paho_client_module) -> bool:
+    """Make paho's client wait with poll() (PollSelect), on POSIX; once, and only while that
+    module still waits through the select module. Returns whether it does now."""
+    current = getattr(paho_client_module, "select", None)
+    if isinstance(current, PollSelect):
+        return True
+    if current is not select or not hasattr(select, "poll"):
+        return False  # Windows (select() limits the count, not the value) or a changed paho
+    paho_client_module.select = PollSelect()
+    return True
 
 
 def shown(value, limit: int = 40) -> str:
