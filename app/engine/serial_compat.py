@@ -48,9 +48,12 @@ the device as on POSIX. SER2NET_WINDOWS_SERIAL=pyserial keeps pyserial's own cla
     (upstream never does: the next writable event hit an assert on the empty buffer,
     every time the loop ran; pyserial-asyncio-fast PR #36, not merged);
   - reads of up to READ_SIZE bytes instead of 1024 (upstream has a TODO about it);
-  - on Windows, where the transport polls the port on a timer (pyserial-asyncio PR #8),
+  - on Windows, where the transport polls the port on a timer (pyserial-asyncio PR #8):
     a write poll that keeps writing what the transport holds while it closes (upstream
-    stopped, so a graceful close with data left never completed).
+    stopped, so a graceful close with data left never completed), and a read poll every
+    POLL_IDLE_WAIT_S instead of every 0.5 ms once the port has been quiet for
+    POLL_IDLE_AFTER_S, back to 0.5 ms as soon as data arrives or is written (a reply
+    usually follows a write).
 
 How ser2net carries fixes for upstream code: each override names the upstream issue or
 commit it mirrors and is removed once a release has the fix; tests/test_serial_compat.py
@@ -89,9 +92,11 @@ _DISCONNECTED = ("device reports readiness to read but returned no data "
 # the versions the overrides here were written for and checked against (unverified_note)
 VERIFIED = (("pyserial", serial, "3.5"), ("pyserial-asyncio-fast", _saf, "0.16"))
 
-READ_SIZE = 65536    # bytes the transport reads per readiness event (upstream: 1024)
-WRITE_WINDOW = 8192  # Windows: bytes of a port's writes in flight at most
-CANCEL_WAIT_S = 1.0  # Windows: how long a close waits for cancelled writes to end
+READ_SIZE = 65536        # bytes the transport reads per readiness event (upstream: 1024)
+WRITE_WINDOW = 8192      # Windows: bytes of a port's writes in flight at most
+CANCEL_WAIT_S = 1.0      # Windows: how long a close waits for cancelled writes to end
+POLL_IDLE_AFTER_S = 1.0  # Windows: a port quiet this long is polled every ...
+POLL_IDLE_WAIT_S = 0.01  # ... this instead of every 0.5 ms
 WINDOWS_SERIAL_ENV = "SER2NET_WINDOWS_SERIAL"
 
 
@@ -384,6 +389,8 @@ class Transport(_saf.SerialTransport):
                  serial_instance: Any) -> None:
         super().__init__(loop, protocol, serial_instance)
         self._max_read_size = READ_SIZE
+        self._last_io = loop.time()  # Windows: when data last came or went (read polling)
+        self._idle_poll = False      # Windows: the read poll is at POLL_IDLE_WAIT_S
 
     def _write_ready(self) -> None:
         """Upstream's, but it stops watching for writability once its buffer is empty
@@ -403,6 +410,33 @@ class Transport(_saf.SerialTransport):
             self._remove_writer()
 
     if sys.platform == "win32":
+        def write(self, data: Any) -> None:
+            self._last_io = self._loop.time()
+            if self._idle_poll and self._has_reader and not self._closing:
+                # a reply usually follows: poll at the fast rate again from now
+                self._has_reader.cancel()
+                self._has_reader = self._loop.call_later(self._poll_wait_time, self._poll_read)
+                self._idle_poll = False
+            super().write(data)
+
+        def _poll_read(self) -> None:
+            """Upstream's every 0.5 ms; every POLL_IDLE_WAIT_S once the port has been quiet
+            for POLL_IDLE_AFTER_S (back to 0.5 ms when data arrives, or is written). A
+            port that fails (unplugged) is closed instead of raising on every poll."""
+            if not self._has_reader or self._closing:
+                return
+            self._idle_poll = self._loop.time() - self._last_io >= POLL_IDLE_AFTER_S
+            wait = POLL_IDLE_WAIT_S if self._idle_poll else self._poll_wait_time
+            self._has_reader = self._loop.call_later(wait, self._poll_read)
+            try:
+                waiting = self._serial.in_waiting
+            except serial.SerialException as exc:
+                self._fatal_error(exc, "Fatal read error on serial transport")
+                return
+            if waiting:
+                self._last_io = self._loop.time()
+                self._read_ready()
+
         def _poll_write(self) -> None:
             """Upstream's, but it keeps writing what the transport holds while it closes:
             upstream stopped once closing, so a graceful close with data left never
@@ -417,6 +451,7 @@ class Transport(_saf.SerialTransport):
                 self._fatal_error(exc, "Fatal write error on serial transport")
                 return
             if room:
+                self._last_io = self._loop.time()
                 self._write_ready()
 
 
@@ -424,7 +459,7 @@ class Transport(_saf.SerialTransport):
 # stepping aside on a newer release that still has the bugs would bring them back)
 _UPSTREAM_MEMBERS = ("_write_data", "_maybe_resume_protocol", "_maybe_pause_protocol",
                      "_remove_writer", "_ensure_writer", "_read_ready", "_fatal_error") + (
-    ("_poll_write",) if sys.platform == "win32" else ())
+    ("_poll_read", "_poll_write") if sys.platform == "win32" else ())
 
 
 def transport_class() -> type:
