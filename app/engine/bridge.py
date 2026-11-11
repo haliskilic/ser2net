@@ -76,6 +76,10 @@ CLIENT_QUEUE_MAX = 2048  # outbound chunks buffered per client before it's dropp
 # event-loop time. 64 KiB is that high-water mark too, about 68 s of line time at 9600
 # baud and 6 s at 115200; the largest datagram fits.
 UDP_BACKLOG_MAX = 64 * 1024
+# a client connection's graceful close (and the flush before a closeon close) gets this
+# long; a peer that keeps the connection up but reads nothing is then cut off, instead of
+# holding one of the mapping's connection slots for as long as TCP takes to give up
+TCP_CLOSE_TIMEOUT_S = 5.0
 # errno/winerror values for "the peer stopped answering" (keepalive or retransmission
 # timeout): ETIMEDOUT, plus on Windows WSAETIMEDOUT, WSAENETRESET and the overlapped-I/O
 # ERROR_SEM_TIMEOUT.
@@ -84,6 +88,20 @@ _PEER_TIMEOUT_ERRNOS = {errno.ETIMEDOUT, 10060, 10052, 121}
 
 class _Disconnect(ConnectionError):
     """Ends a client session for a known reason (the message is logged)."""
+
+
+async def _close_client(writer: asyncio.StreamWriter) -> None:
+    """Close a client's connection gracefully (what is queued for it goes out first), and
+    abort it if that takes longer than TCP_CLOSE_TIMEOUT_S."""
+    with contextlib.suppress(Exception):
+        writer.close()
+    closed = asyncio.ensure_future(writer.wait_closed())
+    closed.add_done_callback(lambda f: f.cancelled() or f.exception())
+    # asyncio.wait, not wait_for: the timeout must not cancel the stream's close future
+    done, _pending = await asyncio.wait((closed,), timeout=TCP_CLOSE_TIMEOUT_S)
+    if not done:
+        with contextlib.suppress(Exception):
+            writer.transport.abort()
 
 
 def describe_disconnect(exc: BaseException) -> str:
@@ -421,9 +439,7 @@ class _ClientConn:
             # link can come up just after the port went away)
             self._closing = True
             self.close_reason = "the serial port is not open"
-            with contextlib.suppress(Exception):
-                self.writer.close()
-                await self.writer.wait_closed()
+            await _close_client(self.writer)
             return
         self._session = make_session(m.network.protocol, ser,
                                      poll_interval=m.options.rfc2217_poll_modem_interval_s,
@@ -464,9 +480,7 @@ class _ClientConn:
                     raise base_only from None
         finally:
             self._closing = True
-            with contextlib.suppress(Exception):
-                self.writer.close()
-                await self.writer.wait_closed()
+            await _close_client(self.writer)
 
     async def _pump_net_to_serial(self) -> None:
         m = self.runner.mapping
@@ -502,7 +516,11 @@ class _ClientConn:
                     d = self._out.get_nowait()
                     if d:
                         self.writer.write(d)
-                await self.writer.drain()
+                try:
+                    await asyncio.wait_for(self.writer.drain(), timeout=TCP_CLOSE_TIMEOUT_S)
+                except asyncio.TimeoutError:  # a peer that reads nothing: cut it off
+                    with contextlib.suppress(Exception):
+                        self.writer.transport.abort()
                 raise _Disconnect("closed by closeon match")
             self.writer.write(data)
             await self.writer.drain()
@@ -983,7 +1001,8 @@ class MappingRunner:
                 self.status.state = "reconnecting" if backoff.attempt else "device-missing"
                 self._log(f"serial bridge error: {self.status.last_error}")
             finally:
-                await asyncio.gather(*(close_stream(w) for w in (wa, wb) if w is not None))
+                await asyncio.gather(*(close_stream(w, self._log)
+                                       for w in (wa, wb) if w is not None))
             if self._stop.is_set():
                 break
             self.status.reconnects += 1
