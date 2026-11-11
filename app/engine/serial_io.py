@@ -3,7 +3,8 @@
 Kept separate from the bridge so the device-resolution and pyserial-config
 mapping live in one place. ``resolve_device`` re-resolves a stable hardware
 identity (VID/PID/serial) to a current device path so COMx / ttyUSB* renumbering
-doesn't break a mapping across reconnects.
+doesn't break a mapping across reconnects. The port class and the stream on top of it
+are serial_compat's (POSIX: reads without select(), one descriptor per port).
 """
 from __future__ import annotations
 
@@ -122,20 +123,19 @@ async def open_serial(settings: SerialSettings):
     serial.SerialException / OSError if the device can't be opened, ValueError for a
     URL port (refuse_url).
     """
-    import serial_asyncio_fast
-
     _patch_serial_asyncio_fast()
     device = resolve_device(settings)
     refuse_url(device)  # the one place every serial port is opened
-    kwargs: dict[str, Any] = dict(url=device, **port_settings(settings))
+    kwargs: dict[str, Any] = port_settings(settings)
     # `exclusive` is POSIX-only in pyserial; Windows ports are exclusive anyway.
     if sys.platform != "win32":
         kwargs["exclusive"] = settings.exclusive
 
     import serial.rs485
 
-    reader, writer = await serial_asyncio_fast.open_serial_connection(
-        limit=SERIAL_STREAM_LIMIT, **kwargs)
+    from . import serial_compat
+
+    reader, writer = await serial_compat.open_stream(device, SERIAL_STREAM_LIMIT, **kwargs)
     # upstream reads only 1024 bytes per readiness event (it even has a TODO to
     # raise this); a larger read drains the OS buffer faster and lowers CPU/latency
     # under sustained or full-duplex load.

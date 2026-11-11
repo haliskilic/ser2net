@@ -75,6 +75,7 @@ PORTABLE = [
     "test_traffic_counters.py",
     "test_protocol_parsers.py",
     "test_rfc2217_settings.py",
+    "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
