@@ -337,8 +337,10 @@ port olarak kabul edilmez.
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
 anda en fazla 32 (toplamda 128) el sıkışma yürür. Kapasite, `kick_old_user` ve "Busy" satırı
 yine el sıkışmadan sonra gelir. Yönetim arayüzü, bağlandıktan ya da son yanıttan sonra
-`admin_ui.request_timeout_s` (10 sn) içinde tam bir istek göndermeyen bağlantıyı kapatır
-(konsol WebSocket'i süreye tabi değildir) ve aynı anda en fazla `admin_ui.max_connections`
+`admin_ui.request_timeout_s` (10 sn) içinde tam bir istek başlığı göndermeyen, ardından
+istek gövdesi gelmeyi kesen (gövdeye bu süre artı gelen her KiB için bir saniye tanınır) ya
+da bir yanıttan bu süre boyunca hiçbir şey almayan bağlantıyı kapatır (konsol WebSocket'i
+süreye tabi değildir) ve aynı anda en fazla `admin_ui.max_connections`
 (256), bir adresten en fazla `admin_ui.max_connections_per_ip` (64) bağlantı kabul eder;
 TLS el sıkışması bir eşleminkiyle aynı sınırlara tabidir. Bu anahtarlar yalnızca
 `config.json`'dadır (0 = sınır yok); bir reverse proxy arkasında tüm kullanıcılar proxy'nin

@@ -737,7 +737,9 @@ class AdminUI:
     # Connections to the UI's listener: at most this many open at once in all, and from
     # one source address (0 = no limit; config.json only). A connection must send a
     # complete request head within request_timeout_s of connecting, and of the end of the
-    # previous response (0 = no limit); a WebSocket (the console) is not timed.
+    # previous response (0 = no limit), then its body, which gets that time plus a second
+    # per KiB of it that comes in; a client that takes nothing of a response for
+    # request_timeout_s is dropped too. A WebSocket (the console) is not timed.
     max_connections: int = 256
     max_connections_per_ip: int = 64
     request_timeout_s: int = 10
