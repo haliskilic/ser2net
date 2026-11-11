@@ -445,7 +445,8 @@ def _bound_close(tls: Any, transport: Any) -> None:  # pragma: no cover - Python
 
     def bounded_close() -> None:
         close()
-        loop.call_later(TLS_SHUTDOWN_TIMEOUT_S, transport.abort)
+        if not loop.is_closed():  # (a transport collected after the loop ended)
+            loop.call_later(TLS_SHUTDOWN_TIMEOUT_S, transport.abort)
 
     tls.close = bounded_close
 
