@@ -73,6 +73,7 @@ PORTABLE = [
     "test_audit_log.py",
     "test_sign_in_limits.py",  # request body limits, failed sign-in records, log caps
     "test_login_throttle.py",  # sign-in attempt limits (address, name), password work
+    "test_password_hashing.py",  # hash format and cost, older hashes, renewal at sign-in
     "test_healthcheck.py",
     "test_upgrade_from_2_7.py",
     "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)
