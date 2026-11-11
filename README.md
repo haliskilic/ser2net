@@ -424,6 +424,15 @@ dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yede
 olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
 kapalıyken o hesapların oturumları geçersizdir.
 
+**Başarısız girişler** adres başına 5 dakikada 8 ile sınırlıdır. all.log her biri için bir
+satır tutar, denetim kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bir kullanıcı adı
+yazıldığı gibi değil `(unknown user)` olarak kaydedilir (yanlış alana yazılmış bir parola
+olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnızca sayar ve o 10
+dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
+itemez. 256 karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
+çıkış formları 64 KB, yapılandırma içe aktarma 16 MB, geri kalan her şey (formlar, REST API)
+2 MB; daha büyüğü HTTP 413 alır.
+
 **LDAP / OIDC grupları → roller:** bir grup ayarı (admin / operator / viewer grubu) tek bir
 grubu adlandırır ve yalnızca o grubun adının tamamıyla eşleşir, asla bir parçasıyla değil.
 LDAP'ta bu grubun adı (CN'i, ör. `ser2net-admins`), DN'inin baş kısmı

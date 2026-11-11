@@ -200,6 +200,9 @@ def session_user(cfg, token: str | None, revoked: RevokedSessions | None = None)
 # and LDAP/OIDC names in parentheses are refused (config.external_name_problem). Identity
 # checks compare the source too (an older install may have such an account).
 ANONYMOUS_USERNAME = "(anonymous)"
+# What logs and the audit log name for a failed sign-in whose user name is no account's:
+# people type their password into that field. Not a valid account name either.
+UNKNOWN_USER = "(unknown user)"
 # The longest user name a sign-in is tried with (local names have at most 32 characters);
 # a longer one fails at once, without asking the directory.
 LOGIN_NAME_MAX = 256

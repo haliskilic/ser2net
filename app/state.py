@@ -108,8 +108,8 @@ class FailedLoginRecords:
         self._timer: asyncio.TimerHandle | None = None
 
     def add(self, ip: str, user: str) -> bool:
-        """A failed sign-in from `ip` for the user name `user`: True if it got its own
-        record, False if it was only counted."""
+        """A failed sign-in from `ip` for `user` (an account name or auth.UNKNOWN_USER):
+        True if it got its own record, False if it was only counted."""
         now = time.monotonic()
         if self._start is None or now - self._start >= self.window_s:
             self.flush()
