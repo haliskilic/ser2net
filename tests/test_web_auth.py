@@ -1,6 +1,9 @@
 """Web auth lifecycle: CSRF enforcement, login rate-limiting, and session
-revocation on password change (pwd_version). Run: python3 tests/test_web_auth.py
+revocation on password change (pwd_version); a cookie, CSRF token or SSO state with
+bytes no token has (non-ASCII) is a mismatch (4xx), not a server error.
+Run: python3 tests/test_web_auth.py
 """
+import http.client
 import http.cookiejar
 import json
 import os
@@ -15,8 +18,30 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, ROOT)
 UI = 8087
 BASE = f"http://127.0.0.1:{UI}"
+
+from _server import Server  # noqa: E402
+
+from app.web import auth  # noqa: E402
+
+
+def raw(port, method, path, headers, body=None):
+    """A request whose header values are sent as given (bytes too); returns the status."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        conn.putrequest(method, path)
+        for k, v in headers.items():
+            conn.putheader(k, v)
+        if body is not None:
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body)
+        r = conn.getresponse()
+        r.read()
+        return r.status
+    finally:
+        conn.close()
 
 
 def wait_port(port, timeout=10):
@@ -72,6 +97,25 @@ def main():
         assert getattr(r, "code", getattr(r, "status", None)) == 403, r
         print("CSRF: /api POST without token -> 403  OK")
 
+        # non-ASCII bytes in a session cookie, a CSRF cookie/header or a form's _csrf
+        # field are a mismatch (no session / 403), never a server error
+        bad = "ü".encode()  # the UTF-8 bytes of a letter
+        for cookie in (b"ser2net_session=" + bad + b".x", b'ser2net_session="\\303\\274.x"'):
+            assert raw(UI, "GET", "/", {"Cookie": cookie}) == 303, cookie
+            assert raw(UI, "GET", "/api/status", {"Cookie": cookie}) == 401, cookie
+        form = urllib.parse.urlencode({"name": "x"}).encode()
+        ct = {"Content-Type": "application/x-www-form-urlencoded"}
+        sess = f"ser2net_session={session()}".encode()
+        assert raw(UI, "POST", "/api/mappings/save", {
+            **ct, "Cookie": f"ser2net_csrf={csrf()}; ".encode() + sess, "X-CSRF-Token": bad}, form) == 403
+        assert raw(UI, "POST", "/api/mappings/save", {
+            **ct, "Cookie": b"ser2net_csrf=" + bad + b"; " + sess,
+            "X-CSRF-Token": csrf().encode()}, form) == 403
+        login = urllib.parse.urlencode({"password": "x", "_csrf": "ü"}).encode()
+        assert raw(UI, "POST", "/login", {**ct, "Cookie": f"ser2net_csrf={csrf()}".encode()},
+                   login) == 403
+        print("non-ASCII session cookie / CSRF cookie, header or field -> 303/401/403  OK")
+
         # 2) session revocation: change password, then the OLD session must be invalid
         r = post("/settings/password",
                  {"current": "supersecret1", "password": "newsecret123",
@@ -116,5 +160,23 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_oidc_state_odd_values():
+    """The SSO callback compares the state it gets with the signed one in its cookie:
+    a non-ASCII state or cookie is a mismatch (400), not a server error."""
+    secret = "s" * 64
+    with Server({"secret_key": secret,
+                 "users": [{"username": "admin", "role": "admin", "pwd_version": 1,
+                            "password_hash": auth.hash_password("adminpass123")}],
+                 "oidc": {"enabled": True, "issuer": "https://idp.example.com",
+                          "client_id": "ser2net", "client_secret": "sek"}}) as srv:
+        signed = auth.sign_payload(secret, {"s": "abc", "n": "n", "r": "https://h/cb"}).encode()
+        for state, cookie in (("%C3%BC", signed), ("abc", "ü".encode() + b"." + signed)):
+            st = raw(srv.port, "GET", f"/auth/oidc/callback?code=x&state={state}",
+                     {"Cookie": b"ser2net_oidc=" + cookie})
+            assert st == 400, (state, st)
+    print("SSO callback: non-ASCII state or state cookie -> 400  OK")
+
+
 if __name__ == "__main__":
     main()
+    test_oidc_state_odd_values()

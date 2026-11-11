@@ -6,16 +6,22 @@ dicts plus warnings. Checks:
     *banner aliases): 4 mappings; the two that share a device with an earlier one come
     in disabled, so the whole import validates;
   * accepters: telnet, telnet(rfc2217), udp, bind address forms (host, localhost, ipv6),
-    TLS/certauth/sctp layers warned about, unusable ones skipped;
+    sctp warned about, unusable ones skipped;
+  * protections that can't be carried over hold the mapping disabled (certauth, ssl
+    clientauth, TLS files missing here, dtls, wronly/rawlp, no-con-to-acc), with every
+    reason; TLS is kept when its files are here; a read-only trace is not imported;
   * connectors: serialdev/sdev options (9600n81, rtscts, xonxoff, dtr=, nobreak, ...),
     Windows //./COMn, network/IPMI connectors skipped;
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
     trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
+  * the default remaddr only for a connection without addresses of its own (4.x / 3.x);
   * *(name), $(name), =(name) and *alias substitution; defaults; version 2 files;
   * YAML subset details: quotes, comments, flow [..]/{..}, block scalars, documents;
   * a 3.x ser2net.conf with BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/DEFAULT/
     CONTROLPORT/LED/SIGNATURE lines, every state and line continuation;
   * garbage, JSON, empty and non-ser2net YAML -> ConfigError;
+  * limits: alias/define/escape expansion, file size, nesting and connection count
+    refuse the file quickly; long flows and quoted scalars are read in one pass;
   * every produced dict passes MappingConfig.from_dict(d).validate(), and the set of
     them passes AppConfig.validate() (no port or serial-device clash).
 Pure parsing: no network, no serial hardware.
@@ -24,6 +30,8 @@ Run: python3 tests/test_ser2net_import.py
 """
 import os
 import sys
+import tempfile
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -122,6 +130,7 @@ def test_debian_default():
     assert has(warns, "con0192", "imported disabled", "/dev/ttyS0", "con0096")
     assert has(warns, "con0096", r"\B", "9600N81")
     assert not has(warns, "telnet-brk-on-sync"), warns  # meaningless on a raw TCP port
+    assert not has(warns, "TCP wrappers"), warns  # every port listens on localhost only
     print("Debian default ser2net.yaml: 4 mappings, banner alias, multi-line connectors, "
           "shared devices imported disabled  OK")
 
@@ -183,14 +192,168 @@ def test_accepters():
     # a host name can't be bound: listening on 0.0.0.0 would be wider, so it comes in disabled
     assert net["hostname"]["bind_ip"] == "0.0.0.0" and maps["hostname"]["enabled"] is False
     assert has(warns, "hostname:", "myhost.example.com", "imported disabled")
-    assert all(maps[n]["enabled"] for n in maps if n != "hostname")
-    assert not net["tls"].get("tls") and has(warns, "tls:", "TLS (ssl) is not imported")
+    # TLS without its files on this host and a gtlssh login can't be carried over: those
+    # mappings come in disabled rather than as open cleartext listeners
+    assert all(maps[n]["enabled"] for n in maps if n not in ("hostname", "tls", "gtlssh"))
+    assert maps["tls"]["enabled"] is False and not net["tls"].get("tls")
+    assert has(warns, "tls:", "/etc/ser2net/k.key", "not on this host", "imported disabled")
     assert net["gtlssh"]["protocol"] == "rfc2217" and net["gtlssh"]["port"] == 2011
-    assert has(warns, "gtlssh:", "certauth") and has(warns, "gtlssh:", "SCTP")
+    assert maps["gtlssh"]["enabled"] is False
+    assert has(warns, "gtlssh:", "certauth", "imported disabled") and has(warns, "gtlssh:", "SCTP")
     assert "unixsock" not in maps and has(warns, "unixsock:", "skipped", "not a TCP/UDP port")
     assert "dynamic" not in maps and has(warns, "dynamic:", "skipped", "'0'")
-    print("accepters: telnet / rfc2217 / udp / bind forms; TLS, certauth, SCTP warned; "
-          "unix socket and port 0 skipped  OK")
+    print("accepters: telnet / rfc2217 / udp / bind forms; TLS and certauth held disabled, SCTP "
+          "warned; unix socket and port 0 skipped  OK")
+
+
+def test_protections():
+    """A connection that would be more open here than in ser2net comes in disabled."""
+    d = tempfile.mkdtemp(prefix="s2n_import_")
+    cert, key = os.path.join(d, "ser2net.crt"), os.path.join(d, "ser2net.key")
+    for path in (cert, key):
+        with open(path, "w") as fh:
+            fh.write("placeholder\n")  # only checked to exist here
+    text = f"""
+default:
+  name: cert
+  value: {cert}
+  class: ssl
+default:
+  name: key
+  value: {key}
+  class: ssl
+connection: &tls
+  accepter: telnet(rfc2217),ssl,tcp,6101
+  connector: serialdev,/dev/ttyUSB1,115200n81
+connection: &tlsfiles
+  accepter: telnet,ssl(key={key},cert={cert}),tcp,6102
+  connector: serialdev,/dev/ttyUSB2
+connection: &tlsmissing
+  accepter: telnet,ssl(key={d}/other.key),tcp,6103
+  connector: serialdev,/dev/ttyUSB3
+connection: &clientauth
+  accepter: telnet,ssl(clientauth),tcp,6104
+  connector: serialdev,/dev/ttyUSB4
+connection: &gtlssh
+  accepter: telnet(rfc2217),mux,certauth(enable-password),ssl,tcp,6105
+  connector: serialdev,/dev/ttyUSB5
+connection: &dtls
+  accepter: dtls,udp,6106
+  connector: serialdev,/dev/ttyUSB6
+connection: &wronly
+  accepter: tcp,6107
+  connector: serialdev,/dev/ttyUSB7,9600n81,wronly
+connection: &lp
+  accepter: tcp,6108
+  connector: dev(wronly),/dev/lp0
+connection: &nocon
+  accepter: tcp,6109
+  connector: serialdev,/dev/ttyUSB9
+  options:
+    no-con-to-acc: true
+connection: &rdonly
+  accepter: tcp,6110
+  connector: serialdev,/dev/ttyUSB10
+  options:
+    no-acc-to-con: true
+    trace-read: /var/log/rd
+connection: &twrite
+  accepter: tcp,6111
+  connector: serialdev,/dev/ttyUSB11
+  options:
+    trace-write: /var/log/wr
+connection: &three
+  accepter: telnet,mux,certauth,ssl(clientauth=false,key={d}/none.key),tcp,myhost,6112
+  connector: serialdev,/dev/ttyUSB12
+connection: &shared1
+  accepter: telnet,ssl(clientauth),tcp,6113
+  connector: serialdev,/dev/ttyUSB13
+connection: &shared2
+  accepter: telnet,tcp,127.0.0.1,6114
+  connector: serialdev,/dev/ttyUSB13
+"""
+    maps, warns = parse(text)
+    on = {n for n, m in maps.items() if m["enabled"]}
+    assert on == {"tls", "tlsfiles", "rdonly", "twrite", "shared2"}, on
+    for name in ("tls", "tlsfiles"):  # the certificate is on this host: TLS is kept
+        net = maps[name]["network"]
+        assert (net["tls"], net["tls_cert"], net["tls_key"]) == (True, cert, key), net
+        assert has(warns, f"{name}:", "TLS (ssl) is kept", cert)
+    assert not maps["tlsmissing"]["network"].get("tls")
+    assert has(warns, "tlsmissing:", "other.key", "not on this host", "imported disabled")
+    for name in ("clientauth", "gtlssh"):  # TLS is set up, but what it relied on is missing
+        assert maps[name]["network"]["tls"] is True, name
+    assert has(warns, "clientauth:", "client certificates", "imported disabled")
+    assert has(warns, "gtlssh:", "certauth", "without a login")
+    assert has(warns, "dtls:", "dtls", "imported disabled rather than unencrypted")
+    assert has(warns, "wronly:", "wronly", "write-only") and has(warns, "lp:", "wronly")
+    assert has(warns, "nocon:", "no-con-to-acc", "imported disabled")
+    assert not has(warns, "nocon: not imported")  # handled, not listed as dropped
+    r = maps["rdonly"]
+    assert r["network"]["read_only"] is True and not r["options"].get("trace_both")
+    assert has(warns, "rdonly:", "trace-read is not imported", "passwords")
+    assert maps["twrite"]["options"]["trace_both"] == "/var/log/wr"
+    assert has(warns, "twrite:", "trace-write: both directions")
+    for why in ("listen address 'myhost'", "certauth", "none.key"):  # every reason is shown
+        assert has(warns, "three:", why), why
+    assert not has(warns, "three:", "client certificates")  # clientauth=false
+    # a held connection does not claim its device: the narrower one sharing it stays on
+    assert not has(warns, "shared2:", "also used by")
+    assert has(warns, "TCP wrappers", "hosts.allow")
+    print("protections: TLS kept with its files; certauth, clientauth, missing TLS files, dtls, "
+          "wronly and no-con-to-acc held disabled with every reason; read-only traces off  OK")
+
+    text = """
+default:
+  name: clientauth
+  value: true
+  class: ssl
+connection: &before
+  accepter: telnet,ssl(clientauth=no),tcp,6201
+  connector: serialdev,/dev/ttyS1
+connection: &auth
+  accepter: telnet,ssl,tcp,6202
+  connector: serialdev,/dev/ttyS2
+delete_default:
+  name: clientauth
+  class: ssl
+connection: &after
+  accepter: telnet,ssl,tcp,6203
+  connector: serialdev,/dev/ttyS3
+"""
+    maps, warns = parse(text)
+    assert has(warns, "auth:", "client certificates") and not has(warns, "before:", "client")
+    assert not has(warns, "after:", "client certificates")
+    assert has(warns, "after:", "/etc/ser2net/ser2net.crt") or has(warns, "after:", "is kept")
+    print("ssl defaults (clientauth, delete_default) reach the ssl layers that follow  OK")
+
+    # every connection uses a gtlssh login: nothing comes in enabled (and nothing is open)
+    text = r"""%YAML 1.1
+---
+defines:
+  hello: Port \N on \d\r\n
+connections:
+  bench1:
+    accepter: telnet(rfc2217),mux,certauth(),ssl,tcp,4401
+    connector: serialdev,/dev/ttyACM0,19200n81
+    options:
+      banner: =(hello)
+  bench2:
+    accepter: telnet(rfc2217),mux,certauth(),ssl,tcp,4402
+    connector: serialdev,/dev/ttyACM1,115200n81
+"""
+    maps, warns = parse(text)
+    assert list(maps) == ["bench1", "bench2"] and not any(m["enabled"] for m in maps.values())
+    assert not has(warns, "TCP wrappers")
+    conf = "\n".join(["TRACEFILE:t1:/var/log/t1",
+                      "3001:raw:0:/dev/ttyS1:9600 tr=t1",
+                      "3002:rawlp:0:/dev/ttyS2:"])
+    maps, warns = parse(conf, "ser2net.conf")
+    assert maps["ser2net-3001"]["enabled"] and not maps["ser2net-3001"]["options"].get("trace_both")
+    assert has(warns, "ser2net-3001", "tr is not imported")
+    assert maps["ser2net-3002"]["enabled"] is False
+    assert has(warns, "ser2net-3002", "rawlp", "write-only")
+    print("a gtlssh-only file comes in all disabled; 3.x tr= only and rawlp handled alike  OK")
 
 
 CONNECTORS = r"""
@@ -303,6 +466,83 @@ def test_options():
     assert has(warns, "locked:", "imported disabled rather than open")
     print("options: kickolduser, max-connections, banner/openstr/closestr/closeon escapes, "
           "trace-both, timeout, enable: off, remaddr, read-only; the rest warned once  OK")
+
+
+REMADDR = r"""
+default:
+  name: remaddr
+  value: 10.0.0.0/8
+  class: ser2net
+connection: &own
+  accepter: tcp,7101
+  connector: serialdev,/dev/ttyS1
+  options:
+    remaddr: 192.168.1.5
+connection: &inherits
+  accepter: tcp,7102
+  connector: serialdev,/dev/ttyS2
+connection: &empty
+  accepter: tcp,7103
+  connector: serialdev,/dev/ttyS3
+  options:
+    remaddr: ""
+connection: &hostname
+  accepter: tcp,7104
+  connector: serialdev,/dev/ttyS4
+  options:
+    remaddr: workstation7,0
+connection: &connectback
+  accepter: tcp,7105
+  connector: serialdev,/dev/ttyS5
+  options:
+    remaddr: "!192.168.1.9,3000"
+connection: &twice
+  accepter: tcp,7106
+  connector: serialdev,/dev/ttyS6
+  options:
+    remaddr: 192.168.1.5
+    remaddr: 192.168.1.6;192.168.1.7,2000
+delete_default:
+  name: remaddr
+  class: ser2net
+connection: &nodefault
+  accepter: tcp,7107
+  connector: serialdev,/dev/ttyS7
+  options:
+    remaddr: ""
+"""
+
+
+def test_remaddr_default():
+    """ser2net uses the default remaddr only for a connection that gives no address of its
+    own; it never adds the two up (4.x: an empty remaddr gives none, 3.x: remaddr= counts)."""
+    maps, warns = parse(REMADDR)
+    acl = {n: m["network"].get("allowed_client_ips") for n, m in maps.items()}
+    assert acl["own"] == ["192.168.1.5"], acl
+    assert acl["inherits"] == ["10.0.0.0/8"] and has(warns, "inherits:", "from the defaults")
+    assert acl["empty"] == ["10.0.0.0/8"], acl  # 4.2+: an empty remaddr keeps the default
+    assert acl["twice"] == ["192.168.1.5", "192.168.1.6", "192.168.1.7"], acl
+    assert has(warns, "twice:", "192.168.1.7,2000", "not its port")
+    # own addresses that can't be imported: disabled, not opened to the default's range
+    for name in ("hostname", "connectback"):
+        assert not acl[name] and maps[name]["enabled"] is False, (name, acl[name])
+        assert has(warns, f"{name}:", "imported disabled rather than open")
+        assert not has(warns, f"{name}:", "from the defaults")
+    assert not acl["nodefault"] and maps["nodefault"]["enabled"] is True  # no limit, as there
+    assert not has(warns, "own:", "from the defaults") and not has(warns, "nodefault:", "remaddr")
+    conf = "\n".join(["DEFAULT:remaddr:10.1.1.1",
+                      "7201:raw:0:/dev/ttyS1:remaddr=10.2.2.2",
+                      "7202:raw:0:/dev/ttyS2:9600",
+                      "7203:raw:0:/dev/ttyS3:remaddr=hostx",
+                      "7204:raw:0:/dev/ttyS4:remaddr="])
+    maps, warns = parse(conf, "ser2net.conf")
+    acl = {n: m["network"].get("allowed_client_ips") for n, m in maps.items()}
+    assert acl["ser2net-7201"] == ["10.2.2.2"], acl
+    assert acl["ser2net-7202"] == ["10.1.1.1"] and has(warns, "ser2net-7202", "from the defaults")
+    assert not acl["ser2net-7203"] and maps["ser2net-7203"]["enabled"] is False
+    assert not acl["ser2net-7204"] and maps["ser2net-7204"]["enabled"] is True  # remaddr= set
+    print("remaddr: a connection's own addresses replace the default (4.x and 3.x); unusable "
+          "own addresses hold it disabled instead of falling back to the default  OK")
 
 
 SUBSTITUTION = r"""
@@ -525,7 +765,7 @@ def test_v3():
     assert u["options"]["trace_both"] == "/var/log/s2n/2002.log" and u["options"]["trace_hexdump"]
     assert has(warns, "ser2net-udp-2002", r"\Y \M \D", "file name")
     assert maps["ser2net-2003"]["serial"]["baudrate"] == 19200  # DEFAULT:speed from here on
-    assert has(warns, "ser2net-2003", "rawlp")
+    assert maps["ser2net-2003"]["enabled"] is False and has(warns, "ser2net-2003", "rawlp")
     off = maps["ser2net-2004"]
     assert off["enabled"] is False
     assert off["serial"]["port"] == "/dev/serial/by-id/usb-FTDI_1:2-if00"  # DEVICE: alias
@@ -599,17 +839,92 @@ def test_errors():
           "file -> no mappings + a warning  OK")
 
 
+def refused(text, want, filename="ser2net.yaml"):
+    """The file is refused with a ConfigError naming the limit, quickly."""
+    t = time.monotonic()
+    try:
+        parse_ser2net_config(text, filename)
+    except ConfigError as e:
+        assert want in str(e), (want, str(e)[:300])
+    else:
+        raise AssertionError(f"accepted ({want})")
+    assert time.monotonic() - t < 10, f"took {time.monotonic() - t:.1f} s ({want})"
+
+
+def quick(text, filename="ser2net.yaml"):
+    t = time.monotonic()
+    maps, warns = parse(text, filename)
+    assert time.monotonic() - t < 10, f"took {time.monotonic() - t:.1f} s"
+    return maps, warns
+
+
+HEAD = "connection: &c\n  accepter: tcp,4001\n  connector: serialdev,/dev/ttyS0\n  options:\n"
+
+
+def test_limits():
+    """Files whose aliases, defines or escapes would expand without bound, or that are
+    huge or deeply nested, are refused at once; long but sane input is read in one pass."""
+    flow = [HEAD + "    a0: &a0 [x, x, x, x, x, x, x, x, x, x]"]
+    for i in range(1, 8):  # each line repeats the previous one ten times
+        flow.append(f"    a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * 10) + "]")
+    refused("\n".join(flow) + "\n", "YAML nodes")
+    block = ["connections:", "  c0:", "    accepter: tcp,4001",
+             "    connector: serialdev,/dev/ttyS0", "    options: &o0"]
+    block += ["      kickolduser: true"] * 10
+    for i in range(1, 8):
+        block += [f"  c{i}:", f"    accepter: tcp,{4001 + i}",
+                  "    connector: serialdev,/dev/ttyS0", f"    x: &o{i}"]
+        block += [f"      - *o{i - 1}"] * 10
+    refused("\n".join(block) + "\n", "YAML nodes")
+    chain = ["define: &d0 xxxxxxxxxx"]
+    chain += [f"define: &d{i} " + f"*(d{i - 1})" * 10 for i in range(1, 8)]
+    refused("\n".join(chain) + "\n" + HEAD + "    banner: '*(d7)'\n", "longer than 64 KB")
+    refused(HEAD.replace("serialdev,/dev/ttyS0", "serialdev,/dev/" + "y" * 3000)
+            + "    openstr: '" + "\\d" * 1000 + "'\n", "c: openstr: the value is longer")
+    conf = "BANNER:b1:" + "x" * 60000 + "\n" + "".join(f"{i}:raw:0:/dev/ttyS{i}:b1\n"
+                                                      for i in range(1, 400))
+    refused(conf, "more than 16 MB", "ser2net.conf")
+    refused("BANNER:b1:" + "x" * 70000 + "\n", "line 1 is longer than 64 KB", "ser2net.conf")
+    refused(HEAD + "    x: " + "[" * 100 + "]" * 100 + "\n", "nested more than 64 levels")
+    refused("connection: &c\n" + "".join(" " * (i + 1) + "k:\n" for i in range(100)), "nested")
+    refused(HEAD + "    x: {[a]: b}\n", "cannot be a key")
+    refused("# " + "x" * (1024 * 1024) + "\n" + HEAD, "larger than 1 MB")
+    refused("".join(f"connection: &c{i}\n  accepter: tcp,{1 + i}\n"
+                    f"  connector: serialdev,/dev/ttyS{i}\n" for i in range(1001)),
+            "more than 1000 connections")
+
+    maps, warns = quick(HEAD + "    banner: [\n" + "".join("      a,\n" for _ in range(8000))
+                        + "      b ]\n    kickolduser: true\n")
+    assert maps["c"]["network"]["kick_old_user"] is True and has(warns, "banner is not a single")
+    refused(HEAD + "    x: [\n" + "".join("      a,\n" for _ in range(8000)), "unterminated [")
+    maps, _w = quick(HEAD + "    banner: \"x\n" + "".join("      ab\n" for _ in range(20000))
+                     + "      end\"\n")
+    assert maps["c"]["options"]["banner"] == "x" + " ab" * 20000 + " end"
+    maps, warns = quick(HEAD + "".join(f"    unknown{i}: 1\n" for i in range(30000)))
+    assert sum("not imported (no equivalent here)" in w for w in warns) == 1
+    maps, _w = quick(HEAD + "    banner: '" + "$(" * 30000 + "'\n")
+    assert maps["c"]["options"]["banner"] == "$(" * 30000
+    maps, warns = quick(HEAD + "".join(f"    max-connections: x{i}\n" for i in range(5000)))
+    assert len(warns) == 1002 and warns[1000] == "… and 4000 more warnings", warns[999:]
+    assert has(warns[1001:], "TCP wrappers")  # the file-level notes come after the cut
+    print("limits: alias / define / escape expansion, size, nesting and connection count "
+          "refused quickly; long flows, quoted scalars, many options read in one pass  OK")
+
+
 def main():
     test_debian_default()
     test_accepters()
+    test_protections()
     test_connectors()
     test_options()
+    test_remaddr_default()
     test_substitution()
     test_defaults()
     test_yaml_syntax()
     test_v3()
     test_names_and_clashes()
     test_errors()
+    test_limits()
     print("\nPASS: ser2net.yaml / ser2net.conf import (every mapping validates)")
 
 

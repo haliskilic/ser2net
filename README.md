@@ -157,8 +157,14 @@ düzenlemeye gerek yok.
   **sağlığını** (uptime · sürüm · çalışan/toplam) belirtir. Operatörler bu ekrandan
   başka bir host'un eşlemelerini **uzaktan başlat/durdur/yeniden başlat ve düzenle** edebilir.
   Broadcast'in ulaşmadığı yönlendirilmiş/L3 ağlar için **manuel peer** (host:port)
-  eklenebilir. Güven = her düğümde **aynı paylaşılan anahtar**; varsayılan kapalı,
-  Ayarlar → LAN cluster'dan açılır.
+  eklenebilir. Güven = her düğümde **aynı paylaşılan anahtar** (Türkçe harfler dahil her
+  karakter olabilir; kullanılmadan önce Unicode NFKC ile normalleştirilir, başka bir sistemde
+  yazılan ya da yapıştırılan aynı anahtar da eşleşir); varsayılan kapalı, Ayarlar → LAN
+  cluster'dan açılır. Düğümler arasındaki istekler anahtarı taşımak yerine onunla
+  **imzalanır** (anahtarın kendisini yalnızca 2.8.0 ya da daha eski sürümle çalışan düğümler
+  alır; bkz. Güvenlik → LAN cluster). Eşlere her zaman doğrudan bağlanılır, hiçbir zaman HTTP
+  proxy üzerinden bağlanılmaz (`HTTP(S)_PROXY` / `ALL_PROXY` yalnızca webhook ve SSO için
+  geçerlidir).
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
@@ -166,7 +172,9 @@ düzenlemeye gerek yok.
   gerektirir (opsiyonel; yoksa köprü normal çalışır).
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
-  olarak gösterilir.
+  olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
+  istemci sertifikası, sertifikası bu makinede olmayan TLS, yalnızca yazılan cihaz) kapalı
+  olarak gelir.
 - **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.
@@ -390,6 +398,41 @@ LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve 
 erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
 gösterilir ve açılışta loga yazılır.
 
+### LAN cluster
+
+- **İmzalı istekler:** düğümler arasındaki her istek cluster anahtarıyla (ondan türetilen
+  bir anahtarla) imzalanır — yöntem, yol, gövde, iki düğümün kimliği, zaman ve tek
+  kullanımlık bir nonce — her yanıt da öyle. Bu düğümler arasında anahtarın kendisi hiç
+  gönderilmez, ağda yakalanan bir istek (aynı ya da başka bir düğüme) yeniden gönderilemez
+  ve bir yanıt değiştirilemez. Düğümlerin saatlerinin aynı olması gerekmez: bir düğüm her eşin saatini
+  onun imzalı beacon'larından ve yanıtlarından öğrenir. Reddedilen istekler adres ve
+  değişiklik başına bir kez loga (`cluster: refused …`) ve denetim kaydına
+  (`cluster_auth_failed`) yazılır.
+- **Eski düğümler (eski kimlik doğrulama):** 2.8.0 ya da daha eski sürümle çalışan
+  düğümler yalnızca ham anahtarı bilir ve onu her istekte gönderir. *Eski kimlik doğrulama*
+  işaretliyken (Ayarlar → LAN cluster; kademeli yükseltmede filo bölünmesin diye varsayılan
+  olarak açık) bir düğüm bu anahtarı kabul eder ve yalnızca o düğümlerle kullanır: beacon'ı
+  daha eski olduğunu söyleyenler (beacon'ın bildirdiği adreste) ve imzalı bir isteği eski
+  sürümlerin yaptığı gibi reddeden manuel eşler (imzalı bir isteğe yanıt vermiş bir eş asla).
+  LAN adresini bildirmeyen eski bir düğüm (varsayılan rota yok: beacon'ı 127.0.0.1 diyor) diğer
+  düğümlerden ancak orada manuel eş olarak eklenince yönetilir; filo görünümü bunu belirtir.
+  Filo görünümü bu düğümleri **imzasız anahtar** etiketiyle gösterir ve bir uyarıda listeler.
+  **Tüm düğümler yükseltilince bu işareti her düğümde kaldırın.**
+- **Anahtar:** ağdaki herkes zayıf bir anahtarı beacon'lardan çevrimdışı tahmin etmeyi
+  deneyebilir; anahtar ise bir düğüme diğer tüm düğümlerin eşlemelerini başlatma, durdurma ve
+  değiştirme yetkisi verir: en az 16 rastgele karakter kullanın (*Yeni anahtar üret ve
+  kaydet* bir tane üretir ve bir kez gösterir). Ayarlar sayfası kayıtlı anahtarı hiç
+  göstermez; boş bırakılan alan anahtarı korur.
+- **Anahtarı değiştirmek:** *planlı* — her düğümde yeni anahtarı girin (ya da birinde üretip
+  kopyalayın), *mevcut anahtarı 7 gün daha kabul et* işaretli kalsın; henüz değiştirilmemiş
+  düğümler çalışmayı sürdürür ve filo görünümünde **önceki anahtar** etiketiyle görünür. Tüm
+  düğümlere girilince her birinde *Önceki anahtarı artık kabul etme*'yi işaretleyin.
+  *Sızdıysa* — *kabul et* işaretini kaldırın, böylece eski anahtar hemen reddedilir, ve
+  anahtarı her düğümde değiştirin; o zamana kadar filo görünümü değiştirilmemiş düğümler için
+  **cluster anahtarı reddedildi** gösterir, bir uyarı da farklı bir anahtarla yayın yapan
+  düğümleri listeler. Yalnızca manuel eşlerin kullanıldığı yerlerde *otomatik keşif*
+  kapatılabilir.
+
 ---
 
 ## ⚙️ Servis olarak çalıştırma
@@ -447,6 +490,15 @@ logu ya da içe aktarma önizlemesi bunu belirtir.
 
 `config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
 temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin).
+
+**Bir kurulumu kopyalamak** (disk ya da VM imajı, kopyalanan veri klasörü ya da Docker
+volume'u): `config.json` düğümün kimliğini tutar — cluster ID'sini (`instance_id`) ve
+oturumları imzalayan anahtarı (`secret_key`). Kopyalar cluster'da birbirini gizler ve
+birinde açılan oturum diğerinde de geçerli olur. İmajı almadan önce bu iki girdiyi
+`config.json`'dan silin (bir sonraki açılışta yenileri üretilir). Zaten çalışan kopyalar
+log'da, filo görünümünde ve Ayarlar → LAN cluster'da bildirilir; orada *Bu düğüme yeni bir
+kimlik ver* kopyalardan birine yeni bir ID ve oturum anahtarı verir (o düğümde oturum açmış
+herkesin oturumu kapanır).
 
 **Oturum süresi:** Ayarlar → *Web arayüzü erişimi* → *Oturum süresi (dakika)* (varsayılan 8 saat).
 **İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,

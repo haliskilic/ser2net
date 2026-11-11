@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 import time
+import unicodedata
 from urllib.parse import urlencode
 
 from starlette.responses import PlainTextResponse, Response
@@ -18,8 +19,9 @@ from starlette.routing import Route
 from ... import importer
 from ...config import (
     NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings,
-    ConfigError, NotificationSettings, User,
+    ConfigError, NotificationSettings, User, parse_cluster_peer,
 )
+from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
 from .. import auth, selfsigned
 from .common import Ctx, csrf_failed
@@ -33,7 +35,22 @@ def routes(ctx: Ctx) -> list:
     state, render = ctx.state, ctx.render
     current_user, require_role, set_session = ctx.current_user, ctx.require_role, ctx.set_session
 
-    async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None):
+    def _cluster_view() -> dict:
+        """What the LAN cluster panel shows - never the key itself."""
+        c = state.config.cluster
+        keys = state.cluster.keys()
+        until = c.previous_until if len(keys) > 1 else 0.0
+        return {"cluster": c, "instance_id": state.config.instance_id,
+                "cluster_peers_text": "\n".join(c.peers),
+                "cluster_key_set": bool(c.key.strip()), "cluster_key_hint": _key_hint(c.key),
+                "cluster_previous": len(keys) > 1,
+                "cluster_previous_until": time.strftime("%Y-%m-%d %H:%M", time.gmtime(until))
+                if until else "",
+                "cluster_copies": state.cluster.copies(),
+                "cluster_legacy": state.cluster.legacy_nodes() if c.active else []}
+
+    async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
+                           new_cluster_key=None):
         me = current_user(request)
         backups = state.store.backups() if me is not None and me.role == "admin" else []
         return render(request, "settings.html", ok=ok, error=error,
@@ -41,12 +58,11 @@ def routes(ctx: Ctx) -> list:
                       admin=state.config.admin_ui,
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
-                      new_api_token=new_api_token,
+                      new_api_token=new_api_token, new_cluster_key=new_cluster_key,
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       ldap=state.config.ldap, ldap_lib=_module_present("ldap3"),
                       oidc=state.config.oidc, oidc_lib=_module_present("authlib"),
-                      cluster=state.config.cluster, instance_id=state.config.instance_id,
-                      cluster_peers_text="\n".join(state.config.cluster.peers),
+                      **_cluster_view(),
                       session_minutes=state.config.session_timeout_s // 60,
                       notify=state.config.notifications, notify_events=NOTIFY_EVENTS,
                       webhook_formats=WEBHOOK_FORMATS, smtp_security=SMTP_SECURITY,
@@ -361,7 +377,9 @@ def routes(ctx: Ctx) -> list:
         upload = form.get("file")
         try:
             raw = await upload.read() if hasattr(upload, "read") else str(upload or "").encode()
-            plan = importer.parse_mappings_file(raw, getattr(upload, "filename", "") or "")
+            # parsing is bounded, but a big file still takes a moment: not on the event loop
+            plan = await asyncio.to_thread(importer.parse_mappings_file, raw,
+                                           getattr(upload, "filename", "") or "")
         except ConfigError as e:
             return await settings_get(request, error=_("Import failed: {0}").format(e))
         mode = form.get("mode", "merge")
@@ -592,15 +610,42 @@ def routes(ctx: Ctx) -> list:
         except ValueError:
             return await settings_get(request, error=_("Cluster discovery port must be a number."))
         peers = [ln.strip() for ln in (form.get("peers") or "").splitlines() if ln.strip()]
-        new = ClusterSettings(
-            enabled=form.get("enabled") == "on",
-            key=(form.get("key") or "").strip(),
-            discovery_port=port,
-            advertise_ip=(form.get("advertise_ip") or "").strip(),
-            peers=peers,
-        )
+        try:  # each entry saved here must name an IP address or host name
+            for entry in peers:
+                parse_cluster_peer(entry, strict=True)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
+        generate = form.get("then") == "generate"
         async with state.config_lock:
             old = state.config.cluster
+            # The key is never shown: a blank field keeps it, "Generate" makes one (shown
+            # once). A changed key keeps the old one accepted for a while unless that is
+            # unticked (a planned change vs. a leaked key), so the fleet isn't split
+            # until every node has the new one.
+            key = secrets.token_urlsafe(32) if generate else (
+                (form.get("key") or "").strip() or old.key)
+            if _checkbox(form, "clear_key") and not generate:
+                key = ""
+            previous, until = old.previous_key, old.previous_until
+            changed = key_bytes(key) != key_bytes(old.key)
+            if changed:
+                keep = bool(old.key.strip()) and _checkbox(form, "keep_old_key")
+                previous, until = (old.key, time.time() + KEY_OVERLAP_S) if keep else ("", 0.0)
+            if _checkbox(form, "clear_previous_key") or not key.strip():
+                previous, until = "", 0.0
+            # a form from before these switches existed (an open tab during an upgrade, a
+            # script) leaves them as they are; an unticked box is only "off" in this form
+            current_form = form.get("cluster_form") == "2"
+            new = ClusterSettings(
+                enabled=form.get("enabled") == "on",
+                key=key,
+                discovery_port=port,
+                advertise_ip=(form.get("advertise_ip") or "").strip(),
+                peers=peers,
+                previous_key=previous, previous_until=until,
+                legacy_auth=_checkbox(form, "legacy_auth") if current_form else old.legacy_auth,
+                discovery=_checkbox(form, "discovery") if current_form else old.discovery,
+            )
             state.config.cluster = new
             try:
                 await state.asave()
@@ -610,10 +655,64 @@ def routes(ctx: Ctx) -> list:
         # apply live: restart discovery so a key/port/enable change takes effect now
         await state.cluster.stop()
         await state.cluster.start()
-        state.log(f"cluster settings updated (enabled={new.enabled}, manual_peers={len(peers)})")
+        state.log(f"cluster settings updated (enabled={new.enabled}, manual_peers={len(peers)}, "
+                  f"legacy_auth={new.legacy_auth}, discovery={new.discovery})")
         ctx.audit(request, "cluster_settings",
                     "enabled" if new.active else "disabled")
-        return await settings_get(request, ok=_("Cluster settings saved."))
+        ok = _("Cluster settings saved.")
+        if changed:
+            kept = bool(new.previous_key) and new.previous_key == old.key
+            how = "generated" if generate else ("removed" if not key else "set")
+            until_text = time.strftime("%Y-%m-%d %H:%M", time.gmtime(until)) if kept else ""
+            previous_note = (f"previous key accepted until {until_text} UTC" if kept
+                             else "previous key not accepted")
+            state.log(f"cluster key {how}, {previous_note}")
+            ctx.audit(request, "cluster_key_change", f"{how}, {previous_note}")
+            if kept:
+                ok += " " + _("The previous key is still accepted until {0} UTC, so the nodes "
+                              "not changed yet keep working; set the new key on each of "
+                              "them.").format(until_text)
+            elif key:
+                ok += " " + _("Only the new key is accepted now: set it on every node.")
+        elif old.previous_key and not new.previous_key:
+            state.log("cluster: the previous key is no longer accepted")
+            ctx.audit(request, "cluster_key_change", "previous key no longer accepted")
+        if generate:
+            return await settings_get(request, new_cluster_key=key, ok=ok)
+        return await settings_get(request, ok=ok)
+
+    async def settings_cluster_identity(request):
+        """Give this node a new cluster id and a new session key - the way out for a copy
+        of another installation (its data folder, disk or VM image): the copies no longer
+        hide each other in the cluster, and a sign-in to one is not valid on the other.
+        Everyone signed in here is signed out, except the admin doing this."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        async with state.config_lock:
+            old = (state.config.instance_id, state.config.secret_key)
+            state.config.instance_id = secrets.token_hex(8)
+            state.config.secret_key = secrets.token_hex(32)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                state.config.instance_id, state.config.secret_key = old
+                return await settings_get(request, error=str(e))
+        await state.cluster.stop()
+        await state.cluster.start()
+        new_id = state.config.instance_id
+        state.log(f"new identity for this node: cluster id {old[0][:8]} -> {new_id[:8]}, new "
+                  "session key (everyone else signed in here is signed out)")
+        ctx.audit(request, "node_new_identity", f"{old[0][:8]} -> {new_id[:8]}")
+        resp = await settings_get(request, ok=_("This node has a new identity (cluster ID {0}). "
+                                                "Everyone else signed in to it was signed out.")
+                                  .format(new_id[:8]))
+        user = current_user(request)
+        if user is not None and user.source != "anonymous":
+            set_session(resp, request, user)  # signed with the new key: this admin stays in
+        return resp
 
     return [
         Route("/settings", settings_get, methods=["GET"]),
@@ -629,8 +728,11 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/ldap", settings_ldap_post, methods=["POST"]),
         Route("/settings/oidc", settings_oidc_post, methods=["POST"]),
         Route("/settings/cluster", settings_cluster_post, methods=["POST"]),
+        Route("/settings/cluster/identity", settings_cluster_identity, methods=["POST"]),
         Route("/settings/config/export", config_export),
-        Route("/settings/config/import", config_import, methods=["POST"]),
+        # the body is refused (413) past the import file limit, before it is spooled
+        Route("/settings/config/import", config_import, methods=["POST"],
+              max_body_size=importer.MAX_FILE_BYTES + 64 * 1024),  # + the form's other fields
         Route("/settings/config/import/apply", config_import_apply, methods=["POST"]),
         Route("/settings/notifications", settings_notifications_post, methods=["POST"]),
         Route("/settings/audit", audit_page),
@@ -638,6 +740,17 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/backups/restore", backup_restore, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
+
+
+def _key_hint(key: str) -> str:
+    """Why the cluster key deserves a warning: "weak" (any host on the network can try
+    to guess it offline from a beacon), "ascii" (nodes up to 2.8.0 can't use it) or ""."""
+    k = unicodedata.normalize("NFKC", key or "").strip()
+    if not k:
+        return ""
+    if len(k) < 16 or len(set(k)) < 8:
+        return "weak"
+    return "" if k.isascii() else "ascii"
 
 
 def _csv_cell(value: str) -> str:

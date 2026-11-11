@@ -856,9 +856,39 @@ class OidcSettings:
             raise ConfigError(_("OIDC default role must be one of {0} or blank.").format(ROLES))
 
 
-def parse_cluster_peer(entry: str) -> tuple[str, str, int]:
+_PEER_ZONE = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def peer_host(host: str) -> str | None:
+    """A cluster peer's host in canonical form: an IP address (IPv6 without brackets,
+    with an optional %zone) or a host name. None when it is neither — a value with
+    anything in it that could change the URL built from it."""
+    h = str(host or "").strip()
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    addr, sep, zone = h.partition("%")
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        if sep and not (ip.version == 6 and _PEER_ZONE.fullmatch(zone)):
+            return None
+        return f"{ip}%{zone}" if sep else str(ip)
+    labels = (h[:-1] if h.endswith(".") else h).split(".")
+    if len(h) <= 253 and all(
+            0 < len(lb) <= 63 and lb[0].isalnum() and lb[-1].isalnum()
+            and all(c.isalnum() or c in "-_" for c in lb) for lb in labels):
+        return h
+    return None
+
+
+def parse_cluster_peer(entry: str, strict: bool = False) -> tuple[str, str, int]:
     """Parse a manual cluster-peer entry into (scheme, host, port). Accepts
-    'host:port' (defaults to http) or 'http(s)://host:port'. Raises ConfigError."""
+    'host:port' (defaults to http) or 'http(s)://host:port'. Raises ConfigError.
+    strict (when an entry is edited) also requires the host to be an IP address or a
+    host name; validate() stays lenient, so an entry an older release accepted still
+    loads (one that is no address is just never contacted)."""
     s = (entry or "").strip()
     scheme = "http"
     if "://" in s:
@@ -867,7 +897,7 @@ def parse_cluster_peer(entry: str) -> tuple[str, str, int]:
     if scheme not in ("http", "https"):
         raise ConfigError(_("Cluster peer scheme must be http or https: {0}").format(entry))
     host, sep, port_s = s.rpartition(":")
-    if not sep or not host:
+    if not sep or not host or (strict and peer_host(host) is None):
         raise ConfigError(_("Cluster peer must be host:port — got: {0}").format(entry))
     try:
         port = int(port_s)
@@ -887,12 +917,21 @@ class ClusterSettings:
     peer-facing status endpoint. `advertise_ip` overrides the auto-detected LAN IP
     that peers use to reach this node's web UI (blank => auto). `peers` is a list of
     manual 'host:port' entries for routed/L3 networks where UDP broadcast doesn't
-    reach — they're aggregated alongside auto-discovered peers."""
+    reach — they're aggregated alongside auto-discovered peers.
+
+    Peer requests are signed with (a key derived from) the key; `legacy_auth` also
+    accepts the raw key from, and sends it to, nodes running 2.8.0 or older, which know
+    nothing else. During a planned key change `previous_key` (the key replaced last) is still
+    accepted until `previous_until`, so the nodes not changed yet keep working."""
     enabled: bool = False
     key: str = ""                    # shared secret (PSK); empty => cluster off
     discovery_port: int = 41750      # UDP port for broadcast beacons
     advertise_ip: str = ""           # override advertised web-UI IP (blank => auto-detect)
     peers: list[str] = field(default_factory=list)  # manual 'host:port' peer entries
+    previous_key: str = ""           # still accepted during a key change (blank => none)
+    previous_until: float = 0.0      # ... until this time (epoch seconds; 0 => no end)
+    legacy_auth: bool = True         # raw key with nodes up to 2.8.0 (off once all upgraded)
+    discovery: bool = True           # UDP beacons; off => manual peers only
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "ClusterSettings":
@@ -900,6 +939,12 @@ class ClusterSettings:
         known = {f.name for f in dataclasses.fields(ClusterSettings)}
         c = ClusterSettings(**{k: v for k, v in d.items() if k in known})
         c.peers = [str(p).strip() for p in (c.peers or []) if str(p).strip()]
+        # the fields added after 2.8.0: a hand-edited value of the wrong type takes the default
+        c.previous_key = c.previous_key if isinstance(c.previous_key, str) else ""
+        c.previous_until = _epoch(c.previous_until)
+        for name in ("legacy_auth", "discovery"):
+            if not isinstance(getattr(c, name), bool):
+                setattr(c, name, True)
         return c
 
     @property
@@ -1212,6 +1257,17 @@ def _session_timeout(value: Any) -> int:
     except (TypeError, ValueError, OverflowError):
         return SESSION_TIMEOUT_DEFAULT_S
     return min(max(seconds, SESSION_TIMEOUT_MIN_S), SESSION_TIMEOUT_MAX_S)
+
+
+def _epoch(value: Any) -> float:
+    """A stored point in time (epoch seconds); anything unreadable is 0 (none)."""
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        t = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return t if math.isfinite(t) and t > 0 else 0.0
 
 
 def _ip_overlaps(a: str, b: str) -> bool:

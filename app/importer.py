@@ -18,6 +18,10 @@ from .i18n import _
 from .ser2net_import import looks_yaml, parse_ser2net_config
 
 MODES = ("merge", "replace")
+# An import file is read whole and its mappings are previewed and validated at once:
+# limits far above any real export or config.json (and the classic parser has its own).
+MAX_FILE_BYTES = 16 * 1024 * 1024
+MAX_MAPPINGS = 1000
 
 
 @dataclass
@@ -31,6 +35,8 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
     """A ser2net mappings export ({"mappings": [...]}), a whole config.json, or a
     classic ser2net configuration (ser2net.yaml of ser2net 4.x / ser2net.conf of 3.x).
     Raises ConfigError with a user-facing message."""
+    if len(raw) > MAX_FILE_BYTES:
+        raise ConfigError(_("The file is larger than {0} MB.").format(MAX_FILE_BYTES // 2**20))
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -39,10 +45,13 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
         return _classic_ser2net(text, filename)
     try:
         doc = json.loads(text)
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:  # RecursionError: nested too deeply
         raise ConfigError(_("The file is not valid JSON ({0}).").format(e)) from None
     if not isinstance(doc, dict) or not isinstance(doc.get("mappings"), list):
         raise ConfigError(_('Expected a ser2net export: a JSON object with a "mappings" list.'))
+    if len(doc["mappings"]) > MAX_MAPPINGS:
+        raise ConfigError(_("The file has {0} mappings; at most {1} can be imported at once.")
+                          .format(len(doc["mappings"]), MAX_MAPPINGS))
     mappings, warnings = [], []
     for i, item in enumerate(doc["mappings"], 1):
         if not isinstance(item, dict):

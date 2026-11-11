@@ -102,6 +102,7 @@ table.ports { min-width: 40rem; }
 .state-error { background: rgba(248,81,73,.18); color: #ff6b64; }
 .tag { font-size: 10.5px; background: var(--panel2); color: var(--muted); padding: 1px 6px; border-radius: 10px; white-space: nowrap; }
 .tag-danger { color: var(--red); }
+.tag-warn { color: var(--amber); }
 /* at most 3 lines; the full message is in the title tooltip and the mapping log */
 .err-small {
   color: var(--red); font-size: 11px; margin-top: 3px; max-width: 16rem;
