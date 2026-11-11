@@ -868,5 +868,7 @@
   "“{0}” restarted on {1}.": "“{0}” {1} üzerinde yeniden başlatıldı.",
   "Terminal input": "Terminal girişi",
   "Shift+Tab leaves the console": "Shift+Tab konsoldan çıkar",
-  "Role of %(user)s": "%(user)s kullanıcısının rolü"
+  "Role of %(user)s": "%(user)s kullanıcısının rolü",
+  "Discard the unsaved changes in the open form?": "Açık formdaki kaydedilmemiş değişiklikler atılsın mı?",
+  "Sign in in a new tab (keeps the open form)": "Yeni sekmede giriş yap (açık form korunur)"
 }
