@@ -23,7 +23,7 @@
       </label>
       {% endif %}
       <label>{{ _("Admin username") }}
-        <input type="text" name="username" value="admin" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
+        <input type="text" name="username" value="{{ username or 'admin' }}" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
                maxlength="32" pattern="[A-Za-z0-9._\-]{1,32}" title="{{ _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.") }}" autofocus required>
       </label>
       <label>{{ _("New password (min 8 chars)") }}
