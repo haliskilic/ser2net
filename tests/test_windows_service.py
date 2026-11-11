@@ -24,6 +24,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from types import SimpleNamespace
 
 from _server import ROOT, Browser, free_port, wait_port
 
@@ -88,6 +89,119 @@ def test_acl_decision_table():
     assert w.location_warning() is None
     print("ACL decision table: non-admin write on the exe/folder is flagged, deny honoured  OK")
 
+    # real DACLs as the reader hands them over (sid, mask, allow, ace flags), and owners
+    oi_ci, io, inh = 0x01 | 0x02, w.INHERIT_ONLY_ACE, w.INHERITED_ACE
+    full, rx, gr_ge = 0x1F01FF, 0x1200A9, 0x80000000 | 0x20000000
+    creator_owner, packages = "S-1-3-0", "S-1-15-2-1"
+    users = "S-1-5-32-545"
+    # an untouched folder under C:\Program Files (icacls: TrustedInstaller:(I)(F) ...
+    # CREATOR OWNER:(I)(OI)(CI)(IO)(F)): the inherit-only entries grant nothing on it
+    program_files_dir = [
+        (trusted_installer, full, True, inh), (trusted_installer, w.GENERIC_ALL, True, inh | 0x02 | io),
+        (system, full, True, inh), (system, w.GENERIC_ALL, True, inh | oi_ci | io),
+        (admins, full, True, inh), (admins, w.GENERIC_ALL, True, inh | oi_ci | io),
+        (users, rx, True, inh), (users, gr_ge, True, inh | oi_ci | io),
+        (creator_owner, w.GENERIC_ALL, True, inh | oi_ci | io),
+        (packages, rx, True, inh), (packages, gr_ge, True, inh | oi_ci | io)]
+    assert w.acl_offenders(program_files_dir, owner=trusted_installer) == []
+    # ... but a folder an administrator created there on Windows 10/11 is owned by that
+    # account, and CREATOR OWNER turned into a full-control entry of its own
+    created = program_files_dir[:-3] + [(user, full, True, inh)]
+    assert w.acl_offenders(created, owner=user) == [user]
+    # what install() leaves on %ProgramFiles%\ser2net (and the exe inherits): no entry for
+    # the installing account, owned by Administrators
+    hardened = [(system, full, True, oi_ci), (admins, full, True, oi_ci), (users, rx, True, oi_ci)]
+    assert w.acl_offenders(hardened, owner=admins) == []
+    assert w.acl_offenders([(s, m, a, inh) for s, m, a, _f in hardened], owner=admins) == []
+    # the per-user grant lock_down_dir() adds would keep that account able to replace the
+    # exe from an unelevated program — so it must not be used on the install folder
+    assert w.acl_offenders(hardened + [(user, full, True, oi_ci)], owner=admins) == [user]
+    # a placeholder is never an account, even where it isn't inherit-only
+    assert w.acl_offenders([(creator_owner, full, True, 0)], owner=system) == []
+    # LocalService / NetworkService are not trusted to change what SYSTEM runs
+    assert w.acl_offenders([("S-1-5-19", full, True, 0)], owner=admins) == ["S-1-5-19"]
+    # folders above the data directory: only what lets someone rename it counts
+    c_root = [(auth_users, 0x4, True, 0),                      # (AD): may add folders
+              (auth_users, 0x1301BF, True, oi_ci | io), (admins, full, True, oi_ci)]
+    assert w.acl_offenders(c_root, owner=trusted_installer, rights=w.RENAME_RIGHTS) == []
+    c_ser2net = [(auth_users, 0x1301BF, True, inh | oi_ci), (admins, full, True, inh | oi_ci)]
+    assert w.acl_offenders(c_ser2net, owner=admins, rights=w.RENAME_RIGHTS) == [auth_users]
+    # whose leftovers a new service won't take over
+    assert not w.foreign_owner(admins, user) and not w.foreign_owner(system, user)
+    assert not w.foreign_owner(user, user) and w.foreign_owner("S-1-5-21-1-2-3-1002", user)
+    print("ACL decision table: inherit-only/CREATOR OWNER skipped, owners and the installer's "
+          "own grant counted, Program Files passes, ancestors judged on rename rights  OK")
+
+
+def test_registered_command_read_back():
+    """An existing service's --data-dir / --config are read back from its command line
+    (CommandLineToArgvW rules), for the 2.8.0 and the current layout alike."""
+    w = winservice
+    cases = [
+        [r"C:\ser2net\ser2net.exe", "--service", "--service-name", "ser2net", "--data-dir",
+         r"C:\ser2net\data"],                                                  # 2.8.0, frozen
+        [r"C:\Program Files\ser2net\plant-2.exe", "--service", "--service-name", "plant-2",
+         "--data-dir", r"C:\ProgramData\ser2net\plant 2" "\\", "--config", r'D:\cfg "x"\c.json'],
+        [r"C:\Python312\python.exe", r"C:\src dir\ser2net.py", "--service", "--service-name",
+         "s", "--data-dir", "D:\\s2n\\"],                                       # source
+    ]
+    for parts in cases:
+        cmd = " ".join(w._quote(p) for p in parts)
+        assert w.split_command_line(cmd) == parts, (cmd, w.split_command_line(cmd))
+    got = w.parse_service_command(" ".join(w._quote(p) for p in cases[1]))
+    assert got == {"executable": cases[1][0], "script": None, "service_name": "plant-2",
+                   "data_dir": cases[1][5], "config": cases[1][7]}, got
+    got = w.parse_service_command(" ".join(w._quote(p) for p in cases[2]))
+    assert got["script"] == r"C:\src dir\ser2net.py" and got["data_dir"] == "D:\\s2n\\", got
+    assert w.parse_service_command(r'"C:\Windows\System32\svchost.exe" -k netsvcs') is None
+    assert w.split_command_line("  ") == []
+    print("registered command line read back: data dir / config / exe, any quoting  OK")
+
+
+def test_upgrade_paths():
+    """choose_install_paths(): an upgrade keeps the service's data directory; a new
+    service gets the default; moving to an empty directory is refused."""
+    w = winservice
+    base = os.path.join(tempfile.gettempdir(), "s2n-choose")
+    old = os.path.join(base, "ser2net", "data")             # a 2.8.0 service: data next to the exe
+    new = os.path.join(base, "ProgramData", "ser2net")
+    other = os.path.join(base, "elsewhere")
+    reg = {"executable": os.path.join(base, "ser2net", "ser2net.exe"), "script": None,
+           "service_name": "ser2net", "data_dir": old, "config": None}
+    files = {os.path.join(old, "config.json")}
+    exists = files.__contains__
+    # the documented upgrade (no --data-dir): the service's own data directory is kept
+    d, c, notes = w.choose_install_paths(None, None, reg, new, exists)
+    assert (d, c) == (old, None) and "keeping" in notes[0], (d, c, notes)
+    # a registered --config is kept too
+    d, c, _n = w.choose_install_paths(None, None, dict(reg, config=os.path.join(base, "c.json")),
+                                      new, exists)
+    assert c == os.path.join(base, "c.json")
+    # passing the same directory explicitly (the old README command) changes nothing
+    assert w.choose_install_paths(old, None, reg, new, exists)[:2] == (old, None)
+    # moving it to a directory without a configuration would start over empty: refused
+    try:
+        w.choose_install_paths(other, None, reg, new, exists)
+    except w.ServiceError as e:
+        assert "Copy" in str(e) and old in str(e) and other in str(e), str(e)
+    else:
+        raise AssertionError("moving the service to an empty data directory was accepted")
+    # ... allowed once the folder was copied there
+    files.add(os.path.join(other, "config.json"))
+    d, _c, notes = w.choose_install_paths(other, None, reg, new, exists)
+    assert d == other and "moving" in notes[0]
+    # a new service: the default, or what was passed
+    assert w.choose_install_paths(None, None, None, new, exists) == (new, None, [])
+    assert w.choose_install_paths(other, None, None, new, exists)[0] == other
+    # a registration that names no data directory can't be upgraded blindly
+    try:
+        w.choose_install_paths(None, None, dict(reg, data_dir=None), new, exists)
+    except w.ServiceError:
+        pass
+    else:
+        raise AssertionError("a registration without --data-dir was guessed")
+    print("upgrade keeps the service's data dir; new service -> default; empty move refused  OK")
+
 
 def test_install_locations():
     """Where a frozen build installs itself and keeps a service's data (any OS)."""
@@ -111,6 +225,241 @@ def test_install_locations():
         for k, v in old.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
     print("frozen install path under %ProgramFiles%, data under %ProgramData%  OK")
+
+
+class FakeSCM:
+    """Just enough of advapi32 for install(): one service, its command line, and a start
+    that can be made to fail once; every call is recorded in order."""
+
+    def __init__(self, calls, existing_cmd=None, fail_start_once=False):
+        self.calls, self.cmd, self.fail_start = calls, existing_cmd, fail_start_once
+        self.running = existing_cmd is not None
+
+    def OpenSCManagerW(self, *a):  # noqa: N802 (Win32 names)
+        return 1
+
+    def OpenServiceW(self, scm, name, access):  # noqa: N802
+        return 2 if self.cmd is not None else 0
+
+    def CreateServiceW(self, scm, name, display, access, kind, start, err, cmd, *rest):  # noqa: N802
+        self.calls.append(("create", cmd))
+        self.cmd = cmd
+        return 3
+
+    def ChangeServiceConfigW(self, svc, kind, start, err, cmd, *rest):  # noqa: N802
+        self.calls.append(("change", cmd))
+        self.cmd = cmd
+        return 1
+
+    def StartServiceW(self, svc, *a):  # noqa: N802
+        self.calls.append(("start", self.cmd))
+        self.running = not self.fail_start  # the new build exits right away
+        self.fail_start = False
+        return 1
+
+    def CloseServiceHandle(self, h):  # noqa: N802
+        return 1
+
+
+def fake_windows(scm, previous_cmd, calls):
+    """Patch winservice so install() runs against FakeSCM; returns an undo function. The
+    Windows-only steps (ACLs, the lock test, stopping) only record that they ran."""
+    w = winservice
+    saved = {n: getattr(w, n) for n in (
+        "_advapi", "_win", "_query_registration", "_stop_and_wait", "_wait_lock_free",
+        "_mkdir_admin_only", "_harden", "_require_protected", "_check_adoptable",
+        "_exposed_ancestors", "_service_extras", "_wait_state", "_unsafe_locations")}
+
+    def stop(api, svc, name, log):
+        calls.append(("stop",))
+        was, scm.running = scm.running, False
+        return was
+
+    w._advapi = lambda: SimpleNamespace(dll=scm, kernel=None)
+    w._win = SimpleNamespace(get_last_error=lambda: w.ERROR_SERVICE_DOES_NOT_EXIST,
+                             FormatError=lambda e: f"error {e}")
+    w._query_registration = lambda api, svc: SimpleNamespace(
+        service_type=0x10, start_type=2, error_control=1, binary_path=previous_cmd,
+        display_name="ser2net")
+    w._stop_and_wait = stop
+    w._wait_lock_free = lambda d, timeout: calls.append(("lock-free", d))
+    w._mkdir_admin_only = lambda d: os.makedirs(d, exist_ok=True)
+    w._harden = lambda d, users_read: calls.append(("harden", d))
+    w._require_protected = lambda paths, what: None
+    w._check_adoptable = lambda d, config_path: calls.append(("adoptable", d))
+    w._exposed_ancestors = lambda d: []
+    w._service_extras = lambda *a: None
+    w._wait_state = lambda api, svc, want, timeout=30.0: (
+        w.SERVICE_RUNNING if scm.running else w.SERVICE_STOPPED)
+    w._unsafe_locations = lambda paths, log: []
+
+    def undo():
+        for n, v in saved.items():
+            setattr(w, n, v)
+    return undo
+
+
+def test_install_flow_with_a_fake_scm():
+    """install() against a stand-in Service Control Manager (any OS): re-running it while
+    the service runs stops the service before the data directory's lock is tested and the
+    configuration loaded; a 2.8.0 service keeps its data directory; a failure after the
+    stop puts the previous exe and command line back, starts it and is one line."""
+    w = winservice
+    work = tempfile.mkdtemp(prefix="s2n_flow_")
+    env_saved = {k: os.environ.get(k) for k in ("ProgramFiles", "ProgramData")}
+    exe_saved = sys.executable
+    os.environ["ProgramFiles"] = os.path.join(work, "Program Files")
+    os.environ["ProgramData"] = os.path.join(work, "ProgramData")
+    try:
+        new_build = os.path.join(work, "Downloads", "ser2net-windows-x64.exe")
+        os.makedirs(os.path.dirname(new_build))
+        with open(new_build, "w") as fh:
+            fh.write("NEW")
+        sys.executable = new_build
+        old_dir = os.path.join(work, "ser2net")                 # where 2.8.0 ran from
+        old_data = os.path.join(old_dir, "data")
+        os.makedirs(old_data)
+        with open(os.path.join(old_data, "config.json"), "w") as fh:
+            json.dump({"users": [{"username": "admin"}], "mappings": [{"name": "PLC"}]}, fh)
+        old_cmd = w.service_command("ser2net", old_data, frozen=True,
+                                    executable=os.path.join(old_dir, "ser2net.exe"))
+        dest = w.installed_exe_path("ser2net")
+
+        def run(scm, registered_cmd=old_cmd, data_dir=None, prepare=None, lines=None):
+            calls = []
+            scm.calls = calls
+            undo = fake_windows(scm, registered_cmd, calls)
+            seen = []
+
+            def default_prepare(path):
+                calls.append(("prepare", path))
+                seen.append(path)
+                return SimpleNamespace(path=path)
+            try:
+                result = w.install("ser2net", data_dir, None, prepare=prepare or default_prepare,
+                                   default_data_dir=os.path.join(work, "default-data"),
+                                   frozen=True, log=(lines.append if lines is not None
+                                                     else (lambda *_: None)))
+            finally:
+                undo()
+            return calls, result
+
+        # 1. upgrading the running 2.8.0 service the documented way (no --data-dir)
+        scm = FakeSCM([], existing_cmd=old_cmd)
+        lines = []
+        calls, result = run(scm, lines=lines)
+        kinds = [c[0] for c in calls]
+        assert kinds[:3] == ["stop", "lock-free", "prepare"], kinds  # stopped before the lock
+        assert calls[2][1] == os.path.join(old_data, "config.json"), calls  # its own config
+        change = next(c for c in calls if c[0] == "change")[1]
+        assert w.split_command_line(change)[0] == dest and old_data in change, change
+        assert kinds[-1] == "start" and scm.running
+        with open(dest) as fh:
+            assert fh.read() == "NEW"
+        assert any("keeping the service's data directory" in ln for ln in lines), lines
+        assert any("no longer runs" in ln for ln in lines), lines
+        assert not os.path.exists(dest + ".old"), "the previous copy is dropped once it worked"
+        print("re-run while running: stop -> lock test -> load its config -> re-point -> start; "
+              "2.8.0 data dir kept  OK")
+
+        # 2. the new build doesn't start: the previous exe and command line come back
+        with open(dest, "w") as fh:
+            fh.write("PREVIOUS")
+        installed_cmd = w.service_command("ser2net", old_data, frozen=True, executable=dest)
+        scm = FakeSCM([], existing_cmd=installed_cmd, fail_start_once=True)
+        try:
+            run(scm, registered_cmd=installed_cmd)
+        except w.ServiceError as e:
+            msg = str(e)
+            assert "\n" not in msg and "did not reach RUNNING" in msg, msg
+            assert "previous version is running again" in msg, msg
+        else:
+            raise AssertionError("a start failure was not reported")
+        changes = [c[1] for c in scm.calls if c[0] == "change"]
+        assert len(changes) == 2 and changes[1] == installed_cmd, changes  # command restored
+        with open(dest) as fh:
+            assert fh.read() == "PREVIOUS", "the previous exe was not put back"
+        assert scm.running and scm.calls[-1] == ("start", installed_cmd)
+        print("new build fails to start: previous exe + command line restored and running, "
+              "one-line error  OK")
+
+        # 3. copying the new exe fails (not just 'in use'): one line, the old one restarted
+        import shutil as shutil_module
+        real_copy = shutil_module.copyfile
+
+        def full_disk(src, dst, *a, **k):
+            raise OSError(28, "No space left on device")
+        shutil_module.copyfile = full_disk
+        try:
+            scm = FakeSCM([], existing_cmd=old_cmd)
+            run(scm)
+        except w.ServiceError as e:
+            assert "No space left on device" in str(e) and "running again" in str(e), str(e)
+        else:
+            raise AssertionError("a failed copy was not reported")
+        finally:
+            shutil_module.copyfile = real_copy
+        assert not any(c[0] == "change" for c in scm.calls) and scm.running
+        print("copying the new exe fails: one line, the previous version restarted  OK")
+
+        # 4. loading the configuration stops the install: the service is started again
+        def broken(path):
+            raise SystemExit("ser2net: config.json is not a valid configuration")
+        scm = FakeSCM([], existing_cmd=old_cmd)
+        try:
+            run(scm, prepare=broken)
+        except SystemExit as e:
+            assert "not a valid configuration" in str(e.code)
+        else:
+            raise AssertionError("SystemExit was swallowed")
+        assert scm.running and [c[0] for c in scm.calls][-1] == "start"
+        print("a config that can't be loaded: the running version is started again  OK")
+
+        # 5. a new service from the exe: %ProgramData%\ser2net, checked before it is adopted
+        scm = FakeSCM([])
+        calls, _result = run(scm)
+        new_default = w.default_service_data_dir("ser2net")
+        assert ("adoptable", new_default) in calls and ("lock-free", new_default) in calls, calls
+        assert calls.index(("adoptable", new_default)) < calls.index(
+            next(c for c in calls if c[0] == "prepare"))
+        created = next(c for c in calls if c[0] == "create")[1]
+        assert new_default in created and "stop" not in [c[0] for c in calls], calls
+        print("new service: default data dir under %ProgramData%, checked before it is used  OK")
+    finally:
+        sys.executable = exe_saved
+        for k, v in env_saved.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def test_cli_leaves_the_choice_to_install():
+    """ser2net.py no longer refuses before install() (which stops a running service
+    first), and tells it whether --data-dir was given at all."""
+    import ser2net as cli
+
+    w = winservice
+    saved = (w.require_windows, w.install)
+    got = []
+    w.require_windows = lambda: None
+    w.install = lambda name, data_dir, config, **kw: got.append((data_dir, kw)) or None
+    d = tempfile.mkdtemp(prefix="s2n_cli_")
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import sys,time; sys.path.insert(0, sys.argv[2]); "
+         "from app import datalock; assert datalock.acquire(sys.argv[1]) is None; "
+         "print('held', flush=True); time.sleep(60)", d, ROOT],
+        stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"  # "the running service"
+        assert cli.main(["--install-service", "--no-bootstrap", "--data-dir", d]) == 0
+        assert cli.main(["--install-service", "--no-bootstrap"]) == 0
+    finally:
+        holder.kill()
+        holder.wait(10)
+        w.require_windows, w.install = saved
+        shutil.rmtree(d, ignore_errors=True)
+    assert [g[0] for g in got] == [d, None], got  # None: keep what the service uses
+    assert got[0][1]["default_data_dir"] and callable(got[0][1]["prepare"])
+    print("CLI: install() runs while the data dir is locked; an omitted --data-dir stays None  OK")
 
 
 def test_not_windows():
@@ -212,14 +561,26 @@ def test_real_service():
         Browser(f"http://127.0.0.1:{port}").login("admin", "svc-pass-2")
         print("--set-password while the service runs: the service applies it at once  OK")
 
-        # re-running --install-service upgrades the existing service in place (keeps its
-        # name, points it at the current build) instead of failing with 'already exists'
-        p = subprocess.run(install_cmd, capture_output=True, text=True, timeout=120,
+        # re-running --install-service while it runs upgrades it in place (stops it first,
+        # keeps its name and — without --data-dir, as documented — the data directory it
+        # has, read back from its registration) instead of failing with 'already exists'
+        rerun = [a for a in install_cmd if a not in ("--data-dir", data)]
+        p = subprocess.run(rerun, capture_output=True, text=True, timeout=180,
                            stdin=subprocess.DEVNULL)
         assert p.returncode == 0, p.stdout + p.stderr
         assert "upgraded in place" in p.stdout, p.stdout + p.stderr
+        assert "keeping the service's data directory" in p.stdout, p.stdout
         assert wait_for(lambda: healthy(port), 60), "the service did not come back after the upgrade"
-        print("re-run --install-service: upgraded in place, still running  OK")
+        q = sc("qc", name).stdout
+        assert f'"{data}"' in q, q
+        with open(os.path.join(data, "config.json"), encoding="utf-8") as fh:
+            assert [u["username"] for u in json.load(fh)["users"]] == ["admin"], "config lost"
+        print("re-run --install-service while running: upgraded in place, same data dir  OK")
+        if exe:  # the copy in %ProgramFiles%\ser2net may be changed by administrators only
+            with open(os.path.join(data, "all.log"), encoding="utf-8") as fh:
+                log = fh.read()
+            assert "accounts other than SYSTEM and Administrators can change" not in log, log[-2000:]
+            print("installed exe: no start-up warning about who can change it  OK")
 
         def service_procs():
             return [pr for pr in psutil.process_iter(["cmdline"])
@@ -243,6 +604,8 @@ def test_real_service():
         print(p.stdout.strip() or p.stderr.strip())
     assert "1060" in sc("query", name).stdout, "service still registered"
     assert os.path.isfile(os.path.join(data, "config.json")), "uninstall must keep the data"
+    if exe:
+        assert not os.path.exists(winservice.installed_exe_path(name)), "the exe copy was left"
     shutil.rmtree(work, ignore_errors=True)
     print("uninstalled; data directory kept  OK")
 
@@ -250,7 +613,11 @@ def test_real_service():
 def main():
     test_command_line()
     test_acl_decision_table()
+    test_registered_command_read_back()
+    test_upgrade_paths()
     test_install_locations()
+    test_install_flow_with_a_fake_scm()
+    test_cli_leaves_the_choice_to_install()
     test_not_windows()
     test_request_shutdown()
     test_real_service()
