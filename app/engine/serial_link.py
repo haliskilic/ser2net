@@ -33,6 +33,10 @@ if TYPE_CHECKING:
 # a session runs while the port is open and returns or raises once it is gone
 Session = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
 
+# closing a port: what is still waiting to be written to the device gets this long to go
+# out (then it is dropped), and so does the close itself after that
+SERIAL_CLOSE_TIMEOUT_S = 2.0
+
 
 class Backoff:
     """The pause between reconnect attempts: 0.5 s doubling up to 10 s, plus up to 0.4 s
@@ -132,9 +136,7 @@ class SerialLink:
         if had_serial:
             self._changed(None)
         if w is not None:
-            with contextlib.suppress(Exception):
-                w.close()
-                await w.wait_closed()
+            await close_stream(w)
 
     def _changed(self, serial: Any) -> None:
         if self._on_change is not None:
@@ -157,6 +159,39 @@ class SerialLink:
         closed.add_done_callback(_consume_error)
         await asyncio.wait((closed,))
         raise closed.exception() or ConnectionError("serial EOF / device removed")
+
+
+async def close_stream(writer: asyncio.StreamWriter) -> None:
+    """Close a serial port's stream. The stream closes gracefully: it writes what it still
+    holds, waits for the OS to send all of it to the device (tcdrain) and closes the port.
+    A device that takes no data (CTS low, XOFF, a PTY or virtual port nobody reads) kept
+    that waiting for good, and the port open, so whoever closed it (a mapping's stop() on
+    a save, restart or shutdown) never returned. So the graceful close gets
+    SERIAL_CLOSE_TIMEOUT_S; then what the device has not taken is dropped and the port
+    closed at once."""
+    with contextlib.suppress(Exception):
+        writer.close()
+    closed = asyncio.ensure_future(writer.wait_closed())
+    closed.add_done_callback(_consume_error)
+    if await _done_within(closed, SERIAL_CLOSE_TIMEOUT_S):
+        return
+    transport: Any = writer.transport
+    with contextlib.suppress(Exception):
+        if transport.get_write_buffer_size():
+            # still writing: stop and drop the rest (once all is written, the transport
+            # is already draining and closing the port, and must not do that twice)
+            transport.abort()
+    with contextlib.suppress(Exception):
+        # what the OS holds for the device: the drain then returns and the close does
+        # not wait for it either
+        transport.serial.reset_output_buffer()
+    await _done_within(closed, SERIAL_CLOSE_TIMEOUT_S)
+
+
+async def _done_within(fut: asyncio.Future, seconds: float) -> bool:
+    # asyncio.wait, not wait_for: a timeout must not cancel the stream's own close future
+    done, _pending = await asyncio.wait((fut,), timeout=seconds)
+    return bool(done)
 
 
 def _consume_error(fut: asyncio.Future) -> None:
