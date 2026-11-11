@@ -41,8 +41,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--version", action="version", version=f"ser2net {__version__}")
     p.add_argument(
         "--data-dir",
-        default=os.path.join(_app_dir(), "data"),
-        help="Directory for config.json, backups and logs (default: ./data).",
+        default=None,  # see below: whether it was given matters to --install-service
+        help="Directory for config.json, backups and logs (default: ./data; for "
+             "--install-service: the data directory the service already uses, or for a "
+             "new service from the standalone exe %%ProgramData%%\\ser2net).",
     )
     p.add_argument(
         "--config",
@@ -103,7 +105,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                           "the first line of stdin.")
     one.add_argument("--sign-out-all", action="store_true",
                      help="End every web UI session (new session key), then exit.")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    args.data_dir_given = args.data_dir is not None
+    if args.data_dir is None:
+        args.data_dir = os.path.join(_app_dir(), "data")
+    return args
 
 
 def apply_lib_override() -> None:
@@ -204,15 +210,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.about:
         return print_about()
 
-    # A frozen Windows service keeps its data under %ProgramData% (admin-controlled),
-    # not next to the exe in the admin-only %ProgramFiles% install folder. Only when the
-    # user didn't pass a --data-dir of their own; existing services keep what they have.
-    if (args.install_service and FROZEN and os.name == "nt"
-            and os.path.abspath(args.data_dir) == os.path.abspath(os.path.join(_app_dir(), "data"))):
-        from app import winservice
-
-        args.data_dir = winservice.default_service_data_dir(args.service_name)
-
     # 2. resolve config path
     config_path = args.config or os.path.join(args.data_dir, "config.json")
 
@@ -227,31 +224,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.install_service:
         if _service_call(lambda ws: ws.require_windows()):
             return 1
-        data_dir = os.path.abspath(args.data_dir)
-        config = os.path.abspath(args.config) if args.config else None
-        # another instance already using this data directory would clash with the
-        # service we install (and with the first-run save below). Only test the lock
-        # here — the service, once started, is the one that holds it.
-        from app import datalock
+        def prepare(service_config: str):
+            # runs once an existing service is stopped (the data directory then has no
+            # running instance). First run: asks for the UI address; warnings (e.g. a
+            # setting that was not saved) would otherwise only reach the service's log
+            _store, loaded = runtime.prepare_config(service_config, args.reconfigure)
+            for note in loaded.load_notes:
+                _write_utf8(note + "\n")
+            runtime.require_admin_tls(loaded.admin_ui)  # the service could not start without it
+            return loaded
 
-        pid = datalock.holder(data_dir)
-        if pid is not None:
-            who = f"process {pid}" if pid else "another process"
-            print(f"ser2net: {who} is already running with the data directory {data_dir}. "
-                  "Stop it first (a service: sc stop <name>), or install with a different "
-                  "--data-dir.", file=sys.stderr)
-            return 1
-        # first run: asks for the UI address; warnings (e.g. a setting that was not saved)
-        # would otherwise only reach the service's log
-        _store, loaded = runtime.prepare_config(config_path, args.reconfigure)
-        for note in loaded.load_notes:
-            _write_utf8(note + "\n")
-        runtime.require_admin_tls(loaded.admin_ui)  # the service could not start without it
-        rc = _service_call(lambda ws: ws.install(
-            args.service_name, data_dir, config,
-            allow_unsafe_location=args.allow_unsafe_location))
-        if rc == 0:
-            _print_firewall_hint(loaded, args.service_name)
+        # an upgrade keeps the data directory the service has unless --data-dir is given
+        done: dict = {}
+        rc = _service_call(lambda ws: done.update(config=ws.install(
+            args.service_name, args.data_dir if args.data_dir_given else None, args.config,
+            prepare=prepare, default_data_dir=os.path.abspath(args.data_dir),
+            allow_unsafe_location=args.allow_unsafe_location)))
+        if rc == 0 and done.get("config") is not None:
+            _print_firewall_hint(done["config"], args.service_name)
         return rc
     if args.service:
         from app import winservice
