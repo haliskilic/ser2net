@@ -411,6 +411,15 @@ ends every session at once, the admin's own excepted — use it when a copy of
 `config.json` or a backup may have leaked (downloaded backups leave the key out). While
 LDAP or OIDC is switched off, its accounts' sessions don't count.
 
+**Failed sign-ins** are limited to 8 per address in 5 minutes. all.log has a line for each,
+and the audit log records them; a user name that is no account's is recorded as
+`(unknown user)`, never as typed (it may be a password typed into the wrong field). Past 20
+failed sign-ins in 10 minutes the audit log only counts them and sums them up in one record
+at the end of those 10 minutes, so a flood of attempts can't push the other records out.
+Names over 256 characters aren't tried. Request bodies are limited too: the sign-in, setup
+and sign-out forms to 64 KB, a configuration import to 16 MB and everything else (forms,
+the REST API) to 2 MB; a larger one gets HTTP 413.
+
 **LDAP / OIDC groups → roles:** a group setting (admin / operator / viewer group) names one
 group and matches only its whole name, never a part of it. For LDAP that is the group's
 name (its CN, e.g. `ser2net-admins`), the start of its DN (`cn=ser2net-admins,ou=groups`)

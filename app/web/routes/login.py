@@ -276,12 +276,21 @@ def routes(ctx: Ctx) -> list:
         resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
         return resp
 
+    def _is_account_name(name: str) -> bool:
+        """Is `name` an account's (letter case aside)? Only then does a failed sign-in
+        record the name typed."""
+        folded = name.casefold()
+        return any(u.username.casefold() == folded for u in state.config.users)
+
     def _login_failed(request, ip: str, username: str):
-        """Count, log, record and notify a failed sign-in; the sign-in page again."""
+        """Count, log, record and notify a failed sign-in; the sign-in page again. A
+        name that is no account's is recorded as auth.UNKNOWN_USER: what was typed may
+        well be a password."""
+        label = username if _is_account_name(username) else auth.UNKNOWN_USER
         state.rate_limiter.record_failure(ip)
-        state.log(f"failed login for {username!r} from {ip}")
-        state.failed_logins.add(ip, username)
-        state.notifier.emit("login_failed", ip, "", f"user {username!r} from {ip}")
+        state.log(f"failed login for {label!r} from {ip}")
+        state.failed_logins.add(ip, label)
+        state.notifier.emit("login_failed", ip, "", f"user {label!r} from {ip}")
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
                       oidc_enabled=state.config.oidc.enabled)
