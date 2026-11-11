@@ -6,6 +6,7 @@ Checks:
     a sign-in that works resets the count;
   * without LDAP, a name that has no local account (unknown, or an LDAP/OIDC account) is
     checked against a dummy hash: the same work as a wrong password;
+  * the per-address limit counts an IPv6 address by its /64 (IPv4-mapped as IPv4);
   * failed sign-ins under one name (letter case aside) from any number of addresses:
     10 in 15 minutes, then 429 for that name only (also with the right password) until
     they expire; a sign-in that works resets it; the directory isn't asked meanwhile;
@@ -150,6 +151,24 @@ async def _burst(d: str, config: dict) -> None:
 
 def test_burst_counted_before_check():
     run(_burst, {"users": [_user("admin")]})
+
+
+def test_ipv6_by_64():
+    k = auth.address_key
+    assert k("2001:db8:1:2:aaaa:bbbb:cccc:dddd") == k("2001:db8:1:2::1") == "2001:db8:1:2::/64"
+    assert k("2001:db8:1:3::1") == "2001:db8:1:3::/64"
+    assert k("::ffff:192.0.2.7") == k("192.0.2.7") == "192.0.2.7"
+    assert k("fe80::1%eth0") == "fe80::/64" and k("::1") == "::/64"
+    assert k("testclient") == "testclient" and k("?") == "?"
+    lim = auth.LoginRateLimiter()
+    for i in range(lim.max_attempts):  # privacy addresses of one host / LAN
+        assert not lim.blocked(f"2001:db8:1:2::{i + 1:x}")
+        lim.record_failure(f"2001:db8:1:2::{i + 1:x}")
+    assert lim.blocked("2001:db8:1:2:ffff::42") and not lim.blocked("2001:db8:1:3::1")
+    assert len(lim._fails) == 1
+    lim.reset("2001:db8:1:2::abcd")
+    assert not lim.blocked("2001:db8:1:2::1")
+    print("address limit: IPv6 by its /64 (any address in it), IPv4-mapped as IPv4  OK")
 
 
 # ---------------------------------------------------------------- names without an account
@@ -332,6 +351,7 @@ def test_busy_answers_429():
 
 def main():
     test_burst_counted_before_check()
+    test_ipv6_by_64()
     test_unknown_names_cost_a_check()
     test_per_name_limit()
     test_per_name_limit_directory()

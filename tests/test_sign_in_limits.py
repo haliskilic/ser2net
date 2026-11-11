@@ -508,13 +508,14 @@ def test_rate_limiter_bounds():
     for i in range(2000):
         assert not lim.blocked(f"10.1.{i // 256}.{i % 256}")
     assert not lim._fails, "checking an address must not keep it"
-    for i in range(lim.MAX_ADDRESSES + 500):
-        lim.record_failure(f"2001:db8::{i:x}")
+    for i in range(lim.MAX_ADDRESSES + 500):     # each in a /64 of its own
+        lim.record_failure(f"2001:db8:{i:x}::1")
     assert len(lim._fails) == lim.MAX_ADDRESSES
-    assert "2001:db8::0" not in lim._fails and f"2001:db8::{lim.MAX_ADDRESSES + 499:x}" in lim._fails
-    lim.record_failure("2001:db8::1f4")          # failing again: kept longest
-    lim.record_failure("2001:db8::ffff")
-    assert "2001:db8::1f4" in lim._fails and "2001:db8::1f5" not in lim._fails
+    assert "2001:db8::/64" not in lim._fails
+    assert f"2001:db8:{lim.MAX_ADDRESSES + 499:x}::/64" in lim._fails
+    lim.record_failure("2001:db8:1f4::1")          # failing again: kept longest
+    lim.record_failure("2001:db8:ffff::1")
+    assert "2001:db8:1f4::/64" in lim._fails and "2001:db8:1f5::/64" not in lim._fails
     for _ in range(10):
         lim.record_failure("10.9.9.9")
     assert len(lim._fails["10.9.9.9"]) == 3 and lim.blocked("10.9.9.9")
