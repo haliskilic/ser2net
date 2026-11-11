@@ -632,8 +632,10 @@ All state lives in the **data dir** (default `data/`). The data directory is loc
 owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the files
 inside aren't readable by other users:
 - `config.json` — admin IP, password hash, all mappings (atomic write).
-- `backups/` — the previous `config.json` before every change (newest 50). Download or
-  restore one under Settings → *Configuration backups*. A restore first shows what changes
+- `backups/` — the `config.json` every change writes, and the one it replaces when that
+  isn't kept yet (newest 50): the newest backup is always the current `config.json`. The
+  list shows which release wrote each one. Download or restore one under Settings →
+  *Configuration backups*. A restore first shows what changes
   for sign-in and access, then brings back the mappings and settings; the user accounts
   and passwords, the REST API token and the cluster key stay as they are unless you tick
   the box to restore them too (that also signs everyone else out). *Only its mappings*
@@ -659,6 +661,16 @@ Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pru
 `backups/` is never restored by itself — delete it too if you want it gone). To get back in
 after a lost password, use `--set-password` instead (see Security): it keeps everything else.
 `admin-requests/` only holds a command-line request until the running instance takes it.
+
+**Going back to an older version:** stop the service and copy the data folder first. A
+release drops the settings it doesn't know at its first save — 2.7.x at once in Docker (with
+`SER2NET_BIND_IP` it saves at every start) — and 2.7.x keeps no backups; it also refuses
+Modbus coil / discrete-input points (fn 1/2), so a config with them doesn't start there.
+Since 2.9.0 the newest backup is always the current `config.json`, so the newer file is still
+in `backups/` after an older release replaced it: after upgrading again, restore it under
+Settings → *Configuration backups*. A `config.json` written by a newer release (its
+`written_by`), or with settings this release doesn't know, is reported at start-up and on
+that page.
 
 **Copying an installation** (a disk or VM image, a copied data folder or Docker volume):
 `config.json` holds the node's identity — its cluster id (`instance_id`) and the key that

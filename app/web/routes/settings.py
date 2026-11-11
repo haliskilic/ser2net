@@ -71,7 +71,8 @@ def routes(ctx: Ctx) -> list:
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,
-                      backups=backups,
+                      backups=backups, newer_writer=state.config.newer_writer,
+                      unknown_keys=state.config.unknown_keys,
                       admin=state.config.admin_ui,
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
@@ -901,10 +902,12 @@ def routes(ctx: Ctx) -> list:
             return await settings_get(request, error=_("This backup has no admin account, so its "
                                                        "accounts can't be restored. Not restored."))
         # never from the backup: the session key (renewed below with the accounts), this
-        # node's cluster id and what start-up accepted while broken, so a restore is refused
-        # only for what it changes or adds (AppConfig.validate_for_save); and unless asked,
-        # the accounts and credentials
-        keep = {"secret_key", "instance_id", "load_notes", "ids_created", "tolerated"}
+        # node's cluster id, what start-up accepted while broken, so a restore is refused
+        # only for what it changes or adds (AppConfig.validate_for_save), and what start-up
+        # found in config.json (Settings says so); and unless asked, the accounts and
+        # credentials
+        keep = {"secret_key", "instance_id", "load_notes", "ids_created", "tolerated",
+                "unknown_keys", "newer_writer"}
         if not with_accounts:
             keep |= {"users", "api_token_hash", "api_token_role"}
         notes = []

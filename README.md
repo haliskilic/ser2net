@@ -650,8 +650,10 @@ Tüm durum **veri dizininde** (varsayılan `data/`). Veri dizini yalnızca sahib
 kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), böylece
 içindeki dosyalar başka kullanıcılarca okunamaz:
 - `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
-- `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
-  *Yapılandırma yedekleri*'nden indirilir ya da geri yüklenir. Geri yükleme önce giriş ve
+- `backups/` — her değişikliğin yazdığı `config.json` ve henüz saklanmamışsa yerini aldığı
+  hâli (son 50): en yeni yedek her zaman güncel `config.json`'dur. Liste her yedeği hangi
+  sürümün yazdığını gösterir. Ayarlar → *Yapılandırma yedekleri*'nden indirilir ya da geri
+  yüklenir. Geri yükleme önce giriş ve
   erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
   kullanıcı hesapları ve parolaları, REST API token'ı ve cluster anahtarı, onları da geri
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
@@ -677,6 +679,15 @@ logu ya da içe aktarma önizlemesi bunu belirtir.
 temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin). Parola
 unutulduysa bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
 `admin-requests/` yalnızca komut satırından gelen bir isteği, çalışan örnek alana kadar tutar.
+
+**Eski bir sürüme dönmek:** önce servisi durdurup veri klasörünü kopyalayın. Bir sürüm,
+bilmediği ayarları ilk kaydında atar — 2.7.x bunu Docker'da hemen yapar (`SER2NET_BIND_IP`
+ile her açılışta kaydeder) — ve 2.7.x yedek tutmaz; Modbus coil / discrete input
+noktalarını (fn 1/2) da reddeder, bu yüzden bunları içeren bir config orada açılmaz.
+2.9.0'dan beri en yeni yedek her zaman güncel `config.json`'dur; böylece eski bir sürüm onu
+değiştirdikten sonra da yeni dosya `backups/`'ta durur: yeniden yükselttikten sonra Ayarlar →
+*Yapılandırma yedekleri*'nden geri yükleyin. Daha yeni bir sürümün yazdığı (`written_by`) ya
+da bu sürümün bilmediği ayarları içeren bir `config.json`, açılışta ve o sayfada bildirilir.
 
 **Bir kurulumu kopyalamak** (disk ya da VM imajı, kopyalanan veri klasörü ya da Docker
 volume'u): `config.json` düğümün kimliğini tutar — cluster ID'sini (`instance_id`) ve

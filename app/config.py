@@ -29,6 +29,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable, Optional, Union
+from . import __version__
 from .i18n import _
 
 # ---------------------------------------------------------------------------
@@ -1548,6 +1549,12 @@ class AppConfig:
     # Parts start-up accepted although validate() rejects them (tolerate_problems): part
     # key -> its content then. Never persisted.
     tolerated: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    # What the config.json this was loaded from had that this version doesn't use, for the
+    # Settings page (a load note each, too): the paths of the keys that are no setting, and
+    # the version that wrote it when that is newer than this one. Never persisted (every
+    # save writes this version's "written_by").
+    unknown_keys: list[str] = field(default_factory=list, repr=False, compare=False)
+    newer_writer: str = field(default="", repr=False, compare=False)
 
     # ----- (de)serialization -----
     @staticmethod
@@ -1558,6 +1565,12 @@ class AppConfig:
         (a section that is no JSON object, a list that is no list) raises ConfigError."""
         d = dict(d or {})
         notes: list[FieldNote] = []
+        # read elsewhere: the sections, the values with their own rules, what is never stored
+        own = ("admin_ui", "api_token_role", "session_timeout_s", "external_users_expire_days",
+               "users", "ldap", "oidc", "cluster", "notifications", "mappings", "load_notes",
+               "ids_created", "tolerated", "unknown_keys", "newer_writer")
+        top = _read_fields(AppConfig, d, notes, skip=own,
+                           keep=("password_hash", "pwd_version", "written_by"))
         admin_ui = AdminUI(**_read_fields(AdminUI, _section(d, "admin_ui"), notes, "admin_ui."))
         if not isinstance(d.get("users", []), list):  # never read as "no accounts yet"
             raise ConfigError(_("{0} must be a JSON list, not {1}.").format(
@@ -1568,10 +1581,6 @@ class AppConfig:
             users = [User(username="admin", password_hash=d["password_hash"],
                           role="admin", pwd_version=int(d.get("pwd_version", 0)))]
         token_role, token_note = _api_token_role(d)
-        # read elsewhere: the sections, the values with their own rules, what is never stored
-        own = ("admin_ui", "api_token_role", "session_timeout_s", "external_users_expire_days",
-               "users", "ldap", "oidc", "cluster", "notifications", "mappings", "load_notes",
-               "ids_created", "tolerated")
         cfg = AppConfig(
             admin_ui=admin_ui,
             api_token_role=token_role,
@@ -1584,14 +1593,24 @@ class AppConfig:
             notifications=NotificationSettings.from_dict(_section(d, "notifications"), notes,
                                                          "notifications."),
             mappings=[MappingConfig.from_dict(m) for m in _objects(d, "mappings")],
-            **_read_fields(AppConfig, d, notes, skip=own,
-                           keep=("password_hash", "pwd_version")),
+            **top,
         )
         cfg.secret_key = cfg.secret_key or secrets.token_hex(32)
         cfg.instance_id = cfg.instance_id or secrets.token_hex(8)
+        writer = d.get("written_by")
+        if isinstance(writer, str) and _newer_version(writer, __version__):
+            cfg.newer_writer = writer[:40]
+            cfg.load_notes.append(
+                f"config.json was written by ser2net {cfg.newer_writer}, a newer version than "
+                f"this one ({__version__}): what only {cfg.newer_writer} knows is not used here "
+                "and is left out when this version saves config.json. backups/ keeps the file "
+                f"as {cfg.newer_writer} left it: restore it there after upgrading again")
         cfg._note_fields("config.json", notes)
-        for m in cfg.mappings:
+        for i, m in enumerate(cfg.mappings):
             cfg._note_fields(f"mapping '{m.name}'", m.input_notes)
+            cfg.unknown_keys += [f"mappings[{i}].{n.path}" for n in m.input_notes
+                                 if n.kind == "unknown"]
+        cfg.unknown_keys[:0] = [n.path for n in notes if n.kind == "unknown"]
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
         raw_days = d.get("external_users_expire_days")
@@ -1663,6 +1682,9 @@ class AppConfig:
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": self.version,
+            # which release wrote the file (older ones drop it): a later load by an older
+            # release notes what it can't keep, and the backups list shows it
+            "written_by": __version__,
             "admin_ui": asdict(self.admin_ui),
             "secret_key": self.secret_key,
             "api_token_hash": self.api_token_hash,
@@ -1922,6 +1944,17 @@ def _mapping_content(m: "MappingConfig") -> dict[str, Any]:
     return content
 
 
+def _version_parts(text: str) -> Optional[tuple[int, ...]]:
+    """(2, 9, 0) for "2.9.0" (or "2.9.0rc1"), None for anything else."""
+    m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", text.strip())
+    return tuple(int(x or 0) for x in m.groups()) if m else None
+
+
+def _newer_version(text: str, than: str) -> bool:
+    a, b = _version_parts(text), _version_parts(than)
+    return a is not None and b is not None and a > b
+
+
 def _api_token_role(d: dict[str, Any]) -> tuple[str, str]:
     """api_token_role from a config file, and a note when it had to be changed. No key
     means a token from before token roles (v2.3), which had full access: admin. A role
@@ -1990,12 +2023,16 @@ _BACKUP_NAME = re.compile(r"^config-\d{8}T\d{6}Z(-\d+)?\.json$")
 
 
 class ConfigStore:
-    """config.json with atomic writes, plus automatic backups of earlier versions.
+    """config.json with atomic writes, plus automatic backups.
 
-    Every save that changes config.json first copies the version it replaces to
-    <data>/backups/config-<UTC time>.json (identical content is not copied twice; the
-    newest BACKUPS_KEPT are kept). Backups are never read back on their own: deleting
-    config.json still resets the system; restoring one is an explicit admin action."""
+    Every save keeps the file it writes as the newest backup,
+    <data>/backups/config-<UTC time>.json, and first the version it replaces when that is
+    not the newest backup already (an older release wrote it, or it was edited by hand).
+    So backups/ always holds the current config.json too: going back to a release that
+    keeps no backups (2.7) and drops what it doesn't know at its first save loses nothing.
+    Identical content is not copied twice; the newest BACKUPS_KEPT are kept. Backups are
+    never read back on their own: deleting config.json still resets the system; restoring
+    one is an explicit admin action."""
 
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
@@ -2018,19 +2055,26 @@ class ConfigStore:
 
     def matches(self, config: AppConfig) -> bool:
         """True when config.json already holds exactly this configuration, so saving it
-        would change nothing (start-up then leaves the file alone)."""
+        would change nothing (start-up then leaves the file alone). Which release wrote it
+        doesn't count: an upgrade alone doesn't rewrite it."""
         try:
             with open(self.path, "r", encoding="utf-8") as fh:
-                return json.load(fh) == json.loads(json.dumps(config.to_dict()))
+                on_disk = json.load(fh)
         except (OSError, ValueError):
             return False
+        mine = json.loads(json.dumps(config.to_dict()))
+        if isinstance(on_disk, dict):
+            on_disk.pop("written_by", None)
+        mine.pop("written_by", None)
+        return on_disk == mine
 
     def save(self, config: AppConfig, *, validate: bool = True) -> None:
         """Atomically persist config to a single file (validates first: what start-up
         accepted while broken may stay as it was, see AppConfig.validate_for_save).
 
         Uses a temp file + os.replace so config.json is never partially written; the
-        version being replaced is kept in backups/ first (see the class docstring).
+        version being replaced is kept in backups/ first, the new one after (see the class
+        docstring).
         validate=False is for a change the caller checked itself and that must not
         fail on an unrelated setting (account recovery, app/accounts.py; start-up right
         after tolerate_problems(), runtime.prepare_config).
@@ -2053,18 +2097,23 @@ class ConfigStore:
         # written: only now does a part this save fixed stop being accepted while broken
         config.tolerated = still_accepted
         _fsync_dir(directory)
+        self._add_backup(data)
 
     # ----- backups -----
     def _backup_current(self, new_data: str) -> None:
-        """Copy config.json into backups/ before it is replaced by new_data. Best
-        effort: a failing backup must never stop the save itself."""
+        """Before config.json is replaced by new_data: keep it in backups/, unless that is
+        the newest backup already (_add_backup)."""
         try:
             with open(self.path, "r", encoding="utf-8") as fh:
                 current = fh.read()
         except OSError:
             return  # first save: nothing to keep
-        if current == new_data:
-            return
+        if current != new_data:
+            self._add_backup(current)
+
+    def _add_backup(self, current: str) -> None:
+        """Make `current` (a config.json's text) the newest backup, unless it is that
+        already. Best effort: a failing backup must never stop the save itself."""
         try:
             os.makedirs(self.backup_dir, exist_ok=True)
             lock_down_dir(self.backup_dir)
@@ -2100,19 +2149,31 @@ class ConfigStore:
         return sorted(names, key=_backup_order, reverse=True)
 
     def backups(self) -> list[dict]:
-        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users}], newest first."""
+        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users, written_by
+        (the release that wrote it; None: 2.8.1 or older), current (it is what config.json
+        holds now)}], newest first."""
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                current: Optional[str] = fh.read()
+        except OSError:
+            current = None
         out = []
         for name in self.backup_names():
             path = os.path.join(self.backup_dir, name)
             info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
-                                    "time": backup_time(name)}
+                                    "time": backup_time(name), "written_by": None,
+                                    "current": False}
             try:
                 info["size"] = os.path.getsize(path)
                 with open(path, encoding="utf-8") as fh:
-                    doc = json.load(fh)
+                    text = fh.read()
+                info["current"] = text == current
+                doc = json.loads(text)
                 info["mappings"] = len(doc.get("mappings") or [])
                 info["users"] = len(doc.get("users") or [])
-            except (OSError, ValueError, AttributeError):
+                writer = doc.get("written_by")
+                info["written_by"] = writer[:40] if isinstance(writer, str) else None
+            except (OSError, ValueError, AttributeError, TypeError):
                 pass
             out.append(info)
         return out
