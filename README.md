@@ -600,13 +600,15 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   ```
   Exe kendini `C:\Program Files\ser2net\` altına kopyalar (yalnızca yöneticilerin
   değiştirebildiği bir yer; böylece sıradan bir kullanıcı, servisin SYSTEM olarak
-  çalıştırdığı dosyayı değiştiremez) ve verisini `C:\ProgramData\ser2net\` altında tutar.
+  çalıştırdığı dosyayı değiştiremez) ve verisini `C:\ProgramData\ser2net\` altında tutar
+  (ikisini de yalnızca SYSTEM ve Administrators değiştirebilir).
   Servis açılışta başlar, kullanıcı oturumu gerektirmez (LocalSystem), çökerse ya da
   hatayla çıkarsa 5 sn sonra yeniden başlar; arayüz adresi ilk kurulumda konsolda sorulur.
   Kaldırmak: `--uninstall-service` (veri klasörü kalır); birden fazla örnek için
   `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net` ya da *Hizmetler*
   (services.msc). Yeni bir exe ile `--install-service`'i yeniden çalıştırmak servisi
-  yerinde yükseltir. Başka hostlardan erişmek için gereken güvenlik duvarı kuralı, adres
+  yerinde yükseltir ve servisin kullandığı veri klasörünü korur (2.8.0 servisinde de).
+  Başka hostlardan erişmek için gereken güvenlik duvarı kuralı, adres
   değişimi, yükseltme ve imzasız derlemelerdeki SmartScreen uyarısı için
   **[`docs/WINDOWS.md`](docs/WINDOWS.md)**.
 - **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
