@@ -108,13 +108,21 @@ def routes(ctx: Ctx) -> list:
         state.log(f"{source.upper()}: {username!r} signed out everywhere: their groups give "
                   f"no role any more")
 
+    def _record_failure(ip: str, user: str, notice: str, action: str = "login_failed",
+                        detail: str = "") -> None:
+        """The audit record (bounded: state.failed_logins) and the notification of a
+        failed or refused sign-in."""
+        state.failed_logins.add(ip, user, action, detail)
+        state.notifier.emit("login_failed", ip, "", notice)
+
     def _name_refused(request, source: str, username: str) -> str | None:
         """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
         can't have an account under this name is refused: the name of a local account,
         letter case aside — such a sign-in must never take over, convert or demote that
         account (upsert_external_user refuses it too) — or a name no account can have
-        (external_name_problem). Logged, audited and notified like a failed sign-in.
-        Returns the sign-in page's message, or None when the name can be used."""
+        (external_name_problem). Logged, audited (within the failed sign-ins' limit) and
+        notified like a failed sign-in. Returns the sign-in page's message, or None when
+        the name can be used."""
         local = state.config.named(username, "local")
         why = (f"the local account {local[0].username!r} has this name" if local
                else external_name_problem(username))
@@ -131,10 +139,10 @@ def routes(ctx: Ctx) -> list:
                     "claim" if source == "oidc" else "")
             state.log(f"{what} login denied for {username!r}: no account can have this name "
                       f"here: {why}{hint}")
-        ctx.audit(request, f"{source}_login_denied",
-                  f"local account {local[0].username}" if local else why, user=username)
-        state.notifier.emit("login_failed", ip, "", f"{what} user {username!r} from {ip}: "
-                            + ("the name of a local account" if local else why))
+        _record_failure(ip, username, f"{what} user {username!r} from {ip}: "
+                        + ("the name of a local account" if local else why),
+                        f"{source}_login_denied",
+                        f"local account {local[0].username}" if local else why)
         if local:
             return _("There is a local account named {0} here, so you can't sign in under that "
                      "name with SSO or a directory account. Sign in with that account’s "
@@ -289,8 +297,7 @@ def routes(ctx: Ctx) -> list:
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
         state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {label!r} from {ip}")
-        state.failed_logins.add(ip, label)
-        state.notifier.emit("login_failed", ip, "", f"user {label!r} from {ip}")
+        _record_failure(ip, label, f"user {label!r} from {ip}")
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
                       oidc_enabled=state.config.oidc.enabled)
