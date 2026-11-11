@@ -189,6 +189,8 @@ def test_settings_ui(hook_port):
         assert srv.saved_config()["notifications"]["webhook_url"].endswith("/ui"), "blank URL must keep the stored one"
         st, _, page = b.post("/settings/notifications", {**form, "notify_webhook_url": "ftp://x"})
         assert "must start with https://" in page
+        st, _, page = b.post("/settings/notifications", {**form, "notify_repeat_min": "inf"})
+        assert st == 200 and "repeat interval must be numbers" in page, (st, page[:300])
         before = len(RECEIVED)
         Browser(srv.base).post("/login", {"username": "admin", "password": "wrong"})
         for _ in range(50):

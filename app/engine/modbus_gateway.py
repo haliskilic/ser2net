@@ -89,6 +89,7 @@ class ModbusGatewayRunner:
         self._sparkplug: Optional[SparkplugNode] = None  # payload format sparkplug_b
         self._write_tasks: set = set()
         self._poll_task: Optional[asyncio.Task] = None
+        self._publish_error = ""   # the last publishing failure logged by the poll loop
         # plain MQTT: the command topic of each writable point, matched exactly (a point
         # name is never read back out of a topic)
         base = mapping.mqtt.base_topic.rstrip("/")
@@ -180,8 +181,12 @@ class ModbusGatewayRunner:
         self._traffic.clear()
         if self._poll_task is not None:
             self._poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:  # it had died: say why, and still send NDEATH etc. below
+                self._log(f"polling had stopped: {e!r}")
             self._poll_task = None
         for t in list(self._write_tasks):
             t.cancel()
@@ -290,7 +295,14 @@ class ModbusGatewayRunner:
                 except Exception as e:  # one bad point must not stop the loop
                     self._log(f"poll '{p.name}': {e}")
             if values:
-                self._publish_values(values)
+                try:
+                    self._publish_values(values)
+                    published = ""
+                except Exception as e:  # nor a value the publisher can't take
+                    published = f"poll: publishing failed: {e!r}"
+                    if published != self._publish_error:  # once, not every interval
+                        self._log(published)
+                self._publish_error = published
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=poll.interval_s)
                 break

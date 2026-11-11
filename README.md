@@ -351,6 +351,10 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+Bir değer metin olarak da gönderilebilir (`"9600"`; `"false"` false demektir); ayarın tipine
+uymayan bir değer `400` ve ayarın yoluyla reddedilir (`serial.baudrate: "fast" is not a whole
+number.`). Ayar olmayan anahtarlar yok sayılır ve yanıttaki `warnings` listesinde adlandırılır.
+Beklenmeyen bir sunucu hatası da JSON bir `500` döner.
 Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
 sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
 `viewer` sayılır ve açılış log'u bunu yazar.

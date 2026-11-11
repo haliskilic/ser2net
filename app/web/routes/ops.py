@@ -56,7 +56,9 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         apply_usb_match(mapping, form, state.ports.get(), existing)
         mapping.validate()
         mapping.validate_input()
-    except (ValueError, ConfigError) as e:
+    # ConfigError is a ValueError; values of the wrong type are read as the right one
+    # (config._read_fields), so the others only guard a check that still trips over one
+    except (ValueError, TypeError, AttributeError, OverflowError) as e:
         return False, str(e)
     # Hold the lock only to mutate + persist config; release it BEFORE the
     # (potentially slow) supervisor call so other admin requests aren't blocked
@@ -72,8 +74,10 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
             state.config.mappings.append(mapping)
         try:
             await state.asave()
-        except ConfigError as e:
+        except Exception as e:  # not saved: nothing changed
             state.config.mappings = backup
+            if not isinstance(e, ConfigError):
+                raise
             return False, str(e)
     await state.supervisor.apply_mapping(mapping)
     return True, mapping.name

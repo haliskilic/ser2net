@@ -24,6 +24,7 @@ import re
 import secrets
 import tempfile
 import time
+import typing
 import unicodedata
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -194,6 +195,236 @@ def _legacy_seconds(value: Any) -> Any:
     return min(value, MAX_TIMER_S)
 
 
+# ---------------------------------------------------------------------------
+# Reading JSON (config.json, the REST API, an import, a form) into the typed model
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class FieldNote:
+    """What reading a JSON object into the model did with one of its values (_read_fields),
+    by its path in that object ("serial.baudrate", "modbus_poll.points[0].scale"):
+      unknown   - no setting of this version: left out (an edit warns about it);
+      converted - another JSON type, read as the field's type ("false" as false, "9600" as
+                  9600): an edit takes it as meant, loading config.json notes it;
+      invalid   - can't be read as the field's type: `used` instead, and an edit refuses
+                  it (`expected`: what it must be, a key of _EXPECTED);
+      replaced  - not supported together with the other settings: `used` instead, with a
+                  warning (`why` in English for the log, `warning` in the language of the
+                  request that sent it)."""
+    path: str
+    kind: str
+    value: Any = None
+    used: Any = None
+    expected: str = ""
+    why: str = ""
+    warning: str = ""
+
+    def text(self) -> str:
+        """The note in English, for the log, the REST API and the import preview."""
+        if self.kind == "unknown":
+            return f"{self.path} is not a setting of this version and is ignored"
+        if self.kind == "invalid":
+            return (f"{self.path} {_shown(self.value)} is not {_EXPECTED[self.expected]}: "
+                    f"{_shown(self.used)} is used")
+        if self.kind == "converted":
+            text = f"{self.path} {_shown(self.value)} is read as {_shown(self.used)}"
+            if self.used is False and isinstance(self.value, str) and self.value.strip():
+                text += " (versions before 2.9.0 took any text but \"\" as true)"
+            return text
+        return self.why
+
+    def error(self) -> str:
+        """An edit's refusal of an invalid value, in the UI's language."""
+        return _("{0}: {1} is not {2}.").format(self.path, _shown(self.value),
+                                                _expected(self.expected))
+
+
+# what a field of each kind must be (FieldNote.expected), for the log ...
+_EXPECTED = {"bool": "true or false", "int": "a whole number", "number": "a finite number",
+             "str": "text", "object": "a JSON object"}
+
+
+def _expected(kind: str) -> str:
+    """... and in the UI's language."""
+    return {"bool": _("true or false"), "int": _("a whole number"),
+            "number": _("a finite number"), "str": _("text"),
+            "object": _("a JSON object")}[kind]
+
+
+def _shown(value: Any, limit: int = 60) -> str:
+    """A value as JSON writes it, cut to `limit` characters, for messages."""
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = repr(value)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+_TRUE_WORDS = ("true", "1", "on", "yes")
+_FALSE_WORDS = ("false", "0", "off", "no", "")
+
+
+def _text_number(text: str) -> Any:
+    """The number a text spells (an int when it is one), else None."""
+    t = text.strip()
+    try:
+        return int(t)
+    except ValueError:
+        pass
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _coerce(value: Any, hint: Any) -> tuple[bool, Any]:
+    """`value` read as a field of type `hint`: (True, the value) — converted from another
+    JSON type when that needs no guess — or (False, None) when it can't be. null is an
+    unset value: false, "", [] or {} (a number: _read_fields takes the field's default).
+    A list of text takes any value: a text is a one-entry list, anything else becomes
+    text, so no entry of an allow-list is ever dropped (unusable ones are reported where
+    they are used: client_networks)."""
+    if hint is bool:
+        if value is None:
+            return True, False
+        if isinstance(value, bool):
+            return True, value
+        if _is_int(value) and value in (0, 1):
+            return True, bool(value)
+        if isinstance(value, str):
+            word = value.strip().lower()
+            if word in _TRUE_WORDS:
+                return True, True
+            if word in _FALSE_WORDS:
+                return True, False
+        return False, None
+    if hint is int or hint is float:
+        if isinstance(value, str):
+            value = _text_number(value)
+        if isinstance(value, bool) or not _is_number(value):
+            return False, None
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                return False, None
+            if hint is int and value.is_integer():
+                return True, int(value)
+        elif hint is float:
+            try:
+                float(value)
+            except OverflowError:  # an int too large for any float
+                return False, None
+        return True, value
+    if hint is str:
+        if isinstance(value, str):
+            return True, value
+        if value is None:
+            return True, ""
+        if _is_number(value):
+            return True, str(value)
+        return False, None
+    origin = typing.get_origin(hint)
+    if origin is list and typing.get_args(hint) == (str,):
+        if value is None:
+            return True, []
+        if isinstance(value, str):
+            return True, [value] if value.strip() else []
+        items = value if isinstance(value, list) else [value]
+        return True, [v if isinstance(v, str) else _shown(v, 200) for v in items]
+    if origin is dict:
+        if value is None:
+            return True, {}
+        return (True, value) if isinstance(value, dict) else (False, None)
+    return True, value
+
+
+def _kind_of(hint: Any) -> str:
+    return {bool: "bool", int: "int", float: "number", str: "str"}.get(hint, "object")
+
+
+def _same(value: Any, read: Any) -> bool:
+    """True when reading `value` changed nothing worth a note (null for an empty value,
+    4001.0 for 4001)."""
+    if value is None:
+        return read is False or (not isinstance(read, bool) and read in ("", [], {}))
+    if _is_number(value) and _is_number(read):
+        return value == read
+    return type(value) is type(read) and value == read
+
+
+@functools.cache
+def _hints(cls) -> dict[str, Any]:
+    return typing.get_type_hints(cls)
+
+
+def _field_default(f: dataclasses.Field) -> Any:
+    if f.default is not dataclasses.MISSING:
+        return f.default
+    return f.default_factory()  # type: ignore[operator]
+
+
+def _read_fields(cls, d: dict[str, Any], notes: list[FieldNote], path: str = "", *,
+                 skip: tuple = (), keep: tuple = (),
+                 fallback: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Keyword arguments for cls() from the JSON object `d`: each field `d` has, read as the
+    field's type (_coerce), except `skip` (the caller reads those). A value that can't be
+    takes the field's default — a true/false field the value's truth instead, as earlier
+    versions took it, or the field's `fallback`. Keys that are no field (or `keep`, read
+    elsewhere) are left out. What it did is added to `notes`, paths prefixed with `path`."""
+    hints = _hints(cls)
+    out: dict[str, Any] = {}
+    names = set()
+    for f in dataclasses.fields(cls):
+        names.add(f.name)
+        if f.name in skip or f.name not in d:
+            continue
+        value, hint = d[f.name], hints[f.name]
+        if value is None and hint in (int, float):  # a number left unset
+            out[f.name] = _field_default(f)
+            continue
+        ok, read = _coerce(value, hint)
+        if not ok:
+            if fallback and f.name in fallback:
+                read = fallback[f.name]
+            else:
+                read = bool(value) if hint is bool else _field_default(f)
+            notes.append(FieldNote(path + f.name, "invalid", value, read, _kind_of(hint)))
+        elif not _same(value, read):
+            notes.append(FieldNote(path + f.name, "converted", value, read))
+        out[f.name] = read
+    for key, value in d.items():
+        if key not in names and key not in keep:
+            notes.append(FieldNote(f"{path}{key}", "unknown", value))
+    return out
+
+
+def _section(d: dict[str, Any], key: str, path: str = "") -> dict[str, Any]:
+    """The JSON object d[key]; an absent or empty one is {} (as before). Anything else
+    raises ConfigError: config.json then fails to load, as it did before, rather than
+    lose that part of it."""
+    value = d.get(key)
+    if not value:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(_("{0} must be a JSON object, not {1}.").format(path + key,
+                                                                          _shown(value)))
+    return value
+
+
+def _objects(d: dict[str, Any], key: str, path: str = "") -> list[dict[str, Any]]:
+    """The JSON list of objects d[key]; an absent or empty one is []. Raises ConfigError
+    for anything else (see _section)."""
+    value = d.get(key)
+    if not value:
+        return []
+    if not isinstance(value, list):
+        raise ConfigError(_("{0} must be a JSON list, not {1}.").format(path + key,
+                                                                       _shown(value)))
+    for i, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ConfigError(_("{0} must be a JSON object, not {1}.").format(
+                f"{path}{key}[{i}]", _shown(item)))
+    return value
+
+
 TRACE_DEFAULT_NAME = "trace.log"
 # letters/digits of any script, "_", "." and "-"; path separators and the characters
 # Windows forbids become "_" (the <id>- prefix also rules out reserved names like CON)
@@ -254,13 +485,14 @@ class SerialSettings:
     advanced: SerialAdvanced = field(default_factory=SerialAdvanced)
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "SerialSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "SerialSettings":
         d = dict(d or {})
-        adv = d.pop("advanced", {}) or {}
-        known = {f.name for f in dataclasses.fields(SerialAdvanced)}
-        advanced = SerialAdvanced(**{k: v for k, v in adv.items() if k in known})
-        known = {f.name for f in dataclasses.fields(SerialSettings)} - {"advanced"}
-        return SerialSettings(advanced=advanced, **{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        fields = _read_fields(SerialSettings, d, notes, path, skip=("advanced",))
+        adv = _section(d, "advanced", path)
+        advanced = SerialAdvanced(**_read_fields(SerialAdvanced, adv, notes, path + "advanced."))
+        return SerialSettings(advanced=advanced, **fields)
 
     def validate(self) -> None:
         if not self.port:
@@ -353,10 +585,11 @@ class NetworkSettings:
         return self.mode in ("server", "udp")
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "NetworkSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "NetworkSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(NetworkSettings)}
-        return NetworkSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return NetworkSettings(**_read_fields(NetworkSettings, d, notes, path))
 
     def validate(self) -> None:
         if self.mode not in NET_MODES:
@@ -482,10 +715,11 @@ class MappingOptions:
     modbus_response_timeout_s: float = 1.0
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "MappingOptions":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "MappingOptions":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(MappingOptions)}
-        opts = MappingOptions(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        opts = MappingOptions(**_read_fields(MappingOptions, d, notes, path))
         opts.idle_timeout_s = _legacy_seconds(opts.idle_timeout_s)
         opts.trace_both = trace_file_name(opts.trace_both)
         return opts
@@ -530,10 +764,11 @@ class MqttSettings:
     apply_retained_set: bool = False
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "MqttSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "MqttSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(MqttSettings)}
-        return MqttSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return MqttSettings(**_read_fields(MqttSettings, d, notes, path))
 
     def validate(self) -> None:
         if not self.enabled:
@@ -577,44 +812,69 @@ class ModbusPoint:
     writable: bool = False
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "ModbusPoint":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "ModbusPoint":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(ModbusPoint)}
-        return ModbusPoint(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return ModbusPoint(**_read_fields(ModbusPoint, d, notes, path))
+
+
+MODBUS_POLL_DEFAULT_S = 5.0
 
 
 @dataclass
 class ModbusPoll:
-    interval_s: float = 5.0
+    interval_s: float = MODBUS_POLL_DEFAULT_S
     points: list[ModbusPoint] = field(default_factory=list)
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "ModbusPoll":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "ModbusPoll":
         d = dict(d or {})
-        return ModbusPoll(
-            interval_s=float(d.get("interval_s", 5.0) or 5.0),
-            points=[ModbusPoint.from_dict(p) for p in d.get("points", [])],
-        )
+        notes = [] if notes is None else notes
+        poll = ModbusPoll(
+            points=[ModbusPoint.from_dict(p, notes, f"{path}points[{i}].")
+                    for i, p in enumerate(_objects(d, "points", path))],
+            **_read_fields(ModbusPoll, d, notes, path, skip=("points",)))
+        # 0 or less has always meant the default interval (an <input min> keeps the form
+        # from sending it); said now, where it matters
+        if poll.interval_s <= 0:
+            if poll.points:
+                was, now = _shown(poll.interval_s), f"{MODBUS_POLL_DEFAULT_S:g}"
+                notes.append(FieldNote(
+                    path + "interval_s", "replaced", poll.interval_s, MODBUS_POLL_DEFAULT_S,
+                    why=f"{path}interval_s {was} is not a poll interval (more than 0 "
+                        f"seconds): {now} s is used",
+                    warning=_("{0}interval_s {1} is not a poll interval (more than 0 seconds): "
+                              "{2} s is used.").format(path, was, now)))
+            poll.interval_s = MODBUS_POLL_DEFAULT_S
+        return poll
 
     def validate(self) -> None:
         if not self.points:
             return
-        if self.interval_s <= 0:
+        if not _is_number(self.interval_s) or not (0 < self.interval_s < math.inf):
             raise ConfigError(_("Modbus poll interval must be > 0 seconds."))
         seen = set()
         for p in self.points:
-            if not p.name.strip():
+            if not isinstance(p.name, str) or not p.name.strip():
                 raise ConfigError(_("Each Modbus poll point needs a name."))
             if p.name in seen:
                 raise ConfigError(_("Duplicate Modbus poll point name: {0}.").format(repr(p.name)))
             seen.add(p.name)
-            if not (0 <= p.unit <= 255):
+            if not _is_int(p.unit) or not (0 <= p.unit <= 255):
                 raise ConfigError(_("Point {0}: unit must be 0-255.").format(repr(p.name)))
-            if p.fn not in (1, 2, 3, 4):
+            if p.fn not in (1, 2, 3, 4) or not _is_int(p.fn):
                 raise ConfigError(_("Point {0}: function must be 1 (coils), 2 (discrete "
                                     "inputs), 3 (holding registers) or 4 (input registers).").format(repr(p.name)))
-            if not (0 <= p.address <= 65535):
+            if not _is_int(p.address) or not (0 <= p.address <= 65535):
                 raise ConfigError(_("Point {0}: address must be 0-65535.").format(repr(p.name)))
+            # from_dict reads both as numbers / true or false; a model built in code is
+            # refused here rather than fail at every poll
+            if not _is_number(p.scale) or not (isinstance(p.scale, int) or math.isfinite(p.scale)):
+                raise ConfigError(_("Point {0}: scale must be a number.").format(repr(p.name)))
+            if not isinstance(p.writable, bool):
+                raise ConfigError(_("Point {0}: writable must be true or false.").format(repr(p.name)))
             if p.dtype not in MODBUS_DTYPES:
                 raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), MODBUS_DTYPES))
             if (p.fn in (1, 2)) != (p.dtype == "bool"):
@@ -643,27 +903,44 @@ class MappingConfig:
     options: MappingOptions = field(default_factory=MappingOptions)
     mqtt: MqttSettings = field(default_factory=MqttSettings)
     modbus_poll: ModbusPoll = field(default_factory=ModbusPoll)
+    # What from_dict did with the data it was given (FieldNote): loading config.json logs
+    # it, an edit refuses an invalid value (validate_input) and warns about the rest.
+    # Never persisted.
+    input_notes: list[FieldNote] = field(default_factory=list, repr=False, compare=False)
+
+    # what a mapping read back from the REST API has besides its settings (never stored)
+    _READ_ONLY_KEYS = ("status", "warnings")
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingConfig":
         # every way into the config (file, import, form, REST, cluster) passes here, so an
-        # id that is not a valid mapping id never gets further (see _mapping_id_from)
+        # id that is not a valid mapping id never gets further (see _mapping_id_from), nor a
+        # value of the wrong type (see _read_fields)
         d = dict(d or {})
-        return MappingConfig(
-            id=_mapping_id_from(d.get("id")),
-            name=d.get("name", ""),
-            enabled=bool(d.get("enabled", True)),
-            kind=d.get("kind", "net"),
-            serial=SerialSettings.from_dict(d.get("serial", {})),
-            serial_b=SerialSettings.from_dict(d.get("serial_b", {})),
-            network=NetworkSettings.from_dict(d.get("network", {})),
-            options=MappingOptions.from_dict(d.get("options", {})),
-            mqtt=MqttSettings.from_dict(d.get("mqtt", {})),
-            modbus_poll=ModbusPoll.from_dict(d.get("modbus_poll", {})),
-        )
+        notes: list[FieldNote] = []
+        readers: dict[str, Any] = {
+            "serial": SerialSettings.from_dict, "serial_b": SerialSettings.from_dict,
+            "network": NetworkSettings.from_dict, "options": MappingOptions.from_dict,
+            "mqtt": MqttSettings.from_dict, "modbus_poll": ModbusPoll.from_dict}
+        fields = _read_fields(MappingConfig, d, notes, skip=("id", "input_notes", *readers),
+                              keep=MappingConfig._READ_ONLY_KEYS)
+        sections = {key: read(_section(d, key), notes, key + ".") for key, read in readers.items()}
+        return MappingConfig(id=_mapping_id_from(d.get("id")), input_notes=notes,
+                             **sections, **fields)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("input_notes", None)
+        return d
+
+    def input_warnings(self) -> list[str]:
+        """What an edit (REST API, import) is told about the data it sent: keys that are no
+        setting, settings replaced by supported ones (in the request's language; the REST
+        API's is English)."""
+        unknown = [n.path for n in self.input_notes if n.kind == "unknown"]
+        out = ([_("Not settings of this version, so they are ignored: {0}.").format(
+            ", ".join(unknown))] if unknown else [])
+        return out + [n.warning for n in self.input_notes if n.kind == "replaced"]
 
     def validate(self) -> None:
         if not self.name.strip():
@@ -706,7 +983,11 @@ class MappingConfig:
         import, cluster), checked there in addition to validate(). validate() must not
         refuse them: a stored config has to keep loading and saving (Docker re-saves it on
         every start), so a stored value they forbid is refused where it is used instead
-        (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url)."""
+        (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url), or
+        normalized when it is loaded (a value of the wrong type: from_dict)."""
+        for note in self.input_notes:
+            if note.kind == "invalid":
+                raise ConfigError(note.error())
         for side in self.serial_sides():
             if url_port(side.port):
                 raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "
@@ -840,10 +1121,11 @@ class LdapSettings:
     nested_groups: bool = False      # AD: LDAP_MATCHING_RULE_IN_CHAIN group search
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "LdapSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "LdapSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(LdapSettings)}
-        return LdapSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return LdapSettings(**_read_fields(LdapSettings, d, notes, path))
 
     @property
     def uses_tls(self) -> bool:
@@ -889,10 +1171,11 @@ class OidcSettings:
     default_role: str = ""           # role when no group matched; "" => deny
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "OidcSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "OidcSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(OidcSettings)}
-        return OidcSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        return OidcSettings(**_read_fields(OidcSettings, d, notes, path))
 
     def validate(self) -> None:
         if not self.enabled:
@@ -983,20 +1266,21 @@ class ClusterSettings:
     discovery: bool = True           # UDP beacons; off => manual peers only
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "ClusterSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "ClusterSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(ClusterSettings)}
-        c = ClusterSettings(**{k: v for k, v in d.items() if k in known})
-        c.peers = [str(p).strip() for p in (c.peers or []) if str(p).strip()]
-        # a hand-edited key of null or a number: "" (cluster off, which start-up reports) or
-        # the number as text, instead of failing wherever the key is used
-        c.key = "" if c.key is None else str(c.key)
-        # the fields added after 2.8.0: a hand-edited value of the wrong type takes the default
-        c.previous_key = c.previous_key if isinstance(c.previous_key, str) else ""
+        notes = [] if notes is None else notes
+        # the fields added after 2.8.0: a hand-edited value that is no true/false (null too)
+        # takes the default, not its truth
+        defaults = {"legacy_auth": True, "discovery": True}
+        for name in defaults:
+            if name in d and d[name] is None:
+                del d[name]
+        # a hand-edited key of null or a number reads as "" (cluster off, which start-up
+        # reports) or the number as text, instead of failing wherever the key is used
+        c = ClusterSettings(**_read_fields(ClusterSettings, d, notes, path, fallback=defaults))
+        c.peers = [p.strip() for p in c.peers if p.strip()]
         c.previous_until = _epoch(c.previous_until)
-        for name in ("legacy_auth", "discovery"):
-            if not isinstance(getattr(c, name), bool):
-                setattr(c, name, True)
         return c
 
     @property
@@ -1052,10 +1336,11 @@ class NotificationSettings:
     smtp_password: str = ""
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "NotificationSettings":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "NotificationSettings":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(NotificationSettings)}
-        n = NotificationSettings(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        n = NotificationSettings(**_read_fields(NotificationSettings, d, notes, path))
         n.events = [e for e in (n.events or []) if e in NOTIFY_EVENTS]
         return n
 
@@ -1155,10 +1440,11 @@ class User:
         return self.source if self.source == "local" else self.source.upper()
 
     @staticmethod
-    def from_dict(d: dict[str, Any]) -> "User":
+    def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
+                  path: str = "") -> "User":
         d = dict(d or {})
-        known = {f.name for f in dataclasses.fields(User)}
-        u = User(**{k: v for k, v in d.items() if k in known})
+        notes = [] if notes is None else notes
+        u = User(**_read_fields(User, d, notes, path))
         if u.role not in ROLES:
             u.role = "viewer"
         if u.source not in ("local", "ldap", "oidc"):
@@ -1209,32 +1495,46 @@ class AppConfig:
     # ----- (de)serialization -----
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "AppConfig":
+        """The config in a config.json (a backup, a restore). Values of the wrong type are
+        normalized, with a load note each (_read_fields), never refused: a config that an
+        older release wrote or accepted keeps loading. A part that isn't shaped like one
+        (a section that is no JSON object, a list that is no list) raises ConfigError."""
         d = dict(d or {})
-        admin = d.get("admin_ui", {}) or {}
-        known = {f.name for f in dataclasses.fields(AdminUI)}
-        admin_ui = AdminUI(**{k: v for k, v in admin.items() if k in known})
-        users = [User.from_dict(u) for u in d.get("users", [])]
+        notes: list[FieldNote] = []
+        admin_ui = AdminUI(**_read_fields(AdminUI, _section(d, "admin_ui"), notes, "admin_ui."))
+        if not isinstance(d.get("users", []), list):  # never read as "no accounts yet"
+            raise ConfigError(_("{0} must be a JSON list, not {1}.").format(
+                "users", _shown(d["users"])))
+        users = [User.from_dict(u, notes, f"users[{i}].")
+                 for i, u in enumerate(_objects(d, "users"))]
         if not users and d.get("password_hash"):  # migrate legacy single-password config
             users = [User(username="admin", password_hash=d["password_hash"],
                           role="admin", pwd_version=int(d.get("pwd_version", 0)))]
         token_role, token_note = _api_token_role(d)
+        # read elsewhere: the sections, the values with their own rules, what is never stored
+        own = ("admin_ui", "api_token_role", "session_timeout_s", "external_users_expire_days",
+               "users", "ldap", "oidc", "cluster", "notifications", "mappings", "load_notes",
+               "ids_created", "tolerated")
         cfg = AppConfig(
-            version=int(d.get("version", 1)),
             admin_ui=admin_ui,
-            secret_key=d.get("secret_key") or secrets.token_hex(32),
-            api_token_hash=d.get("api_token_hash", ""),
             api_token_role=token_role,
             session_timeout_s=_session_timeout(d.get("session_timeout_s")),
             external_users_expire_days=_expire_days(d.get("external_users_expire_days")),
             users=users,
-            ldap=LdapSettings.from_dict(d.get("ldap", {})),
-            oidc=OidcSettings.from_dict(d.get("oidc", {})),
-            cluster=ClusterSettings.from_dict(d.get("cluster", {})),
-            notifications=NotificationSettings.from_dict(d.get("notifications", {})),
-            instance_id=d.get("instance_id") or secrets.token_hex(8),
-            defaults=d.get("defaults", {}) or {},
-            mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
+            ldap=LdapSettings.from_dict(_section(d, "ldap"), notes, "ldap."),
+            oidc=OidcSettings.from_dict(_section(d, "oidc"), notes, "oidc."),
+            cluster=ClusterSettings.from_dict(_section(d, "cluster"), notes, "cluster."),
+            notifications=NotificationSettings.from_dict(_section(d, "notifications"), notes,
+                                                         "notifications."),
+            mappings=[MappingConfig.from_dict(m) for m in _objects(d, "mappings")],
+            **_read_fields(AppConfig, d, notes, skip=own,
+                           keep=("password_hash", "pwd_version")),
         )
+        cfg.secret_key = cfg.secret_key or secrets.token_hex(32)
+        cfg.instance_id = cfg.instance_id or secrets.token_hex(8)
+        cfg._note_fields("config.json", notes)
+        for m in cfg.mappings:
+            cfg._note_fields(f"mapping '{m.name}'", m.input_notes)
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
         raw_days = d.get("external_users_expire_days")
@@ -1263,7 +1563,7 @@ class AppConfig:
                 "private CA (Active Directory Certificate Services) or a self-signed "
                 "certificate, set Settings → LDAP / Active Directory → CA certificate file "
                 "(ldap.ca_file). Local accounts are not affected.")
-        for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
+        for raw, m in zip(_objects(d, "mappings"), cfg.mappings, strict=True):
             old_id = (raw or {}).get("id")
             if old_id and old_id != m.id:
                 cfg.load_notes.append(
@@ -1283,6 +1583,17 @@ class AppConfig:
                         "device; URL ports are no longer opened, so the mapping does not start "
                         "until a serial device is set")
         return cfg
+
+    def _note_fields(self, where: str, notes: list[FieldNote]) -> None:
+        """Add what reading `where` did (FieldNote) to the load notes."""
+        self.load_notes.extend(f"{where}: {n.text()}" for n in notes if n.kind != "unknown")
+        unknown = [n.path for n in notes if n.kind == "unknown"]
+        if unknown:
+            shown = ", ".join(unknown[:20]) + (f" and {len(unknown) - 20} more"
+                                               if len(unknown) > 20 else "")
+            self.load_notes.append(
+                f"{where}: not settings of this version, so they are not used and are left "
+                f"out when config.json is next saved (backups/ keeps the file as it was): {shown}")
 
     def to_dict(self) -> dict[str, Any]:
         return {

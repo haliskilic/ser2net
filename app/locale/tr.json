@@ -838,5 +838,17 @@
   "Legacy authentication": "Eski kimlik doğrulama",
   "Automatic discovery": "Otomatik keşif",
   "An account named {0} here signs in another way (through the directory or SSO), so you can't sign in under that name like this. Ask an admin to delete that account first.": "Burada {0} adında başka bir yolla (dizin ya da SSO ile) giriş yapan bir hesap var; bu yüzden bu adla bu şekilde giriş yapamazsın. Bir admin'den önce o hesabı silmesini iste.",
-  "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış."
+  "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış.",
+  "{0}: {1} is not {2}.": "{0}: {1}, {2} değil.",
+  "true or false": "true ya da false",
+  "a whole number": "bir tam sayı",
+  "a finite number": "sonlu bir sayı",
+  "text": "metin",
+  "a JSON object": "bir JSON nesnesi",
+  "{0} must be a JSON object, not {1}.": "{0} bir JSON nesnesi olmalı, {1} değil.",
+  "{0} must be a JSON list, not {1}.": "{0} bir JSON listesi olmalı, {1} değil.",
+  "Point {0}: scale must be a number.": "{0} noktası: ölçek (scale) bir sayı olmalı.",
+  "Point {0}: writable must be true or false.": "{0} noktası: writable true ya da false olmalı.",
+  "{0}interval_s {1} is not a poll interval (more than 0 seconds): {2} s is used.": "{0}interval_s {1} geçerli bir okuma aralığı değil (0 saniyeden uzun olmalı): {2} sn kullanılıyor.",
+  "Not settings of this version, so they are ignored: {0}.": "Bunlar bu sürümün ayarları değil, bu yüzden yok sayılıyor: {0}."
 }

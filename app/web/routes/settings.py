@@ -246,7 +246,7 @@ def routes(ctx: Ctx) -> list:
         if "session_minutes" in form:
             try:
                 timeout = int(float(form.get("session_minutes") or "") * 60)
-            except ValueError:
+            except (ValueError, OverflowError):  # OverflowError: "inf"
                 return await settings_get(request, error=_("Session lifetime must be a number "
                                                            "of minutes."))
         ui = state.config.admin_ui
@@ -739,8 +739,10 @@ def routes(ctx: Ctx) -> list:
             state.config.mappings = new_maps
             try:
                 await state.asave()
-            except ConfigError as e:
+            except Exception as e:  # not saved: the mappings stay as they were
                 state.config.mappings = old
+                if not isinstance(e, ConfigError):
+                    raise
                 return await settings_get(request, error=_("Import rejected: {0}").format(e))
         if mode == "replace":
             await state.supervisor.stop_all()
@@ -766,7 +768,7 @@ def routes(ctx: Ctx) -> list:
         try:
             port = int(form.get("notify_smtp_port") or 587)
             repeat = int(float(form.get("notify_repeat_min") or 5) * 60)
-        except ValueError:
+        except (ValueError, OverflowError):  # OverflowError: "inf"
             raise ConfigError(_("SMTP port and repeat interval must be numbers.")) from None
         url, pw = form.get("notify_webhook_url", "").strip(), form.get("notify_smtp_password", "")
         return NotificationSettings.from_dict({

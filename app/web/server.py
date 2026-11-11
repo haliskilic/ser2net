@@ -205,6 +205,16 @@ def make_templates() -> Jinja2Templates:
     return templates
 
 
+async def server_error(request, exc) -> PlainTextResponse | JSONResponse:
+    """The answer to a request that failed with an unexpected exception (the server logs
+    its traceback): JSON under the REST API, whose clients expect nothing else, else the
+    usual plain text."""
+    if request.url.path.startswith("/api/v1"):
+        return JSONResponse({"error": "internal", "detail": "internal server error"},
+                            status_code=500)
+    return PlainTextResponse("Internal Server Error", status_code=500)
+
+
 def build_app(state) -> Starlette:
     templates = make_templates()
     routes = build_routes(templates, state, STATIC_DIR)
@@ -213,7 +223,8 @@ def build_app(state) -> Starlette:
     # an exception group from BaseHTTPMiddleware's receive, a 500 instead of the 413.
     middleware = [Middleware(GuardMiddleware),
                   Middleware(RequestBodyLimitMiddleware, max_body_size=MAX_BODY_BYTES)]
-    app = Starlette(routes=routes, middleware=middleware)
+    app = Starlette(routes=routes, middleware=middleware,
+                    exception_handlers={Exception: server_error})
     app.state.appstate = state
     app.state.templates = templates
     return app

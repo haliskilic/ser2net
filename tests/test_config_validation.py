@@ -257,17 +257,29 @@ def test_connection_lifecycle_validation():
     bad = [
         ({"keepalive_idle_s": 0}, None, "Keepalive idle time"),
         ({"keepalive_idle_s": 40000}, None, "Keepalive idle time"),
-        ({"keepalive_interval_s": "10"}, None, "Keepalive probe interval"),
         ({"keepalive_count": 0}, None, "Keepalive probe count"),
         ({"keepalive_count": 128}, None, "Keepalive probe count"),
-        ({"keepalive_count": True}, None, "Keepalive probe count"),
         ({"connect_timeout_s": -1}, None, "Connect timeout"),
         ({"connect_timeout_s": 3601}, None, "Connect timeout"),
         (None, {"max_connection_time_s": -1}, "Max connection time"),
-        (None, {"max_connection_time_s": "24h"}, "Max connection time"),
     ]
     for network, options, needle in bad:
         _expect_error(mapping(network, options), needle)
+    # a number sent as text is that number; a value that is no number is refused by an
+    # edit and reads as the default when it is loaded (validate() never sees it)
+    assert mapping({"keepalive_interval_s": "10"}).network.keepalive_interval_s == 10
+    for network, options, attr, default in (
+            ({"keepalive_count": True}, None, ("network", "keepalive_count"), 3),
+            (None, {"max_connection_time_s": "24h"}, ("options", "max_connection_time_s"), 0)):
+        m = mapping(network, options)
+        assert getattr(getattr(m, attr[0]), attr[1]) == default, (attr, m)
+        m.validate()
+        try:
+            m.validate_input()
+        except ConfigError as e:
+            assert f"{attr[0]}.{attr[1]}:" in str(e), e
+        else:
+            raise AssertionError(f"an edit accepted {network or options}")
     # a negative idle timeout is rejected when set directly...
     neg = mapping()
     neg.options.idle_timeout_s = -5

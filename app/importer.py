@@ -52,7 +52,8 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
     if len(doc["mappings"]) > MAX_MAPPINGS:
         raise ConfigError(_("The file has {0} mappings; at most {1} can be imported at once.")
                           .format(len(doc["mappings"]), MAX_MAPPINGS))
-    mappings, warnings = [], []
+    mappings: list[MappingConfig] = []
+    warnings: list[str] = []
     for i, item in enumerate(doc["mappings"], 1):
         if not isinstance(item, dict):
             raise ConfigError(_("Mapping #{0} is not an object.").format(i))
@@ -61,6 +62,8 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
             m.validate_input()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
+        warnings.extend(_("Mapping #{0} ({1}): {2}").format(i, m.name, w)
+                        for w in m.input_warnings())
         if item.get("id") and item["id"] != m.id:
             warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "
                               "digits or _), so it gets a new one.").format(

@@ -342,6 +342,10 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (unauthenticated), `GET /openapi.json`.
+A value may be sent as text (`"9600"`, `"false"` is false); one that is not of the setting's
+type is refused with `400` and the setting's path (`serial.baudrate: "fast" is not a whole
+number.`). Keys that are not settings are ignored and named in the response's `warnings`
+list. An unexpected server error is a JSON `500` too.
 The token has the role chosen when it was generated: a `viewer` token may only read (GET)
 and gets stored secrets (the MQTT password) masked. An `api_token_role` in `config.json`
 that is not a role counts as `viewer`, and the start-up log says so.
