@@ -13,6 +13,8 @@ Checks:
   * every self-refreshing panel — the ports, the fleet view, a mapping's log, like the
     mappings table — answers 204 while the browser shows its content already;
   * Settings → Users: each role selector and row button names its user;
+  * a refused sign-in (401, 429) and a refused first-run setup fill in the user name
+    typed, not "admin" again; a plain sign-in page still offers "admin";
 
 Run: python3 tests/test_ui_feedback.py
 """
@@ -204,12 +206,38 @@ def test_users_table_names():
     print("users table: the role selector and the row buttons name their user  OK")
 
 
+def username_field(page):
+    m = re.search(r'<input type="text" name="username" value="([^"]*)"', page)
+    return m and m.group(1)
+
+
+def test_typed_username_kept():
+    with Server({"users": USERS}) as srv:
+        b = Browser(srv.base)
+        assert username_field(b.get("/login")[2]) == "admin"
+        st, _, page = b.post("/login", {"username": "view", "password": "wrong"})
+        assert st == 401 and username_field(page) == "view", (st, username_field(page))
+        st, _, page = b.post("/login", {"username": 'a"><b>x', "password": "wrong"})
+        assert username_field(page) == "a&#34;&gt;&lt;b&gt;x", "escaped"
+        for _ in range(8):
+            st, _, page = b.post("/login", {"username": "view", "password": "wrong"})
+        assert st == 429 and username_field(page) == "view", (st, username_field(page))
+    with Server() as srv:   # first-run setup
+        b = Browser(srv.base)
+        assert username_field(b.get("/setup")[2]) == "admin"
+        st, _, page = b.post("/setup", {"username": "boss", "password": "long-enough-1",
+                                        "password2": "something-else"})
+        assert st == 400 and username_field(page) == "boss", (st, username_field(page))
+    print("sign-in and setup: a refused form keeps the user name typed  OK")
+
+
 def main():
     test_deleted_mapping_log()
     test_error_texts()
     test_notices()
     test_unchanged_panels()
     test_users_table_names()
+    test_typed_username_kept()
     print("\nPASS: dashboard request answers")
 
 

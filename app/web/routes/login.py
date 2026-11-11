@@ -33,6 +33,11 @@ def routes(ctx: Ctx) -> list:
         return render(request, "login.html", error=None,
                       oidc_enabled=state.config.oidc.enabled)
 
+    def _typed(form) -> str:
+        """The user name a refused sign-in form had, to fill it in again: a retry that
+        re-types only the password must not go to 'admin' (the field's default)."""
+        return str(form.get("username") or "").strip()[:auth.LOGIN_NAME_MAX]
+
     # ---------------- LDAP / OIDC groups -> role ----------------
     # (source, user name) whose sessions a refused sign-in already ended, so that more
     # refused tries don't save config.json (and push out a backup) each time; their next
@@ -156,12 +161,12 @@ def routes(ctx: Ctx) -> list:
         return _("Your user name from the directory or the identity provider can’t be used "
                  "here; an admin can see why in all.log.")
 
-    def _refusal_page(request, source: str, message: str | None):
+    def _refusal_page(request, source: str, message: str | None, username: str = ""):
         if source == "oidc":
             return render(request, "login.html", status_code=403, error=None, oidc_enabled=True,
                           oidc_error=message)
         return render(request, "login.html", status_code=403, error=message,
-                      oidc_enabled=state.config.oidc.enabled)
+                      oidc_enabled=state.config.oidc.enabled, username=username)
 
     async def _save_external(source: str, username: str, role: str) -> User | None:
         """The saved shadow account of an LDAP/OIDC user who signed in; None when a local
@@ -296,32 +301,33 @@ def routes(ctx: Ctx) -> list:
         folded = name.casefold()
         return any(u.username.casefold() == folded for u in state.config.users)
 
-    def _login_failed(request, ip: str, username: str):
-        """Count, log, record and notify a failed sign-in; the sign-in page again. A
-        name that is no account's is recorded as auth.UNKNOWN_USER: what was typed may
-        well be a password."""
+    def _login_failed(request, ip: str, username: str, typed: str):
+        """Count, log, record and notify a failed sign-in; the sign-in page again, with
+        the name typed (`typed`). A name that is no account's is recorded as
+        auth.UNKNOWN_USER: what was typed may well be a password."""
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
         state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {label!r} from {ip}")
         _record_failure(ip, label, f"user {label!r} from {ip}")
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
-                      oidc_enabled=state.config.oidc.enabled)
+                      oidc_enabled=state.config.oidc.enabled, username=typed)
 
     async def login_post(request):
         ip = client_ip(request)
         form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
+        typed = _typed(form)
         if state.rate_limiter.blocked(ip):
             return render(request, "login.html", status_code=429,
                           error=_("Too many attempts. Wait a few minutes and try again."),
-                          oidc_enabled=state.config.oidc.enabled)
+                          oidc_enabled=state.config.oidc.enabled, username=typed)
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
         if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
-            return _login_failed(request, ip, username)
+            return _login_failed(request, ip, username, typed)
         user = state.config.get_user(username)
         authed = None
         # local account: verify the scrypt hash off the event loop (it's slow on purpose)
@@ -337,13 +343,13 @@ def routes(ctx: Ctx) -> list:
             if groups is not None:
                 state.ldap_tls_problem = None   # the connection to the directory works
                 if refusal := _name_refused(request, "ldap", username):
-                    return _refusal_page(request, "ldap", refusal)
+                    return _refusal_page(request, "ldap", refusal, typed)
                 role = _directory_role("ldap", username, groups, state.config.ldap)
                 if role:
                     authed = await _save_external("ldap", username, role)
                     if authed is None:   # a local account got the name meanwhile
                         return _refusal_page(request, "ldap",
-                                             _name_refused(request, "ldap", username))
+                                             _name_refused(request, "ldap", username), typed)
                     refused.discard(_person("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
@@ -354,7 +360,7 @@ def routes(ctx: Ctx) -> list:
             resp = RedirectResponse("/", status_code=303)
             set_session(resp, request, authed)
             return resp
-        return _login_failed(request, ip, username)
+        return _login_failed(request, ip, username, typed)
 
     async def _sign_out_everywhere(username: str) -> None:
         """A logout the revocation list has no room for: end all of the account's
@@ -394,11 +400,13 @@ def routes(ctx: Ctx) -> list:
     # machine's (auth.claims_own_host, the DNS-rebinding guard). Through another name
     # (a reverse proxy, Docker's host name) the page asks for the one-time code that
     # AppState.prepare_first_run wrote to setup-code.txt. No redirect: every path leads here.
-    def setup_page(request, status_code=200, error=None):
+    def setup_page(request, status_code=200, error=None, username=""):
+        # username: the admin name a refused form had (accounts can't be renamed, so one
+        # that silently fell back to "admin" would stay so)
         return render(request, "setup.html", status_code=status_code, error=error,
                       ips=netinfo.list_ip_candidates(), admin=state.config.admin_ui,
                       locked=state.setup_locked, need_code=not auth.claims_own_host(request.headers),
-                      host=auth.foreign_host(request.headers))
+                      host=auth.foreign_host(request.headers), username=username)
 
     async def setup_get(request):
         trusted = auth.claims_own_host(request.headers) and not state.setup_locked
@@ -411,22 +419,23 @@ def routes(ctx: Ctx) -> list:
         if state.setup_locked:
             return setup_page(request, status_code=403)
         ip = client_ip(request)
+        typed = _typed(form)
         if not auth.claims_own_host(request.headers):
             if state.rate_limiter.blocked(ip):
                 return setup_page(request, 429, _("Too many attempts. Wait a few minutes and try "
-                                                  "again."))
+                                                  "again."), typed)
             if not state.setup_code_ok(form.get("setup_code") or ""):
                 state.rate_limiter.record_failure(ip)
                 state.log(f"first-run setup refused: wrong setup code from {ip} "
                           f"(host {auth.foreign_host(request.headers)!r})")
                 return setup_page(request, 403, _("That setup code is not right. It is in "
-                                                  "setup-code.txt in ser2net’s data folder."))
+                                                  "setup-code.txt in ser2net’s data folder."), typed)
         username = (form.get("username") or "admin").strip() or "admin"
         pw = form.get("password", "")
         pw2 = form.get("password2", "")
         err = _username_problem(username) or _password_problem(pw, pw2)
         if err:
-            return setup_page(request, 400, err)
+            return setup_page(request, 400, err, typed)
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
         async with state.config_lock:
             # checked again here: another setup request may have finished while this one
@@ -439,7 +448,7 @@ def routes(ctx: Ctx) -> list:
                     await state.asave()
                 except ConfigError as e:
                     state.config.users = []
-                    return setup_page(request, 400, str(e))
+                    return setup_page(request, 400, str(e), typed)
         if claimed:
             state.log(f"first-run setup from {ip} ignored: the admin account exists already")
             return RedirectResponse("/login", status_code=303)
