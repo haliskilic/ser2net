@@ -83,7 +83,7 @@
           {% else %}
             <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/cluster/control-peer" hx-vals='{{ dict(peer, action="start")|tojson }}' hx-swap="none" hx-disabled-elt="this">{{ _("Start") }}</button>
           {% endif %}
-          <button class="btn sm" id="{{ rid }}-edit" aria-describedby="{{ rid }}-name" hx-get="/api/cluster/peer-form?{{ peer|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
+          <button class="btn sm" id="{{ rid }}-edit" aria-describedby="{{ rid }}-name" hx-get="/api/cluster/peer-form?{{ peer|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ _("Edit") }}</button>
         </div></div>
         {% endif %}
       </td>

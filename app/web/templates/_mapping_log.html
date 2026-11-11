@@ -1,8 +1,8 @@
 {% if gone %}
 <div class="form-head">
-  <h3>{{ _("Log") }}</h3>
+  <h3 id="panel-title" tabindex="-1">{{ _("Log") }}</h3>
   <div class="actions">
-    <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
+    <button type="button" class="btn sm" id="log-close" data-cancel>{{ _("Close") }}</button>
   </div>
 </div>
 <p class="muted">{{ _("This mapping no longer exists: it was deleted.") }}</p>
@@ -11,7 +11,7 @@
    scroll position and a text selection stay); the button ids keep the keyboard focus #}
 <div hx-get="/api/mappings/{{ mid }}/log" hx-trigger="every 5s" hx-target="#form-panel" hx-swap="innerHTML" data-hash="{{ content_hash }}">
   <div class="form-head">
-    <h3>{{ _("Log — %(name)s", name=mapping_name|softbreak) }}</h3>
+    <h3 id="panel-title" tabindex="-1">{{ _("Log — %(name)s", name=mapping_name|softbreak) }}</h3>
     <div class="actions">
       <button class="btn sm" id="log-refresh" hx-get="/api/mappings/{{ mid }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
       <button type="button" class="btn sm" id="log-close" data-cancel>{{ _("Close") }}</button>

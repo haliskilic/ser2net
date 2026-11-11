@@ -4,7 +4,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>{{ _("Serial → Network mappings") }}</h2>
-    {% if can_edit %}<button class="btn primary" hx-get="/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML">{{ _("+ Add mapping") }}</button>{% endif %}
+    {% if can_edit %}<button class="btn primary" id="add-mapping" hx-get="/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ _("+ Add mapping") }}</button>{% endif %}
   </div>
   <div id="form-panel"></div>
   <div class="toolbar" data-mapping-tools>

@@ -31,13 +31,14 @@ def unchanged_or(request, resp):
     return resp
 
 
-def notice(text: str, kind: str = "ok") -> dict:
+def notice(text: str, kind: str = "ok", focus: str = "") -> dict:
     """The response header that has the dashboard (app.js, its feedback area) tell the
-    user what an action did: "ok" as a status message, "warn" as an alert. A header, so
-    the action's answer and its status stay what they are; JSON, percent-encoded (a
+    user what an action did: "ok" as a status message, "warn" as an alert; `focus`: the
+    id of the element that gets the keyboard focus when the form panel closes. A header,
+    so the action's answer and its status stay what they are; JSON, percent-encoded (a
     header value is Latin-1 only)."""
-    return {"X-Notice": urllib.parse.quote(json.dumps({"kind": kind, "text": text},
-                                                      ensure_ascii=False))}
+    d = {"kind": kind, "text": text, **({"focus": focus} if focus else {})}
+    return {"X-Notice": urllib.parse.quote(json.dumps(d, ensure_ascii=False))}
 
 
 def action_done(action: str, name: str) -> str:

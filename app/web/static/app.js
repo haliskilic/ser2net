@@ -26,6 +26,14 @@ document.addEventListener("click", function (e) {
   try { localStorage.setItem("ser2net-theme", toLight ? "light" : "dark"); } catch (e) {}
 });
 
+// 0b) htmx sets detail.elt to the element each event is dispatched on — afterRequest goes
+//     to an ancestor still in the page when the element that asked was replaced
+//     meanwhile (a row button while its table refreshed). The element that asked is
+//     kept here, on the request's detail that all its events share.
+document.addEventListener("htmx:beforeRequest", function (e) {
+  e.detail.askedBy = e.detail.elt;
+});
+
 // 1) Send the CSRF token on every htmx request (double-submit cookie pattern).
 document.addEventListener("htmx:configRequest", function (e) {
   var m = document.querySelector('meta[name="csrf-token"]');
@@ -77,7 +85,7 @@ document.addEventListener("htmx:configRequest", function (e) {
     e.detail.headers["X-Content-Hash"] = el.getAttribute("data-hash");
 });
 document.addEventListener("htmx:afterRequest", function (e) {
-  var el = e.detail.elt, xhr = e.detail.xhr;
+  var el = e.detail.askedBy, xhr = e.detail.xhr;
   if (polls(el) && xhr && xhr.status === 200) {
     var h = xhr.getResponseHeader("X-Content-Hash");
     if (h) el.setAttribute("data-hash", h);
@@ -157,6 +165,7 @@ document.addEventListener("click", function (e) {
     closeTerm();
     var panel = document.getElementById("form-panel");
     if (panel) panel.innerHTML = "";
+    panelFocus.back();   // to the button that opened it (8)
   }
 });
 
@@ -196,7 +205,8 @@ function initTerm(root) {
     term.onData(function (d) {
       if (el._mode === "text" && el._ws && el._ws.readyState === 1) el._ws.send(d);
     });
-    term.focus();
+    // the focus: once the panel is in view (8) — keys typed into a console out of view
+    // (Space / PageDown to scroll the page) would go to the device
   }
   connectTerm(el, "text");
 }
@@ -383,7 +393,7 @@ document.addEventListener("visibilitychange", function () {
 //    The answers are taken from htmx:afterRequest, not htmx:responseError: when the
 //    element that asked was replaced meanwhile (a row button while the table
 //    refreshed), htmx sends afterRequest on to the nearest element still in the page,
-//    while responseError would go to the replaced one and be lost.
+//    while responseError would go to the replaced one and be lost (see 0b).
 var feedback = (function () {
   var shown = {}, seq = 0;
 
@@ -479,7 +489,7 @@ var feedback = (function () {
   }
 
   document.addEventListener("htmx:afterRequest", function (e) {
-    var d = e.detail, xhr = d.xhr, el = d.elt;
+    var d = e.detail, xhr = d.xhr, el = d.askedBy || d.elt;
     if (!xhr || !xhr.status) return;   // no answer: htmx:sendError (or an abort)
     var poll = polls(el);
     if (d.successful) {                // 2xx (204, 286 too) or a re-rendered form
@@ -490,6 +500,7 @@ var feedback = (function () {
       if (n) {
         try { n = JSON.parse(decodeURIComponent(n)); } catch (err) { n = null; }
         if (n && n.text) feedback.show(null, n.kind === "warn" ? "warn" : "ok", String(n.text));
+        if (n && n.focus) panelFocus.want(String(n.focus));   // when the panel closes (8)
       }
       return;
     }
@@ -505,4 +516,67 @@ var feedback = (function () {
     if (polls(el)) setStale(el, true);
     feedback.show("offline", "error", tr("offline", "The server can’t be reached: this page is not up to date. It updates again as soon as the server answers."));
   });
+})();
+
+// 8) The form panel (#form-panel: a mapping's form, log, console or traces) sits above
+//    the table. The buttons that open it scroll it into view (hx-swap "show:top"), then
+//    it takes the keyboard focus: its error banner when it has one; an operator's
+//    console when it is in view (what is typed there goes to the device); else its
+//    heading. Closing it, or a save that empties it, gives the focus back to the button
+//    that opened it — or to the one the save names (X-Notice "focus": a new mapping's
+//    Edit button, once the refreshed table has it). A refresh inside the panel (the
+//    log's) moves nothing.
+var panelFocus = (function () {
+  var opener = null, wanted = null;
+
+  function give(id) {
+    var el = id ? document.getElementById(id) : null;
+    if (!el) return false;
+    el.focus();
+    return true;
+  }
+  function back() {
+    var id = wanted || opener;
+    opener = null;
+    if (give(id)) wanted = null;
+    else if (id) wanted = id;   // the table's next refresh may bring it
+  }
+  function inView(el) {
+    var r = el.getBoundingClientRect();
+    return r.top >= 0 && r.top < window.innerHeight;
+  }
+  function settled(p, fromPanel) {
+    if (!p.firstElementChild) { back(); return; }
+    var err = p.querySelector(".banner.error");
+    if (fromPanel && !err) return;
+    var term = p.querySelector("#term");
+    if (!err && term && term._term && term.getAttribute("data-interactive") === "1" && inView(term)) {
+      term._term.focus();
+      return;
+    }
+    var target = err || p.querySelector("#panel-title");
+    if (target) target.focus({ preventScroll: true });
+  }
+
+  document.addEventListener("htmx:beforeRequest", function (e) {
+    var p = document.getElementById("form-panel"), el = e.detail.elt;
+    if (e.defaultPrevented || !p || !el || e.detail.target !== p) return;
+    e.detail.fromPanel = p.contains(el);
+    if (!e.detail.fromPanel) { opener = el.id || null; wanted = null; }
+  });
+  document.addEventListener("htmx:afterSettle", function (e) {
+    var p = e.target;
+    if (!p || p.id !== "form-panel") return;
+    var fromPanel = !!e.detail.fromPanel;
+    // htmx scrolls the panel into view right after this event
+    setTimeout(function () { settled(p, fromPanel); }, 0);
+  });
+  document.addEventListener("htmx:afterSwap", function (e) {
+    var id = e.target ? e.target.id : "";
+    if (wanted && (id === "mappings" || id === "cluster") && give(wanted)) wanted = null;
+  });
+  return {
+    back: back,
+    want: function (id) { wanted = id; }
+  };
 })();

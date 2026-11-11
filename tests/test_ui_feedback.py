@@ -7,8 +7,9 @@ Checks:
     it as it is), an ended session a 401 (app.js offers to sign in again);
   * a successful action says what it did in its X-Notice header (percent-encoded JSON,
     app.js shows it): save, start / stop / restart, bulk, copy, delete — as a warning
-    when a mapping did not start, with the reason, which also goes to its own log;
-    the answer itself stays as it was (status, empty body, HX-Trigger);
+    when a mapping did not start, with the reason, which also goes to its own log; a
+    save names the row button that gets the focus when the form closes (a new
+    mapping's too); the answer itself stays as it was (status, empty body, HX-Trigger);
   * every self-refreshing panel — the ports, the fleet view, a mapping's log, like the
     mappings table — answers 204 while the browser shows its content already;
 
@@ -82,6 +83,11 @@ def note(headers):
     return d["kind"], d["text"]
 
 
+def focus(headers):
+    """The element the X-Notice gives the focus to when the form panel closes."""
+    return json.loads(urllib.parse.unquote(headers.get("X-Notice"))).get("focus")
+
+
 def test_notices():
     busy = socket.socket()   # a port in use: a mapping that listens on it can't start
     busy.bind(("127.0.0.1", 0))
@@ -99,6 +105,13 @@ def test_notices():
             st, h, body = b.post("/api/mappings/save", form, htmx=True)
             assert st == 200 and body == "" and h.get("HX-Trigger") == "refreshMappings"
             assert note(h) == ("ok", "“Gamma” saved."), note(h)
+            assert focus(h) == "m-fb0000000003-edit", "the focus goes back to the row"
+            st, h, _ = b.post("/api/mappings/save", {**form, "id": "", "name": "Zeta",
+                                                     "serial_port": "/dev/ser2net-feedback-z",
+                                                     "network_port": str(free_port())}, htmx=True)
+            new = next(m["id"] for m in srv.saved_config()["mappings"] if m["name"] == "Zeta")
+            assert note(h) == ("ok", "“Zeta” saved.") and focus(h) == f"m-{new}-edit", \
+                "a new mapping: the focus to its row (no new form: that would add it twice)"
 
             st, h, _ = b.post("/api/mappings/fb0000000003/start", htmx=True)
             assert st == 200 and note(h) == ("ok", "“Gamma” started."), note(h)
