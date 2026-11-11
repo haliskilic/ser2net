@@ -85,9 +85,9 @@ düzenlemeye gerek yok.
   trace'te `ser>drop` olarak, konsolda ve hex görünümünde görünür. Broadcast (unit 0) bir
   yazma (FC5/6/15/16/22) hatta gönderilir ve 200 ms'lik dönüş beklemesinden (en çok yanıt
   süresi kadar) sonra bir slave'in vereceği yankıyla yanıtlanır; unit 0'a okuma hatta hiç
-  gitmeden hemen `0x0B` alır. Seri port kaybolursa (USB
-  adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır (o
-  anda yanıt bekleyen istek de) ve port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
+  gitmeden hemen `0x0B` alır. Seri port kaybolursa (USB adaptör çıkarıldığında)
+  master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır (o anda yanıt bekleyen istek
+  de) ve port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
   kayboldu/geri geldi bildirimleri).
   Master'lar diğer istemciler gibi kabul edilir (izinli IP'ler, max bağlantı, öncelikli
   IP'ler, eski-kullanıcıyı-at); **salt okunur** bir gateway okuma olmayan her isteği
@@ -100,10 +100,10 @@ düzenlemeye gerek yok.
   kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
   `.../set/result`'ta `error: …` alır). Unit 0'daki bir nokta okunmaz; ona yazma broadcast
   olarak gider ve geri okunmaz. Eşleme formu ve log, unit 0'daki ve seri hattın ayırdığı
-  248–255 unit'lerindeki noktalar için uyarır. **Salt okunur** bu yazmaları da reddeder (`error:
-  mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler panoda
-  **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker karar
-  verir). İstenirse **Sparkplug B**
+  248–255 unit'lerindeki noktalar için uyarır. **Salt okunur** bu yazmaları da reddeder
+  (`error: mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler
+  panoda **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker
+  karar verir). İstenirse **Sparkplug B**
   edge node olarak, her Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH,
   `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth. Bir komut yayınlandığında bir
   kez yazılır: broker'ın yeniden bağlanma, yeniden başlatma ya da config kaydından sonra

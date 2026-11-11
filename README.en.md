@@ -70,9 +70,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer
   within the response timeout, which starts once the request has gone out on the line
-  (set in the mapping form's Options: 1 s by default, 0.01–60 s). A reply ends when it is as long as its header says (after 50 ms of silence for function
-  codes whose header doesn't size the reply: FC8, FC43, user-defined ones), so the latency
-  of USB adapters and the Windows clock don't cut replies. A reply has to answer its
+  (set in the mapping form's Options: 1 s by default, 0.01–60 s). A reply ends when it is
+  as long as its header says (after 50 ms of silence for function codes whose header
+  doesn't size the reply: FC8, FC43, user-defined ones), so the latency of USB adapters
+  and the Windows clock don't cut replies. A reply has to answer its
   request (the same function or its exception, the byte count of the quantity read, a
   write's echo), and after a request that got no reply in time the gateway waits until the
   line has been quiet for 250 ms (at most the response timeout) before it sends the next
@@ -84,8 +85,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   without reaching the bus.
   If the serial port goes away (a USB adapter unplugged), masters get `0x0A` (gateway path
   unavailable) at once meanwhile (so does a request waiting for its reply at that moment)
-  and the port is reopened like any mapping's (state
-  `reconnecting`, device lost/back notifications). Masters are admitted like other
+  and the port is reopened like any mapping's (state `reconnecting`, device lost/back
+  notifications). Masters are admitted like other
   clients (allowed IPs, max connections, priority IPs, kick-old-user); a **read-only**
   gateway answers every request that is not a read (writes such as FC5/6/15/16/22/23,
   diagnostics that restart or silence a slave, unknown function codes) with exception
@@ -97,9 +98,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   FC6/FC16 for a holding register's own one or two registers; a JSON list or other text
   gets `error: …` on `.../set/result`). A point on unit 0 is never read; a write to it is
   broadcast and not read back. The mapping form and the log warn about points on unit 0
-  and on units 248–255, which a serial line reserves. **Read-only** refuses these writes too (`error:
-  mapping is read-only`; a refused DCMD is logged), and the dashboard marks a mapping that
-  takes MQTT writes with **CMD** (see Security: the broker decides who may send them).
+  and on units 248–255, which a serial line reserves. **Read-only** refuses these writes
+  too (`error: mapping is read-only`; a refused DCMD is logged), and the dashboard marks a
+  mapping that takes MQTT writes with **CMD** (see Security: the broker decides who may
+  send them).
   Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
   NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
   A command is written once, when it is published: a retained `/set` that the broker sends
