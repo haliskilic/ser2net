@@ -323,6 +323,13 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
 
+**Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
+the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
+address (128 in all). Capacity, `kick_old_user` and the "Busy" line still come after the
+handshake. When the process gets close to its open-file limit, new connections to a
+mapping are refused with a log line, so serial ports, logs and the configuration
+keep the files they need.
+
 **UDP mappings:** `allowed_client_ips` is checked for every datagram, but what it checks is
 the datagram's source address, which a sender on the network can forge, so for UDP it is no
 authentication. Without a reply address, any allowed sender (or one forging an allowed

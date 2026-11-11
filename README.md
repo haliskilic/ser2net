@@ -331,6 +331,13 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
 port olarak kabul edilmez.
 
+**Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
+TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
+anda en fazla 32 (toplamda 128) el sıkışma yürür. Kapasite, `kick_old_user` ve "Busy" satırı
+yine el sıkışmadan sonra gelir. Süreç açık dosya sınırına yaklaşınca eşlemelere gelen yeni
+bağlantılar log'a bir satır yazılarak reddedilir; böylece seri portlar, log'lar ve
+yapılandırma ihtiyaç duydukları dosyaları açabilir.
+
 **UDP eşlemeleri:** `allowed_client_ips` her datagram için denetlenir, ama baktığı şey
 datagram'ın kaynak adresidir ve ağdaki bir gönderici bu adresi taklit edebilir; yani UDP'de
 izin listesi kimlik doğrulama değildir. Yanıt adresi yoksa izinli her gönderici (ya da izinli
