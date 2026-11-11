@@ -50,9 +50,9 @@ SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
 SESSION_TIMEOUT_MAX_S = 30 * 86400
 # LDAP/OIDC accounts not signed in for this many days are removed (AppConfig
-# .external_users_expire_days, app/signins.py); 0 = never. At least the longest session
-# lifetime, so no live session ends that way.
-EXPIRE_DAYS_DEFAULT = 90
+# .external_users_expire_days, app/signins.py); 0 = never, the default: an admin turns it
+# on. At least the longest session lifetime, so no live session ends that way.
+EXPIRE_DAYS_DEFAULT = 0
 EXPIRE_DAYS_MIN = SESSION_TIMEOUT_MAX_S // 86400
 EXPIRE_DAYS_MAX = 3650
 
@@ -1157,8 +1157,8 @@ class AppConfig:
     api_token_role: str = "admin"  # role granted by the API token (viewer = read-only)
     # lifetime of a web-UI sign-in (cookie + signed token); Settings -> Web UI access
     session_timeout_s: int = SESSION_TIMEOUT_DEFAULT_S
-    # LDAP/OIDC accounts not signed in for this many days are removed (0: never);
-    # Settings -> Users
+    # LDAP/OIDC accounts not signed in for this many days are removed (0: never, the
+    # default); Settings -> Users
     external_users_expire_days: int = EXPIRE_DAYS_DEFAULT
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
@@ -1439,7 +1439,7 @@ def _epoch(value: Any) -> float:
 
 def _expire_days(value: Any) -> int:
     """external_users_expire_days from a config file: missing or unreadable -> the
-    default, 0 or less -> 0 (never), anything else clamped into the supported range (a
+    default (0: never), 0 or less -> 0, anything else clamped into the supported range (a
     hand-edited value must not stop a start; from_dict notes the change)."""
     if value is None or isinstance(value, bool):
         return EXPIRE_DAYS_DEFAULT

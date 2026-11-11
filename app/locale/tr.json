@@ -823,7 +823,6 @@
   "last sign-in: %(time)s": "son giriş: %(time)s",
   "LDAP / OIDC accounts are made at their first sign-in, and every sign-in takes their role from the directory or the identity provider again. Delete signs such an account out at once, but whether that person can sign in again is up to the directory: while a mapped group or the default role still applies, their next sign-in makes a new account.": "LDAP / OIDC hesapları ilk girişte oluşturulur ve her girişte rolleri yeniden dizinden ya da kimlik sağlayıcıdan alınır. Sil, böyle bir hesabın oturumlarını hemen kapatır; ama o kişinin yeniden giriş yapıp yapamayacağına dizin karar verir: eşlenen bir grup ya da varsayılan rol geçerli oldukça bir sonraki girişi yeni bir hesap oluşturur.",
   "Remove LDAP / OIDC accounts not signed in for (days)": "Giriş yapılmayan LDAP / OIDC hesaplarını kaldırma süresi (gün)",
-  "0 = never · %(min)s to %(max)s · never admins or local accounts": "0 = hiçbir zaman · %(min)s ile %(max)s arası · admin'ler ve yerel hesaplar asla kaldırılmaz",
   "Save": "Kaydet",
   "Enter 0 (never) or a number of days from {0} to {1}.": "0 (hiçbir zaman) ya da {0} ile {1} arasında bir gün sayısı gir.",
   "Saved: LDAP / OIDC accounts that haven’t signed in for {0} days are removed (checked every hour).": "Kaydedildi: {0} gündür giriş yapmamış LDAP / OIDC hesapları kaldırılır (her saat denetlenir).",
@@ -832,5 +831,7 @@
   "They are signed out; while {0} still gives them a role, their next sign-in makes a new account.": "Oturumları kapatıldı; {0} onlara bir rol verdiği sürece bir sonraki girişleri yeni bir hesap oluşturur.",
   "{0} days": "{0} gün",
   "never": "hiçbir zaman",
-  "Remove LDAP / OIDC accounts not signed in for": "Giriş yapılmayan LDAP / OIDC hesaplarını kaldırma süresi"
+  "Remove LDAP / OIDC accounts not signed in for": "Giriş yapılmayan LDAP / OIDC hesaplarını kaldırma süresi",
+  "0 = off, the default · %(min)s to %(max)s": "0 = kapalı, varsayılan · %(min)s ile %(max)s arası",
+  "Off by default: an account that stops signing in stays until you delete it. With a number of days, LDAP / OIDC accounts not signed in for that long are removed at once and then every hour, each logged and audited — never admins or local accounts; they come back at their next sign-in while the directory still gives them a role.": "Varsayılan olarak kapalı: giriş yapmayı bırakan bir hesap, sen silene kadar kalır. Bir gün sayısı girersen o kadar süredir giriş yapmamış LDAP / OIDC hesapları hemen ve sonra her saat kaldırılır, her biri loga ve denetim kaydına yazılır — admin'ler ve yerel hesaplar asla kaldırılmaz; dizin onlara hâlâ bir rol veriyorsa bir sonraki girişlerinde geri gelirler."
 }

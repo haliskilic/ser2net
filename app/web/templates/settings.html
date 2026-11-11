@@ -137,9 +137,10 @@
   <p class="muted mb-sm">{{ _("LDAP / OIDC accounts are made at their first sign-in, and every sign-in takes their role from the directory or the identity provider again. Delete signs such an account out at once, but whether that person can sign in again is up to the directory: while a mapped group or the default role still applies, their next sign-in makes a new account.") }}</p>
   <form method="post" action="/settings/users/expiry" class="authform mb-sm">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label>{{ _("Remove LDAP / OIDC accounts not signed in for (days)") }} <span class="muted">({{ _("0 = never · %(min)s to %(max)s · never admins or local accounts", min=expire_min, max=expire_max) }})</span>
+    <label>{{ _("Remove LDAP / OIDC accounts not signed in for (days)") }} <span class="muted">({{ _("0 = off, the default · %(min)s to %(max)s", min=expire_min, max=expire_max) }})</span>
       <input type="number" name="expire_days" min="0" max="{{ expire_max }}" value="{{ expire_days }}" required>
     </label>
+    <p class="muted">{{ _("Off by default: an account that stops signing in stays until you delete it. With a number of days, LDAP / OIDC accounts not signed in for that long are removed at once and then every hour, each logged and audited — never admins or local accounts; they come back at their next sign-in while the directory still gives them a role.") }}</p>
     <button class="btn" type="submit">{{ _("Save") }}</button>
   </form>
   {% endif %}

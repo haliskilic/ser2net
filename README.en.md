@@ -439,15 +439,16 @@ a name with control or invisible characters, longer than 255 characters or in pa
 refused (all.log says why).
 
 **Unused LDAP / OIDC accounts:** **Settings → Users** shows each account's last sign-in
-(from the audit log and the sign-ins since; not written to config.json). LDAP/OIDC accounts
-that have not signed in for **90 days** are removed at start-up and every hour, and written
-to all.log and the audit log (`user_expired`); the period is set there too
-(`external_users_expire_days`: 0 = never, or 30–3650 days). Admins, local accounts and the
-last remaining accounts are never removed, and an account without any sign-in in the audit
-log only when the log goes back that far for its kind of sign-in. Deleting (or removing) an
-LDAP/OIDC account ends its sessions at once, but access is up to the directory: while a
-mapped group or the default role still applies, the person's next sign-in makes a new
-account.
+(from the audit log and the sign-ins since; not written to config.json). Removing unused
+LDAP/OIDC accounts is **off by default**: an account that stops signing in stays until you
+delete it. To turn it on, set *Remove LDAP / OIDC accounts not signed in for (days)* in the
+same place (`external_users_expire_days`: 30–3650 days; 0 = off): LDAP/OIDC accounts not
+signed in for that long are then removed at once, at start-up and every hour, each written
+to all.log and the audit log (`user_expired`). Admins, local accounts and the last remaining
+accounts are never removed, and an account without any sign-in in the audit log only when
+the log goes back that far for its kind of sign-in. Deleting (or removing) an LDAP/OIDC
+account ends its sessions at once, but access is up to the directory: while a mapped group
+or the default role still applies, the person's next sign-in makes a new account.
 
 **OIDC (SSO):** the code request carries PKCE (S256). Every address the provider's discovery
 document gives (authorization, token, JWKS) and every redirect on the way must be https://
