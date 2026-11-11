@@ -699,14 +699,17 @@ def test_edit_on_a_peer_with_its_own_id():
         html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
         assert "OLD1" in html and "mid=my-port%26x" in html, html[:800]
 
-        q = urllib.parse.urlencode({"scheme": "http", "host": "127.0.0.1", "port": stub_port,
-                                    "mid": peer_id})
-        html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/peer-form?{q}", timeout=10).read().decode()
+        # the peer by host + port (this node resolves it); the GET carries the CSRF header,
+        # as the Edit button's htmx request does
+        q = urllib.parse.urlencode({"host": "127.0.0.1", "port": stub_port, "mid": peer_id})
+        form_req = urllib.request.Request(f"http://127.0.0.1:{ui_a}/api/cluster/peer-form?{q}")
+        form_req.add_header("X-CSRF-Token", csrf())
+        html = op.open(form_req, timeout=10).read().decode()
         assert seen[-1] == ("mapping-data", peer_id), seen
         assert '<input type="hidden" name="id" value="my-port&amp;x">' in html, html[:1500]
         assert "/dev/ttyOLD" in html
 
-        edit = {"_csrf": csrf(), "scheme": "http", "host": "127.0.0.1", "port": str(stub_port),
+        edit = {"_csrf": csrf(), "host": "127.0.0.1", "port": str(stub_port),
                 "id": peer_id, "name": "OLD1", "enabled": "on", "kind": "net",
                 "serial_port": "/dev/ttyEDITED", "serial_baudrate": "19200",
                 "serial_bytesize": "8", "serial_parity": "N", "serial_stopbits": "1",
