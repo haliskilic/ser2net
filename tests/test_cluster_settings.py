@@ -163,7 +163,8 @@ def main():
         assert "Another node uses this node’s identity" not in page
         assert admin.get("/settings")[0] == 200, "the admin who did it stays signed in"
         st, headers, _ = other.get("/settings")
-        assert st == 303 and headers.get("Location") == "/login", "other sessions end"
+        assert st == 303 and headers.get("Location") == "/login?next=%2Fsettings", \
+            "other sessions end"
         audit = open(os.path.join(srv.data, "audit.log"), encoding="utf-8").read()
         assert "\tnode_new_identity\t" in audit and "\tcluster_key_change\t" in audit
         print("new identity: new cluster id and session key; this admin stays, others are "

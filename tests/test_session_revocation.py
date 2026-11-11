@@ -75,7 +75,7 @@ def signed_in(srv, token: str) -> bool:
         r = e
     st = r.status if hasattr(r, "status") else r.code
     if st == 303:
-        assert r.headers.get("Location") == "/login", r.headers.get("Location")
+        assert r.headers.get("Location") == "/login?next=%2Fsettings", r.headers.get("Location")
         return False
     assert st == 200, st
     return True

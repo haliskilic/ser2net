@@ -57,6 +57,17 @@ def start_failed(state, mid: str) -> str:
     return (st.get("last_error") or _("unknown error")) if st.get("state") == "error" else ""
 
 
+def local_path(value, default: str = "/") -> str:
+    """`value` when it is a path on this site — where to go after a sign-in or a language
+    switch — else `default`: no scheme or host, no //host or /\\host (other sites), no
+    control characters (a browser drops a tab or newline and may read what is left as
+    another site)."""
+    if (not isinstance(value, str) or not value.startswith("/") or value.startswith("//")
+            or "\\" in value or len(value) > 2048 or any(c < " " or c == "\x7f" for c in value)):
+        return default
+    return value
+
+
 def client_ip(request) -> str:
     ip = request.client.host if request.client else "?"
     # normalize IPv4-mapped IPv6 (::ffff:1.2.3.4 -> 1.2.3.4) so the rate-limit

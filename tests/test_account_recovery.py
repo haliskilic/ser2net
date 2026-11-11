@@ -390,7 +390,8 @@ def test_running():
         code, out = cli(srv.data, "--set-password", "admin", password=NEW)
         assert code == 0 and "done by the running ser2net" in out, out
         st, h, _ = b.get("/settings")
-        assert st == 303 and h.get("Location") == "/login", "the old session must end at once"
+        assert st == 303 and h.get("Location") == "/login?next=%2Fsettings", \
+            "the old session must end at once"
         Browser(srv.base).login("admin", NEW)
         assert verify_password(NEW, account(srv.saved_config(), "admin")["password_hash"])
         assert "command line: new password set for 'admin'" in srv.output()

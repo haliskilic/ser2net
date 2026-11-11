@@ -6,7 +6,7 @@ from starlette.routing import Route
 
 from ... import i18n
 from ...engine import netguard, portlist
-from .common import Ctx, unchanged_or
+from .common import Ctx, local_path, unchanged_or
 
 
 def routes(ctx: Ctx) -> list:
@@ -80,10 +80,7 @@ def routes(ctx: Ctx) -> list:
         """/lang/tr?next=/settings: remember the visitor's UI language (a cookie), then
         go back. Only a local path is followed (no open redirect)."""
         code = request.path_params["code"]
-        nxt = request.query_params.get("next") or "/"
-        if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
-            nxt = "/"
-        resp = RedirectResponse(nxt, status_code=303)
+        resp = RedirectResponse(local_path(request.query_params.get("next")), status_code=303)
         if code in i18n.LANGUAGES:
             resp.set_cookie(i18n.COOKIE, code, max_age=365 * 86400, httponly=True,
                             samesite="lax", secure=state.config.admin_ui.tls_enabled, path="/")

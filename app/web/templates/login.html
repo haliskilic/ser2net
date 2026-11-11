@@ -10,11 +10,12 @@
     {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
     {% if oidc_error %}<div class="banner error" role="alert">{{ oidc_error }}</div>{% endif %}
     {% if oidc_enabled %}
-    <a class="btn primary w-full" href="/auth/oidc/login">{{ _("Sign in with SSO") }}</a>
+    <a class="btn primary w-full" href="/auth/oidc/login{% if next %}?next={{ next|urlencode }}{% endif %}">{{ _("Sign in with SSO") }}</a>
     <p class="muted or-line">{{ _("— or —") }}</p>
     {% endif %}
     <form method="post" action="/login" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
       <label>{{ _("Username") }}
         <input type="text" name="username" value="{{ username or 'admin' }}" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
       </label>
