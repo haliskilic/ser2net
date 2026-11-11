@@ -27,7 +27,7 @@ from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_
 from ...i18n import _
 from .. import auth
 from . import ops
-from .common import Ctx, csrf_failed
+from .common import Ctx, csrf_failed, notice, start_failed
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -121,6 +121,15 @@ def _fmt_uptime(seconds) -> str:
         return f"{h}h {m}m"
     return f"{m}m"
 
+
+
+def _peer_done(action: str, name: str, addr: str) -> str:
+    """What a start / stop / restart of the mapping `name` on the peer `addr` did."""
+    if action == "start":
+        return _("“{0}” started on {1}.").format(name, addr)
+    if action == "stop":
+        return _("“{0}” stopped on {1}.").format(name, addr)
+    return _("“{0}” restarted on {1}.").format(name, addr)
 
 
 def routes(ctx: Ctx) -> list:
@@ -264,7 +273,9 @@ def routes(ctx: Ctx) -> list:
         ip = client_ip(request)
         state.log(f"cluster: remote {action} of '{name}' from {ip}")
         state.audit(ip, f"cluster_remote_{action}", name, user="cluster-peer")
-        return _peer_json(a, {"ok": True, "name": name})
+        # start_error: why it did not start (ignored by nodes older than 2.9)
+        why = start_failed(state, mid) if action != "stop" else ""
+        return _peer_json(a, {"ok": True, "name": name, **({"start_error": why} if why else {})})
 
     async def cluster_control_peer(request):
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
@@ -285,9 +296,13 @@ def routes(ctx: Ctx) -> list:
                                        "(unreachable or rejected)."), status_code=502)
         state.cluster.forget(target)   # the refresh this triggers shows the new state
         addr = peer_addr(target["ip"], target["port"])
-        state.log(f"cluster: sent {action} to {addr} for '{res.get('name', mid)}'")
-        ctx.audit(request, f"cluster_control_{action}", f"{addr}/{res.get('name', mid)}")
-        return Response("", headers={"HX-Trigger": "refreshCluster"})
+        name = str(res.get("name", mid))
+        state.log(f"cluster: sent {action} to {addr} for '{name}'")
+        ctx.audit(request, f"cluster_control_{action}", f"{addr}/{name}")
+        why = res.get("start_error")   # from a 2.9+ peer
+        note = (notice(_("“{0}” on {1} could not start: {2}").format(name, addr, why), "warn")
+                if why and isinstance(why, str) else notice(_peer_done(action, name, addr)))
+        return Response("", headers={"HX-Trigger": "refreshCluster", **note})
 
     # ---- remote EDIT: peer renders no UI; THIS node renders the form (so the CSRF
     #      token + form action belong to the browser's session) and proxies the save.
@@ -311,13 +326,15 @@ def routes(ctx: Ctx) -> list:
         if deny:
             return deny
         form = await request.form()
-        ok, msg = await ops.save_mapping_from_form(state, form)
-        if not ok:
+        ok, msg, saved = await ops.save_mapping_from_form(state, form)
+        if not ok or saved is None:
             return _peer_json(a, {"ok": False, "error": msg}, 400)
         ip = client_ip(request)
         state.log(f"cluster: remote edit of '{msg}' from {ip}")
         state.audit(ip, "cluster_remote_save", msg, user="cluster-peer")
-        return _peer_json(a, {"ok": True, "name": msg})
+        # start_error: why it did not start (ignored by nodes older than 2.9)
+        return _peer_json(a, {"ok": True, "name": msg,
+                              **({"start_error": saved.start_error} if saved.start_error else {})})
 
     def _peer_target(getter):
         """The peer a browser request names by host + port (as the fleet view shows them)
@@ -398,9 +415,14 @@ def routes(ctx: Ctx) -> list:
         if res and res.get("ok"):
             state.cluster.forget(target)   # the refresh this triggers shows the change
             addr = peer_addr(target["ip"], target["port"])
-            state.log(f"cluster: edited '{res.get('name', '')}' on {addr}")
-            ctx.audit(request, "cluster_edit", f"{addr}/{res.get('name', '')}")
-            return Response("", headers={"HX-Trigger": "refreshCluster"})
+            name = str(res.get("name", ""))
+            state.log(f"cluster: edited '{name}' on {addr}")
+            ctx.audit(request, "cluster_edit", f"{addr}/{name}")
+            why = res.get("start_error")   # from a 2.9+ peer
+            note = (notice(_("“{0}” saved on {1}, but it could not start: {2}").format(
+                        name, addr, why), "warn") if why and isinstance(why, str)
+                    else notice(_("“{0}” saved on {1}.").format(name, addr)))
+            return Response("", headers={"HX-Trigger": "refreshCluster", **note})
         return _reload((res or {}).get("error") or _("The peer rejected the change or was "
                                                      "unreachable."))
 

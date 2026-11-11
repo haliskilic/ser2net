@@ -131,7 +131,8 @@ class Supervisor:
             with contextlib.suppress(Exception):
                 await old.stop()
 
-        runner = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+        log = self._logger_factory(mapping)
+        runner = _build_runner(mapping, log, self.trace_dir)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
         async with self._lock:
@@ -149,7 +150,7 @@ class Supervisor:
         except Exception as e:
             runner.status.state = "error"
             runner.status.last_error = str(e)
-            self.log(f"[{mapping.name}] start failed: {e}")
+            log(f"start failed: {e}")   # all.log ("[name] ...") and the mapping's own log
             return False, str(e)
 
     async def start_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
