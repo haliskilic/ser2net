@@ -454,7 +454,9 @@ come first: an LDAP/OIDC sign-in under the name of a local account (letter case 
 refused and written to all.log and the audit log (`ldap_login_denied` /
 `oidc_login_denied`); it never takes over the local account, turns it into an SSO account or
 demotes it. To move someone from a local account to SSO, delete the local account first
-(another admin must remain). Like directories, ser2net ignores letter case in LDAP names
+(another admin must remain). The same holds between LDAP and OIDC: a sign-in under the name
+of an account of the other method is refused (the two may be different people); delete that
+account to move the person. Like directories, ser2net ignores letter case in LDAP names
 (Turkish İ/ı too): `hkilic`, `Hkilic` and `HKILIC` are one account; the accounts earlier
 versions made for each spelling merge at that person's next sign-in (the other spellings'
 sessions end), and *Sign out* and *Delete* cover all of them. OIDC names are compared

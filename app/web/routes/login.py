@@ -117,37 +117,42 @@ def routes(ctx: Ctx) -> list:
 
     def _name_refused(request, source: str, username: str) -> str | None:
         """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
-        can't have an account under this name is refused: the name of a local account,
-        letter case aside — such a sign-in must never take over, convert or demote that
-        account (upsert_external_user refuses it too) — or a name no account can have
-        (external_name_problem). Logged, audited (within the failed sign-ins' limit) and
-        notified like a failed sign-in. Returns the sign-in page's message, or None when
-        the name can be used."""
-        local = state.config.named(username, "local")
-        why = (f"the local account {local[0].username!r} has this name" if local
+        can't have an account under this name is refused: the name of a local account or
+        of one of the other sign-in method, letter case aside — such a sign-in must never
+        take over, convert or demote that account (upsert_external_user refuses it too) —
+        or a name no account can have (external_name_problem). Logged, audited (within
+        the failed sign-ins' limit) and notified like a failed sign-in. Returns the
+        sign-in page's message, or None when the name can be used."""
+        taken = state.config.taken_name(username, source)
+        why = (f"the {taken.kind} account {taken.username!r} has this name" if taken
                else external_name_problem(username))
         if why is None:
             return None
         ip, what = client_ip(request), source.upper()
-        if local:
+        if taken:
+            other = ("a local account" if taken.source == "local"
+                     else "an account of another sign-in method")
             state.log(f"{what} login denied for {username!r}: {why}, and an {what} sign-in "
-                      f"never takes over a local account. To let them sign in with {what}, "
-                      f"delete the local account in Settings → Users (another admin must "
-                      f"remain).")
+                      f"never takes over {other}. To let them sign in with {what}, delete the "
+                      f"{taken.kind} account in Settings → Users (another admin must remain).")
         else:
             hint = ("; Settings → Single sign-on (OIDC) → Username claim can name another "
                     "claim" if source == "oidc" else "")
             state.log(f"{what} login denied for {username!r}: no account can have this name "
                       f"here: {why}{hint}")
         _record_failure(ip, username, f"{what} user {username!r} from {ip}: "
-                        + ("the name of a local account" if local else why),
+                        + (f"the name of a {taken.kind} account" if taken else why),
                         f"{source}_login_denied",
-                        f"local account {local[0].username}" if local else why)
-        if local:
+                        f"{taken.kind} account {taken.username}" if taken else why)
+        if taken and taken.source == "local":
             return _("There is a local account named {0} here, so you can't sign in under that "
                      "name with SSO or a directory account. Sign in with that account’s "
                      "password, or ask an admin to delete the local account first.").format(
-                         local[0].username)
+                         taken.username)
+        if taken:
+            return _("An account named {0} here signs in another way (through the directory or "
+                     "SSO), so you can't sign in under that name like this. Ask an admin to "
+                     "delete that account first.").format(taken.username)
         return _("Your user name from the directory or the identity provider can’t be used "
                  "here; an admin can see why in all.log.")
 

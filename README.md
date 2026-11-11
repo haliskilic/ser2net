@@ -467,7 +467,9 @@ belirlenir — son admin rolünü elinden alsa bile (all.log o zaman uyarır; `s
 harf fark etmeksizin) bir yerel hesabın adı olan bir LDAP/OIDC girişi reddedilir, all.log'a
 ve denetim kaydına (`ldap_login_denied` / `oidc_login_denied`) yazılır; böyle bir giriş
 yerel hesabı asla devralmaz, SSO hesabına çevirmez ya da rolünü düşürmez. Birini yerel
-hesaptan SSO'ya taşımak için önce yerel hesabını silin (başka bir admin kalmalı). Dizinler
+hesaptan SSO'ya taşımak için önce yerel hesabını silin (başka bir admin kalmalı). LDAP ile
+OIDC arasında da aynısı geçerli: öbür yöntemin bir hesabının adıyla yapılan giriş reddedilir
+(ikisi farklı kişiler olabilir); kişiyi taşımak için o hesabı silin. Dizinler
 gibi ser2net de LDAP adlarında büyük/küçük harfe bakmaz (Türkçe İ/ı dahil): `hkilic`,
 `Hkilic` ve `HKILIC` tek hesaptır; eski sürümlerin her yazılış için açtığı hesaplar o
 kişinin bir sonraki girişinde birleşir (diğer yazılışların oturumları kapanır), *Oturumları
