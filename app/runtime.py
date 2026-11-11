@@ -12,6 +12,7 @@ runs the ProactorEventLoop instead, which has no such limit (event_loop_choice).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import ipaddress
 import logging
@@ -311,6 +312,23 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
     loop.set_exception_handler(handler)
 
 
+# Threads of the loop's default pool (asyncio.to_thread, run_in_executor(None)).
+WORKER_THREADS = 32
+
+
+def use_worker_threads(loop: asyncio.AbstractEventLoop) -> None:
+    """Give the loop a default thread pool of WORKER_THREADS threads. Python's own has
+    min(32, CPUs + 4): 8 on a Raspberry Pi 4, 5-6 on a small VM. That pool opens, closes
+    and flushes serial ports (pyserial-asyncio-fast always uses it), saves config.json
+    while the config lock is held, scans the port list and reads logs, and also waits
+    for slow network calls (a connect-out mapping's DNS lookup while DNS is down), so a
+    few of those would hold up every other job. Password checks and directory sign-ins
+    have a limit of their own (auth.SlowWork), so more threads don't mean more scrypt
+    jobs at once."""
+    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(
+        max_workers=WORKER_THREADS, thread_name_prefix="ser2net"))
+
+
 _as_service = False  # set by service_main so _serve can log the service-only warnings
 
 
@@ -343,6 +361,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
+    use_worker_threads(asyncio.get_running_loop())
     for lang in i18n.missing_catalogs():
         state.log(f"WARNING: the '{lang}' UI translation is missing from {i18n.LOCALE_DIR} "
                   "— the web UI shows English to visitors who pick it")
