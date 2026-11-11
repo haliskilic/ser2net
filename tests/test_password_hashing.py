@@ -6,6 +6,11 @@ Checks:
     verifying, also one written by v2.7.1 (tests/fixtures/config-2.7.1.json);
   * the cost a stored hash names is used (also above OpenSSL's default 32 MiB limit),
     within bounds: a malformed or too costly one is refused, not computed;
+  * passwords are hashed as Unicode NFKC: composed and decomposed letters, a no-break
+    space and a space, full-width forms give the same hash; typed Turkish letters are
+    NFKC already (one scrypt per check); an older hash of a password as typed keeps
+    verifying (also when NFKC changes it) and its renewal makes the other forms work; a
+    directory (LDAP) gets the password exactly as typed;
   * the command line's hand-over (accounts.apply) takes both formats;
   * a sign-in with an older hash renews it with today's cost: saved without touching
     pwd_version (sessions stay), best effort (a failed save is logged, the sign-in works);
@@ -94,6 +99,59 @@ def test_cost_bounds():
           "limit), malformed / too costly ones are refused without computing  OK")
 
 
+class CountScrypt:
+    def __init__(self) -> None:
+        self.n, self.real = 0, auth._scrypt
+
+    def __call__(self, *a, **k):
+        self.n += 1
+        return self.real(*a, **k)
+
+    def __enter__(self) -> "CountScrypt":
+        auth._scrypt = self
+        return self
+
+    def __exit__(self, *exc) -> None:
+        auth._scrypt = self.real
+
+
+def nfd(text: str) -> str:
+    import unicodedata
+    return unicodedata.normalize("NFD", text)
+
+
+TURKISH = "Gizli-Şifre-ğüşıöç-İĞÜŞÖÇ-1"
+
+
+def test_normalized():
+    import unicodedata
+    assert unicodedata.normalize("NFKC", TURKISH) == TURKISH, "typed Turkish is NFKC already"
+    assert nfd(TURKISH) != TURKISH
+    h = auth.hash_password(TURKISH)
+    assert auth.verify_password(nfd(TURKISH), h) and auth.verify_password(TURKISH, h)
+    h = auth.hash_password(nfd(TURKISH))   # set from a decomposed source
+    assert auth.verify_password(TURKISH, h)
+    h = auth.hash_password("correct horse 42")
+    assert auth.verify_password("correct\u00a0horse\u202f42", h)    # no-break spaces
+    assert auth.verify_password("ｃｏｒｒｅｃｔ horse ４２", h)        # full-width
+    assert not auth.verify_password("correct  horse 42", h)
+    with CountScrypt() as c:
+        assert auth.verify_password(TURKISH, auth.hash_password(TURKISH))
+        assert not auth.verify_password(nfd(TURKISH), auth.hash_password("other-pass-1"))
+        assert not auth.verify_password("ascii-pass-1", legacy_hash("other-pass-1"))
+    assert c.n == 2 + 2 + 1, f"{c.n} scrypt runs: one per check (and per hash)"
+    # a hash of 2.8 made of a decomposed password (as typed): that form keeps working
+    old = legacy_hash(nfd(TURKISH))
+    with CountScrypt() as c:
+        assert auth.verify_password(nfd(TURKISH), old)
+    assert c.n == 2, "NFKC first, then the form as typed"
+    old = legacy_hash("pass\u00a0word-1")
+    assert auth.verify_password("pass\u00a0word-1", old)
+    print("NFKC: decomposed / composed letters, no-break / plain spaces, full-width forms are "
+          "one password; typed Turkish costs one scrypt; a 2.8 hash of the typed form keeps "
+          "verifying  OK")
+
+
 def test_command_line_hand_over():
     for h in (auth.hash_password(PW), legacy_hash(PW)):
         cfg = AppConfig.from_dict({"users": [{"username": "admin", "password_hash": "x",
@@ -173,6 +231,42 @@ async def _renewal(d: str, config: dict) -> None:
           "tried again next time  OK")
 
 
+async def _normalized_sign_in(d: str, config: dict) -> None:
+    from app.web import ldap_auth
+
+    state = _state(d, config)
+    app = build_app(state)
+    # the 2.8 hash was made of the decomposed form: the composed one never matched it
+    assert (await login(app, "admin", TURKISH, client="10.1.0.1"))[0] == 401
+    assert (await login(app, "admin", nfd(TURKISH), client="10.1.0.2"))[0] == 303
+    assert not auth.needs_rehash(state.config.get_user("admin").password_hash)
+    for form in (TURKISH, nfd(TURKISH)):  # renewed as NFKC: both forms work from now on
+        assert (await login(app, "admin", form, client="10.1.0.3"))[0] == 303
+    got = []
+
+    def directory(settings, username, password, log, **kw):
+        got.append(password)
+        return None
+
+    state.config.ldap.enabled = True
+    real, ldap_auth.authenticate = ldap_auth.authenticate, directory
+    try:
+        assert (await login(app, "jdoe", nfd(TURKISH) + "\u00a0", client="10.1.0.4"))[0] == 401
+    finally:
+        ldap_auth.authenticate = real
+    assert got == [nfd(TURKISH) + "\u00a0"], "the directory gets the password as typed"
+    print("sign-in: a 2.8 hash of a decomposed password works with that form, is renewed, then "
+          "both forms work; LDAP gets the password exactly as typed  OK")
+
+
+def test_normalized_sign_in():
+    run(_normalized_sign_in, {
+        "users": [{"username": "admin", "password_hash": legacy_hash(nfd(TURKISH)),
+                   "role": "admin", "pwd_version": 1}],
+        "ldap": {"enabled": False, "server_uri": "ldap://127.0.0.1:1",
+                 "user_dn_template": "uid={username},ou=people,dc=ex,dc=com"}})
+
+
 def test_renewed_at_sign_in():
     run(_renewal, {"users": [
         {"username": "admin", "password_hash": legacy_hash(PW), "role": "admin",
@@ -186,8 +280,10 @@ def test_renewed_at_sign_in():
 def main():
     test_format()
     test_cost_bounds()
+    test_normalized()
     test_command_line_hand_over()
     test_renewed_at_sign_in()
+    test_normalized_sign_in()
     print("\nPASS: password hashes")
 
 
