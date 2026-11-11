@@ -120,7 +120,9 @@ def routes(ctx: Ctx) -> list:
         mid = request.path_params["mid"]
         m = state.config.get_mapping(mid)
         if not m:
-            return PlainTextResponse(_("Mapping not found"), status_code=404)
+            # deleted meanwhile: 286 makes htmx stop the panel's 5-second refresh, and the
+            # panel says why (a 404 would be polled - and reported - every 5 seconds)
+            return render(request, "_mapping_log.html", status_code=286, gone=True)
         lines = await asyncio.to_thread(state.read_mapping_log, mid, 1000)
         return render(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
                       lines=lines)
