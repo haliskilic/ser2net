@@ -75,6 +75,7 @@
     <button type="button" class="btn sm" data-cancel>{{ _("Cancel") }}</button>
   </div>
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+  {% for note in mapping.ignored_settings() %}<div class="banner warn">{{ note }}</div>{% endfor %}
 
   <div class="grid3">
     <label>{{ _("Name") }} <input type="text" name="name" value="{{ mapping.name }}" placeholder="{{ _('e.g. %(example)s', example='PLC-1') }}" required></label>
@@ -108,7 +109,7 @@
         </select>
       </label>
       <label>{{ _("Protocol") }}
-        <select name="network_protocol">{% for pr in protocols %}<option value="{{ pr }}" {% if pr == mapping.network.protocol %}selected{% endif %}>{{ pr }}</option>{% endfor %}</select>
+        <select name="network_protocol">{% for pr in protocols %}<option value="{{ pr }}" {% if pr == mapping.network.protocol %}selected{% endif %}{% if pr != 'raw' %} data-show-when="network_mode=server,client"{% endif %}>{{ pr }}</option>{% endfor %}</select>
       </label>
       <label class="chk chk-pad"><input type="checkbox" name="network_read_only" {% if mapping.network.read_only %}checked{% endif %}> {{ _("Read-only") }}</label>
     </div>
@@ -218,7 +219,7 @@
 
   <fieldset data-show-when="kind=net">
     <legend>{{ _("MQTT publishing") }} <span class="muted" data-show-when="network_protocol=raw,telnet,rfc2217">({{ _("serial lines → broker; needs paho-mqtt") }})</span><span class="muted" data-show-when="network_protocol=modbus">({{ _("Modbus points → broker, commands → writable points; needs paho-mqtt") }})</span></legend>
-    <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> {{ _("Publish serial lines to MQTT") }}</label>
+    <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> <span data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Publish serial lines to MQTT") }}</span><span data-show-when="network_protocol=modbus">{{ _("Publish the Modbus poll points to MQTT (add them below)") }}</span></label>
     <div class="grid3">
       <label>{{ _("Broker host") }} <input type="text" name="mqtt_host" value="{{ mapping.mqtt.host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.5') }}"></label>
       <label>{{ _("Port") }} <input type="number" name="mqtt_port" min="1" max="65535" value="{{ mapping.mqtt.port }}"></label>

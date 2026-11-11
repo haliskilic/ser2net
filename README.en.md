@@ -56,7 +56,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   device's output to the sender of the last datagram from an allowed IP, or always to a
   fixed **reply address** (IP + port); a **peer timeout** forgets a sender that went quiet.
   Datagrams wait for the serial port in a queue of at most 64 KiB: what a sender faster
-  than the line sends beyond that is dropped, counted and logged.
+  than the line sends beyond that is dropped, counted and logged. UDP is always raw (a
+  stored `telnet` is read as `raw`, which is what it always did) and has no connections a
+  close-on string could close. A setting that does nothing — this one, MQTT on a
+  serial↔serial bridge, MQTT on a Modbus gateway without poll points — is logged when the
+  mapping starts and shown in its edit form and in the REST API's `warnings`.
 - **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live changes to
   baud/parity/data bits/stop bits/flow control), `modbus` (RTU↔TCP gateway). An RFC 2217
   request the port can't carry out (a malformed or reserved value, or one the serial port

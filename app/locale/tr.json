@@ -850,5 +850,10 @@
   "Point {0}: scale must be a number.": "{0} noktası: ölçek (scale) bir sayı olmalı.",
   "Point {0}: writable must be true or false.": "{0} noktası: writable true ya da false olmalı.",
   "{0}interval_s {1} is not a poll interval (more than 0 seconds): {2} s is used.": "{0}interval_s {1} geçerli bir okuma aralığı değil (0 saniyeden uzun olmalı): {2} sn kullanılıyor.",
-  "Not settings of this version, so they are ignored: {0}.": "Bunlar bu sürümün ayarları değil, bu yüzden yok sayılıyor: {0}."
+  "Not settings of this version, so they are ignored: {0}.": "Bunlar bu sürümün ayarları değil, bu yüzden yok sayılıyor: {0}.",
+  "Telnet is not supported over UDP, so the protocol is raw (as it always was in effect).": "UDP üzerinde telnet desteklenmiyor, bu yüzden protokol raw (fiilen hep böyle çalışıyordu).",
+  "MQTT is on, but a serial-to-serial bridge does not publish to MQTT: its MQTT settings are not used.": "MQTT açık, ama seri ↔ seri köprü MQTT'ye yayın yapmaz: MQTT ayarları kullanılmıyor.",
+  "MQTT is on, but a Modbus gateway publishes only its poll points, and it has none: nothing is published. Add poll points, or turn MQTT off.": "MQTT açık, ama Modbus ağ geçidi yalnızca okuma noktalarını yayınlar ve hiç okuma noktası yok: hiçbir şey yayınlanmıyor. Okuma noktası ekle ya da MQTT'yi kapat.",
+  "A close-on string is set, but a UDP mapping has no connections to close: it is not used.": "Bir kapatma dizesi ayarlı, ama bir UDP eşlemesinin kapatılacak bağlantısı yok: kullanılmıyor.",
+  "Publish the Modbus poll points to MQTT (add them below)": "Modbus okuma noktalarını MQTT'ye yayınla (noktaları aşağıya ekle)"
 }

@@ -33,7 +33,8 @@ from ..config import MappingConfig, ModbusPoint
 from . import modbus, netguard, sockopts
 from .access import AccessPolicy, server_ssl
 from .bridge import (
-    FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
+    FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration,
+    log_ignored_settings, open_tracer,
 )
 from .mqtt_pub import shown
 from .serial_link import SerialLink
@@ -149,6 +150,7 @@ class ModbusGatewayRunner:
             await self.stop()
             raise
         self._log_policy()
+        log_ignored_settings(self.mapping, self._log)
         # optional edge mode: poll Modbus registers off the bus and publish to MQTT
         # (plain topics, or as a Sparkplug B edge node); writable points take values back
         if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:

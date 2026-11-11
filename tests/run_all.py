@@ -101,6 +101,7 @@ PORTABLE = [
     "test_cluster_settings.py",
     "test_changelog.py",
     "test_config_types.py",
+    "test_ignored_settings.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

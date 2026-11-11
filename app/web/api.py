@@ -37,9 +37,9 @@ def _mapping_view(mapping, state) -> dict:
 def _edit_view(mapping, state) -> dict:
     """The response to a create / update: the mapping as stored, and when there are any,
     the `warnings` about what was sent (keys that are no setting, a setting replaced by a
-    supported one)."""
+    supported one) and about settings it has that do nothing (MappingConfig.ignored_settings)."""
     view = _mapping_view(mapping, state)
-    warnings = mapping.input_warnings()
+    warnings = mapping.input_warnings() + mapping.ignored_settings()
     if warnings:
         view["warnings"] = warnings
     return view

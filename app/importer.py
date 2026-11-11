@@ -63,7 +63,7 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
         warnings.extend(_("Mapping #{0} ({1}): {2}").format(i, m.name, w)
-                        for w in m.input_warnings())
+                        for w in m.input_warnings() + m.ignored_settings())
         if item.get("id") and item["id"] != m.id:
             warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "
                               "digits or _), so it gets a new one.").format(

@@ -274,6 +274,23 @@ def main():
             if not polls:
                 problems.append("showing the tab again did not refresh the cluster panel")
             print("cluster panel: no refresh while the tab is hidden, one when shown")
+
+            # UDP offers raw only: picking UDP selects raw, the other protocols can't be
+            # picked until the mode is TCP again
+            dashboard()
+            open_view(TR["Edit"])  # the language is Turkish here (the loop above)
+            selects = "#form-panel select[name=network_%s]"
+            protocols = ("() => { const s = document.querySelector('#form-panel "
+                         "select[name=network_protocol]'); return [s.value, [...s.options]"
+                         ".filter(o => o.disabled).map(o => o.value)]; }")
+            page.select_option(selects % "protocol", "telnet")
+            page.select_option(selects % "mode", "udp")
+            if page.evaluate(protocols) != ["raw", ["telnet", "rfc2217", "modbus"]]:
+                problems.append(f"UDP mode: protocol select is {page.evaluate(protocols)}")
+            page.select_option(selects % "mode", "server")
+            if page.evaluate(protocols) != ["raw", []]:
+                problems.append(f"server mode: protocol select is {page.evaluate(protocols)}")
+            print("mapping form: UDP leaves only raw to pick, TCP all protocols")
             browser.close()
 
         assert not problems, "layout problems:\n  " + "\n  ".join(problems)
