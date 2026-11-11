@@ -51,7 +51,7 @@
           {% else %}
             <button class="btn sm" hx-post="/api/cluster/control-peer" hx-vals='{{ vals }}start"}' hx-swap="none">{{ _("Start") }}</button>
           {% endif %}
-          <button class="btn sm" hx-get="/api/cluster/peer-form?scheme={{ n.scheme }}&host={{ n.ip }}&port={{ n.port }}&mid={{ m.id }}" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
+          <button class="btn sm" hx-get="/api/cluster/peer-form?scheme={{ n.scheme }}&host={{ n.ip }}&port={{ n.port }}&mid={{ m.id|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
         </div></div>
         {% endif %}
       </td>

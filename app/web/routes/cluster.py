@@ -73,6 +73,17 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     return fields, None
 
 
+def _remote(scheme, host, port, peer_id, mapping) -> dict:
+    """The fleet view's edit form for a peer's mapping: where it is saved, and under which
+    id. That is the id the peer itself keys the mapping by, sent back to it unchanged: a
+    v2.7/v2.8 peer may keep an id that this node would not take (``mapping`` carries the
+    id derived from it here, which that peer has never heard of). This node uses it only
+    to address the mapping on the peer, never for a file or path of its own."""
+    if not isinstance(peer_id, str) or not peer_id:
+        peer_id = mapping.id
+    return {"scheme": scheme, "host": host, "port": port, "id": peer_id}
+
+
 def _mapping_kind_label(m) -> str:
     if m.kind == "serialbridge":
         return "serial↔serial"
@@ -277,14 +288,16 @@ def routes(ctx: Ctx) -> list:
             return err
         scheme, host, port = peer
         mid = request.query_params.get("mid", "")
-        data = await state.cluster.get_peer(scheme, host, port, f"/api/cluster/mapping-data?mid={mid}")
-        if not data or "mapping" not in data:
+        data = await state.cluster.get_peer(
+            scheme, host, port, f"/api/cluster/mapping-data?mid={quote(mid, safe='')}")
+        if not data or not isinstance(data.get("mapping"), dict):
             return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
         mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
                       modbus_points_json=_modbus_points_json(mapping),
                       ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
-                      remote={"scheme": scheme, "host": host, "port": port}, error=None)
+                      remote=_remote(scheme, host, port, data["mapping"].get("id"), mapping),
+                      error=None)
 
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
@@ -318,7 +331,7 @@ def routes(ctx: Ctx) -> list:
                           is_new=False, modbus_points_json=_modbus_points_json(mapping),
                           ports=portlist.visible((data or {}).get("ports", [])),
                           ips=(data or {}).get("ips", []),
-                          remote={"scheme": scheme, "host": host, "port": port}, error=msg)
+                          remote=_remote(scheme, host, port, mid, mapping), error=msg)
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))

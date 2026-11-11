@@ -6,6 +6,8 @@ Two parts:
   2) the real server with the cluster enabled — /api/cluster/local is guarded by
      the shared key (403 without / 200 with), reflects this node's mappings, and
      /api/cluster/status (session-authed) renders the unified table with the host.
+Also two real nodes (remote control and edit), and the fleet view's edit of a mapping on
+a stand-in v2.7/v2.8 peer whose id this version would not take (kept as the peer's).
 
 Run: python3 tests/test_cluster.py
 """
@@ -356,10 +358,150 @@ def test_manual_peer_and_remote_control():
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _old_peer(key, peer_id, seen):
+    """A stand-in for a v2.7/v2.8 cluster node that keeps a mapping under an id this
+    version would not take (it rewrites such ids on load). Serves the key-guarded peer
+    endpoints the fleet view's edit uses, and records what it was asked (``seen``)."""
+    import http.server
+    import threading
+
+    mapping = {"id": peer_id, "name": "OLD1", "enabled": False, "kind": "net",
+               "serial": {"port": "/dev/ttyOLD", "baudrate": 9600},
+               "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
+                           "port": 4555}, "options": {"trace_both": ""}}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_a):
+            pass
+
+        def _reply(self, code, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.headers.get("X-Cluster-Key") != key:
+                return self._reply(403, {"error": "forbidden"})
+            url = urllib.parse.urlsplit(self.path)
+            if url.path == "/api/cluster/local":
+                port = self.server.server_address[1]
+                return self._reply(200, {
+                    "id": "oldnode", "name": "old-node", "ip": "127.0.0.1", "port": port,
+                    "scheme": "http", "version": "2.8.0", "uptime_s": 5, "mapping_count": 1,
+                    "running_count": 0, "mappings": [{
+                        "id": peer_id, "name": "OLD1", "enabled": False, "kind": "server/raw",
+                        "endpoint": "127.0.0.1:4555", "serial": "/dev/ttyOLD",
+                        "state": "stopped", "client_count": 0, "bytes_in": 0, "bytes_out": 0}]})
+            if url.path == "/api/cluster/mapping-data":
+                mid = urllib.parse.parse_qs(url.query).get("mid", [""])[0]
+                seen.append(("mapping-data", mid))
+                if mid != peer_id:
+                    return self._reply(404, {"error": "not_found"})
+                return self._reply(200, {"mapping": mapping, "ports": [], "ips": []})
+            return self._reply(404, {"error": "not_found"})
+
+        def do_POST(self):
+            if self.headers.get("X-Cluster-Key") != key:
+                return self._reply(403, {"error": "forbidden"})
+            fields = urllib.parse.parse_qs(
+                self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
+            seen.append(("mapping-save", fields.get("id", [""])[0]))
+            if fields.get("id", [""])[0] != peer_id:
+                return self._reply(400, {"ok": False, "error": "no such mapping"})
+            return self._reply(200, {"ok": True, "name": "OLD1"})
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_edit_on_a_peer_with_its_own_id():
+    """The fleet view edits a mapping on a v2.7/v2.8 peer whose id this version would not
+    take: the form keeps the peer's own id (this node's copy of the mapping gets a derived
+    one), and the save reaches the peer's mapping under it."""
+    key = "old-peer-key-1"
+    peer_id = "my-port&x"
+    seen = []
+    stub = _old_peer(key, peer_id, seen)
+    stub_port = stub.server_address[1]
+    ui_a = free_port()
+    pa, ta = start_node({"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a},
+                         "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
+                                     "peers": [f"127.0.0.1:{stub_port}"]}})
+    try:
+        assert wait_port(ui_a), "node did not start"
+        jar = http.cookiejar.CookieJar()
+        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+        def csrf():
+            return next(c.value for c in jar if c.name == "ser2net_csrf")
+
+        def post_a(path, fields):
+            req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}",
+                                         data=urllib.parse.urlencode(fields).encode(), method="POST")
+            req.add_header("Content-Type", "application/x-www-form-urlencoded")
+            req.add_header("X-CSRF-Token", csrf())
+            try:
+                return op.open(req, timeout=10).status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        op.open(f"http://127.0.0.1:{ui_a}/setup")
+        post_a("/setup", {"username": "admin", "password": "adminpass123",
+                          "password2": "adminpass123", "_csrf": csrf()})
+
+        html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
+        assert "OLD1" in html and "mid=my-port%26x" in html, html[:800]
+
+        q = urllib.parse.urlencode({"scheme": "http", "host": "127.0.0.1", "port": stub_port,
+                                    "mid": peer_id})
+        html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/peer-form?{q}", timeout=10).read().decode()
+        assert seen[-1] == ("mapping-data", peer_id), seen
+        assert '<input type="hidden" name="id" value="my-port&amp;x">' in html, html[:1500]
+        assert "/dev/ttyOLD" in html
+
+        edit = {"_csrf": csrf(), "scheme": "http", "host": "127.0.0.1", "port": str(stub_port),
+                "id": peer_id, "name": "OLD1", "enabled": "on", "kind": "net",
+                "serial_port": "/dev/ttyEDITED", "serial_baudrate": "19200",
+                "serial_bytesize": "8", "serial_parity": "N", "serial_stopbits": "1",
+                "serial_flowcontrol": "none", "network_mode": "server",
+                "network_protocol": "raw", "network_bind_ip": "127.0.0.1", "network_port": "4555"}
+        assert post_a("/api/cluster/peer-save", edit) == 200, seen
+        assert ("mapping-data", peer_id) in seen and seen[-1] == ("mapping-save", peer_id), seen
+        # a form that comes back with an error keeps the peer's id too
+        req = urllib.request.Request(f"http://127.0.0.1:{ui_a}/api/cluster/peer-save",
+                                     data=urllib.parse.urlencode(
+                                         {**edit, "serial_port": "socket://10.0.0.9:1"}).encode(),
+                                     method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        req.add_header("X-CSRF-Token", csrf())
+        try:
+            op.open(req, timeout=10)
+            raise AssertionError("a URL serial port must be refused")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+            again = e.read().decode()
+        assert '<input type="hidden" name="id" value="my-port&amp;x">' in again, again[:1500]
+        print("remote edit of a v2.7/v2.8 peer's mapping under the peer's own id (one this "
+              "version would not take): form, save and a re-shown form keep it  OK")
+    finally:
+        stub.shutdown()
+        pa.terminate()
+        try:
+            pa.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pa.kill()
+        shutil.rmtree(ta, ignore_errors=True)
+
+
 def main():
     test_discovery_unit()
     test_endpoints()
     test_manual_peer_and_remote_control()
+    test_edit_on_a_peer_with_its_own_id()
 
 
 if __name__ == "__main__":
