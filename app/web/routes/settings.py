@@ -118,12 +118,13 @@ def routes(ctx: Ctx) -> list:
         cur = form.get("current", "")
         new = form.get("password", "")
         new2 = form.get("password2", "")
-        if user is None or not await asyncio.to_thread(auth.verify_password, cur, user.password_hash):
+        if user is None or not await state.password_work.run(auth.verify_password, cur,
+                                                             user.password_hash):
             return await settings_get(request, error=_("Current password is incorrect."))
         err = _password_problem(new, new2)
         if err:
             return await settings_get(request, error=err)
-        new_hash = await asyncio.to_thread(auth.hash_password, new)
+        new_hash = await state.password_work.run(auth.hash_password, new)
         async with state.config_lock:
             user.password_hash = new_hash
             user.pwd_version += 1
@@ -479,7 +480,7 @@ def routes(ctx: Ctx) -> list:
                or taken())
         if err:
             return await settings_get(request, error=err)
-        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
+        pw_hash = await state.password_work.run(auth.hash_password, pw)
         async with state.config_lock:
             if err := taken():  # created while the password was hashed
                 return await settings_get(request, error=err)
@@ -623,7 +624,7 @@ def routes(ctx: Ctx) -> list:
 
         if err := problem() or _password_problem(pw, pw2):
             return await settings_get(request, error=err)
-        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
+        pw_hash = await state.password_work.run(auth.hash_password, pw)
         async with state.config_lock:
             if err := problem():  # changed while the password was hashed
                 return await settings_get(request, error=err)

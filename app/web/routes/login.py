@@ -13,7 +13,7 @@ from ...config import (
     AccountNameError, ConfigError, User, external_name, external_name_problem, fold,
     new_pwd_version,
 )
-from ...engine import netinfo
+from ...engine import netguard, netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth
 from .common import Ctx, csrf_failed
@@ -290,6 +290,9 @@ def routes(ctx: Ctx) -> list:
         resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
         return resp
 
+    # sign-ins not tried because too many were being checked already: logged once a minute
+    busy_note = netguard.LogEvery(lambda msg: state.log(msg))
+
     def _is_account_name(name: str) -> bool:
         """Is `name` an account's (letter case aside)? Only then does a failed sign-in
         record the name typed."""
@@ -319,22 +322,34 @@ def routes(ctx: Ctx) -> list:
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
+        if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
+            state.rate_limiter.record_failure(ip)
+            return _login_failed(request, ip, username)
+        user = state.config.get_user(username)
+        local = user is not None and user.source == "local"
+        directory = not local and state.config.ldap.enabled
+        work = state.directory_work if directory else state.password_work
+        if work.busy():  # not tried, not counted
+            busy_note(f"sign-in from {ip} not tried: {work.limit + work.queue} "
+                      f"{'directory sign-ins' if directory else 'password checks'} are "
+                      "running or waiting already")
+            return render(request, "login.html", status_code=429,
+                          error=_("Too many sign-ins at the same time. Try again in a "
+                                  "moment."),
+                          oidc_enabled=state.config.oidc.enabled)
         # counted as failed before the password is checked, in the same step as the check
         # above (no await between them): concurrent attempts can't all get past the limit
         # while the first ones are still being checked. A sign-in that works resets it.
         state.rate_limiter.record_failure(ip)
-        if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
-            return _login_failed(request, ip, username)
-        user = state.config.get_user(username)
         authed = None
         # local account: verify the scrypt hash off the event loop (it's slow on purpose)
-        if user is not None and user.source == "local":
-            if await asyncio.to_thread(auth.verify_password, password, user.password_hash):
+        if local:
+            if await work.run(auth.verify_password, password, user.password_hash):
                 authed = user
         # LDAP/AD: for unknown users (or LDAP shadow accounts) when LDAP is enabled
-        elif state.config.ldap.enabled:
+        elif directory:
             username = external_name(username)
-            groups = await asyncio.to_thread(
+            groups = await work.run(
                 ldap_auth.authenticate, state.config.ldap, username, password, state.log,
                 on_tls_problem=_note_tls_problem)
             if groups is not None:
@@ -351,7 +366,7 @@ def routes(ctx: Ctx) -> list:
                 else:
                     await _end_refused_sessions("ldap", username)
         else:  # no such local account, no directory: the work of a wrong password
-            await asyncio.to_thread(auth.verify_password, password, auth.DUMMY_HASH)
+            await work.run(auth.verify_password, password, auth.DUMMY_HASH)
         if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
@@ -432,7 +447,7 @@ def routes(ctx: Ctx) -> list:
         err = _username_problem(username) or _password_problem(pw, pw2)
         if err:
             return setup_page(request, 400, err)
-        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
+        pw_hash = await state.password_work.run(auth.hash_password, pw)
         async with state.config_lock:
             # checked again here: another setup request may have finished while this one
             # was sending its form or hashing — it must not replace that admin
