@@ -22,13 +22,14 @@ import socket
 import ssl
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
-from app.engine import netguard
+from app.engine import modbus, netguard
 from app.engine.supervisor import make_runner
 
 MISSING_PORT = "COM250" if sys.platform == "win32" else "/dev/ser2net-test-missing"
@@ -201,6 +202,72 @@ async def test_handshake_timeout_and_caps(cert, key):
           "handshake ends with the mapping  OK")
 
 
+def tls_clients(port: int, n: int, request: bytes = b"", timeout: float = 5.0,
+                together: bool = True) -> list:
+    """``n`` real TLS clients (blocking sockets, one thread each) that send their
+    ClientHello right after connect, as real clients do: all at the same moment
+    (``together``) or one after the other. Each optionally sends ``request`` and reads
+    the first reply. Returns per client ("ok", reply) or ("failed", why)."""
+    barrier = threading.Barrier(n) if together else None
+    results: list = [("failed", "did not run")] * n
+
+    def one(i: int) -> None:
+        try:
+            if barrier is not None:
+                barrier.wait(timeout)
+            with socket.create_connection(("127.0.0.1", port), timeout=timeout) as raw, \
+                    client_ctx().wrap_socket(raw) as s:
+                reply = b""
+                if request:
+                    s.sendall(request)
+                    reply = s.recv(256)
+                results[i] = ("ok", reply)
+        except Exception as e:  # noqa: BLE001 - reported per client
+            results[i] = ("failed", f"{type(e).__name__}: {e}")
+
+    if barrier is None:
+        for i in range(n):
+            one(i)
+        return results
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results
+
+
+async def test_concurrent_handshakes(cert, key):
+    """Real clients against the real listeners (no stand-ins): every handshake completes,
+    whether the clients come at once or one after the other, and the connection serves."""
+    # Modbus/TCP read holding registers 0..1 from unit 1: the gateway answers it with an
+    # exception while its serial port is missing
+    read = modbus.build_tcp_adu(7, 1, bytes([0x03, 0, 0, 0, 2]))
+    for protocol, request in (("raw", b""), ("modbus", read)):
+        lines = []
+        port = free_port()
+        runner = await started(mapping(port, cert, key, protocol, max_connections=32), lines)
+        try:
+            for together, n in ((True, 16), (False, 8)):
+                results = await asyncio.to_thread(tls_clients, port, n, request,
+                                                  together=together)
+                failed = [why for status, why in results if status != "ok"]
+                assert not failed, (f"{protocol}: {len(failed)} of {n} TLS clients "
+                                    f"({'at once' if together else 'one by one'}) failed: "
+                                    f"{failed[:3]}; log: {lines[-3:]}")
+                if protocol == "modbus":
+                    for _status, reply in results:
+                        frame = modbus.take_tcp_adu(bytearray(reply))
+                        assert frame is not None and frame[0] == 7, reply
+                        assert frame[2][0] == 0x83, f"expected an exception reply: {reply!r}"
+                await asyncio.sleep(0.2)
+            assert len(netguard.BUDGET.handshakes) == 0, "finished handshakes must free their slot"
+        finally:
+            await runner.stop()
+    print("TLS listener (bridge, Modbus gateway): 16 real clients at once and 8 one by one "
+          "all complete their handshake and are served  OK")
+
+
 async def test_budget_refuses_near_the_fd_limit():
     lines = []
     port = free_port()
@@ -319,6 +386,7 @@ async def main():
     if cert is None:
         print(f"SKIP TLS listener checks: no certificate ({key})")
         return
+    await test_concurrent_handshakes(cert, key)
     await test_refused_before_the_handshake(cert, key)
     await test_allowed_handshake_and_capacity(cert, key)
     await test_handshake_timeout_and_caps(cert, key)
