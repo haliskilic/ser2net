@@ -99,6 +99,7 @@ PORTABLE = [
     "test_event_loop.py",       # real-server part (600 idle sockets, proactor): Windows CI
     "test_cluster_peer_calls.py",
     "test_cluster_settings.py",
+    "test_changelog.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
