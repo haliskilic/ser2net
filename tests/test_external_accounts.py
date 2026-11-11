@@ -15,16 +15,19 @@ accounts are written into config.json the way earlier sign-ins left them):
     own row), and a new local account can't differ from an existing name only in case;
   * each account's last sign-in comes from the audit log (also v2.7's oidc_login lines
     and LDAP names typed in another letter case) and every session issued since; it is
-    shown in the Users panel. LDAP/OIDC accounts not signed in for
-    external_users_expire_days (90; 0 = never, else 30-3650) are removed at start-up and
-    hourly — never admins, local accounts or the last accounts, and one with no sign-in
-    on record only when the audit log goes back that far for its kind of sign-in — each
-    logged and audited. Deleting one says it can come back while the directory allows it.
+    shown in the Users panel. Removing unused LDAP/OIDC accounts is off by default
+    (external_users_expire_days 0, also for an upgraded config): nothing goes. Once an
+    admin sets 30-3650 days, accounts not signed in for that long are removed at once,
+    at start-up and hourly — never admins, local accounts or the last accounts, and one
+    with no sign-in on record only when the audit log goes back that far for its kind of
+    sign-in — each logged and audited. Deleting one says it can come back while the
+    directory allows it.
 
 Run: python3 tests/test_external_accounts.py
 """
 import html
 import http.cookiejar
+import json
 import os
 import sys
 import time
@@ -217,13 +220,16 @@ def test_sign_ins():
                          90, NOW) == []
     # never the last accounts (setup would open again)
     assert seen.expired([User("stale", source="ldap", role="viewer")], 90, NOW) == []
-    # the setting: missing -> 90 days; odd values corrected with a note
-    assert AppConfig.from_dict({}).external_users_expire_days == 90
-    for value, days in ((0, 0), (45, 45), (-3, 0), (7, 30), (99999, 3650), ("x", 90)):
+    # the setting: off unless an admin sets it (a new config, or one without the key);
+    # odd values corrected with a note
+    assert AppConfig().external_users_expire_days == 0
+    assert AppConfig.from_dict({"users": []}).external_users_expire_days == 0
+    assert seen.expired(users, AppConfig.from_dict({}).external_users_expire_days, NOW) == []
+    for value, days in ((0, 0), (45, 45), (-3, 0), (7, 30), (99999, 3650), ("x", 0)):
         cfg = AppConfig.from_dict({"external_users_expire_days": value})
         assert cfg.external_users_expire_days == days, (value, cfg.external_users_expire_days)
         assert bool(cfg.load_notes) == (value not in (0, 45)), (value, cfg.load_notes)
-    assert AppConfig().to_dict()["external_users_expire_days"] == 90
+    assert AppConfig().to_dict()["external_users_expire_days"] == 0
     print("sign-ins: from the audit log (v2.7 lines, LDAP in any letter case); unused LDAP/OIDC "
           "accounts found — never admins, local or the last accounts  OK")
 
@@ -240,52 +246,76 @@ def test_expiry():
                        "user_dn_template": "uid={username}"},
               "oidc": {"enabled": True, "issuer": "https://idp.invalid", "client_id": "c",
                        "client_secret": "s"}}
-    srv = Server(config)
+    everyone = {"admin", "fresh", "stale", "month.old", "gone.sso", "boss.sso"}
+    srv = Server(config)    # no external_users_expire_days: an upgraded config
     with open(os.path.join(srv.data, "audit.log"), "w", encoding="utf-8") as fh:
         fh.write(audit_line(200, "oidc_login", "someone.else", "someone.else")
                  + audit_line(120, "login", "viewer, ldap", "Stale")
                  + audit_line(45, "login", "viewer, ldap", "month.old")
                  + audit_line(2, "login", "viewer, ldap", "fresh"))
     with srv:
-        for _ in range(100):   # the maintenance pass at start-up
-            if {"stale", "gone.sso"}.isdisjoint(users(srv)):
+        admin = Browser(srv.base)
+        admin.login("admin", PW)
+        for _ in range(100):   # the audit log is read at start-up
+            _, _, page = admin.get("/settings")
+            if f"last sign-in: {record(2, '')['time'][:16]}" in page:
                 break
             time.sleep(0.1)
+        # off by default: every account stays
+        assert set(users(srv)) == everyone, users(srv)
+        assert 'name="expire_days" min="0" max="3650" value="0"' in page
+        assert "Off by default: an account that stops signing in stays until you delete it." in page
+        today = time.strftime("%Y-%m-%d")
+        assert f"last sign-in: {today}" in page.split("boss.sso")[0].split("<td class=\"mono\">admin")[1]
+        assert f"last sign-in: {record(2, '')['time'][:16]}" in page
+        assert page.split("<td class=\"mono\">boss.sso")[1].find("last sign-in: —") >= 0
+        assert "whether that person can sign in again is up to the directory" in page
+
+        for bad in ("10", "abc", "4000", "-1"):
+            st, _, page = admin.post("/settings/users/expiry", {"expire_days": bad})
+            assert "Enter 0 (never) or a number of days from 30 to 3650." in page, bad
+        assert srv.saved_config()["external_users_expire_days"] == 0
+        # turned on: applied at once
+        st, _, page = admin.post("/settings/users/expiry", {"expire_days": "90"})
+        assert ("Saved: LDAP / OIDC accounts that haven’t signed in for 90 days are removed "
+                "(checked every hour). Removed now: stale, gone.sso.") in page, page[-800:]
         assert set(users(srv)) == {"admin", "fresh", "month.old", "boss.sso"}, users(srv)
+        assert srv.saved_config()["external_users_expire_days"] == 90
         log = open(os.path.join(srv.data, "all.log"), encoding="utf-8").read()
         assert (f"LDAP account 'stale' (viewer) removed: no sign-in for 90 days (last: "
                 f"{record(120, '')['time'][:10]}). It is made again at their next sign-in while "
                 f"LDAP still gives them a role.") in log, log[-2000:]
         assert "OIDC account 'gone.sso' (viewer) removed: no sign-in for 90 days (last: none on record)" in log
         audit = open(os.path.join(srv.data, "audit.log"), encoding="utf-8").read()
-        assert "\tuser_expired\tstale: ldap, no sign-in for 90 days" in audit, audit[-800:]
+        assert "\tusers_expiry\t90\tadmin" in audit and \
+            "\tuser_expired\tstale: ldap, no sign-in for 90 days" in audit, audit[-800:]
         assert audit.rstrip("\n").endswith("\t(maintenance)"), audit[-300:]
+
+        # once on, the pass at start-up (and every hour) removes them
+        srv.stop()
+        cfg = srv.saved_config()
+        cfg["external_users_expire_days"] = 30
+        with open(srv.config_path, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh)
+        srv.start()
+        removed = "LDAP account 'month.old' (viewer) removed: no sign-in for 30 days"
+        for _ in range(100):   # config.json is saved first, then each removal logged
+            if removed in open(os.path.join(srv.data, "all.log"), encoding="utf-8").read():
+                break
+            time.sleep(0.1)
+        assert set(users(srv)) == {"admin", "fresh", "boss.sso"}, users(srv)
+        assert removed in open(os.path.join(srv.data, "all.log"), encoding="utf-8").read()
 
         admin = Browser(srv.base)
         admin.login("admin", PW)
-        _, _, page = admin.get("/settings")
-        today = time.strftime("%Y-%m-%d")
-        assert f"last sign-in: {today}" in page.split("boss.sso")[0].split("<td class=\"mono\">admin")[1]
-        assert f"last sign-in: {record(2, '')['time'][:16]}" in page
-        assert page.split("<td class=\"mono\">boss.sso")[1].find("last sign-in: —") >= 0
-        assert "whether that person can sign in again is up to the directory" in page
-        assert 'name="expire_days" min="0" max="3650" value="90"' in page
-        for bad in ("10", "abc", "4000", "-1"):
-            st, _, page = admin.post("/settings/users/expiry", {"expire_days": bad})
-            assert "Enter 0 (never) or a number of days from 30 to 3650." in page, bad
-        assert srv.saved_config()["external_users_expire_days"] == 90
-        st, _, page = admin.post("/settings/users/expiry", {"expire_days": "30"})
-        assert ("Saved: LDAP / OIDC accounts that haven’t signed in for 30 days are removed "
-                "(checked every hour). Removed now: month.old.") in page, page[-800:]
-        assert set(users(srv)) == {"admin", "fresh", "boss.sso"}
         st, _, page = admin.post("/settings/users/expiry", {"expire_days": "0"})
         assert "never removed for not signing in" in page
         assert srv.saved_config()["external_users_expire_days"] == 0
         st, _, page = admin.post("/settings/users/delete", {"username": "fresh"})
         assert ("User &#39;fresh&#39; deleted. They are signed out; while LDAP still gives them "
                 "a role, their next sign-in makes a new account.") in page, page[-800:]
-    print("unused LDAP/OIDC accounts: removed at start-up (logged, audited), never admins; "
-          "the setting is checked and applied at once; Users shows the last sign-in  OK")
+    print("unused LDAP/OIDC accounts: kept by default; once turned on, removed at once and at "
+          "start-up (logged, audited), never admins; Users shows the last sign-in  OK")
 
 
 def main():

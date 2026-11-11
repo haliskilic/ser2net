@@ -453,15 +453,17 @@ da görünmez karakter içeren, 255 karakterden uzun ya da parantez içindeki bi
 reddedilir (nedeni all.log'da).
 
 **Kullanılmayan LDAP / OIDC hesapları:** **Ayarlar → Kullanıcılar** her hesabın son girişini
-gösterir (denetim kaydından ve o andan sonraki girişlerden; config.json'a yazılmaz). **90
-gündür** giriş yapmamış LDAP/OIDC hesapları açılışta ve her saat kaldırılır, all.log'a ve
-denetim kaydına (`user_expired`) yazılır; süre aynı yerden değiştirilir
-(`external_users_expire_days`: 0 = hiçbir zaman, ya da 30–3650 gün). Admin'ler, yerel
-hesaplar ve son kalan hesaplar hiçbir zaman kaldırılmaz; denetim kaydında hiç girişi olmayan
-bir hesap ise ancak kayıt o türden girişler için o kadar geriye gidiyorsa kaldırılır. Bir
-LDAP/OIDC hesabının silinmesi ya da kaldırılması oturumlarını hemen kapatır, ama erişime dizin
-karar verir: eşlenen bir grup ya da varsayılan rol geçerli oldukça kişinin bir sonraki
-girişi yeni bir hesap oluşturur.
+gösterir (denetim kaydından ve o andan sonraki girişlerden; config.json'a yazılmaz).
+Kullanılmayan LDAP/OIDC hesaplarının kaldırılması **varsayılan olarak kapalıdır**: giriş
+yapmayı bırakan bir hesap, siz silene kadar kalır. Açmak için aynı yerde *Giriş yapılmayan
+LDAP / OIDC hesaplarını kaldırma süresi (gün)* değerini girin (`external_users_expire_days`:
+30–3650 gün; 0 = kapalı): o kadar süredir giriş yapmamış LDAP/OIDC hesapları o zaman hemen,
+açılışta ve her saat kaldırılır, her biri all.log'a ve denetim kaydına (`user_expired`)
+yazılır. Admin'ler, yerel hesaplar ve son kalan hesaplar hiçbir zaman kaldırılmaz; denetim
+kaydında hiç girişi olmayan bir hesap ise ancak kayıt o türden girişler için o kadar geriye
+gidiyorsa kaldırılır. Bir LDAP/OIDC hesabının silinmesi ya da kaldırılması oturumlarını
+hemen kapatır, ama erişime dizin karar verir: eşlenen bir grup ya da varsayılan rol geçerli
+oldukça kişinin bir sonraki girişi yeni bir hesap oluşturur.
 
 **OIDC (SSO):** kod isteği PKCE (S256) taşır. Sağlayıcının keşif belgesinde verdiği tüm
 adresler (yetkilendirme, token, JWKS) ve yoldaki yönlendirmeler https:// olmalıdır (http://

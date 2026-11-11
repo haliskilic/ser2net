@@ -6,8 +6,9 @@ read once at start-up (AppState.load_sign_ins) — and from every session issued
 config.json would save it, and push a backup out of the 50 kept, at every sign-in.
 
 An LDAP/OIDC account is only a shadow of the directory's or identity provider's: it
-comes back at the next sign-in while that still gives the person a role. One not signed
-in for AppConfig.external_users_expire_days is removed by the hourly maintenance
+comes back at the next sign-in while that still gives the person a role. When an admin
+sets AppConfig.external_users_expire_days (0, the default, keeps every account), one not
+signed in for that many days is removed by the hourly maintenance
 (AppState.expire_external_accounts), so people who left don't stay in config.json and
 its backups for ever. Never removed: local accounts, admins, and the last accounts
 (an empty account list would open first-run setup again). An account without any
