@@ -406,19 +406,34 @@ def csrf_token_matches(request, token) -> bool:
 # --------------------------------------------------------------------------
 # login rate limiter (per IP or per user name, sliding window)
 # --------------------------------------------------------------------------
+def address_key(ip: str) -> str:
+    """What the per-address sign-in limit counts an address under: an IPv6 address by its
+    /64 network (a host or a LAN gets a whole /64 and can use any address in it), an IPv4
+    address (also when written IPv4-mapped) as it is, anything else unchanged."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network((int(addr) >> 64 << 64, 64)))
+    return str(addr)
+
+
 class LoginRateLimiter:
-    """Blocks an address (or what `key` makes of the value given: a user name) after
-    `max_attempts` failed sign-ins in `window_s` seconds. Keeps the times of at most that
-    many failures for at most MAX_ADDRESSES keys (when full, the one whose last failure
-    is the oldest is forgotten), so addresses that only ever fail don't add up in
-    memory."""
+    """Blocks an address (an IPv6 one by its /64: address_key), or what `key` makes of the
+    value given (a user name), after `max_attempts` failed sign-ins in `window_s` seconds.
+    Keeps the times of at most that many failures for at most MAX_ADDRESSES keys (when
+    full, the one whose last failure is the oldest is forgotten), so addresses that only
+    ever fail don't add up in memory."""
 
     MAX_ADDRESSES = 4096
 
     def __init__(self, max_attempts: int = 8, window_s: int = 300, key=None):
         self.max_attempts = max_attempts
         self.window_s = window_s
-        self._key = key or str
+        self._key = key or address_key
         self._fails: OrderedDict[str, deque] = OrderedDict()
 
     def blocked(self, ip: str) -> bool:
