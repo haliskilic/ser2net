@@ -184,7 +184,8 @@ def take_tcp_adu(buf: bytearray) -> tuple[int, int, bytes] | None:
 
     Returns (txn, unit, pdu) and removes the consumed bytes from ``buf``; returns
     None if a full frame isn't buffered yet. Raises ValueError on a framing error
-    (non-zero protocol id or an absurd length) so the caller can drop the peer.
+    (non-zero protocol id, or a length that leaves no function code or goes past the
+    largest PDU) so the caller can drop the peer.
     """
     if len(buf) < MBAP_LEN:
         return None
@@ -194,7 +195,7 @@ def take_tcp_adu(buf: bytearray) -> tuple[int, int, bytes] | None:
     unit = buf[6]
     if proto != 0:
         raise ValueError("not Modbus/TCP (protocol id != 0)")
-    if not (1 <= length <= MAX_PDU + 1):
+    if not (2 <= length <= MAX_PDU + 1):  # unit id + at least a function code
         raise ValueError(f"invalid MBAP length {length}")
     total = MBAP_LEN + (length - 1)  # length counts unit id, already in the header
     if len(buf) < total:

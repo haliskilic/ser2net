@@ -78,7 +78,18 @@ def test_take_tcp_adu_streaming_and_errors():
         raise AssertionError("expected protocol-id error")
     except ValueError:
         pass
-    print("take_tcp_adu handles streaming, back-to-back frames and bad protocol id  OK")
+    # a length that leaves no function code (1: the unit id only), or none at all, or one
+    # past the largest PDU -> framing error, before the body is even waited for
+    for length in (0, 1, modbus.MAX_PDU + 2, 0xFFFF):
+        head = bytearray([0, 7, 0, 0, length >> 8, length & 0xFF, 1])
+        try:
+            modbus.take_tcp_adu(head)
+            raise AssertionError(f"expected a length error for {length}")
+        except ValueError as e:
+            assert f"invalid MBAP length {length}" in str(e), e
+    assert modbus.take_tcp_adu(bytearray(modbus.build_tcp_adu(7, 1, b"\x07"))) == (7, 1, b"\x07")
+    print("take_tcp_adu handles streaming, back-to-back frames, bad protocol id and "
+          "lengths without a function code  OK")
 
 
 def test_exception_pdu():
