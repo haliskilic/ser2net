@@ -452,8 +452,10 @@ class ModbusGatewayRunner:
                 self._dropped(buf[:start])
                 self._delivered(bytes(buf[start:end]))
                 self._dropped(buf[end:])
-                if dropped or start or end < len(buf):
-                    self._dirty = True  # more of what came first may be on its way
+                if dropped or end < len(buf):
+                    # bytes after the reply: more may be on its way (bytes only in front of
+                    # it, such as an adapter's echo of the request, are no reason to wait)
+                    self._dirty = True
                 return bytes(buf[start + 1:end - 2])
             left = (finish if scan.pending else deadline) - loop.time()
             if left <= 0:

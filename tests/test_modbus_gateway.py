@@ -311,6 +311,16 @@ async def test_dropped_bytes():
     print("bytes in front of a reply: skipped, counted, in the trace (ser>drop), console "
           "and hex view  OK")
 
+    # an RS-485 adapter that echoes each request in front of the reply: the echo is
+    # dropped, and the next request does not wait for a quiet line because of it
+    runner, bus = memory_gateway(lambda u, p: [
+        (0, modbus.rtu_wrap(u, p)), (0.005, regs_reply(u, 2, base=int.from_bytes(p[1:3], "big")))])
+    replies, took = await timed(asyncio.gather(
+        *(runner._transaction(1, modbus.read_pdu(3, a, 2)) for a in (3, 9, 30))))
+    assert [regs_of(r) for r in replies] == [[3, 4], [9, 10], [30, 31]], replies
+    assert took < GUARD_S, f"3 requests took {took:.2f}s"
+    print(f"request echoed by the adapter: dropped; 3 requests in {took * 1000:.0f} ms  OK")
+
 
 async def test_cut_and_chattering():
     """A reply that never completes ends in 0x0B within the response timeout plus a frame's
