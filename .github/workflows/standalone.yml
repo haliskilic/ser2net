@@ -75,8 +75,11 @@ jobs:
       fail-fast: false
       matrix:
         arch: [x64, arm64]
+        # glibc 2.28 -> newest (Ubuntu 26.04 and current Fedora have glibc 2.42+, which refuses
+        # how pyserial 3.5 sets a baud rate without a termios constant: test_standalone's
+        # 250000-baud PTY mapping checks ser2net's fix there)
         image: ["almalinux:8", "debian:11", "ubuntu:20.04", "almalinux:9", "ubuntu:22.04",
-                "debian:12", "opensuse/leap:15.6", "ubuntu:24.04", "fedora:latest"]  # glibc 2.28 -> newest
+                "debian:12", "opensuse/leap:15.6", "ubuntu:24.04", "ubuntu:26.04", "fedora:latest"]
         # the distribution's CA bundle path, for base images that ship without ca-certificates
         include:
           - { image: "almalinux:8", ca: /etc/pki/tls/certs/ca-bundle.crt }
@@ -87,6 +90,7 @@ jobs:
           - { image: "debian:12", ca: /etc/ssl/certs/ca-certificates.crt }
           - { image: "opensuse/leap:15.6", ca: /etc/ssl/ca-bundle.pem }
           - { image: "ubuntu:24.04", ca: /etc/ssl/certs/ca-certificates.crt }
+          - { image: "ubuntu:26.04", ca: /etc/ssl/certs/ca-certificates.crt }
           - { image: "fedora:latest", ca: /etc/pki/tls/certs/ca-bundle.crt }
     steps:
       - uses: actions/checkout@v7

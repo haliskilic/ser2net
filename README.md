@@ -240,8 +240,9 @@ Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
 - paketin içindekiler işletim sisteminin temel kütüphanelerinden (glibc ≤ 2.28 / Windows
   sistem DLL'leri) başka bir şeye ihtiyaç duymamalı (Linux'ta x86_64 ve arm64);
 - binary boş bir `PATH` ile (Python yok, `openssl` yok) çalışmalı;
-- Linux binary'si temiz AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04,
-  openSUSE Leap 15.6 ve Fedora konteynerlerinde çalışmalı.
+- Linux binary'si temiz AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04/26.04,
+  openSUSE Leap 15.6 ve Fedora konteynerlerinde çalışmalı; termios sabiti olmayan bir hızda
+  (250000 baud) bir seri port da açabilmeli.
 
 Linux notları:
 - `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.

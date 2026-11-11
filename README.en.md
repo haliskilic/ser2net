@@ -232,8 +232,8 @@ Every pull request and release proves it (`tests/test_standalone.py`): the bundl
 need nothing but OS-base libraries (glibc ≤ 2.28 / Windows system DLLs; Linux on x86_64
 and arm64), the binary must
 work with an empty `PATH` (no Python, no `openssl`), and the Linux one must run in clean
-AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04, openSUSE Leap 15.6 and Fedora
-containers.
+AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04/26.04, openSUSE Leap 15.6 and Fedora
+containers, including a serial port at a rate without a termios constant (250000 baud).
 
 Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
 group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is

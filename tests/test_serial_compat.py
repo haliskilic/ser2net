@@ -11,6 +11,10 @@ whole process any more). Checked here, without a serial device:
     out once the port has room (POSIX PTY);
   - reads take up to READ_SIZE bytes (the upstream attribute it sets still exists);
   - ports opened through serial_io.open_serial get this transport (POSIX PTY);
+  - a baud rate without a termios constant (250000, 74880, ...) opens and can be switched
+    to while termios refuses pyserial 3.5's BOTHER placeholder, as glibc 2.42+ does for
+    the standalone binary; a setting the OS refuses is a readable SerialException (Linux
+    PTY, rates read back with TCGETS2);
   - a missing upstream member makes it fall back to upstream's transport, and versions
     other than the checked ones are named in a start-up warning;
   - the upstream code each override replaces or relies on is pinned by a hash of its
@@ -252,6 +256,90 @@ def test_eagain_keeps_the_data_posix():
           "byte with the writer armed, and it arrives once there is room  OK")
 
 
+# ------------------------------------------------------------------ custom baud rates
+def _bother_refused():
+    """termios.tcsetattr as it answers on glibc 2.42+ in a program built for an older glibc
+    (the standalone binary): the BOTHER placeholder pyserial 3.5 gives as the speed for a
+    rate without a termios constant is refused with EINVAL."""
+    import termios
+
+    from serial import serialposix
+    real = termios.tcsetattr
+
+    def tcsetattr(fd, when, attrs):
+        if serialposix.BOTHER in (attrs[4], attrs[5]):
+            raise termios.error(22, "Invalid argument")
+        return real(fd, when, attrs)
+
+    return mock.patch.object(termios, "tcsetattr", tcsetattr)
+
+
+def _speeds(fd):
+    """(input, output) baud rate the kernel has for ``fd`` (TCGETS2)."""
+    import array
+    import fcntl
+
+    from serial import serialposix
+    buf = array.array("i", [0] * 64)
+    fcntl.ioctl(fd, serialposix.TCGETS2, buf)
+    return buf[9], buf[10]
+
+
+async def _open_at(path, rate):
+    from app.config import SerialSettings
+    from app.engine import serial_io
+
+    _reader, writer, ser, _dev = await serial_io.open_serial(SerialSettings(port=path,
+                                                                            baudrate=rate))
+    try:
+        return _speeds(ser.fd)
+    finally:
+        writer.transport.abort()
+        await asyncio.sleep(0.05)
+
+
+def test_custom_baud_rates_on_new_glibc():
+    if not sys.platform.startswith("linux"):
+        print("SKIP (part): the custom baud rate checks are Linux only (TCSETS2)")
+        return
+    import termios
+
+    from serial import serialposix
+    pty = Pty()
+    try:
+        with _bother_refused():
+            try:
+                serialposix.Serial(pty.path, 250000).close()
+            except termios.error:
+                pass
+            else:
+                raise AssertionError("the stand-in must refuse BOTHER as glibc 2.42+ does")
+            ser = serial_compat.PosixSerial(pty.path, 250000, timeout=0, write_timeout=0)
+            try:
+                assert _speeds(ser.fd) == (250000, 250000), _speeds(ser.fd)
+                for rate in (74880, 31250, 7200, 9600, 115200, 100000):  # e.g. RFC 2217
+                    ser.baudrate = rate
+                    assert ser.baudrate == rate and _speeds(ser.fd) == (rate, rate), \
+                        (rate, _speeds(ser.fd))
+            finally:
+                ser.close()
+            assert asyncio.run(_open_at(pty.path, 250000)) == (250000, 250000)
+        with mock.patch.object(termios, "tcsetattr",
+                               side_effect=termios.error(22, "Invalid argument")):
+            try:
+                serial_compat.PosixSerial(pty.path, 19200, timeout=0, write_timeout=0)
+            except serial.SerialException as e:
+                assert f"could not configure {pty.path} for 19200 baud, 8N1: Invalid " \
+                       "argument" == str(e), str(e)
+            else:
+                raise AssertionError("a refused setting must raise SerialException")
+    finally:
+        pty.close()
+    print("PosixSerial: 250000 / 74880 / 31250 / 7200 / 100000 baud open and switch where "
+          "glibc 2.42+ refuses pyserial's BOTHER placeholder; a refused setting is a "
+          "readable SerialException  OK")
+
+
 # ------------------------------------------------------------------ upstream pins
 def upstream_functions(module_name):
     """{qualified name: source} of every function in ``module_name``'s file, read with ast
@@ -293,6 +381,8 @@ PINS = {
         "Serial.write": "d3b1411cb6cb8ed4",
         "Serial.cancel_read": "dcd213634ed388d5",
         "Serial.cancel_write": "a0686d9cef203a4e",
+        "Serial._reconfigure_port": "750c32d9514f897d",
+        "PlatformSpecific._set_special_baudrate[plat[:5] == 'linux']": "9d227870e19188c0",
     },
     "serial_asyncio_fast": {            # Transport, open_stream
         "SerialTransport.__init__": "0813f41f9c2b76d2",
@@ -330,5 +420,6 @@ if __name__ == "__main__":
     test_fallback_and_version_note()
     test_requirements_pin_the_checked_versions()
     test_eagain_keeps_the_data_posix()
+    test_custom_baud_rates_on_new_glibc()
     test_upstream_pins()
     print("\nPASS: serial_compat's transport and the upstream code it builds on")
