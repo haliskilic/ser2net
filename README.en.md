@@ -526,7 +526,7 @@ directory's owner by itself):
 | Install | Command |
 |---|---|
 | source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
-| Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ser2net\data --set-password admin` |
+| Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
 **First admin without the browser:** run `ser2net --set-password admin` before the first
