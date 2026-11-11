@@ -22,6 +22,8 @@ listener they reach, before they cost anything more:
   - TLS handshakes in progress hold a socket and a 256 KiB buffer each: at most
     TLS_HANDSHAKES_MAX at a time, TLS_HANDSHAKES_PER_IP from one address, each given
     TLS_HANDSHAKE_TIMEOUT_S (asyncio's default is 60 s).
+  - Windows' SelectorEventLoop (``CappedSelectSelector``): select() takes at most 512
+    sockets there, so connections are refused while it watches nearly that many.
 ``start_server`` is asyncio.start_server for a mapping's listener with that admission. For
 a TLS listener it also applies the mapping's allow-list before the handshake (a refused
 host never gets one) and does the handshake itself (``start_tls``): the mapping sees the
@@ -30,7 +32,9 @@ connection only once it is done, and decides about capacity, kicking and "Busy" 
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
+import selectors
 import sys
 import time
 from typing import Any, Callable, Optional
@@ -49,6 +53,11 @@ TLS_SHUTDOWN_TIMEOUT_S = 5.0
 # TLS handshakes in progress at once: in the process, and from one source address
 TLS_HANDSHAKES_MAX = 128
 TLS_HANDSHAKES_PER_IP = 32
+# Windows' select() takes at most this many sockets in each of its sets (FD_SETSIZE);
+# incoming connections are refused once the event loop watches all but SELECT_HEADROOM
+# of them, which stay for listeners, connections out and UDP sockets
+SELECT_LIMIT = 512
+SELECT_HEADROOM = 64
 
 
 class LogEvery:
@@ -234,6 +243,8 @@ class Budget:
     def __init__(self) -> None:
         self.handshakes = Pool(TLS_HANDSHAKES_MAX, TLS_HANDSHAKES_PER_IP)
         self.refused: dict[str, int] = {}  # why -> connections refused for it (/metrics)
+        # the event loop's selector when it is select() based (Windows; runtime.py sets it)
+        self.selector: Optional[CappedSelectSelector] = None
         self._counted = (-1.0, 0)  # (when, how many files were open)
         self._admitted = 0  # connections let in since
 
@@ -255,6 +266,13 @@ class Budget:
                 self.note_refused("open_files")
                 return (f"{used} of this process's {limit} open files are in use (the rest "
                         "is kept for serial ports, logs and the configuration)")
+        sel = self.selector
+        if sel is not None:
+            watched = sel.watched()
+            if watched >= sel.limit - SELECT_HEADROOM:
+                self.note_refused("event_loop")
+                return (f"the event loop watches {watched} sockets, near the {sel.limit} its "
+                        "select() takes")
         self._admitted += 1
         return ""
 
@@ -271,7 +289,44 @@ class Budget:
 
 BUDGET = Budget()
 # why a connection can be refused right after accept (Budget.refused keys, for /metrics)
-REFUSAL_REASONS = ("open_files", "tls_handshakes", "admin_ui")
+REFUSAL_REASONS = ("open_files", "event_loop", "tls_handshakes", "admin_ui")
+
+
+class CappedSelectSelector(selectors.SelectSelector):
+    """The selector of the SelectorEventLoop on Windows. select() takes at most 512 sockets
+    in each set there and raises ValueError past that, inside the event loop, which then
+    stopped: every bridge with it. This one refuses the registration that would go past
+    the limit instead (an OSError for whatever asked for the socket to be watched), and
+    tells Budget.headroom how full it is, so incoming connections are refused before that
+    (SELECT_HEADROOM)."""
+
+    def __init__(self, limit: int = SELECT_LIMIT) -> None:
+        super().__init__()
+        self.limit = limit
+
+    def _count(self, event: int) -> int:
+        return sum(1 for key in self.get_map().values() if key.events & event)
+
+    def watched(self) -> int:
+        """Sockets in the fuller of the two sets (read, write)."""
+        return max(self._count(selectors.EVENT_READ), self._count(selectors.EVENT_WRITE))
+
+    def _room(self, fileobj: Any, events: int) -> None:
+        fd = fileobj if isinstance(fileobj, int) else fileobj.fileno()
+        key = self.get_map().get(fd)
+        have = key.events if key is not None else 0
+        for event in (selectors.EVENT_READ, selectors.EVENT_WRITE):
+            if events & event and not have & event and self._count(event) >= self.limit:
+                raise OSError(errno.EMFILE, f"the event loop already watches {self.limit} "
+                                            "sockets, the most its select() takes")
+
+    def register(self, fileobj: Any, events: int, data: Any = None) -> selectors.SelectorKey:
+        self._room(fileobj, events)
+        return super().register(fileobj, events, data)
+
+    def modify(self, fileobj: Any, events: int, data: Any = None) -> selectors.SelectorKey:
+        self._room(fileobj, events)  # before modify() unregisters it
+        return super().modify(fileobj, events, data)
 
 
 class _Early(asyncio.Protocol):

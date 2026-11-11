@@ -1,19 +1,24 @@
 """Runtime orchestration: own the event loop, run uvicorn + the bridge engine.
 
 Critical cross-platform detail (from the design research): we OWN the event loop
-rather than letting uvicorn pick it. On Windows we force a SelectorEventLoop (via
-asyncio.Runner's loop_factory) — durable and future-proof vs. the deprecated
-event-loop policies — and run uvicorn.Server.serve() INSIDE that loop with
-loop="asyncio". On Linux the default selector loop is already correct.
+rather than letting uvicorn pick it (asyncio.Runner's loop_factory: durable and
+future-proof vs. the deprecated event-loop policies) and run uvicorn.Server.serve()
+INSIDE that loop with loop="asyncio". On Linux the default selector loop (epoll) is
+correct. On Windows it is a SelectorEventLoop whose select() takes at most 512 sockets:
+its selector refuses a socket past that instead of stopping the loop, and incoming
+connections are refused before it fills (engine/netguard.py). SER2NET_WINDOWS_LOOP=proactor
+runs the ProactorEventLoop instead, which has no such limit (event_loop_choice).
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import signal
 import sys
 import threading
+from typing import Callable, Mapping, Optional
 
 # asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
 # (bundled: taskgroup), which accepts the same loop_factory argument.
@@ -79,17 +84,57 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     return store, config
 
 
+WINDOWS_LOOP_ENV = "SER2NET_WINDOWS_LOOP"
+
+
+def event_loop_choice(platform: str = sys.platform,
+                      env: Optional[Mapping[str, str]] = None) -> tuple[str, str]:
+    """The event loop ser2net runs on ("default", "selector" or "proactor") and the line the
+    start-up log gets about it ("" when there is nothing to say). Windows: the
+    SelectorEventLoop, which serial ports and sockets have run on so far, unless
+    SER2NET_WINDOWS_LOOP=proactor; elsewhere the platform's default."""
+    if platform != "win32":
+        return "default", ""
+    env = os.environ if env is None else env
+    want = (env.get(WINDOWS_LOOP_ENV) or "").strip().lower()
+    if want == "proactor":
+        return "proactor", (f"event loop: proactor ({WINDOWS_LOOP_ENV}=proactor), no "
+                            f"{netguard.SELECT_LIMIT}-socket limit")
+    note = "" if want in ("", "selector") else (
+        f"{WINDOWS_LOOP_ENV}={want!r} is neither 'selector' nor 'proactor'; ")
+    return "selector", (note + f"event loop: selector (select() watches at most "
+                        f"{netguard.SELECT_LIMIT} sockets, so new connections are refused "
+                        f"near that; {WINDOWS_LOOP_ENV}=proactor has no such limit)")
+
+
+def loop_factory(choice: str) -> Optional[Callable[[], asyncio.AbstractEventLoop]]:
+    """What asyncio.Runner makes the loop with, for an event_loop_choice() answer (None: the
+    platform's default)."""
+    if choice == "selector":
+        def selector_loop() -> asyncio.AbstractEventLoop:
+            selector = netguard.CappedSelectSelector()
+            netguard.BUDGET.selector = selector
+            return asyncio.SelectorEventLoop(selector)
+        return selector_loop
+    if choice == "proactor" and sys.platform == "win32":
+        return asyncio.ProactorEventLoop
+    return None
+
+
 def main(config_path: str, reconfigure: bool = False) -> int:
     standalone.prepare()  # standalone Linux binary: find the system CA certificates
     store, config = prepare_config(config_path, reconfigure)
 
-    # Own the loop. Force SelectorEventLoop on Windows for pyserial-asyncio-fast.
-    loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
+    choice, loop_note = event_loop_choice()
     try:
-        with Runner(loop_factory=loop_factory) as runner:
-            return runner.run(_serve(store, config))
+        with Runner(loop_factory=loop_factory(choice)) as runner:
+            return runner.run(_serve(store, config, loop_note))
     except KeyboardInterrupt:
         return 0
+    except Exception:
+        # all.log too, not only stderr (a service has none to read); then exit with it
+        logging.getLogger("ser2net").exception("fatal error, ser2net stops")
+        raise
 
 
 def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
@@ -107,14 +152,14 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
     loop.set_exception_handler(handler)
 
 
-async def _serve(store: ConfigStore, config) -> int:
+async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     import uvicorn
 
     state = AppState(store, config)
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
     state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
-    for note in standalone.notes + config.load_notes:
+    for note in standalone.notes + config.load_notes + ([loop_note] if loop_note else []):
         state.log(note)
     for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config)):
         if line:
