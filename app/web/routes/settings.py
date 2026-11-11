@@ -756,6 +756,7 @@ def routes(ctx: Ctx) -> list:
                 return await settings_get(request, error=_("Import rejected: {0}").format(e))
         if mode == "replace":
             await state.supervisor.stop_all()
+            state.forget_mappings({m.id for m in old} - {m.id for m in new_maps})
             await state.supervisor.start_all(state.config)
         else:
             for m in touched:
@@ -952,6 +953,7 @@ def routes(ctx: Ctx) -> list:
         if with_accounts:
             state.revoked_sessions.clear()  # signed with the old key: dead anyway
         await state.supervisor.stop_all()
+        state.forget_mappings({m.id for m in previous["mappings"]} - {m.id for m in cur.mappings})
         await state.supervisor.start_all(state.config)
         await state.cluster.stop()
         await state.cluster.start()

@@ -433,13 +433,21 @@ class AppState:
         lines = data.decode("utf-8", errors="replace").splitlines()
         return lines[-limit:][::-1]
 
+    def forget_mappings(self, mapping_ids) -> None:
+        """Close the log files of mappings that are gone (an import replaced them, a
+        backup was restored) and forget their loggers, which would keep each file open
+        until a restart. The files themselves stay until the next start removes them
+        (prune_mapping_logs)."""
+        for mid in mapping_ids:
+            lg = self._mapping_loggers.pop(mid, None)
+            if lg is not None:
+                for h in list(lg.handlers):
+                    with _suppress(Exception):
+                        h.close()
+                    lg.removeHandler(h)
+
     def delete_mapping_log(self, mapping_id: str) -> None:
-        lg = self._mapping_loggers.pop(mapping_id, None)
-        if lg is not None:
-            for h in list(lg.handlers):
-                with _suppress(Exception):
-                    h.close()
-                lg.removeHandler(h)
+        self.forget_mappings([mapping_id])
         # the log file may never have been created (FileNotFoundError)
         with _suppress(OSError, ValueError):
             os.remove(self.mapping_log_path(mapping_id))
