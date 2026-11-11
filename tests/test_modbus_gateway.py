@@ -815,6 +815,31 @@ async def test_read_only():
             await asyncio.wait_for(srv.wait_closed(), timeout=2)
 
 
+async def test_frame_without_function():
+    """A Modbus/TCP frame whose MBAP length leaves no function code (1: the unit id alone)
+    is a framing error: the master is dropped, as for other bad frames, and nothing reaches
+    the bus (it used to go out as a 3-byte RTU frame and get a made-up 80 0b)."""
+    seen = []
+    srv = await asyncio.start_server(echo_slave(seen), "127.0.0.1", 0)
+    logs = []
+    try:
+        async with running_gateway(srv.sockets[0].getsockname()[1], logs) as (runner, gw_port):
+            mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
+            read = modbus.read_pdu(3, 0, 2)
+            assert await request(mr, mw, 1, RESPONSIVE_UNIT, read) == echo_answer(read)
+            mw.write(bytes([0, 2, 0, 0, 0, 1, RESPONSIVE_UNIT]))
+            await mw.drain()
+            assert await closed_by_gateway(mr), "the master must be dropped"
+            assert await wait_for(lambda: any("bad Modbus/TCP framing" in m and
+                                              "invalid MBAP length 1" in m for m in logs)), logs
+        assert [p for _u, p in seen] == [read], f"nothing more may reach the bus: {seen}"
+    finally:
+        srv.close()
+        with suppress(Exception):
+            await asyncio.wait_for(srv.wait_closed(), timeout=2)
+    print("MBAP length 1 (no function code): master dropped, logged, nothing on the bus  OK")
+
+
 async def test_master_admission(slave_port):
     """Allow-list, max connections, kick_old_user and priority IPs apply to masters."""
     # a full gateway refuses a new master unless kick_old_user or a priority IP says otherwise
@@ -897,6 +922,7 @@ async def main():
         await test_missing_port_at_start(slave_port)
         await test_slow_first_open(slave_port)
         await test_read_only()
+        await test_frame_without_function()
         await test_master_admission(slave_port)
         await test_unused_options_logged(slave_port)
         print("\nPASS: Modbus RTU<->TCP gateway")
