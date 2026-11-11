@@ -163,7 +163,9 @@ def routes(ctx: Ctx) -> list:
         return target, None
 
     async def settings_signout_others(request):
-        """Any signed-in user: end their own sessions elsewhere, keep this one."""
+        """Any signed-in user: end their own sessions elsewhere, keep this one. Nothing
+        to do (no save) when no session was issued for the account since its last
+        click (AppState.others_signed_out)."""
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
@@ -171,6 +173,10 @@ def routes(ctx: Ctx) -> list:
         if me is None or me.source == "anonymous":
             return await settings_get(request, error=_("Sign in to manage your sessions."))
         async with state.config_lock:
+            if state.others_signed_out.get(me.username) == (
+                    me.pwd_version, state.sessions_issued.get(me.username, 0)):
+                return await settings_get(request,
+                                          ok=_("Your other sessions are already signed out."))
             user, err = await _bump_sessions(me.username)
         if err:
             return await settings_get(request, error=err)
@@ -178,6 +184,8 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "sessions_signout_others", me.username)
         resp = await settings_get(request, ok=_("Your other sessions were signed out."))
         set_session(resp, request, user)
+        state.others_signed_out[user.username] = (user.pwd_version,
+                                                  state.sessions_issued.get(user.username, 0))
         return resp
 
     async def settings_tls_post(request):

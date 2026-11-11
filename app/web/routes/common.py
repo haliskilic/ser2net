@@ -70,6 +70,8 @@ class Ctx:
         cfg = self.state.config
         ttl = cfg.session_timeout_s  # Settings -> Web UI access -> session lifetime
         self.state.signins.note(user.username, user.source)   # its last sign-in
+        issued = self.state.sessions_issued
+        issued[user.username] = issued.get(user.username, 0) + 1
         response.set_cookie(
             auth.SESSION_COOKIE,
             auth.issue_session(cfg.secret_key, ttl, user.username, user.pwd_version),

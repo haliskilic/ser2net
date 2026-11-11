@@ -223,6 +223,12 @@ class AppState:
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
         # when each account last signed in (from audit.log, then every session issued)
         self.signins = SignIns()
+        # sessions issued per account (Ctx.set_session), and that count with the account's
+        # pwd_version right after its "Sign out my other sessions": the same again means no
+        # other session was made since, so the next click has nothing to end (and doesn't
+        # save config.json, whose 50 backups each save pushes along) — in memory only
+        self.sessions_issued: dict[str, int] = {}
+        self.others_signed_out: dict[str, tuple[int, int]] = {}
         # LDAP/OIDC group settings that matched a sign-in's group only as part of its name,
         # which no longer counts: (source, setting) -> details, shown in Settings until
         # that section is saved (in memory only)

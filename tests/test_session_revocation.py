@@ -235,6 +235,23 @@ def test_signout_others(srv):
     assert not signed_in(srv, tb)
     print("Sign out my other sessions: the others end, this one stays  OK")
 
+    # again, with no session issued since: nothing to end, config.json and its backups stay
+    backups = sorted(os.listdir(os.path.join(srv.data, "backups")))
+    version = next(u for u in srv.saved_config()["users"] if u["username"] == "admin")["pwd_version"]
+    for _ in range(5):
+        st, _, page = a.post("/settings/sessions/signout-others")
+        assert st == 200 and "Your other sessions are already signed out" in page
+    assert sorted(os.listdir(os.path.join(srv.data, "backups"))) == backups, "saved for nothing"
+    assert next(u for u in srv.saved_config()["users"]
+                if u["username"] == "admin")["pwd_version"] == version
+    assert signed_in(srv, cookie_of(a))
+    c = Browser(srv.base)  # a new sign-in elsewhere: the next click ends it
+    c.login("admin", PW)
+    st, _, page = a.post("/settings/sessions/signout-others")
+    assert st == 200 and "Your other sessions were signed out" in page
+    assert not signed_in(srv, cookie_of(c)) and signed_in(srv, cookie_of(a))
+    print("... clicked again with nothing new: no save; after a new sign-in it ends that one  OK")
+
 
 def test_recreated_user(srv, admin):
     bob = Browser(srv.base)
