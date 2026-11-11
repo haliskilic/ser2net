@@ -413,6 +413,18 @@ the login page. Behind a reverse proxy, the proxy must pass the original name in
 and managed after signing in, and open consoles are closed when access is revoked or the
 role changes. While it is on, the UI shows a warning and startup logs it.
 
+**Passwords** of local accounts are stored as scrypt hashes (N=2^14, r=8, p=5, OWASP's
+minimum; the hash names its cost, so the cost can be raised later). A hash made by 2.8.1 or
+older keeps working and is renewed with today's cost at that account's next sign-in (its
+sessions stay; `config.json` is saved, the previous one goes to `backups/`). Passwords are
+compared as Unicode NFKC: a letter with its accent as one character or two (text pasted
+from macOS or a PDF), a no-break space and a space, full-width forms are the same password.
+A directory (LDAP) gets the password exactly as typed. **Going back to 2.8.1 or older:**
+those versions can't read the renewed hashes, so an account that signed in with 2.9 can't
+sign in there: give it a new password with `ser2net --set-password NAME` (2.8.1), or, on
+2.8.0 and older, which have no such command, put back a `config.json` from `backups/` made
+before the upgrade.
+
 **Sessions:** logging out ends that session on the server (a copy of the cookie stops
 working too). Under **Settings → Users** an admin can sign a user out everywhere or set a
 local user's new password (which signs them out as well); everyone can *Sign out my other
@@ -421,9 +433,19 @@ ends every session at once, the admin's own excepted — use it when a copy of
 `config.json` or a backup may have leaked (downloaded backups leave the key out). While
 LDAP or OIDC is switched off, its accounts' sessions don't count.
 
-**Failed sign-ins** are limited to 8 per address in 5 minutes. all.log has a line for each,
-and the audit log records them; a user name that is no account's is recorded as
-`(unknown user)`, never as typed (it may be a password typed into the wrong field). Past 20
+**Failed sign-ins** are limited to 8 per address in 5 minutes (an IPv6 address counts by
+its /64; behind a reverse proxy all clients share the proxy's address) and to 10 per user
+name in 15 minutes, from any address and letter case aside; past either limit that address
+or that name gets HTTP 429 until its oldest failures are older than that — nothing is locked
+for good, and with LDAP the directory is asked no more often, which keeps such attempts
+below its own lock-out. A wrong current password in *Change your password* counts under the
+account's name too, and is logged and recorded in the audit log (`password_change_failed`).
+Password checks run two at a time and directory sign-ins four; while many wait already, a
+sign-in gets HTTP 429 (*Too many sign-ins at the same time*) without being tried. A name
+without a local account takes as long to refuse as a wrong password. all.log has a line for
+each failed sign-in, and the audit log records them; a user name that is no account's is
+recorded as `(unknown user)`, never as typed (it may be a password typed into the wrong
+field). Past 20
 failed sign-ins in 10 minutes the audit log only counts them and sums them up in one record
 at the end of those 10 minutes, so a flood of attempts can't push the other records out.
 Opening a mapping's console or hex view is recorded once per account (with open access: per
