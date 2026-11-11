@@ -350,6 +350,8 @@ def routes(ctx: Ctx) -> list:
                     refused.discard(_person("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
+        else:  # no such local account, no directory: the work of a wrong password
+            await asyncio.to_thread(auth.verify_password, password, auth.DUMMY_HASH)
         if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
