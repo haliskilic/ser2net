@@ -54,6 +54,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
 
 from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
 from . import serial_io, sockopts
+from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
 from .protocols.base import ProtocolError, ProtocolSession
@@ -120,29 +121,6 @@ def fmt_duration(secs: float) -> str:
     if m:
         return f"{m}m {s:02d}s"
     return f"{s}s"
-
-
-class _LogEvery:
-    """A log line that can repeat many times a second (dropped data, a UDP peer that keeps
-    changing, refused datagrams): written at most once per ``interval`` seconds, saying
-    how many were held back since the last one."""
-
-    def __init__(self, log, interval: float = 60.0) -> None:
-        self._log = log
-        self._interval = interval
-        self._next = 0.0
-        self._held = 0
-
-    def __call__(self, msg: str) -> None:
-        now = time.monotonic()
-        if now < self._next:
-            self._held += 1
-            return
-        if self._held:
-            msg += f" ({self._held} more since the last such line)"
-        self._held = 0
-        self._next = now + self._interval
-        self._log(msg)
 
 
 def trace_path(trace_dir: str, mapping: MappingConfig) -> str:

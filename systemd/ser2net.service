@@ -17,6 +17,11 @@ WorkingDirectory=/opt/ser2net
 ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data
 Restart=on-failure
 RestartSec=3
+# Open files: each running mapping holds about three (serial port, listener, log) plus
+# one per client. systemd's default soft limit is 1024; ser2net also raises its soft
+# limit at start (toward the hard limit, at most 65536), so an older copy of this unit
+# without the line below works too.
+LimitNOFILE=65536
 
 # --- Hardening ---
 NoNewPrivileges=true

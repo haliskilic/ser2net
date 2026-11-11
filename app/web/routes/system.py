@@ -5,7 +5,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, RedirectRespons
 from starlette.routing import Route
 
 from ... import i18n
-from ...engine import portlist
+from ...engine import netguard, portlist
 from .common import Ctx
 
 
@@ -22,6 +22,13 @@ def routes(ctx: Ctx) -> list:
             "ser2net_up 1",
             f"ser2net_mappings_total {len(state.config.mappings)}",
         ]
+        # the process's open files and their limit (POSIX: what serial ports, sockets and
+        # files share; not reported on Windows)
+        fds, fd_limit = netguard.open_fds(), netguard.fd_limit()
+        if fds is not None:
+            lines.append(f"ser2net_open_fds {fds}")
+        if fd_limit is not None:
+            lines.append(f"ser2net_fd_limit {fd_limit}")
         for m in state.config.mappings:
             st = statuses.get(m.id) or {}
             lbl = f'mapping="{_metric_label(m.name)}",id="{_metric_label(m.id)}"'
