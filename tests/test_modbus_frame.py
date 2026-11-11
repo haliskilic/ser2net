@@ -241,6 +241,50 @@ def test_find_reply():
           "and functions skipped; silence ends unsized frames  OK")
 
 
+def test_reply_mismatch():
+    """A reply has to answer its request: the same function (or its exception), the byte
+    count of the quantity read, a write's echo; other functions by function code only."""
+    ok = [
+        ("0300000002", "030400010002"), ("0300000002", "8302"),      # registers / exception
+        ("040010007d", "04fa" + "00" * 250),                         # 125 input registers
+        ("0100000013", "0103cd6b05"), ("0200000001", "020101"),      # 19 coils, 1 input
+        ("1700030006000e00030600ff00ff00ff", "170c" + "00" * 12),     # FC23 reads 6
+        ("0600010003", "0600010003"), ("0500acff00", "0500acff00"),  # echoes
+        ("0f0013000a02cd01", "0f0013000a"), ("100001000204000a0102", "1000010002"),
+        ("16000400f20025", "16000400f20025"),
+        ("080000a537", "080000a537"), ("2b0e0100", "2b0e01000000"), ("4100", "41ff"),
+        ("11", "1102aaff"), ("07", "076d"),                           # no layout checked
+    ]
+    for req, reply in ok:
+        why = modbus.reply_mismatch(bytes.fromhex(req), bytes.fromhex(reply))
+        assert why == "", (req, reply, why)
+    bad = [
+        ("0600010003", "0302000a", "FC3 reply to FC6"),
+        ("0300000002", "0414" + "00" * 20, "FC4 reply to FC3"),
+        ("0300000002", "0314" + "00" * 20, "20 data bytes for 2 register(s)"),  # 10 regs
+        ("0300c80001", "030400010002", "4 data bytes for 1 register"),
+        ("0100000013", "010101", "1 data bytes for 19 bit(s)"),
+        ("0600010003", "0600010007", "not the request's echo"),     # another value
+        ("0600010003", "0600020003", "not the request's echo"),     # another register
+        ("100001000204000a0102", "1000010001", "not the request's echo"),
+        ("0f0013000a02cd01", "0f0013000a02cd01", "not the request's echo"),
+        ("0300000002", "", "empty"),
+    ]
+    for req, reply, want in bad:
+        why = modbus.reply_mismatch(bytes.fromhex(req), bytes.fromhex(reply))
+        assert want in why, (req, reply, why)
+    # find_reply skips a whole frame that answers something else and keeps looking
+    req = bytes.fromhex("0600010003")
+    stale = modbus.rtu_wrap(1, bytes.fromhex("0302000a"))
+    echo = modbus.rtu_wrap(1, req)
+    scan = modbus.find_reply(stale + echo, 1, req)
+    assert scan.span == (len(stale), len(stale) + len(echo)), scan
+    scan = modbus.find_reply(modbus.rtu_wrap(1, bytes.fromhex("0600010007")), 1, req, quiet=True)
+    assert scan.span is None and "echo" in scan.rejected and not scan.pending, scan
+    print(f"reply_mismatch: {len(ok)} replies answer their request, {len(bad)} do not "
+          "(function, byte count, echo); find_reply skips them  OK")
+
+
 def main():
     test_register_read_and_decode()
     test_crc_and_rtu_known_vector()
@@ -252,6 +296,7 @@ def main():
     test_gateway_conversion_chain()
     test_rtu_reply_length()
     test_find_reply()
+    test_reply_mismatch()
     print("\nPASS: Modbus framing (RTU<->TCP)")
 
 

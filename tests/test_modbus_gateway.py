@@ -37,7 +37,7 @@ from app import notify
 from app.config import MappingConfig
 from app.engine import modbus, serial_io
 from app.engine.bridge import FROM_DEVICE, open_tracer
-from app.engine.modbus_gateway import SILENCE_S, ModbusGatewayRunner
+from app.engine.modbus_gateway import GUARD_S, SILENCE_S, ModbusGatewayRunner
 
 RESPONSIVE_UNIT = 1
 SILENT_UNIT = 9
@@ -157,9 +157,17 @@ async def running_gateway(slave_port, logs=None, options=None, **network):
         serial_io.open_serial = real_open
 
 
+def echo_answer(pdu):
+    """A register read (FC3/FC4) gets that many registers (all 0); anything else its own
+    PDU back (what a slave sends for an accepted single write, or an FC8/00 echo)."""
+    if pdu[0] in (3, 4):
+        count = int.from_bytes(pdu[3:5], "big")
+        return bytes([pdu[0], 2 * count]) + bytes(2 * count)
+    return pdu
+
+
 def echo_slave(seen):
-    """An RTU slave that records each request and answers with the request PDU itself
-    (what a slave sends back for an accepted single write; good enough for any FC here)."""
+    """An RTU slave that records each request and answers it with echo_answer."""
     async def handle(reader, writer):
         buf = bytearray()
         try:
@@ -172,7 +180,7 @@ def echo_slave(seen):
                     unit, pdu = modbus.rtu_unwrap(bytes(buf))
                     buf.clear()
                     seen.append((unit, pdu))
-                    writer.write(modbus.rtu_wrap(unit, pdu))
+                    writer.write(modbus.rtu_wrap(unit, echo_answer(pdu)))
                     await writer.drain()
         except (ConnectionError, OSError):
             pass
@@ -306,12 +314,13 @@ async def test_dropped_bytes():
 
 async def test_cut_and_chattering():
     """A reply that never completes ends in 0x0B within the response timeout plus a frame's
-    time, with one log line saying what came (repeats are counted into the next line); a
-    line that never goes quiet holds a request back by a bounded time."""
+    time (and the guard wait for a quiet line after the request before), with one log line
+    saying what came (repeats are counted into the next line); a line that never goes
+    quiet holds a request back by a bounded time."""
     frame = regs_reply(1, 10)
     logs = []
     runner, bus = memory_gateway(lambda u, p: [(0, frame[:9])], logs=logs)
-    limit = runner._resp_timeout + modbus.MAX_ADU * runner._char_s + runner._gap + 0.2
+    limit = runner._resp_timeout + modbus.MAX_ADU * runner._char_s + runner._gap + GUARD_S + 0.2
     for _ in range(3):
         rpdu, took = await timed(runner._transaction(1, modbus.read_pdu(3, 0, 10)))
         assert rpdu == TIMEOUT_PDU and took < limit, (rpdu, took)
@@ -332,7 +341,8 @@ async def test_cut_and_chattering():
     noise = asyncio.create_task(chatter())
     try:
         await asyncio.sleep(0.05)
-        limit = (runner._resp_timeout + 2 * modbus.MAX_ADU * runner._char_s + runner._gap + 0.3)
+        limit = (runner._resp_timeout + 2 * modbus.MAX_ADU * runner._char_s + runner._gap
+                 + GUARD_S + 0.3)
         for _ in range(2):
             rpdu, took = await timed(runner._transaction(1, modbus.read_pdu(3, 0, 2)))
             assert rpdu == TIMEOUT_PDU and took < limit, (rpdu, took, limit)
@@ -353,6 +363,89 @@ async def test_wire_time():
     rpdu = await runner._transaction(1, pdu)
     assert rpdu == pdu[:5], rpdu.hex(" ")
     print("FC16 of 59 bytes at 1200 baud, timeout 0.3 s: the echo 0.6 s later counts  OK")
+
+
+def register_slave(delay_of=lambda address: 0.0):
+    """MemoryBus answers of a slave whose holding register N holds N, each read answered
+    ``delay_of(address)`` seconds after its request came."""
+    def answer(unit, pdu):
+        address, count = int.from_bytes(pdu[1:3], "big"), int.from_bytes(pdu[3:5], "big")
+        return [(delay_of(address), regs_reply(unit, count, base=address))]
+    return answer
+
+
+async def test_late_reply_dropped():
+    """A reply that comes after the response timeout is not taken for the next request's:
+    a read of the same unit, function and quantity at another address can't tell them apart
+    (a read's reply carries no address), so after a request that got no reply in time the
+    line has to be quiet for the guard time before the next request goes out. The late
+    slave is logged once."""
+    logs = []
+    runner, bus = memory_gateway(register_slave(lambda a: 0.35 if a == 100 else 0.1),
+                                 timeout=0.3, logs=logs)
+    first, second = await asyncio.gather(runner._transaction(1, modbus.read_pdu(3, 100, 2)),
+                                         runner._transaction(1, modbus.read_pdu(3, 200, 2)))
+    assert first == TIMEOUT_PDU, first.hex(" ")
+    assert regs_of(second) == [200, 201], f"the next request got {regs_of(second)}"
+    late = [m for m in logs if m.startswith("unit 1 answered FC3 after the response timeout")]
+    assert len(late) == 1 and "0.3 s" in late[0], logs
+    print("late reply: dropped while the line settles, the next read gets its own value, "
+          "the late unit is logged  OK")
+
+    # the poll path and a queueing slave (it answers every request 0.35 s after it came,
+    # in order): whatever times out, no point ever gets another point's value
+    runner, bus = memory_gateway(register_slave(lambda a: 0.35), timeout=0.3)
+    points = [MappingConfig.from_dict({"modbus_poll": {"points": [
+        {"name": f"p{a}", "unit": 1, "fn": 3, "address": a, "dtype": "uint32"}]}}
+    ).modbus_poll.points[0] for a in (10, 20, 30)]
+    for p in points:
+        try:
+            value = await runner._read_point(p)
+        except ValueError as e:
+            assert "0x0b" in str(e), e
+            continue
+        assert value == (p.address << 16) | (p.address + 1), (p.name, value)
+    print("queueing slave: every poll point gets its own value or 0x0B, never a neighbour's  OK")
+
+
+async def test_reply_must_answer_request():
+    """The frame from the right unit has to answer the request: an FC3 frame on the line is
+    no reply to an FC6 write (the echo after it is), a 10-register reply none to a 2-register
+    read, and a write's reply must be its echo; what does not answer is dropped and logged."""
+    write = modbus.write_single_register_pdu(1, 3)
+    stale = modbus.rtu_wrap(1, bytes.fromhex("0302000a"))
+    runner, bus = memory_gateway(lambda u, p: [(0, stale), (0.02, modbus.rtu_wrap(u, p))])
+    assert await runner._transaction(1, write) == write
+    print("FC6: an FC3 frame in front of its echo is skipped, the echo is the reply  OK")
+
+    logs = []
+    runner, bus = memory_gateway(lambda u, p: [(0, stale)], logs=logs)
+    assert await runner._transaction(1, write) == bytes([0x86, 0x0B])
+    assert any(m.startswith("unit 1: no usable reply to FC6") and "none of them answers" in m
+               for m in logs), logs
+
+    # FC16: an echo of another quantity; FC5: of the other state
+    runner, bus = memory_gateway(lambda u, p: [(0, modbus.rtu_wrap(u, p[:3] + b"\x00\x01"))])
+    assert await runner._transaction(1, modbus.write_multiple_registers_pdu(0, [1, 2])) == \
+        bytes([0x90, 0x0B])
+    runner, bus = memory_gateway(lambda u, p: [(0, modbus.rtu_wrap(u, p[:3] + b"\x00\x00"))])
+    assert await runner._transaction(1, modbus.write_single_coil_pdu(5, True)) == \
+        bytes([0x85, 0x0B])
+
+    # the poll path: a uint32 point (2 registers) answered with 10 is an error, not a value
+    logs = []
+    runner, bus = memory_gateway(lambda u, p: [(0, regs_reply(u, 10))], logs=logs)
+    point = MappingConfig.from_dict({"modbus_poll": {"points": [
+        {"name": "flow", "unit": 1, "fn": 3, "address": 0, "dtype": "uint32"}]}}
+    ).modbus_poll.points[0]
+    try:
+        value = await runner._read_point(point)
+        raise AssertionError(f"a 10-register reply was decoded as {value}")
+    except ValueError as e:
+        assert "0x0b" in str(e), e
+    assert any("20 data bytes for 2 register(s)" in m for m in logs), logs
+    print("no reply: a wrong function, a write echo that differs, a 10-register reply to a "
+          "uint32 point -> 0x0B and a log line  OK")
 
 
 class ThreadSlave:
@@ -486,7 +579,7 @@ async def test_reopen_after_port_loss(slave_port):
     real_open, serial_io.open_serial = serial_io.open_serial, port.open
     gw_port = free_port()
     mapping = gateway_mapping(gw_port, points=[{"name": "level", "unit": RESPONSIVE_UNIT,
-                                                "fn": 3, "address": 0, "dtype": "uint16"}])
+                                                "fn": 3, "address": 0, "dtype": "uint32"}])
     logs = []
     runner = ModbusGatewayRunner(mapping, logger=logs.append)
     names = {mapping.id: mapping.name}
@@ -648,7 +741,8 @@ async def test_read_only():
             txn = 0x100
             for pdu in reads:
                 txn += 1
-                assert await request(mr, mw, txn, RESPONSIVE_UNIT, pdu) == pdu, pdu.hex(" ")
+                got = await request(mr, mw, txn, RESPONSIVE_UNIT, pdu)
+                assert got == echo_answer(pdu), (pdu.hex(" "), got.hex(" "))
             for pdu in refused:
                 txn += 1
                 got = await request(mr, mw, txn, RESPONSIVE_UNIT, pdu)
@@ -756,6 +850,8 @@ async def main():
         await test_cut_and_chattering()
         await test_wire_time()
         await test_split_reply_real_pauses()
+        await test_late_reply_dropped()
+        await test_reply_must_answer_request()
         await test_reopen_after_port_loss(slave_port)
         await test_missing_port_at_start(slave_port)
         await test_slow_first_open(slave_port)
