@@ -22,7 +22,10 @@ whole process any more). Checked here, without a serial device:
     waits for them (and never frees one the driver did not let go of);
   - the transport's Windows branch (tests/_windows_transport.py, in a child process; off
     Windows its timer-driven code is loaded as on Windows): drain() waits for the device,
-    a graceful close with data left completes, a failing port is closed once;
+    a graceful close with data left completes, a failing port is closed once, an idle
+    port is polled every POLL_IDLE_WAIT_S and a busy one every 0.5 ms (with the read
+    polls per second and CPU of 1 / 8 / 32 idle ports measured and printed: on the
+    Windows legs that is the selector loop's real rate);
   - Windows only (the windows-latest CI legs): WindowsSerial is the class ports are opened
     with (SER2NET_WINDOWS_SERIAL=pyserial: pyserial's), and OverlappedWrites works against
     a real overlapped handle (a named pipe nobody reads, then reads in order; a cancel);
@@ -573,6 +576,9 @@ PINS = {
         'SerialTransport._poll_write[os.name == "nt"]': "dc4e21ed43e1ca26",
         'SerialTransport._ensure_writer[os.name == "nt"]': "a60d57465e66d3ab",
         'SerialTransport._remove_writer[os.name == "nt"]': "aaaedc0e83fb6660",
+        'SerialTransport._poll_read[os.name == "nt"]': "b21bc71108e803e7",
+        'SerialTransport._ensure_reader[os.name == "nt"]': "ebf610378a97b332",
+        'SerialTransport._remove_reader[os.name == "nt"]': "883bdd2e4eaacbf9",
     },
     "serial.serialwin32": {             # WindowsSerial
         "Serial.__init__": "5cd96869f9600813",

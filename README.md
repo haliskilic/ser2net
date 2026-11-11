@@ -632,7 +632,9 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   log'unda yazar.
 - **Windows'ta seri yazmalar** Linux'taki gibi cihazı bekler: port başına sürücüye bir anda en
   fazla 8 KiB verilir, böylece ağdan hızlı gönderen biri sürücünün kuyruğunu doldurmak yerine
-  seri hattın hızına yavaşlatılır. Bir seri sürücü bununla sorun çıkarırsa
+  seri hattın hızına yavaşlatılır. Bir saniyedir trafiği olmayan bir port 0,5 ms yerine
+  10 ms'de bir yoklanır, veri gelir ya da gider gitmez yeniden 0,5 ms'de bir (bir isteğin
+  yanıtı gecikmez). Bir seri sürücü bununla sorun çıkarırsa
   `SER2NET_WINDOWS_SERIAL=pyserial` (servis için: sistem ortam değişkeni) pyserial'ın kendi
   yazma biçimine (hız denetimi olmadan) döner; lütfen adaptörü ve sürücüyü bildirin.
 
