@@ -24,9 +24,9 @@
     {% if can_edit %}
     <span class="bulk" data-bulk hidden>
       <span class="muted" data-bulk-count></span>
-      <button class="btn sm" type="button" data-bulk-action="start">{{ _("Start") }}</button>
-      <button class="btn sm" type="button" data-bulk-action="stop">{{ _("Stop") }}</button>
-      <button class="btn sm" type="button" data-bulk-action="restart">{{ _("Restart") }}</button>
+      <button class="btn sm" type="button" data-bulk-action="start" hx-disabled-elt="this">{{ _("Start") }}</button>
+      <button class="btn sm" type="button" data-bulk-action="stop" hx-disabled-elt="this">{{ _("Stop") }}</button>
+      <button class="btn sm" type="button" data-bulk-action="restart" hx-disabled-elt="this">{{ _("Restart") }}</button>
       <button class="link" type="button" data-bulk-clear>{{ _("clear") }}</button>
     </span>
     {% endif %}

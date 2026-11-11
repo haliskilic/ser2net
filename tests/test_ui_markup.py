@@ -18,6 +18,7 @@ Run: python3 tests/test_ui_markup.py
 import html.parser
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -372,6 +373,80 @@ def test_mapping_form_kick_hint():
     print("mapping form: kick_old_user without an allow-list is pointed out (server mode)  OK")
 
 
+class Page:
+    """The `request` a full page (_shell.html) renders with."""
+    class state:
+        csrf_token = "t"
+        user = None
+        lang = "en"
+
+    class url:
+        path = "/"
+        query = ""
+
+
+def dashboard(can_edit=True, cluster_on=False):
+    return make_templates().env.get_template("dashboard.html").render(
+        request=Page, can_edit=can_edit, cluster_on=cluster_on)
+
+
+def test_feedback_area():
+    """Every page of the shell has the two live regions app.js reports into (status for
+    what an action did, alert for what failed), outside <main> so they float over it, and
+    the page carries the texts app.js needs for them."""
+    root = parse(dashboard())
+    region = {n.attrs.get("id"): n for n in root.walk() if n.attrs.get("id") in ("ui-alert", "ui-status")}
+    assert region["ui-alert"].attrs.get("role") == "alert", region["ui-alert"].attrs
+    assert region["ui-status"].attrs.get("role") == "status", region["ui-status"].attrs
+    for n in region.values():
+        anc = list(n.ancestors())
+        assert any("feedback" in a.classes() for a in anc) and not any(a.tag == "main" for a in anc)
+    body = next(n for n in root.walk() if n.tag == "body")
+    texts = json.loads(body.attrs["data-i18n"])
+    for key in ("dismiss", "stale", "failed", "server_error", "offline", "session_ended", "sign_in"):
+        assert texts.get(key), key
+    assert "{0}" in texts["failed"] and "{0}" in texts["server_error"], "the status goes in"
+    print("feedback area: alert + status live regions on every shell page, texts for app.js  OK")
+
+
+def test_actions_hold_a_second_click():
+    """A state-changing button is disabled while its request runs (hx-disabled-elt), so a
+    second click is not queued and sent afterwards (a second copy, a second restart)."""
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    rows = parse(tpl.render(mappings=mappings(), statuses={}, can_edit=True))
+    cluster = make_templates().env.get_template("_cluster_body.html").render(
+        can_edit=True, nodes=[{"name": "peer", "self": False, "source": "auto", "ip": "10.0.0.2",
+                               "port": 8080, "addr": "10.0.0.2:8080", "online": True,
+                               "mappings": [{"id": "x1", "name": "a", "enabled": True},
+                                            {"id": "x2", "name": "b", "enabled": False}]}])
+    acting = [n for root in (rows, parse(cluster)) for n in root.walk()
+              if n.tag == "button" and ("hx-post" in n.attrs or "hx-delete" in n.attrs)]
+    assert len(acting) == 4 + 3 + 4 + 3, len(acting)   # Stop Restart Copy Delete / Start Copy Delete
+    for b in acting:
+        assert b.attrs.get("hx-disabled-elt") == "this", b.attrs
+    root = parse(dashboard())
+    bulk = [n for n in root.walk() if "data-bulk-action" in n.attrs]
+    assert len(bulk) == 3 and all(b.attrs.get("hx-disabled-elt") == "this" for b in bulk)
+    form = parse(make_templates().env.get_template("_mapping_form.html").render(
+        request=Page, mapping=MappingConfig(name=""), is_new=True, modbus_points_json="",
+        ports=[], ips=[], error=None))
+    f = next(n for n in form.walk() if n.tag == "form")
+    assert f.attrs.get("hx-disabled-elt") == "find button[type=submit]", f.attrs
+    print("row, peer, bulk and form actions: disabled while their request runs  OK")
+
+
+def test_app_js_inserts_no_server_html():
+    """app.js puts server texts into the page with textContent: the only innerHTML it
+    writes is the empty string (closing a panel), and nothing else parses HTML."""
+    src = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    writes = re.findall(r"\.innerHTML\s*=(?!=)\s*([^;]*);", src)
+    assert writes and all(w.strip() == '""' for w in writes), writes
+    for sink in ("insertAdjacentHTML", "outerHTML", "document.write", "DOMParser", "eval("):
+        assert sink not in src, sink
+    assert "textContent = text" in src, "feedback messages go in as text"
+    print("app.js: server texts as textContent, no HTML sinks  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
@@ -382,6 +457,9 @@ def main():
     test_mapping_form_rfc2217_restore()
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()
+    test_feedback_area()
+    test_actions_hold_a_second_click()
+    test_app_js_inserts_no_server_html()
     print("\nPASS: UI markup contract")
 
 
