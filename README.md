@@ -293,9 +293,9 @@ volume'u ilk açılışta otomatik devralınır, yükseltmede elle bir şey yapm
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
   düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
-  `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren TLS el sıkışmaları ve
-  kabulden hemen sonra reddedilen bağlantılar (`ser2net_connections_refused_total`, nedene
-  göre).
+  `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren ve sıra bekleyen TLS
+  el sıkışmaları ve kabulden hemen sonra reddedilen bağlantılar
+  (`ser2net_connections_refused_total`, nedene göre).
 
 ---
 
@@ -335,8 +335,10 @@ port olarak kabul edilmez.
 
 **Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
-anda en fazla 32 (toplamda 128) el sıkışma yürür. Kapasite, `kick_old_user` ve "Busy" satırı
-yine el sıkışmadan sonra gelir. Yönetim arayüzü, bağlandıktan ya da son yanıttan sonra
+anda en fazla 32 (toplamda 128) el sıkışma yürür. Fazlası, bunlardan birinin bitmesini 15 sn'ye
+kadar bekler (bir adresten en fazla 64, toplamda 256 bağlantı); böylece bir istemcinin toplu
+yeniden bağlanması reddedilmez, sırayla karşılanır. Kapasite, `kick_old_user` ve "Busy"
+satırı yine el sıkışmadan sonra gelir. Yönetim arayüzü, bağlandıktan ya da son yanıttan sonra
 `admin_ui.request_timeout_s` (10 sn) içinde tam bir istek başlığı göndermeyen, ardından
 istek gövdesi gelmeyi kesen (gövdeye bu süre artı gelen her KiB için bir saniye tanınır) ya
 da bir yanıttan bu süre boyunca hiçbir şey almayan bağlantıyı kapatır (konsol WebSocket'i

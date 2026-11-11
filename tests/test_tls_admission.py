@@ -9,7 +9,9 @@ after accept:
     open-file limit (serial ports, logs and the configuration keep that much);
   - TLS listeners: a host not in the allow-list is closed before any handshake; at most
     TLS_HANDSHAKES_PER_IP handshakes at a time from one address (TLS_HANDSHAKES_MAX in
-    all); a handshake must be over within TLS_HANDSHAKE_TIMEOUT_S, a failed one is logged;
+    all), more connections wait for a slot (bounded, first come first served) and are
+    refused past that; a handshake must be over within TLS_HANDSHAKE_TIMEOUT_S, a failed
+    one is logged; real clients, at once and one by one, all complete their handshake;
   - capacity, kicking and "Busy" stay after the handshake, as before.
 No serial device is needed (the port is missing; the listener runs anyway). Binds
 127.0.0.1 (and 127.0.0.2 where the OS allows it).
@@ -181,9 +183,11 @@ async def test_close_does_not_wait_for_a_silent_client(cert, key):
 async def test_handshake_timeout_and_caps(cert, key):
     lines = []
     port = free_port()
-    saved = (netguard.TLS_HANDSHAKE_TIMEOUT_S, netguard.BUDGET.handshakes)
+    saved = (netguard.TLS_HANDSHAKE_TIMEOUT_S, netguard.BUDGET.handshakes,
+             netguard.BUDGET.waiting)
     netguard.TLS_HANDSHAKE_TIMEOUT_S = 1.0
     netguard.BUDGET.handshakes = netguard.Pool(total=4, per_ip=2)
+    netguard.BUDGET.waiting = netguard.Pool(total=4, per_ip=1)
     runner = await started(mapping(port, cert, key), lines)
     writers = []
     try:
@@ -192,11 +196,18 @@ async def test_handshake_timeout_and_caps(cert, key):
         writers += [w for _r, w in idle]
         await asyncio.sleep(0.2)
         assert len(netguard.BUDGET.handshakes) == 2, len(netguard.BUDGET.handshakes)
-        # ... so a third from it is refused at once (logged), while another address gets in
+        # ... so a real TLS client from it waits for one of them to end, ...
+        waiting = asyncio.ensure_future(asyncio.open_connection("127.0.0.1", port,
+                                                                ssl=client_ctx()))
+        await asyncio.sleep(0.2)
+        assert len(netguard.BUDGET.waiting) == 1 and not waiting.done()
+        # ... and one more from it is refused at once (logged), while another address
+        # gets a slot
         r3, w3 = await raw_connect(port)
         writers.append(w3)
-        assert await closed_by_server(r3, 2), "a third handshake from one address must be refused"
-        assert any("too many TLS handshakes in progress (2 at once from one address" in ln
+        assert await closed_by_server(r3, 2), "past the waiting ones, a connection is refused"
+        assert any("too many TLS handshakes in progress (2 at once from one address is the "
+                   "limit) and waiting for one to end (1 at once from one address" in ln
                    for ln in lines), lines
         try:
             r4, w4 = await raw_connect(port, "127.0.0.2")
@@ -213,8 +224,13 @@ async def test_handshake_timeout_and_caps(cert, key):
         assert time.monotonic() - t0 < 3.5
         assert any("TLS handshake with 127.0.0.1:" in ln and "longer than 1.0 seconds" in ln
                    for ln in lines), lines
+        # the waiting client got the slot that came free and completed its handshake
+        _r, w = await asyncio.wait_for(waiting, 3)
+        writers.append(w)
+        assert w.get_extra_info("ssl_object") is not None
         await asyncio.sleep(0.1)
         assert len(netguard.BUDGET.handshakes) <= 1, "finished handshakes must free their slot"
+        assert len(netguard.BUDGET.waiting) == 0
         # a handshake still pending when the mapping stops is closed with it, at once
         r5, w5 = await raw_connect(port, "127.0.0.1")
         writers.append(w5)
@@ -225,12 +241,69 @@ async def test_handshake_timeout_and_caps(cert, key):
         assert await closed_by_server(r5, 2)
         assert len(netguard.BUDGET.handshakes) == 0
     finally:
-        netguard.TLS_HANDSHAKE_TIMEOUT_S, netguard.BUDGET.handshakes = saved
+        (netguard.TLS_HANDSHAKE_TIMEOUT_S, netguard.BUDGET.handshakes,
+         netguard.BUDGET.waiting) = saved
         for w in writers:
             w.close()
         await runner.stop()
-    print("TLS listener: handshake timeout (logged), per-address handshake cap, a pending "
+    print("TLS listener: handshake timeout (logged), per-address handshake cap (a client "
+          "past it waits for a slot, past the waiting ones it is refused), a pending "
           "handshake ends with the mapping  OK")
+
+
+async def test_waiting_for_a_handshake_slot(cert, key):
+    """A reconnect burst from one address beyond TLS_HANDSHAKES_PER_IP: the excess waits
+    for slots (first come, first served) and every client is served; a connection that
+    gets no slot within the timeout is closed (logged), as is one still waiting when the
+    mapping stops."""
+    lines = []
+    port = free_port()
+    saved = (netguard.TLS_HANDSHAKE_TIMEOUT_S, netguard.BUDGET.handshakes,
+             netguard.BUDGET.waiting)
+    netguard.BUDGET.handshakes = netguard.Pool(total=8, per_ip=4)
+    netguard.BUDGET.waiting = netguard.Pool(total=32, per_ip=32)
+    runner = await started(mapping(port, cert, key, max_connections=32), lines)
+    writers = []
+    try:
+        results = await asyncio.to_thread(tls_clients, port, 24)
+        failed = [why for status, why in results if status != "ok"]
+        assert not failed, f"{len(failed)} of 24 clients at once failed: {failed[:3]}"
+        assert not any("refused" in ln for ln in lines), lines
+        await asyncio.sleep(0.2)
+        assert len(netguard.BUDGET.handshakes) == 0 and len(netguard.BUDGET.waiting) == 0
+
+        netguard.TLS_HANDSHAKE_TIMEOUT_S = 1.0
+        netguard.BUDGET.handshakes = netguard.Pool(total=8, per_ip=1)
+        held = await raw_connect(port)  # holds the address's one slot for 1 s
+        writers.append(held[1])
+        await asyncio.sleep(0.1)
+        first = await raw_connect(port)  # gets the slot at 1 s, holds it to 2 s
+        second = await raw_connect(port)  # still waiting at 1.1 s: closed
+        writers += [first[1], second[1]]
+        t0 = time.monotonic()
+        assert await closed_by_server(second[0], 3)
+        assert 0.8 < time.monotonic() - t0 < 2, time.monotonic() - t0
+        assert any("waited 1 seconds for a TLS handshake to end" in ln for ln in lines), lines
+        assert await closed_by_server(first[0], 3), "the promoted one has its own timeout"
+        # one still waiting when the mapping stops ends at once with it
+        writers += [(await raw_connect(port))[1] for _ in range(2)]
+        await asyncio.sleep(0.1)
+        assert len(netguard.BUDGET.waiting) == 1
+        t0 = time.monotonic()
+        await runner.stop()
+        assert time.monotonic() - t0 < 2, "stop() waited for a connection waiting for a slot"
+        await asyncio.sleep(0.1)
+        assert len(netguard.BUDGET.handshakes) == 0 and len(netguard.BUDGET.waiting) == 0
+        assert not netguard.BUDGET._turns
+    finally:
+        (netguard.TLS_HANDSHAKE_TIMEOUT_S, netguard.BUDGET.handshakes,
+         netguard.BUDGET.waiting) = saved
+        for w in writers:
+            w.close()
+        await runner.stop()
+    print("TLS listener: a burst past the per-address handshake cap waits for slots and is "
+          "served; a connection that gets none in time is closed (logged), one waiting "
+          "ends with the mapping  OK")
 
 
 def tls_clients(port: int, n: int, request: bytes = b"", timeout: float = 5.0,
@@ -425,6 +498,7 @@ async def main():
     await test_allowed_handshake_and_capacity(cert, key)
     await test_close_does_not_wait_for_a_silent_client(cert, key)
     await test_handshake_timeout_and_caps(cert, key)
+    await test_waiting_for_a_handshake_slot(cert, key)
 
 
 if __name__ == "__main__":

@@ -286,8 +286,9 @@ a `HEALTHCHECK` (`ser2net --healthcheck`). Details: [`docs/DOCKER.md`](docs/DOCK
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
-  the admin UI's connections, TLS handshakes in progress and the connections refused right
-  after accept (`ser2net_connections_refused_total`, by reason).
+  the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
+  the connections refused right after accept (`ser2net_connections_refused_total`, by
+  reason).
 
 ---
 
@@ -327,8 +328,9 @@ device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, 
 
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
-address (128 in all). Capacity, `kick_old_user` and the "Busy" line still come after the
-handshake. The admin UI closes a connection that sends no complete request head within
+address (128 in all). More connections wait up to 15 s for one of those to end (at most 64
+from one address, 256 in all), so a client's burst of reconnects is served rather than
+refused. Capacity, `kick_old_user` and the "Busy" line still come after the handshake. The admin UI closes a connection that sends no complete request head within
 `admin_ui.request_timeout_s` (10 s) of connecting or of its last response, whose request
 body then stops coming (the body gets that time plus a second per KiB that arrives), or
 whose client takes nothing of a response for that long (a console WebSocket is not
