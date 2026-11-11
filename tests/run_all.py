@@ -68,6 +68,18 @@ PORTABLE = [
     "test_sparkplug.py",
     "test_ser2net_import.py",
     "test_i18n.py",
+    "test_mapping_ids.py",
+    "test_serial_url_ports.py",
+    "test_cluster_peer_save.py",
+    "test_access_policy.py",
+    "test_traffic_counters.py",
+    "test_protocol_parsers.py",
+    "test_rfc2217_settings.py",
+    "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
+    "test_fd_limits.py",
+    "test_tls_admission.py",
+    "test_admin_limits.py",
+    "test_event_loop.py",       # real-server part (600 idle sockets, proactor): Windows CI
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
@@ -84,6 +96,7 @@ SOCAT = [
     "test_v2_console.py",
     "test_v2_web.py",
     "test_web_e2e.py",
+    "test_serial_reconnect.py",
 ]
 
 

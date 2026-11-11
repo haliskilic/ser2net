@@ -73,6 +73,7 @@ def main():
     with Server(boot) as srv:
         log = srv.output()
         assert "its trace file is now traces/aaaa00000001-plc1.trace" in log, log[-1500:]
+        assert "is not a valid mapping id" not in log, "a 2.7.1 mapping id was replaced"
         backups = os.listdir(os.path.join(srv.data, "backups"))
         assert len(backups) == 1, backups
         with open(os.path.join(srv.data, "backups", backups[0]), encoding="utf-8") as fh:

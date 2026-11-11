@@ -129,6 +129,18 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
+    # a checkbox (absent when unticked) shown for plain-format Modbus points only
+    "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
+    # not offered for a Modbus gateway, which has no per-client output buffer and can't
+    # send a banner or act on a close-on string (bytes outside Modbus frames)
+    "network_client_queue_max": ("network", ("client_queue_max",)),
+    "opt_banner": ("options", ("banner",)),
+    "opt_closeon": ("options", ("closeon",)),
+    # a checkbox (absent when unticked) shown for RFC 2217 mappings only
+    "opt_rfc2217_restore_on_disconnect_shown": ("options", ("rfc2217_restore_on_disconnect",)),
+    # UDP only: where the device's output goes
+    "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
+                                               "udp_peer_timeout_s")),
 }
 
 
@@ -149,7 +161,6 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         "read_only": _checkbox(form, "network_read_only"),
         "allowed_client_ips": _split(form.get("network_allowed_client_ips", "")),
         "priority_client_ips": _split(form.get("network_priority_client_ips", "")),
-        "client_queue_max": _num(form, "network_client_queue_max", 2048, strict=strict),
         "tls": _checkbox(form, "network_tls"),
         "tls_cert": form.get("network_tls_cert", "").strip(),
         "tls_key": form.get("network_tls_key", "").strip(),
@@ -164,19 +175,33 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "network_connect_timeout_s" in form:
         network["connect_timeout_s"] = _num(form, "network_connect_timeout_s", 10.0,
                                             strict=strict, cast=float)
+    if "network_client_queue_max" in form:
+        network["client_queue_max"] = _num(form, "network_client_queue_max", 2048, strict=strict)
+    if "network_udp_peer_timeout_s" in form:
+        network.update(
+            udp_peer_host=form.get("network_udp_peer_host", "").strip(),
+            udp_peer_port=(_num(form, "network_udp_peer_port", 0, strict=strict)
+                           if form.get("network_udp_peer_port") else 0),
+            udp_peer_timeout_s=(_num(form, "network_udp_peer_timeout_s", 0, strict=strict)
+                                if form.get("network_udp_peer_timeout_s") else 0),
+        )
     options = {
-        "banner": form.get("opt_banner", ""),
         "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
-        "closeon": form.get("opt_closeon", ""),
         "trace_both": form.get("opt_trace_both", "").strip(),
         "trace_hexdump": _checkbox(form, "opt_trace_hexdump"),
     }
+    for key in ("banner", "closeon"):
+        if f"opt_{key}" in form:
+            options[key] = form.get(f"opt_{key}", "")
     if "opt_max_connection_time_s" in form:
         options["max_connection_time_s"] = _num(form, "opt_max_connection_time_s", 0,
                                                 strict=strict)
     if "opt_trace_max_mb" in form:
         options["trace_max_mb"] = _num(form, "opt_trace_max_mb", 10.0, strict=strict, cast=float)
         options["trace_keep"] = _num(form, "opt_trace_keep", 3, strict=strict)
+    if "opt_rfc2217_restore_on_disconnect_shown" in form:
+        options["rfc2217_restore_on_disconnect"] = _checkbox(
+            form, "opt_rfc2217_restore_on_disconnect")
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),
@@ -200,6 +225,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                 "sparkplug_group_id": form.get("mqtt_sparkplug_group_id", "").strip() or "ser2net",
                 "sparkplug_node_id": form.get("mqtt_sparkplug_node_id", "").strip()}
                if "mqtt_payload_format" in form else {}),
+            **({"apply_retained_set": _checkbox(form, "mqtt_apply_retained_set")}
+               if "mqtt_apply_retained_set_shown" in form else {}),
         },
         "modbus_poll": {
             "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),

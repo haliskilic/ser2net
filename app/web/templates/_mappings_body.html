@@ -4,7 +4,7 @@
   <thead>
     <tr>
       <th>{{ _("Name") }}</th><th>{{ _("Serial") }}</th><th>{{ _("Network") }}</th>
-      <th>{{ _("State") }}</th><th>{{ _("Clients") }}</th><th>{{ _("In / Out") }}</th><th class="col-actions"></th>
+      <th>{{ _("State") }}</th><th>{{ _("Clients") }}</th><th title="{{ _('In: bytes read from the serial device · Out: bytes written to it (serial↔serial: A → B / B → A)') }}">{{ _("In / Out") }}</th><th class="col-actions"></th>
     </tr>
   </thead>
   <tbody>
@@ -32,6 +32,7 @@
           {%- else -%}{{ m.network.mode }}/{{ m.network.protocol }}
             {%- if m.network.tls %} <span class="tag">TLS</span>{% endif %}
             {%- if m.network.read_only %} <span class="tag" title="{{ _('read-only') }}">RO</span>{% endif %}
+            {%- if m.accepts_mqtt_writes %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ _('writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them') if open_cmd else _('writable points take MQTT commands (/set or Sparkplug DCMD)') }}">CMD{% if open_cmd %} ⚠{% endif %}</span>{% endif %}
           {%- endif -%}
         </div>
       </td>
@@ -50,7 +51,8 @@
         {% endif %}
         {% if st and st.dropped_clients %}<div class="err-small">⚠ {{ _("%(n)s slow client(s) dropped", n=st.dropped_clients) }}</div>{% endif %}
       </td>
-      <td class="mono nowrap" data-label="{{ _('In / Out') }}">{{ (st.bytes_in if st else 0) }} / {{ (st.bytes_out if st else 0) }}</td>
+      <td class="mono nowrap" data-label="{{ _('In / Out') }}">{{ (st.bytes_in if st else 0) }} / {{ (st.bytes_out if st else 0) }}
+        {% if st and st.bytes_dropped %}<div class="err-small" title="{{ _('data from the network that was not written to the serial device; the mapping’s log says why') }}">⚠ {{ _("%(n)s bytes dropped", n=st.bytes_dropped) }}</div>{% endif %}</td>
       <td class="col-actions">
         <div class="row-actions">
           {% if can_edit %}

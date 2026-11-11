@@ -5,26 +5,38 @@ protocol is ``modbus``. It listens as a Modbus/TCP server: each connected master
 sends Modbus/TCP requests, which the gateway converts to Modbus/RTU, forwards on
 the shared serial bus (one transaction at a time, since RTU is a single-master
 bus), reads the slave's RTU reply, and returns it to that master as Modbus/TCP —
-echoing the transaction id so concurrent masters don't get crossed wires.
+echoing the transaction id so concurrent masters don't get crossed wires. A request
+whose slave doesn't answer in time is answered with exception 0x0B (gateway target
+failed to respond); while the serial port is down, every request is answered with 0x0A
+(gateway path unavailable) at once.
 
-Shares the lifecycle shape (and the H3/H4 fixes) of MappingRunner: a supervised,
-auto-reconnecting serial endpoint plus an asyncio TCP server, both torn down
-cleanly on stop().
+Shares the lifecycle shape (and the H3/H4 fixes) of MappingRunner: the same
+supervised serial port (serial_link.SerialLink: reopened, and its USB identity
+re-resolved, whenever it is lost) plus an asyncio TCP server, both torn down
+cleanly on stop(). Masters are admitted by the same policy as bridge clients
+(access.AccessPolicy: allow-list, max connections, priority IPs, kick_old_user);
+a read-only gateway answers every request that is not known to be a read with
+exception 01 and never puts it on the bus, and refuses MQTT/Sparkplug writes as well.
+A banner, open/close strings and closeon don't apply: bytes outside Modbus frames
+would break the framing.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import ipaddress
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
-from ..config import MappingConfig, normalize_cidr
-from . import modbus, serial_io, sockopts
+from ..config import MappingConfig, ModbusPoint
+from . import modbus, netguard, sockopts
+from .access import AccessPolicy, server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
 )
+from .mqtt_pub import shown
+from .serial_link import SerialLink
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -41,31 +53,20 @@ def _next_timer(idle_s: float, deadline: Optional[float]) -> Optional[float]:
     return min(waits) if waits else None
 
 
-def _parse_nets(cidrs):
-    nets = []
-    for c in cidrs:
-        with contextlib.suppress(ValueError):
-            nets.append(ipaddress.ip_network(normalize_cidr(c), strict=False))
-    return nets
-
-
-def _ip_in_nets(ip: str, nets) -> bool:
-    if not nets:
-        return False
-    with contextlib.suppress(ValueError):
-        addr = ipaddress.ip_address(ip)
-        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
-            addr = addr.ipv4_mapped
-        return any(addr in net for net in nets)
-    return False
-
-
 @dataclass(eq=False)
 class _Master:
     """A connected Modbus/TCP master (identity-hashed, so it can live in a set)."""
     writer: asyncio.StreamWriter
     peer: str
+    priority: bool = False          # admitted from priority_client_ips
     connected_at: float = field(default_factory=time.time)
+    close_reason: str = ""          # why the gateway dropped it (first cause wins)
+    refused: int = 0                # requests refused because the mapping is read-only
+
+    def kick(self, reason: str = "kicked") -> None:
+        self.close_reason = self.close_reason or reason
+        with contextlib.suppress(Exception):
+            self.writer.transport.abort()
 
 
 class ModbusGatewayRunner:
@@ -75,13 +76,11 @@ class ModbusGatewayRunner:
         self._tracer: Optional[Tracer] = None
         self.status = RunnerStatus(state="stopped")
         self.log = logger
-        self.serial_instance = None
-        self._sreader: Optional[asyncio.StreamReader] = None
-        self._swriter: Optional[asyncio.StreamWriter] = None
         self._serial_task: Optional[asyncio.Task] = None
-        self._server: Optional[asyncio.Server] = None
+        self._server: Optional[netguard.Listener] = None
         self._stop = asyncio.Event()
-        self._serial_ready = asyncio.Event()
+        # the RTU bus; is_open / ready say whether requests can reach it right now
+        self._link = SerialLink(mapping.serial, self.status, self._stop, self._log)
         self._bus_lock = asyncio.Lock()      # RTU is single-master: one txn at a time
         self._clients: set[_Master] = set()
         self._monitors: set = set()           # browser console observers (read the bus)
@@ -90,7 +89,12 @@ class ModbusGatewayRunner:
         self._sparkplug: Optional[SparkplugNode] = None  # payload format sparkplug_b
         self._write_tasks: set = set()
         self._poll_task: Optional[asyncio.Task] = None
-        self._allowed = _parse_nets(mapping.network.allowed_client_ips)
+        # plain MQTT: the command topic of each writable point, matched exactly (a point
+        # name is never read back out of a topic)
+        base = mapping.mqtt.base_topic.rstrip("/")
+        self._set_points: dict[str, ModbusPoint] = {
+            f"{base}/{p.name}/set": p for p in mapping.modbus_poll.points if p.writable}
+        self._access = AccessPolicy(mapping.network)
         # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
         baud = max(1, mapping.serial.baudrate)
         self._gap = max(0.01, 3.5 * 11 / baud)
@@ -121,26 +125,29 @@ class ModbusGatewayRunner:
         for mon in list(self._traffic):
             mon.feed_traffic(direction, data)
 
-    async def serial_write(self, data: bytes) -> None:
+    async def serial_write(self, data: bytes) -> bool:
         # the modbus console is observe-only (injecting raw bytes would corrupt
         # the request/response framing on the shared bus)
-        return
+        return False
 
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
         self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
         net = self.mapping.network
+        # the port is read per transaction; the link only watches for it going away
         self._serial_task = asyncio.create_task(
-            self._serial_supervisor(), name=f"modbus-serial:{self.mapping.name}")
+            self._link.run(self._link.hold_open), name=f"modbus-serial:{self.mapping.name}")
         try:
-            self._server = await asyncio.start_server(
-                self._on_client, host=net.bind_ip, port=net.port, ssl=self._server_ssl())
+            self._server = await netguard.start_server(
+                self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
+                allowed=self._access.allowed, log=self._log)
             self._log(f"modbus gateway listening on {net.bind_ip}:{net.port}"
                       f" ({'TLS, ' if net.tls else ''}{sockopts.describe(net)})")
         except BaseException:
             await self.stop()
             raise
+        self._log_policy()
         # optional edge mode: poll Modbus registers off the bus and publish to MQTT
         # (plain topics, or as a Sparkplug B edge node); writable points take values back
         if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:
@@ -151,22 +158,22 @@ class ModbusGatewayRunner:
                 self._mqtt = self._sparkplug.publisher()
             else:
                 from .mqtt_pub import MqttPublisher
-                base = mq.base_topic.rstrip("/")
-                subs = {f"{base}/{p.name}/set": self._on_set_message
-                        for p in self.mapping.modbus_poll.points if p.writable}
-                self._mqtt = MqttPublisher(mq, logger=self._log, subscriptions=subs)
+                self._mqtt = MqttPublisher(
+                    mq, logger=self._log,
+                    subscriptions=dict.fromkeys(self._set_points, self._on_set_message),
+                    accept_retained=bool(mq.apply_retained_set))
             self._mqtt.connect()
             self._poll_task = asyncio.create_task(
                 self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
-        self.status.state = "running"
+        if self.status.state == "stopped":  # the serial side has not reported yet
+            self.status.state = "running"
 
     async def stop(self) -> None:
         self._stop.set()
         if self._server is not None:
             self._server.close()
         for c in list(self._clients):
-            with contextlib.suppress(Exception):
-                c.writer.transport.abort()
+            c.kick("gateway stopped")
         for mon in list(self._monitors) + list(self._traffic):
             mon.close()
         self._monitors.clear()
@@ -194,7 +201,7 @@ class ModbusGatewayRunner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._serial_task
             self._serial_task = None
-        await self._close_serial()
+        await self._link.close()
         if self._tracer:
             await self._tracer.aclose()
             self._tracer = None
@@ -203,70 +210,20 @@ class ModbusGatewayRunner:
         self.status.clients = []
         self._log("modbus gateway stopped")
 
-    def _server_ssl(self):
-        net = self.mapping.network
-        if not net.tls:
-            return None
-        import ssl
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(net.tls_cert, net.tls_key)
-        return ctx
-
-    # ---------------- serial side ----------------
-    async def _close_serial(self) -> None:
-        self._serial_ready.clear()
-        w = self._swriter
-        self._sreader = self._swriter = None
-        self.serial_instance = None
-        if w is not None:
-            with contextlib.suppress(Exception):
-                w.close()
-                await w.wait_closed()
-
-    async def _serial_supervisor(self) -> None:
-        backoff, attempt = 0.5, 0
-        while not self._stop.is_set():
-            try:
-                reader, writer, ser, device = await serial_io.open_serial(self.mapping.serial)
-                self._sreader, self._swriter, self.serial_instance = reader, writer, ser
-                self.status.device = device
-                self.status.last_error = ""
-                self.status.state = "running"
-                self._serial_ready.set()
-                backoff, attempt = 0.5, 0
-                self._log(f"serial open: {device} @ {self.mapping.serial.compact()}")
-                await self._stop.wait()       # hold the port open; reads happen per-transaction
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                self.status.last_error = str(e)
-                self.status.state = "device-missing" if attempt == 0 else "reconnecting"
-                self._log(f"serial error: {e}")
-            finally:
-                await self._close_serial()
-            if self._stop.is_set():
-                break
-            attempt += 1
-            self.status.reconnects += 1
-            self.status.state = "reconnecting"
-            delay = min(backoff, 10.0) + (attempt % 5) * 0.1
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                break
-            except asyncio.TimeoutError:
-                pass
-            backoff = min(backoff * 2, 10.0)
-
     # ---------------- one RTU transaction on the shared bus ----------------
     async def _transaction(self, unit: int, pdu: bytes) -> bytes:
         function = pdu[0] if pdu else 0
+        if self._link.down:  # the port is gone (reconnecting): answer now, don't queue
+            return modbus.exception_pdu(function, modbus.GATEWAY_PATH_UNAVAILABLE)
+        if not self._link.is_open:
+            # the first open at start-up is still under way: wait a little for it, outside
+            # the bus lock, so queued requests wait together and not one timeout each
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._link.ready.wait(), timeout=self._resp_timeout)
         async with self._bus_lock:
-            if not self._serial_ready.is_set():
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self._serial_ready.wait(), timeout=self._resp_timeout)
-            reader, writer = self._sreader, self._swriter
-            if reader is None or writer is None:
-                return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
+            reader, writer = self._link.reader, self._link.writer
+            if reader is None or writer is None:  # not open (yet), or lost meanwhile
+                return modbus.exception_pdu(function, modbus.GATEWAY_PATH_UNAVAILABLE)
             # discard any stale bytes left on the bus, then send the RTU request
             with contextlib.suppress(Exception):
                 while True:
@@ -325,7 +282,9 @@ class ModbusGatewayRunner:
         poll = self.mapping.modbus_poll
         while not self._stop.is_set():
             values = {}
-            for p in poll.points:
+            # while the port is gone there is nothing to read (the link logs the outage)
+            points = poll.points if not self._link.down else []
+            for p in points:
                 try:
                     values[p.name] = await self._read_point(p)
                 except Exception as e:  # one bad point must not stop the loop
@@ -338,21 +297,27 @@ class ModbusGatewayRunner:
             except asyncio.TimeoutError:
                 pass
 
-    # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug NCMD) ----
+    # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug DCMD) ----
     async def write_point(self, point, value) -> None:
-        """Write a value to a writable point (coils: FC5, or FC15 for a list of
-        states; holding registers: FC6 for 16-bit types, FC16 for 32-bit), check the
-        slave's reply, then read the point back and publish it."""
+        """Write one value to one writable point, and nothing beyond it: a coil takes a
+        bool (FC5), a holding register a number, encoded as the point's own type (FC6 for
+        a 16-bit type, FC16 for the two registers of a 32-bit one). Check the slave's
+        reply, then read the point back and publish it. A read-only mapping writes nothing
+        (checked here, at write time, for every command path)."""
+        if self.mapping.network.read_only:
+            raise ValueError("mapping is read-only")
         if not point.writable:
             raise ValueError(f"point {point.name!r} is not writable")
         if point.fn == modbus.READ_COILS:
-            # passed through unchanged: the PDU builders accept only bool / 0 / 1, so a
-            # stray value (a Sparkplug String "false", an Int 2) can't switch a coil ON
-            if isinstance(value, (list, tuple)):
-                pdu = modbus.write_multiple_coils_pdu(point.address, list(value))
-            else:
-                pdu = modbus.write_single_coil_pdu(point.address, value)
+            # only a bool: never a list (several coils), a number (a Sparkplug Int 2) or
+            # text (a Sparkplug String "false")
+            if not isinstance(value, bool):
+                raise ValueError(f"{point.name!r} is a coil: it takes true or false, "
+                                 f"not {shown(value)}")
+            pdu = modbus.write_single_coil_pdu(point.address, value)
         else:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{point.name!r} takes a number, not {shown(value)}")
             regs = modbus.encode_value(value, point.dtype, point.scale or 1.0)
             pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
                    else modbus.write_multiple_registers_pdu(point.address, regs))
@@ -371,7 +336,7 @@ class ModbusGatewayRunner:
                 await self.write_point(point, value)
             except Exception as e:
                 err = str(e) or type(e).__name__
-                self._log(f"write '{point.name}' = {value!r} failed: {err}")
+                self._log(f"write '{point.name}' = {shown(value)} failed: {err}")
             if done is not None:
                 done(err)
         task = asyncio.create_task(run(), name=f"modbus-write:{point.name}")
@@ -379,11 +344,16 @@ class ModbusGatewayRunner:
         task.add_done_callback(self._write_tasks.discard)
 
     def _on_set_message(self, topic: str, payload: bytes) -> None:
-        name = topic.rsplit("/", 2)[-2]
-        point = next((p for p in self.mapping.modbus_poll.points if p.name == name), None)
+        """Plain MQTT: a value for one writable point on its <base_topic>/<point>/set; the
+        outcome goes to .../set/result (ok, or error: …)."""
+        point = self._set_points.get(topic)
         if point is None or self._mqtt is None:
             return
         result = topic + "/result"
+        if self.mapping.network.read_only:
+            self._log(f"write '{point.name}' from MQTT refused: the mapping is read-only")
+            self._mqtt.publish_raw(result, b"error: mapping is read-only")
+            return
         try:
             value = parse_write_payload(payload, point)
         except ValueError as e:
@@ -411,13 +381,41 @@ class ModbusGatewayRunner:
         return bytes(buf)
 
     # ---------------- network side ----------------
+    def _log_policy(self) -> None:
+        """Log at start which of the mapping's options a Modbus gateway treats differently:
+        the ones it does not use, and what read-only means here."""
+        opts = self.mapping.options
+        unused = [name for name, value in (("banner", opts.banner), ("openstr", opts.openstr),
+                                           ("closestr", opts.closestr), ("closeon", opts.closeon))
+                  if value]
+        if unused:
+            self._log(f"not used by a Modbus gateway: {', '.join(unused)} "
+                      "(bytes outside Modbus frames would break the framing)")
+        if self.mapping.network.read_only:
+            self._log("read-only: requests from Modbus/TCP masters that are not reads get "
+                      "exception 01 (illegal function) and never reach the bus; MQTT/Sparkplug "
+                      "writes to writable points are refused too")
+        mq = self.mapping.mqtt
+        missing = [what for what, have in (("TLS", mq.tls), ("a username", mq.username))
+                   if not have]
+        if self.mapping.accepts_mqtt_writes and missing:
+            self._log("warning: writable points take MQTT commands over a broker connection "
+                      f"without {' or '.join(missing)}: any client the broker lets publish to "
+                      "the command topics can write them; restrict those topics with the "
+                      "broker's access rules (ACLs)")
+
+    def _refuse(self, master: _Master, pdu: bytes) -> bytes:
+        """Answer a request a read-only gateway does not forward: exception 01 (illegal
+        function). The first one per master connection is logged, the rest are counted."""
+        function = pdu[0] if pdu else 0
+        master.refused += 1
+        if master.refused == 1:
+            self._log(f"read-only: refused FC{function} from {master.peer} with exception 01 "
+                      "(further refusals for this master are only counted)")
+        return modbus.exception_pdu(function, modbus.ILLEGAL_FUNCTION)
+
     def _refresh_clients(self) -> None:
-        self.status.client_count = len(self._clients)
-        self.status.clients = sorted(
-            ({"peer": c.peer, "connected_at": c.connected_at, "priority": False}
-             for c in self._clients),
-            key=lambda d: d["connected_at"],
-        )
+        self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peername = writer.get_extra_info("peername") or ("?", 0)
@@ -425,22 +423,20 @@ class ModbusGatewayRunner:
         peer = f"{peer_ip}:{peername[1]}" if isinstance(peername, tuple) and len(peername) > 1 else peer_ip
         net = self.mapping.network
 
-        if self._allowed and not _ip_in_nets(peer_ip, self._allowed):
-            self._log(f"rejected {peer}: not in allowed list")
-            writer.close()
-            return
-        if len(self._clients) >= net.max_connections:
-            self._log(f"rejected {peer}: max connections reached")
+        # allow-list, then max connections (a priority master / kick_old_user makes room)
+        admission = self._access.admit(peer_ip, peer, self._clients, self._log)
+        if not admission.admitted:
             with contextlib.suppress(Exception):
                 writer.close()
             return
 
         if err := sockopts.apply_keepalive(writer, net):
             self._log(f"TCP keepalive not enabled for {peer}: {err}")
-        master = _Master(writer, peer)
+        master = _Master(writer, peer, priority=admission.priority)
         self._clients.add(master)
         self._refresh_clients()
-        self._log(f"modbus master connected: {peer} ({len(self._clients)} total)")
+        tag = " [priority]" if master.priority else ""
+        self._log(f"modbus master connected: {peer}{tag} ({len(self._clients)} total)")
         opts = self.mapping.options
         deadline = (time.monotonic() + opts.max_connection_time_s
                     if opts.max_connection_time_s > 0 else None)
@@ -473,7 +469,10 @@ class ModbusGatewayRunner:
                     if frame is None:
                         break
                     txn, unit, pdu = frame
-                    rpdu = await self._transaction(unit, pdu)
+                    if net.read_only and not modbus.is_read_request(pdu):
+                        rpdu = self._refuse(master, pdu)
+                    else:
+                        rpdu = await self._transaction(unit, pdu)
                     writer.write(modbus.build_tcp_adu(txn, unit, rpdu))
                     await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError, OSError) as e:
@@ -483,35 +482,39 @@ class ModbusGatewayRunner:
             self._refresh_clients()
             with contextlib.suppress(Exception):
                 writer.close()
+            reason = master.close_reason or reason
             if self._stop.is_set():
                 reason = "gateway stopped"
             held = fmt_duration(time.time() - master.connected_at)
-            self._log(f"modbus master disconnected: {peer} after {held} — {reason} "
+            refused = f", {master.refused} request(s) refused (read-only)" if master.refused else ""
+            self._log(f"modbus master disconnected: {peer} after {held} — {reason}{refused} "
                       f"({len(self._clients)} total)")
 
 
+# a holding register's value: a decimal integer, 0x hex, or a decimal fraction / exponent
+_NUMBER = re.compile(r"[+-]?(?:0[xX][0-9a-fA-F]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)")
+_NUMBER_MAX_LEN = 64
+
+
 def parse_write_payload(payload: bytes, point):
-    """An MQTT write request's value: coils take 1/0, true/false, on/off (or a JSON
-    list of those for consecutive coils, FC15); registers a number."""
+    """The value of a plain-MQTT write to ``point``: one coil state (1/0, true/false or
+    on/off), or one number for a holding register (decimal, 0x hex, or a decimal fraction
+    or exponent; write_point encodes it as the point's type). Anything else, a JSON list
+    included, raises ValueError: a command writes the point it was sent to, nothing more."""
     text = payload.decode("utf-8", "replace").strip()
     if point.fn == modbus.READ_COILS:
-        if text.startswith("["):
-            import json
-            items = json.loads(text)
-            if not isinstance(items, list) or not items:
-                raise ValueError("expected a JSON list of coil states")
-            return [_coil(str(v)) for v in items]
         return _coil(text)
-    try:
-        return float(text) if any(c in text for c in ".eE") else int(text, 0)
-    except ValueError:
-        raise ValueError(f"not a number: {text!r}") from None
+    if len(text) > _NUMBER_MAX_LEN or not _NUMBER.fullmatch(text):
+        raise ValueError(f"not a number: {shown(text)}")
+    if "x" in text or "X" in text:
+        return int(text, 16)
+    return float(text) if any(c in text for c in ".eE") else int(text)
 
 
 def _coil(text: str) -> bool:
-    t = text.strip().lower()
+    t = text.lower()
     if t in ("1", "true", "on"):
         return True
     if t in ("0", "false", "off"):
         return False
-    raise ValueError(f"a coil takes 1/0, true/false or on/off, not {text!r}")
+    raise ValueError(f"a coil takes one state: 1/0, true/false or on/off, not {shown(text)}")

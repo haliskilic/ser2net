@@ -3,7 +3,8 @@
 Kept separate from the bridge so the device-resolution and pyserial-config
 mapping live in one place. ``resolve_device`` re-resolves a stable hardware
 identity (VID/PID/serial) to a current device path so COMx / ttyUSB* renumbering
-doesn't break a mapping across reconnects.
+doesn't break a mapping across reconnects. The port class and the stream on top of it
+are serial_compat's (POSIX: reads without select(), one descriptor per port).
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import contextlib
 import sys
 from typing import Any
 
-from ..config import SerialSettings
+from ..config import SerialSettings, url_port
 
 _patched = False
 
@@ -91,18 +92,20 @@ def resolve_device(settings: SerialSettings) -> str:
     return settings.port
 
 
-async def open_serial(settings: SerialSettings):
-    """Open the serial port asynchronously.
+def refuse_url(device: str) -> None:
+    """Raise ValueError for a port written as a URL (socket://, rfc2217://, spy://, loop://
+    ...): pyserial would hand it to a URL handler, which opens a network connection or a
+    file instead of a serial device. Edits refuse such ports (MappingConfig.validate_input);
+    this keeps a stored one (hand-edited, restored, older config) from ever being opened."""
+    if url_port(device):
+        raise ValueError(f"serial port {device!r} is a URL, not a serial device; "
+                         "URL ports are not opened")
 
-    Returns (reader, writer, serial_instance, device_path). Raises
-    serial.SerialException / OSError if the device can't be opened.
-    """
-    import serial_asyncio_fast
 
-    _patch_serial_asyncio_fast()
-    device = resolve_device(settings)
-    kwargs: dict[str, Any] = dict(
-        url=device,
+def port_settings(settings: SerialSettings) -> dict[str, Any]:
+    """The pyserial settings a mapping's port is opened with: baud rate, data bits, parity,
+    stop bits and flow control (in the order pyserial applies them)."""
+    return dict(
         baudrate=settings.baudrate,
         bytesize=settings.bytesize,
         parity=settings.parity,
@@ -111,14 +114,28 @@ async def open_serial(settings: SerialSettings):
         rtscts=(settings.flowcontrol == "rtscts"),
         dsrdtr=(settings.flowcontrol == "dsrdtr"),
     )
+
+
+async def open_serial(settings: SerialSettings):
+    """Open the serial port asynchronously.
+
+    Returns (reader, writer, serial_instance, device_path). Raises
+    serial.SerialException / OSError if the device can't be opened, ValueError for a
+    URL port (refuse_url).
+    """
+    _patch_serial_asyncio_fast()
+    device = resolve_device(settings)
+    refuse_url(device)  # the one place every serial port is opened
+    kwargs: dict[str, Any] = port_settings(settings)
     # `exclusive` is POSIX-only in pyserial; Windows ports are exclusive anyway.
     if sys.platform != "win32":
         kwargs["exclusive"] = settings.exclusive
 
     import serial.rs485
 
-    reader, writer = await serial_asyncio_fast.open_serial_connection(
-        limit=SERIAL_STREAM_LIMIT, **kwargs)
+    from . import serial_compat
+
+    reader, writer = await serial_compat.open_stream(device, SERIAL_STREAM_LIMIT, **kwargs)
     # upstream reads only 1024 bytes per readiness event (it even has a TODO to
     # raise this); a larger read drains the OS buffer faster and lowers CPU/latency
     # under sustained or full-duplex load.

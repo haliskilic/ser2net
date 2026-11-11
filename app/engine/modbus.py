@@ -88,11 +88,40 @@ def take_tcp_adu(buf: bytearray) -> tuple[int, int, bytes] | None:
 
 def exception_pdu(function: int, code: int) -> bytes:
     """A Modbus exception PDU: function|0x80 followed by the exception code.
-    Code 0x0B = gateway target device failed to respond (RTU timeout)."""
+    Code 0x0B = gateway target device failed to respond (RTU timeout), 0x0A = gateway
+    path unavailable (the serial port is down)."""
     return bytes([(function | 0x80) & 0xFF, code & 0xFF])
 
 
+ILLEGAL_FUNCTION = 0x01       # exception code: the function is not allowed here
+GATEWAY_PATH_UNAVAILABLE = 0x0A  # exception code: no path to the slaves (the port is down)
 GATEWAY_TARGET_FAILED = 0x0B  # exception code for a non-responding RTU slave
+
+# Requests that only read (Modbus Application Protocol v1.1b3): what a read-only gateway
+# still forwards. FC1-4 read bits/registers; 7 read exception status, 11/12 comm event
+# counter/log, 17 report server id, 20 read file record, 24 read FIFO queue.
+_READ_FUNCTIONS = frozenset({1, 2, 3, 4, 7, 11, 12, 17, 20, 24})
+DIAGNOSTICS = 8               # FC8: some sub-functions restart a slave or silence it
+# ... so only the ones that return data: query data echo, diagnostic register, counters
+_READ_DIAGNOSTICS = frozenset({0x00, 0x02, *range(0x0B, 0x13)})
+ENCAPSULATED_INTERFACE = 43   # FC43: only MEI type 14 (read device identification) reads
+READ_DEVICE_ID = 0x0E
+
+
+def is_read_request(pdu: bytes) -> bool:
+    """True if a request PDU only reads. False for writes (FC5/6/15/16, 21-23), state-changing
+    diagnostics (restart, listen-only, clear counters), other FC43 types, the user-defined
+    and every unknown function code, and an empty PDU: anything not known to be a read."""
+    if not pdu:
+        return False
+    function = pdu[0]
+    if function in _READ_FUNCTIONS:
+        return True
+    if function == DIAGNOSTICS:
+        return len(pdu) >= 3 and int.from_bytes(pdu[1:3], "big") in _READ_DIAGNOSTICS
+    if function == ENCAPSULATED_INTERFACE:
+        return len(pdu) >= 2 and pdu[1] == READ_DEVICE_ID
+    return False
 
 
 # ---------------------------------------------------------------------------

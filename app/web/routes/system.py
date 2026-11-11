@@ -5,7 +5,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, RedirectRespons
 from starlette.routing import Route
 
 from ... import i18n
-from ...engine import portlist
+from ...engine import netguard, portlist
 from .common import Ctx
 
 
@@ -22,15 +22,36 @@ def routes(ctx: Ctx) -> list:
             "ser2net_up 1",
             f"ser2net_mappings_total {len(state.config.mappings)}",
         ]
+        # the process's open files and their limit (POSIX: what serial ports, sockets and
+        # files share; not reported on Windows)
+        fds, fd_limit = netguard.open_fds(), netguard.fd_limit()
+        if fds is not None:
+            lines.append(f"ser2net_open_fds {fds}")
+        if fd_limit is not None:
+            lines.append(f"ser2net_fd_limit {fd_limit}")
+        guard = getattr(state, "admin_guard", None)
+        if guard is not None:
+            lines.append(f"ser2net_admin_connections {len(guard.connections)}")
+        budget = netguard.BUDGET
+        lines.append(f"ser2net_tls_handshakes_in_progress {len(budget.handshakes)}")
+        lines.append(f"ser2net_tls_handshakes_waiting {len(budget.waiting)}")  # for a slot
+        # connections refused right after accept: near the open-file limit or (Windows) the
+        # event loop's socket limit, too many TLS handshakes, the admin UI's own limits
+        for why in netguard.REFUSAL_REASONS:
+            lines.append(f'ser2net_connections_refused_total{{reason="{why}"}} '
+                         f"{budget.refused.get(why, 0)}")
         for m in state.config.mappings:
             st = statuses.get(m.id) or {}
-            lbl = f'mapping="{_metric_label(m.name)}",id="{m.id}"'
+            lbl = f'mapping="{_metric_label(m.name)}",id="{_metric_label(m.id)}"'
             running = 1 if st.get("state") == "running" else 0
             lines += [
                 f"ser2net_mapping_running{{{lbl}}} {running}",
                 f"ser2net_mapping_clients{{{lbl}}} {st.get('client_count', 0)}",
+                # bytes read from / written to the serial device, counted once at the device;
+                # dropped: sent for the device but not written (see RunnerStatus)
                 f"ser2net_mapping_bytes_in_total{{{lbl}}} {st.get('bytes_in', 0)}",
                 f"ser2net_mapping_bytes_out_total{{{lbl}}} {st.get('bytes_out', 0)}",
+                f"ser2net_mapping_bytes_dropped_total{{{lbl}}} {st.get('bytes_dropped', 0)}",
                 f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
                 f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
             ]
@@ -77,6 +98,6 @@ def routes(ctx: Ctx) -> list:
 
 
 def _metric_label(name: str) -> str:
-    """Escape a mapping name for a Prometheus label value."""
+    """Escape a mapping name (or id) for a Prometheus label value."""
     return name.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
 

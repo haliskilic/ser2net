@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import hashlib
 import ipaddress
 import json
 import math
@@ -55,6 +56,49 @@ class ConfigError(ValueError):
 
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+# A mapping id names the mapping's own files (logs/<id>.log, traces/<id>-<name>) and is
+# part of URLs, so it is 1-64 ASCII letters, digits or "_": never a path separator, ".",
+# ":" or NUL, and no "-" either (a mapping's traces are found by their "<id>-" prefix,
+# so an id "a" must not also match the traces of a mapping "a-b"). Generated ids
+# (_new_id) are 12 hex digits.
+_MAPPING_ID = re.compile(r"[A-Za-z0-9_]{1,64}")
+# device names Windows reserves, with any extension too (logs/NUL.log is the NUL device)
+_WINDOWS_DEVICE_NAME = re.compile(r"(?i:con|prn|aux|nul|com[0-9]|lpt[0-9])")
+
+
+def valid_mapping_id(value: Any) -> bool:
+    """True for a mapping id that is safe as a file name and in a URL (see _MAPPING_ID)."""
+    return (isinstance(value, str) and _MAPPING_ID.fullmatch(value) is not None
+            and _WINDOWS_DEVICE_NAME.fullmatch(value) is None)
+
+
+def _mapping_id_from(value: Any) -> str:
+    """The id of a mapping read from a config file, an import or a form: the value when it
+    is a valid id, a new one when there is none, else one derived from the value. The
+    derived id is the same on every load, so the mapping keeps its log and traces even
+    when the config is not saved again."""
+    if valid_mapping_id(value):
+        return value
+    if not value:
+        return _new_id()
+    return hashlib.sha256(repr(value).encode("utf-8", "backslashreplace")).hexdigest()[:12]
+
+
+def mapping_file(directory: str, mapping_id: Any, suffix: str = "") -> str:
+    """<directory>/<mapping id><suffix>: a mapping's own file, its log (logs/<id>.log) or a
+    trace (traces/<id>-<name>). Raises ValueError for an invalid mapping id, or when the
+    result would not be a file directly in `directory`, so no id or name can point
+    anywhere else."""
+    if not valid_mapping_id(mapping_id):
+        raise ValueError(f"not a valid mapping id: {mapping_id!r}")
+    name = f"{mapping_id}{suffix}"
+    path = os.path.join(directory, name)
+    if (os.path.basename(name) != name
+            or os.path.dirname(os.path.abspath(path)) != os.path.abspath(directory)):
+        raise ValueError(f"not a file in {directory}: {name!r}")
+    return path
 
 
 def lock_down_dir(directory: str) -> None:
@@ -217,6 +261,14 @@ class SerialSettings:
         return f"{self.baudrate}{self.parity}{self.bytesize}{int(self.stopbits)}"
 
 
+def url_port(port: Any) -> bool:
+    """True for a serial port value that pyserial would open with a URL handler instead
+    of as a device: anything with "://" (socket://, rfc2217://, spy://, loop://, alt://,
+    hwgrep:// ...), which is what pyserial's serial_for_url dispatches on. A mapping only
+    opens serial devices (COM3, \\\\.\\COM10, /dev/ttyUSB0, /dev/serial/by-id/...)."""
+    return isinstance(port, str) and "://" in port
+
+
 # ---------------------------------------------------------------------------
 # Network side
 # ---------------------------------------------------------------------------
@@ -229,9 +281,18 @@ class NetworkSettings:
     protocol: str = "raw"  # raw | telnet | rfc2217
     bind_ip: str = "0.0.0.0"
     port: int = 4001
-    # client/udp connect-out target
+    # client mode: the connect-out target (UDP does not use these: see udp_peer_host)
     remote_host: str = ""
     remote_port: int = 0
+    # UDP: where the device's output goes. Blank (default): to the sender of the last
+    # datagram from an allowed IP, so a new sender takes it over. With a reply address
+    # (an IP and a port) it always goes there, whoever sends.
+    udp_peer_host: str = ""
+    udp_peer_port: int = 0
+    # UDP without a reply address: forget the last sender after this many seconds
+    # without a datagram from it (the output then goes nowhere until someone sends);
+    # 0 = never.
+    udp_peer_timeout_s: int = 0
     max_connections: int = 1
     kick_old_user: bool = False
     allowed_client_ips: list[str] = field(default_factory=list)
@@ -334,6 +395,35 @@ class NetworkSettings:
                     raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(label, repr(cidr))) from None
 
 
+def udp_peer_address(net: NetworkSettings) -> Optional[tuple[str, int]]:
+    """The reply address of a UDP mapping (udp_peer_host, udp_peer_port): where the
+    device's output always goes, or None when none is set (the last sender gets it).
+    Raises ValueError when it is not a host's IP address and a port; edits refuse that
+    (MappingConfig.validate_input), so only a hand-edited config has it."""
+    host = str(net.udp_peer_host or "").strip()
+    if not host:
+        return None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        raise ValueError(f"UDP reply address {host!r} is not an IP address") from None
+    if ip.is_unspecified:
+        raise ValueError(f"UDP reply address {host} is not a host's address")
+    port = net.udp_peer_port
+    if not _is_int(port) or not 1 <= port <= 65535:
+        raise ValueError(f"UDP reply port {port!r} is not between 1 and 65535")
+    return host, port
+
+
+def udp_peer_timeout(net: NetworkSettings) -> float:
+    """A UDP mapping's peer timeout in seconds, 0 = never. A stored value that is not a
+    number of seconds reads as 0, today's behaviour (edits refuse one: validate_input)."""
+    t = net.udp_peer_timeout_s
+    if _is_number(t) and math.isfinite(t) and t > 0:
+        return float(min(t, MAX_TIMER_S))
+    return 0.0
+
+
 # ---------------------------------------------------------------------------
 # Per-mapping options
 # ---------------------------------------------------------------------------
@@ -358,6 +448,10 @@ class MappingOptions:
     # RFC2217 interop knobs for non-compliant peers:
     rfc2217_poll_modem_interval_s: float = 1.0
     rfc2217_net_timeout_s: float = 3.0
+    # RFC2217: once the client has left, put the serial port back to this mapping's baud
+    # rate, data bits, parity, stop bits and flow control (off: what the client set stays
+    # until the port is reopened). RTS/DTR are left alone: toggling them can reset a device.
+    rfc2217_restore_on_disconnect: bool = False
     # Modbus gateway: how long to wait for an RTU slave's reply before returning a
     # Modbus exception (0x0B gateway-target-failed) to the TCP master.
     modbus_response_timeout_s: float = 1.0
@@ -404,6 +498,11 @@ class MqttSettings:
     payload_format: str = "plain"
     sparkplug_group_id: str = "ser2net"
     sparkplug_node_id: str = ""
+    # Plain-format commands: also write a <base_topic>/<point>/set that the broker sends
+    # from its retained store after each (re)connect. Off: a command is written once, when
+    # it is published (Sparkplug NCMD / DCMD are never retained, so a retained one is
+    # always ignored).
+    apply_retained_set: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MqttSettings":
@@ -447,8 +546,9 @@ class ModbusPoint:
     address: int = 0            # 0-based coil / register address
     dtype: str = "uint16"       # uint16 | int16 | uint32 | int32 | float32 (registers), bool (bits)
     scale: float = 1.0          # published value = raw * scale (0 = no scaling, as before)
-    # MQTT may write it: <base_topic>/<name>/set, or a Sparkplug B NCMD (coils: FC5 /
-    # FC15, holding registers: FC6 / FC16). Only coils and holding registers.
+    # MQTT may write it: <base_topic>/<name>/set, or a Sparkplug B DCMD to its unit's
+    # device (a coil: FC5, a holding register: FC6 / FC16 for its own one or two
+    # registers). Only coils and holding registers.
     writable: bool = False
 
     @staticmethod
@@ -521,9 +621,11 @@ class MappingConfig:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingConfig":
+        # every way into the config (file, import, form, REST, cluster) passes here, so an
+        # id that is not a valid mapping id never gets further (see _mapping_id_from)
         d = dict(d or {})
         return MappingConfig(
-            id=d.get("id") or _new_id(),
+            id=_mapping_id_from(d.get("id")),
             name=d.get("name", ""),
             enabled=bool(d.get("enabled", True)),
             kind=d.get("kind", "net"),
@@ -561,6 +663,60 @@ class MappingConfig:
             raise ConfigError(_("Sparkplug B publishes Modbus poll points: add points (and use "
                                 "protocol = modbus), or use the plain MQTT format."))
 
+    def serial_sides(self) -> list[SerialSettings]:
+        """The serial ports this mapping opens: A, and B for a serial-to-serial bridge."""
+        return [self.serial, self.serial_b] if self.kind == "serialbridge" else [self.serial]
+
+    @property
+    def accepts_mqtt_writes(self) -> bool:
+        """MQTT commands can write to the bus: a Modbus gateway with MQTT on, writable
+        points and Read-only off. Who may send them (<base_topic>/<point>/set, or the
+        Sparkplug NCMD / DCMD topics) is up to the broker's access rules."""
+        return (self.kind == "net" and self.network.protocol == "modbus" and self.mqtt.enabled
+                and not self.network.read_only
+                and any(p.writable for p in self.modbus_poll.points))
+
+    def validate_input(self) -> None:
+        """The rules for a mapping that is being created or changed (web form, REST API,
+        import, cluster), checked there in addition to validate(). validate() must not
+        refuse them: a stored config has to keep loading and saving (Docker re-saves it on
+        every start), so a stored value they forbid is refused where it is used instead
+        (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url)."""
+        for side in self.serial_sides():
+            if url_port(side.port):
+                raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "
+                                    "devices only (URLs such as socket:// or spy:// are not "
+                                    "supported).").format(side.port))
+        if self.kind == "net" and self.network.mode == "udp":
+            self._validate_udp_peer()
+
+    def _validate_udp_peer(self) -> None:
+        """A UDP mapping's reply address and peer timeout (an edit's rules: a stored
+        malformed reply address makes the mapping fail to start, see udp_peer_address)."""
+        net = self.network
+        host = str(net.udp_peer_host or "").strip()
+        if host:
+            try:
+                ip = ipaddress.ip_address(host)
+            except ValueError:
+                ip = None
+            if ip is None or ip.is_unspecified:
+                raise ConfigError(_("The UDP reply address must be a host's IP address, not "
+                                    "{0}.").format(repr(host)))
+            if not _is_int(net.udp_peer_port) or not (1 <= net.udp_peer_port <= 65535):
+                raise ConfigError(_("The UDP reply port must be between 1 and 65535."))
+            try:
+                bind_v4 = ipaddress.ip_address(net.bind_ip).version == 4
+            except ValueError:
+                bind_v4 = False  # validate() reports a bad bind IP
+            if ip.version == 6 and bind_v4:
+                raise ConfigError(_("The UDP reply address {0} is IPv6, but the mapping listens "
+                                    "on an IPv4 address ({1}).").format(host, net.bind_ip))
+        timeout = net.udp_peer_timeout_s
+        if not _is_number(timeout) or not (0 <= timeout <= MAX_TIMER_S):
+            raise ConfigError(_("{0} must be between 0 (off) and {1} seconds.").format(
+                _("Peer timeout"), MAX_TIMER_S))
+
 
 # ---------------------------------------------------------------------------
 # Global application config
@@ -578,10 +734,42 @@ class AdminUI:
     anonymous_role: str = "viewer"
     # web UI language when a visitor hasn't picked one: auto (the browser's), en, tr
     language: str = "auto"
+    # Connections to the UI's listener: at most this many open at once in all, and from
+    # one source address (0 = no limit; config.json only). A connection must send a
+    # complete request head within request_timeout_s of connecting, and of the end of the
+    # previous response (0 = no limit), then its body, which gets that time plus a second
+    # per KiB of it that comes in; a client that takes nothing of a response for
+    # request_timeout_s is dropped too. A WebSocket (the console) is not timed.
+    max_connections: int = 256
+    max_connections_per_ip: int = 64
+    request_timeout_s: int = 10
 
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
+
+
+# admin_ui connection limits: (default, lowest value other than 0, highest)
+_ADMIN_LIMITS = {"max_connections": (256, 16, 65535),
+                 "max_connections_per_ip": (64, 8, 65535),
+                 "request_timeout_s": (10, 1, 3600)}
+
+
+def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
+    """Put an admin_ui connection limit that is not a usable whole number back to its
+    default (0, no limit, stays 0; a value below the lowest goes up to it), with a load
+    note: a hand-edited config.json must not keep the UI from starting, nor make it unusable."""
+    for name, (default, low, high) in _ADMIN_LIMITS.items():
+        value = getattr(admin, name)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= high:
+            fixed = default
+        elif 0 < value < low:
+            fixed = low
+        else:
+            continue
+        setattr(admin, name, fixed)
+        notes.append(f"admin_ui.{name} {value!r} is not usable (0 = no limit, else "
+                     f"{low}-{high}); using {fixed}")
 
 
 UI_LANGUAGES = ("auto", "en", "tr")
@@ -877,13 +1065,26 @@ class AppConfig:
             defaults=d.get("defaults", {}) or {},
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
+        _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         for raw, m in zip(d.get("mappings", []), cfg.mappings, strict=False):
+            old_id = (raw or {}).get("id")
+            if old_id and old_id != m.id:
+                cfg.load_notes.append(
+                    f"mapping '{m.name}': its id {old_id!r} is not a valid mapping id (1-64 "
+                    f"letters, digits or '_'), so it is now {m.id}: the REST API and /metrics "
+                    "use the new id, and its log and traces start afresh under it")
             old = str(((raw or {}).get("options") or {}).get("trace_both") or "").strip()
             if old and old != m.options.trace_both:
                 cfg.load_notes.append(
                     f"mapping '{m.name}': its trace file is now traces/{m.id}-{m.options.trace_both} "
                     f"in the data directory (configured: {old!r}; traces are no longer written "
                     "outside it)")
+            for side in m.serial_sides():
+                if url_port(side.port):
+                    cfg.load_notes.append(
+                        f"mapping '{m.name}': its serial port {side.port!r} is a URL, not a "
+                        "device; URL ports are no longer opened, so the mapping does not start "
+                        "until a serial device is set")
         return cfg
 
     def to_dict(self) -> dict[str, Any]:

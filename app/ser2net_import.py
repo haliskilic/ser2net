@@ -26,7 +26,9 @@ import socket
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .config import MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, trace_file_name
+from .config import (
+    MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, trace_file_name, url_port,
+)
 from .i18n import _
 
 
@@ -669,7 +671,10 @@ def _connector(c: _Conn, spec: str, defaults: list[str]) -> bool:
             if not tokens:
                 c.skip(_("the connector names no device"))
                 return False
-            c.device = _windows_device(tokens[0])
+            device = _windows_device(tokens[0])
+            if url_port(device):  # a pyserial URL, not a device: never opened here
+                break
+            c.device = device
             if low == "dev":
                 c.note(_("'dev' (a device without serial settings) is imported as a serial "
                          "port; it may not open if it is not a tty"))
@@ -1213,6 +1218,8 @@ class _V3:
             c.label = _("{0} (line {1})").format(c.name, n)
             if not device:
                 c.skip(_("no device"))
+            elif url_port(device):  # e.g. a DEVICE alias; a pyserial URL is never opened here
+                c.skip(_("device {0} is a URL, not a local serial port").format(device))
             elif device.startswith("sol.") or " " in device:
                 c.skip(_("IPMI serial-over-LAN connections are not imported"))
             else:

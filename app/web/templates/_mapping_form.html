@@ -69,7 +69,7 @@
   <input type="hidden" name="host" value="{{ remote.host }}">
   <input type="hidden" name="port" value="{{ remote.port }}">
   {% endif %}
-  {% if not is_new %}<input type="hidden" name="id" value="{{ mapping.id }}">{% endif %}
+  {% if not is_new %}<input type="hidden" name="id" value="{{ remote.id if remote else mapping.id }}">{% endif %}
 
   <div class="form-head">
     <h3>{{ _("New mapping") if is_new else _("Edit mapping") }}{% if remote %} <span class="tag">{{ _("on %(host)s", host=remote.host ~ ':' ~ remote.port) }}</span>{% endif %}</h3>
@@ -138,17 +138,31 @@
       <div class="grid3">
         <label>{{ _("Max connections") }} <input type="number" name="network_max_connections" min="1" value="{{ mapping.network.max_connections }}"></label>
         <label class="chk chk-pad"><input type="checkbox" name="network_kick_old_user" {% if mapping.network.kick_old_user %}checked{% endif %}> {{ _("Kick old client") }}</label>
-        <label>{{ _("Client buffer (chunks)") }} <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
+        <label data-show-when="network_protocol=raw,telnet,rfc2217">{{ _("Client buffer (chunks)") }} <input type="number" name="network_client_queue_max" min="16" value="{{ mapping.network.client_queue_max }}"></label>
       </div>
       <label>{{ _("High-priority client IPs / CIDRs") }} <span class="muted">({{ _("kick an existing client when full") }})</span>
         <input type="text" name="network_priority_client_ips" value="{{ mapping.network.priority_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.10') }}">
       </label>
+      {% if mapping.network.kick_old_user and not mapping.network.allowed_client_ips %}
+      <p class="sub mb-sm" data-kick-hint>{{ _("“Kick old client” is on and no allowed client IPs are set: any host that can reach this port can take the connection over from the client using it.") }}</p>
+      {% endif %}
     </div>
 
     <div data-show-when="network_mode=server,udp">
       <label>{{ _("Allowed client IPs / CIDRs") }} <span class="muted">({{ _("blank = any; enforced for TCP server and UDP") }})</span>
         <input type="text" name="network_allowed_client_ips" value="{{ mapping.network.allowed_client_ips | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.0/24') }}">
       </label>
+    </div>
+
+    <div data-show-when="network_mode=udp">
+      <div class="grid3">
+        <label>{{ _("Reply to IP") }} <span class="muted">({{ _("blank = the last sender") }})</span>
+          <input type="text" name="network_udp_peer_host" value="{{ mapping.network.udp_peer_host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.20') }}"></label>
+        <label>{{ _("Reply to port") }} <input type="number" name="network_udp_peer_port" min="1" max="65535" value="{{ mapping.network.udp_peer_port or '' }}"></label>
+        <label>{{ _("Peer timeout (s)") }} <span class="muted">({{ _("forget the last sender after this long without a datagram · 0 = never") }})</span>
+          <input type="number" name="network_udp_peer_timeout_s" min="0" value="{{ mapping.network.udp_peer_timeout_s }}"></label>
+      </div>
+      <p class="sub mb-sm">{{ _("The device’s output goes to the sender of the last datagram from an allowed IP, so any of them can take it over; with a reply address it always goes there. The allow-list checks a datagram’s source address, which can be forged: on an untrusted network use TCP with TLS, or a firewall.") }}</p>
     </div>
 
     <div data-show-when="network_mode=server,client">
@@ -171,13 +185,17 @@
 
   <fieldset>
     <legend>{{ _("Options") }}</legend>
-    <div class="grid2">
+    <div class="grid2" data-show-when="network_protocol=raw,telnet,rfc2217">
       <label>{{ _("Connect banner") }} <span class="muted">(\d {{ _("device") }}, \I IP, \N {{ _("name") }}, \p {{ _("port") }})</span>
         <input type="text" name="opt_banner" value="{{ mapping.options.banner }}" placeholder="{{ _('optional') }}">
       </label>
       <label>{{ _("Close-on string") }} <span class="muted">({{ _("disconnect clients when the device sends this") }})</span>
         <input type="text" name="opt_closeon" value="{{ mapping.options.closeon }}" placeholder="{{ _('optional') }}">
       </label>
+    </div>
+    <div data-show-when="network_protocol=rfc2217">
+      <input type="hidden" name="opt_rfc2217_restore_on_disconnect_shown" value="1">
+      <label class="chk"><input type="checkbox" name="opt_rfc2217_restore_on_disconnect" {% if mapping.options.rfc2217_restore_on_disconnect %}checked{% endif %}> {{ _("Restore the serial settings when the RFC 2217 client leaves") }} <span class="muted">({{ _("baud rate, data bits, parity, stop bits and flow control go back to this mapping’s; RTS/DTR stay as they are") }})</span></label>
     </div>
     <div class="grid2">
       <label>{{ _("Idle timeout (s)") }} <span class="muted">({{ _("TCP; no traffic either way · 0 = off") }})</span>
@@ -200,7 +218,7 @@
   </fieldset>
 
   <fieldset data-show-when="kind=net">
-    <legend>{{ _("MQTT publishing") }} <span class="muted">({{ _("serial lines → broker; needs paho-mqtt") }})</span></legend>
+    <legend>{{ _("MQTT publishing") }} <span class="muted" data-show-when="network_protocol=raw,telnet,rfc2217">({{ _("serial lines → broker; needs paho-mqtt") }})</span><span class="muted" data-show-when="network_protocol=modbus">({{ _("Modbus points → broker, commands → writable points; needs paho-mqtt") }})</span></legend>
     <label class="chk"><input type="checkbox" name="mqtt_enabled" {% if mapping.mqtt.enabled %}checked{% endif %}> {{ _("Publish serial lines to MQTT") }}</label>
     <div class="grid3">
       <label>{{ _("Broker host") }} <input type="text" name="mqtt_host" value="{{ mapping.mqtt.host }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.5') }}"></label>
@@ -237,6 +255,12 @@
       <textarea name="modbus_points" rows="5" spellcheck="false"
                 placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}, {"name":"setpoint","unit":1,"fn":3,"address":10,"dtype":"int16","writable":true}]'>{{ modbus_points_json }}</textarea>
     </label>
+    <p class="sub mb-sm">{{ _('Who may write is up to the broker: let only trusted clients publish to <span class="mono">&lt;topic&gt;/+/set</span> (Sparkplug: the node’s NCMD and DCMD topics), and use TLS and a username. Read-only refuses every write.') }}</p>
+    {% if mapping.accepts_mqtt_writes and not (mapping.mqtt.tls and mapping.mqtt.username) %}<div class="banner warn">{{ _('Writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them. Restrict those topics with the broker’s ACLs, and use TLS and credentials.') }}</div>{% endif %}
+    <div data-show-when="mqtt_payload_format=plain">
+      <input type="hidden" name="mqtt_apply_retained_set_shown" value="1">
+      <label class="chk"><input type="checkbox" name="mqtt_apply_retained_set" {% if mapping.mqtt.apply_retained_set %}checked{% endif %}> {{ _("Re-apply a retained /set after every connect") }} <span class="muted">({{ _("off: a command is written when it is published; the retained copy the broker sends again after a reconnect, restart or save is ignored") }})</span></label>
+    </div>
   </fieldset>
 
   <button class="btn primary" type="submit">{{ _("Create mapping") if is_new else _("Save changes") }}</button>
