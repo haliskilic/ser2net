@@ -21,8 +21,16 @@ service run their code as SYSTEM.
 
 When you run `--install-service` from the standalone exe, it **copies itself into
 `C:\Program Files\ser2net\` for you** and registers the service from there, so you can
-run the downloaded exe from anywhere. The data directory defaults to
+run the downloaded exe from anywhere. A new service keeps its data in
 `C:\ProgramData\ser2net\` unless you pass `--data-dir`.
+
+Both folders end up owned by *Administrators*, with only SYSTEM and Administrators able to
+change them (Users may read and run the program) — not even your own account outside an
+elevated prompt, since a program you run unelevated must not be able to change what the
+service runs as SYSTEM. So run ser2net against the service's data directory only from an
+elevated prompt, with the service stopped. A new service won't take over a data folder
+that holds files owned by another account (a standard user can create folders in
+`C:\ProgramData`): check and delete it, or take it over, and install again.
 
 ## Install
 
@@ -53,15 +61,34 @@ ser2net-windows-x64.exe --install-service
 ```
 
 It stops the service, replaces the copy in `C:\Program Files\ser2net\`, and starts it
-again — **in place**, keeping the service name and data directory. (Doing it by hand
-works too: `sc stop ser2net`, replace the exe, `sc start ser2net`.)
+again — **in place**, keeping the service name and the data directory the service uses
+(read from its registration, so leave out `--data-dir`). If the new version doesn't start,
+the previous one is put back and started again. This also upgrades a service installed by
+ser2net 2.8.0 that still runs from a folder like `C:\ser2net\`: from then on it runs from
+`C:\Program Files\ser2net\` and keeps its data where it was (`C:\ser2net\data`).
+
+When other accounts can rename a folder above that data directory (as with a folder made at
+the root of `C:\`), the upgrade warns: they could swap it for one of their own. Move it to
+`C:\ProgramData\ser2net`: `sc stop ser2net`, copy the folder there, then
+`--install-service --data-dir C:\ProgramData\ser2net`; keep the old folder until the
+service works. (`--data-dir` pointing to a folder without a `config.json` while the
+current one has one is refused, so an upgrade can't start over empty.)
 
 ### Installing from a source checkout
 
-A source checkout can't copy itself to an admin-only folder. Put the checkout under
-`C:\Program Files\` (or another admin-only folder), or, if you trust the location, add
-`--allow-unsafe-location`. The service logs a warning at start-up while it runs from a
-place a non-administrator can modify.
+A source checkout can't copy itself to an admin-only folder, so `--install-service`
+refuses while an account other than SYSTEM and Administrators can change the interpreter,
+the checkout, `app\` or `lib\` — your own account included when it owns the folder. Put
+the checkout and Python under `C:\Program Files\` (or another admin-only folder) owned by
+Administrators; for a folder you already have, from an elevated prompt:
+
+```bat
+icacls "C:\Program Files\ser2net-src" /setowner *S-1-5-32-544 /t /c
+icacls "C:\Program Files\ser2net-src" /reset /t /c
+```
+
+If you trust the location as it is, add `--allow-unsafe-location`; the service then logs a
+warning at every start.
 
 ## Windows Firewall
 
@@ -90,21 +117,22 @@ LAN; the mapping ports still need the rule to be reachable from other hosts.
 
 ## Changing the admin UI address
 
-Stop the service first (the data directory allows only one running instance), then run
-the picker, which saves and starts a foreground server; stop it with Ctrl-C and start the
-service again:
+From an elevated prompt (same `--service-name` if you gave one):
 
 ```bat
-sc stop ser2net
-ser2net-windows-x64.exe --reconfigure --data-dir C:\ProgramData\ser2net
-sc start ser2net
+ser2net-windows-x64.exe --install-service --reconfigure
 ```
+
+It stops the service, asks for the address on the console, saves it and starts the
+service again with it. (Running `--reconfigure` on its own while the service runs is
+refused: the data directory allows only one running instance.)
 
 ## One instance per data directory
 
 ser2net locks its data directory (`ser2net.lock`) while it runs, so a second instance on
 the **same** data directory refuses to start rather than two processes overwriting each
-other's `config.json`. That is why `--reconfigure` must be run after `sc stop`. To run a
+other's `config.json` — a plain `--reconfigure` while the service runs, too.
+`--install-service` only checks the lock, after stopping the service it upgrades. To run a
 genuinely separate instance, give it its own `--data-dir` (and `--service-name`).
 
 ## Unsigned builds and SmartScreen

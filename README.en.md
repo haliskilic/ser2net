@@ -584,12 +584,14 @@ is no account at all; later starts ignore it.
   ```
   The exe copies itself to `C:\Program Files\ser2net\` (admin-only, so a standard user
   can't replace the file the service runs as SYSTEM) and keeps its data in
-  `C:\ProgramData\ser2net\`. The service starts at boot, needs no signed-in user
+  `C:\ProgramData\ser2net\` (both writable by SYSTEM and Administrators only). The
+  service starts at boot, needs no signed-in user
   (LocalSystem) and restarts 5 s after it crashes or exits with an error; the console asks
   once for the UI address. Remove it with `--uninstall-service` (the data folder is kept);
   run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
   `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
-  newer exe upgrades it in place. **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
+  newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
+  service too). **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
   firewall rule you need to reach it from other hosts, changing the address, upgrading and
   the SmartScreen warning on unsigned builds.
 - **Many mappings:** a running mapping keeps about three files open (its serial port, its
