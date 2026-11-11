@@ -207,24 +207,41 @@ def _healthz(port: int) -> bool:
         return False
 
 
+def _wait_for(cond, timeout: float) -> bool:
+    end = time.monotonic() + timeout
+    while not cond():
+        if time.monotonic() > end:
+            return False
+        time.sleep(0.2)
+    return True
+
+
 def test_windows_600_idle_sockets():
-    # the admin UI's own limits off: the event loop's socket limit is what is left
+    # the admin UI's own limits off: the event loop's socket limit is what is left. The
+    # admitted sockets must all still be open when the loop gets near its limit, however
+    # slowly a busy runner connects and accepts them, so the request timeout is far longer
+    # than that takes; they are closed here once the refusal is seen.
+    marker = "the event loop watches"
     with Server(_config(max_connections=0, max_connections_per_ip=0,
-                        request_timeout_s=4)) as srv:
+                        request_timeout_s=300)) as srv:
         time.sleep(0.5)
-        held = []
-        for _ in range(600):
+        held, failed = [], 0
+        end = time.monotonic() + 120
+        while len(held) < 600 and time.monotonic() < end:
             try:
-                held.append(socket.create_connection(("127.0.0.1", srv.port), timeout=5))
-            except OSError:
-                break
-        time.sleep(1)
+                held.append(socket.create_connection(("127.0.0.1", srv.port), timeout=30))
+            except OSError:  # the listen queue is full: let the server accept what is in it
+                failed += 1
+                time.sleep(0.2)
+        # the server accepts the queued ones at its own pace: wait for its refusal line
+        _wait_for(lambda: marker in srv.output() or srv.proc.poll() is not None, 60)
         assert srv.proc.poll() is None, "the server stopped:\n" + srv.output()[-2000:]
-        assert "the event loop watches" in srv.output(), srv.output()[-2000:]
-        time.sleep(5)  # the admitted idle ones reach request_timeout_s
+        assert marker in srv.output(), (f"{len(held)} sockets open ({failed} connects failed)\n"
+                                        + srv.output()[-2000:])
         for s in held:
             s.close()
-        assert _healthz(srv.port), "the UI must answer again:\n" + srv.output()[-2000:]
+        assert _wait_for(lambda: _healthz(srv.port), 60), \
+            "the UI must answer again:\n" + srv.output()[-2000:]
         assert "event loop: selector" in srv.output()
     print(f"Windows: {len(held)} idle sockets; the event loop refuses near 512 and keeps "
           "running, the UI answers again  OK")
