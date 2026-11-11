@@ -33,13 +33,24 @@ reads empty and also refuses the input-queue ioctl, unless the bytes were taken 
 meantime by a purge or another reader: the read is then just empty, as pyserial's would
 be), and sets a rate without a termios constant the way pyserial's master branch does
 (70d18864): 38400 through tcsetattr, then the real rate with the TCSETS2 ioctl.
-Windows keeps pyserial's own class (overlapped I/O, polled by the transport).
+
+Windows: pyserial issues every non-blocking write on the port's one OVERLAPPED structure
+while earlier ones are still pending, reports it written at once and keeps nothing alive
+for the driver (pyserial #671). Nothing on Windows then waited for the device: a fast
+sender filled the driver's queue without limit, drain() never waited, and a stop waited
+for all of it. ``WindowsSerial`` gives each write its own OVERLAPPED and event and keeps
+its data until it has completed, with at most WRITE_WINDOW bytes in flight per port: past
+that a write raises BlockingIOError, the transport keeps the data, and drain() waits for
+the device as on POSIX. SER2NET_WINDOWS_SERIAL=pyserial keeps pyserial's own class.
 
 ``Transport`` is pyserial-asyncio-fast's SerialTransport with:
   - _write_ready() that stops watching for writability once its buffer is empty
     (upstream never does: the next writable event hit an assert on the empty buffer,
     every time the loop ran; pyserial-asyncio-fast PR #36, not merged);
-  - reads of up to READ_SIZE bytes instead of 1024 (upstream has a TODO about it).
+  - reads of up to READ_SIZE bytes instead of 1024 (upstream has a TODO about it);
+  - on Windows, where the transport polls the port on a timer (pyserial-asyncio PR #8),
+    a write poll that keeps writing what the transport holds while it closes (upstream
+    stopped, so a graceful close with data left never completed).
 
 How ser2net carries fixes for upstream code: each override names the upstream issue or
 commit it mirrors and is removed once a release has the fix; tests/test_serial_compat.py
@@ -55,13 +66,20 @@ URL handling (URL ports are never opened: serial_io.refuse_url).
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
+import ctypes
+import errno
 import functools
 import os
+import sys
+import threading
+import time
 from typing import Any
 
 import serial
 import serial_asyncio_fast as _saf
+from serial import serialutil
 
 _PIPES = ("pipe_abort_read_r", "pipe_abort_read_w", "pipe_abort_write_r", "pipe_abort_write_w")
 # what pyserial's own read() says when a port reads empty although it was ready
@@ -71,13 +89,16 @@ _DISCONNECTED = ("device reports readiness to read but returned no data "
 # the versions the overrides here were written for and checked against (unverified_note)
 VERIFIED = (("pyserial", serial, "3.5"), ("pyserial-asyncio-fast", _saf, "0.16"))
 
-READ_SIZE = 65536  # bytes the transport reads per readiness event (upstream: 1024)
+READ_SIZE = 65536    # bytes the transport reads per readiness event (upstream: 1024)
+WRITE_WINDOW = 8192  # Windows: bytes of a port's writes in flight at most
+CANCEL_WAIT_S = 1.0  # Windows: how long a close waits for cancelled writes to end
+WINDOWS_SERIAL_ENV = "SER2NET_WINDOWS_SERIAL"
 
 
 if os.name == "posix":
     import termios
 
-    from serial import serialposix, serialutil
+    from serial import serialposix
 
     class PosixSerial(serialposix.Serial):
         """pyserial's POSIX port without select() and without the abort pipes, for a
@@ -191,9 +212,169 @@ if os.name == "posix":
                 and rate not in getattr(port, "BAUDRATE_CONSTANTS", {}))
 
 
+def _win_error(code: int) -> OSError:
+    make = getattr(ctypes, "WinError", None)  # Windows only
+    return make(code) if make is not None else OSError(code, f"Windows error {code}")
+
+
+# Windows writes that a close could not see end (a driver that ignored the cancel): the
+# driver may still use their OVERLAPPED and data, so they are never freed
+_ABANDONED: list = []
+
+
+class OverlappedWrites:
+    """A Windows port's writes in flight, each with its own OVERLAPPED structure and event,
+    and its data kept until the write has completed; at most ``window`` bytes at a time.
+    ``win32`` is pyserial's serial.win32 (a test passes a stand-in), ``handle`` the port's,
+    opened for overlapped I/O. The writes complete in the order they were issued; one the
+    port's purge aborted (an RFC 2217 purge, a reset_output_buffer()) counts as done. A
+    write that failed after it was started is raised as SerialException by the next one."""
+
+    def __init__(self, win32: Any, handle: Any, window: int = WRITE_WINDOW) -> None:
+        self._w32 = win32
+        self._handle = handle
+        self.window = window
+        self._pending: collections.deque = collections.deque()  # (OVERLAPPED, data)
+        self._bytes = 0
+        self._error: Exception | None = None
+        self._lock = threading.Lock()  # the close and a flush run in an executor thread
+
+    def pending(self) -> int:
+        """Bytes written to the port whose write has not completed yet."""
+        with self._lock:
+            self._reap()
+            return self._bytes
+
+    def write(self, data: bytes) -> int:
+        """Start writing as much of ``data`` as the window has room for; how much that
+        was. BlockingIOError: no room (or the driver can't take a write right now)."""
+        w = self._w32
+        with self._lock:
+            self._reap()
+            if self._error is not None:
+                e, self._error = self._error, None
+                raise e
+            room = self.window - self._bytes
+            if room <= 0:
+                raise BlockingIOError(errno.EAGAIN, "the port's writes in flight are at "
+                                                    "their limit")
+            chunk = data if len(data) <= room else data[:room]
+            ov = w.OVERLAPPED()
+            ov.hEvent = w.CreateEvent(None, 1, 0, None)  # manual reset: stays set when done
+            if not ov.hEvent:
+                error = _win_error(w.GetLastError())
+                raise serial.SerialException(f"CreateEvent failed ({error!r})")
+            done = w.DWORD()
+            ok = w.WriteFile(self._handle, chunk, len(chunk), ctypes.byref(done),
+                             ctypes.byref(ov))
+            code = w.ERROR_SUCCESS if ok else w.GetLastError()
+            if code in (w.ERROR_SUCCESS, w.ERROR_IO_PENDING):
+                self._pending.append((ov, chunk))  # both alive until it has completed
+                self._bytes += len(chunk)
+                return len(chunk)
+            w.CloseHandle(ov.hEvent)
+            if code in (w.ERROR_INVALID_USER_BUFFER, w.ERROR_NOT_ENOUGH_MEMORY,
+                        w.ERROR_OPERATION_ABORTED):
+                # what pyserial reads as "nothing written now" (no room in the driver, a
+                # purge under way): the transport tries again once the port has room
+                raise BlockingIOError(errno.EAGAIN, f"the port took no data now ({code})")
+            raise serial.SerialException(f"WriteFile failed ({_win_error(code)!r})")
+
+    def _reap(self) -> None:
+        """Forget the writes at the front that have completed (lock held)."""
+        w = self._w32
+        while self._pending:
+            ov, chunk = self._pending[0]
+            done = w.DWORD()
+            if not w.GetOverlappedResult(self._handle, ctypes.byref(ov), ctypes.byref(done),
+                                         False):
+                code = w.GetLastError()
+                if code in (w.ERROR_IO_INCOMPLETE, w.ERROR_IO_PENDING):
+                    return
+                if code != w.ERROR_OPERATION_ABORTED and self._error is None:
+                    self._error = serial.SerialException(f"write failed ({_win_error(code)!r})")
+            self._pending.popleft()
+            self._bytes -= len(chunk)
+            w.CloseHandle(ov.hEvent)
+
+    def cancel(self, wait_s: float = CANCEL_WAIT_S) -> None:
+        """Cancel every write in flight and wait (up to ``wait_s``) until the driver is done
+        with them before they are freed: what a close does before the port's handle goes."""
+        w = self._w32
+        with self._lock:
+            pending = list(self._pending)
+            self._pending.clear()
+            self._bytes = 0
+        for ov, _chunk in pending:
+            w.CancelIoEx(self._handle, ctypes.byref(ov))
+        deadline = time.monotonic() + wait_s
+        for ov, chunk in pending:
+            left = max(0, int((deadline - time.monotonic()) * 1000))
+            if w.WaitForSingleObject(ov.hEvent, left) == 0:  # WAIT_OBJECT_0: it has ended
+                w.CloseHandle(ov.hEvent)
+            else:
+                _ABANDONED.append((ov, chunk))
+
+
+if os.name == "nt":
+    from serial import serialwin32
+    from serial import win32 as _win32
+
+    class WindowsSerial(serialwin32.Serial):
+        """pyserial's Windows port, whose non-blocking writes are tracked (OverlappedWrites)
+        instead of reported done at once on one shared OVERLAPPED; for a non-blocking
+        transport only (a write timeout other than 0 is refused)."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._writes: OverlappedWrites | None = None
+            super().__init__(*args, **kwargs)
+
+        def open(self) -> None:
+            super().open()
+            self._writes = OverlappedWrites(_win32, self._port_handle)
+
+        def write(self, data: Any) -> int:
+            if not self.is_open or self._writes is None:
+                raise serial.PortNotOpenError()
+            if self._write_timeout != 0:
+                raise serial.SerialException("this port writes non-blocking only "
+                                             "(write_timeout=0)")
+            data = serialutil.to_bytes(data)
+            return self._writes.write(data) if data else 0
+
+        @property
+        def out_waiting(self) -> int:
+            """What is still to go out: the driver's queue, or the writes in flight (some
+            drivers report no queue)."""
+            queued = serialwin32.Serial.out_waiting.fget(self)
+            writes = self._writes
+            return max(queued, writes.pending()) if writes is not None else queued
+
+        def flush(self) -> None:
+            """Wait until everything written has gone out (pyserial waits for the driver's
+            queue only)."""
+            while self.is_open and self.out_waiting:
+                time.sleep(0.05)
+
+        def cancel_write(self) -> None:
+            if self._writes is not None:
+                self._writes.cancel()
+            super().cancel_write()
+
+        def _close(self) -> None:
+            writes, self._writes = self._writes, None
+            if writes is not None and self._port_handle is not None:
+                writes.cancel()  # before the handle (and with it the driver's I/O) goes
+            super()._close()
+
+
 def serial_class() -> type:
     """The pyserial class a device is opened with on this OS."""
-    return PosixSerial if os.name == "posix" else serial.Serial
+    if os.name == "posix":
+        return PosixSerial
+    if os.name == "nt" and (os.environ.get(WINDOWS_SERIAL_ENV) or "").strip().lower() != "pyserial":
+        return WindowsSerial
+    return serial.Serial
 
 
 class Transport(_saf.SerialTransport):
@@ -221,11 +402,29 @@ class Transport(_saf.SerialTransport):
         if not self._write_buffer and not self._closing:
             self._remove_writer()
 
+    if sys.platform == "win32":
+        def _poll_write(self) -> None:
+            """Upstream's, but it keeps writing what the transport holds while it closes:
+            upstream stopped once closing, so a graceful close with data left never
+            completed and the port stayed open. A port that fails is closed instead of
+            raising on every poll."""
+            if not self._has_writer:
+                return
+            self._has_writer = self._loop.call_later(self._poll_wait_time, self._poll_write)
+            try:
+                room = self._serial.out_waiting < self._max_out_waiting
+            except serial.SerialException as exc:
+                self._fatal_error(exc, "Fatal write error on serial transport")
+                return
+            if room:
+                self._write_ready()
+
 
 # what Transport builds on in the upstream class (feature detection, not a version gate:
 # stepping aside on a newer release that still has the bugs would bring them back)
 _UPSTREAM_MEMBERS = ("_write_data", "_maybe_resume_protocol", "_maybe_pause_protocol",
-                     "_remove_writer", "_ensure_writer", "_read_ready", "_fatal_error")
+                     "_remove_writer", "_ensure_writer", "_read_ready", "_fatal_error") + (
+    ("_poll_write",) if sys.platform == "win32" else ())
 
 
 def transport_class() -> type:
