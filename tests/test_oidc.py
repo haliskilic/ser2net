@@ -5,7 +5,9 @@ setting matches a whole claim value in any letter case (Turkish İ/I/ı/i as one
 letter), or the last part of a Keycloak path / DOMAIN\\name — never a part of a name.
 An e-mail address the provider says is not verified names nobody (no fall-back to sub).
 Discovery and the authorize URL (with PKCE S256) need no package either; every address
-the provider gives, and every redirect, must be https:// (http:// only to loopback). The
+the provider gives, and every redirect, must be https:// (http:// only to loopback), and
+the provider's certificate is checked against the CA certificates as they are at the
+request (SSL_CERT_FILE set after the import: needs cryptography for the test CA). The
 full token-exchange + id_token validation flow uses a real RS256-signed token and mocked
 discovery/token/JWKS HTTP, so it runs without a provider; it needs authlib and
 cryptography: without them it is skipped with a SKIP line (tests/run_all.py repeats it),
@@ -16,9 +18,11 @@ import hashlib
 import http.server
 import os
 import re
+import shutil
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -207,6 +211,61 @@ def test_https_only():
     print("OIDC: provider addresses and redirects must be https:// (or loopback http://)  OK")
 
 
+def test_ca_certificates_read_per_request():
+    """The provider's certificate is checked against the CA certificates as they are when
+    the request is made, not when the module was imported: the standalone Linux binary
+    points OpenSSL at the system's CA bundle (SSL_CERT_FILE, app/standalone.py) after
+    app.web.oidc_auth is imported. Needs cryptography (the test certificates)."""
+    import ssl
+    import tempfile
+
+    from _pki import TestCA
+
+    d = tempfile.mkdtemp(prefix="s2n_oidc_ca_")
+    ca, other = TestCA(d), TestCA(d, "other test CA")
+    cert, key = ca.issue(d, "idp", ["127.0.0.1"])
+
+    class Discovery(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 (http.server API)
+            body = b'{"issuer": "https://127.0.0.1"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Discovery)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(cert, key)
+    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"https://127.0.0.1:{srv.server_address[1]}/.well-known/openid-configuration"
+    saved = os.environ.get("SSL_CERT_FILE")
+    try:
+        os.environ["SSL_CERT_FILE"] = other.path  # a bundle without the provider's CA
+        try:
+            oidc_auth._get_json(url, timeout=5)
+        except urllib.error.URLError as e:
+            assert "CERTIFICATE_VERIFY_FAILED" in str(e), e
+        else:
+            raise AssertionError("a certificate from a CA not in SSL_CERT_FILE was accepted")
+        os.environ["SSL_CERT_FILE"] = ca.path  # what standalone.prepare() sets, after the import
+        assert oidc_auth._get_json(url, timeout=5) == {"issuer": "https://127.0.0.1"}
+    finally:
+        if saved is None:
+            os.environ.pop("SSL_CERT_FILE", None)
+        else:
+            os.environ["SSL_CERT_FILE"] = saved
+        srv.shutdown()
+        srv.server_close()
+        shutil.rmtree(d, ignore_errors=True)
+    print("OIDC: the provider's certificate is checked against SSL_CERT_FILE as set when "
+          "the request is made (the standalone binary sets it after the import)  OK")
+
+
 def test_complete_flow():
     from authlib.jose import JsonWebKey, jwt
 
@@ -320,6 +379,9 @@ def main():
     test_signed_state_cookie()
     test_discovery_and_authorize_url()
     test_https_only()
+    if need("cryptography", what="OIDC certificate check against an SSL_CERT_FILE set "
+                                 "after the import"):
+        test_ca_certificates_read_per_request()
     if need("authlib", "cryptography", what="OIDC token exchange and id_token checks "
                                             "(oidc_auth.complete)"):
         test_complete_flow()
