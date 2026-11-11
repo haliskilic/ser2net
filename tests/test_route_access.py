@@ -79,12 +79,17 @@ ROUTES = {
     ("POST", "/settings/api-token/revoke"): (ADMIN, FORM),
     ("POST", "/settings/users"): (ADMIN, FORM),
     ("POST", "/settings/users/password"): (ADMIN, FORM),
-    ("POST", "/settings/users/{username}/role"): (ADMIN, FORM),
+    ("POST", "/settings/users/role"): (ADMIN, FORM),  # the user name in a form field
+    ("POST", "/settings/users/delete"): (ADMIN, FORM),
+    ("POST", "/settings/users/signout"): (ADMIN, FORM),
+    ("POST", "/settings/users/expiry"): (ADMIN, FORM),
+    ("POST", "/settings/users/{username}/role"): (ADMIN, FORM),  # the same, by path
     ("POST", "/settings/users/{username}/delete"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/signout"): (ADMIN, FORM),
     ("POST", "/settings/ldap"): (ADMIN, FORM),
     ("POST", "/settings/oidc"): (ADMIN, FORM),
     ("POST", "/settings/cluster"): (ADMIN, FORM),
+    ("POST", "/settings/cluster/identity"): (ADMIN, FORM),
     ("GET", "/settings/config/export"): (OPERATOR, NONE),  # mappings carry the MQTT password
     ("POST", "/settings/config/import"): (OPERATOR, FORM),
     ("POST", "/settings/config/import/apply"): (OPERATOR, FORM),
