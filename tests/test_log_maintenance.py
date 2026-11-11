@@ -1,4 +1,6 @@
-"""Per-mapping log retention: age (>15d) + size (>100MB) auto-trim.
+"""Per-mapping log retention: age (>15d) + size (>100MB) auto-trim; an import that
+replaces the mappings, or a restored backup, closes the log files of the mappings that
+are gone (the files stay until the next start prunes them).
 
 Run: python3 tests/test_log_maintenance.py
 """
@@ -100,8 +102,65 @@ async def _integration():
         shutil.rmtree(d, ignore_errors=True)
 
 
+async def _replaced():
+    import json
+
+    from test_login_throttle import CSRF, call
+
+    from app.web import auth
+    from app.web.server import build_app
+
+    d = tempfile.mkdtemp()
+    try:
+        store = ConfigStore(os.path.join(d, "config.json"))
+        cfg = AppConfig.from_dict({
+            "users": [{"username": "admin", "password_hash": auth.hash_password("logs-pass-1"),
+                       "role": "admin", "pwd_version": 1}],
+            "mappings": [{"name": "First", "enabled": False, "serial": {"port": "/dev/ttyS0"}}]})
+        store.save(cfg, validate=False)
+        state = AppState(store, cfg)
+        app = build_app(state)
+        await state.supervisor.start_all(cfg)
+        first = cfg.mappings[0].id
+        session = auth.issue_session(cfg.secret_key, 3600, "admin", 1)
+        headers = {"Content-Type": "application/x-www-form-urlencoded",
+                   "Cookie": f"ser2net_csrf={CSRF}; ser2net_session={session}"}
+        # a file without ids (like a classic ser2net.yaml): new ids at every import
+        upload = json.dumps({"version": 1, "mappings": [
+            {"name": n, "enabled": False, "serial": {"port": "/dev/ttyS0"},
+             "network": {"port": port}} for n, port in (("A", 7001), ("B", 7002))]})
+        seen = dict(state._mapping_loggers)
+        for _ in range(3):  # the 2.7-style one-step import: replace everything
+            s, _h, page = await call(app, "POST", "/settings/config/import", {"file": upload},
+                                     headers=headers)
+            assert s == 200 and "Imported 2 mappings" in page, page[page.find("banner"):][:300]
+            now = {m.id for m in state.config.mappings}
+            assert set(state._mapping_loggers) == now, (state._mapping_loggers, now)
+            seen.update(state._mapping_loggers)
+        gone = {mid: lg for mid, lg in seen.items() if mid not in now}
+        assert len(gone) == 5 and all(not lg.handlers for lg in gone.values()), gone
+        assert all(os.path.exists(state.mapping_log_path(mid)) for mid in gone), \
+            "the files stay until the next start"
+        # restoring the first backup brings "First" back and closes the imported ones
+        oldest = state.store.backup_names()[-1]
+        s, _h, page = await call(app, "POST", "/settings/backups/restore", {"name": oldest},
+                                 headers=headers)
+        assert s == 200 and [m.id for m in state.config.mappings] == [first], page[-300:]
+        assert set(state._mapping_loggers) == {first}
+        assert all(not seen[mid].handlers for mid in now)
+        await state.supervisor.stop_all()
+        state.prune_mapping_logs()
+        assert sorted(os.listdir(state.logs_dir)) == [f"{first}.log"]
+        print("replace import (x3, new ids each time) and backup restore: the log files of "
+              "the mappings that are gone are closed; removed at the next start  OK")
+    finally:
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_age_trim()
     test_size_cap()
     asyncio.run(_integration())
+    asyncio.run(_replaced())
     print("\nPASS: per-mapping log retention (age + size)")
