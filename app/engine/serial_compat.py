@@ -3,19 +3,24 @@
 pyserial-asyncio-fast's SerialTransport watches a port with the event loop's own file
 descriptor watching (POSIX: add_reader, i.e. epoll / kqueue) and drives it non-blocking
 (timeout=0, write_timeout=0, set when the transport is made). pyserial's POSIX Serial
-does two things such a transport never needs:
+does three things such a transport never needs:
   - read() asks select() first. select() takes no descriptor at or above FD_SETSIZE
     (1024) and raises ValueError, which neither pyserial nor the transport catches: a
     port opened while the process had ~1000 files open read nothing, never noticed an
     unplug, and its reader fired again on every pass of the loop;
   - open() makes two pipes (four descriptors per port) that only cancel_read() /
-    cancel_write() use, to wake a blocking read or write.
+    cancel_write() use, to wake a blocking read or write;
+  - write() tries again while the OS refuses a write for now (EAGAIN), and with
+    write_timeout 0 never stops trying: while a device took no data (CTS low, XOFF, a
+    PTY nobody reads), the event loop spun in it and nothing else ran.
 
-``PosixSerial`` closes those pipes once the port is open and reads with os.read alone:
-the transport only reads after the loop has seen the port readable. An empty read then
-means the device went away (a hung-up tty reads empty and also refuses the input-queue
-ioctl), unless the bytes were taken in the meantime, by a purge or another reader (the
-port still answers the ioctl): the read is then just empty, as pyserial's would be.
+``PosixSerial`` closes those pipes once the port is open, writes with one os.write (an
+EAGAIN is raised as BlockingIOError: the transport keeps the data and waits for the port
+to be writable) and reads with os.read alone: the transport only reads after the loop has
+seen the port readable. An empty read then means the device went away (a hung-up tty
+reads empty and also refuses the input-queue ioctl), unless the bytes were taken in the
+meantime, by a purge or another reader (the port still answers the ioctl): the read is
+then just empty, as pyserial's would be.
 Windows keeps pyserial's own class (overlapped I/O, polled by the transport).
 
 ``open_stream`` opens a device with the class for this OS and builds the StreamReader /
@@ -39,7 +44,7 @@ _DISCONNECTED = ("device reports readiness to read but returned no data "
 
 
 if os.name == "posix":
-    from serial import serialposix
+    from serial import serialposix, serialutil
 
     class PosixSerial(serialposix.Serial):
         """pyserial's POSIX port without select() and without the abort pipes, for a
@@ -89,10 +94,23 @@ if os.name == "posix":
             return b""  # taken in the meantime: the port is still there
 
         def write(self, data: Any) -> int:
+            """One non-blocking write: how much of ``data`` the OS took. pyserial's own
+            write() tries again while the OS refuses a write for now (EAGAIN), and with
+            write_timeout 0 it never stops trying: a device that took no data (CTS low,
+            XOFF, a PTY nobody reads) kept the event loop spinning in it. That raises
+            BlockingIOError here instead, and the transport keeps the data until the port
+            is writable again."""
+            if not self.is_open:
+                raise serial.PortNotOpenError()
             if self._write_timeout != 0:
                 raise serial.SerialException("this port writes non-blocking only "
                                              "(write_timeout=0)")
-            return super().write(data)
+            try:
+                return os.write(self.fd, serialutil.to_bytes(data))
+            except BlockingIOError:
+                raise
+            except OSError as e:
+                raise serial.SerialException(f"write failed: {e}") from e
 
         def cancel_read(self) -> None:
             """Nothing to cancel: a read never waits."""

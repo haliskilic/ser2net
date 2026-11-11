@@ -9,7 +9,8 @@ and keeps one descriptor per port (pyserial's two abort pipes are closed once it
 
 Checked here on PTYs (os.openpty: no socat, no serial hardware): one descriptor per port;
 an empty read is "no data" while the port is there and a disconnect once it is hung up
-(with pyserial's message); blocking use is refused; data both ways and the hang-up at a
+(with pyserial's message); blocking use is refused; a write to a port that takes nothing
+returns at once (pyserial's own spins); data both ways and the hang-up at a
 descriptor above 1024, through serial_io.open_serial and through a raw bridge mapping
 (binds 127.0.0.1); the pyserial / pyserial-asyncio-fast internals this builds on.
 Skipped on Windows (its serial ports are not file descriptors).
@@ -133,6 +134,40 @@ def test_hangup_and_blocking_use():
           "refused  OK")
 
 
+def test_write_to_a_port_that_takes_nothing():
+    """A device that takes no data (here a PTY nobody reads): a write the OS refuses is
+    raised as BlockingIOError at once (the transport keeps the data), it does not spin."""
+    import signal
+
+    from app.engine.serial_compat import PosixSerial
+
+    def stuck(*_args):
+        raise AssertionError("a write to a port that takes nothing did not return")
+
+    pty = Pty()
+    ser = PosixSerial(pty.path, 9600, timeout=0, write_timeout=0)
+    signal.signal(signal.SIGALRM, stuck)
+    signal.alarm(10)
+    try:
+        took = 0
+        for _ in range(1000):  # far more than a PTY holds
+            try:
+                took += ser.write(b"z" * 1000)
+            except BlockingIOError:
+                break
+        else:
+            raise AssertionError("the PTY never filled up")
+        assert took > 0
+        assert pty.recv(took) == b"z" * took, "what a write reported taken must arrive"
+        assert ser.write(b"more") > 0, "once there is room again, writes go through"
+    finally:
+        signal.alarm(0)
+        ser.close()
+        pty.unplug()
+    print("PosixSerial: a write to a port that takes nothing raises BlockingIOError at once "
+          "(no spinning), and goes through once there is room  OK")
+
+
 async def _open_above_fd_setsize():
     pty = Pty()
     errors = []
@@ -231,6 +266,9 @@ def test_upstream_internals():
     assert "self.fd = os.open(" in opened, "pyserial's open() no longer keeps the port in .fd"
     for attr in ("_timeout", "_write_timeout", "is_open"):
         assert hasattr(serial.Serial(), attr), attr
+    write_data = inspect.getsource(saf.SerialTransport._write_data)
+    assert "n = self._serial.write(data)" in write_data, write_data
+    assert "except (BlockingIOError, InterruptedError)" in write_data, write_data
     read_ready = inspect.getsource(saf.SerialTransport._read_ready)
     assert "self._serial.read(self._max_read_size)" in read_ready, read_ready
     assert "except serial.SerialException" in read_ready, read_ready
@@ -250,6 +288,7 @@ if __name__ == "__main__":
     try:
         test_one_descriptor_per_port()
         test_hangup_and_blocking_use()
+        test_write_to_a_port_that_takes_nothing()
         test_stream_above_fd_setsize()
         test_bridge_above_fd_setsize()
     except Skip as e:
