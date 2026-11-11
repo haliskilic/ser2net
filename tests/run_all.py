@@ -93,6 +93,7 @@ PORTABLE = [
     "test_protocol_parsers.py",
     "test_rfc2217_settings.py",
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
+    "test_serial_compat.py",      # PTY parts POSIX only; the transport parts run on Windows too
     "test_fd_limits.py",
     "test_tls_admission.py",
     "test_admin_limits.py",

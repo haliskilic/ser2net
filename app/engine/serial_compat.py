@@ -1,9 +1,14 @@
-"""The serial port class ser2net opens, and the asyncio stream built on it.
+"""The serial port classes ser2net opens, and the asyncio transport and stream built on them.
+
+ser2net opens every port itself, with ``serial_class()``, and builds pyserial-asyncio-fast's
+transport itself (``Transport``), instead of letting serial_for_url pick the class and
+open_serial_connection make the transport: the fixes below therefore apply to ser2net's own
+ports only, not to pyserial process-wide.
 
 pyserial-asyncio-fast's SerialTransport watches a port with the event loop's own file
 descriptor watching (POSIX: add_reader, i.e. epoll / kqueue) and drives it non-blocking
 (timeout=0, write_timeout=0, set when the transport is made). pyserial's POSIX Serial
-does three things such a transport never needs:
+does things such a transport never needs, or gets wrong:
   - read() asks select() first. select() takes no descriptor at or above FD_SETSIZE
     (1024) and raises ValueError, which neither pyserial nor the transport catches: a
     port opened while the process had ~1000 files open read nothing, never noticed an
@@ -12,7 +17,8 @@ does three things such a transport never needs:
     cancel_write() use, to wake a blocking read or write;
   - write() tries again while the OS refuses a write for now (EAGAIN), and with
     write_timeout 0 never stops trying: while a device took no data (CTS low, XOFF, a
-    PTY nobody reads), the event loop spun in it and nothing else ran.
+    PTY nobody reads), the event loop spun in it and nothing else ran (pyserial #280,
+    fix PR #883 not merged).
 
 ``PosixSerial`` closes those pipes once the port is open, writes with one os.write (an
 EAGAIN is raised as BlockingIOError: the transport keeps the data and waits for the port
@@ -22,6 +28,19 @@ reads empty and also refuses the input-queue ioctl), unless the bytes were taken
 meantime, by a purge or another reader (the port still answers the ioctl): the read is
 then just empty, as pyserial's would be.
 Windows keeps pyserial's own class (overlapped I/O, polled by the transport).
+
+``Transport`` is pyserial-asyncio-fast's SerialTransport with:
+  - _write_ready() that stops watching for writability once its buffer is empty
+    (upstream never does: the next writable event hit an assert on the empty buffer,
+    every time the loop ran; pyserial-asyncio-fast PR #36, not merged);
+  - reads of up to READ_SIZE bytes instead of 1024 (upstream has a TODO about it).
+
+How ser2net carries fixes for upstream code: each override names the upstream issue or
+commit it mirrors and is removed once a release has the fix; tests/test_serial_compat.py
+pins the upstream code each one replaces (a release that changes it fails there) and fails
+once upstream fixes _write_ready itself. At run time an override is used whenever the
+upstream members it builds on are there; unverified_note() says so at start when pyserial
+/ pyserial-asyncio-fast are not the versions these were written for.
 
 ``open_stream`` opens a device with the class for this OS and builds the StreamReader /
 StreamWriter pair the way serial_asyncio_fast.open_serial_connection does, without its
@@ -36,11 +55,17 @@ import os
 from typing import Any
 
 import serial
+import serial_asyncio_fast as _saf
 
 _PIPES = ("pipe_abort_read_r", "pipe_abort_read_w", "pipe_abort_write_r", "pipe_abort_write_w")
 # what pyserial's own read() says when a port reads empty although it was ready
 _DISCONNECTED = ("device reports readiness to read but returned no data "
                  "(device disconnected or multiple access on port?)")
+
+# the versions the overrides here were written for and checked against (unverified_note)
+VERIFIED = (("pyserial", serial, "3.5"), ("pyserial-asyncio-fast", _saf, "0.16"))
+
+READ_SIZE = 65536  # bytes the transport reads per readiness event (upstream: 1024)
 
 
 if os.name == "posix":
@@ -97,9 +122,9 @@ if os.name == "posix":
             """One non-blocking write: how much of ``data`` the OS took. pyserial's own
             write() tries again while the OS refuses a write for now (EAGAIN), and with
             write_timeout 0 it never stops trying: a device that took no data (CTS low,
-            XOFF, a PTY nobody reads) kept the event loop spinning in it. That raises
-            BlockingIOError here instead, and the transport keeps the data until the port
-            is writable again."""
+            XOFF, a PTY nobody reads) kept the event loop spinning in it (pyserial #280).
+            That raises BlockingIOError here instead, and the transport keeps the data
+            until the port is writable again."""
             if not self.is_open:
                 raise serial.PortNotOpenError()
             if self._write_timeout != 0:
@@ -124,6 +149,61 @@ def serial_class() -> type:
     return PosixSerial if os.name == "posix" else serial.Serial
 
 
+class Transport(_saf.SerialTransport):
+    """pyserial-asyncio-fast's transport with ser2net's fixes (see the module docstring)."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop, protocol: asyncio.Protocol,
+                 serial_instance: Any) -> None:
+        super().__init__(loop, protocol, serial_instance)
+        self._max_read_size = READ_SIZE
+
+    def _write_ready(self) -> None:
+        """Upstream's, but it stops watching for writability once its buffer is empty
+        (pyserial-asyncio-fast PR #36): upstream never did, and the next writable event
+        hit `assert data` on the empty buffer, every time the loop ran."""
+        if not self._write_buffer:
+            self._remove_writer()
+            return
+        if len(self._write_buffer) == 1:
+            data = self._write_buffer.pop()
+        else:
+            data = b"".join(self._write_buffer)
+            self._write_buffer.clear()
+        self._write_data(data)
+        self._maybe_resume_protocol()  # may append to the buffer
+        if not self._write_buffer and not self._closing:
+            self._remove_writer()
+
+
+# what Transport builds on in the upstream class (feature detection, not a version gate:
+# stepping aside on a newer release that still has the bugs would bring them back)
+_UPSTREAM_MEMBERS = ("_write_data", "_maybe_resume_protocol", "_maybe_pause_protocol",
+                     "_remove_writer", "_ensure_writer", "_read_ready", "_fatal_error")
+
+
+def transport_class() -> type:
+    """``Transport``, or upstream's own SerialTransport when it lacks what Transport builds
+    on (unverified_note says so)."""
+    if all(hasattr(_saf.SerialTransport, m) for m in _UPSTREAM_MEMBERS):
+        return Transport
+    return _saf.SerialTransport
+
+
+def unverified_note() -> str:
+    """A start-up warning when pyserial / pyserial-asyncio-fast are not the versions the
+    overrides here were written for ("" when they are)."""
+    other = [f"{name} {getattr(mod, '__version__', '?')} (checked: {want})"
+             for name, mod, want in VERIFIED if getattr(mod, "__version__", None) != want]
+    if not other:
+        return ""
+    note = (f"WARNING: serial ports: {', '.join(other)} — ser2net's fixes for these "
+            "libraries were not checked against this version")
+    if transport_class() is not Transport:
+        note += ("; pyserial-asyncio-fast lacks what they build on, so its own transport is "
+                 "used (without them)")
+    return note
+
+
 def _open_port(device: str, **kwargs: Any) -> Any:
     """Open ``device`` the way serial.serial_for_url opens a device path (blocking: runs in
     an executor)."""
@@ -142,10 +222,8 @@ def _close_opened(fut: asyncio.Future) -> None:
 async def open_stream(device: str, limit: int,
                       **kwargs: Any) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open ``device`` with ``kwargs`` (pyserial settings) and return its (reader, writer);
-    ``writer.transport.serial`` is the port. Raises serial.SerialException / OSError when
-    it can't be opened."""
-    import serial_asyncio_fast
-
+    ``writer.transport`` is a ``Transport`` and ``writer.transport.serial`` the port.
+    Raises serial.SerialException / OSError when it can't be opened."""
     loop = asyncio.get_running_loop()
     opening = loop.run_in_executor(None, functools.partial(_open_port, device, **kwargs))
     try:
@@ -156,8 +234,7 @@ async def open_stream(device: str, limit: int,
     try:
         reader = asyncio.StreamReader(limit=limit, loop=loop)
         protocol = asyncio.StreamReaderProtocol(reader, loop=loop)
-        transport, _ = await serial_asyncio_fast.connection_for_serial(
-            loop, lambda: protocol, ser)
+        transport = transport_class()(loop, protocol, ser)
     except BaseException:
         ser.close()
         raise
