@@ -253,15 +253,18 @@ def require_admin_tls(admin) -> None:
 
 def hold_data_dir(config_path: str) -> str | None:
     """Take the data directory's single-instance lock (app.datalock) before anything is
-    written there: a second ser2net on the same directory stops here with one line.
+    written there: a second ser2net on the same directory stops here with one line; a
+    --set-password / --sign-out-all that is changing config.json is waited for.
     Returns a warning for the start-up log when the lock can't be taken (the start goes
     on without it)."""
     data_dir = os.path.dirname(os.path.abspath(config_path))
     with contextlib.suppress(OSError):  # if it can't be created, loading config.json says why
         os.makedirs(data_dir, exist_ok=True)
     try:
-        return datalock.acquire(data_dir)
+        return datalock.acquire(data_dir, wait=datalock.BRIEF_WAIT_S)
     except datalock.Held as e:
+        if e.brief:
+            raise SystemExit(f"ser2net: {e} — start again once it is done") from None
         raise SystemExit(f"ser2net: {e} — stop it first (a Windows service: sc stop ser2net; "
                          "systemd: systemctl stop ser2net) or give this one its own "
                          "--data-dir") from None

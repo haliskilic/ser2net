@@ -12,14 +12,23 @@ stays; earlier releases ignore it).
 Where the lock can't be taken — a read-only data directory, a network share without
 lock support — the start goes on without it and the start-up log says so.
 POSIX: flock(); Windows: a byte-range lock (msvcrt.locking).
+
+`ser2net --set-password` / `--sign-out-all` (app/accounts.py) hold the lock too, while
+they change config.json of a stopped ser2net: they mark it as brief ("<pid> brief" in
+the file), and a start that finds it held that way waits for them (BRIEF_WAIT_S)
+instead of refusing.
 """
 from __future__ import annotations
 
 import errno
 import os
 import sys
+import time
 
 LOCK_NAME = "ser2net.lock"
+BRIEF = "brief"        # the lock file's second word: held by a command that exits soon
+BRIEF_WAIT_S = 15.0    # how long a start waits for such a command
+SETTLE_S = 0.5         # ... and for a holder that may not have written its line yet
 # A Windows byte-range lock also keeps other processes from reading that range: lock a
 # byte far past the holder's process id (written at the start of the file), so a start
 # that is refused can still name the holder.
@@ -28,12 +37,18 @@ _held: dict[str, int] = {}  # data directory -> fd that holds its lock
 
 
 class Held(Exception):
-    """Another process holds the data directory's lock."""
+    """Another process holds the data directory's lock (brief: a --set-password /
+    --sign-out-all that is changing config.json)."""
 
-    def __init__(self, data_dir: str, pid: int | None):
-        self.data_dir, self.pid = data_dir, pid
-        who = f"another ser2net (process {pid})" if pid else "another ser2net"
-        super().__init__(f"{who} is already running with the data directory {data_dir}")
+    def __init__(self, data_dir: str, pid: int | None, brief: bool = False):
+        self.data_dir, self.pid, self.brief = data_dir, pid, brief
+        process = f" (process {pid})" if pid else ""
+        if brief:
+            super().__init__(f"ser2net --set-password / --sign-out-all{process} is changing "
+                             f"the data directory {data_dir}")
+        else:
+            super().__init__(f"another ser2net{process} is already running with the data "
+                             f"directory {data_dir}")
 
 
 def _lock(fd: int) -> bool:
@@ -71,13 +86,15 @@ def _unlock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
 
-def _holder_pid(fd: int) -> int | None:
+def _holder(fd: int) -> tuple[int | None, bool]:
+    """(process id, brief) from the holder's line: "<pid>" or "<pid> brief"."""
     try:
         os.lseek(fd, 0, os.SEEK_SET)
-        text = os.read(fd, 32).decode("ascii", "replace").strip()
+        words = os.read(fd, 32).decode("ascii", "replace").split()
     except OSError:
-        return None
-    return int(text) if text.isdigit() else None
+        return None, False
+    pid = int(words[0]) if words and words[0].isdigit() else None
+    return pid, words[1:2] == [BRIEF]
 
 
 def _open(path: str) -> tuple[int, bool]:
@@ -91,35 +108,42 @@ def _open(path: str) -> tuple[int, bool]:
     return os.open(path, os.O_RDONLY), False
 
 
-def acquire(data_dir: str) -> str | None:
+def acquire(data_dir: str, *, brief: bool = False, wait: float = 0.0) -> str | None:
     """Hold data_dir's lock until release() or the end of the process. Raises Held when
-    another process holds it. Returns a warning for the start-up log when it can't be
-    taken here (the start goes on without it), else None."""
+    another process holds it; a brief holder is waited for up to `wait` seconds first
+    (one that has not written its line yet: SETTLE_S of them). brief=True marks this
+    holder as brief. Returns a warning for the start-up log when it can't be taken here
+    (the start goes on without it), else None."""
     data_dir = os.path.abspath(data_dir)
     if data_dir in _held:
         return None
     path = os.path.join(data_dir, LOCK_NAME)
-    try:
-        fd, writable = _open(path)
-    except OSError as e:
-        return (f"WARNING: can't lock the data directory ({path}: {e.strerror or e}) — "
-                "nothing keeps a second ser2net from using it at the same time")
-    try:
-        locked = _lock(fd)
-    except OSError as e:
+    start = time.monotonic()
+    while True:
+        try:
+            fd, writable = _open(path)
+        except OSError as e:
+            return (f"WARNING: can't lock the data directory ({path}: {e.strerror or e}) — "
+                    "nothing keeps a second ser2net from using it at the same time")
+        try:
+            locked = _lock(fd)
+        except OSError as e:
+            os.close(fd)
+            return (f"WARNING: can't lock the data directory ({path}: locking is not "
+                    f"supported there: {e.strerror or e}) — nothing keeps a second ser2net "
+                    "from using it at the same time")
+        if locked:
+            break
+        pid, by_brief = _holder(fd)
         os.close(fd)
-        return (f"WARNING: can't lock the data directory ({path}: locking is not "
-                f"supported there: {e.strerror or e}) — nothing keeps a second ser2net "
-                "from using it at the same time")
-    if not locked:
-        pid = _holder_pid(fd)
-        os.close(fd)
-        raise Held(data_dir, pid)
+        if time.monotonic() - start >= (wait if by_brief else min(wait, SETTLE_S)):
+            raise Held(data_dir, pid, by_brief)
+        time.sleep(0.1)
     if writable:
         try:
             os.ftruncate(fd, 0)
             os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+            os.write(fd, f"{os.getpid()}{' ' + BRIEF if brief else ''}\n".encode("ascii"))
         except OSError:
             pass  # the lock holds; only the name in a refusal is lost
     _held[data_dir] = fd
@@ -130,6 +154,11 @@ def release(data_dir: str) -> None:
     fd = _held.pop(os.path.abspath(data_dir), None)
     if fd is not None:
         os.close(fd)  # closing the file drops the lock
+
+
+def holds(data_dir: str) -> bool:
+    """This process holds data_dir's lock."""
+    return os.path.abspath(data_dir) in _held
 
 
 def holder(data_dir: str) -> int | None:
@@ -145,7 +174,7 @@ def holder(data_dir: str) -> int | None:
         if _lock(fd):
             _unlock(fd)
             return None
-        return _holder_pid(fd) or 0
+        return _holder(fd)[0] or 0
     except OSError:
         return None
     finally:

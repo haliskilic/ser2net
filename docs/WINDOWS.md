@@ -133,7 +133,9 @@ ser2net locks its data directory (`ser2net.lock`) while it runs, so a second ins
 the **same** data directory refuses to start rather than two processes overwriting each
 other's `config.json` — a plain `--reconfigure` while the service runs, too.
 `--set-password` and `--sign-out-all` (account recovery) are not refused: while the service
-runs they hand the change to it, which applies it at once.
+runs they hand the change to it, which applies it at once; while it is stopped they take
+the lock for the moment they change `config.json`, and a service that starts meanwhile
+waits for them.
 `--install-service` only checks the lock, after stopping the service it upgrades. To run a
 genuinely separate instance, give it its own `--data-dir` (and `--service-name`).
 
