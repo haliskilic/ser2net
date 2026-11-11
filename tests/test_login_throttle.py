@@ -6,6 +6,11 @@ Checks:
     a sign-in that works resets the count;
   * without LDAP, a name that has no local account (unknown, or an LDAP/OIDC account) is
     checked against a dummy hash: the same work as a wrong password;
+  * failed sign-ins under one name (letter case aside) from any number of addresses:
+    10 in 15 minutes, then 429 for that name only (also with the right password) until
+    they expire; a sign-in that works resets it; the directory isn't asked meanwhile;
+  * a wrong current password in the password change counts under that name, is logged
+    and audited (password_change_failed); past the limit even the right one is refused;
   * password checks and directory sign-ins run a few at a time (auth.SlowWork); while
     too many wait already, a sign-in is answered 429 without being tried or counted;
 
@@ -132,8 +137,9 @@ async def _burst(d: str, config: dict) -> None:
     statuses = [c[0] for c in codes]
     assert statuses.count(401) == limit and statuses.count(429) == 40 - limit, statuses
     assert len(verify.calls) == limit, f"{len(verify.calls)} password checks, limit {limit}"
-    # another address isn't held up; a sign-in that works resets that address's count
+    # a sign-in that works resets that address's count
     state.rate_limiter.reset("127.0.0.1")
+    state.name_limiter.reset("admin")
     for i in range(limit - 1):
         assert (await login(app, "admin", f"wrong-{i}"))[0] == 401
     assert (await login(app, "admin", PW))[0] == 303
@@ -164,6 +170,116 @@ def test_unknown_names_cost_a_check():
     sso = {"username": "sso-user", "password_hash": "", "role": "viewer", "source": "oidc",
            "pwd_version": 1}
     run(_unknown_names, {"users": [_user("admin"), sso]})
+
+
+# ---------------------------------------------------------------- the per-name limit
+def _audit(state) -> list[list[str]]:
+    try:
+        with open(state.audit_path, encoding="utf-8") as fh:
+            return [ln.split("\t") for ln in fh.read().split("\n") if ln]
+    except OSError:
+        return []
+
+
+async def _per_name(d: str, config: dict) -> None:
+    state = _state(d, config)
+    app = build_app(state)
+    lim = state.name_limiter
+    assert (lim.max_attempts, lim.window_s) == (10, 900)
+    spellings = ["admin", "ADMIN", "Admin"]
+    for i in range(lim.max_attempts):  # a new address each time: the address limit never hits
+        name = spellings[i % 3]
+        assert (await login(app, name, "wrong", client=f"10.3.{i}.1"))[0] == 401
+    s, _h, text = await login(app, "admin", PW, client="10.3.99.1")
+    assert s == 429 and "Too many attempts" in text, "paused for this name, any address"
+    assert (await login(app, "bob", PW, client="10.3.99.2"))[0] == 303, "other names aren't"
+    with open(state.log_path, encoding="utf-8") as fh:
+        assert "sign-ins under 'admin' are refused for now: 10 failed in 15 minutes" in fh.read()
+    lim.window_s = 0.2  # the failures expire: the right password works again
+    await asyncio.sleep(0.3)
+    assert not lim.blocked("admin") and "admin" not in lim._fails
+    lim.window_s = 900
+    assert (await login(app, "admin", "wrong", client="10.3.99.3"))[0] == 401
+    assert (await login(app, "admin", PW, client="10.3.99.4"))[0] == 303
+    assert "admin" not in lim._fails, "a sign-in that works resets the name's count"
+    # an unknown name is counted the same way (a 429 doesn't tell whether it exists)
+    for i in range(lim.max_attempts):
+        assert (await login(app, "nobody", "wrong", client=f"10.4.{i}.1"))[0] == 401
+    assert (await login(app, "nobody", "wrong", client="10.4.99.1"))[0] == 429
+    with open(state.log_path, encoding="utf-8") as fh:
+        log = fh.read()
+    assert "sign-ins under a name that is no account's are refused for now" in log
+    assert "nobody" not in log, "a name that is no account's isn't logged"
+    print("per name: 10 failed sign-ins in 15 minutes from any addresses (letter case aside) "
+          "-> 429 for that name only, also with the right password; known and unknown names "
+          "alike; expires; reset by a sign-in that works  OK")
+
+
+def test_per_name_limit():
+    run(_per_name, {"users": [_user("admin"), _user("bob", "viewer")]})
+
+
+async def _per_name_directory(d: str, config: dict) -> None:
+    from app.web import ldap_auth
+
+    asked = []
+
+    def directory(settings, username, password, log, **kw):
+        asked.append(username)
+        return None  # wrong password
+
+    real, ldap_auth.authenticate = ldap_auth.authenticate, directory
+    try:
+        state = _state(d, config)
+        app = build_app(state)
+        for i in range(12):
+            await login(app, "jdoe" if i % 2 else "JDoe", "wrong", client=f"10.5.{i}.1")
+    finally:
+        ldap_auth.authenticate = real
+    assert len(asked) == state.name_limiter.max_attempts, asked
+    print(f"per name, LDAP: the directory is asked {len(asked)} times in 15 minutes for one "
+          "name (any letter case), then not until they expire  OK")
+
+
+def test_per_name_limit_directory():
+    run(_per_name_directory, {"users": [_user("admin")], "ldap": {
+        "enabled": True, "server_uri": "ldap://127.0.0.1:1",
+        "user_dn_template": "uid={username},ou=people,dc=ex,dc=com"}})
+
+
+async def _password_change(d: str, config: dict) -> None:
+    state = _state(d, config)
+    app = build_app(state)
+    user = state.config.get_user("admin")
+    session = auth.issue_session(state.config.secret_key, 3600, user.username, user.pwd_version)
+    headers = {**FORM, "Cookie": f"ser2net_csrf={CSRF}; ser2net_session={session}"}
+
+    def change(current: str):
+        return call(app, "POST", "/settings/password",
+                    {"current": current, "password": "brand-new-pass-1",
+                     "password2": "brand-new-pass-1"}, headers=headers, client="10.6.0.1")
+
+    for _ in range(state.name_limiter.max_attempts):
+        s, _h, text = await change("wrong-current")
+        assert s == 200 and "Current password is incorrect." in text
+    s, _h, text = await change(PW)
+    assert "Too many attempts" in text and auth.verify_password(PW, user.password_hash)
+    failed = [r for r in _audit(state) if r[2] == "password_change_failed"]
+    assert len(failed) == state.name_limiter.max_attempts and failed[0][3] == "admin", failed
+    with open(state.log_path, encoding="utf-8") as fh:
+        assert "password change for admin refused: wrong current password (from 10.6.0.1)" \
+            in fh.read()
+    assert (await login(app, "admin", PW, client="10.6.0.2"))[0] == 429, "the same name's limit"
+    state.name_limiter.reset("admin")
+    s, _h, text = await change(PW)
+    assert "Password updated." in text and auth.verify_password("brand-new-pass-1",
+                                                                user.password_hash)
+    print("password change: a wrong current password is logged, audited and counted under "
+          "that name; past the limit the right one is refused too  OK")
+
+
+def test_password_change_limited():
+    run(_password_change, {"users": [_user("admin")]})
 
 
 # ---------------------------------------------------------------- a few checks at a time
@@ -217,6 +333,9 @@ def test_busy_answers_429():
 def main():
     test_burst_counted_before_check()
     test_unknown_names_cost_a_check()
+    test_per_name_limit()
+    test_per_name_limit_directory()
+    test_password_change_limited()
     test_slow_work_bounded()
     test_busy_answers_429()
     print("\nPASS: sign-in attempts are limited")

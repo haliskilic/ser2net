@@ -404,44 +404,48 @@ def csrf_token_matches(request, token) -> bool:
 
 
 # --------------------------------------------------------------------------
-# login rate limiter (per IP, sliding window)
+# login rate limiter (per IP or per user name, sliding window)
 # --------------------------------------------------------------------------
 class LoginRateLimiter:
-    """Blocks an address after `max_attempts` failed sign-ins in `window_s` seconds.
-    Keeps the times of at most that many failures for at most MAX_ADDRESSES addresses
-    (when full, the one whose last failure is the oldest is forgotten), so addresses
-    that only ever fail don't add up in memory."""
+    """Blocks an address (or what `key` makes of the value given: a user name) after
+    `max_attempts` failed sign-ins in `window_s` seconds. Keeps the times of at most that
+    many failures for at most MAX_ADDRESSES keys (when full, the one whose last failure
+    is the oldest is forgotten), so addresses that only ever fail don't add up in
+    memory."""
 
     MAX_ADDRESSES = 4096
 
-    def __init__(self, max_attempts: int = 8, window_s: int = 300):
+    def __init__(self, max_attempts: int = 8, window_s: int = 300, key=None):
         self.max_attempts = max_attempts
         self.window_s = window_s
+        self._key = key or str
         self._fails: OrderedDict[str, deque] = OrderedDict()
 
     def blocked(self, ip: str) -> bool:
-        q = self._fails.get(ip)
+        k = self._key(ip)
+        q = self._fails.get(k)
         if q is None:
             return False
         now = time.monotonic()
         while q and now - q[0] > self.window_s:
             q.popleft()
         if not q:
-            del self._fails[ip]
+            del self._fails[k]
         return len(q) >= self.max_attempts
 
     def record_failure(self, ip: str) -> None:
-        q = self._fails.get(ip)
+        k = self._key(ip)
+        q = self._fails.get(k)
         if q is None:
-            q = self._fails[ip] = deque(maxlen=self.max_attempts)
+            q = self._fails[k] = deque(maxlen=self.max_attempts)
             while len(self._fails) > self.MAX_ADDRESSES:
                 self._fails.popitem(last=False)
         else:
-            self._fails.move_to_end(ip)
+            self._fails.move_to_end(k)
         q.append(time.monotonic())
 
     def reset(self, ip: str) -> None:
-        self._fails.pop(ip, None)
+        self._fails.pop(self._key(ip), None)
 
 
 # --------------------------------------------------------------------------

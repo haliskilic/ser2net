@@ -24,7 +24,9 @@ from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from . import accounts
-from .config import AppConfig, ConfigStore, User, lock_down_dir, mapping_file, valid_mapping_id
+from .config import (
+    AppConfig, ConfigStore, User, fold, lock_down_dir, mapping_file, valid_mapping_id,
+)
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
@@ -264,6 +266,10 @@ class AppState:
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
+        # failed sign-ins (and password changes) per user name, letter case aside, from
+        # any address: they pause that name only, never for good, and stay below the
+        # usual directory lock-out thresholds (LDAP accounts)
+        self.name_limiter = LoginRateLimiter(max_attempts=10, window_s=900, key=fold)
         # password hashing and checks, directory (LDAP) sign-ins: a few at a time
         self.password_work = SlowWork(limit=2, queue=8)
         self.directory_work = SlowWork(limit=4, queue=16)

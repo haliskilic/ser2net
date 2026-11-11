@@ -415,6 +415,9 @@ async def _directory_refusals(d: str) -> None:
         "notifications": {"enabled": True, "events": ["login_failed"], "repeat_s": 0},
         "ldap": {"enabled": True, "server_uri": "ldap://127.0.0.1:1",
                  "user_dn_template": "uid={username},ou=people,dc=ex,dc=com"}})
+    # more attempts under one name than its own limit lets through (test_login_throttle):
+    # here only the records count
+    state.name_limiter.max_attempts = 100
     app = build_app(state)
     limit = st.FAILED_LOGIN_RECORDS
     for i in range(limit + 5):  # the directory knows "ADMIN": the local admin's name
