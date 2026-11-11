@@ -69,6 +69,31 @@ the optional feature packages bundled into the binaries and the Docker image in
 `python tools/refresh_wheels.py` so `vendor/wheels/` (the offline install set) matches —
 this also applies to Dependabot's pull requests.
 
+### Third-party code
+Runtime dependencies are pinned exactly. When one has a bug its maintainers have not
+fixed in a release (pyserial and pyserial-asyncio-fast rarely release), the fix goes into
+ser2net, not into a fork or a process-wide patch:
+- One module per library (`app/engine/serial_compat.py` for pyserial and
+  pyserial-asyncio-fast), with a subclass ser2net itself uses that overrides as little as
+  possible. Its docstring names the upstream issue, pull request or commit it mirrors;
+  where a report exists, comment there instead of filing another.
+- It applies whenever the upstream members it builds on exist (feature detection), not
+  behind a version check, which would bring the bug back with a newer release that still
+  has it; the start-up log says once when an installed version is not the one checked.
+- It has a test that needs no hardware, on Windows too where it applies.
+  `tests/test_serial_compat.py` pins the upstream code each override replaces by a hash
+  of its source, so a bump that changes that code fails until the override is reviewed
+  and the hash updated; a check that the upstream bug is still there says when an
+  override can go.
+- It is removed once a release has the fix (then bump the pin and refresh
+  `vendor/wheels/`).
+- BSD-licensed code (pyserial, pyserial-asyncio-fast) may be subclassed or copied with its
+  notice; LGPL code (ldap3) is used through its public API only.
+
+Dependabot opens a pull request of its own for pyserial, pyserial-asyncio-fast, ldap3 and
+pyasn1 (everything else comes grouped): read their changelogs, and for ldap3 / pyasn1 check
+the CI legs that install `requirements-optional.txt`.
+
 ### Commits and pull requests
 Short imperative subjects with a prefix: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
 `deps:`, `refactor:` (optionally a scope, e.g. `fix(modbus): …`). Keep a pull request to
@@ -126,6 +151,31 @@ binary'lere ve Docker imajına giren isteğe bağlı paketler `requirements-opti
 `requirements.txt`'i değiştirdikten sonra `python tools/refresh_wheels.py` çalıştırın;
 `vendor/wheels/` (çevrimdışı kurulum seti) eşleşsin. Bu Dependabot'un PR'ları için de
 geçerli.
+
+### Üçüncü taraf kodu
+Çalışma zamanı bağımlılıkları tam sürümle sabitlenir. Birindeki bir hata yayımlanmış bir
+sürümde düzeltilmediyse (pyserial ve pyserial-asyncio-fast nadiren sürüm çıkarır), düzeltme
+bir fork'a ya da tüm süreci değiştiren bir yamaya değil, ser2net'e girer:
+- Kütüphane başına tek bir modül (pyserial ve pyserial-asyncio-fast için
+  `app/engine/serial_compat.py`): ser2net'in kendisinin kullandığı ve olabildiğince az şeyi
+  değiştiren bir alt sınıf. Docstring'i taklit ettiği upstream issue'yu, PR'ı ya da commit'i
+  belirtir; bir rapor zaten varsa yenisini açmak yerine oraya yorum yazılır.
+- Dayandığı upstream üyeler var olduğu sürece uygulanır (özellik tespiti); sürüm
+  kontrolünün arkasına konmaz, çünkü bu, hatayı hâlâ taşıyan daha yeni bir sürümde hatayı
+  geri getirir. Kurulu sürüm denetlenen sürüm değilse açılış log'u bunu bir kez yazar.
+- Donanım gerektirmeyen bir testi olur, geçerli olduğu yerde Windows'ta da.
+  `tests/test_serial_compat.py` her override'ın yerini aldığı upstream kodu kaynağının
+  hash'iyle sabitler: o kodu değiştiren bir sürüm yükseltmesi, override gözden geçirilip hash
+  güncellenene kadar başarısız olur; upstream hatasının hâlâ durduğunu denetleyen bir test de
+  override'ın ne zaman kaldırılabileceğini söyler.
+- Düzeltmeyi içeren bir sürüm çıkınca kaldırılır (ardından sabitlenen sürüm yükseltilir ve
+  `vendor/wheels/` yenilenir).
+- BSD lisanslı kod (pyserial, pyserial-asyncio-fast) alt sınıflanabilir ya da lisans notuyla
+  kopyalanabilir; LGPL kod (ldap3) yalnızca açık API'si üzerinden kullanılır.
+
+Dependabot pyserial, pyserial-asyncio-fast, ldap3 ve pyasn1 için ayrı birer pull request
+açar (diğerleri gruplu gelir): değişiklik günlüklerini okuyun; ldap3 / pyasn1 için
+`requirements-optional.txt`'i kuran CI ayaklarına bakın.
 
 ### Commit ve pull request
 Kısa, emir kipinde ve önekli başlıklar: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,

@@ -55,12 +55,13 @@ the device as on POSIX. SER2NET_WINDOWS_SERIAL=pyserial keeps pyserial's own cla
     POLL_IDLE_AFTER_S, back to 0.5 ms as soon as data arrives or is written (a reply
     usually follows a write).
 
-How ser2net carries fixes for upstream code: each override names the upstream issue or
-commit it mirrors and is removed once a release has the fix; tests/test_serial_compat.py
-pins the upstream code each one replaces (a release that changes it fails there) and fails
-once upstream fixes _write_ready itself. At run time an override is used whenever the
-upstream members it builds on are there; unverified_note() says so at start when pyserial
-/ pyserial-asyncio-fast are not the versions these were written for.
+How ser2net carries fixes for upstream code (CONTRIBUTING.md, "Third-party code"): each
+override names the upstream issue or commit it mirrors and is removed once a release has
+the fix; tests/test_serial_compat.py pins the upstream code each one replaces (a release
+that changes it fails there) and fails once upstream fixes _write_ready itself. At run
+time an override is used whenever the upstream members it builds on are there;
+unverified_note() says so at start when pyserial / pyserial-asyncio-fast are not the
+versions these were written for.
 
 ``open_stream`` opens a device with the class for this OS and builds the StreamReader /
 StreamWriter pair the way serial_asyncio_fast.open_serial_connection does, without its

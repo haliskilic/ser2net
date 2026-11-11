@@ -1,7 +1,8 @@
-# Dependabot: weekly version-update PRs (grouped, one per ecosystem) plus security
-# updates. A requirements.txt bump also needs the offline wheels refreshed — run
-# `python tools/refresh_wheels.py` on the Dependabot branch (CI job "offline wheels
-# match requirements.txt" stays red until then). See CONTRIBUTING.md.
+# Dependabot: weekly version-update PRs (grouped, one per ecosystem, except the libraries
+# ser2net carries fixes for, below) plus security updates. A requirements.txt bump also
+# needs the offline wheels refreshed — run `python tools/refresh_wheels.py` on the
+# Dependabot branch (CI job "offline wheels match requirements.txt" stays red until
+# then). See CONTRIBUTING.md.
 version: 2
 updates:
   - package-ecosystem: pip
@@ -12,6 +13,10 @@ updates:
     groups:
       python:
         patterns: ["*"]
+        # one pull request each: ser2net carries fixes for pyserial / pyserial-asyncio-fast
+        # code (app/engine/serial_compat.py), and ldap3 / pyasn1 bumps need their own look
+        # (CONTRIBUTING.md, "Third-party code")
+        exclude-patterns: ["pyserial", "pyserial-asyncio-fast", "ldap3", "pyasn1"]
     commit-message:
       prefix: "deps"
   - package-ecosystem: github-actions
