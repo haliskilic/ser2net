@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
-from ..config import MappingConfig, ModbusPoint
+from ..config import MappingConfig, ModbusPoint, modbus_response_timeout
 from . import modbus, netguard, sockopts
 from .access import AccessPolicy, server_ssl
 from .bridge import (
@@ -112,7 +112,7 @@ class ModbusGatewayRunner:
         baud = max(1, mapping.serial.baudrate)
         self._char_s = 11 / baud
         self._gap = max(SILENCE_S, 3.5 * self._char_s)
-        self._resp_timeout = mapping.options.modbus_response_timeout_s or 1.0
+        self._resp_timeout = modbus_response_timeout(mapping.options)
         self._notes: dict[tuple[str, int], tuple[float, int]] = {}  # see _note
         # the line may still carry a reply to an earlier request (see _settle): the last
         # request that got none in time, as (unit, PDU)

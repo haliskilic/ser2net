@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import AppConfig, ConfigError, MappingConfig
+from app.config import MAX_TIMER_S, AppConfig, ConfigError, MappingConfig, modbus_response_timeout
 from app.web.routes import _build_mapping_dict, _preserve_unmanaged_fields
 
 
@@ -452,6 +452,62 @@ def test_form_udp_reply_fields():
     print("form: UDP reply address / peer timeout parsed when shown, kept when absent  OK")
 
 
+def test_form_modbus_response_timeout():
+    """The Modbus response timeout is in the form for Modbus gateways only (before 2.9 it was
+    in config.json only): parsed when posted (blank = the default 1 s), kept when a form
+    leaves it out (another protocol, an older cluster peer's form). An edit refuses a value
+    outside 0.01-60 s; a stored one is read leniently and never stops a config loading."""
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502"}
+    existing = MappingConfig.from_dict({"name": "gw", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "modbus", "port": 502},
+                                        "options": {"modbus_response_timeout_s": 0.8}})
+    assert MappingConfig().options.modbus_response_timeout_s == 1.0
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.options.modbus_response_timeout_s
+
+    assert parsed(dict(base, id=existing.id, opt_modbus_response_timeout_s="2.5")) == 2.5
+    assert parsed(dict(base, id=existing.id, opt_modbus_response_timeout_s=" ")) == 1.0
+    assert parsed(dict(base, id=existing.id)) == 0.8, "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, network_protocol="raw")) == 0.8
+    assert parsed(base) == 1.0 and parsed(dict(base, opt_modbus_response_timeout_s="3")) == 3.0
+    try:
+        parsed(dict(base, opt_modbus_response_timeout_s="soon"))
+        raise AssertionError("a timeout that is not a number must be refused")
+    except ValueError:
+        pass
+
+    def gateway(timeout, protocol="modbus"):
+        return MappingConfig.from_dict({"name": "gw", "serial": {"port": "COM7"},
+                                        "network": {"protocol": protocol, "port": 502},
+                                        "options": {"modbus_response_timeout_s": timeout}})
+    for ok in (0.01, 0.4, 1, 60):
+        gateway(ok).validate_input()
+    for bad in (0.005, 0, -1, 61, "1.5", True, None):
+        try:
+            gateway(bad).validate_input()
+            raise AssertionError(f"an edit must refuse a response timeout of {bad!r}")
+        except ConfigError as e:
+            assert "between 0.01 and 60 seconds" in str(e), e
+    gateway(-1, protocol="raw").validate_input()  # not a gateway: not its setting
+    # stored values from before 2.9 (config.json only, unchecked) still load and save, and
+    # read as their number or the default; nothing past the timers' upper bound
+    for stored, reads in ((-1, 1.0), (0, 1.0), ("1.5", 1.5), ("soon", 1.0), (True, 1.0),
+                          (None, 1.0), (float("nan"), 1.0), (0.8, 0.8), (1e12, MAX_TIMER_S)):
+        m = gateway(stored)
+        m.validate()
+        AppConfig.from_dict({"mappings": [m.to_dict()]}).validate()
+        assert modbus_response_timeout(m.options) == reads, (stored, reads)
+    from app.engine.modbus_gateway import ModbusGatewayRunner
+    assert ModbusGatewayRunner(gateway("1.5"))._resp_timeout == 1.5
+    print("form: Modbus response timeout parsed when shown, kept when absent; edits refuse "
+          "values outside 0.01-60 s, stored ones read leniently  OK")
+
+
 def test_web_access_settings():
     cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
     assert cfg.admin_ui.require_login is True, "login must be required by default"
@@ -473,6 +529,7 @@ def main():
     test_form_apply_retained_set()
     test_form_rfc2217_restore_on_disconnect()
     test_form_udp_reply_fields()
+    test_form_modbus_response_timeout()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

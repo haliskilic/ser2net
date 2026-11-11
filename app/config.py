@@ -46,6 +46,9 @@ COMMON_BAUDRATES = (
     115200, 230400, 460800, 921600,
 )
 MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year)
+# Modbus gateway response timeout: the default, and what an edit may set
+MODBUS_TIMEOUT_DEFAULT_S = 1.0
+MODBUS_TIMEOUT_RANGE_S = (0.01, 60.0)
 # web-UI sign-in session lifetime (AppConfig.session_timeout_s)
 SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
@@ -477,9 +480,10 @@ class MappingOptions:
     # rate, data bits, parity, stop bits and flow control (off: what the client set stays
     # until the port is reopened). RTS/DTR are left alone: toggling them can reset a device.
     rfc2217_restore_on_disconnect: bool = False
-    # Modbus gateway: how long to wait for an RTU slave's reply before returning a
-    # Modbus exception (0x0B gateway-target-failed) to the TCP master.
-    modbus_response_timeout_s: float = 1.0
+    # Modbus gateway: how long an RTU slave gets to begin its reply once the request is out
+    # on the line, before the gateway answers exception 0x0B (gateway target failed to
+    # respond). Read through modbus_response_timeout().
+    modbus_response_timeout_s: float = MODBUS_TIMEOUT_DEFAULT_S
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingOptions":
@@ -499,6 +503,22 @@ class MappingOptions:
             raise ConfigError(_("Trace file size must be between 0.1 and 1024 MB."))
         if not _is_int(self.trace_keep) or not (0 <= self.trace_keep <= 50):
             raise ConfigError(_("Rotated trace files kept must be between 0 and 50."))
+
+
+def modbus_response_timeout(opts: MappingOptions) -> float:
+    """A Modbus gateway's response timeout in seconds. A stored value that is not a
+    positive number of seconds (before 2.9 it was in config.json only, unchecked) reads as
+    the default 1 s, as 0 always did; a numeric string counts as its number. Edits refuse
+    anything outside MODBUS_TIMEOUT_RANGE_S (validate_input)."""
+    t = opts.modbus_response_timeout_s
+    if isinstance(t, str):
+        try:
+            t = float(t.strip())
+        except ValueError:
+            return MODBUS_TIMEOUT_DEFAULT_S
+    if _is_number(t) and math.isfinite(t) and t > 0:
+        return float(min(t, MAX_TIMER_S))
+    return MODBUS_TIMEOUT_DEFAULT_S
 
 
 # ---------------------------------------------------------------------------
@@ -714,6 +734,12 @@ class MappingConfig:
                                     "supported).").format(side.port))
         if self.kind == "net" and self.network.mode == "udp":
             self._validate_udp_peer()
+        if self.kind == "net" and self.network.protocol == "modbus":
+            low, high = MODBUS_TIMEOUT_RANGE_S
+            timeout = self.options.modbus_response_timeout_s
+            if not _is_number(timeout) or not (low <= timeout <= high):
+                raise ConfigError(_("The Modbus response timeout must be between {0} and {1} "
+                                    "seconds.").format(f"{low:g}", f"{high:g}"))
 
     def _validate_udp_peer(self) -> None:
         """A UDP mapping's reply address and peer timeout (an edit's rules: a stored

@@ -73,7 +73,8 @@ düzenlemeye gerek yok.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
   RTU yanıtı yanıt süresi içinde gelmezse `0x0B` (gateway-timeout) exception; süre, istek
-  hatta tamamen gönderildikten sonra başlar. Bir yanıt, başlığının söylediği uzunluğa
+  hatta tamamen gönderildikten sonra başlar ve eşleme formunun Seçenekler bölümünde
+  ayarlanır (varsayılan 1 sn, 0,01–60 sn). Bir yanıt, başlığının söylediği uzunluğa
   ulaşınca biter (başlığı uzunluk vermeyen FC8, FC43 ya da kullanıcı tanımlı fonksiyon
   kodlarında hat 50 ms sessiz kalınca); USB adaptörlerin gecikmesi ya da Windows'un saati
   yanıtları bölmez. Yanıt isteğe uymalıdır (aynı fonksiyon ya da onun exception'ı, okunan

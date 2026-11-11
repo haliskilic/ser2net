@@ -838,5 +838,8 @@
   "Legacy authentication": "Eski kimlik doğrulama",
   "Automatic discovery": "Otomatik keşif",
   "An account named {0} here signs in another way (through the directory or SSO), so you can't sign in under that name like this. Ask an admin to delete that account first.": "Burada {0} adında başka bir yolla (dizin ya da SSO ile) giriş yapan bir hesap var; bu yüzden bu adla bu şekilde giriş yapamazsın. Bir admin'den önce o hesabı silmesini iste.",
-  "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış."
+  "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış.",
+  "Response timeout (s)": "Yanıt süresi (sn)",
+  "how long an RTU slave gets to begin its reply once the request is out; then exception 0x0B": "istek hatta gittikten sonra bir RTU slave'in yanıta başlaması için tanınan süre; sonra 0x0B exception",
+  "The Modbus response timeout must be between {0} and {1} seconds.": "Modbus yanıt süresi {0} ile {1} saniye arasında olmalı."
 }
