@@ -58,7 +58,7 @@ from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
 from .protocols.base import ProtocolError, ProtocolSession
-from .serial_link import Backoff, SerialLink
+from .serial_link import Backoff, SerialLink, close_stream
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -983,11 +983,7 @@ class MappingRunner:
                 self.status.state = "reconnecting" if backoff.attempt else "device-missing"
                 self._log(f"serial bridge error: {self.status.last_error}")
             finally:
-                for w in (wa, wb):
-                    if w is not None:
-                        with contextlib.suppress(Exception):
-                            w.close()
-                            await w.wait_closed()
+                await asyncio.gather(*(close_stream(w) for w in (wa, wb) if w is not None))
             if self._stop.is_set():
                 break
             self.status.reconnects += 1
