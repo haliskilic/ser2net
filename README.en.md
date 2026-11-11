@@ -68,7 +68,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   than 1 KiB (real ones are a few bytes) ends that client's session, and the log says why.
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
-  integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
+  integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer
+  within the response timeout, which starts once the request has gone out on the line. A
+  reply ends when it is as long as its header says (after 50 ms of silence for function
+  codes whose header doesn't size the reply: FC8, FC43, user-defined ones), so the latency
+  of USB adapters and the Windows clock don't cut replies; bytes that are not the reply are
+  dropped and show up in the trace as `ser>drop`, in the console and in the hex view.
   If the serial port goes away (a USB adapter unplugged), masters get `0x0A` (gateway path
   unavailable) at once meanwhile and the port is reopened like any mapping's (state
   `reconnecting`, device lost/back notifications). Masters are admitted like other

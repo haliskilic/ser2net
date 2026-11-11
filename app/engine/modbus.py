@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import math
 import struct
+from typing import NamedTuple, Optional
 
 MBAP_LEN = 7  # txn(2) + proto(2) + length(2) + unit(1)
 MAX_PDU = 253  # Modbus PDU max (256-byte ADU minus addr+CRC)
+MAX_ADU = MAX_PDU + 3  # an RTU frame at most: unit + PDU + CRC
 
 READ_HOLDING = 3   # read holding registers
 READ_INPUT = 4     # read input registers
@@ -52,6 +54,79 @@ def rtu_unwrap(frame: bytes) -> tuple[int, bytes]:
     if crc16(body) != (crc_lo | (crc_hi << 8)):
         raise ValueError("RTU CRC mismatch")
     return body[0], body[1:]
+
+
+# The length of a slave's reply (Modbus Application Protocol v1.1b3), counted as an RTU
+# frame (unit + PDU + CRC): fixed for these function codes ...
+_FIXED_REPLY = {5: 8, 6: 8, 7: 5, 11: 8, 15: 8, 16: 8, 22: 10}
+# ... and 5 + the byte count that follows the function code for these (FC1-4 reads,
+# 12 comm event log, 17 report server id, 20/21 file records, 23 read/write registers)
+_COUNTED_REPLY = frozenset({1, 2, 3, 4, 12, 17, 20, 21, 23})
+_READ_FIFO_QUEUE = 24  # 6 + a two-byte byte count
+
+
+def rtu_reply_length(head: bytes | bytearray) -> Optional[int]:
+    """The length of the RTU reply that starts with ``head`` (its unit id first), from the
+    function code and byte count at its start, as libmodbus frames replies: the whole
+    frame's length once ``head`` holds them, else the least it can be (read that many
+    bytes, then ask again). None when the function code does not tell (FC8 diagnostics,
+    FC43, user-defined and unknown codes): such a reply ends where the line goes quiet."""
+    if len(head) < 2:
+        return 4  # unit + function + CRC: no frame is shorter
+    function = head[1]
+    if function & 0x80:  # an exception: unit, function | 0x80, exception code, CRC
+        return 5
+    if function in _FIXED_REPLY:
+        return _FIXED_REPLY[function]
+    if function in _COUNTED_REPLY:
+        return 5 + head[2] if len(head) > 2 else 5
+    if function == _READ_FIFO_QUEUE:
+        return 6 + int.from_bytes(head[2:4], "big") if len(head) > 3 else 6
+    return None
+
+
+class ReplyScan(NamedTuple):
+    span: Optional[tuple[int, int]]  # buf[start:end] is the reply (None: not found)
+    pending: bool  # a frame from the unit has begun and may still be completed
+    started: bool  # a frame from the unit began in buf at all
+
+
+def find_reply(buf: bytes | bytearray, unit: int, request: bytes, *,
+               quiet: bool = False) -> ReplyScan:
+    """Look for the reply to ``request`` (a PDU sent to ``unit``) in ``buf``, the bytes read
+    off the line since it was sent. They may begin with bytes no request is waiting for
+    (the late tail of an earlier reply, noise), which are skipped.
+
+    A reply starts with ``unit`` and the request's function code (or its exception code),
+    is as long as its header says (rtu_reply_length) and passes its CRC. ``quiet``: the
+    line has gone quiet since buf's last byte, so a frame whose length its header does not
+    give, or that fails its CRC at that length (a slave that miscounts), may end with buf:
+    it is then tried as a whole too."""
+    function = request[0] if request else 0
+    starts = (function, (function | 0x80) & 0xFF)
+    pending = started = False
+    for start in range(len(buf) - 1):
+        if buf[start] != unit or buf[start + 1] not in starts:
+            continue
+        started = True
+        length = rtu_reply_length(buf[start:start + 4])
+        ends = []
+        if length is None:
+            pending = True  # it ends where the line goes quiet
+        elif length <= MAX_ADU:
+            if start + length <= len(buf):
+                ends.append(start + length)
+            else:
+                pending = True
+        if quiet and len(buf) - start <= MAX_ADU and len(buf) not in ends:
+            ends.append(len(buf))
+        for end in ends:
+            try:
+                rtu_unwrap(bytes(buf[start:end]))
+            except ValueError:
+                continue
+            return ReplyScan((start, end), pending, started)
+    return ReplyScan(None, pending, started)
 
 
 def build_tcp_adu(txn: int, unit: int, pdu: bytes) -> bytes:

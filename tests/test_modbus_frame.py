@@ -168,6 +168,79 @@ def test_register_read_and_decode():
     print("read_pdu / response_data / decode_value (dtypes + scale + exception)  OK")
 
 
+def test_rtu_reply_length():
+    """A reply's length comes from its header, as libmodbus frames replies; a function code
+    whose replies have no fixed layout gives None (the gateway then waits for silence)."""
+    cases = [
+        ("0183", 5),            # exception: unit, 0x83, code, CRC
+        ("01030a", 15),         # FC3 with a byte count of 10: 5 + 10
+        ("0101", 5),            # FC1 before its byte count has come: at least 5
+        ("010402", 7), ("010201", 6), ("011702", 7),  # FC4, FC2, FC23
+        ("010c08", 13), ("011104", 9), ("011406", 11), ("011506", 11),  # FC12/17/20/21
+        ("0105", 8), ("0106", 8), ("010f", 8), ("0110", 8),  # write echoes
+        ("0116", 10), ("0107", 5), ("010b", 8),             # FC22, FC7, FC11
+        ("0118", 6), ("011800", 6), ("01180006", 12),       # FC24: 6 + a 16-bit byte count
+        ("01", 4), ("", 4),     # not even a function code yet: no frame is shorter than 4
+    ]
+    for head, want in cases:
+        got = modbus.rtu_reply_length(bytes.fromhex(head))
+        assert got == want, (head, got, want)
+    for head in ("0108", "012b", "0141", "0164", "0100"):  # FC8, FC43, user-defined, invalid
+        assert modbus.rtu_reply_length(bytes.fromhex(head)) is None, head
+    # every frame built for a known function code has exactly the length its header gives
+    for pdu in (bytes([3, 4, 0, 1, 0, 2]), bytes([1, 1, 0x05]), bytes([6, 0, 1, 0, 3]),
+                bytes([0x10, 0, 1, 0, 2]), bytes([0x16, 0, 4, 0, 0xF2, 0, 0x25]),
+                bytes([0x18, 0, 6, 0, 2, 1, 0xB8, 0x12, 0x84]), bytes([0x83, 2])):
+        frame = modbus.rtu_wrap(9, pdu)
+        assert modbus.rtu_reply_length(frame) == len(frame), pdu.hex(" ")
+    print("rtu_reply_length: exceptions, counted reads, fixed writes, FC24; None for FC8/43/"
+          "user-defined  OK")
+
+
+def test_find_reply():
+    """The reply to a request is found in what came off the line: by unit, function code and
+    length, skipping bytes in front of it; a frame whose length its header does not give is
+    tried as a whole once the line is quiet."""
+    req = bytes([3, 0, 0, 0, 10])
+    reply = modbus.rtu_wrap(1, bytes([3, 20]) + bytes(range(20)))  # 10 registers: 25 bytes
+    scan = modbus.find_reply(reply, 1, req)
+    assert scan.span == (0, len(reply)) and scan.started, scan
+    # complete as soon as it is as long as its header says: nothing more is waited for
+    assert modbus.find_reply(reply + b"\x00\x01", 1, req).span == (0, len(reply))
+    # cut short: not found, but it has begun and may still complete
+    scan = modbus.find_reply(reply[:9], 1, req)
+    assert scan.span is None and scan.pending and scan.started, scan
+    assert modbus.find_reply(reply[:9], 1, req, quiet=True).span is None
+    # a stale tail and noise in front: skipped (even a tail that starts like a reply)
+    tail = reply[-6:]
+    for junk in (b"\x55\xaa", tail, b"\x01\x03\x10", bytes([1, 3, 0, 0, 0]), b"\x01"):
+        scan = modbus.find_reply(junk + reply, 1, req)
+        assert scan.span == (len(junk), len(junk) + len(reply)), (junk.hex(" "), scan)
+    # another unit, another function, garbage: not a reply, nothing pending
+    for other in (modbus.rtu_wrap(2, bytes([3, 20]) + bytes(range(20))),
+                  modbus.rtu_wrap(1, bytes([4, 2, 0, 1])), b"\x55" * 40):
+        scan = modbus.find_reply(other, 1, req, quiet=True)
+        assert scan.span is None and not scan.pending and not scan.started, other.hex(" ")
+    # an exception for the request's function is its reply
+    exc = modbus.rtu_wrap(1, bytes([0x83, 2]))
+    assert modbus.find_reply(exc, 1, req).span == (0, 5)
+    # a user-defined function code: a whole frame, but only once the line is quiet
+    user = modbus.rtu_wrap(1, bytes([0x41, 1, 2, 3, 4, 5]))
+    scan = modbus.find_reply(user, 1, b"\x41\x00")
+    assert scan.span is None and scan.pending, scan
+    assert modbus.find_reply(user, 1, b"\x41\x00", quiet=True).span == (0, len(user))
+    assert modbus.find_reply(user[:5], 1, b"\x41\x00", quiet=True).span is None
+    # a slave that miscounts (byte count 20, 22 data bytes): its CRC fails at the counted
+    # length, so the whole frame is tried once the line is quiet
+    miscounted = modbus.rtu_wrap(1, bytes([3, 20]) + bytes(22))
+    assert modbus.find_reply(miscounted, 1, req).span is None
+    assert modbus.find_reply(miscounted, 1, req, quiet=True).span == (0, len(miscounted))
+    # a byte count past the largest frame never makes anything pending forever
+    assert not modbus.find_reply(bytes([1, 3, 0xFF]) + b"\x00" * 3, 1, req).pending
+    print("find_reply: reply found by unit/function/length behind stale bytes; other units "
+          "and functions skipped; silence ends unsized frames  OK")
+
+
 def main():
     test_register_read_and_decode()
     test_crc_and_rtu_known_vector()
@@ -177,6 +250,8 @@ def main():
     test_exception_pdu()
     test_read_request_allow_list()
     test_gateway_conversion_chain()
+    test_rtu_reply_length()
+    test_find_reply()
     print("\nPASS: Modbus framing (RTU<->TCP)")
 
 

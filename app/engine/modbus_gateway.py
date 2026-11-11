@@ -43,6 +43,14 @@ if TYPE_CHECKING:
     from .sparkplug_node import SparkplugNode
 
 READ_CHUNK = 512
+# An RTU reply whose length its header does not give (FC8, FC43, user-defined codes), or
+# that fails its CRC at that length, ends once the line has been quiet this long (or for
+# 3.5 characters, if that is longer): well above the latency of USB serial adapters (16 ms
+# by default on FTDI chips) and the 15.6 ms clock of the event loop on Windows.
+SILENCE_S = 0.05
+# Log lines about one slave's replies (cut short, not matching): at most one per this many
+# seconds per kind and unit; the ones in between are counted into the next.
+NOTE_EVERY_S = 60.0
 
 
 def _next_timer(idle_s: float, deadline: Optional[float]) -> Optional[float]:
@@ -95,10 +103,13 @@ class ModbusGatewayRunner:
         self._set_points: dict[str, ModbusPoint] = {
             f"{base}/{p.name}/set": p for p in mapping.modbus_poll.points if p.writable}
         self._access = AccessPolicy(mapping.network)
-        # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
+        # one RTU character on the line (start bit, 8 data bits, parity or a 2nd stop bit,
+        # stop bit), and the silence that ends a reply its header does not size
         baud = max(1, mapping.serial.baudrate)
-        self._gap = max(0.01, 3.5 * 11 / baud)
+        self._char_s = 11 / baud
+        self._gap = max(SILENCE_S, 3.5 * self._char_s)
         self._resp_timeout = mapping.options.modbus_response_timeout_s or 1.0
+        self._notes: dict[tuple[str, int], tuple[float, int]] = {}  # see _note
 
     def _log(self, msg: str) -> None:
         if self.log:
@@ -224,37 +235,24 @@ class ModbusGatewayRunner:
             reader, writer = self._link.reader, self._link.writer
             if reader is None or writer is None:  # not open (yet), or lost meanwhile
                 return modbus.exception_pdu(function, modbus.GATEWAY_PATH_UNAVAILABLE)
-            # discard any stale bytes left on the bus, then send the RTU request
-            with contextlib.suppress(Exception):
-                while True:
-                    try:
-                        junk = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=0.001)
-                    except asyncio.TimeoutError:
-                        break
-                    if not junk:
-                        break
             rtu_req = modbus.rtu_wrap(unit, pdu)
-            self._feed_monitors(b"\xbb tx " + rtu_req)
-            if self._tracer:
-                self._tracer.write("net>ser", rtu_req)
-            self._feed_traffic(TO_DEVICE, rtu_req)
+            loop = asyncio.get_running_loop()
             try:
+                await self._settle(reader)  # drop what the line holds, then send
+                self._feed_monitors(b"\xbb tx " + rtu_req)
+                if self._tracer:
+                    self._tracer.write("net>ser", rtu_req)
+                self._feed_traffic(TO_DEVICE, rtu_req)
                 writer.write(rtu_req)
                 await writer.drain()
                 self.status.bytes_out += len(rtu_req)
-                rtu_resp = await self._read_rtu_response(reader)
+                # drain() returns once the OS has the request, which then still takes
+                # its time on the line: the response timeout starts after that
+                rpdu = await self._read_reply(reader, unit, pdu,
+                                              loop.time() + len(rtu_req) * self._char_s)
             except (asyncio.TimeoutError, ConnectionError, OSError):
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
-            self._feed_monitors(b"\xaa rx " + rtu_resp)
-            if self._tracer:
-                self._tracer.write("ser>net", rtu_resp)
-            self._feed_traffic(FROM_DEVICE, rtu_resp)
-            self.status.bytes_in += len(rtu_resp)
-            try:
-                runit, rpdu = modbus.rtu_unwrap(rtu_resp)
-            except ValueError:
-                return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
-            if runit != unit:  # reply from a different slave id -> treat as no answer
+            if rpdu is None:  # no reply from that slave in time
                 return modbus.exception_pdu(function, modbus.GATEWAY_TARGET_FAILED)
             return rpdu
 
@@ -363,22 +361,106 @@ class ModbusGatewayRunner:
         self._write_soon(point, value, lambda err: mqtt.publish_raw(
             result, b"ok" if err is None else f"error: {err}".encode()))
 
-    async def _read_rtu_response(self, reader) -> bytes:
-        # wait for the first byte(s) within the response timeout
-        first = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=self._resp_timeout)
-        if not first:
-            raise ConnectionError("serial EOF")
-        buf = bytearray(first)
-        # then drain until an inter-frame gap of silence (RTU framing is timing-based)
-        while True:
+    # ---------------- reading the RTU line ----------------
+    async def _settle(self, reader) -> None:
+        """Before a request goes out: drop what the line holds, bytes no request is waiting
+        for. A line that never goes quiet holds the request back by at most the time a
+        whole frame takes."""
+        loop = asyncio.get_running_loop()
+        end = loop.time() + 0.001 + modbus.MAX_ADU * self._char_s
+        got = bytearray()
+        while (left := end - loop.time()) > 0:
             try:
-                more = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=self._gap)
+                chunk = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=min(0.001, left))
             except asyncio.TimeoutError:
                 break
-            if not more:
+            if not chunk:
+                raise ConnectionError("serial EOF")
+            got += chunk
+        if got:
+            self._dropped(got)
+            self._note("stray", -1, f"dropped {len(got)} byte(s) on the serial line that no "
+                       "request was waiting for")
+
+    async def _read_reply(self, reader, unit: int, request: bytes, sent: float) -> Optional[bytes]:
+        """The PDU of the reply from ``unit`` to ``request``, which has gone out on the line
+        at ``sent`` (loop time), or None if none came in time.
+
+        The reply has to begin within the response timeout and may then take as long as a
+        whole frame needs. It is complete as soon as it is as long as its header says (or
+        when the line goes quiet, for a reply whose header does not say), not after a fixed
+        pause: see modbus.find_reply. Bytes around it are dropped."""
+        loop = asyncio.get_running_loop()
+        deadline = sent + self._resp_timeout
+        finish = deadline + modbus.MAX_ADU * self._char_s + self._gap
+        buf = bytearray()
+        dropped = 0  # bytes cut off the front of buf (no reply is that long)
+        quiet = False
+        while True:
+            scan = modbus.find_reply(buf, unit, request, quiet=quiet)
+            if scan.span is not None:
+                start, end = scan.span
+                self._dropped(buf[:start])
+                self._delivered(bytes(buf[start:end]))
+                self._dropped(buf[end:])
+                return bytes(buf[start + 1:end - 2])
+            left = (finish if scan.pending else deadline) - loop.time()
+            if left <= 0:
                 break
-            buf += more
-        return bytes(buf)
+            if buf and not quiet:
+                left = min(left, self._gap)  # then try what came as a whole frame
+            try:
+                chunk = await asyncio.wait_for(reader.read(READ_CHUNK), timeout=left)
+            except asyncio.TimeoutError:
+                quiet = bool(buf)
+                continue
+            if not chunk:
+                raise ConnectionError("serial EOF")
+            buf += chunk
+            quiet = False
+            if len(buf) > 2 * modbus.MAX_ADU:  # a reply can't begin before the last MAX_ADU
+                self._dropped(buf[:-modbus.MAX_ADU])
+                dropped += len(buf) - modbus.MAX_ADU
+                del buf[:-modbus.MAX_ADU]
+        if buf or dropped:
+            self._dropped(buf)
+            what = ("a frame from it that is cut short or fails its CRC" if scan.started
+                    else "no frame from it")
+            self._note("bad", unit, f"unit {unit}: no usable reply to FC{request[0]} within "
+                       f"{self._resp_timeout:g} s; dropped {dropped + len(buf)} byte(s) "
+                       f"({what})")
+        return None
+
+    def _delivered(self, frame: bytes) -> None:
+        self.status.bytes_in += len(frame)
+        self._feed_monitors(b"\xaa rx " + frame)
+        if self._tracer:
+            self._tracer.write("ser>net", frame)
+        self._feed_traffic(FROM_DEVICE, frame)
+
+    def _dropped(self, data) -> None:
+        """Bytes read off the line that are not a reply: counted, and shown in the trace
+        (as ser>drop), the console and the hex view like any others."""
+        if not data:
+            return
+        data = bytes(data)
+        self.status.bytes_in += len(data)
+        self._feed_monitors(b"\xaa rx (dropped) " + data)
+        if self._tracer:
+            self._tracer.write("ser>drop", data)
+        self._feed_traffic(FROM_DEVICE, data)
+
+    def _note(self, kind: str, unit: int, message: str) -> None:
+        """Log a note about the replies on the line, at most once per NOTE_EVERY_S for one
+        kind and unit: a slave that keeps failing every request must not flood the log."""
+        now = time.monotonic()
+        last, held = self._notes.get((kind, unit), (None, 0))
+        if last is not None and now - last < NOTE_EVERY_S:
+            self._notes[(kind, unit)] = (last, held + 1)
+            return
+        self._notes[(kind, unit)] = (now, 0)
+        more = f" (and {held} more since the last such line)" if held else ""
+        self._log(message + more)
 
     # ---------------- network side ----------------
     def _log_policy(self) -> None:
