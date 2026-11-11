@@ -31,6 +31,10 @@ from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
 )
 
+# a mappings file to import may be larger than other requests (server.MAX_BODY_BYTES):
+# the importer's file limit, plus the form's other fields
+IMPORT_MAX_BYTES = importer.MAX_FILE_BYTES + 64 * 1024
+
 
 def routes(ctx: Ctx) -> list:
     state, render = ctx.state, ctx.render
@@ -1114,7 +1118,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/config/export", config_export),
         # the body is refused (413) past the import file limit, before it is spooled
         Route("/settings/config/import", config_import, methods=["POST"],
-              max_body_size=importer.MAX_FILE_BYTES + 64 * 1024),  # + the form's other fields
+              max_body_size=IMPORT_MAX_BYTES),
         Route("/settings/config/import/apply", config_import_apply, methods=["POST"]),
         Route("/settings/notifications", settings_notifications_post, methods=["POST"]),
         Route("/settings/audit", audit_page),

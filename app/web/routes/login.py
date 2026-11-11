@@ -20,6 +20,10 @@ from .common import Ctx, csrf_failed
 from .forms import _password_problem, _username_problem
 
 OIDC_COOKIE = "ser2net_oidc"
+# The sign-in, first-run setup and sign-out forms are a few short fields: a larger request
+# is refused (413) before it is read, a file or a long field (400) while it is.
+FORM_MAX_BYTES = 64 * 1024
+FORM_LIMITS = {"max_files": 0, "max_fields": 16, "max_part_size": 16 * 1024}
 
 
 def routes(ctx: Ctx) -> list:
@@ -274,7 +278,7 @@ def routes(ctx: Ctx) -> list:
 
     async def login_post(request):
         ip = client_ip(request)
-        form = await request.form()
+        form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         if state.rate_limiter.blocked(ip):
@@ -325,7 +329,7 @@ def routes(ctx: Ctx) -> list:
                       oidc_enabled=state.config.oidc.enabled)
 
     async def logout_post(request):
-        form = await request.form()
+        form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         # the cookie is a signed token: end it on the server too, so a copy of it is
@@ -354,7 +358,7 @@ def routes(ctx: Ctx) -> list:
         return setup_page(request, 200 if trusted else 403)
 
     async def setup_post(request):
-        form = await request.form()
+        form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         if state.setup_locked:
@@ -402,10 +406,10 @@ def routes(ctx: Ctx) -> list:
 
     return [
         Route("/login", login_get, methods=["GET"]),
-        Route("/login", login_post, methods=["POST"]),
-        Route("/logout", logout_post, methods=["POST"]),
+        Route("/login", login_post, methods=["POST"], max_body_size=FORM_MAX_BYTES),
+        Route("/logout", logout_post, methods=["POST"], max_body_size=FORM_MAX_BYTES),
         Route("/auth/oidc/login", oidc_login, methods=["GET"]),
         Route("/auth/oidc/callback", oidc_callback, methods=["GET"]),
         Route("/setup", setup_get, methods=["GET"]),
-        Route("/setup", setup_post, methods=["POST"]),
+        Route("/setup", setup_post, methods=["POST"], max_body_size=FORM_MAX_BYTES),
     ]
