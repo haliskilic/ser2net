@@ -6,7 +6,7 @@ from starlette.routing import Route
 
 from ... import i18n
 from ...engine import netguard, portlist
-from .common import Ctx
+from .common import Ctx, unchanged_or
 
 
 def routes(ctx: Ctx) -> list:
@@ -70,9 +70,11 @@ def routes(ctx: Ctx) -> list:
         ports = state.ports.get()
         show_all = request.query_params.get("all") == "1"
         shown = portlist.visible(ports, show_all)
-        return render(request, "_ports_table.html", ports=shown, show_all=show_all,
-                      hidden=len(ports) - len(portlist.visible(ports)),
-                      in_use=state.supervisor.devices_in_use())
+        # refreshed every 5 s: 204 while the ports are what the browser shows already
+        return unchanged_or(request, render(request, "_ports_table.html", ports=shown,
+                                            show_all=show_all,
+                                            hidden=len(ports) - len(portlist.visible(ports)),
+                                            in_use=state.supervisor.devices_in_use()))
 
     async def set_language(request):
         """/lang/tr?next=/settings: remember the visitor's UI language (a cookie), then

@@ -62,6 +62,28 @@ document.addEventListener("htmx:beforeSwap", function (e) {
   }
 });
 
+// 1c) A panel that refreshes itself ("every Ns": the mappings table, the fleet view, the
+//     ports, a mapping's log) is swapped only when its content changed: it sends the hash
+//     of what it shows, and the server answers 204 otherwise (no flicker; the keyboard
+//     focus, a text selection and the scroll position stay). The hash comes back in
+//     X-Content-Hash, or (the log, which each refresh replaces) in the panel's data-hash.
+function polls(el) {
+  var t = el && el.getAttribute ? el.getAttribute("hx-trigger") : "";
+  return !!t && /\bevery\b/.test(t);
+}
+document.addEventListener("htmx:configRequest", function (e) {
+  var el = e.detail.elt;
+  if (polls(el) && el.getAttribute("data-hash"))
+    e.detail.headers["X-Content-Hash"] = el.getAttribute("data-hash");
+});
+document.addEventListener("htmx:afterRequest", function (e) {
+  var el = e.detail.elt, xhr = e.detail.xhr;
+  if (polls(el) && xhr && xhr.status === 200) {
+    var h = xhr.getResponseHeader("X-Content-Hash");
+    if (h) el.setAttribute("data-hash", h);
+  }
+});
+
 // 2) "Custom…" reveal: a <select data-custom="fieldName"> toggles the sibling
 //    <input name="fieldName"> when its value is "custom".
 function syncCustomInputs(root) {
@@ -253,8 +275,8 @@ document.addEventListener("htmx:beforeSwap", function (e) {
 });
 
 // 5) Dashboard mappings table: search / state filter / sort / bulk actions, applied
-//    on the client to every refreshed copy of the table. The table refresh itself
-//    answers 204 when nothing changed (X-Content-Hash), so the page doesn't flicker.
+//    on the client to every refreshed copy of the table (which is swapped only when it
+//    changed, see 1c).
 (function () {
   var selected = new Set();          // mapping ids ticked for a bulk action
   var KEY = "ser2net-dashboard";     // per-browser filter memory
@@ -334,19 +356,6 @@ document.addEventListener("htmx:beforeSwap", function (e) {
       action: b.getAttribute("data-bulk-action"), ids: Array.from(selected) } });
   });
 
-  // only swap the table when it changed (the server answers 204 otherwise)
-  document.addEventListener("htmx:configRequest", function (e) {
-    var el = e.detail.elt;
-    if (el && el.id === "mappings" && el.getAttribute("data-hash"))
-      e.detail.headers["X-Content-Hash"] = el.getAttribute("data-hash");
-  });
-  document.addEventListener("htmx:afterRequest", function (e) {
-    var el = e.detail.elt, xhr = e.detail.xhr;
-    if (el && el.id === "mappings" && xhr && xhr.status === 200) {
-      var h = xhr.getResponseHeader("X-Content-Hash");
-      if (h) el.setAttribute("data-hash", h);
-    }
-  });
   document.addEventListener("htmx:afterSwap", function (e) {
     if (e.target && e.target.id === "mappings") apply();
   });
@@ -448,10 +457,6 @@ var feedback = (function () {
       : tr("failed", "That did not work (HTTP {0}).", xhr.status);
   }
 
-  function polls(el) {
-    var t = el && el.getAttribute ? el.getAttribute("hx-trigger") : "";
-    return !!t && /\bevery\b/.test(t);
-  }
   function pollKey(el) { return "poll " + (el.id || el.getAttribute("hx-get") || ""); }
   function setStale(el, on) {
     if (on) {

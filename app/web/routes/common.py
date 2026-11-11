@@ -5,10 +5,11 @@ the helpers that used to be closures inside one big ``build_routes()`` live here
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import urllib.parse
 
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 
 from ...config import ROLE_RANK
 from ...i18n import _
@@ -16,6 +17,18 @@ from .. import auth
 
 # HTMX response header: tells the dashboard to re-fetch the mappings table now
 TRIGGER = {"HX-Trigger": "refreshMappings"}
+
+
+def unchanged_or(request, resp):
+    """A fragment the dashboard polls: 204 when the browser shows this content already
+    (the X-Content-Hash it sent; htmx then keeps the panel as it is — no flicker, the
+    focus, a text selection and the scroll position stay), else the fragment with its
+    hash."""
+    digest = hashlib.sha256(resp.body).hexdigest()[:16]
+    if request.headers.get("x-content-hash") == digest:
+        return Response(status_code=204, headers={"X-Content-Hash": digest})
+    resp.headers["X-Content-Hash"] = digest
+    return resp
 
 
 def notice(text: str, kind: str = "ok") -> dict:

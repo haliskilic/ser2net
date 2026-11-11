@@ -15,7 +15,10 @@
     <tr data-mid="{{ m.id }}" data-name="{{ m.name|lower }}" data-state="{{ 'problem' if problem else state }}"
         data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
         data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}">
-      <td class="col-name">{% if can_edit %}<input type="checkbox" class="row-select" value="{{ m.id }}" aria-label="{{ _('select %(name)s', name=m.name) }}"> {% endif %}{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">{{ _("disabled") }}</span>{% endif %}</td>
+      {# the ids: htmx puts the keyboard focus back on a control after the table's 2-second
+         refresh; every row button is described by the mapping's name (screen readers) #}
+      {% set rid = 'm-' ~ m.id %}
+      <td class="col-name">{% if can_edit %}<input type="checkbox" class="row-select" id="{{ rid }}-select" value="{{ m.id }}" aria-label="{{ _('select %(name)s', name=m.name) }}"> {% endif %}<span id="{{ rid }}-name">{{ m.name|softbreak }}</span>{% if not m.enabled %} <span class="tag">{{ _("disabled") }}</span>{% endif %}</td>
       <td data-label="{{ _('Serial') }}">
         <div class="mono">{{ m.serial.port|softbreak }}{% if m.serial.match %} <span class="tag" title="{{ _('found by its USB identity %(id)s', id=m.serial.match.vid ~ ':' ~ m.serial.match.pid ~ ((' [' ~ m.serial.match.serial_number ~ ']') if m.serial.match.serial_number else '')) }}">USB-ID</span>{% endif %}</div>
         {% if st and st.device and st.device != m.serial.port %}<div class="sub mono" title="{{ _('device opened now') }}">→ {{ st.device|softbreak }}</div>{% endif %}
@@ -58,21 +61,21 @@
           {% if can_edit %}
           <div class="btn-group">
             {% if m.enabled %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/stop" hx-swap="none" hx-disabled-elt="this">{{ _("Stop") }}</button>
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/restart" hx-swap="none" hx-disabled-elt="this">{{ _("Restart") }}</button>
+            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/stop" hx-swap="none" hx-disabled-elt="this">{{ _("Stop") }}</button>
+            <button class="btn sm" id="{{ rid }}-restart" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/restart" hx-swap="none" hx-disabled-elt="this">{{ _("Restart") }}</button>
             {% else %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/start" hx-swap="none" hx-disabled-elt="this">{{ _("Start") }}</button>
+            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/start" hx-swap="none" hx-disabled-elt="this">{{ _("Start") }}</button>
             {% endif %}
-            <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/form" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
+            <button class="btn sm" id="{{ rid }}-edit" aria-describedby="{{ rid }}-name" hx-get="/api/mappings/{{ m.id }}/form" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
           </div>
           {% endif %}
           <div class="btn-group">
-            <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Log") }}</button>
-            <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Monitor") }}</button>
-            {% if can_edit and m.options.trace_both %}<button class="btn sm" hx-get="/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Trace") }}</button>{% endif %}
+            <button class="btn sm" id="{{ rid }}-log" aria-describedby="{{ rid }}-name" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Log") }}</button>
+            <button class="btn sm" id="{{ rid }}-monitor" aria-describedby="{{ rid }}-name" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Monitor") }}</button>
+            {% if can_edit and m.options.trace_both %}<button class="btn sm" id="{{ rid }}-trace" aria-describedby="{{ rid }}-name" hx-get="/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Trace") }}</button>{% endif %}
             {% if can_edit %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none" hx-disabled-elt="this">{{ _("Copy") }}</button>
-            <button class="btn sm danger" hx-delete="/api/mappings/{{ m.id }}"
+            <button class="btn sm" id="{{ rid }}-copy" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none" hx-disabled-elt="this">{{ _("Copy") }}</button>
+            <button class="btn sm danger" id="{{ rid }}-delete" aria-describedby="{{ rid }}-name" hx-delete="/api/mappings/{{ m.id }}"
                     hx-confirm="{{ _('Delete mapping “%(name)s”?', name=m.name) }}" hx-swap="none" hx-disabled-elt="this">{{ _("Delete") }}</button>
             {% endif %}
           </div>

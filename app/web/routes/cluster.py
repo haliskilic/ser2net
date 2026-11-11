@@ -27,7 +27,7 @@ from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_
 from ...i18n import _
 from .. import auth
 from . import ops
-from .common import Ctx, csrf_failed, notice, start_failed
+from .common import Ctx, csrf_failed, notice, start_failed, unchanged_or
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -244,8 +244,9 @@ def routes(ctx: Ctx) -> list:
                   "addr": peer_addr(local["ip"], local["port"]),
                   "uptime": _fmt_uptime(local["uptime_s"])}]
         if is_anonymous(request):  # other nodes' data needs a real login here
-            return render(request, "_cluster_body.html", nodes=nodes, can_edit=False,
-                          discovery_error="", peers_hidden=True)
+            return unchanged_or(request, render(request, "_cluster_body.html", nodes=nodes,
+                                                can_edit=False, discovery_error="",
+                                                peers_hidden=True))
         targets = state.cluster.all_targets()
         results = await asyncio.gather(*[state.cluster.fetch_peer(t) for t in targets]) \
             if targets else []
@@ -254,8 +255,11 @@ def routes(ctx: Ctx) -> list:
         c = state.cluster
         notes = {"copies": c.copies(), "shared": c.shared_ids(), "other_key": c.other_key_nodes(),
                  "legacy": c.legacy_nodes()}
-        return render(request, "_cluster_body.html", nodes=nodes, can_edit=can_edit(request),
-                      discovery_error=state.cluster.discovery_error, notes=notes)
+        # refreshed every 5 s: 204 when the fleet view is what the browser shows already
+        return unchanged_or(request, render(request, "_cluster_body.html", nodes=nodes,
+                                            can_edit=can_edit(request),
+                                            discovery_error=state.cluster.discovery_error,
+                                            notes=notes))
 
     async def cluster_control(request):
         """Peer-facing remote control: another cluster node (presenting the shared key)
