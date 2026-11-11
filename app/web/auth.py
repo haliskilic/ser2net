@@ -35,50 +35,95 @@ from collections import OrderedDict, deque
 SESSION_COOKIE = "ser2net_session"
 CSRF_COOKIE = "ser2net_csrf"
 
+# The scrypt cost of new password hashes: N=2^14, r=8, p=5, OWASP's minimum for scrypt.
+# It needs 16 MiB like the p=1 used before 2.9, and about 5 times the CPU time. A hash
+# names the cost it was made with ("scrypt:N:r:p$<salt hex>$<hash hex>"), so the cost can
+# change without breaking the hashes stored before; one in the format of older versions
+# ("scrypt$<salt hex>$<hash hex>") was made with N=2^14, r=8, p=1.
 _SCRYPT_N = 2 ** 14
 _SCRYPT_R = 8
-_SCRYPT_P = 1
+_SCRYPT_P = 5
 _DKLEN = 32
+_COST = (_SCRYPT_N, _SCRYPT_R, _SCRYPT_P)
+_LEGACY_COST = (2 ** 14, 8, 1)
+# what a stored hash may ask for (more is refused, not computed): at most 256 MiB
+_MAX_N, _MAX_R, _MAX_P, _MAX_MEM, _MAX_DKLEN = 2 ** 20, 32, 64, 256 * 1024 * 1024, 64
 
 
 # --------------------------------------------------------------------------
 # password hashing
 # --------------------------------------------------------------------------
+def _cost(scheme: str) -> tuple[int, int, int] | None:
+    """(N, r, p) a stored hash's scheme names ("scrypt" or "scrypt:N:r:p"), or None."""
+    if scheme == "scrypt":
+        return _LEGACY_COST
+    name, _sep, rest = scheme.partition(":")
+    values = rest.split(":")
+    if name != "scrypt" or len(values) != 3 or not all(v.isascii() and v.isdigit()
+                                                       for v in values):
+        return None
+    n, r, p = (int(v) for v in values)
+    if not (2 <= n <= _MAX_N and n & (n - 1) == 0 and 1 <= r <= _MAX_R and 1 <= p <= _MAX_P
+            and 128 * r * n <= _MAX_MEM):
+        return None
+    return n, r, p
+
+
+def _parse(stored) -> tuple[tuple[int, int, int], bytes, bytes] | None:
+    """(cost, salt, hash) of a hash_password() result (of any version), or None."""
+    parts = str(stored).split("$")
+    if len(parts) != 3:
+        return None
+    cost = _cost(parts[0])
+    try:
+        salt, expected = bytes.fromhex(parts[1]), bytes.fromhex(parts[2])
+    except ValueError:
+        return None
+    if cost is None or not salt or not 1 <= len(expected) <= _MAX_DKLEN:
+        return None
+    return cost, salt, expected
+
+
+def _scrypt(password: str, salt: bytes, cost: tuple[int, int, int], dklen: int) -> bytes:
+    n, r, p = cost
+    # the memory these parameters need (OpenSSL refuses more than 32 MiB unless told)
+    maxmem = 128 * r * (n + p + 2) + 1024 * 1024
+    return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=n, r=r, p=p, dklen=dklen,
+                          maxmem=maxmem)
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
-    dk = hashlib.scrypt(password.encode("utf-8"), salt=salt,
-                        n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=_DKLEN)
-    return f"scrypt${salt.hex()}${dk.hex()}"
+    dk = _scrypt(password, salt, _COST, _DKLEN)
+    return f"scrypt:{_SCRYPT_N}:{_SCRYPT_R}:{_SCRYPT_P}${salt.hex()}${dk.hex()}"
 
 
 # What a sign-in under a name that has no local account is checked against while there is
 # no directory to ask: a hash of a password nobody knows, so that such a sign-in takes as
 # long as a wrong password and the answer's timing doesn't tell which names have one.
-DUMMY_HASH = f"scrypt${secrets.token_hex(16)}${secrets.token_hex(_DKLEN)}"
+DUMMY_HASH = (f"scrypt:{_SCRYPT_N}:{_SCRYPT_R}:{_SCRYPT_P}"
+              f"${secrets.token_hex(16)}${secrets.token_hex(_DKLEN)}")
 
 
 def is_password_hash(stored: str) -> bool:
-    """Is `stored` a hash_password() result ("scrypt$<salt hex>$<hash hex>")?"""
-    parts = str(stored).split("$")
-    if len(parts) != 3 or parts[0] != "scrypt":
-        return False
-    try:
-        return bool(bytes.fromhex(parts[1])) and bool(bytes.fromhex(parts[2]))
-    except ValueError:
-        return False
+    """Is `stored` a hash_password() result, of this version or an older one?"""
+    return _parse(stored) is not None
+
+
+def needs_rehash(stored: str) -> bool:
+    """Was `stored` made with another cost than new hashes get (an older version's)?"""
+    parsed = _parse(stored)
+    return parsed is None or parsed[0] != _COST or len(parsed[2]) != _DKLEN
 
 
 def verify_password(password: str, stored: str) -> bool:
+    parsed = _parse(stored)
+    if parsed is None:
+        return False
+    cost, salt, expected = parsed
     try:
-        scheme, salt_hex, hash_hex = stored.split("$", 2)
-        if scheme != "scrypt":
-            return False
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(hash_hex)
-        dk = hashlib.scrypt(password.encode("utf-8"), salt=salt,
-                            n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=len(expected))
-        return hmac.compare_digest(dk, expected)
-    except (ValueError, AttributeError):
+        return hmac.compare_digest(_scrypt(password, salt, cost, len(expected)), expected)
+    except (ValueError, AttributeError, MemoryError):  # not text; out of memory
         return False
 
 

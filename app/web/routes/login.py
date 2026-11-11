@@ -309,6 +309,27 @@ def routes(ctx: Ctx) -> list:
         folded = name.casefold()
         return any(u.username.casefold() == folded for u in state.config.users)
 
+    async def _renew_hash(user: User, password: str) -> None:
+        """A local account's password hash from an older version (a lower scrypt cost) is
+        made again with today's cost once its password has been checked. Best effort:
+        the sign-in works even when this can't be saved (it is tried again at the next
+        one), and the account's sessions stay (pwd_version is unchanged)."""
+        if state.password_work.busy():
+            return
+        old = user.password_hash
+        new = await state.password_work.run(auth.hash_password, password)
+        async with state.config_lock:
+            if state.config.get_user(user.username) is not user or user.password_hash != old:
+                return  # changed meanwhile
+            user.password_hash = new
+            try:  # only this hash changes: an unrelated setting must not stop it
+                await asyncio.to_thread(state.store.save, state.config, validate=False)
+            except OSError as e:
+                user.password_hash = old
+                state.log(f"could not save the renewed password hash of {user.username!r}: {e}")
+                return
+        state.log(f"the password hash of {user.username!r} was renewed with today's scrypt cost")
+
     def _too_many(request):
         return render(request, "login.html", status_code=429,
                       error=_("Too many attempts. Wait a few minutes and try again."),
@@ -387,6 +408,8 @@ def routes(ctx: Ctx) -> list:
         if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
             state.name_limiter.reset(authed.username)
+            if local and auth.needs_rehash(authed.password_hash):
+                await _renew_hash(authed, password)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
             ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=authed.username)
             resp = RedirectResponse("/", status_code=303)
