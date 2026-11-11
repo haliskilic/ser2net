@@ -8,6 +8,7 @@ authenticated. Every response is JSON. The OpenAPI 3.0 description is served at
 """
 from __future__ import annotations
 
+from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
@@ -46,6 +47,8 @@ def build_api_routes(state):
     async def create_mapping(request):
         try:
             body = await request.json()
+        except HTTPException:  # a body over the size limit: 413
+            raise
         except Exception:
             return JSONResponse({"error": "invalid_json"}, status_code=400)
         if not isinstance(body, dict):
@@ -76,6 +79,8 @@ def build_api_routes(state):
             return JSONResponse({"error": "not_found"}, status_code=404)
         try:
             body = await request.json()
+        except HTTPException:  # a body over the size limit: 413
+            raise
         except Exception:
             return JSONResponse({"error": "invalid_json"}, status_code=400)
         if not isinstance(body, dict):
