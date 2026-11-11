@@ -345,9 +345,10 @@ def routes(ctx: Ctx) -> list:
         return ""
 
     def _ca_file_problem(ldap) -> str | None:
-        """Checked when the LDAP form is saved: the CA certificate file can be read and
-        holds a certificate."""
-        if not (ldap.tls_verify and ldap.ca_file.strip()):
+        """Checked when the LDAP form is saved with LDAP on over TLS (the only time the
+        file is used; switching LDAP off must work while it is missing): the CA
+        certificate file can be read and holds a certificate."""
+        if not (ldap.enabled and ldap.uses_tls and ldap.tls_verify and ldap.ca_file.strip()):
             return None
         try:
             ldap_auth.tls_context(ldap)
