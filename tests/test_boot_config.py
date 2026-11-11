@@ -15,6 +15,10 @@ way a container starts:
     fixing one broken part while others stay broken work; editing a broken part without
     fixing it, or adding a new clash, is refused with its error;
   * a write that fails is a warning, not a crash;
+  * what start-up adds for the accounts — the first admin from
+    SER2NET_ADMIN_PASSWORD_FILE, the session key and cluster id of a config.json that
+    had none — is saved once, also while a setting is accepted broken, and the next
+    start leaves the file alone;
   * fatal with one line and no traceback: an unusable SER2NET_BIND_IP / SER2NET_PORT, a
     config.json that can't be read or parsed, a first run that can't create it, an admin
     UI certificate that can't be read.
@@ -393,6 +397,55 @@ def test_invalid_settings_still_start():
           "part, deleting another are saved; an unfixed edit and a new clash are refused  OK")
 
 
+def test_accounts_saved_once():
+    data = new_dir()
+    path = os.path.join(data, "config.json")
+    pwfile = os.path.join(data, "admin-password.txt")
+    no_env = {"SER2NET_BIND_IP": None, "SER2NET_PORT": None}  # only the accounts change it
+    try:
+        with open(pwfile, "w", encoding="utf-8") as fh:
+            fh.write("boot-admin-pass-1\n")
+        doc = broken_config(PORTS)
+        doc["users"] = []
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        with env(SER2NET_ADMIN_PASSWORD_FILE=pwfile, SER2NET_ADMIN_USER="boss", **no_env):
+            _store, cfg = runtime.prepare_config(path)
+            saved = read_json(path)
+            assert [(u["username"], u["role"]) for u in saved["users"]] == [("boss", "admin")]
+            assert saved["secret_key"] == cfg.secret_key and saved["instance_id"] == cfg.instance_id
+            assert (saved["cluster"]["discovery_port"], saved["mappings"][3]["network"]["tls_cert"],
+                    saved["mappings"][4]["serial"]["baudrate"]) == ("not-a-port", MISSING, "9600"), \
+                "the broken parts must stay as they were"
+            assert len(backups(data)) == 1, backups(data)
+            assert "admin account 'boss' created from SER2NET_ADMIN_PASSWORD_FILE" in cfg.load_notes
+            assert "first_run_setup\tSER2NET_ADMIN_PASSWORD_FILE\tboss" in \
+                read_text(os.path.join(data, "audit.log"))
+            before, kept = file_state(path), backups(data)
+            _store, cfg = runtime.prepare_config(path)
+            assert file_state(path) == before and backups(data) == kept, "rewritten on a restart"
+            assert any("SER2NET_ADMIN_PASSWORD_FILE is ignored" in n for n in cfg.load_notes)
+        print("SER2NET_ADMIN_PASSWORD_FILE with a setting accepted broken: the admin, session "
+              "key and cluster id saved once, the next start leaves config.json alone  OK")
+
+        doc = read_json(path)
+        key = doc.pop("secret_key")
+        doc.pop("instance_id")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        with env(**no_env):
+            _store, cfg = runtime.prepare_config(path)
+            saved = read_json(path)
+            assert saved["secret_key"] == cfg.secret_key != key and saved["instance_id"]
+            before = file_state(path)
+            _store, again = runtime.prepare_config(path)
+            assert file_state(path) == before and again.secret_key == cfg.secret_key, \
+                "the session key must survive a restart"
+        print("a config.json without secret_key / instance_id: made once and kept  OK")
+    finally:
+        shutil.rmtree(data, ignore_errors=True)
+
+
 def test_write_failure_is_a_warning():
     data = new_dir()
     path = os.path.join(data, "config.json")
@@ -588,6 +641,7 @@ def main():
     test_problems_listed()
     test_saves_refuse_only_new_problems()
     test_invalid_settings_still_start()
+    test_accounts_saved_once()
     test_write_failure_is_a_warning()
     test_failed_write_keeps_what_was_accepted()
     test_fatal_with_one_line()
