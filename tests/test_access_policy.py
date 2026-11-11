@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import NetworkSettings
+from app.config import NetworkSettings, client_networks
 from app.engine import access
 from app.engine.serial_link import Backoff
 
@@ -40,6 +40,25 @@ def test_allow_list():
     assert policy(priority_client_ips=["10.9.9.9"]).is_priority("10.9.9.9")
     assert not policy().is_priority("10.9.9.9")
     print("allow-list: blank = any, CIDR/host match, IPv4-mapped IPv6, junk ignored  OK")
+
+
+def test_unusable_allow_list_admits_nobody():
+    """A list is set but no entry of it is an address or network (a hand-edited config.json:
+    edits refuse such entries): nobody gets in — before, the empty result admitted all."""
+    for entries in (["plc.local"], ["10.0.0.0/8, 192.168.1.0/24"], ["10.0.0.1-10.0.0.9"],
+                    ["10.0.0.0/33"], [""], "plc.local"):
+        p = policy(allowed_client_ips=entries)
+        for ip in ("10.0.0.7", "192.168.1.9", "127.0.0.1", "::1"):
+            assert not p.allowed(ip), (entries, ip)
+    # a bare text that is one network still works as that network (a one-entry list)
+    assert policy(allowed_client_ips="10.0.0.0/8").allowed("10.1.2.3")
+    nets, bad = client_networks(["10.0.0.0/8", "plc.local", "0.0.0.0", 7])
+    assert [str(n) for n in nets] == ["10.0.0.0/8", "0.0.0.0/0"] and bad == ["plc.local", "7"]
+    logs = []
+    a = policy(allowed_client_ips=["plc.local"]).admit("10.0.0.7", "10.0.0.7:5000", set(),
+                                                         logs.append)
+    assert not a.admitted and logs == ["rejected 10.0.0.7:5000: not in allowed list"], logs
+    print("allow-list with no usable entry: nobody admitted (was: everyone)  OK")
 
 
 def test_admit():
@@ -109,6 +128,7 @@ def test_backoff():
 
 def main():
     test_allow_list()
+    test_unusable_allow_list_admits_nobody()
     test_admit()
     test_backoff()
     print("\nPASS: client admission policy + reconnect backoff")

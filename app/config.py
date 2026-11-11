@@ -28,7 +28,7 @@ import typing
 import unicodedata
 import uuid
 from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
+from typing import Any, Iterable, Optional, Union
 from .i18n import _
 
 # ---------------------------------------------------------------------------
@@ -455,6 +455,26 @@ def normalize_cidr(value: str) -> str:
     return v
 
 
+ClientNetwork = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
+
+
+def client_networks(entries: Iterable[Any]) -> tuple[list[ClientNetwork], list[str]]:
+    """The networks of an allowed / priority client list (an address is a one-host network;
+    0.0.0.0 and :: are everyone, see normalize_cidr), and the entries that are none: a host
+    name, a range, a comma-joined list ... Edits refuse those (NetworkSettings.validate), so
+    only a hand-edited config.json has them; where a list is used, they are left out (an
+    allow-list none of whose entries is usable admits nobody: engine/access.AccessPolicy)."""
+    nets: list[ClientNetwork] = []
+    ignored: list[str] = []
+    for entry in entries or []:
+        text = entry if isinstance(entry, str) else str(entry)
+        try:
+            nets.append(ipaddress.ip_network(normalize_cidr(text), strict=False))
+        except ValueError:
+            ignored.append(text)
+    return nets, ignored
+
+
 # ---------------------------------------------------------------------------
 # Serial side
 # ---------------------------------------------------------------------------
@@ -657,11 +677,9 @@ class NetworkSettings:
                     raise ConfigError(_("TLS file not found: {0}").format(p))
         for label, lst in ((_("allowed"), self.allowed_client_ips),
                            (_("priority"), self.priority_client_ips)):
-            for cidr in lst:
-                try:
-                    ipaddress.ip_network(normalize_cidr(cidr), strict=False)
-                except ValueError:
-                    raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(label, repr(cidr))) from None
+            _nets, bad = client_networks(lst)
+            if bad:
+                raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(label, repr(bad[0])))
 
 
 def udp_peer_address(net: NetworkSettings) -> Optional[tuple[str, int]]:
@@ -991,6 +1009,17 @@ class MappingConfig:
         if self.kind == "net" and self.network.mode == "udp" and self.options.closeon:
             out.append(_("A close-on string is set, but a UDP mapping has no connections to "
                          "close: it is not used."))
+        if self.kind == "net":  # a list an edit would refuse: only in a hand-edited file
+            nets, bad = client_networks(self.network.allowed_client_ips)
+            if bad:
+                out.append(_("Allowed client IPs: these entries are not IP addresses or "
+                             "networks, so they are left out: {0}.").format(", ".join(bad))
+                           + ("" if nets else " " + _("No entry is usable, so every client "
+                                                      "is refused.")))
+            _nets, bad = client_networks(self.network.priority_client_ips)
+            if bad:
+                out.append(_("High-priority client IPs: these entries are not IP addresses or "
+                             "networks, so they are left out: {0}.").format(", ".join(bad)))
         return out
 
     def serial_sides(self) -> list[SerialSettings]:
@@ -1604,6 +1633,14 @@ class AppConfig:
                     f"mapping '{m.name}': its trace file is now traces/{m.id}-{m.options.trace_both} "
                     f"in the data directory (configured: {old!r}; traces are no longer written "
                     "outside it)")
+            for key in ("allowed_client_ips", "priority_client_ips"):
+                nets, bad = client_networks(getattr(m.network, key))
+                if bad and m.kind == "net":
+                    cfg.load_notes.append(
+                        f"mapping '{m.name}': network.{key} entries that are not IP addresses "
+                        f"or networks are left out: {', '.join(map(repr, bad))}"
+                        + ("; none is usable, so every client is refused until the list is "
+                           "fixed" if key == "allowed_client_ips" and not nets else ""))
             for side in m.serial_sides():
                 if url_port(side.port):
                     cfg.load_notes.append(

@@ -2,7 +2,9 @@
 (bridge.MappingRunner) and the Modbus gateway (modbus_gateway.ModbusGatewayRunner).
 
 - ``allowed_client_ips``: blank admits every source, otherwise only the listed IPs/CIDRs
-  (an IPv4-mapped IPv6 peer counts as its IPv4 address);
+  (an IPv4-mapped IPv6 peer counts as its IPv4 address); entries that are no address or
+  network (a hand-edited config.json) are left out, and a list with no usable entry at
+  all admits nobody, never everyone;
 - at ``max_connections`` a source in ``priority_client_ips`` always gets in by kicking a
   client (the oldest non-priority one, else the oldest); any other source gets in only
   with ``kick_old_user`` (kicking the same way), otherwise it is refused;
@@ -18,16 +20,15 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Collection, Iterable, Optional, Protocol, Union
+from typing import TYPE_CHECKING, Callable, Collection, Optional, Protocol
 
-from ..config import normalize_cidr
+from ..config import ClientNetwork as Network
+from ..config import client_networks
 
 if TYPE_CHECKING:
     import ssl
 
     from ..config import NetworkSettings
-
-Network = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
 
 
 class Client(Protocol):
@@ -37,15 +38,6 @@ class Client(Protocol):
     connected_at: float  # time.time() when it connected
 
     def kick(self, reason: str = ...) -> None: ...
-
-
-def parse_nets(cidrs: Iterable[str]) -> list[Network]:
-    """The networks of an IP/CIDR list; an unparsable entry is skipped (validated elsewhere)."""
-    nets = []
-    for c in cidrs:
-        with contextlib.suppress(ValueError):
-            nets.append(ipaddress.ip_network(normalize_cidr(c), strict=False))
-    return nets
 
 
 def ip_in_nets(ip: str, nets: Collection[Network]) -> bool:
@@ -80,12 +72,14 @@ class Admission:
 class AccessPolicy:
     def __init__(self, net: NetworkSettings) -> None:
         self.net = net
-        self._allowed = parse_nets(net.allowed_client_ips)
-        self._priority = parse_nets(net.priority_client_ips)
+        self._allowed, _ignored = client_networks(net.allowed_client_ips)
+        self._priority, _ignored = client_networks(net.priority_client_ips)
+        # no allow-list = everyone; one whose entries are all unusable = nobody (the runner
+        # logs which entries it left out at start: MappingConfig.ignored_settings)
+        self._everyone = not net.allowed_client_ips
 
     def allowed(self, ip: str) -> bool:
-        # empty allow-list = allow everyone
-        return True if not self._allowed else ip_in_nets(ip, self._allowed)
+        return self._everyone or ip_in_nets(ip, self._allowed)
 
     def is_priority(self, ip: str) -> bool:
         return ip_in_nets(ip, self._priority)
