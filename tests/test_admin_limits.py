@@ -28,7 +28,7 @@ import tempfile
 import threading
 import time
 
-from _server import Browser, Server
+from _server import Browser, Server, closed_by_server, silent_tls_client
 
 from app.config import AppConfig
 from app.web.auth import hash_password
@@ -263,6 +263,10 @@ def test_https():
         assert answers == [b"ok"] * 12, f"HTTPS clients at once: {answers}"
         with ctx.wrap_socket(connect(srv.port)) as s:  # handshake done, then nothing
             assert closed_within(s, 6) < 4, "an idle TLS connection must be closed in time"
+        # ... and its socket really goes, also when the client never answers the close
+        with silent_tls_client(srv.port, ctx) as raw:
+            took = closed_by_server(raw, 6)
+            assert took < 4, f"a silent TLS client's socket stayed open {took:.1f} s"
         with connect(srv.port) as plain:  # plain HTTP on the TLS port gets no answer
             plain.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
             plain.settimeout(5)
