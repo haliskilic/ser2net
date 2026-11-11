@@ -31,6 +31,16 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 _SOFT_BREAK_AFTER = re.compile(r"([/\\_.:@-])")
 
 
+_NOT_ID_CHAR = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def domid(value) -> str:
+    """*value* as part of an HTML id: other characters than letters, digits, _ and -
+    become _. (htmx keeps the keyboard focus on a polled table's buttons across a
+    refresh by their ids; a peer's address and mapping id are part of them.)"""
+    return _NOT_ID_CHAR.sub("_", str(value))
+
+
 def softbreak(value) -> Markup:
     """Escape *value* and allow a line break after / \\ _ . : @ - so a long device
     path or name wraps at a separator instead of mid-word (<wbr> adds no text,
@@ -197,6 +207,7 @@ def make_templates() -> Jinja2Templates:
         asset_version=__version__,
     )
     templates.env.filters["softbreak"] = softbreak
+    templates.env.filters["domid"] = domid
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")

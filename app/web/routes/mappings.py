@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import time
 
@@ -17,6 +18,7 @@ from ...i18n import _
 from . import ops
 from .common import (
     TRIGGER, Ctx, action_done, console_interactive, notice, sees_to_device, start_failed,
+    unchanged_or,
 )
 from .forms import _form_error, _modbus_points_json
 
@@ -64,17 +66,11 @@ def routes(ctx: Ctx) -> list:
             _("Copied as “{0}” (disabled: it uses the same serial port).").format(dup.name))})
 
     async def api_status(request):
-        resp = render(request, "_mappings_body.html",
-                      mappings=state.config.mappings,
-                      statuses=state.supervisor.all_status(),
-                      can_edit=can_edit(request))
-        # Polled every 2 s: when nothing changed since the browser's copy, answer 204
-        # (htmx then keeps the table as it is — no flicker, selections and scroll stay).
-        digest = hashlib.sha256(resp.body).hexdigest()[:16]
-        if request.headers.get("x-content-hash") == digest:
-            return Response(status_code=204, headers={"X-Content-Hash": digest})
-        resp.headers["X-Content-Hash"] = digest
-        return resp
+        # polled every 2 s: 204 when nothing changed since the browser's copy
+        return unchanged_or(request, render(request, "_mappings_body.html",
+                                            mappings=state.config.mappings,
+                                            statuses=state.supervisor.all_status(),
+                                            can_edit=can_edit(request)))
 
     async def mapping_bulk(request):
         """Start / stop / restart several mappings at once (the dashboard's selection)."""
@@ -137,8 +133,14 @@ def routes(ctx: Ctx) -> list:
             # panel says why (a 404 would be polled - and reported - every 5 seconds)
             return render(request, "_mapping_log.html", status_code=286, gone=True)
         lines = await asyncio.to_thread(state.read_mapping_log, mid, 1000)
+        # refreshed every 5 s: 204 while the browser shows these lines already (the hash
+        # goes into the panel, which each refresh replaces)
+        digest = hashlib.sha256(json.dumps([getattr(request.state, "lang", ""), m.name, lines])
+                                .encode()).hexdigest()[:16]
+        if request.headers.get("x-content-hash") == digest:
+            return Response(status_code=204)
         return render(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
-                      lines=lines)
+                      lines=lines, content_hash=digest)
 
     def _trace_files(mid):
         out = []

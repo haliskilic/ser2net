@@ -9,12 +9,16 @@ Checks:
     app.js shows it): save, start / stop / restart, bulk, copy, delete — as a warning
     when a mapping did not start, with the reason, which also goes to its own log;
     the answer itself stays as it was (status, empty body, HX-Trigger);
+  * every self-refreshing panel — the ports, the fleet view, a mapping's log, like the
+    mappings table — answers 204 while the browser shows its content already;
 
 Run: python3 tests/test_ui_feedback.py
 """
 import json
 import os
+import re
 import socket
+import time
 import urllib.parse
 
 from _server import ROOT, Browser, Server, free_port
@@ -143,10 +147,41 @@ def test_notices():
           "mapping did not start (also in its log)  OK")
 
 
+def test_unchanged_panels():
+    cfg = {"users": USERS, "mappings": [mapping("fb0000000005", "Epsilon")],
+           "cluster": {"enabled": True, "key": "feedback-cluster-key-1", "discovery_port": free_port()}}
+    with Server(cfg) as srv:
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        for path in ("/api/ports/table", "/api/cluster/status"):
+            st, h, body = b.get(path)
+            digest = h.get("X-Content-Hash")
+            assert st == 200 and digest and body, (path, st)
+            b.op.addheaders = [("X-Content-Hash", digest)]
+            st, h, body = b.get(path)
+            b.op.addheaders = []
+            assert st == 204 and body == "", (path, st, body[:80])
+            assert b.get(path)[0] == 200, "without the hash: the panel again"
+        # the log panel carries its hash in the panel (each refresh replaces it)
+        st, _, body = b.get("/api/mappings/fb0000000005/log")
+        digest = re.search(r'data-hash="([0-9a-f]{16})"', body).group(1)
+        b.op.addheaders = [("X-Content-Hash", digest)]
+        assert b.get("/api/mappings/fb0000000005/log")[0] == 204
+        b.post("/api/mappings/fb0000000005/start", htmx=True)   # a new log line
+        for _ in range(50):
+            st, _, body = b.get("/api/mappings/fb0000000005/log")
+            if st == 200:
+                break
+            time.sleep(0.1)
+        assert st == 200 and f'data-hash="{digest}"' not in body, "a new line: the new log"
+    print("ports, fleet view and log panels: 204 while unchanged  OK")
+
+
 def main():
     test_deleted_mapping_log()
     test_error_texts()
     test_notices()
+    test_unchanged_panels()
     print("\nPASS: dashboard request answers")
 
 

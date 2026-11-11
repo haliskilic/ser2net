@@ -435,6 +435,40 @@ def test_actions_hold_a_second_click():
     print("row, peer, bulk and form actions: disabled while their request runs  OK")
 
 
+def test_polled_controls_keep_their_ids():
+    """htmx 2 puts the keyboard focus back after a swap only on an element with an id: every
+    control of the polled tables (mappings, fleet view, ports) and of the self-refreshing
+    log panel has one, the same in every refresh, unique in the page (the fleet view's are
+    prefixed: this node's mappings are listed there too). Each row button is described by
+    the mapping's name, so "Stop" says which mapping it stops."""
+    env = make_templates().env
+    tpl = env.get_template("_mappings_body.html")
+    out = tpl.render(mappings=mappings(), statuses={}, can_edit=True)
+    assert out == tpl.render(mappings=mappings(), statuses={}, can_edit=True)
+    nodes = [{"name": "peer", "self": False, "source": "auto", "ip": "fd00::2", "port": 8443,
+              "addr": "[fd00::2]:8443", "online": True,
+              "mappings": [{"id": "m1", "name": "same id as here", "enabled": True},
+                           {"id": "x 2", "name": "odd id", "enabled": False}]}]
+    cluster = env.get_template("_cluster_body.html").render(can_edit=True, nodes=nodes)
+    ports = env.get_template("_ports_table.html").render(ports=[], hidden=2, show_all=False)
+    log = env.get_template("_mapping_log.html").render(mid="m1", mapping_name="a",
+                                                      lines=["x"], content_hash="0123")
+    ids = []
+    for markup in (out, cluster, ports, log):
+        root = parse(markup)
+        named = {n.attrs["id"] for n in root.walk() if n.attrs.get("id", "").endswith("-name")}
+        for n in root.walk():
+            if n.tag in ("button", "input") and n.attrs.get("type") != "hidden":
+                assert n.attrs.get("id"), f"no id: {n.tag} {n.attrs}"
+                assert re.fullmatch(r"[A-Za-z0-9_-]+", n.attrs["id"]), n.attrs["id"]
+                ids.append(n.attrs["id"])
+                if n.attrs["id"].startswith(("m-", "c-")) and n.tag == "button":
+                    assert n.attrs.get("aria-describedby") in named, n.attrs
+    assert len(ids) == len(set(ids)), sorted(i for i in ids if ids.count(i) > 1)
+    assert "m-m1-run" in ids and "m-m1-edit" in ids and "c-_fd00__2__8443-m1-run" in ids, ids
+    print("polled tables and the log panel: stable, unique ids; row buttons name their mapping  OK")
+
+
 def test_app_js_inserts_no_server_html():
     """app.js puts server texts into the page with textContent: the only innerHTML it
     writes is the empty string (closing a panel), and nothing else parses HTML."""
@@ -459,6 +493,7 @@ def main():
     test_mqtt_command_tags()
     test_feedback_area()
     test_actions_hold_a_second_click()
+    test_polled_controls_keep_their_ids()
     test_app_js_inserts_no_server_html()
     print("\nPASS: UI markup contract")
 
