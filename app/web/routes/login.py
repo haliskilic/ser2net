@@ -252,7 +252,8 @@ def routes(ctx: Ctx) -> list:
             return _provider_error(request, data, error)
         code = request.query_params.get("code", "")
         st = request.query_params.get("state", "")
-        if not data or not code or not _same(st, data.get("s")):
+        if (not data or not code or not _same(st, data.get("s"))
+                or not isinstance(data.get("r"), str) or not isinstance(data.get("n"), str)):
             return render(request, "login.html", status_code=400, error=None, oidc_enabled=True,
                           oidc_error=_("SSO state mismatch — please try again."))
         # "v": the PKCE verifier (a state cookie from before it was sent has none)
