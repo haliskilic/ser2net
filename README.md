@@ -749,6 +749,18 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
 
+`all.log`, stdout, `logs/<id>.log` ve `audit.log`'daki (görüntüleyicisi ve CSV'si dahil)
+**saatler** sunucunun yerel saatidir ve UTC farkını da içerir: `2026-11-06 12:00:00+03:00`.
+Böylece yaz saati bitince tekrarlanan saat birbirine karışmaz, bir container'ın UTC satırları
+da yerel saat sanılmaz. 2.9'dan önce yazılan satırlarda bu fark yoktur; ilk 19 karakter
+aynı kaldığından aynı dosyadaki eski ve yeni satırlar (eski sürümlerde de) aynı şekilde
+okunur. Trace dosyalarındaki satırlar `YYYY-MM-DD HH:MM:SS` biçiminde, sunucunun yerel
+saatiyle kalır (paneller saat dilimini gösterir); yedekler UTC ile adlandırılır, canlı hex
+görünümü ise tarayıcının saatini gösterir ve hangi dilim olduğunu yazar. Eski biçimi
+düzenli ifadeyle yakalayan bir log toplayıcının saniyeden sonraki isteğe bağlı farkı
+(`[+-]HH:MM`) da kabul etmesi gerekir. Docker'da `TZ` verilmedikçe saat dilimi UTC'dir
+([`docs/DOCKER.md`](docs/DOCKER.md)).
+
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
 ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış

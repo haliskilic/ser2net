@@ -9,7 +9,7 @@
       <a class="btn sm" href="/settings">{{ _("← Settings") }}</a>
     </div>
   </div>
-  <p class="muted mb-sm">{{ _('Sign-ins and every change to the configuration, newest first: who (user), from where (IP), what (action) and on what (detail). Times are the server’s local time. Kept in the data folder’s <span class="mono">audit.log</span> (rotated at 5 MB, one older file kept).') }}</p>
+  <p class="muted mb-sm">{{ _('Sign-ins and every change to the configuration, newest first: who (user), from where (IP), what (action) and on what (detail). Times are the server’s local time with its offset from UTC (the server is at %(zone)s now; records written before version 2.9 have no offset). Kept in the data folder’s <span class="mono">audit.log</span> (rotated at 5 MB, one older file kept).', zone=server_zone()) }}</p>
   <form method="get" action="/settings/audit" class="filters">
     <input type="search" name="q" value="{{ filters.q }}" placeholder="{{ _('Search (name, IP, detail…)') }}">
     <select name="action">
