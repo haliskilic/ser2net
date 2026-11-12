@@ -979,5 +979,6 @@
   "Restart “%(name)s”? %(num)s connected clients will be disconnected.": "“%(name)s” yeniden başlatılsın mı? Bağlı %(num)s istemcinin bağlantısı kesilecek.",
   "Imported {0} mapping (replaced the existing ones).": "{0} eşleme içe aktarıldı (mevcut eşlemelerin yerini aldı).",
   "{0} byte left out: this browser did not keep up": "{0} bayt atlandı: bu tarayıcı yetişemedi",
-  "for visitors who haven’t picked one with the language switch": "dil seçiciyle bir dil seçmemiş ziyaretçiler için"
+  "for visitors who haven’t picked one with the language switch": "dil seçiciyle bir dil seçmemiş ziyaretçiler için",
+  "serial option '{0}': ser2net 4.x takes the parity words in capitals only ({1}), so it did not accept this one; not imported": "seri seçenek '{0}': ser2net 4.x parite sözcüklerini yalnızca büyük harfle ({1}) kabul eder, bunu kabul etmemişti; içe aktarılmadı"
 }

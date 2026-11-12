@@ -808,6 +808,24 @@ def _tls(c: _Conn) -> None:
 
 
 _SPEED = re.compile(r"(?:speed=)?(\d+)([NEOMS])?([5-8])?([12])?", re.I)
+_PARITY_WORDS = {"NONE": "N", "EVEN": "E", "ODD": "O", "MARK": "M", "SPACE": "S"}
+
+
+def _serial_word(c: _Conn, tok: str) -> bool:
+    """The serial framing written as words (gensio still takes them, ser2net 3.x wrote
+    them so): 1STOPBIT / 2STOPBITS / 5DATABITS..8DATABITS in any case, the parity words
+    NONE EVEN ODD MARK SPACE in capitals (gensio compares those exactly). False if `tok`
+    is none of them."""
+    word = tok.upper()
+    if word in ("1STOPBIT", "2STOPBITS"):
+        c.serial["stopbits"] = int(word[0])
+    elif re.fullmatch(r"[5-8]DATABITS", word):
+        c.serial["bytesize"] = int(word[0])
+    elif tok in _PARITY_WORDS:
+        c.serial["parity"] = _PARITY_WORDS[tok]
+    else:
+        return False
+    return True
 
 
 def _windows_device(device: str) -> str:
@@ -855,6 +873,12 @@ def _serial_option(c: _Conn, tok: str) -> None:
         if m.group(4):
             c.serial["stopbits"] = int(m.group(4))
         return
+    if _serial_word(c, tok):
+        return
+    if tok.upper() in _PARITY_WORDS:
+        c.note(_("serial option '{0}': ser2net 4.x takes the parity words in capitals only "
+                 "({1}), so it did not accept this one; not imported").format(tok, tok.upper()))
+        return
     name, eq, value = tok.partition("=")
     low = name.lower()
     flag: Optional[bool] = True
@@ -880,11 +904,11 @@ def _serial_option(c: _Conn, tok: str) -> None:
     elif low == "nobreak":
         c.advanced["nobreak"] = bool(flag)
     elif low in ("dtr", "rts"):
-        state = (value or "on").strip().lower() if flag else "off"
-        if state in ("on", "off"):
-            c.serial[f"{low}_on_open"] = state
-        else:
+        on = _bool(value or "on") if flag else False  # gensio reads it as a boolean
+        if on is None:
             c.note(_("serial option '{0}' is not on/off, ignored").format(tok))
+        else:
+            c.serial[f"{low}_on_open"] = "on" if on else "off"
     elif low == "rs485":
         if value.strip().lower() not in ("", "off"):
             c.note(_("{0} is not imported: set RS-485 in the mapping's serial settings")
@@ -1395,8 +1419,7 @@ def _from_yaml(text: str, label: str, budget: _Budget) -> tuple[list[_Conn], lis
 _V3_STATE = re.compile(r":(rawlp|raw|telnet|off):")
 _V3_DIRECTIVE = re.compile(r"(BANNER|SIGNATURE|OPENSTR|CLOSESTR|CLOSEON|DEVICE|TRACEFILE|"
                            r"CONTROLPORT|RS485CONF|DEFAULT|ROTATOR|LED):")
-_V3_PARITY = {"NONE": "N", "EVEN": "E", "ODD": "O", "MARK": "M", "SPACE": "S",
-              "none": "N", "even": "E", "odd": "O", "mark": "M", "space": "S"}
+_V3_PARITY = {**_PARITY_WORDS, **{k.lower(): v for k, v in _PARITY_WORDS.items()}}
 _V3_TRACE = {"tr": "read", "tw": "write", "tb": "both"}
 _V3_IGNORED_DEFAULTS = ("local", "chardelay", "telnet_brk_on_sync")
 
@@ -1556,11 +1579,9 @@ class _V3:
         base, on = tok.lstrip("-"), not tok.startswith("-")
         if tok.isdigit():
             c.serial["baudrate"] = int(tok)
-        elif tok in ("1STOPBIT", "2STOPBITS"):
-            c.serial["stopbits"] = int(tok[0])
-        elif re.fullmatch(r"[5-8]DATABITS", tok):
-            c.serial["bytesize"] = int(tok[0])
-        elif tok in _V3_PARITY:
+        elif _serial_word(c, tok):
+            pass
+        elif tok in _V3_PARITY:  # (in small letters too)
             c.serial["parity"] = _V3_PARITY[tok]
         elif base in ("XONXOFF", "RTSCTS"):
             setattr(c, base.lower(), on)
