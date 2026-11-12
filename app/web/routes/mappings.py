@@ -206,7 +206,8 @@ def routes(ctx: Ctx) -> list:
             # saved, but it didn't start: say why where the form was (its row shows it too)
             error = str(started.get("detail") or "")
             return render(request, "_mapping_start_failed.html", headers=TRIGGER,
-                          mapping_name=msg, error=error, port_taken=_port_taken(error))
+                          mapping_name=msg, error=error, port_taken=_port_taken(error),
+                          retrying=bool(started.get("retrying")))
         return Response("", headers=TRIGGER)
 
     async def mapping_delete(request):

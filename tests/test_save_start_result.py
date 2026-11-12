@@ -5,7 +5,8 @@ by another program - another ser2net instance on the machine - or its TLS files 
 only the dashboard row showed it. Checks:
   * a mapping saved on a port another socket listens on: kept in config.json, and the
     answer (instead of an empty one that closes the form) says it didn't start, with the
-    error and, for a taken port, what to do; the table is refreshed and the row says error;
+    error and, for a taken port, what to do and that it is tried again (the supervisor's
+    bind retry); the table is refreshed and the row says error;
   * a mapping that is saved stopped (or starts) closes the form as before;
   * which errors count as a taken port (Linux, macOS, Windows texts).
 
@@ -54,10 +55,11 @@ def test_save() -> None:
         assert 'class="banner warn"' in body and "“Line &lt;1&gt;” is saved, but it didn’t start:" \
             in body, body
         assert "listens on that port: give the mapping a port of its own." in body, body
+        assert "It is started as soon as it can listen there" in body, body
         saved = [m for m in a.state.config.mappings if m.name == "Line <1>"]
         assert len(saved) == 1 and a.state.store.load().mappings[0].name == "Line <1>"
         status = a.state.supervisor.status(saved[0].id)
-        assert status is not None and status["state"] == "error", status
+        assert status is not None and status["state"] == "error" and status["retrying"], status
         assert "mapping saved: Line <1>" in a.lines
         # saved stopped (on a port of its own: this instance's mappings may not share one):
         # the form closes as before
