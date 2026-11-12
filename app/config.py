@@ -529,10 +529,13 @@ class NetworkSettings:
     # seconds and retry. 0 = no limit of our own (the OS gives up after ~21 s on
     # Windows, ~2 min on Linux).
     connect_timeout_s: float = 10.0
-    # Per-mapping TLS for the data bridge (server/client TCP). Both files required.
+    # Per-mapping TLS for the data bridge (server/client TCP), see engine/tls.py. Both files
+    # required. tls_key_password decrypts an encrypted key (never asked for on a terminal);
+    # edits load the files with it (MappingConfig.check_tls_files).
     tls: bool = False
     tls_cert: str = ""
     tls_key: str = ""
+    tls_key_password: str = ""
 
     @property
     def listens(self) -> bool:
@@ -923,6 +926,22 @@ class MappingConfig:
         if self.kind == "net" and net.mode == "udp":
             self._validate_udp_peer()
 
+    def check_tls_files(self) -> None:
+        """An edit's check (mapping form, so also a cluster peer's save on the node it is
+        for; REST API; an import, as a warning), not part of validate()/validate_input(),
+        which can't load files: a TLS mapping's certificate and key must load as the mapping
+        will load them (engine/tls.py), its key decrypted with tls_key_password, so a key
+        that needs a password, a wrong password or a key that is not the certificate's is
+        refused here rather than found out when the mapping starts. Raises ConfigError."""
+        net = self.network
+        if not (self.kind == "net" and net.tls and net.mode != "udp"):
+            return
+        from .engine.tls import TlsFileError, mapping_context
+        try:
+            mapping_context(net)
+        except TlsFileError as e:
+            raise ConfigError(tls_file_message(e)) from None
+
     def _validate_udp_peer(self) -> None:
         """A UDP mapping's reply address and peer timeout (an edit's rules: a stored
         malformed reply address makes the mapping fail to start, see udp_peer_address)."""
@@ -954,6 +973,21 @@ class MappingConfig:
         if not _is_number(timeout) or not (0 <= timeout <= MAX_TIMER_S):
             raise ConfigError(_("{0} must be between 0 (off) and {1} seconds.").format(
                 _("Peer timeout"), MAX_TIMER_S))
+
+
+def tls_file_message(e: Any) -> str:
+    """The UI's text for an engine.tls.TlsFileError."""
+    if e.kind == "unreadable":
+        return _("The TLS file {0} can't be read: {1}").format(e.path, e.detail)
+    if e.kind == "password":
+        return _("The TLS key {0} is password-protected: enter its password (TLS key "
+                 "password).").format(e.path)
+    if e.kind == "unusable":
+        return _("The TLS certificate {0} can't be used with its key ({1}). Is the key "
+                 "password right, and is it the certificate's key?").format(e.path, e.detail)
+    if e.kind == "no_cert":
+        return _("Enable TLS requires both a certificate and a key.")
+    return str(e)
 
 
 # ---------------------------------------------------------------------------

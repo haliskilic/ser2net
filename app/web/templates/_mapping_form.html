@@ -169,6 +169,12 @@
         <label>{{ _("TLS certificate path") }} <input type="text" name="network_tls_cert" value="{{ mapping.network.tls_cert }}" placeholder="/path/cert.pem"></label>
         <label>{{ _("TLS key path") }} <input type="text" name="network_tls_key" value="{{ mapping.network.tls_key }}" placeholder="/path/key.pem"></label>
       </div>
+      {% set tls_pw_kept = tls_pw_stored if tls_pw_stored is defined else mapping.network.tls_key_password %}
+      <div class="grid2">
+        <label>{{ _("TLS key password") }} <span class="muted">({{ _("only for an encrypted key") }})</span>
+          <input type="password" name="network_tls_key_password" value="{{ tls_pw_typed | default('') }}" placeholder="{{ _('•••••• (unchanged)') if tls_pw_kept else _('optional') }}" autocomplete="new-password"></label>
+        {% if tls_pw_kept %}<label class="chk chk-pad"><input type="checkbox" name="network_tls_key_password_clear" {% if tls_pw_clear | default(false) %}checked{% endif %}> {{ _("Remove the stored password") }}</label>{% endif %}
+      </div>
     </div>
 
     <div data-show-when="network_mode=server,client">

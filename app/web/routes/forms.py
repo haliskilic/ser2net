@@ -195,6 +195,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         "tls": _checkbox(form, "network_tls"),
         "tls_cert": form.get("network_tls_cert", "").strip(),
         "tls_key": form.get("network_tls_key", "").strip(),
+        # never shown in the form: blank keeps the stored one (_preserve_unmanaged_fields)
+        "tls_key_password": form.get("network_tls_key_password", ""),
     }
     if "network_keepalive_idle_s" in form:
         network.update(
@@ -310,6 +312,11 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
                     setattr(_section(new_map, section), attr,
                             getattr(_section(existing, section), attr))
         net = new_map.network
+        if not form.get("network_tls_key_password", ""):
+            # the form never shows the stored TLS key password: a blank field (or a form
+            # without it: an older node's) keeps it, unless the remove box is ticked
+            net.tls_key_password = ("" if _checkbox(form, "network_tls_key_password_clear")
+                                    else existing.network.tls_key_password)
         if "network_dual_stack_shown" not in form:
             # an older node's form (which may list this node's choices all the same): the
             # stored setting stays while the bind IP is a wildcard
@@ -334,13 +341,24 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     o.modbus_response_timeout_s = prev.modbus_response_timeout_s
 
 
+def tls_password_view(stored: str, form=None) -> dict:
+    """What _mapping_form.html shows of a mapping's TLS key password: whether one is stored,
+    never the password itself; re-drawn after an error, what was typed and the remove box
+    (without these, the form goes by the mapping it shows)."""
+    return {"tls_pw_stored": bool(stored),
+            "tls_pw_typed": form.get("network_tls_key_password", "") if form is not None else "",
+            "tls_pw_clear": form is not None and _checkbox(form, "network_tls_key_password_clear")}
+
+
 def _form_error(render, request, state, form, message: str):
     """Re-render the mapping form with the submitted values and an error banner."""
+    existing = None
     try:
         mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
         # keep stored values for fields this form didn't post (else the re-rendered,
         # hidden inputs would carry defaults into the next save)
-        _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id), form)
+        existing = state.config.get_mapping(mapping.id)
+        _preserve_unmanaged_fields(mapping, existing, form)
     except Exception:
         mapping = MappingConfig(name=form.get("name", ""))
     is_new = not form.get("id")
@@ -350,4 +368,6 @@ def _form_error(render, request, state, form, message: str):
                   modbus_points_json=_modbus_points_json(mapping),
                   ports=ports, ips=netinfo.list_ip_candidates(),
                   links=portlist.links(ports, (mapping.serial.port, mapping.serial_b.port)),
-                  error=message)
+                  error=message,
+                  **tls_password_view(existing.network.tls_key_password if existing else "",
+                                      form))

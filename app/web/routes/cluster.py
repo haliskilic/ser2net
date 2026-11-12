@@ -28,7 +28,9 @@ from ...i18n import _
 from .. import auth
 from . import ops
 from .common import Ctx, csrf_failed
-from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
+from .forms import (
+    _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields, tls_password_view,
+)
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
@@ -393,10 +395,13 @@ def routes(ctx: Ctx) -> list:
             state.cluster.get_peer(target, "/api/cluster/local"))
 
         def _reload(msg):
+            stored = ""
             try:
                 mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
                 if data and data.get("mapping"):
-                    _preserve_unmanaged_fields(mapping, MappingConfig.from_dict(data["mapping"]), form)
+                    peer_mapping = MappingConfig.from_dict(data["mapping"])
+                    stored = peer_mapping.network.tls_key_password
+                    _preserve_unmanaged_fields(mapping, peer_mapping, form)
             except Exception:
                 mapping = MappingConfig(name=form.get("name", ""))
             return render(request, "_mapping_form.html", status_code=400, mapping=mapping,
@@ -404,7 +409,8 @@ def routes(ctx: Ctx) -> list:
                           ports=portlist.visible((data or {}).get("ports", [])),
                           links=_peer_links(data),
                           ips=(data or {}).get("ips", []),
-                          remote=_remote(target, form.get("id", ""), mapping), error=msg)
+                          remote=_remote(target, form.get("id", ""), mapping), error=msg,
+                          **tls_password_view(stored, form))
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))

@@ -57,7 +57,7 @@ from .. import i18n
 from ..config import (
     MappingConfig, canonical_ip, host_port, mapping_file, udp_peer_address, udp_peer_timeout,
 )
-from . import netguard, portdiag, serial_io, sockopts
+from . import netguard, portdiag, serial_io, sockopts, tls
 from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
@@ -782,16 +782,7 @@ class MappingRunner:
 
     # ssl context for a connect-out TLS data bridge (a listener's: access.server_ssl)
     def _client_ssl(self):
-        net = self.mapping.network
-        if not net.tls:
-            return None
-        import ssl
-        ctx = ssl.create_default_context()
-        # data-bridge TLS: encrypt the link; peer cert is typically self-signed, so
-        # don't hard-fail verification (this is opportunistic transport encryption).
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
+        return tls.mapping_context(self.mapping.network)
 
     # ---------------- serial side ----------------
     async def serial_write(self, data: bytes) -> bool:
