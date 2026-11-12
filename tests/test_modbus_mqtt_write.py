@@ -37,6 +37,10 @@ anywhere without a broker or hardware. Checks:
   * Sparkplug B: every DCMD to a writable point is followed by a DDATA with the point's
     value read back, changed or not: a write of the current value, a refused value, a
     read-only mapping;
+  * a point's min / max / allowed refuse a value outside them before the bus (the answer
+    says why), "poll": false makes a writable point write-only (never polled, not read
+    back), the log shows the raw register value a fraction or a scale turned into, and a
+    stored limit that can't be used is ignored with a warning at start;
   * a write that comes while a poll is reading the unit's points (the slave sends it when
     the poll asks for the setpoint) is not followed by the value the poll read before it:
     plain and Sparkplug B report new, then new again, never new, old, new.
@@ -888,6 +892,96 @@ async def test_sparkplug_read_back(slave_port):
           "(the current value written, a refused value, read-only)  OK")
 
 
+async def test_point_limits(slave_port):
+    """min / max / allowed limit what MQTT may write (refused before the bus, with the
+    reason); "poll": false is a write-only point (never read, a write not read back); the
+    log names the raw value written when it is not the value itself."""
+    points = [
+        {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"},
+        {"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16",
+         "writable": True, "min": 0, "max": 1500},
+        {"name": "low", "unit": 1, "fn": 3, "address": 20, "dtype": "int16", "writable": True,
+         "min": -10},
+        {"name": "mode", "unit": 1, "fn": 3, "address": 21, "dtype": "uint16",
+         "writable": True, "allowed": [0, 1, 2]},
+        {"name": "reset", "unit": 1, "fn": 1, "address": 2, "dtype": "bool", "writable": True,
+         "allowed": [True]},
+        {"name": "cmd", "unit": 1, "fn": 3, "address": 22, "dtype": "uint16", "writable": True,
+         "poll": False},
+        {"name": "flow", "unit": 1, "fn": 3, "address": 23, "dtype": "uint16", "scale": 0.1,
+         "writable": True}]
+    fake, logs = FakeMqtt(), []
+    REGS.update({10: 0, 20: 0, 21: 0, 22: 0, 23: 0})
+    COILS[2] = False
+    r, sw = await gateway("plain", slave_port, fake, points, logs)
+    poll = asyncio.create_task(r._poll_loop())
+
+    async def answer_of(point, payload):
+        topic = f"plant/a/{point}/set/result"
+        before = len([t for t, _p in fake.published if t == topic])
+        r._mqtt.handle_message(f"plant/a/{point}/set", payload)
+        assert await wait(lambda: len([t for t, _p in fake.published if t == topic]) > before)
+        return last(fake, topic)
+    try:
+        assert await wait(lambda: last(fake, "plant/a/temp") == b"23.5")
+        SEEN.clear()
+        for point, payload, error in (
+                ("setpoint", b"3000", b"error: 3000 is outside the range 0..1500 of 'setpoint'"),
+                ("setpoint", b"-1", b"error: -1 is outside the range 0..1500 of 'setpoint'"),
+                ("setpoint", b"1500.5", b"error: 1500.5 is outside the range 0..1500 of "
+                                        b"'setpoint'"),
+                ("low", b"-11", b"error: -11 is below the minimum -10 of 'low'"),
+                ("mode", b"3", b"error: 3 is not one of the values allowed for 'mode' (0, 1, 2)"),
+                ("reset", b"off", b"error: false is not one of the values allowed for 'reset' "
+                                  b"(true)")):
+            assert await answer_of(point, payload) == error, (point, payload)
+        assert not [p for p in SEEN if p[0] in (5, 6, 15, 16)], "a refused value reached the bus"
+        for point, payload in (("setpoint", b"1500"), ("setpoint", b"0"), ("low", b"30000"),
+                               ("mode", b"2"), ("reset", b"on")):
+            assert await answer_of(point, payload) == b"ok", (point, payload)
+        assert (REGS[10], REGS[20], REGS[21], COILS[2]) == (0, 30000, 2, True)
+        print("point limits: min / max / allowed refuse a value outside them before the bus, "
+              "with the reason; values inside are written  OK")
+
+        # write-only: never polled, a write not read back (JSON answer: value null)
+        await asyncio.sleep(0.3)
+        assert not [p for p in SEEN if p[0] == 3 and p[1:3] == b"\x00\x16"], "polled 'cmd'"
+        assert await answer_of("cmd", b'{"value": 7, "id": 1}') == b'{"id":1,"ok":true,"value":null}'
+        assert REGS[22] == 7 and last(fake, "plant/a/cmd") is None
+        assert not [p for p in SEEN if p[0] == 3 and p[1:3] == b"\x00\x16"], "read 'cmd' back"
+        assert "wrote 'cmd' = 7 (unit 1, FC6; write-only, not read back)" in logs, logs
+        assert r._units[1].points == [p for p in r.mapping.modbus_poll.points
+                                      if p.name != "cmd"]
+        print("write-only point (poll false): never polled, a write not read back  OK")
+
+        # the raw value: a fraction rounded by an integer type, a scale undone
+        assert await answer_of("setpoint", b"12.6") == b"ok"
+        assert await answer_of("flow", b"21.5") == b"ok"
+        assert REGS[10] == 13 and REGS[23] == 215
+        assert "wrote 'setpoint' = 12.6 (unit 1, FC6, raw value 13)" in logs, logs
+        assert "wrote 'flow' = 21.5 (unit 1, FC6, raw value 215)" in logs, logs
+        assert "wrote 'mode' = 2 (unit 1, FC6)" in logs, "raw value only when it differs"
+        print("the log names the raw register value a fraction or a scale became  OK")
+
+        # a stored limit that can't be used (not refused when it was stored by hand):
+        # ignored, with a warning at start
+        sp = r._set_points["plant/a/setpoint/set"]
+        sp.min, sp.allowed = "zero", 5
+        logs.clear()
+        r._log_policy()
+        assert any("warning: point 'setpoint': min and allowed ignored" in m for m in logs), logs
+        assert await answer_of("setpoint", b"-5") == b"ok", "the unusable min is not applied"
+        assert await answer_of("setpoint", b"1501") == \
+            b"error: 1501 is above the maximum 1500 of 'setpoint'"
+        print("a stored limit that can't be used: ignored, warned about at start  OK")
+    finally:
+        r._stop.set()
+        poll.cancel()
+        with suppress(BaseException):
+            await poll
+        sw.close()
+
+
 async def test_stop_with_writes(slave_port):
     """stop() answers every write, in order, before the MQTT connection closes (its
     "offline"): the write on the bus may finish; if it takes too long it is cancelled, and
@@ -1040,6 +1134,7 @@ async def main():
         await test_write_queue(port)
         await test_json_requests(port)
         await test_sparkplug_read_back(port)
+        await test_point_limits(port)
         await test_stop_with_writes(port)
         await test_no_stale_value_after_write(port)
     finally:

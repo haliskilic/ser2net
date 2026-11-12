@@ -216,7 +216,7 @@ class ModbusGatewayRunner:
         # points whose last read failed (True: that was logged)
         self._units: dict[int, _Unit] = {}
         for p in mapping.modbus_poll.points:
-            if p.unit != modbus.BROADCAST:
+            if p.unit != modbus.BROADCAST and _polled(p):
                 self._units.setdefault(p.unit, _Unit(p.unit)).points.append(p)
         self._failing: dict[str, bool] = {}
         self._bad: set[str] = set()  # plain JSON values: points last published as "bad"
@@ -585,8 +585,9 @@ class ModbusGatewayRunner:
         a 16-bit type, FC16 for the two registers of a 32-bit one). Check the slave's
         reply, then read the point back and publish it; returns that value (None if it was
         not read back). A point on unit 0 is a broadcast, carried out by every slave and
-        answered by none, so it is not read back. A read-only mapping writes nothing
-        (checked here, at write time, for every command path)."""
+        answered by none, so it is not read back, nor is a write-only point ("poll":
+        false). A read-only mapping writes nothing, nor does a value outside the point's
+        min / max / allowed (checked here, at write time, for every command path)."""
         if self.mapping.network.read_only:
             raise ValueError("mapping is read-only")
         if not point.writable:
@@ -597,13 +598,17 @@ class ModbusGatewayRunner:
             if not isinstance(value, bool):
                 raise ValueError(f"{point.name!r} is a coil: it takes true or false, "
                                  f"not {shown(value)}")
+            check_limits(point, value)
             pdu = modbus.write_single_coil_pdu(point.address, value)
+            raw = ""
         else:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"{point.name!r} takes a number, not {shown(value)}")
+            check_limits(point, value)
             regs = modbus.encode_value(value, point.dtype, point.scale or 1.0)
             pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
                    else modbus.write_multiple_registers_pdu(point.address, regs))
+            raw = _raw_text(value, regs, point)
         rpdu = await self._transaction(point.unit, pdu, job)
         self._check_answered(rpdu, point)  # (NoReply: the unit did not answer)
         modbus.check_write_response(rpdu, pdu)
@@ -612,10 +617,14 @@ class ModbusGatewayRunner:
         if self._cycle is not None:  # a poll that read the point before the write is under way
             self._cycle.drop(point.name)
         if point.unit == modbus.BROADCAST:
-            self._log(f"wrote '{point.name}' = {value!r} (broadcast to unit 0, FC{pdu[0]}; "
+            self._log(f"wrote '{point.name}' = {value!r} (broadcast to unit 0, FC{pdu[0]}{raw}; "
                       "not read back)")
             return None
-        self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]})")
+        if not _polled(point):
+            self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]}{raw}; "
+                      "write-only, not read back)")
+            return None
+        self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]}{raw})")
         if self._closing:  # the mapping is stopping: no read-back
             return None
         return await self._read_back(point)
@@ -716,7 +725,7 @@ class ModbusGatewayRunner:
         point's current value in a DDATA all the same, as after a write, so the host sees
         it was not taken. Not for a unit that did not answer (it goes offline: DDEATH)."""
         if (self._sparkplug is not None and not self._closing
-                and point.unit != modbus.BROADCAST):
+                and point.unit != modbus.BROADCAST and _polled(point)):
             await self._read_back(point)
 
     def _finish(self, w: _Write, err: Optional[str], value: Any = None) -> None:
@@ -944,6 +953,12 @@ class ModbusGatewayRunner:
         if poll.reserved_unit_points:
             self._log(f"warning: poll point(s) {_names(poll.reserved_unit_points)} on units "
                       "248-255, which a Modbus serial line reserves (slave addresses are 1-247)")
+        for p in poll.points:
+            unusable = [key for key in ("min", "max", "allowed")
+                        if getattr(p, key) is not None and _limit(p, key) is None]
+            if p.writable and unusable:
+                self._log(f"warning: point {p.name!r}: {' and '.join(unusable)} ignored (not a "
+                          "number, or for allowed not a list of values of the point's type)")
         mq = self.mapping.mqtt
         missing = [what for what, have in (("TLS", mq.tls), ("a username", mq.username))
                    if not have]
@@ -1055,6 +1070,67 @@ def encode_value(value, fmt: str, ts: int, good: bool = True) -> bytes:
         value = None
     return json.dumps({"value": value, "ts": ts, "quality": "good" if good else "bad"},
                       separators=(",", ":")).encode()
+
+
+def _polled(point) -> bool:
+    """Whether a point is read (False: "poll": false, a write-only point)."""
+    return point.poll is not False
+
+
+def _limit(point, key: str):
+    """A point's min / max / allowed as the gateway can use it, or None (none set, or a
+    stored one that can't be used: the edits refuse such values, see
+    ModbusPoll.validate_input)."""
+    value = getattr(point, key)
+    if key == "allowed":
+        coil = point.fn in (modbus.READ_COILS, modbus.READ_DISCRETE_INPUTS)
+        ok = isinstance(value, list) and value and all(
+            isinstance(v, bool) if coil else _finite(v) for v in value)
+        return value if ok else None
+    return value if _finite(value) and point.fn not in (
+        modbus.READ_COILS, modbus.READ_DISCRETE_INPUTS) else None
+
+
+def _finite(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _num(v) -> str:
+    return f"{v:g}" if isinstance(v, float) else str(v)
+
+
+def check_limits(point, value) -> None:
+    """A value MQTT writes to ``point``, against the point's allowed / min / max (in its own
+    units, before the scale is undone). Raises ValueError."""
+    allowed = _limit(point, "allowed")
+    if allowed is not None and not any(
+            (value is v) if isinstance(v, bool) else (not isinstance(value, bool) and value == v)
+            for v in allowed):
+        listed = ", ".join(_num(v) if not isinstance(v, bool) else str(v).lower()
+                           for v in allowed[:8]) + (", …" if len(allowed) > 8 else "")
+        shown_value = str(value).lower() if isinstance(value, bool) else _num(value)
+        raise ValueError(f"{shown_value} is not one of the values allowed for "
+                         f"{point.name!r} ({listed})")
+    if isinstance(value, bool):
+        return
+    low, high = _limit(point, "min"), _limit(point, "max")
+    if low is not None and high is not None and not low <= value <= high:
+        raise ValueError(f"{_num(value)} is outside the range {_num(low)}..{_num(high)} of "
+                         f"{point.name!r}")
+    if low is not None and value < low:
+        raise ValueError(f"{_num(value)} is below the minimum {_num(low)} of {point.name!r}")
+    if high is not None and value > high:
+        raise ValueError(f"{_num(value)} is above the maximum {_num(high)} of {point.name!r}")
+
+
+def _raw_text(value, regs: list[int], point) -> str:
+    """For the log: the raw register value written, when it is not the value itself (an
+    integer type rounds a fraction, a scale divides it)."""
+    raw = modbus.decode_value(b"".join(r.to_bytes(2, "big") for r in regs), point.dtype)
+    scaled = bool(point.scale) and point.scale != 1.0
+    if not scaled and (point.dtype == "float32" or raw == value):
+        return ""
+    return f", raw value {_num(raw)}"
 
 
 def _units_text(units: list[int]) -> str:

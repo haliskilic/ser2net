@@ -877,5 +877,13 @@
   "serial lines, Modbus values: a subscriber that connects later gets the last one at once": "seri satırlar, Modbus değerleri: sonradan bağlanan bir abone son değeri hemen alır",
   "Value format": "Değer biçimi",
   "Text: the value alone": "Metin: yalnızca değer",
-  "JSON: {\"value\", \"ts\", \"quality\"}": "JSON: {\"value\", \"ts\", \"quality\"}"
+  "JSON: {\"value\", \"ts\", \"quality\"}": "JSON: {\"value\", \"ts\", \"quality\"}",
+  "optional: <span class=\"mono\">\"min\"</span>, <span class=\"mono\">\"max\"</span> and <span class=\"mono\">\"allowed\": [ … ]</span> limit what MQTT may write to a point, <span class=\"mono\">\"poll\": false</span> makes a writable point write-only (never read)": "isteğe bağlı: <span class=\"mono\">\"min\"</span>, <span class=\"mono\">\"max\"</span> ve <span class=\"mono\">\"allowed\": [ … ]</span> MQTT'nin bir noktaya yazabileceği değerleri sınırlar, <span class=\"mono\">\"poll\": false</span> yazılabilir bir noktayı yalnızca yazılan bir nokta yapar (hiç okunmaz)",
+  "Point {0}: min, max and allowed limit what MQTT may write, so they need \"writable\": true.": "{0} noktası: min, max ve allowed MQTT'nin yazabileceği değerleri sınırlar, bu yüzden \"writable\": true gerekir.",
+  "Point {0}: a coil is true or false, so min and max don't apply to it (use allowed).": "{0} noktası: coil true ya da false olur, bu yüzden min ve max ona uygulanmaz (allowed kullanın).",
+  "Point {0}: {1} must be a number.": "{0} noktası: {1} bir sayı olmalı.",
+  "Point {0}: min is greater than max.": "{0} noktası: min, max'tan büyük.",
+  "Point {0}: allowed must be a list of the values MQTT may write: true / false for a coil, numbers for a register.": "{0} noktası: allowed, MQTT'nin yazabileceği değerlerin listesi olmalı: coil için true / false, register için sayılar.",
+  "Point {0}: poll must be true or false.": "{0} noktası: poll true ya da false olmalı.",
+  "Point {0}: a point that is not polled (\"poll\": false) is write-only, so it needs \"writable\": true.": "{0} noktası: okunmayan (\"poll\": false) bir nokta yalnızca yazılır, bu yüzden \"writable\": true gerekir."
 }
