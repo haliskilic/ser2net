@@ -152,12 +152,12 @@ def test_notices():
                                                         "ids": ["fb0000000003", "fb0000000004"]},
                                  htmx=True)
             assert st == 200 and h.get("HX-Trigger") == "refreshMappings", (st, body)
-            assert note(h) == ("warn", "Restarted 1 of 2 selected mapping(s). Could not start: "
+            assert note(h) == ("warn", "Restarted 1 of 2 selected mappings. Could not start: "
                                        "Delta."), note(h)
             st, h, _ = b.post("/api/mappings/bulk", {"action": "stop",
                                                      "ids": ["fb0000000003", "fb0000000004"]},
                               htmx=True)
-            assert note(h) == ("ok", "Stopped 2 of 2 selected mapping(s)."), note(h)
+            assert note(h) == ("ok", "Stopped 2 of 2 selected mappings."), note(h)
 
             st, h, _ = b.post("/api/mappings/fb0000000003/duplicate", htmx=True)
             assert st == 200 and note(h) == (

@@ -481,7 +481,7 @@ def feedback_checks(browser, base, problems):
     asked = messages[del_messages:]
     n = int(page.evaluate(f"document.querySelector('tr[data-mid=\"{short}\"]').getAttribute('data-clients')"))
     want = ("Restart 1 mapping", f"{n} connected client" if n else "?",
-            "1 selected mapping(s) hidden")
+            "1 selected mapping hidden")
     if not asked or not all(t in asked[0] for t in want):
         bad(f"the bulk restart did not ask with the counts ({n} clients): {asked}")
     if posts:

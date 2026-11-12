@@ -47,8 +47,8 @@ def test_rows():
                      statuses={"busy": {"state": "running", "client_count": 2},
                                "idle": {"state": "running", "client_count": 0}})
     q = confirms(out, "m-busy-run")
-    assert q and "Stop “Map busy”" in q and "2 connected client(s)" in q and "stays stopped" in q, q
-    assert "2 connected client(s)" in confirms(out, "m-busy-restart")
+    assert q and "Stop “Map busy”" in q and "2 connected clients will" in q and "stays stopped" in q, q
+    assert "2 connected clients will" in confirms(out, "m-busy-restart")
     assert confirms(out, "m-idle-run") is None and confirms(out, "m-idle-restart") is None, \
         "no clients: no question"
     assert confirms(out, "m-off-run") is None, "Start never asks"
@@ -60,8 +60,8 @@ def test_rows():
                          {"id": "p2", "name": "Quiet", "enabled": True, "client_count": 0},
                          {"id": "p3", "name": "Odd", "enabled": True, "client_count": "lots"}]}
     out = make_templates().env.get_template("_cluster_body.html").render(can_edit=True, nodes=[peer])
-    assert "1 connected client(s)" in confirms(out, "c-10_0_0_2_8080-p1-run")
-    assert "1 connected client(s)" in confirms(out, "c-10_0_0_2_8080-p1-restart")
+    assert "1 connected client will" in confirms(out, "c-10_0_0_2_8080-p1-run")
+    assert "1 connected client will" in confirms(out, "c-10_0_0_2_8080-p1-restart")
     assert confirms(out, "c-10_0_0_2_8080-p2-run") is None
     assert confirms(out, "c-10_0_0_2_8080-p3-run") is None, "a peer's odd count is no number"
     print("rows and peers: Stop / Restart ask only with clients connected; delete names log + traces  OK")

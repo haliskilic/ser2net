@@ -82,7 +82,7 @@
     <label>{{ _("Session lifetime (minutes)") }} <span class="muted">({{ _("how long a sign-in lasts · 5 min – 30 days · applies to new sign-ins") }})</span>
       <input type="number" name="session_minutes" min="5" max="43200" value="{{ session_minutes }}" required>
     </label>
-    <label>{{ _("Default language") }} <span class="muted">({{ _("for visitors who haven’t picked one with TR / EN") }})</span>
+    <label>{{ _("Default language") }} <span class="muted">({{ _("for visitors who haven’t picked one with the language switch") }})</span>
       <select name="default_language">
         <option value="auto" {% if admin.language == 'auto' %}selected{% endif %}>{{ _("The browser’s language") }}</option>
         {% for code, label in languages.items() %}<option value="{{ code }}" {% if admin.language == code %}selected{% endif %}>{{ label }}</option>{% endfor %}
@@ -487,7 +487,7 @@
   <p><a class="btn" href="/settings/config/export">{{ _("⤓ Export mappings (JSON)") }}</a></p>
   {% if import_preview %}
   {% set p = import_preview %}
-  <h3>{{ _("Import preview") }} <span class="muted">— {{ _("%(n)s mapping(s) from a %(source)s, mode: %(mode)s", n=p.count, source=p.source, mode=_("merge") if p.mode == 'merge' else _("replace")) }}</span></h3>
+  <h3>{{ _("Import preview") }} <span class="muted">— {{ ngettext("%(num)s mapping from a %(source)s, mode: %(mode)s", "%(num)s mappings from a %(source)s, mode: %(mode)s", p.count, source=p.source, mode=_("merge") if p.mode == 'merge' else _("replace")) }}</span></h3>
   {% for w in p.warnings %}<div class="banner warn">{{ w }}</div>{% endfor %}
   {% if p.problem %}<div class="banner error" role="alert">{{ _("This import can’t be applied: %(problem)s", problem=p.problem) }}</div>{% endif %}
   <div class="table-scroll">

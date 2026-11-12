@@ -26,7 +26,7 @@ from ...config import (
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...explain import explain
-from ...i18n import _
+from ...i18n import _, ngettext
 from ...textfold import search_key
 from .. import auth, ldap_auth, selfsigned
 from .common import Ctx, csrf_failed
@@ -916,7 +916,9 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, f"config_import_{mode}",
                     f"{len(plan.mappings)} mappings ({plan.source})")
         if mode == "replace":
-            ok = _("Imported {0} mappings (replaced the existing ones).").format(len(new_maps))
+            ok = ngettext("Imported {0} mapping (replaced the existing ones).",
+                          "Imported {0} mappings (replaced the existing ones).",
+                          len(new_maps)).format(len(new_maps))
         else:
             ok = _("Imported: {0} added, {1} updated, {2} unchanged.").format(
                 count["add"], count["update"], count["same"])

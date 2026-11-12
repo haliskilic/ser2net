@@ -161,7 +161,7 @@ def test_unknown_role_in_config():
         assert call("POST", "/api/v1/mappings", new, mapping(free_port(), "/dev/ttyNOPE"))[0] == 403
         assert admin.post("/settings/api-token/role", {"api_token_role": "root"})[2].count("Invalid role.")
         st, _, page = admin.get("/settings/audit?action=api_token_role")
-        assert "1 record(s)" in page and "&gt; viewer</td>" in page, "audited: from - to"
+        assert ">1 record</p>" in page and "&gt; viewer</td>" in page, "audited: from - to"
         # the questions: replacing and revoking the token ask first, changing its role not
         st, _, page = admin.get("/settings")
         regen = page[page.index('action="/settings/api-token"'):page.index('action="/settings/api-token/revoke"')]

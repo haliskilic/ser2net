@@ -106,7 +106,7 @@ def main():
         v.login("view", PW)
         assert v.post("/api/mappings/bulk", {"action": "stop", "ids": ["aaaaaaaaaaa1"]}, htmx=True)[0] == 403
         st, _, page = b.get("/settings/audit?action=mapping_stop")
-        assert "2 record(s)" in page, page[page.find("record(s)") - 30:][:80]
+        assert ">2 records</p>" in page, page[page.find("record") - 30:][:80]
         print("bulk: stop / start on the selection, audited per mapping; viewer 403, bad input 400  OK")
 
         tdir = os.path.join(srv.data, "traces")

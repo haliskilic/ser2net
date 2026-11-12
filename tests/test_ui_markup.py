@@ -674,7 +674,9 @@ def test_console_says_why():
     base = open(os.path.join(ROOT, "app", "web", "templates", "base.html"), encoding="utf-8").read()
     for key in ("dropped", "ws_not_running", "ws_reconnected", "ws_reconnecting", "ws_refused",
                 "ws_busy", "ws_stopped", "ws_access", "ws_slow", "ws_gone"):
-        assert f"'{key}': _(" in base and f'tr("{key}"' in js, key
+        # (a text with a count: a pair of forms, picked by trn)
+        assert (f"'{key}': _(" in base and f'tr("{key}"' in js
+                or f"'{key}': [_(" in base and f'trn("{key}"' in js), key
     # the console text encoding: the form offers exactly config.CONSOLE_ENCODINGS, for every
     # kind and protocol (no data-show-when), and the panel carries the code page's table
     from app.config import CONSOLE_ENCODINGS, console_charset

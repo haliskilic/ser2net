@@ -9,6 +9,14 @@ function tr(key, fallback) {
   for (var i = 2; i < arguments.length; i++) s = s.replace("{" + (i - 2) + "}", arguments[i]);
   return s;
 }
+// a text with a count n ({0}): base.html gives [the form for 1, the form for other
+// numbers] (the English rule, as i18n.ngettext; a language that has one form after a
+// number has the same text twice); `one` / `other`: the English forms, as fallbacks
+function trn(key, one, other, n) {
+  var forms = I18N[key], s = Array.isArray(forms) ? forms[n === 1 ? 0 : 1] : n === 1 ? one : other;
+  for (var i = 3; i < arguments.length; i++) s = s.replace("{" + (i - 3) + "}", arguments[i]);
+  return s;
+}
 
 // 0) Theme: toggle the light/dark theme (persisted in localStorage) when a
 //    [data-theme-toggle] control is clicked; theme.js applies the saved one, in <head>.
@@ -383,7 +391,8 @@ function connectTerm(el, mode, again) {
     var n = null;
     try { n = JSON.parse(text); } catch (e) {}
     if (n && n.dropped)
-      say(tr("dropped", "{0} bytes left out: this browser did not keep up", n.dropped));
+      say(trn("dropped", "{0} byte left out: this browser did not keep up",
+              "{0} bytes left out: this browser did not keep up", n.dropped));
     if (n && n.state === "stopped")
       say(tr("ws_not_running", "the mapping is not running: its traffic shows here once it is started"));
   }
@@ -698,13 +707,18 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     // rows the filter hides (left out)
     var clients = rows.reduce(function (n, r) { return n + (+r.getAttribute("data-clients") || 0); }, 0);
     var hidden = selected.size - rows.length;
-    var q = action === "stop" ? tr("bulk_stop", "Stop {0} mapping(s)? They stay stopped until they are started again.", rows.length)
-          : action === "restart" ? tr("bulk_restart", "Restart {0} mapping(s)?", rows.length)
-          : tr("bulk_start", "Start {0} mapping(s)?", rows.length);
+    var n = rows.length;
+    var q = action === "stop"
+      ? trn("bulk_stop", "Stop {0} mapping? It stays stopped until it is started again.",
+            "Stop {0} mappings? They stay stopped until they are started again.", n)
+      : action === "restart" ? trn("bulk_restart", "Restart {0} mapping?", "Restart {0} mappings?", n)
+      : trn("bulk_start", "Start {0} mapping?", "Start {0} mappings?", n);
     if (action !== "start" && clients)
-      q += " " + tr("bulk_clients", "{0} connected client(s) will be disconnected.", clients);
+      q += " " + trn("bulk_clients", "{0} connected client will be disconnected.",
+                     "{0} connected clients will be disconnected.", clients);
     if (hidden)
-      q += " " + tr("bulk_hidden", "{0} selected mapping(s) hidden by the filter are left out.", hidden);
+      q += " " + trn("bulk_hidden", "{0} selected mapping hidden by the filter is left out.",
+                     "{0} selected mappings hidden by the filter are left out.", hidden);
     if (!window.confirm(q)) return;
     // the button is the source: its hx-disabled-elt holds a second click off while the
     // request runs, and the feedback area (7) gets the answer
