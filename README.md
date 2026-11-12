@@ -214,7 +214,15 @@ düzenlemeye gerek yok.
   varsayılan ayarlarla (açık · 60 sn boşta · 10 sn aralık · 3 deneme) ~90 sn içinde
   düşürülür ve yuvası boşalır — cihaz veri gönderirken de (Linux `TCP_USER_TIMEOUT`).
   Ayrıca dışa bağlanmada **bağlantı zaman aşımı** (varsayılan 10 sn), **idle timeout**
-  ve **maksimum bağlantı süresi** (ör. 24 sa); her kopuş nedeniyle loglanır.
+  ve **maksimum bağlantı süresi** (ör. 24 sa); her kopuş nedeniyle loglanır. Varsayılan
+  olarak seri cihaz yokken (çıkarılmış, yeniden bağlanıyor) TCP istemcileri bağlı kalır ve
+  yenileri kabul edilir; bu arada gönderdikleri atılır ve sayılır (`bytes_dropped`).
+  **Seri cihaz yokken istemcilerin bağlantısını kes** (`network.disconnect_without_device`,
+  raw / telnet / rfc2217, varsayılan kapalı) açıkken port gidince istemcilerin bağlantısı
+  kesilir ve port geri gelene kadar yeni gelenler (RFC 2217 istemcisinin beklediği kısa
+  sürenin, `options.rfc2217_net_timeout_s`, ardından) reddedilir; böylece bir poller, bir
+  SCADA master'ı ya da sanal COM yönlendiricisi kesintiyi görür. Dışarı bağlanan eşleme de
+  o zaman yalnızca portu açıkken bağlanır.
 - **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp, döner dosyalar,
   arayüzden indirilir), Prometheus `/metrics`, audit log ekranı, canlı log görüntüleyici,
   **tarayıcı-içi seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz) ve
