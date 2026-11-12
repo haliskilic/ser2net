@@ -1,4 +1,4 @@
-"""The Sparkplug B edge node's session state (app/engine/sparkplug_node.py), without a broker.
+"""The Sparkplug B edge node's session state (ser2netweb/engine/sparkplug_node.py), without a broker.
 
 A SparkplugNode on a MqttPublisher whose paho client is a stand-in that records what is
 published and the Will; the broker's CONNACK is handle_connect(), a lost connection
@@ -37,12 +37,12 @@ from unittest import mock
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
-from app.config import AppConfig, ConfigError, MappingConfig
-from app.engine import sparkplug, sparkplug_node
-from app.engine.sparkplug_node import SparkplugNode
-from app.engine.supervisor import make_runner
-from app.state import AppState, ConfigStore
-from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
+from ser2netweb.config import AppConfig, ConfigError, MappingConfig
+from ser2netweb.engine import sparkplug, sparkplug_node
+from ser2netweb.engine.sparkplug_node import SparkplugNode
+from ser2netweb.engine.supervisor import make_runner
+from ser2netweb.state import AppState, ConfigStore
+from ser2netweb.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
 
 POINTS = [
     {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"},

@@ -23,8 +23,8 @@ idna==3.20
 typing_extensions==4.16.0
 # Python 3.10 backports (pure-Python, only installed on < 3.11). anyio needs
 # exceptiongroup there; ser2net additionally uses exceptiongroup + taskgroup as
-# backports of asyncio.TaskGroup / asyncio.Runner / except* so app/engine/bridge.py
-# and app/runtime.py run on 3.10. On 3.11+ these are native and not installed.
+# backports of asyncio.TaskGroup / asyncio.Runner / except* so ser2netweb/engine/bridge.py
+# and ser2netweb/runtime.py run on 3.10. On 3.11+ these are native and not installed.
 exceptiongroup==1.3.1 ; python_version < "3.11"
 taskgroup==0.2.2 ; python_version < "3.11"
 # click pulls in colorama on Windows (for ANSI colors) on every Python version.

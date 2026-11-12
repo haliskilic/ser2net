@@ -42,9 +42,9 @@ import urllib.request
 
 from _server import ROOT, Browser, Server, free_port
 
-from app import runtime
-from app.config import AdminUI, AppConfig, ConfigError, ConfigStore, MappingConfig
-from app.web.auth import hash_password, hash_token
+from ser2netweb import runtime
+from ser2netweb.config import AdminUI, AppConfig, ConfigError, ConfigStore, MappingConfig
+from ser2netweb.web.auth import hash_password, hash_token
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
 # fixed port: the config code reads it; nothing here listens on it (the one service start
@@ -516,7 +516,7 @@ def test_file_gone_while_saving():
 @contextlib.contextmanager
 def full_disk():
     """config.json's temp file can't be created (a full disk, a read-only data dir)."""
-    import app.config as config_module
+    import ser2netweb.config as config_module
 
     real = config_module.tempfile.mkstemp
 

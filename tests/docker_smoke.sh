@@ -263,12 +263,12 @@ need = ["ser2net.py", "bootstrap.py", "requirements.txt", "requirements-optional
         "requirements-lock.txt",
         "LICENSE", "NOTICE", "COMMERCIAL_LICENSE.md", "THIRD-PARTY-NOTICES.md",
         "tools/docker-entrypoint.sh", "tools/licenses/pyserial.txt", "tools/licenses/npm/xterm.txt",
-        "app/locale/tr.json",
-        "app/web/templates/base.html", "app/web/static/app.css"]
+        "ser2netweb/locale/tr.json",
+        "ser2netweb/web/templates/base.html", "ser2netweb/web/static/app.css"]
 missing = [f for f in need if not os.path.isfile(f)]
 extra = [d for d in ("tests", "vendor", "docs", ".github", "Dockerfile") if os.path.exists(d)]
-sources = glob.glob("app/**/*.py", recursive=True)
-pycs = glob.glob("app/**/__pycache__/*.pyc", recursive=True)
+sources = glob.glob("ser2netweb/**/*.py", recursive=True)
+pycs = glob.glob("ser2netweb/**/__pycache__/*.pyc", recursive=True)
 unhashed = [p for p in pycs if open(p, "rb").read(8)[4] != 3]  # 3 = checked-hash
 print(f"{len(sources)} modules, {len(pycs)} compiled; missing {missing}, extra {extra}")
 sys.exit(1 if missing or extra or len(pycs) < len(sources) or unhashed else 0)' \

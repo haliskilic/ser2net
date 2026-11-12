@@ -27,8 +27,8 @@ import types
 
 from _asgi import App, cookies, header
 
-from app.config import AppConfig
-from app.web import auth, oidc_auth
+from ser2netweb.config import AppConfig
+from ser2netweb.web import auth, oidc_auth
 
 PW = "secure-cookie-pass-1"
 CSRF = "secure-cookies-csrf"

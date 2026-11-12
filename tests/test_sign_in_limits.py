@@ -45,11 +45,11 @@ import time
 from _optional import need
 from _server import Browser, Server, ui_cookie
 
-import app.state as st
-from app.config import AppConfig, ConfigStore, LdapSettings
-from app.state import AppState, FailedLoginRecords, LineLimiter, ViewRecords
-from app.web import auth, ldap_auth
-from app.web.server import MAX_BODY_BYTES, build_app
+import ser2netweb.state as st
+from ser2netweb.config import AppConfig, ConfigStore, LdapSettings
+from ser2netweb.state import AppState, FailedLoginRecords, LineLimiter, ViewRecords
+from ser2netweb.web import auth, ldap_auth
+from ser2netweb.web.server import MAX_BODY_BYTES, build_app
 
 PW = "limits-pass-1"
 TOKEN = "s2n_sign-in-limits-token"

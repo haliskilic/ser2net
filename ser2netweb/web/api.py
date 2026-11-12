@@ -537,7 +537,7 @@ def openapi_spec(admin, base: str = "") -> dict:
     """The OpenAPI 3.0 description of the REST API, written by hand (Starlette has no
     auto-generation) except for the mapping schemas (mapping_schemas). Every route in
     build_api_routes is in it (tests/test_rest_patch.py checks). `base`: the path prefix
-    the request came under (app/web/proxy.py)."""
+    the request came under (ser2netweb/web/proxy.py)."""
     schemas = mapping_schemas()
     schemas.update({
         "MappingStatus": {"type": "object", "additionalProperties": True, "properties": {

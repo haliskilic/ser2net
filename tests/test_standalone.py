@@ -1,11 +1,11 @@
 """The standalone executables must run with nothing else installed (#26).
 
-Portable part (always runs): app.standalone points a frozen Linux build's
+Portable part (always runs): ser2netweb.standalone points a frozen Linux build's
 bundled OpenSSL at the distribution's CA bundle (Debian/Ubuntu, RHEL/Fedora,
 openSUSE, Alpine layouts), leaves an admin's SSL_CERT_FILE / SSL_CERT_DIR alone,
 warns when there is none, and does nothing for source runs or on Windows.
 ser2net.spec bundles every data file the app reads at run time (each non-Python
-file under app/: templates, static assets, translations), read without PyInstaller.
+file under ser2netweb/: templates, static assets, translations), read without PyInstaller.
 A one-file build keeps its unpacked directory from temp cleaners: access times are
 refreshed (modification times kept) and, on Linux, the directory is locked, so the
 real systemd-tmpfiles (242+, when installed) skips it even at age 0 while it still
@@ -68,8 +68,8 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app import __version__, standalone
-from app.web.auth import hash_password
+from ser2netweb import __version__, standalone
+from ser2netweb.web.auth import hash_password
 from _server import ui_cookie
 
 BIN = os.path.abspath(os.environ["SER2NET_STANDALONE_BIN"]) if os.environ.get("SER2NET_STANDALONE_BIN") else ""
@@ -191,10 +191,10 @@ def bundled_files(datas):
 
 
 def app_data_files():
-    """Every file under app/ that isn't Python source or bytecode — what the code reads
+    """Every file under ser2netweb/ that isn't Python source or bytecode — what the code reads
     next to itself at run time (in a frozen build: inside the bundle)."""
     out = set()
-    for d, dirs, files in os.walk(os.path.join(ROOT, "app")):
+    for d, dirs, files in os.walk(os.path.join(ROOT, "ser2netweb")):
         dirs[:] = [x for x in dirs if x != "__pycache__" and not x.startswith(".")]
         out.update(posix_path(os.path.relpath(os.path.join(d, f), ROOT)) for f in files
                    if not f.startswith(".") and not f.endswith((".py", ".pyc", ".pyo")))
@@ -202,8 +202,8 @@ def app_data_files():
 
 
 def test_spec_bundles_app_data():
-    from app import i18n
-    from app.web import server
+    from ser2netweb import i18n
+    from ser2netweb.web import server
 
     datas = spec_datas()
     for src, _ in datas:
@@ -215,7 +215,7 @@ def test_spec_bundles_app_data():
     missing = sorted(needed - bundled_files(datas))
     assert not missing, ("the app reads these at run time, but ser2net.spec leaves them out of "
                          "the executables:\n  " + "\n  ".join(missing))
-    print(f"ser2net.spec bundles all {len(needed)} data files under app/ "
+    print(f"ser2net.spec bundles all {len(needed)} data files under ser2netweb/ "
           "(templates, static assets, translations)  OK")
 
 
@@ -250,8 +250,8 @@ def sweep_with_tmpfiles(tmp):
     if tmpfiles_version() < 242:
         return False
     left = os.path.join(tmp, "_MEI_left_behind")
-    os.makedirs(os.path.join(left, "app"))
-    with open(os.path.join(left, "app", "base.html"), "w") as fh:
+    os.makedirs(os.path.join(left, "ser2netweb"))
+    with open(os.path.join(left, "ser2netweb", "base.html"), "w") as fh:
         fh.write("x")
     conf = tmp + ".tmpfiles.conf"
     with open(conf, "w") as fh:
@@ -270,13 +270,13 @@ def test_unpacked_dir_kept():
     try:
         tmp = os.path.join(work, "tmp")
         bundle = os.path.join(tmp, "_MEI0000beefcafe00")
-        catalog = os.path.join(bundle, "app", "locale", "tr.json")
+        catalog = os.path.join(bundle, "ser2netweb", "locale", "tr.json")
         os.makedirs(os.path.dirname(catalog))
         with open(catalog, "w") as fh:
             fh.write("{}")
-        entries = [bundle, os.path.join(bundle, "app"), os.path.dirname(catalog), catalog]
+        entries = [bundle, os.path.join(bundle, "ser2netweb"), os.path.dirname(catalog), catalog]
         if not WINDOWS:  # PyInstaller links shared libraries on Linux
-            os.symlink(os.path.join("app", "locale", "tr.json"), os.path.join(bundle, "libssl.so.3"))
+            os.symlink(os.path.join("ser2netweb", "locale", "tr.json"), os.path.join(bundle, "libssl.so.3"))
             entries.append(os.path.join(bundle, "libssl.so.3"))
         month_ago = (int(time.time()) - 30 * 86400) * 10**9  # whole seconds: exact on NTFS too
         follow = os.utime not in os.supports_follow_symlinks
@@ -670,7 +670,7 @@ def bundle_problems_windows(bundle):
 
 
 def check_version_resource(exe):
-    """The Windows exe carries a VS_VERSIONINFO built from app.__version__ (ser2net.spec
+    """The Windows exe carries a VS_VERSIONINFO built from ser2netweb.__version__ (ser2net.spec
     + tools/win_version_info.py), so Explorer shows a version/publisher instead of nothing
     and the exe no longer uses PyInstaller's default console icon."""
     import pefile
@@ -892,7 +892,7 @@ def test_binary():
 
         # (before the certificate below: once TLS is configured, new cookies are Secure-only)
         import markupsafe
-        with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as fh:
+        with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as fh:
             tr = json.load(fh)
         st, headers, _ = s.request("/lang/tr?next=/settings")
         assert st == 303 and headers and headers.get("Location") == "/settings", f"/lang/tr: {st}"

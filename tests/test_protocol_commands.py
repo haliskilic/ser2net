@@ -32,12 +32,12 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import ConfigError, MappingConfig
-from app.engine import bridge
-from app.engine.protocols import make_session
-from app.engine.protocols.base import BREAK, PortCommand
-from app.engine.protocols.rfc2217 import Rfc2217Session
-from app.engine.protocols.telnet import TelnetSession
+from ser2netweb.config import ConfigError, MappingConfig
+from ser2netweb.engine import bridge
+from ser2netweb.engine.protocols import make_session
+from ser2netweb.engine.protocols.base import BREAK, PortCommand
+from ser2netweb.engine.protocols.rfc2217 import Rfc2217Session
+from ser2netweb.engine.protocols.telnet import TelnetSession
 
 IAC, SB, SE, BRK = 255, 250, 240, 243
 WILL, WONT, DO, DONT = 251, 252, 253, 254

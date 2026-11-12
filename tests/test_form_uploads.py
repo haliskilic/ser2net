@@ -6,7 +6,7 @@ field's name, and handlers that expect a string then failed (AttributeError /
 TypeError: HTTP 500). Every form read now bounds its file parts: the UI's forms take
 none (routes.common.read_form: 400 while the body is read), the mappings import one.
 
-  1. static: every request.form() call in app/web says how many files it takes
+  1. static: every request.form() call in ser2netweb/web says how many files it takes
   2. a real server: a file part named like a field gets 400 on mapping save, the
      access and notification settings and a cluster action; nothing is saved and the
      server keeps running; the same fields as multipart text are still accepted
@@ -26,7 +26,7 @@ sys.path.insert(0, HERE)
 from _server import Browser, Server
 
 sys.path.insert(0, ROOT)
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PASSWORD = "uploads-pass-1"
 
@@ -44,7 +44,7 @@ def _limits_with_max_files(tree: ast.Module) -> set[str]:
 
 def test_every_form_read_bounds_files():
     unbounded, seen = [], 0
-    for folder, _dirs, files in os.walk(os.path.join(ROOT, "app", "web")):
+    for folder, _dirs, files in os.walk(os.path.join(ROOT, "ser2netweb", "web")):
         for name in files:
             if not name.endswith(".py"):
                 continue
@@ -66,7 +66,7 @@ def test_every_form_read_bounds_files():
     assert seen >= 3, seen  # read_form, the import, the sign-in forms
     assert not unbounded, ("request.form() without max_files (use routes.common.read_form):\n  "
                            + "\n  ".join(unbounded))
-    print(f"every request.form() in app/web bounds its file parts ({seen} calls)  OK")
+    print(f"every request.form() in ser2netweb/web bounds its file parts ({seen} calls)  OK")
 
 
 def test_file_parts_refused():

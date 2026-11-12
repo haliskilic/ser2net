@@ -1,7 +1,7 @@
 {
   "name": "ser2net-browser-assets",
   "private": true,
-  "description": "The browser libraries vendored in app/web/static/ (not installed with npm): tools/refresh_assets.py copies them out of these npm releases, tests/test_vendor_assets.py checks them against the sha256 below, tools/third_party.py lists them in the executables' SBOM and --licenses.",
+  "description": "The browser libraries vendored in ser2netweb/web/static/ (not installed with npm): tools/refresh_assets.py copies them out of these npm releases, tests/test_vendor_assets.py checks them against the sha256 below, tools/third_party.py lists them in the executables' SBOM and --licenses.",
   "license": "AGPL-3.0-only",
   "dependencies": {
     "@xterm/addon-fit": "0.10.0",
@@ -10,22 +10,22 @@
   },
   "ser2net": {
     "files": {
-      "app/web/static/htmx.min.js": {
+      "ser2netweb/web/static/htmx.min.js": {
         "package": "htmx.org",
         "path": "dist/htmx.min.js",
         "sha256": "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717"
       },
-      "app/web/static/xterm.js": {
+      "ser2netweb/web/static/xterm.js": {
         "package": "@xterm/xterm",
         "path": "lib/xterm.js",
         "sha256": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495"
       },
-      "app/web/static/xterm.css": {
+      "ser2netweb/web/static/xterm.css": {
         "package": "@xterm/xterm",
         "path": "css/xterm.css",
         "sha256": "ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6"
       },
-      "app/web/static/xterm-addon-fit.js": {
+      "ser2netweb/web/static/xterm-addon-fit.js": {
         "package": "@xterm/addon-fit",
         "path": "lib/addon-fit.js",
         "sha256": "bdaefa370b1bfc42ee88d46fe6072400902a4d4b2d45cd93438dda9b23c97089"

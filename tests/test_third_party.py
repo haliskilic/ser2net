@@ -7,7 +7,7 @@ tools/third_party.py (run by the standalone builds) must
   and this test fails in CI's vendor job until the entry is checked again);
 * list the native libraries in the interpreter with their versions and CPEs (OpenSSL, zlib;
   expat / mpdecimal / SQLite when the executable carries their modules), the OpenSSL that
-  cryptography links in, and the browser libraries of app/web/static;
+  cryptography links in, and the browser libraries of ser2netweb/web/static;
 * put the browser libraries' license texts into the --licenses file.
 ser2net.spec writes that file itself when a plain `pyinstaller ser2net.spec` runs without it,
 and an executable without it points at this version's THIRD-PARTY-NOTICES.md online.
@@ -207,7 +207,7 @@ def test_frozen_fallback_names_the_notices():
     finally:
         ser2net.FROZEN, sys.stdout = saved
     text = buf.getvalue().decode("utf-8")
-    from app import __version__
+    from ser2netweb import __version__
     want = f"https://github.com/haliskilic/ser2net/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
     assert want in text, text
     print("an executable without the license file points at THIRD-PARTY-NOTICES.md online  OK")

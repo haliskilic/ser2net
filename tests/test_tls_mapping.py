@@ -1,4 +1,4 @@
-"""A mapping's TLS files (app/engine/tls.py): its listener and its connect-out link.
+"""A mapping's TLS files (ser2netweb/engine/tls.py): its listener and its connect-out link.
 
   - key passwords: an encrypted key is decrypted with network.tls_key_password; without
     one, or with a wrong one, loading it fails at once with an error that says so (never a
@@ -45,12 +45,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _optional import need
 from _server import ROOT, Browser, Server, _NoRedirect, free_port
 
-from app import importer
-from app.config import ConfigError, MappingConfig
-from app.engine import serial_io, tls
-from app.engine.bridge import MappingRunner
-from app.engine.supervisor import make_runner
-from app.web.auth import hash_password, hash_token
+from ser2netweb import importer
+from ser2netweb.config import ConfigError, MappingConfig
+from ser2netweb.engine import serial_io, tls
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.engine.supervisor import make_runner
+from ser2netweb.web.auth import hash_password, hash_token
 
 MISSING_PORT = "COM250" if sys.platform == "win32" else "/dev/ser2net-test-missing"
 PASSWORD = "key-pass-1"
@@ -173,7 +173,7 @@ def test_import_warns(pki: Pki):
 
 
 def test_api_masks_the_password():
-    from app.web import api
+    from ser2netweb.web import api
     m = mapping(tls_cert="/c.pem", tls_key="/k.pem", tls_key_password="secret")
     for role, shown in (("viewer", api.REDACTED), ("operator", "secret"), ("admin", "secret")):
         state = types.SimpleNamespace(config=types.SimpleNamespace(api_token_role=role),
@@ -412,7 +412,7 @@ def test_connect_out_rules():
 def test_older_forms_keep_the_fields():
     """A form without the new fields (an older cluster node's, or the block hidden for
     another mode) keeps what is stored."""
-    from app.web.routes.forms import _mapping_from_form, _preserve_unmanaged_fields
+    from ser2netweb.web.routes.forms import _mapping_from_form, _preserve_unmanaged_fields
     stored = client_mapping(1, tls_fingerprint="ab" * 32, tls_key_password="pw", tls_ca="/ca.pem",
                             tls_client_ca="/clients.pem")
     fields = {"name": "uplink", "kind": "net", "serial_port": MISSING_PORT,

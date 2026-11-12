@@ -34,8 +34,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import free_port, server_log, show_log_on_failure, wait_port
 
-from app import accounts, datalock, winservice
-from app.config import (
+from ser2netweb import accounts, datalock, winservice
+from ser2netweb.config import (
     OWN_NAMES,
     AppConfig,
     ConfigStore,
@@ -77,7 +77,7 @@ def icacls(*args: str) -> str:
 
 def has_entry(path: str, sid: str) -> bool:
     """An entry that allows `sid` something on `path` itself."""
-    from app import winservice
+    from ser2netweb import winservice
 
     sec = winservice.read_security(path)
     return sec is not None and any(
@@ -89,7 +89,7 @@ def mkdir_with_sddl(path: str, sddl: str) -> None:
     """Create the folder `path` with the security descriptor `sddl` (Windows)."""
     import ctypes
 
-    from app import winservice
+    from ser2netweb import winservice
 
     s = winservice._secapi()
     psd = ctypes.c_void_p()
@@ -103,7 +103,7 @@ def mkdir_with_sddl(path: str, sddl: str) -> None:
 
 
 def test_windows_owner_only_acl():
-    from app import winservice
+    from ser2netweb import winservice
 
     me = winservice._current_user_sid()
     with tempfile.TemporaryDirectory() as d:
@@ -138,7 +138,7 @@ def test_windows_admin_owned_folders():
     permissions; a folder an elevated administrator made private to itself (Python's
     mkdir(0o700) on Windows Server: SYSTEM, Administrators, OWNER RIGHTS, owned by
     Administrators) gets that account's entry, so it can still use it unelevated."""
-    from app import winservice as w
+    from ser2netweb import winservice as w
 
     me = w._current_user_sid()
     base = tempfile.mkdtemp(prefix="s2n_perm_")
@@ -181,8 +181,8 @@ def test_windows_admin_owned_folders():
 
 def test_own_names():
     """The names ser2net puts in its data directory are the ones the code uses."""
-    from app import state, watchdog
-    from app.engine import sparkplug_node
+    from ser2netweb import state, watchdog
+    from ser2netweb.engine import sparkplug_node
 
     for name in (datalock.LOCK_NAME, accounts.REQUEST_DIR, state.SETUP_CODE_FILE,
                  sparkplug_node.BDSEQ_FILE, watchdog.HANG_LOG, winservice.SERVICE_LOG,

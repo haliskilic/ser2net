@@ -1,4 +1,4 @@
-"""Listener admission before TLS, and the connection budget (app/engine/netguard.py).
+"""Listener admission before TLS, and the connection budget (ser2netweb/engine/netguard.py).
 
 A mapping's TLS listener (TCP server bridge, Modbus gateway) used to run the handshake
 first, with asyncio's 60 s timeout, and check the allow-list only once it was done: any
@@ -30,9 +30,9 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MappingConfig
-from app.engine import modbus, netguard
-from app.engine.supervisor import make_runner
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import modbus, netguard
+from ser2netweb.engine.supervisor import make_runner
 
 MISSING_PORT = "COM250" if sys.platform == "win32" else "/dev/ser2net-test-missing"
 
@@ -46,7 +46,7 @@ def free_port() -> int:
 
 
 def make_cert():
-    from app.web.selfsigned import CertError, generate
+    from ser2netweb.web.selfsigned import CertError, generate
     d = tempfile.mkdtemp(prefix="s2n_tlsadm_")
     cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
     try:

@@ -259,10 +259,10 @@ def _guard_runs_first(name: str) -> None:
                                          and isinstance(n.value, ast.Constant))]
     first = next(i for i, n in enumerate(body)
                  if isinstance(n, ast.If) and "version_info" in ast.unparse(n.test))
-    # before it: the stdlib imports and constants only (no app/, no definitions)
+    # before it: the stdlib imports and constants only (no ser2netweb/, no definitions)
     for n in body[:first]:
         assert (isinstance(n, ast.Import) or isinstance(n, ast.ImportFrom) and n.level == 0
-                and not (n.module or "").startswith("app")
+                and not (n.module or "").startswith("ser2netweb")
                 or isinstance(n, ast.Assign) and isinstance(n.value, (ast.Tuple, ast.Constant))), \
             f"{name}:{n.lineno}: runs before the version check"
     assert not any(isinstance(n, (ast.FunctionDef, ast.ClassDef, ast.AnnAssign))

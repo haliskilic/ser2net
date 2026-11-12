@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.engine import modbus
+from ser2netweb.engine import modbus
 
 
 def test_crc_and_rtu_known_vector():

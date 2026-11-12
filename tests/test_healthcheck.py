@@ -13,7 +13,7 @@ import tempfile
 
 from _server import ROOT, Server, free_port
 
-from app import healthcheck
+from ser2netweb import healthcheck
 
 
 def run_check(data_dir, env=None):

@@ -34,9 +34,9 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigStore, MappingConfig
-from app.state import AppState
-from app.web.auth import hash_password
+from ser2netweb.config import AppConfig, ConfigStore, MappingConfig
+from ser2netweb.state import AppState
+from ser2netweb.web.auth import hash_password
 
 PW = "audit-pass-1"
 

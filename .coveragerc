@@ -1,6 +1,6 @@
 # coverage.py settings for tests/coverage_run.py (CI job "coverage").
 [run]
-source = app
+source = ser2netweb
 parallel = True
 # the servers the tests spawn stop on SIGTERM; save their data then too
 sigterm = True

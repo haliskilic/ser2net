@@ -19,8 +19,8 @@ import tempfile
 
 from _server import Browser, Server
 
-from app.config import AppConfig, ConfigError, ConfigStore, User
-from app.web.auth import hash_password
+from ser2netweb.config import AppConfig, ConfigError, ConfigStore, User
+from ser2netweb.web.auth import hash_password
 
 PW = "erasure-pass-1"
 

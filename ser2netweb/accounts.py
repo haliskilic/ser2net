@@ -5,12 +5,12 @@
                                   is created as an admin if it doesn't exist)
     ser2net --sign-out-all        a new session key: every web UI session ends
     ser2net --reload              the running instance reads config.json again
-                                  (app/reload.py); only while one runs
+                                  (ser2netweb/reload.py); only while one runs
     SER2NET_ADMIN_PASSWORD_FILE   (+ SER2NET_ADMIN_USER, default "admin") the first admin
                                   of an install without accounts, e.g. a Docker secret
 
 The commands work whether ser2net is running or not. The data directory's lock
-(app/datalock.py, <data>/ser2net.lock) tells which: while an instance of the same data
+(ser2netweb/datalock.py, <data>/ser2net.lock) tells which: while an instance of the same data
 directory holds it, the change is handed to that instance: a request file in
 <data>/admin-requests/ that it applies under its config lock, so its next save can't
 undo the change and sessions end at once (this also reaches an instance in another

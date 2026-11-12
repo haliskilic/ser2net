@@ -28,9 +28,9 @@ import tempfile
 
 import _server  # noqa: F401  (puts the repo root and lib/ on sys.path)
 
-from app import console, runtime
-from app.config import AdminUI
-from app.engine import netinfo
+from ser2netweb import console, runtime
+from ser2netweb.config import AdminUI
+from ser2netweb.engine import netinfo
 
 
 def listener(host: str = "127.0.0.1") -> socket.socket:

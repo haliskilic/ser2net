@@ -132,7 +132,7 @@ jobs:
           python tools/refresh_locks.py --verify || python tools/refresh_locks.py || true
           python tools/refresh_assets.py --check || python tools/refresh_assets.py || true
           paths=(vendor/wheels requirements-lock.txt requirements-build.txt vendor/npm
-                 app/web/static tools/licenses/npm)
+                 ser2netweb/web/static tools/licenses/npm)
           git add --intent-to-add "${paths[@]}"
           git diff --binary -- "${paths[@]}" > refreshed-pins.patch
           git diff --stat -- "${paths[@]}"
@@ -226,7 +226,7 @@ jobs:
         run: |
           python bootstrap.py
           python -c "import os, sys; sys.path[:0] = ['lib', '.']
-          import serial, starlette, uvicorn, app.runtime, app.web.server
+          import serial, starlette, uvicorn, ser2netweb.runtime, ser2netweb.web.server
           lib = os.path.abspath('lib')
           assert all(os.path.abspath(m.__file__).startswith(lib) for m in (serial, starlette, uvicorn))"
           python ser2net.py --about

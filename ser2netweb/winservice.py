@@ -849,7 +849,7 @@ def _service_extras(api, svc, name: str, data_dir: str) -> None:
 def _program_paths(frozen: bool) -> list[str]:
     """What the service runs, so what nobody but administrators may change: a frozen
     build's exe and its folder (DLLs are looked up there first); for a source checkout the
-    interpreter and its library folders, the checkout, its scripts, app/ and lib/."""
+    interpreter and its library folders, the checkout, its scripts, ser2netweb/ and lib/."""
     if frozen:
         exe = os.path.abspath(sys.executable)
         return [exe, os.path.dirname(exe)]
@@ -858,7 +858,7 @@ def _program_paths(frozen: bool) -> list[str]:
     candidates = [sys.executable, os.path.dirname(os.path.abspath(sys.executable)), sys.prefix,
                   base, os.path.join(base, "Lib"), os.path.join(base, "DLLs"), root,
                   os.path.join(root, "ser2net.py"), os.path.join(root, "bootstrap.py"),
-                  os.path.join(root, "app"), os.path.join(root, "lib")]
+                  os.path.join(root, "ser2netweb"), os.path.join(root, "lib")]
     seen, out = set(), []
     for p in candidates:
         key = os.path.normcase(os.path.abspath(p))
@@ -871,7 +871,7 @@ def _program_paths(frozen: bool) -> list[str]:
 def _guard_location(frozen: bool, allow_unsafe_location: bool,
                     log: Callable[[str], None]) -> None:
     """For a source checkout, refuse to install when an account other than SYSTEM and
-    Administrators can change what the service runs (the interpreter, the checkout, app/,
+    Administrators can change what the service runs (the interpreter, the checkout, ser2netweb/,
     lib/): the LocalSystem service would run that account's code. A frozen build needs no
     check here: install() copies it to an admin-only folder."""
     if frozen:
@@ -933,7 +933,7 @@ def _check_adoptable(data_dir: str, config_path: str) -> None:
 
 
 def _wait_lock_free(data_dir: str, timeout: float) -> None:
-    """--install-service only tests the data directory's lock (app.datalock): the service
+    """--install-service only tests the data directory's lock (ser2netweb.datalock): the service
     it starts must be the one that holds it."""
     from . import datalock
 

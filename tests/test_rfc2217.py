@@ -34,8 +34,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import serial
 
-from app.config import MappingConfig
-from app.engine.supervisor import Supervisor
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine.supervisor import Supervisor
 
 IAC, SB, SE = 255, 250, 240
 

@@ -34,11 +34,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from serial import rfc2217 as pyserial_rfc2217
 
-from app.config import MappingConfig
-from app.engine import bridge
-from app.engine.protocols.base import MAX_SUBNEGOTIATION, ProtocolError
-from app.engine.protocols.rfc2217 import Rfc2217Session
-from app.engine.protocols.telnet import TelnetSession
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import bridge
+from ser2netweb.engine.protocols.base import MAX_SUBNEGOTIATION, ProtocolError
+from ser2netweb.engine.protocols.rfc2217 import Rfc2217Session
+from ser2netweb.engine.protocols.telnet import TelnetSession
 
 IAC, SB, SE = 255, 250, 240
 WILL, WONT, DO, DONT = 251, 252, 253, 254

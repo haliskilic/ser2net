@@ -45,17 +45,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import Browser, Server, free_port
 
-from app.config import (
+from ser2netweb.config import (
     CONSOLE_ENCODINGS, AppConfig, ConfigError, MappingConfig, console_charset, console_encoding,
 )
-from app.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner
-from app.engine.modbus_gateway import ModbusGatewayRunner
-from app.engine.supervisor import _Unbuildable
-from app.web import auth
-from app.web.routes import console
-from app.web.routes.common import Ctx
-from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
-from app.web.routes.console import _Monitor, _TrafficMonitor
+from ser2netweb.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.engine.supervisor import _Unbuildable
+from ser2netweb.web import auth
+from ser2netweb.web.routes import console
+from ser2netweb.web.routes.common import Ctx
+from ser2netweb.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
+from ser2netweb.web.routes.console import _Monitor, _TrafficMonitor
 
 
 def test_end_of_a_full_feed():
@@ -493,7 +493,7 @@ def test_live():
     from websockets.exceptions import ConnectionClosed
     from websockets.sync.client import connect
 
-    from app.web.auth import hash_password
+    from ser2netweb.web.auth import hash_password
 
     def mapping(mid, name, enabled=True, **network):
         return {"id": mid, "name": name, "enabled": enabled, "kind": "net",

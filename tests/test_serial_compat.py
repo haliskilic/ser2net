@@ -1,4 +1,4 @@
-"""ser2net's own serial transport (app/engine/serial_compat.py) and the upstream code it builds on.
+"""ser2net's own serial transport (ser2netweb/engine/serial_compat.py) and the upstream code it builds on.
 
 serial_compat.Transport is pyserial-asyncio-fast's SerialTransport with ser2net's fixes, and
 open_stream builds it for every port (nothing in pyserial-asyncio-fast is patched for the
@@ -56,7 +56,7 @@ import serial
 import serial_asyncio_fast as saf
 
 from _fake_win32 import FakeWin32
-from app.engine import serial_compat
+from ser2netweb.engine import serial_compat
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
@@ -164,7 +164,7 @@ def test_read_size():
 def test_no_process_wide_patch():
     """pyserial-asyncio-fast's own class is left as it is (spy://-style users of it, other
     libraries in the process): the fixes live in the subclass."""
-    from app.engine import serial_io  # noqa: F401 - importing it must not patch anything
+    from ser2netweb.engine import serial_io  # noqa: F401 - importing it must not patch anything
     assert saf.SerialTransport._write_ready is not serial_compat.Transport._write_ready
     assert not hasattr(saf.SerialTransport, "_ser2net_write_ready_patched")
     assert serial_compat.transport_class() is serial_compat.Transport
@@ -226,8 +226,8 @@ class Pty:
 
 
 async def _eagain_through_open_serial():
-    from app.config import SerialSettings
-    from app.engine import serial_io
+    from ser2netweb.config import SerialSettings
+    from ser2netweb.engine import serial_io
 
     pty = Pty()
     writer = None
@@ -302,8 +302,8 @@ def _speeds(fd):
 
 
 async def _open_at(path, rate):
-    from app.config import SerialSettings
-    from app.engine import serial_io
+    from ser2netweb.config import SerialSettings
+    from ser2netweb.engine import serial_io
 
     _reader, writer, ser, _dev = await serial_io.open_serial(SerialSettings(port=path,
                                                                             baudrate=rate))

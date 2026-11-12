@@ -26,10 +26,10 @@ import urllib.request
 from _optional import need
 from _server import Browser, Server, _NoRedirect
 
-from app import console
-from app.config import AppConfig
-from app.engine.cluster import ClusterDiscovery
-from app.web.auth import hash_password
+from ser2netweb import console
+from ser2netweb.config import AppConfig
+from ser2netweb.engine.cluster import ClusterDiscovery
+from ser2netweb.web.auth import hash_password
 
 PW = "tls-live-pass-1"
 

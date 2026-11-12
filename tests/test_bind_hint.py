@@ -1,4 +1,4 @@
-"""Ports the system refuses say why and what to do (app/engine/bindhint.py).
+"""Ports the system refuses say why and what to do (ser2netweb/engine/bindhint.py).
 
 On Linux a process that isn't root needs CAP_NET_BIND_SERVICE for a port below 1024 (the
 systemd unit's user, the Docker image's on the host network). The refused bind said only
@@ -26,10 +26,10 @@ import time
 
 from _server import ROOT, Browser, Server
 
-from app.config import MappingConfig
-from app.engine import bindhint
-from app.engine.supervisor import Supervisor
-from app.web.auth import hash_password
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import bindhint
+from ser2netweb.engine.supervisor import Supervisor
+from ser2netweb.web.auth import hash_password
 
 PW = "hint-pass-1"
 LOW = 502  # Modbus/TCP's port: below 1024, refused to an account without the capability
@@ -126,7 +126,7 @@ def test_dashboard_and_api():
         return
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
-    with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as fh:
         tr = json.load(fh)
     en_text = ("Ports below 1024 need extra rights on Linux: give ser2net the "
                "CAP_NET_BIND_SERVICE capability")

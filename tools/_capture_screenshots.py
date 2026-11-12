@@ -12,7 +12,7 @@ others are stopped). For each language (the English images in --out, the Turkish
 panel, a new mapping's form, the console in its hex view and Settings → Notifications — at
 1280 px and device scale 1, panels as single elements, so they can be read at README size
 and keep the repository small. --as-version shows that version in the UI (screenshots
-taken before the release commit bumps app/__init__.py). Needs socat on PATH for the
+taken before the release commit bumps ser2netweb/__init__.py). Needs socat on PATH for the
 console (else that one is skipped). Run it where nothing else uses the network, e.g. a
 throwaway network namespace. Not part of the app or the test suite.
 """
@@ -35,7 +35,7 @@ sys.path.insert(0, ROOT)
 
 from playwright.sync_api import sync_playwright
 
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 CLUSTER_KEY = "demo-cluster-key-0123456789"
 PASSWORD = "demo-pass-123"  # noqa: S105  (the demo accounts' password)
@@ -108,10 +108,10 @@ def start_node(tmp: str, name: str, cfg: dict, version: str):
     path = os.path.join(folder, "config.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh)
-    # --as-version: the version is set before ser2net.py imports app (every module takes it
+    # --as-version: the version is set before ser2net.py imports ser2netweb (every module takes it
     # from there)
-    code = ("import runpy, sys, app\n"
-            f"if {version!r}: app.__version__ = {version!r}\n"
+    code = ("import runpy, sys, ser2netweb\n"
+            f"if {version!r}: ser2netweb.__version__ = {version!r}\n"
             "sys.argv = ['ser2net.py'] + sys.argv[1:]\n"
             "runpy.run_path('ser2net.py', run_name='__main__')\n")
     log = open(os.path.join(folder, "out.log"), "wb")

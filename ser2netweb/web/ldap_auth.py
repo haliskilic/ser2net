@@ -6,7 +6,7 @@ upserted so the rest of the system â€” sessions, role checks, the Users panel â€
 uniformly; the role is refreshed from LDAP groups on every login.
 
 ldap3 is an OPTIONAL dependency, imported lazily: if it's absent or fails to import,
-LDAP login is disabled with a log line saying which (app.optional) and local accounts
+LDAP login is disabled with a log line saying which (ser2netweb.optional) and local accounts
 keep working. The actual bind/search is isolated so the role-mapping and shadow-user
 logic can be unit-tested without ldap3; the group -> role matching (OIDC claims use it
 too) is pure Python.

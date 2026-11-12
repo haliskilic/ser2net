@@ -1,5 +1,5 @@
-"""The event loop ser2net runs on, and Windows' 512-socket select() limit (app/runtime.py,
-app/engine/netguard.py).
+"""The event loop ser2net runs on, and Windows' 512-socket select() limit (ser2netweb/runtime.py,
+ser2netweb/engine/netguard.py).
 
 On Windows ser2net runs a SelectorEventLoop, whose select() takes at most 512 sockets in a
 set; the 513th used to make select() raise inside the loop, which stopped the process:
@@ -29,9 +29,9 @@ import time
 
 from _server import Server
 
-from app import runtime
-from app.engine import netguard
-from app.web.auth import hash_password
+from ser2netweb import runtime
+from ser2netweb.engine import netguard
+from ser2netweb.web.auth import hash_password
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 PW = "event-loop-pass-1"
@@ -201,7 +201,7 @@ def test_fatal_error_reaches_the_log():
     code = (
         "import logging, sys\n"
         f"sys.path.insert(0, {ROOT!r})\n"
-        "from app import runtime\n"
+        "from ser2netweb import runtime\n"
         "logging.getLogger('ser2net').addHandler(logging.StreamHandler(sys.stdout))\n"
         "async def broken(*a, **k):\n"
         "    raise RuntimeError('selector exploded')\n"

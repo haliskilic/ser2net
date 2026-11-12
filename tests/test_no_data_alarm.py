@@ -16,9 +16,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import free_port
 
-from app import notify
-from app.config import AppConfig, MappingConfig, NotificationSettings
-from app.engine.supervisor import Supervisor
+from ser2netweb import notify
+from ser2netweb.config import AppConfig, MappingConfig, NotificationSettings
+from ser2netweb.engine.supervisor import Supervisor
 
 
 async def start_socat():

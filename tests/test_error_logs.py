@@ -25,13 +25,13 @@ import time
 
 from _server import Browser, Server
 
-from app import logsetup
-from app import state as state_mod
-from app.config import AppConfig, ConfigStore, MappingConfig
-from app.engine import bridge
-from app.state import AppState
-from app.web import auth
-from app.web.server import build_app
+from ser2netweb import logsetup
+from ser2netweb import state as state_mod
+from ser2netweb.config import AppConfig, ConfigStore, MappingConfig
+from ser2netweb.engine import bridge
+from ser2netweb.state import AppState
+from ser2netweb.web import auth
+from ser2netweb.web.server import build_app
 
 
 def _close_loggers():

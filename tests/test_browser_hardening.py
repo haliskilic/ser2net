@@ -23,7 +23,7 @@ import urllib.request
 
 from _server import Browser, Server, free_port, ui_cookie
 
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PW = "hardening-pass-1"
 

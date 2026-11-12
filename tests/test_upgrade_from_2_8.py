@@ -32,7 +32,7 @@ import urllib.request
 from _server import Browser, Server, free_port
 from test_upgrade_from_2_7 import walk
 
-from app.config import AppConfig, ConfigStore
+from ser2netweb.config import AppConfig, ConfigStore
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURE = os.path.join(HERE, "fixtures", "config-2.8.0.json")

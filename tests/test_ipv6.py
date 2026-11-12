@@ -21,15 +21,15 @@ from unittest import mock
 
 from _server import Browser, Server
 
-from app import config as config_mod
-from app import console, healthcheck, runtime
-from app.config import (
+from ser2netweb import config as config_mod
+from ser2netweb import console, healthcheck, runtime
+from ser2netweb.config import (
     AdminUI, AppConfig, ConfigError, MappingConfig, NetworkSettings, _ip_overlaps, bind_ip_problem,
     canonical_ip, host_port,
 )
-from app.engine import netguard, netinfo, serial_io
-from app.engine.bridge import MappingRunner
-from app.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.engine import netguard, netinfo, serial_io
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
 
 
 def ipv6_loopback() -> bool:
@@ -174,8 +174,8 @@ class _Req:
 
 
 def test_mapping_form():
-    from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
-    from app.web.server import make_templates
+    from ser2netweb.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
+    from ser2netweb.web.server import make_templates
 
     base = {"name": "f", "serial_port": "/dev/ttyS0", "network_mode": "server",
             "network_port": "4001"}
@@ -410,7 +410,7 @@ def test_labels():
         {"bind_ip": "::1"}, {"bind_ip": "10.0.0.5"}, {"bind_ip": "0.0.0.0", "dual_stack": True},
         {"bind_ip": "::"})] == ["[::1]", "10.0.0.5", "*", "[::]"]
 
-    from app.web.server import make_templates
+    from ser2netweb.web.server import make_templates
     env = make_templates().env
     maps = [mapping(name="v6", bind_ip="::1", port=4001),
             mapping(name="both", bind_ip="0.0.0.0", dual_stack=True, port=4002),

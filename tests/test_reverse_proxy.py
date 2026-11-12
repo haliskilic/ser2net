@@ -43,9 +43,9 @@ import urllib.request
 from _optional import need
 from _server import Browser, Server, _NoRedirect, free_port, ui_cookie
 
-from app.config import OidcSettings
-from app.web import auth, oidc_auth
-from app.web.auth import hash_password
+from ser2netweb.config import OidcSettings
+from ser2netweb.web import auth, oidc_auth
+from ser2netweb.web.auth import hash_password
 
 PW = "proxy-pass-1"
 MID = "m1"
@@ -503,7 +503,7 @@ def main():
     srv = Server()
     tls = None
     if need("cryptography", what="TLS at the test's reverse proxy (it then speaks plain HTTP)"):
-        from app.web.selfsigned import generate
+        from ser2netweb.web.selfsigned import generate
         tls = (os.path.join(srv.tmp, "cert.pem"), os.path.join(srv.tmp, "key.pem"))
         generate(*tls)
     proxied = Proxy(srv.port, "/ser2net", tls=tls)

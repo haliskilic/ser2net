@@ -17,8 +17,8 @@ import tempfile
 
 from _server import Browser, Server
 
-from app import SOURCE_URL, licences
-from app.web.auth import hash_password
+from ser2netweb import SOURCE_URL, licences
+from ser2netweb.web.auth import hash_password
 
 PW = "licence-pass-1"
 USERS = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",

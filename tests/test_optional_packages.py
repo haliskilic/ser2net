@@ -1,5 +1,5 @@
 """Optional packages (ldap3, authlib, paho-mqtt) that are missing or fail to import are
-reported truthfully (app/optional.py):
+reported truthfully (ser2netweb/optional.py):
 
   * "not installed" only for a ModuleNotFoundError of the package itself; a missing
     dependency, an incompatible version (ImportError, TypeError) or a warning turned
@@ -24,11 +24,11 @@ import tempfile
 
 from _server import ROOT, Browser, Server
 
-from app import optional
-from app.config import LdapSettings, MqttSettings, OidcSettings
-from app.engine.mqtt_pub import MqttPublisher
-from app.web import ldap_auth, oidc_auth
-from app.web.auth import hash_password
+from ser2netweb import optional
+from ser2netweb.config import LdapSettings, MqttSettings, OidcSettings
+from ser2netweb.engine.mqtt_pub import MqttPublisher
+from ser2netweb.web import ldap_auth, oidc_auth
+from ser2netweb.web.auth import hash_password
 
 PW = "optional-pkg-pass-1"
 PIP = "pip install -r requirements-optional.txt"

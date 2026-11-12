@@ -54,9 +54,9 @@ from _clock import WallClock
 from _optional import need
 from _server import ui_cookie
 
-from app import clock, config, runtime
-from app.web import certinfo, selfsigned
-from app.web.auth import hash_password
+from ser2netweb import clock, config, runtime
+from ser2netweb.web import certinfo, selfsigned
+from ser2netweb.web.auth import hash_password
 
 
 class EmptyPath:
@@ -421,11 +421,11 @@ async def _call(app, method, path, cookie, body=b""):
 
 
 def test_settings_shows_certificate():
-    from app.config import AppConfig, ConfigStore
-    from app.state import AppState
-    from app.web import auth
-    from app.web.routes import settings as settings_routes
-    from app.web.server import build_app
+    from ser2netweb.config import AppConfig, ConfigStore
+    from ser2netweb.state import AppState
+    from ser2netweb.web import auth
+    from ser2netweb.web.routes import settings as settings_routes
+    from ser2netweb.web.server import build_app
 
     now = datetime.datetime.now(datetime.timezone.utc)
     tmp = tempfile.mkdtemp(prefix="ser2net_certinfo_")

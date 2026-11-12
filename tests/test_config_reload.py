@@ -39,7 +39,7 @@ import urllib.request
 from _optional import need
 from _server import ROOT, Browser, Server, free_port
 
-from app.web.auth import hash_password, hash_token
+from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "reload-pass-1"
 TOKEN = "s2n_reload-token"
@@ -374,7 +374,7 @@ def test_terminal_hangup() -> None:
 def test_outside_edit_store() -> None:
     """ConfigStore: an edit made outside ser2net is seen (not a touch), and a save that
     replaces it keeps it in backups/ and reports it, also a start/stop's save."""
-    from app.config import AppConfig, ConfigStore
+    from ser2netweb.config import AppConfig, ConfigStore
 
     d = tempfile.mkdtemp(prefix="s2n_outside_")
     path = os.path.join(d, "config.json")
@@ -485,7 +485,7 @@ def test_restore_applies_changes() -> None:
         assert code == 200, out
         cb = socket.create_connection(("127.0.0.1", pb), timeout=5)
         wait(lambda: clients(srv, "b1") == 1, "B2's client")
-        from app.config import ConfigStore
+        from ser2netweb.config import ConfigStore
         backups = ConfigStore(srv.config_path).backup_names()  # newest (in use) first
         b = Browser(srv.base)
         b.login("admin", PW)
@@ -509,8 +509,8 @@ def test_refused_like_an_edit() -> None:
     share an MQTT client ID, Sparkplug B edge node or command topic with another enabled
     mapping on its broker. A mapping that didn't change is not checked again (a stored
     clash keeps running)."""
-    from app import reload as reload_mod
-    from app.config import AppConfig
+    from ser2netweb import reload as reload_mod
+    from ser2netweb.config import AppConfig
 
     def cfg(*mappings):
         return AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1", "port": 8080},

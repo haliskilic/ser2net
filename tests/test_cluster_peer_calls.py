@@ -64,9 +64,9 @@ import urllib.parse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import AppConfig, ClusterSettings, ConfigError, parse_cluster_peer, peer_host
-from app.engine import cluster as cluster_mod
-from app.engine.cluster import (AUTH_HEADER, BOOT_SKEW_S, CLOCK_WINDOW_S, FETCH_CACHE_S,
+from ser2netweb.config import AppConfig, ClusterSettings, ConfigError, parse_cluster_peer, peer_host
+from ser2netweb.engine import cluster as cluster_mod
+from ser2netweb.engine.cluster import (AUTH_HEADER, BOOT_SKEW_S, CLOCK_WINDOW_S, FETCH_CACHE_S,
                                 KEY_HEADER, NOTE_TTL, PEER_TTL, ClusterDiscovery, _Answer,
                                 _Link, _Nonces, _sign,
                                 canonical_target, format_auth, key_bytes, key_header,

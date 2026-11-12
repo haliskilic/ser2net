@@ -27,9 +27,9 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import app.state as state_mod
-from app.state import _trim_log_file, AppState, LOG_MAX_AGE_DAYS
-from app.config import AppConfig, ConfigStore, MappingConfig
+import ser2netweb.state as state_mod
+from ser2netweb.state import _trim_log_file, AppState, LOG_MAX_AGE_DAYS
+from ser2netweb.config import AppConfig, ConfigStore, MappingConfig
 
 
 def _close_loggers():
@@ -415,8 +415,8 @@ async def _replaced():
 
     from test_login_throttle import CSRF, call
 
-    from app.web import auth
-    from app.web.server import build_app
+    from ser2netweb.web import auth
+    from ser2netweb.web.server import build_app
 
     d = tempfile.mkdtemp()
     try:

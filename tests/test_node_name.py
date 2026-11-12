@@ -32,10 +32,10 @@ from types import SimpleNamespace
 from _asgi import App, cookies, header
 from _server import Server
 
-from app import notify, runtime
-from app.config import AdminUI, AppConfig, node_label, node_name
-from app.engine.cluster import ClusterDiscovery
-from app.web import auth
+from ser2netweb import notify, runtime
+from ser2netweb.config import AdminUI, AppConfig, node_label, node_name
+from ser2netweb.engine.cluster import ClusterDiscovery
+from ser2netweb.web import auth
 
 PW = "node-name-pass-1"
 CSRF = "node-name-csrf"

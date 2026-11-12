@@ -1,7 +1,7 @@
 name: Release
 
 # On a v* tag (git tag -a v2.8.0 -m "..." && git push origin v2.8.0): check the tag (vX.Y.Z
-# or vX.Y.Z-rc.N, equal to "v" + app.__version__, with a dated CHANGELOG section, on a
+# or vX.Y.Z-rc.N, equal to "v" + ser2netweb.__version__, with a dated CHANGELOG section, on a
 # commit of main), then run the whole CI on the tagged commit (ci.yml: lint, types, the
 # test suites, the dependency audit, the Docker image and the standalone executables for
 # Linux x86_64 + arm64 and Windows x64 with every check on them — bundle contents,
@@ -50,7 +50,7 @@ jobs:
           fetch-depth: 0          # main's history, for the ancestry check
           persist-credentials: false
       - id: tag
-        name: The tag is "v" + app.__version__, with a dated CHANGELOG.md section
+        name: The tag is "v" + ser2netweb.__version__, with a dated CHANGELOG.md section
         run: |
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             python3 tools/release_guard.py tag "$GITHUB_REF_NAME"

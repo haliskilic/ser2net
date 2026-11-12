@@ -23,10 +23,10 @@ from unittest import mock
 
 from _server import Browser, Server
 
-from app import state as st
-from app.config import AppConfig, ConfigStore
-from app.web.auth import hash_password
-from app.web.server import logs_request
+from ser2netweb import state as st
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.web.auth import hash_password
+from ser2netweb.web.server import logs_request
 
 PW = "activity-pass-1"
 

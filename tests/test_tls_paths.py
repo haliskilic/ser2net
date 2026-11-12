@@ -31,10 +31,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _optional import need
 from _server import ROOT, Browser, Server, free_port
 
-from app import config as cfgmod
-from app import importer, runtime
-from app.config import AppConfig, MappingConfig, data_path, moved_tls_file
-from app.web.auth import hash_password
+from ser2netweb import config as cfgmod
+from ser2netweb import importer, runtime
+from ser2netweb.config import AppConfig, MappingConfig, data_path, moved_tls_file
+from ser2netweb.web.auth import hash_password
 
 USERS = [{"username": "admin", "password_hash": hash_password("admin-pass-1"),
           "role": "admin", "pwd_version": 1, "source": "local"}]

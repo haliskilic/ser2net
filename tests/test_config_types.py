@@ -27,10 +27,10 @@ import types
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import (AppConfig, ClusterSettings, ConfigError, MappingConfig, ModbusPoint,
+from ser2netweb.config import (AppConfig, ClusterSettings, ConfigError, MappingConfig, ModbusPoint,
                         ModbusPoll)
-from app.engine.modbus_gateway import ModbusGatewayRunner
-from app.importer import parse_mappings_file
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.importer import parse_mappings_file
 
 POINT = {"name": "coil", "unit": 1, "fn": 1, "address": 0, "dtype": "bool"}
 
@@ -81,7 +81,7 @@ def test_text_values_read_as_meant():
     assert not gw.accepts_mqtt_writes, "'writable': 'false' must leave the coil read-only"
     runner = ModbusGatewayRunner(gw)
     assert runner._set_points == {}, "no MQTT /set subscription for a point that is not writable"
-    from app.engine import modbus
+    from ser2netweb.engine import modbus
     assert modbus.decode_value(b"\x00\x05", p1.dtype, p1.scale) == 0.5, "scale is a number now"
     print("text values: 'false' / '0' / '1' / '19200' / '0.1' read as meant; writable "
           "'false' is read-only, scale '0.1' multiplies  OK")
@@ -374,7 +374,7 @@ async def test_poll_loop_survives():
 def test_api_server_error_is_json():
     from starlette.requests import Request
 
-    from app.web.server import server_error
+    from ser2netweb.web.server import server_error
 
     def request(path):
         return Request({"type": "http", "method": "GET", "path": path, "headers": [],
@@ -398,7 +398,7 @@ def test_other_settings_of_this_release():
     or of the admin UI is a file of the data directory."""
     import tempfile
 
-    from app.config import AdminUI, console_encoding, set_data_dir, tls_files_missing
+    from ser2netweb.config import AdminUI, console_encoding, set_data_dir, tls_files_missing
     tokens = [{"id": "0123456789abcdef", "name": "grafana", "sha256": "a" * 64,
                "role": "viewer", "created": 1.0, "expires": 0.0}]
     cfg = AppConfig.from_dict({

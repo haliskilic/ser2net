@@ -38,9 +38,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _mqtt_broker import MqttBroker
 from _optional import need
 
-from app import i18n
-from app.config import AppConfig, ConfigError, MappingConfig, MqttSettings
-from app.engine.mqtt_pub import MqttPublisher, TlsFileError, tls_context
+from ser2netweb import i18n
+from ser2netweb.config import AppConfig, ConfigError, MappingConfig, MqttSettings
+from ser2netweb.engine.mqtt_pub import MqttPublisher, TlsFileError, tls_context
 
 
 def settings(**kw):
@@ -90,7 +90,7 @@ def test_context(pki):
     ctx = tls_context(settings(ca_file=pki.ca.path, tls_check_hostname=False))
     assert not ctx.check_hostname and ctx.verify_mode == ssl.CERT_REQUIRED
     # a relative path names a file in the data directory, as a mapping's TLS files do
-    from app import config
+    from ser2netweb import config
     config.set_data_dir(os.path.dirname(pki.ca.path))
     try:
         ctx = tls_context(settings(ca_file=os.path.basename(pki.ca.path)))
@@ -160,7 +160,7 @@ def test_edits(pki):
 
     import json
 
-    from app import importer
+    from ser2netweb import importer
     doc = {"mappings": [dict(m.to_dict(), name="imported", id="imp1",
                              mqtt=dict(m.to_dict()["mqtt"], ca_file=missing))]}
     plan = importer.parse_mappings_file(json.dumps(doc).encode())
@@ -171,8 +171,8 @@ def test_edits(pki):
 
 
 def test_form_and_api():
-    from app.web.api import REDACTED, _mapping_view
-    from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
+    from ser2netweb.web.api import REDACTED, _mapping_view
+    from ser2netweb.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
 
     base = {"name": "m", "kind": "net", "serial_port": "COM3", "network_port": "4001",
             "mqtt_enabled": "on", "mqtt_host": "b", "mqtt_base_topic": "t", "mqtt_tls": "on"}

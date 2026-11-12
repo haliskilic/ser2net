@@ -3,12 +3,13 @@
     python tests/make_config_fixture.py v2.8.0
 
 Run by hand once per minor release, after its tag (CONTRIBUTING.md, Releases), from a git
-checkout with the release tags; not in CI. It unpacks `git archive <tag> app` into a
-temporary folder and, with that release's code, loads the previous fixture (an install
-upgraded from the release before), switches on what the release added (FEATURES below:
-every new setting with a value other than its default, dummy secrets), adds an account
-made by that release's password hashing, validates the result and saves it with the
-release's own ConfigStore, which writes config.json exactly as that release does.
+checkout with the release tags; not in CI. It unpacks `git archive <tag> ser2netweb` (the
+package was `app` up to 2.9.x) into a temporary folder and, with that release's code,
+loads the previous fixture (an install upgraded from the release before), switches on
+what the release added (FEATURES below: every new setting with a value other than its
+default, dummy secrets), adds an account made by that release's password hashing,
+validates the result and saves it with the release's own ConfigStore, which writes
+config.json exactly as that release does.
 
 tests/test_upgrade_from_<X_Y>.py then loads the frozen file with the current code: a later
 rename, a dropped key or a stricter rule that would reset or refuse a setting of that
@@ -76,14 +77,25 @@ FEATURES = {
 }
 
 
+def package_of(tag: str) -> str:
+    """The name of the release's package: ser2netweb, or app up to 2.9.x."""
+    found = subprocess.run(["git", "cat-file", "-e", f"{tag}:ser2netweb"], cwd=ROOT,
+                           capture_output=True)
+    return "ser2netweb" if found.returncode == 0 else "app"
+
+
 def _inside(root: str, version: str, previous_path: str, out_path: str) -> None:
     """Runs in a child process with the release's code first on sys.path."""
-    sys.path.insert(0, root)
-    import app
-    from app.config import AppConfig, ConfigStore, User
-    from app.web.auth import hash_password
+    import importlib
 
-    assert app.__version__ == version, (app.__version__, version)
+    sys.path.insert(0, root)
+    name = "ser2netweb" if os.path.isdir(os.path.join(root, "ser2netweb")) else "app"
+    package = importlib.import_module(name)
+    config = importlib.import_module(f"{name}.config")
+    AppConfig, ConfigStore, User = config.AppConfig, config.ConfigStore, config.User
+    hash_password = importlib.import_module(f"{name}.web.auth").hash_password
+
+    assert package.__version__ == version, (package.__version__, version)
     _prev, features, (user, role, password) = FEATURES[version]
     with open(previous_path, encoding="utf-8") as fh:
         cfg = AppConfig.from_dict(json.load(fh))  # the upgrade, as that release loads it
@@ -109,8 +121,8 @@ def main(argv) -> int:
         previous = os.path.join(FIXTURES, f"config-{FEATURES[version][0]}.json")
         tmp = tempfile.mkdtemp(prefix="s2n_fixture_")
         try:
-            archive = subprocess.run(["git", "archive", tag, "app"], cwd=ROOT, check=True,
-                                     capture_output=True).stdout
+            archive = subprocess.run(["git", "archive", tag, package_of(tag)], cwd=ROOT,
+                                     check=True, capture_output=True).stdout
             subprocess.run(["tar", "-x", "-C", tmp], input=archive, check=True)
             out = os.path.join(tmp, "data", "config.json")
             res = subprocess.run([sys.executable, os.path.abspath(__file__), "--inside", tmp,

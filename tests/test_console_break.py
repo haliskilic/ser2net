@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import Browser, Server, free_port
 
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PW = "break-pass-1"
 

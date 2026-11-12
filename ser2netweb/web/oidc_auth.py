@@ -13,7 +13,7 @@ where nothing crosses a network — so the client secret, the code and the signi
 never travel in clear text (InsecureEndpoint).
 
 authlib is an OPTIONAL dependency (lazy import): absent or failing to import => OIDC
-login is disabled with a log line saying which (app.optional), and local accounts keep
+login is disabled with a log line saying which (ser2netweb.optional), and local accounts keep
 working. HTTP uses stdlib urllib; the fetch/post calls are
 injectable so the full flow can be tested without a real provider.
 """
@@ -131,7 +131,7 @@ class _SecureRedirects(urllib.request.HTTPRedirectHandler):
 def _opener() -> urllib.request.OpenerDirector:
     """A new one for each request: urllib's HTTPS handler loads the CA certificates when
     it is made (Python 3.12+), and the standalone Linux binary points OpenSSL at the
-    system's CA bundle (app/standalone.py: SSL_CERT_FILE) only after this module is
+    system's CA bundle (ser2netweb/standalone.py: SSL_CERT_FILE) only after this module is
     imported. One made at import would trust no provider there."""
     return urllib.request.build_opener(_SecureRedirects)
 

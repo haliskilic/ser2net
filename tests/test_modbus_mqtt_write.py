@@ -59,10 +59,10 @@ from unittest import mock
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
-from app.config import MappingConfig
-from app.engine import modbus, serial_io, sparkplug
-from app.engine.modbus_gateway import ModbusGatewayRunner
-from app.engine.mqtt_pub import _matches, shown
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import modbus, serial_io, sparkplug
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.engine.mqtt_pub import _matches, shown
 
 REGS = {10: 0, 20: 0, 21: 0, 0: 0x41BC, 1: 0x0000}   # input regs 0/1 = float32 23.5
 COILS = {0: False, 1: False, 2: False}
@@ -259,11 +259,11 @@ async def gateway(fmt, slave_port, fake, points=POINTS, logs=None, mqtt=None, ne
     sr, sw = await asyncio.open_connection("127.0.0.1", slave_port)
     r._link.attach(sr, sw)
     if fmt == "sparkplug_b":
-        from app.engine.sparkplug_node import SparkplugNode
+        from ser2netweb.engine.sparkplug_node import SparkplugNode
         r._sparkplug = SparkplugNode(m, log, r._write_soon)
         r._mqtt = r._sparkplug.publisher()
     else:  # what start() subscribes: each writable point's own /set topic
-        from app.engine.mqtt_pub import MqttPublisher
+        from ser2netweb.engine.mqtt_pub import MqttPublisher
         subs = dict.fromkeys(r._set_points, r._on_set_message)
         r._mqtt = MqttPublisher(m.mqtt, logger=log, client=fake, subscriptions=subs,
                                 accept_retained=m.mqtt.apply_retained_set)
@@ -707,7 +707,7 @@ async def test_write_queue(slave_port):
     the poll; the answers come back in that order (a refused command's too). At most 32
     wait: a command beyond them is answered error: busy. One that waited too long for the
     bus is not written (error: expired)."""
-    from app.engine import modbus_gateway
+    from ser2netweb.engine import modbus_gateway
     fake, logs = FakeMqtt(), []
     r, sw = await gateway("plain", slave_port, fake, logs=logs)
     r._resp_timeout = 5.0  # the slave holds its answers to writes for a while here
@@ -1001,7 +1001,7 @@ async def test_stop_with_writes(slave_port):
     "offline"): the write on the bus may finish; if it takes too long it is cancelled, and
     the answer says whether its request had gone out. The writes still waiting are
     cancelled (none was sent); a command that comes while the mapping stops is refused."""
-    from app.engine import modbus_gateway
+    from ser2netweb.engine import modbus_gateway
     result = "plant/a/setpoint/set/result"
     hold = asyncio.Event()
     HOLD_WRITES.append(hold)

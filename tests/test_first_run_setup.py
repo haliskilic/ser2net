@@ -25,7 +25,7 @@ import urllib.request
 
 from _server import Browser, Server, ui_cookie
 
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PW = "setup-pass-123"
 

@@ -13,7 +13,7 @@ Where the lock can't be taken — a read-only data directory, a network share wi
 lock support — the start goes on without it and the start-up log says so.
 POSIX: flock(); Windows: a byte-range lock (msvcrt.locking).
 
-`ser2net --set-password` / `--sign-out-all` (app/accounts.py) hold the lock too, while
+`ser2net --set-password` / `--sign-out-all` (ser2netweb/accounts.py) hold the lock too, while
 they change config.json of a stopped ser2net: they mark it as brief ("<pid> brief" in
 the file), and a start that finds it held that way waits for them (BRIEF_WAIT_S)
 instead of refusing.

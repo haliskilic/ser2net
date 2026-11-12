@@ -10,8 +10,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import AdminUI, ConfigError
-from app.runtime import _env_bind_override
+from ser2netweb.config import AdminUI, ConfigError
+from ser2netweb.runtime import _env_bind_override
 
 
 def _clear():

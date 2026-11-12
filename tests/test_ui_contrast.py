@@ -9,7 +9,7 @@ the dark theme's status colours (1.6-2.3:1). Both themes tell the browser their 
 scheme, so it draws its own controls (checkboxes, scrollbars) to match, and the saved
 theme is applied by a script that is not deferred (no dark first paint).
 
-The values come from app/web/static/app.css itself: its :root and :root[data-theme=light]
+The values come from ser2netweb/web/static/app.css itself: its :root and :root[data-theme=light]
 custom properties and the rules below.
 
 Run: python3 tests/test_ui_contrast.py
@@ -18,7 +18,7 @@ import os
 import re
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-CSS = os.path.join(ROOT, "app", "web", "static", "app.css")
+CSS = os.path.join(ROOT, "ser2netweb", "web", "static", "app.css")
 AA = 4.5
 
 # what is checked: the rules that style it (later ones add to earlier ones), and the
@@ -150,14 +150,14 @@ def test_color_scheme_and_early_theme():
     assert table[':root[data-theme="light"]'].get("color-scheme") == "light"
     for box in (".logbox", ".term"):   # dark in both themes: their scrollbars too
         assert table[box].get("color-scheme") == "dark", box
-    base = open(os.path.join(ROOT, "app", "web", "templates", "base.html"), encoding="utf-8").read()
+    base = open(os.path.join(ROOT, "ser2netweb", "web", "templates", "base.html"), encoding="utf-8").read()
     head = base[:base.index("</head>")]
     tag = re.search(r'<script src="\{\{ base \}\}/static/theme\.js\?v=\{\{ asset_version \}\}"([^>]*)>',
                     head)
     assert tag and "defer" not in tag.group(1) and "async" not in tag.group(1), \
         "theme.js runs before the first paint"
     assert head.index("theme.js") < head.index("app.css"), "theme.js before the stylesheets"
-    js = open(os.path.join(ROOT, "app", "web", "static", "theme.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "theme.js"), encoding="utf-8").read()
     assert 'localStorage.getItem("ser2net-theme")' in js and '"data-theme", "light"' in js
     print("color-scheme per theme; the saved theme is set by a script in <head>  OK")
 

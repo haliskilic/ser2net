@@ -8,7 +8,7 @@ order. A text with a count is ``ngettext(singular, plural, n)`` (templates: its
 GuardMiddleware sets for the web UI only; everything else (logs, the audit log, the
 REST API, start-up messages) runs with the default and stays English.
 
-Catalogs: app/locale/<lang>.json, a flat {"English": "Translation"} object.
+Catalogs: ser2netweb/locale/<lang>.json, a flat {"English": "Translation"} object.
 tests/test_i18n.py checks that every wrapped string has a Turkish translation with the
 same placeholders.
 """

@@ -33,12 +33,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _clock import WallClock
 
-from app import clock, runtime
-from app.config import AppConfig, ConfigStore
-from app.state import AppState
-from app.web import auth
-from app.web.routes import settings as settings_routes
-from app.web.server import build_app
+from ser2netweb import clock, runtime
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.state import AppState
+from ser2netweb.web import auth
+from ser2netweb.web.routes import settings as settings_routes
+from ser2netweb.web.server import build_app
 
 DAY = 86400.0
 PW = "clock-check-1"
@@ -210,7 +210,7 @@ def test_settings():
         _close_loggers()
         shutil.rmtree(d, ignore_errors=True)
 
-    js = open(os.path.join(os.path.dirname(__file__), "..", "app", "web", "static", "app.js"),
+    js = open(os.path.join(os.path.dirname(__file__), "..", "ser2netweb", "web", "static", "app.js"),
               encoding="utf-8").read()
     check = js[js.index(") Clock check: the server's clock"):]
     assert "data-server-time" in check and "[data-clock-skew]" in check and "<= 120" in check

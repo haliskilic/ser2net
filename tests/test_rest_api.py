@@ -24,7 +24,7 @@ from _server import free_port, server_log, show_log_on_failure
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
-from app import __version__
+from ser2netweb import __version__
 
 UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"

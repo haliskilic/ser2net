@@ -218,8 +218,8 @@ class Server:
 def ui_cookie(name: str, port, scheme: str = "http", path: str = "/") -> str:
     """The name the web UI gives its cookie `name` (ser2net_session, ser2net_csrf, ...) at
     scheme://127.0.0.1:`port`: tagged by the port unless it is 8080, with __Host- over https
-    (app/web/proxy.cookie_name; test_cookie_names pins the scheme)."""
-    from app.web import proxy
+    (ser2netweb/web/proxy.cookie_name; test_cookie_names pins the scheme)."""
+    from ser2netweb.web import proxy
 
     host = "127.0.0.1" + ("" if port is None else f":{port}")
     scope = {"type": "http", "scheme": scheme, "path": "/", "headers": [(b"host", host.encode())]}

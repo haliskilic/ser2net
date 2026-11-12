@@ -15,8 +15,8 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import AppConfig, ConfigStore
-from app.state import AppState
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.state import AppState
 
 
 def _close_loggers():

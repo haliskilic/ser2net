@@ -26,7 +26,7 @@ import time
 
 from _server import Browser, Server, free_port
 
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PW = "dash-pass-1"
 

@@ -1,4 +1,4 @@
-"""Two-factor sign-in (TOTP, app/web/totp.py) for local accounts: the code step of a
+"""Two-factor sign-in (TOTP, ser2netweb/web/totp.py) for local accounts: the code step of a
 sign-in, and setting it up or turning it off (Settings → Two-factor sign-in).
 
 Off unless an account sets it up. A local account with User.totp_secret signs in in two
@@ -11,7 +11,7 @@ accepted again (the replay guard is in memory: after a restart, a code used just
 it could be used once more within its 90 s window).
 
 Lost authenticator: an admin turns it off in Settings → Users, or `ser2net --set-password
-NAME` on the server (app/accounts.py) sets a new password and turns it off — also for the
+NAME` on the server (ser2netweb/accounts.py) sets a new password and turns it off — also for the
 only admin, and with ser2net stopped.
 """
 from __future__ import annotations

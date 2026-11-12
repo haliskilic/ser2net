@@ -29,8 +29,8 @@ import urllib.request
 
 from _server import Browser, Server, free_port, server_log, show_log_on_failure, ui_cookie
 
-from app.config import AppConfig
-from app.web.auth import hash_password, hash_token
+from ser2netweb.config import AppConfig
+from ser2netweb.web.auth import hash_password, hash_token
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 UI = free_port()

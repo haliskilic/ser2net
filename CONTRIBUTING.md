@@ -73,23 +73,23 @@ can still hold it. `tests/test_harness.py` fails on a fixed listening port unles
   parsed).
 
 ### Code layout
-`ser2net.py` parses the command line and starts `app/runtime.py`, which owns the event loop
+`ser2net.py` parses the command line and starts `ser2netweb/runtime.py`, which owns the event loop
 and runs the web server and the engine side by side; each module's docstring says more.
 
 | Where | What |
 |---|---|
-| `app/config.py` | the configuration model (dataclasses), reading `config.json` typed, validation, atomic saves and `backups/` |
-| `app/state.py` | the shared state: config, supervisor, port watcher, `all.log` / audit log; `app/reload.py` (SIGHUP), `app/tlsreload.py`, `app/storage.py` (free space, retention), `app/watchdog.py`, `app/datalock.py` |
-| `app/engine/supervisor.py` | one runner per mapping, applying config changes; `bridge.py` (serial ↔ TCP/UDP, telnet / RFC 2217), `serial_link.py` / `serial_io.py` / `serial_compat.py` (the serial port), `modbus_gateway.py` + `modbus.py` (Modbus RTU ↔ TCP, polling), `mqtt_pub.py`, `sparkplug_node.py` + `sparkplug.py`, `tls.py`, `access.py` / `netguard.py` (who may connect, limits), `portlist.py` / `portdiag.py` (ports and what's wrong with them), `cluster.py`, `netinfo.py`, `bindhint.py`, `sockopts.py` |
-| `app/web/server.py` | the Starlette app and its middleware; `auth.py` (sessions, CSRF, sign-in limits), `ldap_auth.py`, `oidc_auth.py`, `totp.py`, `proxy.py` (reverse proxy), `httpguard.py`, `api.py` (REST API `/api/v1`), `certinfo.py`, `selfsigned.py` |
-| `app/web/routes/` | one module per UI area (`login`, `totp`, `settings`, `mappings`, `console`, `cluster`, `system`), shared helpers in `common`, `forms` and `ops` |
-| `app/web/templates/`, `app/web/static/` | Jinja templates; `app.js`, `points.js`, `app.css` and the vendored htmx / xterm.js |
-| `app/notify.py` | webhook / e-mail notifications |
-| `app/importer.py`, `app/ser2net_import.py` | mapping imports and the classic ser2net reader |
-| `app/accounts.py` | `--set-password`, `--sign-out-all`, the first admin |
-| `app/winservice.py`, `app/standalone.py`, `app/sdnotify.py` | the Windows service, the PyInstaller executables, systemd's notify |
-| `app/i18n.py`, `app/locale/tr.json` | translations |
-| `app/clock.py`, `app/explain.py`, `app/logtext.py`, `app/logsetup.py`, `app/textfold.py`, `app/optional.py`, `app/signins.py`, `app/healthcheck.py`, `app/console.py` | times, error texts, log lines, text comparison, optional packages, last sign-ins, `--healthcheck`, the first-run console picker |
+| `ser2netweb/config.py` | the configuration model (dataclasses), reading `config.json` typed, validation, atomic saves and `backups/` |
+| `ser2netweb/state.py` | the shared state: config, supervisor, port watcher, `all.log` / audit log; `ser2netweb/reload.py` (SIGHUP), `ser2netweb/tlsreload.py`, `ser2netweb/storage.py` (free space, retention), `ser2netweb/watchdog.py`, `ser2netweb/datalock.py` |
+| `ser2netweb/engine/supervisor.py` | one runner per mapping, applying config changes; `bridge.py` (serial ↔ TCP/UDP, telnet / RFC 2217), `serial_link.py` / `serial_io.py` / `serial_compat.py` (the serial port), `modbus_gateway.py` + `modbus.py` (Modbus RTU ↔ TCP, polling), `mqtt_pub.py`, `sparkplug_node.py` + `sparkplug.py`, `tls.py`, `access.py` / `netguard.py` (who may connect, limits), `portlist.py` / `portdiag.py` (ports and what's wrong with them), `cluster.py`, `netinfo.py`, `bindhint.py`, `sockopts.py` |
+| `ser2netweb/web/server.py` | the Starlette app and its middleware; `auth.py` (sessions, CSRF, sign-in limits), `ldap_auth.py`, `oidc_auth.py`, `totp.py`, `proxy.py` (reverse proxy), `httpguard.py`, `api.py` (REST API `/api/v1`), `certinfo.py`, `selfsigned.py` |
+| `ser2netweb/web/routes/` | one module per UI area (`login`, `totp`, `settings`, `mappings`, `console`, `cluster`, `system`), shared helpers in `common`, `forms` and `ops` |
+| `ser2netweb/web/templates/`, `ser2netweb/web/static/` | Jinja templates; `app.js`, `points.js`, `app.css` and the vendored htmx / xterm.js |
+| `ser2netweb/notify.py` | webhook / e-mail notifications |
+| `ser2netweb/importer.py`, `ser2netweb/ser2net_import.py` | mapping imports and the classic ser2net reader |
+| `ser2netweb/accounts.py` | `--set-password`, `--sign-out-all`, the first admin |
+| `ser2netweb/winservice.py`, `ser2netweb/standalone.py`, `ser2netweb/sdnotify.py` | the Windows service, the PyInstaller executables, systemd's notify |
+| `ser2netweb/i18n.py`, `ser2netweb/locale/tr.json` | translations |
+| `ser2netweb/clock.py`, `ser2netweb/explain.py`, `ser2netweb/logtext.py`, `ser2netweb/logsetup.py`, `ser2netweb/textfold.py`, `ser2netweb/optional.py`, `ser2netweb/signins.py`, `ser2netweb/healthcheck.py`, `ser2netweb/console.py` | times, error texts, log lines, text comparison, optional packages, last sign-ins, `--healthcheck`, the first-run console picker |
 | `tests/` | one file per feature, collected by `tests/run_all.py` |
 
 Every web route and WebSocket has an access class (who may use it, how CSRF is checked) in
@@ -103,10 +103,10 @@ A text with a count has both English forms, never "record(s)":
 `{{ ngettext("%(num)s record", "%(num)s records", n) }}`,
 `ngettext("Imported {0} mapping.", "Imported {0} mappings.", n).format(n)`, and for app.js
 a `[_("..."), _("...")]` pair in `base.html`; each form is an entry of its own (Turkish:
-the same text twice). Add the Turkish text to `app/locale/tr.json` (new entries at the end);
+the same text twice). Add the Turkish text to `ser2netweb/locale/tr.json` (new entries at the end);
 `tests/test_i18n.py` fails on a missing or unused entry, on a translation that loses a
 placeholder or an HTML tag, and on a "(s)" count. The languages are listed once, in
-`app/i18n.py` (`LANGUAGES`). Logs, the audit log and REST API messages are not translated.
+`ser2netweb/i18n.py` (`LANGUAGES`). Logs, the audit log and REST API messages are not translated.
 
 ### Dependencies
 Runtime pins live in `requirements.txt` (with the Python 3.10 line kept by markers),
@@ -123,7 +123,7 @@ executables install from hash-locked files instead (`pip install --require-hashe
 files) and `requirements-build.txt` (PyInstaller and its dependencies); Dependabot updates
 them with `requirements.txt`, and `python tools/refresh_locks.py` regenerates them after a
 hand-made change (`tests/test_build_lock.py` checks that they match). The browser libraries
-in `app/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; change a
+in `ser2netweb/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; change a
 version there and run `python tools/refresh_assets.py`, which copies the files out of the npm
 release and records their sha256 (Dependabot proposes minor updates, `refresh-pins.yml`
 copies them in; test the console by hand before a major one). GitHub's dependency graph (and so the
@@ -145,7 +145,7 @@ minor release ahead.
 Runtime dependencies are pinned exactly. When one has a bug its maintainers have not
 fixed in a release (pyserial and pyserial-asyncio-fast rarely release), the fix goes into
 ser2net, not into a fork or a process-wide patch:
-- One module per library (`app/engine/serial_compat.py` for pyserial and
+- One module per library (`ser2netweb/engine/serial_compat.py` for pyserial and
   pyserial-asyncio-fast), with a subclass ser2net itself uses that overrides as little as
   possible. Its docstring names the upstream issue, pull request or commit it mirrors;
   where a report exists, comment there instead of filing another.
@@ -176,7 +176,7 @@ documented behaviour updates both READMEs and the guide in `docs/` it touches
 maintainer (below).
 
 ### Releases
-The version goes into `app/__init__.py` and a dated `## [X.Y.Z] — YYYY-MM-DD` section into
+The version goes into `ser2netweb/__init__.py` and a dated `## [X.Y.Z] — YYYY-MM-DD` section into
 `CHANGELOG.md`; once that is merged, an annotated `vX.Y.Z` tag (`vX.Y.Z-rc.N` for a
 pre-release) on the merge commit starts `.github/workflows/release.yml`:
 1. the tag is checked: its form, equal to `"v"` + `__version__`, the CHANGELOG section
@@ -208,7 +208,7 @@ vX.Y.Z` and commit `tests/fixtures/config-X.Y.Z.json` with an upgrade test like
 the 2.7.1 one), and run `python tests/make_form_fixtures.py vX.Y.Z` for the mixed-version
 fleet edits (`tests/fixtures/forms-X.Y.Z.json`, `tests/test_mixed_version_edit.py`), before
 the next release changes the config model or the mapping form. A field the mapping form
-gains goes into a `FORM_BLOCKS_SINCE` block (`app/web/routes/forms.py`) of the version that
+gains goes into a `FORM_BLOCKS_SINCE` block (`ser2netweb/web/routes/forms.py`) of the version that
 reads it.
 
 ## Türkçe
@@ -284,31 +284,31 @@ bir metin iki İngilizce biçimle yazılır, asla "record(s)" diye değil: şabl
 `{{ ngettext("%(num)s record", "%(num)s records", n) }}`, Python'da
 `ngettext("Imported {0} mapping.", "Imported {0} mappings.", n).format(n)`, app.js için
 `base.html`'de bir `[_("..."), _("...")]` çifti; her biçim ayrı bir girdidir (Türkçede aynı
-metin iki kez). Türkçesini `app/locale/tr.json`'a ekleyin (yeni girdiler sona);
+metin iki kez). Türkçesini `ser2netweb/locale/tr.json`'a ekleyin (yeni girdiler sona);
 `tests/test_i18n.py` eksik ya da kullanılmayan girdide, yer tutucusunu ya da HTML etiketini
 kaybeden çeviride ve "(s)" ile yazılmış bir sayıda başarısız olur. Diller tek bir yerde,
-`app/i18n.py`'deki `LANGUAGES` içinde listelenir. Şablonlarda değerler `%(ad)s` olarak
+`ser2netweb/i18n.py`'deki `LANGUAGES` içinde listelenir. Şablonlarda değerler `%(ad)s` olarak
 yazılır: `{{ _("Port %(port)s", port=p) }}`. Log'lar, denetim kaydı ve REST API mesajları
 çevrilmez.
 
 ### Kod düzeni
 `ser2net.py` komut satırını okur ve olay döngüsüne sahip olan, web sunucusuyla motoru yan
-yana çalıştıran `app/runtime.py`'yi başlatır; her modülün docstring'i ayrıntısını anlatır.
+yana çalıştıran `ser2netweb/runtime.py`'yi başlatır; her modülün docstring'i ayrıntısını anlatır.
 
 | Nerede | Ne |
 |---|---|
-| `app/config.py` | yapılandırma modeli (dataclass'lar), `config.json`'u tipiyle okuma, doğrulama, atomik kayıt ve `backups/` |
-| `app/state.py` | paylaşılan durum: config, supervisor, port izleyici, `all.log` / denetim kaydı; `app/reload.py` (SIGHUP), `app/tlsreload.py`, `app/storage.py` (boş alan, saklama süresi), `app/watchdog.py`, `app/datalock.py` |
-| `app/engine/supervisor.py` | eşleme başına bir runner, config değişikliklerini uygular; `bridge.py` (seri ↔ TCP/UDP, telnet / RFC 2217), `serial_link.py` / `serial_io.py` / `serial_compat.py` (seri port), `modbus_gateway.py` + `modbus.py` (Modbus RTU ↔ TCP, okuma), `mqtt_pub.py`, `sparkplug_node.py` + `sparkplug.py`, `tls.py`, `access.py` / `netguard.py` (kim bağlanabilir, sınırlar), `portlist.py` / `portdiag.py` (portlar ve sorunları), `cluster.py`, `netinfo.py`, `bindhint.py`, `sockopts.py` |
-| `app/web/server.py` | Starlette uygulaması ve middleware'i; `auth.py` (oturum, CSRF, giriş sınırları), `ldap_auth.py`, `oidc_auth.py`, `totp.py`, `proxy.py` (reverse proxy), `httpguard.py`, `api.py` (REST API `/api/v1`), `certinfo.py`, `selfsigned.py` |
-| `app/web/routes/` | arayüzün her bölümü için bir modül (`login`, `totp`, `settings`, `mappings`, `console`, `cluster`, `system`); ortak yardımcılar `common`, `forms` ve `ops` içinde |
-| `app/web/templates/`, `app/web/static/` | Jinja şablonları; `app.js`, `points.js`, `app.css` ve gömülü htmx / xterm.js |
-| `app/notify.py` | webhook / e-posta bildirimleri |
-| `app/importer.py`, `app/ser2net_import.py` | eşleme içe aktarma ve klasik ser2net okuyucusu |
-| `app/accounts.py` | `--set-password`, `--sign-out-all`, ilk admin |
-| `app/winservice.py`, `app/standalone.py`, `app/sdnotify.py` | Windows servisi, PyInstaller binary'leri, systemd notify |
-| `app/i18n.py`, `app/locale/tr.json` | çeviriler |
-| `app/clock.py`, `app/explain.py`, `app/logtext.py`, `app/logsetup.py`, `app/textfold.py`, `app/optional.py`, `app/signins.py`, `app/healthcheck.py`, `app/console.py` | zamanlar, hata metinleri, log satırları, metin karşılaştırma, isteğe bağlı paketler, son girişler, `--healthcheck`, ilk açılıştaki konsol seçicisi |
+| `ser2netweb/config.py` | yapılandırma modeli (dataclass'lar), `config.json`'u tipiyle okuma, doğrulama, atomik kayıt ve `backups/` |
+| `ser2netweb/state.py` | paylaşılan durum: config, supervisor, port izleyici, `all.log` / denetim kaydı; `ser2netweb/reload.py` (SIGHUP), `ser2netweb/tlsreload.py`, `ser2netweb/storage.py` (boş alan, saklama süresi), `ser2netweb/watchdog.py`, `ser2netweb/datalock.py` |
+| `ser2netweb/engine/supervisor.py` | eşleme başına bir runner, config değişikliklerini uygular; `bridge.py` (seri ↔ TCP/UDP, telnet / RFC 2217), `serial_link.py` / `serial_io.py` / `serial_compat.py` (seri port), `modbus_gateway.py` + `modbus.py` (Modbus RTU ↔ TCP, okuma), `mqtt_pub.py`, `sparkplug_node.py` + `sparkplug.py`, `tls.py`, `access.py` / `netguard.py` (kim bağlanabilir, sınırlar), `portlist.py` / `portdiag.py` (portlar ve sorunları), `cluster.py`, `netinfo.py`, `bindhint.py`, `sockopts.py` |
+| `ser2netweb/web/server.py` | Starlette uygulaması ve middleware'i; `auth.py` (oturum, CSRF, giriş sınırları), `ldap_auth.py`, `oidc_auth.py`, `totp.py`, `proxy.py` (reverse proxy), `httpguard.py`, `api.py` (REST API `/api/v1`), `certinfo.py`, `selfsigned.py` |
+| `ser2netweb/web/routes/` | arayüzün her bölümü için bir modül (`login`, `totp`, `settings`, `mappings`, `console`, `cluster`, `system`); ortak yardımcılar `common`, `forms` ve `ops` içinde |
+| `ser2netweb/web/templates/`, `ser2netweb/web/static/` | Jinja şablonları; `app.js`, `points.js`, `app.css` ve gömülü htmx / xterm.js |
+| `ser2netweb/notify.py` | webhook / e-posta bildirimleri |
+| `ser2netweb/importer.py`, `ser2netweb/ser2net_import.py` | eşleme içe aktarma ve klasik ser2net okuyucusu |
+| `ser2netweb/accounts.py` | `--set-password`, `--sign-out-all`, ilk admin |
+| `ser2netweb/winservice.py`, `ser2netweb/standalone.py`, `ser2netweb/sdnotify.py` | Windows servisi, PyInstaller binary'leri, systemd notify |
+| `ser2netweb/i18n.py`, `ser2netweb/locale/tr.json` | çeviriler |
+| `ser2netweb/clock.py`, `ser2netweb/explain.py`, `ser2netweb/logtext.py`, `ser2netweb/logsetup.py`, `ser2netweb/textfold.py`, `ser2netweb/optional.py`, `ser2netweb/signins.py`, `ser2netweb/healthcheck.py`, `ser2netweb/console.py` | zamanlar, hata metinleri, log satırları, metin karşılaştırma, isteğe bağlı paketler, son girişler, `--healthcheck`, ilk açılıştaki konsol seçicisi |
 | `tests/` | her özellik için bir dosya, `tests/run_all.py` toplar |
 
 Her web route'unun ve WebSocket'in bir erişim sınıfı vardır (kim kullanabilir, CSRF nasıl
@@ -329,7 +329,7 @@ kurulur (`pip install --require-hashes`): `requirements-lock.txt` (Python 3.12 i
 pin'ler, her sürümün dosyalarının sha256'larıyla) ve `requirements-build.txt` (PyInstaller ve
 bağımlılıkları). Dependabot bunları `requirements.txt` ile birlikte günceller; elle yapılan bir
 değişiklikten sonra `python tools/refresh_locks.py` yeniden üretir
-(`tests/test_build_lock.py` eşleştiklerini denetler). `app/web/static/` içindeki tarayıcı
+(`tests/test_build_lock.py` eşleştiklerini denetler). `ser2netweb/web/static/` içindeki tarayıcı
 kütüphaneleri (htmx, xterm.js) `vendor/npm/package.json`'da sabitlenir; oradaki sürümü
 değiştirip `python tools/refresh_assets.py` çalıştırın: dosyaları npm sürümünden kopyalar ve
 sha256'larını kaydeder (Dependabot minor güncellemeleri önerir, `refresh-pins.yml` onları
@@ -352,7 +352,7 @@ açığı çıkınca (py3.10 bağımlılık denetimi bunu bildirir) bırakılır
 sürümde düzeltilmediyse (pyserial ve pyserial-asyncio-fast nadiren sürüm çıkarır), düzeltme
 bir fork'a ya da tüm süreci değiştiren bir yamaya değil, ser2net'e girer:
 - Kütüphane başına tek bir modül (pyserial ve pyserial-asyncio-fast için
-  `app/engine/serial_compat.py`): ser2net'in kendisinin kullandığı ve olabildiğince az şeyi
+  `ser2netweb/engine/serial_compat.py`): ser2net'in kendisinin kullandığı ve olabildiğince az şeyi
   değiştiren bir alt sınıf. Docstring'i taklit ettiği upstream issue'yu, PR'ı ya da commit'i
   belirtir; bir rapor zaten varsa yenisini açmak yerine oraya yorum yazılır.
 - Dayandığı upstream üyeler var olduğu sürece uygulanır (özellik tespiti); sürüm
@@ -381,7 +381,7 @@ belgelenmiş bir davranışı değiştiren her iki README'yi ve dokunduğu `docs
 günceller (`tests/test_docs.py` komut satırı seçeneklerini ve bağlantıları denetler). Sürümleri proje sahibi çıkarır (aşağıda).
 
 ### Sürümler
-Sürüm `app/__init__.py`'ye, tarihli bir `## [X.Y.Z] — YYYY-MM-DD` bölümü `CHANGELOG.md`'ye
+Sürüm `ser2netweb/__init__.py`'ye, tarihli bir `## [X.Y.Z] — YYYY-MM-DD` bölümü `CHANGELOG.md`'ye
 yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.Z` tag'i
 (ön sürüm için `vX.Y.Z-rc.N`) `.github/workflows/release.yml`'yi başlatır:
 1. tag denetlenir: biçimi, `"v"` + `__version__`'a eşitliği, CHANGELOG bölümü (bu
@@ -418,4 +418,4 @@ commit'lenir; karışık sürümlü küme düzenlemeleri için de
 `python tests/make_form_fixtures.py vX.Y.Z` çalıştırılır (`tests/fixtures/forms-X.Y.Z.json`,
 `tests/test_mixed_version_edit.py`). Bunlar bir sonraki sürüm config modelini ya da eşleme
 formunu değiştirmeden önce yapılır. Eşleme formuna eklenen bir alan, onu okuyan sürümün
-`FORM_BLOCKS_SINCE` bloğuna girer (`app/web/routes/forms.py`).
+`FORM_BLOCKS_SINCE` bloğuna girer (`ser2netweb/web/routes/forms.py`).

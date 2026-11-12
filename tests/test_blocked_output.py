@@ -80,7 +80,7 @@ class Pty:
 
 
 def mapping(name: str, path: str, port: int):
-    from app.config import MappingConfig
+    from ser2netweb.config import MappingConfig
     return MappingConfig.from_dict({
         "name": name, "enabled": True, "serial": {"port": path, "baudrate": 115200},
         "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
@@ -111,7 +111,7 @@ class Sender(threading.Thread):
 
 
 async def run():
-    from app.engine.supervisor import Supervisor
+    from ser2netweb.engine.supervisor import Supervisor
 
     stuck, other = Pty(), Pty()
     sup = Supervisor(logger=lambda _m: None)

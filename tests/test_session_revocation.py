@@ -26,9 +26,9 @@ import urllib.request
 
 from _server import Browser, Server, ui_cookie
 
-from app.config import AppConfig, new_pwd_version
-from app.web import auth
-from app.web.auth import hash_password
+from ser2netweb.config import AppConfig, new_pwd_version
+from ser2netweb.web import auth
+from ser2netweb.web.auth import hash_password
 
 PW = "revoke-pass-1"
 LDAP_ON = {"enabled": True, "server_uri": "ldap://127.0.0.1:9", "user_dn_template": "uid={username}"}
@@ -209,7 +209,7 @@ def test_revoke_all(srv, admin):
 
 
 def test_key_saved_at_start():
-    from app import runtime
+    from ser2netweb import runtime
 
     d = tempfile.mkdtemp(prefix="s2n_key_")
     path = os.path.join(d, "config.json")

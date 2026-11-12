@@ -43,11 +43,11 @@ from contextlib import suppress
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
-from app import notify
-from app.config import MappingConfig
-from app.engine import modbus, sparkplug
-from app.engine.modbus_gateway import UNIT_OFFLINE_AFTER, ModbusGatewayRunner
-from app.engine.sparkplug_node import SparkplugNode
+from ser2netweb import notify
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import modbus, sparkplug
+from ser2netweb.engine.modbus_gateway import UNIT_OFFLINE_AFTER, ModbusGatewayRunner
+from ser2netweb.engine.sparkplug_node import SparkplugNode
 
 TIMEOUT = 0.15
 REGS = {(1, 0): 0x41BC, (1, 1): 0, (1, 10): 5, (2, 30): 42, (2, 31): 43, (3, 40): 7}
@@ -139,7 +139,7 @@ async def gateway(slave_port, fmt, logs, points=POINTS, **mqtt):
         r._sparkplug = SparkplugNode(m, logs.append, r._write_soon)
         r._mqtt = r._sparkplug.publisher()
     else:  # what start() makes
-        from app.engine.mqtt_pub import MqttPublisher
+        from ser2netweb.engine.mqtt_pub import MqttPublisher
         r._mqtt = MqttPublisher(m.mqtt, logger=logs.append, on_connect=(
             r._publish_unit_states if m.mqtt.unit_status else None))
     r._mqtt._client = fake
@@ -174,8 +174,8 @@ def requests_to(unit):
 
 async def metrics_of(runner):
     """/metrics, for a node that runs this one gateway."""
-    from app.config import AppConfig
-    from app.web.routes import system
+    from ser2netweb.config import AppConfig
+    from ser2netweb.web.routes import system
 
     class State:
         config = AppConfig(mappings=[runner.mapping])
@@ -410,7 +410,7 @@ async def test_plain_unit_health(slave_port):
 
 
 def test_encode_value():
-    from app.engine.modbus_gateway import encode_value
+    from ser2netweb.engine.modbus_gateway import encode_value
     assert encode_value(True, "text", 1) == b"1" and encode_value(False, "text", 1) == b"0"
     assert encode_value(21.5, "text", 1) == b"21.5" and encode_value(7, "csv", 1) == b"7"
     assert encode_value(True, "json", 5) == b'{"value":true,"ts":5,"quality":"good"}'

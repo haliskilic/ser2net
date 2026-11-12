@@ -26,13 +26,13 @@ import time
 
 from _server import ROOT, Browser, Server, free_port, wait_port
 
-from app import runtime, sdnotify, watchdog
-from app.web.auth import hash_password
+from ser2netweb import runtime, sdnotify, watchdog
+from ser2netweb.web.auth import hash_password
 
 BLOCKING_SCRIPT = r'''
 import asyncio, sys, time
 sys.path.insert(0, sys.argv[1])
-from app import watchdog
+from ser2netweb import watchdog
 watchdog.CHECK_S = 0.2
 
 async def main():

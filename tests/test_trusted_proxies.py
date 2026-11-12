@@ -30,8 +30,8 @@ from types import SimpleNamespace
 
 from _asgi import App, header
 
-from app.config import AdminUI, AppConfig
-from app.web import auth, proxy
+from ser2netweb.config import AdminUI, AppConfig
+from ser2netweb.web import auth, proxy
 
 PW = "proxy-trust-pass-1"
 CSRF = "trusted-proxies-csrf"

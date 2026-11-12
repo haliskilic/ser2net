@@ -227,7 +227,7 @@ def _keep_absent(m: MappingConfig, target: MappingConfig, absent: list[str]) -> 
 
 
 def _classic_ser2net(text: str, filename: str) -> ImportPlan:
-    """A configuration file of the classic C ser2net, converted (app/ser2net_import).
+    """A configuration file of the classic C ser2net, converted (ser2netweb/ser2net_import).
     Nothing importable is an error, so a replace import cannot empty the mappings."""
     dicts, warnings = parse_ser2net_config(text, filename)
     if not dicts:

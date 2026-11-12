@@ -747,9 +747,9 @@ class AppState:
         self.admin_tls_waiting = ""
         # the Windows service's name when ser2net runs as one (runtime.service_main)
         self.service_name = ""
-        # reloads of config.json under way (SIGHUP: app/reload.py)
+        # reloads of config.json under way (SIGHUP: ser2netweb/reload.py)
         self.reloads: set[asyncio.Task] = set()
-        # the event loop watchdog (runtime.py, app/watchdog.py; None in tests without one),
+        # the event loop watchdog (runtime.py, ser2netweb/watchdog.py; None in tests without one),
         # and the start-up line about a previous run it ended ("" when there was none)
         self.loop_watchdog: Any = None
         self.previous_hang = ""
@@ -1218,7 +1218,7 @@ class AppState:
 
     # ---------------- sign-ins: last sign-in, unused LDAP/OIDC accounts ----------------
     async def load_sign_ins(self) -> None:
-        """Read the sign-ins on record in the audit log (app/signins.py)."""
+        """Read the sign-ins on record in the audit log (ser2netweb/signins.py)."""
         try:
             await asyncio.to_thread(lambda: self.signins.load(self.read_audit()))
         except Exception as e:  # still usable: sign-ins from now on count
@@ -1340,7 +1340,7 @@ class AppState:
                 self.log(f"command-line request failed: {e}")
 
     async def handle_account_requests(self) -> None:
-        """Apply what the command line left in <data>/admin-requests/ (app/accounts.py)."""
+        """Apply what the command line left in <data>/admin-requests/ (ser2netweb/accounts.py)."""
         for request_id, request in await asyncio.to_thread(accounts.take_requests, self.data_dir):
             ok, message = await self._apply_account_request(request)
             await asyncio.to_thread(accounts.answer, self.data_dir, request_id, ok, message)

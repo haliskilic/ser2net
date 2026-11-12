@@ -28,7 +28,7 @@ cat "$data/bootstrap.log"
 
 echo "== 2. the app imports from ./lib; --about"
 psutil=$("$PY" -c "import os, sys; sys.path[:0] = ['lib', '.']
-import importlib.util, serial, starlette, uvicorn, jinja2, app.runtime, app.web.server
+import importlib.util, serial, starlette, uvicorn, jinja2, ser2netweb.runtime, ser2netweb.web.server
 lib = os.path.abspath('lib')
 for m in (serial, starlette, uvicorn, jinja2):
     assert os.path.abspath(m.__file__).startswith(lib), m.__file__

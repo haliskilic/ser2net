@@ -619,7 +619,7 @@ class Listener:
         return self._ssl
 
     @ssl.setter
-    def ssl(self, context: Any) -> None:  # a renewed certificate (app/tlsreload.py)
+    def ssl(self, context: Any) -> None:  # a renewed certificate (ser2netweb/tlsreload.py)
         self._ssl = context
 
     def close(self) -> None:
