@@ -113,7 +113,6 @@
    ["network_protocol", "raw"],
    ["network_read_only", "on"],
    ["network_bind_ip", "192.168.1.10"],
-   ["network_bind_ip_custom", ""],
    ["network_port", "4555"],
    ["network_allowed_client_ips", "192.168.1.0/24"],
    ["opt_banner", "Hello \\N on \\p"],
@@ -151,7 +150,6 @@
    ["network_protocol", "rfc2217"],
    ["network_read_only", "on"],
    ["network_bind_ip", "0.0.0.0"],
-   ["network_bind_ip_custom", ""],
    ["network_port", "4556"],
    ["network_max_connections", "1"],
    ["network_kick_old_user", "on"],
@@ -226,7 +224,7 @@
    ["mqtt_password", "p@ss w'rd\"<&>"],
    ["mqtt_tls", "on"],
    ["modbus_poll_interval_s", "0.5"],
-   ["modbus_points", "[\n  {\n    \"name\": \"run\",\n    \"unit\": 2,\n    \"fn\": 1,\n    \"address\": 5,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"setpoint\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 10,\n    \"dtype\": \"int16\",\n    \"scale\": 0.1\n  },\n  {\n    \"name\": \"temp\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 0,\n    \"dtype\": \"float32\",\n    \"scale\": 0.5\n  },\n  {\n    \"name\": \"door\",\n    \"unit\": 3,\n    \"fn\": 2,\n    \"address\": 1,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  }\n]"]
+   ["modbus_points", "[\n  {\n    \"name\": \"run\",\n    \"unit\": 2,\n    \"fn\": 1,\n    \"address\": 5,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"setpoint\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 10,\n    \"dtype\": \"int16\",\n    \"scale\": 0.1\n  },\n  {\n    \"name\": \"temp\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 0,\n    \"dtype\": \"float32\",\n    \"scale\": 0.5\n  },\n  {\n    \"name\": \"door\",\n    \"unit\": 3,\n    \"fn\": 2,\n    \"address\": 1,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"label\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 20,\n    \"dtype\": \"string\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"alarm\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 30,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"command\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 40,\n    \"dtype\": \"uint32\",\n    \"scale\": 1.0\n  }\n]"]
   ],
   "sinkmodbus02": [
    ["id", "sinkmodbus02"],
@@ -275,7 +273,7 @@
    ["mqtt_password", "p@ss w'rd\"<&>"],
    ["mqtt_tls", "on"],
    ["modbus_poll_interval_s", "1.5"],
-   ["modbus_points", "[\n  {\n    \"name\": \"setpoint\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 10,\n    \"dtype\": \"int16\",\n    \"scale\": 0.1\n  },\n  {\n    \"name\": \"temp\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 0,\n    \"dtype\": \"float32\",\n    \"scale\": 0.5\n  },\n  {\n    \"name\": \"door\",\n    \"unit\": 3,\n    \"fn\": 2,\n    \"address\": 1,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  }\n]"]
+   ["modbus_points", "[\n  {\n    \"name\": \"setpoint\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 10,\n    \"dtype\": \"int16\",\n    \"scale\": 0.1\n  },\n  {\n    \"name\": \"temp\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 0,\n    \"dtype\": \"float32\",\n    \"scale\": 0.5\n  },\n  {\n    \"name\": \"door\",\n    \"unit\": 3,\n    \"fn\": 2,\n    \"address\": 1,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"label\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 20,\n    \"dtype\": \"string\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"alarm\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 30,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"command\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 40,\n    \"dtype\": \"uint32\",\n    \"scale\": 1.0\n  }\n]"]
   ],
   "sinkbridge01": [
    ["id", "sinkbridge01"],
@@ -296,7 +294,6 @@
    ["serial_rs485_delay_after_tx_ms", "1.5"],
    ["serial_b_port", "/dev/ttyACM5"],
    ["serial_b_baudrate", "19200"],
-   ["serial_b_custom_baud", ""],
    ["serial_b_bytesize", "6"],
    ["serial_b_parity", "O"],
    ["serial_b_stopbits", "1.5"],
@@ -868,6 +865,30 @@
       "address": 1,
       "dtype": "bool",
       "scale": 1.0
+     },
+     {
+      "name": "label",
+      "unit": 1,
+      "fn": 3,
+      "address": 20,
+      "dtype": "string",
+      "scale": 1.0
+     },
+     {
+      "name": "alarm",
+      "unit": 1,
+      "fn": 4,
+      "address": 30,
+      "dtype": "bool",
+      "scale": 1.0
+     },
+     {
+      "name": "command",
+      "unit": 1,
+      "fn": 3,
+      "address": 40,
+      "dtype": "uint32",
+      "scale": 1.0
      }
     ]
    }
@@ -994,6 +1015,30 @@
       "fn": 2,
       "address": 1,
       "dtype": "bool",
+      "scale": 1.0
+     },
+     {
+      "name": "label",
+      "unit": 1,
+      "fn": 3,
+      "address": 20,
+      "dtype": "string",
+      "scale": 1.0
+     },
+     {
+      "name": "alarm",
+      "unit": 1,
+      "fn": 4,
+      "address": 30,
+      "dtype": "bool",
+      "scale": 1.0
+     },
+     {
+      "name": "command",
+      "unit": 1,
+      "fn": 3,
+      "address": 40,
+      "dtype": "uint32",
       "scale": 1.0
      }
     ]
@@ -1218,7 +1263,6 @@
    ["network_protocol", "raw"],
    ["network_read_only", "on"],
    ["network_bind_ip", "192.168.1.10"],
-   ["network_bind_ip_custom", ""],
    ["network_port", "4555"],
    ["network_allowed_client_ips", "192.168.1.0/24"],
    ["opt_banner", "Hello \\N on \\p"],
@@ -1256,7 +1300,6 @@
    ["network_protocol", "rfc2217"],
    ["network_read_only", "on"],
    ["network_bind_ip", "0.0.0.0"],
-   ["network_bind_ip_custom", ""],
    ["network_port", "4556"],
    ["network_max_connections", "1"],
    ["network_kick_old_user", "on"],
@@ -1331,7 +1374,7 @@
    ["mqtt_password", "p@ss w'rd\"<&>"],
    ["mqtt_tls", "on"],
    ["modbus_poll_interval_s", "0.5"],
-   ["modbus_points", "[\n  {\n    \"name\": \"run\",\n    \"unit\": 2,\n    \"fn\": 1,\n    \"address\": 5,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"setpoint\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 10,\n    \"dtype\": \"int16\",\n    \"scale\": 0.1\n  },\n  {\n    \"name\": \"temp\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 0,\n    \"dtype\": \"float32\",\n    \"scale\": 0.5\n  },\n  {\n    \"name\": \"door\",\n    \"unit\": 3,\n    \"fn\": 2,\n    \"address\": 1,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  }\n]"]
+   ["modbus_points", "[\n  {\n    \"name\": \"run\",\n    \"unit\": 2,\n    \"fn\": 1,\n    \"address\": 5,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"setpoint\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 10,\n    \"dtype\": \"int16\",\n    \"scale\": 0.1\n  },\n  {\n    \"name\": \"temp\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 0,\n    \"dtype\": \"float32\",\n    \"scale\": 0.5\n  },\n  {\n    \"name\": \"door\",\n    \"unit\": 3,\n    \"fn\": 2,\n    \"address\": 1,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"label\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 20,\n    \"dtype\": \"string\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"alarm\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 30,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"command\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 40,\n    \"dtype\": \"uint32\",\n    \"scale\": 1.0\n  }\n]"]
   ],
   "sinkmodbus02": [
    ["id", "sinkmodbus02"],
@@ -1380,7 +1423,7 @@
    ["mqtt_password", "p@ss w'rd\"<&>"],
    ["mqtt_tls", "on"],
    ["modbus_poll_interval_s", "1.5"],
-   ["modbus_points", "[\n  {\n    \"name\": \"setpoint\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 10,\n    \"dtype\": \"int16\",\n    \"scale\": 0.1\n  },\n  {\n    \"name\": \"temp\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 0,\n    \"dtype\": \"float32\",\n    \"scale\": 0.5\n  },\n  {\n    \"name\": \"door\",\n    \"unit\": 3,\n    \"fn\": 2,\n    \"address\": 1,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  }\n]"]
+   ["modbus_points", "[\n  {\n    \"name\": \"setpoint\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 10,\n    \"dtype\": \"int16\",\n    \"scale\": 0.1\n  },\n  {\n    \"name\": \"temp\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 0,\n    \"dtype\": \"float32\",\n    \"scale\": 0.5\n  },\n  {\n    \"name\": \"door\",\n    \"unit\": 3,\n    \"fn\": 2,\n    \"address\": 1,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"label\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 20,\n    \"dtype\": \"string\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"alarm\",\n    \"unit\": 1,\n    \"fn\": 4,\n    \"address\": 30,\n    \"dtype\": \"bool\",\n    \"scale\": 1.0\n  },\n  {\n    \"name\": \"command\",\n    \"unit\": 1,\n    \"fn\": 3,\n    \"address\": 40,\n    \"dtype\": \"uint32\",\n    \"scale\": 1.0\n  }\n]"]
   ],
   "sinkbridge01": [
    ["id", "sinkbridge01"],
@@ -1401,7 +1444,6 @@
    ["serial_rs485_delay_after_tx_ms", "1.5"],
    ["serial_b_port", "/dev/ttyACM5"],
    ["serial_b_baudrate", "19200"],
-   ["serial_b_custom_baud", ""],
    ["serial_b_bytesize", "6"],
    ["serial_b_parity", "O"],
    ["serial_b_stopbits", "1.5"],
@@ -1451,6 +1493,11 @@
   {
    "value": "0.0.0.0",
    "label": "All interfaces (0.0.0.0)",
+   "kind": "all"
+  },
+  {
+   "value": "*",
+   "label": "All interfaces (IPv4 + IPv6)",
    "kind": "all"
   },
   {

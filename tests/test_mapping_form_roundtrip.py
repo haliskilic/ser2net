@@ -149,7 +149,8 @@ def render(mapping, *, error=None, remote=None, ports=None, hide=frozenset(), re
         mapping, cases.PORTS if ports is None else ports, cases.IPS, is_new=False,
         error=error, remote=remote, hide=hide, rev=rev,
         mqtt_stored=(mapping if stored is None else stored).mqtt.password,
-        tls_stored=None if stored is None else stored.network.tls_key_password, form=form))
+        tls_stored=None if stored is None else stored.network.tls_key_password, form=form,
+        mqtt_key_stored=None if stored is None else stored.mqtt.client_key_password))
 
 
 class Recorder(FormData):

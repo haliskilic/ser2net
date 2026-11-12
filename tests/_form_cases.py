@@ -116,20 +116,28 @@ _OPTIONS = {
     "rfc2217_net_timeout_s": 9.0, "rfc2217_restore_on_disconnect": True,
     "modbus_response_timeout_s": 2.5, "no_data_alarm_s": 300, "no_data_reply_only": True,
     "console_encoding": "iso-8859-9", "rfc2217_signature": "ser2net kitchen sink",
-    "poll_string": "P\\r\\n", "poll_interval_s": 0.5, "poll_with_clients": True}
+    "poll_string": "P\\r\\n", "poll_interval_s": 0.5, "poll_with_clients": True,
+    "modbus_unit_map": {"255": 1, "0": 2}}
 _MQTT = {
     "enabled": True, "host": "broker.example", "port": 8883, "base_topic": "ser2net/plc1",
     "qos": 2, "tls": True, "username": "plc", "password": "p@ss w'rd\"<&>",
     "client_id": "s2n-plc1", "payload_format": "plain", "sparkplug_group_id": "line3",
     "sparkplug_node_id": "plc-1", "apply_retained_set": True, "line_end": "cr",
-    "tx_enabled": True}
+    "tx_enabled": True, "sparkplug_primary_host_id": "scada-1", "unit_status": True,
+    "ca_file": TLS_FILE, "client_cert": TLS_FILE, "client_key": TLS_FILE,
+    "client_key_password": "kitchen-sink-mqtt-key-pw", "tls_check_hostname": False,
+    "retain": True, "value_format": "json"}
 _POINTS = [
     {"name": "run", "unit": 2, "fn": 1, "address": 5, "dtype": "bool", "scale": 1.0,
      "writable": True},
     {"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "scale": 0.1,
-     "writable": True},
+     "writable": True, "min": -50, "max": 150.5, "word_order": "BADC"},
     {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32", "scale": 0.5},
     {"name": "door", "unit": 3, "fn": 2, "address": 1, "dtype": "bool", "scale": 1.0},
+    {"name": "label", "unit": 1, "fn": 3, "address": 20, "dtype": "string", "length": 4},
+    {"name": "alarm", "unit": 1, "fn": 4, "address": 30, "dtype": "bool", "bit": 3},
+    {"name": "command", "unit": 1, "fn": 3, "address": 40, "dtype": "uint32", "writable": True,
+     "poll": False, "allowed": [0, 1, 2], "word_order": "CDAB"},
 ]
 
 
@@ -175,7 +183,8 @@ def mappings() -> list[dict]:
          "options": _OPTIONS,
          "mqtt": _with(_MQTT, payload_format="sparkplug_b", sparkplug_group_id="plant",
                        sparkplug_node_id="gw-1"),
-         "modbus_poll": {"interval_s": 0.5, "points": _POINTS}},
+         "modbus_poll": {"interval_s": 0.5, "points": _POINTS, "block_reads": True,
+                         "block_gap": 4}},
         {"id": "sinkmodbus02", "name": "Modbus plain", "enabled": False, "kind": "net",
          "serial": _with(_SERIAL_A, port="/dev/ttyUSB8", match={}), "serial_b": _SERIAL_B,
          "network": _with(_NETWORK, mode="server", protocol="modbus", port=5503, tls=False),

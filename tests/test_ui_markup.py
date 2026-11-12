@@ -509,8 +509,9 @@ def test_number_fields_required():
     root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
                             ports=[], ips=[], error=None))
     # (a blank poll interval: no polling, as 0)
+    # (a blank Modbus response timeout: the default 1 s; a blank block gap: 0)
     blank_ok = {"network_udp_peer_port", "network_udp_peer_timeout_s", "modbus_poll_interval_s",
-                "opt_poll_interval_s",
+                "opt_poll_interval_s", "opt_modbus_response_timeout_s", "modbus_block_gap",
                 "serial_rs485_delay_before_tx_ms", "serial_rs485_delay_after_tx_ms",
                 "serial_b_rs485_delay_before_tx_ms", "serial_b_rs485_delay_after_tx_ms"}
     numbers = [n for n in root.walk() if n.tag == "input" and n.attrs.get("type") == "number"]
