@@ -64,6 +64,12 @@ class ConfigError(ValueError):
     """Raised when a config object fails validation. Message is user-facing."""
 
 
+class ConfigWriteError(ConfigError):
+    """A change that validates but can't be written to config.json (a full or read-only
+    disk, a file another program holds): AppState.asave raises it for the OSError, so
+    whoever shows a refused save shows this one too. Message is user-facing."""
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -691,14 +697,22 @@ class NetworkSettings:
                 raise ConfigError(_("TLS is not applicable to UDP mappings."))
             if not (self.tls_cert and self.tls_key):
                 raise ConfigError(_("Enable TLS requires both a certificate and a key."))
-            for p in (self.tls_cert, self.tls_key):
-                if not os.path.isfile(p):
-                    raise ConfigError(_("TLS file not found: {0}").format(p))
         for label, lst in ((_("allowed"), self.allowed_client_ips),
                            (_("priority"), self.priority_client_ips)):
             _nets, bad = client_networks(lst)
             if bad:
                 raise ConfigError(_("Invalid {0} client IP/CIDR: {1}.").format(label, repr(bad[0])))
+
+
+def tls_files_missing(net: NetworkSettings) -> list[str]:
+    """A TLS listener's certificate / key files that don't exist, one message each. Not a
+    rule of validate(): a file that goes missing (a mount, a renewal) must not block every
+    other change. An edit refuses them (MappingConfig.validate_input), start-up names them
+    (AppConfig.problems) and the mapping then fails to start, saying so."""
+    if not net.tls or net.mode == "udp":
+        return []
+    return [_("TLS file not found: {0}").format(p)
+            for p in dict.fromkeys((net.tls_cert, net.tls_key)) if p and not os.path.isfile(p)]
 
 
 def udp_peer_address(net: NetworkSettings) -> Optional[tuple[str, int]]:
@@ -1064,6 +1078,8 @@ class MappingConfig:
         for note in self.input_notes:
             if note.kind in ("invalid", "switch_text"):
                 raise ConfigError(note.error())
+        if self.kind == "net" and (missing := tls_files_missing(self.network)):
+            raise ConfigError(missing[0])
         for side in self.serial_sides():
             if url_port(side.port):
                 raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "
@@ -1129,6 +1145,14 @@ class AdminUI:
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
+
+    def check_tls_files(self) -> None:
+        """The certificate and key, when set, must be files that exist: checked when they
+        are set in Settings, and at start-up (runtime.require_admin_tls), not by every save
+        — a file that goes missing later must not block every other change."""
+        for path in (p for p in (self.tls_cert, self.tls_key) if p):
+            if not os.path.isfile(path):
+                raise ConfigError(_("TLS file not found or not readable: {0}").format(path))
 
 
 # admin_ui connection limits: (default, lowest value other than 0, highest)
@@ -1816,14 +1840,10 @@ class AppConfig:
             raise error
 
     def _validate_admin_ui(self) -> None:
-        # TLS: both files required together, and they must exist/be readable so a
-        # bad path fails fast at save time instead of crashing uvicorn at startup.
+        # TLS: both files required together (that they exist: AdminUI.check_tls_files)
         cert, key = self.admin_ui.tls_cert, self.admin_ui.tls_key
         if bool(cert) != bool(key):
             raise ConfigError(_("Set both TLS certificate and key, or neither."))
-        for path in (p for p in (cert, key) if p):
-            if not os.path.isfile(path):
-                raise ConfigError(_("TLS file not found or not readable: {0}").format(path))
 
         # Admin UI bind IP (set via the console / --reconfigure, or a hand-edited
         # config). Catch a bad value here with a clear error instead of letting
@@ -1897,13 +1917,21 @@ class AppConfig:
         return found
 
     def _broken(self) -> list[tuple[str, str, Any]]:
-        """(key, problem, content) for every part validate() rejects and every clash."""
+        """(key, problem, content) for every part validate() rejects and every clash, and
+        each TLS file a mapping names that doesn't exist (tls_files_missing)."""
         found = []
+        missing = {f"mapping {m.id}": tls_files_missing(m.network)
+                   for m in self.mappings if m.kind == "net"}
         for key, label, content, check in self._parts():
             try:
                 check()
             except Exception as e:  # a hand-edited value of the wrong type raises others too
                 found.append((key, f"{label}: {e}", content()))
+            try:
+                found += [(key, f"{label}: {problem}", content())
+                          for problem in missing.get(key, ())]
+            except Exception:  # its content can't be read: named above already
+                pass
         try:
             found += [(key, str(error), None) for key, error in self._clashes()]
         except Exception as e:  # mappings too broken to compare

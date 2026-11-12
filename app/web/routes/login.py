@@ -94,17 +94,17 @@ def routes(ctx: Ctx) -> list:
         would otherwise keep the role saved with it until they expire."""
         if _person(source, username) in refused:
             return
-        async with state.config_lock:
-            accounts = state.config.external_accounts(username, source)
-            if not accounts:
-                return
-            for user in accounts:
-                user.pwd_version += 1
-            refused.add(_person(source, username))
-            try:
-                await state.asave()
-            except (ConfigError, OSError) as e:  # still ended in memory, until a restart
-                state.log(f"could not save the sign-out of {username!r}: {e}")
+        accounts = []
+        try:
+            async with state.edit_config(keep_on_failure=True):  # ended in memory anyway
+                accounts = state.config.external_accounts(username, source)
+                for user in accounts:
+                    user.pwd_version += 1
+        except ConfigError as e:  # still ended in memory, until a restart
+            state.log(f"could not save the sign-out of {username!r}: {e}")
+        if not accounts:
+            return
+        refused.add(_person(source, username))
         state.log(f"{source.upper()}: {username!r} signed out everywhere: their groups give "
                   f"no role any more")
 
@@ -168,17 +168,26 @@ def routes(ctx: Ctx) -> list:
         account got this name while the sign-in waited for the lock. The directory decides
         the role, also when it takes the last admin role away (refusing that would keep
         a removed admin's rights): that is logged as a warning."""
-        async with state.config_lock:
-            before = state.config.usable_admin_count()
-            try:
+        before = state.config.usable_admin_count()
+        user = None
+        try:
+            # saved only when the account changed (a repeated sign-in writes nothing); used
+            # even when it can't be saved: the sign-in goes on, and it is made again later
+            async with state.edit_config(keep_on_failure=True):
+                before = state.config.usable_admin_count()
                 user = state.config.upsert_external_user(username, role, source)
-            except AccountNameError:
-                return None
-            await state.asave()
-            if before and not state.config.usable_admin_count():
-                state.log(f"WARNING: {source.upper()} gives {user.username!r} the role {role}, so "
-                          f"no admin account can sign in any more. `ser2net --set-password "
-                          f"NAME` with a new NAME creates a local admin account.")
+        except AccountNameError:
+            return None
+        except ConfigError as e:
+            state.log(f"WARNING: {source.upper()}: could not save the account of "
+                      f"{username!r} ({e}); they are signed in, but it is made again at their "
+                      f"next sign-in after a restart")
+        if user is None:  # (upsert_external_user returns the account or raises)
+            return None
+        if before and not state.config.usable_admin_count():
+            state.log(f"WARNING: {source.upper()} gives {user.username!r} the role {role}, so "
+                      f"no admin account can sign in any more. `ser2net --set-password "
+                      f"NAME` with a new NAME creates a local admin account.")
         return user
 
     # ---------------- OIDC single sign-on ----------------
@@ -359,15 +368,16 @@ def routes(ctx: Ctx) -> list:
     async def _sign_out_everywhere(username: str) -> None:
         """A logout the revocation list has no room for: end all of the account's
         sessions instead (pwd_version + 1), which ends the copies of its cookies too."""
-        async with state.config_lock:
-            user = state.config.get_user(username)
-            if user is None:
-                return
-            user.pwd_version += 1
-            try:
-                await state.asave()
-            except (ConfigError, OSError) as e:  # still ended in memory, until a restart
-                state.log(f"could not save the sign-out of {username!r}: {e}")
+        user = None
+        try:
+            async with state.edit_config(keep_on_failure=True):  # ended in memory anyway
+                user = state.config.get_user(username)
+                if user is not None:
+                    user.pwd_version += 1
+        except ConfigError as e:  # still ended in memory, until a restart
+            state.log(f"could not save the sign-out of {username!r}: {e}")
+        if user is None:
+            return
         state.revoked_sessions.forget(username)
         state.log(f"{username!r} signed out everywhere: too many of its sessions were ended "
                   "by a logout to remember each one")
@@ -428,18 +438,16 @@ def routes(ctx: Ctx) -> list:
         if err:
             return setup_page(request, 400, err)
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
-        async with state.config_lock:
-            # checked again here: another setup request may have finished while this one
-            # was sending its form or hashing — it must not replace that admin
-            claimed = state.config.password_set
-            if not claimed:
-                state.config.users = [User(username=username, password_hash=pw_hash,
-                                           role="admin", pwd_version=new_pwd_version())]
-                try:
-                    await state.asave()
-                except ConfigError as e:
-                    state.config.users = []
-                    return setup_page(request, 400, str(e))
+        try:
+            async with state.edit_config():
+                # checked again here: another setup request may have finished while this one
+                # was sending its form or hashing — it must not replace that admin
+                claimed = state.config.password_set
+                if not claimed:
+                    state.config.users = [User(username=username, password_hash=pw_hash,
+                                               role="admin", pwd_version=new_pwd_version())]
+        except ConfigError as e:  # not saved: still no account
+            return setup_page(request, 400, str(e))
         if claimed:
             state.log(f"first-run setup from {ip} ignored: the admin account exists already")
             return RedirectResponse("/login", status_code=303)

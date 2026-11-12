@@ -1,8 +1,8 @@
 """Shared runtime state: config + store + supervisor + port watcher + logs.
 
 A single AppState instance is created at startup and shared by the web layer and
-the engine. Config mutations go through ``config_lock`` and are persisted
-atomically before the supervisor is reconciled.
+the engine. Config mutations go through ``edit_config`` (under ``config_lock``): they
+are persisted atomically, or undone, before the supervisor is reconciled.
 
 All activity (logins/logouts, serial port open/close, client connect/disconnect,
 mapping start/stop/edit, HTTP requests, errors) is funneled through ``log()`` and
@@ -12,6 +12,8 @@ fully resets the system — those are the only two state files.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import dataclasses
 import hmac
 import logging
 import os
@@ -24,7 +26,10 @@ from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from . import accounts
-from .config import AppConfig, ConfigStore, User, lock_down_dir, mapping_file, valid_mapping_id
+from .config import (
+    AppConfig, ConfigStore, ConfigWriteError, User, lock_down_dir, mapping_file, valid_mapping_id,
+)
+from .i18n import _
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
@@ -245,6 +250,54 @@ def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
         os.fsync(fh.fileno())
     os.replace(tmp, path)
     return True
+
+
+def _snapshot(value: Any) -> tuple:
+    """What _restore needs to put `value` back as it is now, in place: the same objects
+    (dataclasses, lists, dicts) with the same contents, also where a change replaced one."""
+    if (dataclasses.is_dataclass(value) and not isinstance(value, type)
+            and not value.__dataclass_params__.frozen):  # type: ignore[attr-defined]
+        return value, {f.name: _snapshot(getattr(value, f.name))
+                       for f in dataclasses.fields(value)}
+    if isinstance(value, list):
+        return value, [_snapshot(v) for v in value]
+    if isinstance(value, dict):
+        return value, {k: _snapshot(v) for k, v in value.items()}
+    return value, None  # immutable: str, numbers, None, a frozen note
+
+
+def _restore(snapshot: tuple) -> Any:
+    value, inner = snapshot
+    if inner is None:
+        return value
+    if isinstance(value, list):
+        value[:] = [_restore(s) for s in inner]
+    elif isinstance(value, dict):
+        restored = {k: _restore(s) for k, s in inner.items()}
+        value.clear()
+        value.update(restored)
+    else:
+        for name, s in inner.items():
+            setattr(value, name, _restore(s))
+    return value
+
+
+async def _to_its_end(task: asyncio.Future) -> bool:
+    """Wait until `task` is done, also when the waiting task is cancelled meanwhile (it
+    is not passed on). Returns whether it was: the caller raises CancelledError then."""
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.wait((task,))
+        except asyncio.CancelledError:
+            cancelled = True
+    return cancelled
+
+
+@dataclasses.dataclass
+class ConfigEdit:
+    """What AppState.edit_config did, once its block has ended."""
+    saved: bool = False  # config.json was written (False: the block changed nothing)
 
 
 class AppState:
@@ -637,8 +690,53 @@ class AppState:
     async def asave(self) -> None:
         """Async wrapper around save(): the atomic write does blocking file I/O plus
         two fsyncs, so run it off the event loop to avoid stalling every bridge while
-        config is persisted. Raises ConfigError on invalid config, same as save()."""
-        await asyncio.to_thread(self.store.save, self.config)
+        config is persisted. Raises ConfigError on invalid config, same as save(), and
+        ConfigWriteError (a ConfigError) when config.json can't be written. Changes go
+        through edit_config, which undoes them when this fails."""
+        try:
+            await asyncio.to_thread(self.store.save, self.config)
+        except OSError as e:
+            raise ConfigWriteError(_("Could not save config.json: {0}").format(
+                e.strerror or e)) from e
+
+    @contextlib.asynccontextmanager
+    async def edit_config(self, *, keep_on_failure: bool = False):
+        """Change the configuration and save it, all or nothing:
+
+            async with state.edit_config():
+                state.config.<...> = ...   # in place, under config_lock
+
+        The block changes self.config in place (the objects the cluster, the runners and
+        the requests hold stay the ones in use); raising ConfigError there refuses the
+        change. When the block ends, the change is saved — not when it changed nothing
+        config.json keeps — and the save runs to its end even when the request is
+        cancelled meanwhile. When the block raises or the save fails, every field is put
+        back as it was (the same objects, with their contents) and the error is raised:
+        ConfigError (a ConfigWriteError for a failed write) for the caller to show.
+        keep_on_failure: a change that is used even when it can't be saved (a sign-in's
+        account, a sign-out) stays in memory, until a restart; the error is raised too.
+        Yields a ConfigEdit."""
+        async with self.config_lock:
+            snapshot = _snapshot(self.config)
+            before = self.config.to_dict()
+            edit = ConfigEdit()
+            try:
+                yield edit
+            except BaseException:
+                _restore(snapshot)
+                raise
+            if self.config.to_dict() == before:
+                return
+            save = asyncio.ensure_future(self.asave())
+            cancelled = await _to_its_end(save)
+            error = asyncio.CancelledError() if save.cancelled() else save.exception()
+            if error is not None:
+                if not keep_on_failure:
+                    _restore(snapshot)
+                raise error
+            edit.saved = True
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def start_engine(self) -> None:
         self.prune_mapping_logs()  # drop logs for mappings that no longer exist

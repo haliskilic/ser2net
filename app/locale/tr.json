@@ -864,5 +864,11 @@
   "At start-up, config.json had been written by ser2net %(newer)s, a newer version than this one (%(this)s). What only that version knows is not used here, and it is left out when this version saves config.json. The backups below keep the file as that version left it: restore it after upgrading again.": "Açılışta config.json'u bu sürümden (%(this)s) daha yeni olan ser2net %(newer)s yazmıştı. Yalnızca o sürümün bildiği ayarlar burada kullanılmıyor ve bu sürüm config.json'u kaydederken dışarıda kalıyor. Aşağıdaki yedekler dosyayı o sürümün bıraktığı hâliyle saklıyor: yeniden yükselttikten sonra onu geri yükle.",
   "written by ser2net %(version)s": "yazan: ser2net %(version)s",
   "written by 2.8.1 or older": "yazan: 2.8.1 ya da daha eski",
-  "{0}: use true or false (JSON booleans), not a string.": "{0}: metin değil, true ya da false kullan (JSON boolean)."
+  "{0}: use true or false (JSON booleans), not a string.": "{0}: metin değil, true ya da false kullan (JSON boolean).",
+  "Could not save config.json: {0}": "config.json kaydedilemedi: {0}",
+  "Stopped, but config.json could not be saved ({0}): it starts again when ser2net restarts.": "Durduruldu, ama config.json kaydedilemedi ({0}): ser2net yeniden başlayınca yine çalışır.",
+  "{0} of {1} selected mapping(s) not changed: {2}": "Seçilen {1} eşlemeden {0} tanesi değişmedi: {2}",
+  "Not deleted: {0}": "Silinmedi: {0}",
+  "The peer did not accept the command: {0}": "Eş komutu kabul etmedi: {0}",
+  "The certificate was generated, but not set up: {0}": "Sertifika üretildi, ama ayarlanamadı: {0}"
 }

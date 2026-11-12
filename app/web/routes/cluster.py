@@ -258,9 +258,12 @@ def routes(ctx: Ctx) -> list:
         mid, action = form.get("mapping_id", ""), form.get("action", "")
         if action not in ("start", "stop", "restart"):
             return _peer_json(a, {"error": "bad_action"}, 400)
-        ok, name = await ops.apply_action(state, mid, action)
-        if not ok:
-            return _peer_json(a, {"error": name}, 404)
+        res = await ops.apply_action(state, mid, action)
+        if not res.found:
+            return _peer_json(a, {"error": "Mapping not found"}, 404)
+        if res.error is not None:  # not saved, nothing changed: the controlling node says why
+            return _peer_json(a, {"ok": False, "error": str(res.error)}, 400)
+        name = res.name
         ip = client_ip(request)
         state.log(f"cluster: remote {action} of '{name}' from {ip}")
         state.audit(ip, f"cluster_remote_{action}", name, user="cluster-peer")
@@ -281,6 +284,10 @@ def routes(ctx: Ctx) -> list:
             return err
         res = await state.cluster.control_peer(target, mid, action)
         if not res or not res.get("ok"):
+            why = res.get("error") if res and res.get("ok") is False else None
+            if isinstance(why, str) and why:  # a 2.9+ peer that could not save the change
+                return PlainTextResponse(_("The peer did not accept the command: {0}").format(
+                    why[:500]), status_code=502)
             return PlainTextResponse(_("Peer did not accept the command "
                                        "(unreachable or rejected)."), status_code=502)
         state.cluster.forget(target)   # the refresh this triggers shows the new state
