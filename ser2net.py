@@ -145,6 +145,47 @@ def print_licenses() -> int:
     return 0
 
 
+# what --about writes for the folders it shortens (a bug report shows which copy of a
+# package is loaded, not the account name in the path)
+_ROOT_LABELS = {"<override>": "SER2NET_LIB_OVERRIDE", "<bundle>": "the executable's files",
+                "<ser2net>": "ser2net's folder", "<python>": "the Python installation",
+                "~": "the home folder"}
+
+
+def _known_roots(env=None) -> list[tuple[str, str]]:
+    """(label, folder) of the folders --about writes as a short label (_ROOT_LABELS)."""
+    env = os.environ if env is None else env
+    roots = [("<override>", (env.get("SER2NET_LIB_OVERRIDE") or "").strip()),
+             ("<bundle>", getattr(sys, "_MEIPASS", "") or ""),
+             ("<ser2net>", ROOT), ("<python>", sys.prefix),
+             ("~", os.path.expanduser("~"))]
+    out = []
+    for label, folder in roots:
+        folder = os.path.abspath(folder) if folder and folder != "~" else ""
+        if folder and os.path.dirname(folder) != folder:  # never a whole drive or "/"
+            out.append((label, folder))
+    return out
+
+
+def _where(path: str, roots: list[tuple[str, str]]) -> str:
+    """`path` with the most specific of `roots` that holds it written as its label
+    (compared as the OS does: letter case aside on Windows), else as it is."""
+    full = os.path.abspath(path)
+    best: tuple[str, str] | None = None
+    for label, root in roots:
+        try:
+            inside = (os.path.commonpath([os.path.normcase(full), os.path.normcase(root)])
+                      == os.path.normcase(root))
+        except ValueError:  # another drive, or one relative and one absolute
+            continue
+        if inside and (best is None or len(root) > len(best[1])):
+            best = (label, root)
+    if best is None:
+        return full
+    rest = full[len(best[1]):].lstrip("\\/")
+    return best[0] + (os.sep + rest if rest else "")
+
+
 def print_about() -> int:
     import platform
     import ssl
@@ -152,6 +193,7 @@ def print_about() -> int:
 
     from app import optional
 
+    roots, used = _known_roots(), set()
     lines = [f"ser2net {__version__}",
              f"Python {platform.python_version()} ({platform.python_implementation()}), "
              f"{ssl.OPENSSL_VERSION}",
@@ -176,7 +218,12 @@ def print_about() -> int:
             except metadata.PackageNotFoundError:
                 version = "?"
         where = os.path.dirname(getattr(mod, "__file__", "") or "")
+        if where:
+            where = _where(where, roots)
+            used.add(where.split(os.sep, 1)[0])
         lines.append(f"  {dist:{width}} {version}  ({where})")
+    if legend := [f"{label} = {text}" for label, text in _ROOT_LABELS.items() if label in used]:
+        lines.append(f"  ({', '.join(legend)})")
     _write_utf8("\n".join(lines) + "\n")
     return 0
 

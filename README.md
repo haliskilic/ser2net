@@ -255,8 +255,11 @@ Linux notları:
 - Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
   paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır.
 
-`ser2net --about` sürümleri (Python, OpenSSL, bileşenler) gösterir; hata bildirirken
-ekleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini yazar
+`ser2net --about` sürümleri (Python, OpenSSL, bileşenler) ve her bileşenin nereden
+yüklendiğini gösterir; bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `<bundle>`,
+`<override>`, `~`), böylece yoldaki hesap adı görünmez. Hata bildirirken ekleyin;
+yapıştırdığınız log satırlarındaki IP adreslerini, kullanıcı adlarını ve host adını
+maskeleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini yazar
 (sürümlere `*.THIRD-PARTY-LICENSES.txt` olarak da eklenir).
 
 Kendin derlemek için:
