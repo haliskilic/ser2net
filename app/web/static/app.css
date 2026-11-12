@@ -109,6 +109,11 @@ table.ports { min-width: 40rem; }
   color: var(--red); font-size: 11px; margin-top: 3px; max-width: 16rem;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
+/* the same, for what to know about a port that works (a setting it did not take) */
+.warn-small {
+  color: var(--amber); font-size: 11px; margin-top: 3px; max-width: 16rem;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
 .clients { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
 .peer { background: rgba(46,160,67,.14); color: #4dd069; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 .peer-prio { background: rgba(47,129,247,.18); color: #6cb0ff; }

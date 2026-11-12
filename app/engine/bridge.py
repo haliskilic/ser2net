@@ -53,13 +53,14 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import TaskGroup
     from exceptiongroup import BaseExceptionGroup
 
+from .. import i18n
 from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
-from . import netguard, serial_io, sockopts
+from . import netguard, portdiag, serial_io, sockopts
 from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
 from .protocols.base import ProtocolError, ProtocolSession
-from .serial_link import Backoff, SerialLink, close_stream
+from .serial_link import Backoff, NoteLog, SerialLink, close_stream
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -327,6 +328,9 @@ class RunnerStatus:
     link_error: str = ""
     link_since: float = 0.0   # time.time() of the last change of `link`
     connect_failures: int = 0  # connect-out attempts that failed
+    # what to know about the serial port(s) open now (portdiag.Note): a setting a port did
+    # not take at open (RTS / DTR, RS-485 mode); as_dict() has them as text
+    warnings: tuple = ()
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
@@ -371,6 +375,8 @@ class RunnerStatus:
             "link_error": self.link_error,
             "link_since": int(self.link_since),
             "connect_failures": self.connect_failures,
+            # in the web UI's language on the dashboard (English for the REST API)
+            "warnings": portdiag.texts(self.warnings, i18n.gettext),
         }
 
 
@@ -1033,17 +1039,22 @@ class MappingRunner:
         # both ports open and close together, so this keeps its own loop (SerialLink
         # supervises one port)
         backoff = Backoff()
+        notes = NoteLog(self._log)
         while not self._stop.is_set():
             wa = wb = None
             try:
-                ra, wa, _sa, da = await serial_io.open_serial(self.mapping.serial)
-                rb, wb, _sb, db = await serial_io.open_serial(self.mapping.serial_b)
+                ra, wa, sa, da = await serial_io.open_serial(self.mapping.serial)
+                rb, wb, sb, db = await serial_io.open_serial(self.mapping.serial_b)
                 self.status.device = f"{da} <-> {db}"
                 self.status.devices = (da, db)
                 self.status.last_error = ""
+                self.status.warnings = tuple(
+                    portdiag.Note("side", (side, note))
+                    for side, ser in (("A", sa), ("B", sb)) for note in serial_io.open_notes(ser))
                 self.status.state = "running"
                 backoff.reset()
                 self._log(f"serial bridge open: {da} <-> {db}")
+                notes(self.status.warnings)
                 async with TaskGroup() as tg:
                     tg.create_task(self._pump_serial_pair(ra, wb, "A>B"))
                     tg.create_task(self._pump_serial_pair(rb, wa, "B>A"))
@@ -1057,6 +1068,7 @@ class MappingRunner:
                 self.status.state = "reconnecting" if backoff.attempt else "device-missing"
                 self._log(f"serial bridge error: {self.status.last_error}")
             finally:
+                self.status.warnings = ()
                 await asyncio.gather(*(close_stream(w, self._log)
                                        for w in (wa, wb) if w is not None))
             if self._stop.is_set():

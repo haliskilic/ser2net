@@ -102,6 +102,15 @@ düzenlemeye gerek yok.
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
   kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open ve RS-485
   donanım auto-RTS (Linux `TIOCSRS485`: aç + TX öncesi/sonrası gecikme + TX'te RTS seviyesi).
+  `on` / `off` seçilen RTS ya da DTR, port açıldığı andan itibaren o durumdadır (`keep`
+  sürücünün varsayılanını, yani açığı bırakır). Bu yüzden Windows'ta `off` seçilen hat hiç
+  darbe vermez; Linux'ta ise port açılırken DTR ile RTS'yi çekirdeğin kendisi yükseltir,
+  `off` bu darbeyi yalnızca kısaltır ve DTR ile resetlenen bir kartın (Arduino) her açılışta
+  resetlenmesini önleyemez. Portun kabul etmediği bir ayar (çoğu USB adaptörde RS-485, modem
+  hattı olmayan bir portta RTS/DTR) portun açılmasını engellemez: pano bunu eşlemenin
+  durumunun altında gösterir, eşlemenin log'u bir kez yazar; kabul edilmeyen RS-485 modu
+  yeniden kapatılır, böylece portun ayarlarındaki sonraki değişiklikler (bir RFC 2217
+  istemcisinin baud hızı) çalışır.
 - **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
   hotplug (Linux pyudev / Windows WM_DEVICECHANGE), yoksa polling'e düşer. Linux'ta
   arkasında donanım olmayan `ttyS` portları gizlenir, `/dev/serial/by-id` kalıcı adları

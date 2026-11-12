@@ -16,13 +16,15 @@ The link's state, for the runner and anything built on it:
     a port just opened, None when it is closed (what drives the port itself, an RFC 2217
     session, follows it);
   - ``status.state``: ``running`` while it is open, ``device-missing`` / ``reconnecting``
-    while it is not (what the dashboard, /metrics and the notifications report).
+    while it is not (what the dashboard, /metrics and the notifications report);
+    ``status.warnings``: a setting the open port did not take (serial_io.open_notes),
+    logged when it differs from the last open's.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional
 
 from . import serial_io
 
@@ -83,6 +85,7 @@ class SerialLink:
         self.device = ""
         self.ready = asyncio.Event()
         self.down = False
+        self._notes = NoteLog(log)
 
     @property
     def is_open(self) -> bool:
@@ -120,13 +123,16 @@ class SerialLink:
         use it to wire up a stand-in stream pair)."""
         changed = serial is not self.serial
         self.reader, self.writer, self.serial, self.device = reader, writer, serial, device
+        notes = serial_io.open_notes(serial)
         self.status.device = device
         self.status.devices = (device,) if device else ()
         self.status.last_error = ""
+        self.status.warnings = tuple(notes)
         self.status.state = "running"
         self.down = False
         self.ready.set()
         self._log(f"serial open: {device} @ {self.settings.compact()}")
+        self._notes(notes)
         if changed:
             self._changed(serial)
 
@@ -138,6 +144,7 @@ class SerialLink:
         w, had_serial = self.writer, self.serial is not None
         self.reader = self.writer = self.serial = None
         self.device = ""
+        self.status.warnings = ()
         if had_serial:
             self._changed(None)
         if w is not None:
@@ -164,6 +171,23 @@ class SerialLink:
         closed.add_done_callback(_consume_error)
         await asyncio.wait((closed,))
         raise closed.exception() or ConnectionError("serial EOF / device removed")
+
+
+class NoteLog:
+    """Logs what to know about a port just opened (portdiag.Note) when it differs from what
+    was logged for the last open: a port that keeps refusing RS-485 says so once, not at
+    every reopen."""
+
+    def __init__(self, log: Callable[[str], None]) -> None:
+        self._log = log
+        self._last: tuple = ()
+
+    def __call__(self, notes: Iterable[Any]) -> None:
+        notes = tuple(notes)
+        for note in notes:
+            if note not in self._last:
+                self._log(f"serial warning: {note.text()}")
+        self._last = notes
 
 
 async def close_stream(writer: asyncio.StreamWriter,
