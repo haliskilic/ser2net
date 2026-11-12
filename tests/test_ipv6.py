@@ -157,10 +157,10 @@ def test_pickers():
             (ip, port), _said = _console(str(values.index("*") + 1), "8091")
         assert (ip, port) == ("", 8091)
     # without a terminal a configured "" is kept, as any other address
-    (ip, _port), _said = _console(current=AdminUI(bind_ip=""), tty=False)
-    assert ip == "", ip
-    (ip, _port), _said = _console(current=AdminUI(), tty=False)
-    assert ip == "127.0.0.1", ip
+    (ip, _port), said = _console(current=AdminUI(bind_ip=""), tty=False)
+    assert ip == "" and "*:8080 (as configured)" in said[0], (ip, said)
+    (ip, _port), said = _console(current=AdminUI(), tty=False)
+    assert ip == "127.0.0.1" and "127.0.0.1:8080 (loopback)" in said[0], (ip, said)
     print("pickers: every interface for IPv4, IPv6 or both, both loopbacks, LAN IPv6 addresses "
           "(not link-local or temporary); IPv4 only without IPv6  OK")
 
