@@ -991,5 +991,11 @@
   "on": "açık",
   "off": "kapalı",
   "any client": "her istemci",
-  "%(what)s: %(value)s is kept (the file has %(file)s)": "%(what)s: %(value)s korunur (dosyada %(file)s)"
+  "%(what)s: %(value)s is kept (the file has %(file)s)": "%(what)s: %(value)s korunur (dosyada %(file)s)",
+  "After import": "İçe aktarma sonrası",
+  "%(num)s allowed address": "%(num)s izinli adres",
+  "%(num)s allowed addresses": "%(num)s izinli adres",
+  "imported disabled: the file turns it off (enable: off)": "kapalı olarak içe aktarıldı: dosya onu kapatıyor (enable: off)",
+  "imported disabled: the file turns it off (state off)": "kapalı olarak içe aktarıldı: dosya onu kapatıyor (durum: off)",
+  "A classic ser2net file is imported through the preview: choose it in Settings → Mappings export / import (or post it with step=preview), check the preview, then apply it.": "Klasik bir ser2net dosyası önizlemeyle içe aktarılır: Ayarlar → Eşlemeleri dışa / içe aktar bölümünde seç (ya da step=preview ile gönder), önizlemeyi kontrol et, sonra uygula."
 }

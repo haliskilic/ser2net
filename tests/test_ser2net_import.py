@@ -1074,6 +1074,25 @@ connection: &udpsame
     assert has(warns, "renamed to 'dup (2)'")
     assert has(warns, "sameport: skipped", "TCP port 7001", "'dup'")
     print("duplicate names get (2); a port already listened on is skipped (UDP may share)  OK")
+    # each warning about an imported connection knows its mapping (the preview's row), also
+    # between two connections of the same name; the file's and a skipped one's know none
+    text += ("connection: &held\n  accepter: telnet,mux,certauth,tcp,7003\n"
+             "  connector: serialdev,/dev/ttyS5\n  enable: off\n")
+    maps_list, warns = parse_ser2net_config(text)
+    names = [m["name"] for m in maps_list]
+
+    def about(w):
+        i = getattr(w, "mapping", None)
+        return None if i is None else names[i]
+    by = {}
+    for w in warns:
+        by.setdefault(about(w), []).append(getattr(w, "detail", "") or w)
+    assert by["dup (2)"] == ["renamed to 'dup (2)' (the name is used twice)"], by
+    assert any(w.startswith("sameport: skipped") for w in by[None]), by[None]
+    held = [w for w in warns if about(w) == "held"]
+    assert [w.security for w in held] == [False, True], [(w, w.security) for w in held]
+    assert held[0].detail.endswith("(enable: off)") and "certauth" in held[1].detail
+    print("warnings: each knows the mapping it is about, the hold reasons are marked  OK")
 
 
 def test_errors():

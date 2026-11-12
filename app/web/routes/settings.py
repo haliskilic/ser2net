@@ -802,7 +802,8 @@ def routes(ctx: Ctx) -> list:
 
     # ---- import: the form first shows a preview (step=preview), then applies it in
     #      "merge" or "replace" mode. A POST without step (scripts written for 2.7)
-    #      keeps the old behaviour: replace everything at once, answered with the page.
+    #      keeps the old behaviour: replace everything at once, answered with the page;
+    #      a classic ser2net file (which 2.7 did not take) only goes through the preview.
     PENDING_TTL_S = 900
 
     def _pending_put(user: str, plan, mode: str) -> str:
@@ -836,7 +837,7 @@ def routes(ctx: Ctx) -> list:
         try:
             raw = await upload.read() if hasattr(upload, "read") else str(upload or "").encode()
             # parsing is bounded, but a big file still takes a moment: not on the event loop
-            plan = await asyncio.to_thread(importer.parse_mappings_file, raw,
+            plan = await asyncio.to_thread(importer.parse_for_preview, raw,
                                            getattr(upload, "filename", "") or "")
         except ConfigError as e:
             error = _("Import failed: {0}").format(e)
@@ -848,6 +849,11 @@ def routes(ctx: Ctx) -> list:
             if mode not in importer.MODES:
                 return await _failed(request, "import", _("Unknown import mode."))
             return await _import_preview(request, plan, mode)
+        if plan.classic:  # what it changes and leaves out is only seen in the preview
+            return await settings_get(request, section="import", status_code=400, error=_(
+                "A classic ser2net file is imported through the preview: choose it in "
+                "Settings → Mappings export / import (or post it with step=preview), check "
+                "the preview, then apply it."))
         # legacy one-step import: replace all mappings
         return await _apply_import(request, plan, "replace", legacy=True)
 
@@ -862,7 +868,8 @@ def routes(ctx: Ctx) -> list:
         """What importing a pending plan would change, against the mappings as they are now."""
         plan, mode = item["plan"], item["mode"]
         current = state.config.mappings
-        rows = importer.plan_rows(current, plan.mappings, mode, plan.classic)
+        general, notes = plan.split_warnings()   # a mapping's own warnings go in its row
+        rows = importer.plan_rows(current, plan.mappings, mode, plan.classic, notes)
         candidate, _touched = importer.apply_import(current, plan.mappings, mode, plan.classic)
         problem = None
         try:
@@ -870,7 +877,7 @@ def routes(ctx: Ctx) -> list:
         except ConfigError as e:
             problem = str(e)
         return {"token": token, "mode": mode, "rows": rows, "source": plan.source,
-                "warnings": plan.warnings, "problem": problem, "count": len(plan.mappings)}
+                "warnings": general, "problem": problem, "count": len(plan.mappings)}
 
     async def config_import_apply(request):
         if deny := require_role(request, "operator"):
@@ -911,10 +918,15 @@ def routes(ctx: Ctx) -> list:
             for m in touched:
                 await state.supervisor.apply_mapping(m)
         count = {a: sum(1 for r in rows if r["action"] == a) for a in ("add", "update", "same", "remove")}
-        state.log(f"mappings imported ({mode}): {count['add']} added, {count['update']} updated, "
-                  f"{count['same']} unchanged, {count['remove']} removed")
-        ctx.audit(request, f"config_import_{mode}",
-                    f"{len(plan.mappings)} mappings ({plan.source})")
+        # in English (parse_for_preview): what the import left out or changed stays on record
+        source, warnings = ((plan.log_source, plan.log_warnings) if plan.log_source else
+                            (plan.source, plan.warnings))
+        state.log(f"mappings imported ({mode}) from {source}: {count['add']} added, "
+                  f"{count['update']} updated, {count['same']} unchanged, "
+                  f"{count['remove']} removed, {len(warnings)} warnings")
+        for w in warnings:
+            state.log(f"import warning: {w}")
+        ctx.audit(request, f"config_import_{mode}", importer.audit_detail(plan))
         if mode == "replace":
             ok = ngettext("Imported {0} mapping (replaced the existing ones).",
                           "Imported {0} mappings (replaced the existing ones).",
@@ -1172,10 +1184,11 @@ def routes(ctx: Ctx) -> list:
         name = form.get("name", "")
         try:
             raw = await asyncio.to_thread(state.store.read_backup, name)
-            plan = importer.parse_mappings_file(raw.encode("utf-8"), name)
+            plan = await asyncio.to_thread(importer.parse_for_preview, raw.encode("utf-8"), name)
         except (ConfigError, OSError) as e:
             return await _failed(request, "backups", _("Could not read the backup: {0}").format(_unreadable(e)))
         plan.source = _("configuration backup ({0} UTC)").format(backup_time(name))
+        plan.log_source = f"configuration backup ({backup_time(name)} UTC)"
         return await _import_preview(request, plan, "replace")
 
     async def settings_cluster_post(request):

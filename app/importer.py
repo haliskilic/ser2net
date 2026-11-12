@@ -12,14 +12,18 @@ A mapping from a ser2net export or config.json replaces the one it updates. One 
 classic ser2net file says only part of what a mapping has here, so a merge takes only
 that part from it and keeps the rest (_overlay): TLS, the bind IP or the allowed clients
 set after the first import, its USB identity, RS-485, MQTT, Modbus points. The preview
-lists what an update changes and what it keeps.
+lists what an update changes and what it keeps, and how each mapping will be after the
+import (enabled, TLS, which clients, read-only) with its own warnings.
 """
 from __future__ import annotations
 
+import contextvars
 import ipaddress
 import json
 from dataclasses import dataclass, field
+from typing import Optional
 
+from . import i18n
 from .config import ConfigError, MappingConfig, _new_id, normalize_cidr
 from .i18n import _
 from .ser2net_import import looks_yaml, parse_ser2net_config
@@ -37,6 +41,39 @@ class ImportPlan:
     mappings: list[MappingConfig]
     warnings: list[str] = field(default_factory=list)
     classic: bool = False               # a classic ser2net file: a merge overlays (_overlay)
+    # the source and the warnings in English, for the log and the audit log (which stay
+    # English: parse_for_preview); empty: as `source` / `warnings`
+    log_source: str = ""
+    log_warnings: list[str] = field(default_factory=list)
+
+    def split_warnings(self) -> tuple[list[str], list[list[str]]]:
+        """The warnings about the file as a whole, and those about each mapping (by its
+        position in `mappings`; a classic file's ser2net_import.Note knows its mapping),
+        which the preview shows in the mapping's row."""
+        general: list[str] = []
+        per: list[list[str]] = [[] for _m in self.mappings]
+        for w in self.warnings:
+            i = getattr(w, "mapping", None)
+            (per[i] if i is not None and 0 <= i < len(per) else general).append(w)
+        return general, per
+
+
+def parse_for_preview(raw: bytes, filename: str = "") -> ImportPlan:
+    """parse_mappings_file, with the source and the warnings in English as well (log_*):
+    applying the import logs them, and the log and the audit log stay English whatever
+    the language of the page."""
+    plan = parse_mappings_file(raw, filename)
+    if i18n.current() == i18n.DEFAULT:
+        plan.log_source, plan.log_warnings = plan.source, list(plan.warnings)
+    else:
+        english = contextvars.copy_context().run(_in_english, raw, filename)
+        plan.log_source, plan.log_warnings = english.source, english.warnings
+    return plan
+
+
+def _in_english(raw: bytes, filename: str) -> ImportPlan:
+    i18n.set_language(i18n.DEFAULT)  # (in a copy of the context: for this call only)
+    return parse_mappings_file(raw, filename)
 
 
 def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
@@ -214,25 +251,58 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
 
 
 def plan_rows(current: list[MappingConfig], incoming: list[MappingConfig],
-              mode: str, classic: bool = False) -> list[dict]:
-    """Preview rows: {name, kind, action: add|update|same|remove, target, changes}; for
-    an update, `changes` lists what it changes and what it keeps of the mapping (_diff)."""
+              mode: str, classic: bool = False,
+              notes: Optional[list[list[str]]] = None) -> list[dict]:
+    """Preview rows: {name, kind, action: add|update|same|remove, target, changes, after,
+    notes}. For an update, `changes` lists what it changes and what it keeps of the
+    mapping (_diff); `after` is how the mapping will be (_after); `notes` are its
+    warnings (ImportPlan.split_warnings, in the order of `incoming`), those about its
+    protection first."""
     rows = []
-    for m in incoming:
+    for i, m in enumerate(incoming):
         target = _match(current, m) if mode == "merge" else None
         changes: list[dict] = []
+        result = m
         if target is None:
             action = "add"
         else:
-            probe = _merged(target, m, classic)
-            action = "same" if probe.to_dict() == target.to_dict() else "update"
-            changes = _diff(target, m, probe)
+            result = _merged(target, m, classic)
+            action = "same" if result.to_dict() == target.to_dict() else "update"
+            changes = _diff(target, m, result)
+        own = [{"text": getattr(n, "detail", "") or n, "security": getattr(n, "security", False)}
+               for n in (notes[i] if notes and i < len(notes) else [])]
         rows.append({"name": m.name, "kind": _kind(m), "action": action,
-                     "target": target.name if target is not None else "", "changes": changes})
+                     "target": target.name if target is not None else "", "changes": changes,
+                     "after": _after(result),
+                     "notes": sorted(own, key=lambda n: not n["security"])})
     if mode == "replace":
         for e in current:
-            rows.append({"name": e.name, "kind": _kind(e), "action": "remove", "target": ""})
+            rows.append({"name": e.name, "kind": _kind(e), "action": "remove", "target": "",
+                         "changes": [], "after": None, "notes": []})
     return rows
+
+
+def _after(m: MappingConfig) -> dict:
+    """How a mapping will be after the import, for the preview (as the dashboard tags it):
+    enabled, TLS, read-only, `clients` (entries of its allow-list; None: it doesn't
+    listen) and `open` (enabled and taking any client beyond the loopback)."""
+    n = m.network
+    listens = m.kind == "net" and n.mode != "client"
+    return {"enabled": m.enabled, "tls": listens and n.tls, "read_only": n.read_only,
+            "clients": len(n.allowed_client_ips) if listens else None,
+            "open": listens and m.enabled and not n.allowed_client_ips
+            and _bind_reach(n.bind_ip) > 0}
+
+
+def audit_detail(plan: ImportPlan, most: int = 500) -> str:
+    """The audit record of an import: how many mappings from what, and its warnings (in
+    English), cut to `most` characters."""
+    source, warnings = ((plan.log_source, plan.log_warnings) if plan.log_source else
+                        (plan.source, plan.warnings))
+    text = f"{len(plan.mappings)} mappings ({source})"
+    if warnings:
+        text += f"; {len(warnings)} warnings: " + "; ".join(warnings)
+    return text if len(text) <= most else text[:most - 1] + "…"
 
 
 def _shown(value: str, most: int = 60) -> str:
