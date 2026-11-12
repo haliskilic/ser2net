@@ -29,7 +29,9 @@ longer:
     focus survives the table's refreshes; a panel opened from far down the page comes
     into view and takes the focus, which goes back to its button on Cancel; unsaved
     form changes are not thrown away without asking; a save says so and the focus goes
-    back to the row; Shift+Tab leaves the console; a failed action, a lost connection
+    back to the row; Shift+Tab leaves the console, whose typing hint is for the text view
+    only, and which says so and connects again when its mapping restarts (a code page's
+    text decoded and typed by app.js); a failed action, a lost connection
     and an ended session are shown (refreshing panels marked "not up to date") and
     cleared once requests work again; a bulk action acts on the ticked rows shown only
     ("Select all shown" ticks those), asks first with the counts and clears the
@@ -374,7 +376,37 @@ def feedback_checks(browser, base, problems):
     page.keyboard.press("Shift+Tab")
     if active() == "xterm-helper-textarea":
         bad("Shift+Tab did not leave the console")
+    # the typing hint is for the text view only
+    hint = "document.querySelector('#form-panel [data-text-only]').hidden"
+    if page.evaluate(hint):
+        bad("the typing hint is hidden in the text view")
+    page.click("#form-panel [data-term-mode]")
+    if not page.evaluate(hint):
+        bad("the typing hint is still shown in the hex view")
+    page.click("#form-panel [data-term-mode]")
+    if page.evaluate(hint):
+        bad("the typing hint did not come back in the text view")
     page.click("#console-close")
+
+    # a console whose mapping restarts says so and connects again (to the new runner)
+    screen = ("() => { const b = document.getElementById('term')._term.buffer.active; "
+              "let s = ''; for (let i = 0; i < b.length; i++) "
+              "s += b.getLine(i).translateToString(true) + '\\n'; return s; }")
+    press(row_button(LONG_NAME, "monitor"))
+    page.wait_for_selector("#term .xterm")
+    page.wait_for_timeout(500)
+    press(row_button(LONG_NAME, "restart"))
+    for text in ("the mapping stopped or restarted: connecting again", "connected again"):
+        if not until(f"() => ({screen})().includes({json.dumps(text)})"):
+            bad(f"a restart did not show {text!r} in the console: {page.evaluate(screen)!r}")
+    page.click("#console-close")
+    # the console text encoding: a code page's bytes shown and typed as its characters
+    from app.config import console_charset
+    decoded = page.evaluate("cs => decodeBytes(new Uint8Array([0xDE, 0xDD, 0x20, 0xB0, 0x41]), cs)",
+                            console_charset("iso-8859-9"))
+    typed = page.evaluate("cs => Array.from(encodeText('şİ°A€', cs))", console_charset("cp857"))
+    if decoded != "Şİ °A" or typed != list("şİ".encode("cp857")) + [0xF8, 0x41, 0x3F]:
+        bad(f"console text encoding: {decoded!r}, {typed!r}")
 
     # a save says so, and the focus goes back to the row
     short_edit = row_button("short", "edit")
