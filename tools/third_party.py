@@ -19,6 +19,7 @@ Components:
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import platform
 import re
@@ -42,13 +43,20 @@ def canonical(name: str) -> str:
 
 
 def _packaging():
+    """packaging's Marker and Requirement: the installed package, else pip's copy."""
     try:
-        from packaging.markers import Marker
-        from packaging.requirements import Requirement
+        markers = importlib.import_module("packaging.markers")
+        requirements = importlib.import_module("packaging.requirements")
     except ImportError:  # pip always vendors it
-        from pip._vendor.packaging.markers import Marker  # type: ignore[no-redef]
-        from pip._vendor.packaging.requirements import Requirement  # type: ignore[no-redef]
-    return Marker, Requirement
+        markers = importlib.import_module("pip._vendor.packaging.markers")
+        requirements = importlib.import_module("pip._vendor.packaging.requirements")
+    return markers.Marker, requirements.Requirement
+
+
+def _field(md, name: str) -> str | None:
+    """A metadata field's first value, None when it is missing."""
+    values = md.get_all(name)
+    return values[0] if values else None
 
 
 def top_level_names() -> list[str]:
@@ -98,14 +106,14 @@ def runtime_distributions(strict: bool = False) -> list[metadata.Distribution]:
 
 def license_of(dist: metadata.Distribution) -> str:
     md = dist.metadata
-    expr = md.get("License-Expression")
+    expr = _field(md, "License-Expression")
     if expr:
         return expr
     classifiers = [c.split("::")[-1].strip() for c in md.get_all("Classifier") or []
                    if c.startswith("License ::")]
     if classifiers:
         return "; ".join(classifiers)
-    lic = (md.get("License") or "").strip()
+    lic = (_field(md, "License") or "").strip()
     return lic.splitlines()[0][:120] if lic else "see license text"
 
 
@@ -163,11 +171,11 @@ def write_licenses(out_path: str, extra_dirs: list[str], strict: bool = False) -
         f"CPython {platform.python_version()} — PSF-2.0 (bundled interpreter; "
         f"{ssl.OPENSSL_VERSION})", cpython_license()))
     dists = runtime_distributions(strict)
-    for name, role in BUILD_EMBEDDED.items():
+    for name, what in BUILD_EMBEDDED.items():
         try:
             dists.append(metadata.distribution(name))
         except metadata.PackageNotFoundError:
-            print(f"note: {name} not installed ({role} not covered)", file=sys.stderr)
+            print(f"note: {name} not installed ({what} not covered)", file=sys.stderr)
     for dist in dists:
         name, version = dist.metadata["Name"], dist.version
         role = BUILD_EMBEDDED.get(canonical(name))
@@ -201,7 +209,7 @@ def write_sbom(out_path: str, strict: bool = False) -> None:
     from app import __version__
 
     def lic(dist: metadata.Distribution) -> list:
-        expr = dist.metadata.get("License-Expression")
+        expr = _field(dist.metadata, "License-Expression")
         return [{"expression": expr}] if expr else [{"license": {"name": license_of(dist)}}]
 
     components = []
