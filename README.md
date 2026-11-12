@@ -625,6 +625,13 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   Başka hostlardan erişmek için gereken güvenlik duvarı kuralı, adres
   değişimi, yükseltme ve imzasız derlemelerdeki SmartScreen uyarısı için
   **[`docs/WINDOWS.md`](docs/WINDOWS.md)**.
+- **Açılış sırası:** önce yönetim arayüzü hazırlanır. TLS çifti yüklenemezse açılış, hiçbir
+  seri port açılmadan durur (nedeni `all.log`'da); böylece yeniden başlatma politikası
+  DTR'ye duyarlı kartları döngüde resetleyemez. Arayüzün portu eşlemeler başlamadan
+  alınır: arayüzün adres ve portundaki bir eşleme arayüzü engellemek yerine `error` gösterir.
+  Arayüzün kendi adresi kullanılamazsa (portu başka bir program tutuyor ya da IP açılışta
+  henüz atanmamış) eşlemeler yine başlar, arayüz en fazla 30 sn arayla yeniden dener
+  (`all.log` bunu yazar).
 - **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
   dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
   açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar
