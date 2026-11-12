@@ -249,12 +249,14 @@ def test_send_deadline():
                                   request_timeout_s=2)
     guard = httpguard.AdminGuard(admin, lambda _msg: None)
     paused = []
+    transports = []
 
     class Protocol(httpguard.protocol_class(guard)):
         def connection_made(self, transport):
             if self._accepted is None:
                 transport.get_extra_info("socket").setsockopt(socket.SOL_SOCKET,
                                                               socket.SO_SNDBUF, 4096)
+                transports.append(transport)
             super().connection_made(transport)
 
         def pause_writing(self):
@@ -308,8 +310,14 @@ def test_send_deadline():
         while not server.started:
             await asyncio.sleep(0.05)
         try:
-            got = await asyncio.to_thread(stalled, port)
-            if not paused:
+            stall = asyncio.ensure_future(asyncio.to_thread(stalled, port))
+            # before the deadline: what the server still holds of the response. Nothing when
+            # the kernel took all of it (Windows may, also after writing paused for a while):
+            # then there is nothing left to cut off
+            await asyncio.sleep(1.0)
+            held = transports[-1].get_write_buffer_size() if transports else 0
+            got = await stall
+            if not paused or not held:
                 print("  (SKIP the stalled client: the kernel took the whole response here)")
             else:
                 assert got < len(payload), "a client that takes nothing kept its response"
