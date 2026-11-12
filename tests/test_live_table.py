@@ -36,7 +36,7 @@ from app.config import MappingConfig  # noqa: E402
 from app.engine.bridge import RunnerStatus  # noqa: E402
 from app.web.routes.cluster import _fleet_snapshot  # noqa: E402
 from app.web.routes.common import Ctx, LiveTable  # noqa: E402
-from app.web.routes.mappings import _SHOWN, _in_out, _steady  # noqa: E402
+from app.web.routes.mappings import _SHOWN, _in_out, _row_shape, _steady  # noqa: E402
 from app.web.server import make_templates  # noqa: E402
 
 
@@ -175,7 +175,17 @@ def _mappings_shape():
     out = make_templates().env.get_template("_mappings_body.html").render(
         mappings=[m], statuses={"m1": b}, can_edit=True)
     assert "data-since" not in out and '<span class="dur">9h 59m</span>' in out, out
-    print("mappings table: connection times and counters are not part of the shape  OK")
+    # a device past its no-data alarm: the row says for how long, so that is the shape
+    alarmed = MappingConfig.from_dict({"id": "m2", "name": "B", "serial": {"port": "/dev/y"},
+                                       "options": {"no_data_alarm_s": 30}})
+    quiet = dict(a, state="running", rx_idle_s=10.0)
+    assert _row_shape(alarmed, quiet) == _row_shape(alarmed, dict(quiet, rx_idle_s=20.0))
+    assert _row_shape(alarmed, dict(quiet, rx_idle_s=31.0)) != _row_shape(alarmed, quiet)
+    assert _row_shape(alarmed, dict(quiet, rx_idle_s=31.0)) != \
+        _row_shape(alarmed, dict(quiet, rx_idle_s=33.0)), "the seconds shown"
+    assert _row_shape(m, dict(quiet, rx_idle_s=31.0)) == _row_shape(m, quiet), "no alarm: no shape"
+    print("mappings table: connection times and counters are not part of the shape, a "
+          "no-data alarm is  OK")
 
 
 def test_fleet_shape():
