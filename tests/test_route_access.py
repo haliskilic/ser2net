@@ -77,6 +77,7 @@ ROUTES = {
     ("POST", "/settings/access"): (ADMIN, FORM),
     ("POST", "/settings/sessions/revoke-all"): (ADMIN, FORM),
     ("POST", "/settings/api-token"): (ADMIN, FORM),
+    ("POST", "/settings/api-token/role"): (ADMIN, FORM),
     ("POST", "/settings/api-token/revoke"): (ADMIN, FORM),
     ("POST", "/settings/users"): (ADMIN, FORM),
     ("POST", "/settings/users/password"): (ADMIN, FORM),

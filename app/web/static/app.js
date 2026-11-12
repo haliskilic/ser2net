@@ -215,11 +215,13 @@ document.addEventListener("DOMContentLoaded", function () {
   applyShowWhen(document);
 });
 
-// 2c) <form data-confirm="question">: ask before submitting (plain forms; htmx
-//     elements use hx-confirm). Delegated, so no inline JS is needed (CSP).
+// 2c) <form data-confirm="question">, or a <button data-confirm> that submits it: ask
+//     before submitting (plain forms; htmx elements use hx-confirm). Delegated, so no
+//     inline JS is needed (CSP). The button's question is asked when it submits.
 document.addEventListener("submit", function (e) {
-  var f = e.target.closest ? e.target.closest("form[data-confirm]") : null;
-  if (f && !window.confirm(f.getAttribute("data-confirm"))) e.preventDefault();
+  var b = e.submitter, f = e.target.closest ? e.target.closest("form") : null;
+  var q = (b && b.getAttribute("data-confirm")) || (f && f.getAttribute("data-confirm"));
+  if (q && !window.confirm(q)) e.preventDefault();
 });
 
 // 3) Unsaved changes in the mapping form. The form is "dirty" once a field was changed
