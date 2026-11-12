@@ -101,7 +101,7 @@ def node_with(m=None, logs=None, **kw):
     """A node whose publisher has 'connected' (the Will is set), not yet CONNACKed."""
     client = FakeClient()
     node = SparkplugNode(m or mapping(), (logs.append if logs is not None else (lambda _m: None)),
-                         lambda point, value: None, **kw)
+                         lambda point, value, refused=None: None, **kw)
     pub = node.publisher()
     pub._client = client
     pub.connect()

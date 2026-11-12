@@ -412,11 +412,13 @@ class ModbusGatewayRunner:
             if rpdu[1] == modbus.GATEWAY_PATH_UNAVAILABLE:
                 raise NoReply("the serial port is down")
 
-    def _publish_values(self, values: dict, stamps: Optional[dict] = None) -> None:
+    def _publish_values(self, values: dict, stamps: Optional[dict] = None,
+                        force: bool = False) -> None:
         """Publish values read off the bus; ``stamps``: when each was read (ms since the
-        epoch), which Sparkplug B reports as the metric's timestamp."""
+        epoch), which Sparkplug B reports as the metric's timestamp; ``force``: Sparkplug B
+        sends them in a DDATA even if they did not change (after a DCMD)."""
         if self._sparkplug is not None:
-            self._sparkplug.update(values, stamps)
+            self._sparkplug.update(values, stamps, force=values.keys() if force else ())
         elif self._mqtt is not None:
             fmt = self.mapping.mqtt.value_format
             for name, v in values.items():
@@ -603,6 +605,7 @@ class ModbusGatewayRunner:
             pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
                    else modbus.write_multiple_registers_pdu(point.address, regs))
         rpdu = await self._transaction(point.unit, pdu, job)
+        self._check_answered(rpdu, point)  # (NoReply: the unit did not answer)
         modbus.check_write_response(rpdu, pdu)
         if job is not None:
             job.stage = "written"
@@ -615,11 +618,17 @@ class ModbusGatewayRunner:
         self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]})")
         if self._closing:  # the mapping is stopping: no read-back
             return None
+        return await self._read_back(point)
+
+    async def _read_back(self, point) -> Any:
+        """After a write: the point's value, read and published (Sparkplug B: in a DDATA
+        even if it did not change, so the host learns how the DCMD went); None if it can't
+        be read."""
         try:
             value = await self._read_point(point)
         except Exception:
             return None
-        self._publish_values({point.name: value}, {point.name: _now_ms()})
+        self._publish_values({point.name: value}, {point.name: _now_ms()}, force=True)
         return value
 
     def _write_soon(self, point, value, done=None, refused: Optional[str] = None) -> None:
@@ -685,6 +694,7 @@ class ModbusGatewayRunner:
 
     async def _run_write(self, w: _Write) -> tuple[Optional[str], Any]:
         if w.refused is not None:
+            await self._report(w.point)
             return w.refused, None
         waited = time.monotonic() - w.queued
         if waited > WRITE_EXPIRE_S:
@@ -697,7 +707,17 @@ class ModbusGatewayRunner:
         except Exception as e:
             err = str(e) or type(e).__name__
             self._log(f"write '{w.point.name}' = {shown(w.value)} failed: {err}")
+            if not isinstance(e, NoReply):
+                await self._report(w.point)
             return err, None
+
+    async def _report(self, point) -> None:
+        """Sparkplug B, a DCMD that wrote nothing (refused, or the slave's exception): the
+        point's current value in a DDATA all the same, as after a write, so the host sees
+        it was not taken. Not for a unit that did not answer (it goes offline: DDEATH)."""
+        if (self._sparkplug is not None and not self._closing
+                and point.unit != modbus.BROADCAST):
+            await self._read_back(point)
 
     def _finish(self, w: _Write, err: Optional[str], value: Any = None) -> None:
         if w.done is not None:
@@ -708,19 +728,29 @@ class ModbusGatewayRunner:
 
     def _on_set_message(self, topic: str, payload: bytes) -> None:
         """Plain MQTT: a value for one writable point on its <base_topic>/<point>/set; the
-        outcome goes to .../set/result (ok, or error: …)."""
+        outcome goes to .../set/result (ok, or error: …), at QoS 1 or the mapping's QoS. A
+        JSON request {"value": …, "id": …} gets a JSON answer {"id": …, "ok": true,
+        "value": <read back>} / {"id": …, "ok": false, "error": "…"} (see
+        parse_write_request)."""
         point = self._set_points.get(topic)
         if point is None or self._mqtt is None:
             return
         mqtt, result = self._mqtt, topic + "/result"
+        # at QoS 1 at least, as the /set subscription: paho keeps it over a reconnect
+        qos = max(self.mapping.mqtt.qos if isinstance(self.mapping.mqtt.qos, int) else 0, 1)
+        request: Optional[dict] = {} if payload[:64].lstrip()[:1] == b"{" else None
 
-        def answer(err: Optional[str], _value: Any = None) -> None:
-            mqtt.publish_raw(result, b"ok" if err is None else f"error: {err}".encode())
-        if self.mapping.network.read_only:
-            self._note("write read-only", point.unit,
-                       f"write '{point.name}' from MQTT refused: the mapping is read-only")
-            self._write_soon(point, None, answer, refused="mapping is read-only")
-            return
+        def answer(err: Optional[str], value: Any = None) -> None:
+            if request is None:  # plain text: ok, or error: …
+                out = b"ok" if err is None else f"error: {err}".encode()
+            else:  # a JSON request: its id (if it had one), and the value read back
+                reply = dict(request, ok=err is None)
+                if err is None:
+                    reply["value"] = _json_value(value)
+                else:
+                    reply["error"] = err
+                out = json.dumps(reply, separators=(",", ":")).encode()
+            mqtt.publish_raw(result, out, qos=qos)
         if len(payload) > SET_MAX_BYTES:
             too_large = f"too large: {len(payload)} bytes (at most {SET_MAX_BYTES})"
             self._note("write too large", point.unit, f"write '{point.name}' from MQTT "
@@ -728,9 +758,17 @@ class ModbusGatewayRunner:
             self._write_soon(point, None, answer, refused=too_large)
             return
         try:
-            value = parse_write_payload(payload, point)
+            if request is None:
+                value = parse_write_payload(payload, point)
+            else:
+                value = parse_write_request(payload, point, request)
         except ValueError as e:
             self._write_soon(point, None, answer, refused=str(e))
+            return
+        if self.mapping.network.read_only:
+            self._note("write read-only", point.unit,
+                       f"write '{point.name}' from MQTT refused: the mapping is read-only")
+            self._write_soon(point, None, answer, refused="mapping is read-only")
             return
         self._write_soon(point, value, answer)
 
@@ -1055,3 +1093,49 @@ def _coil(text: str) -> bool:
     if t in ("0", "false", "off"):
         return False
     raise ValueError(f"a coil takes one state: 1/0, true/false or on/off, not {shown(text)}")
+
+
+_ID_MAX_LEN = 64
+
+
+def parse_write_request(payload: bytes, point, request: dict):
+    """The value of a plain-MQTT write sent as JSON, {"value": …, "id": …}: one coil state
+    (true / false, or 1 / 0) or one JSON number; "id" (optional: a string of at most 64
+    characters or an integer) is put into ``request`` as soon as it is read, so that even
+    the answer to a request refused here carries it. Raises ValueError."""
+    def no_constant(name: str):
+        raise ValueError(f"{name} is not a number")
+    try:
+        doc = json.loads(payload.decode("utf-8"), parse_constant=no_constant)
+    except (ValueError, RecursionError):  # (UnicodeDecodeError too; and deep nesting)
+        raise ValueError(f"not a JSON request: {shown(payload)}") from None
+    if not isinstance(doc, dict):
+        raise ValueError('a JSON request is an object: {"value": …, "id": …}')
+    if "id" in doc:
+        rid = doc["id"]
+        if not ((isinstance(rid, str) and len(rid) <= _ID_MAX_LEN)
+                or (isinstance(rid, int) and not isinstance(rid, bool)
+                    and abs(rid) < 1 << 63)):
+            raise ValueError(f"the id must be a string of at most {_ID_MAX_LEN} characters "
+                             f"or an integer, not {shown(rid)}")
+        request["id"] = rid
+    unknown = sorted(str(k) for k in doc if k not in ("value", "id"))
+    if unknown:
+        raise ValueError(f"unknown key(s) in the request: {shown(', '.join(unknown))}")
+    if "value" not in doc:
+        raise ValueError('the request has no "value"')
+    value = doc["value"]
+    if point.fn == modbus.READ_COILS:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int) and value in (0, 1):
+            return value == 1
+        raise ValueError(f"a coil takes true / false or 1 / 0, not {shown(value)}")
+    return value  # write_point takes a number (and refuses anything else)
+
+
+def _json_value(value):
+    """A value read back, for a JSON answer: a NaN or infinite reading is null."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value

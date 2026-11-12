@@ -144,7 +144,16 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   writable points of the device, nulls) is logged in one line, at most once a minute. A
   rebirth asked for less than 2 s after the last births goes out once those 2 s are up. The
   broker's own limits (Mosquitto `message_size_limit`) and ACLs remain the first guard.
-  Stopping the mapping (also a save, a restart or an
+  Answers go out at QoS 1 (or the mapping's QoS if higher), as `/set` is subscribed. A
+  `/set` may also be JSON, `{"value": 25, "id": "abc"}` (the id is optional: a string of up
+  to 64 characters or an integer); its answer is JSON too, `{"id": "abc", "ok": true,
+  "value": 25}` with the value read back from the device (null if it can't be read), or
+  `{"id": "abc", "ok": false, "error": "…"}`, while a plain value keeps the plain `ok` /
+  `error: …`. A unit that doesn't answer a write gives `error: no reply from unit N within
+  T s`. Sparkplug B: after every DCMD to a writable point the point is read back and sent
+  in a DDATA, changed or not (also when the write was refused, or the slave answered with
+  an exception), so the host sees how it went; a unit that did not answer goes offline
+  instead (DDEATH). Stopping the mapping (also a save, a restart or an
   import that changes it) answers every write before the MQTT connection closes: the one
   on the bus may finish (at most 2 s; else `error: cancelled: mapping stopped (sent,
   outcome unknown)` or `(not sent)`), the ones still waiting get `error: cancelled: mapping

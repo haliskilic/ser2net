@@ -146,7 +146,16 @@ düzenlemeye gerek yok.
   yazılabilir noktası olmayan metrikler, null'lar) tek satırda, en çok dakikada bir
   loglanır. Son birth'lerden sonraki 2 sn içinde istenen bir rebirth bu süre dolunca
   gönderilir. Broker'ın kendi sınırları (Mosquitto `message_size_limit`) ve ACL'ler ilk
-  savunma olmaya devam eder. Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
+  savunma olmaya devam eder. Cevaplar, `/set` aboneliğiyle uyumlu olarak QoS 1 ile (eşlemenin
+  QoS'u daha yüksekse onunla) gider. Bir `/set` JSON da olabilir: `{"value": 25, "id":
+  "abc"}` (id isteğe bağlıdır: en çok 64 karakterlik bir metin ya da bir tamsayı); cevabı
+  da JSON olur: cihazdan geri okunan değerle `{"id": "abc", "ok": true, "value": 25}`
+  (okunamazsa null) ya da `{"id": "abc", "ok": false, "error": "…"}`. Düz bir değer yine
+  düz `ok` / `error: …` alır. Bir yazmaya yanıt vermeyen unit `error: no reply from unit N
+  within T s` verir. Sparkplug B'de yazılabilir bir noktaya gelen her DCMD'den sonra nokta
+  geri okunur ve değişmiş olsun olmasın DDATA ile gönderilir (yazma reddedildiğinde ya da
+  slave exception ile yanıt verdiğinde de); böylece host sonucu görür. Yanıt vermeyen bir
+  unit ise bunun yerine offline olur (DDEATH). Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
   içe aktarma da) MQTT bağlantısı kapanmadan önce her yazmayı cevaplar: hattaki yazma
   bitebilir (en çok 2 sn; bitmezse `error: cancelled: mapping stopped (sent, outcome
   unknown)` ya da `(not sent)`), bekleyenler `error: cancelled: mapping stopped`, bu

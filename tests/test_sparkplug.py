@@ -486,7 +486,10 @@ def edge_node(**network):
         "modbus_poll": {"points": NODE_POINTS}})
     m.validate()
     writes, logs, births = [], [], []
-    node = SparkplugNode(m, logs.append, lambda point, value: writes.append((point.name, value)))
+
+    def write(point, value, refused=None):  # (a refused one: only read back, see gateway)
+        writes.append((point.name, value) if refused is None else ("refused", point.name))
+    node = SparkplugNode(m, logs.append, write)
     node.birth = lambda: births.append(1)
 
     def command(kind, device, *metrics):
@@ -620,14 +623,16 @@ def test_rebirth_spacing():
 
 
 def test_node_read_only():
-    """On a read-only mapping a DCMD writes nothing and is logged; it is checked for each
-    command, so it follows the mapping's setting without a new session."""
+    """On a read-only mapping a DCMD writes nothing and is logged (the gateway reads the
+    point back for the host instead); it is checked for each command, so it follows the
+    mapping's setting without a new session."""
     node, command, writes, logs, _births = edge_node(read_only=True)
     command("DCMD", "unit1", Metric("pump", T.Boolean, True))
     command("DCMD", "unit2", Metric("level", T.UInt16, 3))
-    assert writes == [], writes
+    assert writes == [("refused", "pump"), ("refused", "level")], writes
     assert sum("refused: the mapping is read-only" in line for line in logs) == 2, logs
     node.mapping.network.read_only = False
+    writes.clear()
     command("DCMD", "unit1", Metric("pump", T.Boolean, True))
     assert writes == [("pump", True)], writes
     print("edge node: read-only refuses (and logs) DCMD writes, checked per command  OK")
