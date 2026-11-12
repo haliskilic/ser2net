@@ -16,7 +16,10 @@ longer:
     and never overlap; no cell's content overflows the cell;
   * the browser reports no errors (e.g. a Content-Security-Policy violation);
   * the cluster panel isn't refreshed while the tab is hidden (each refresh makes the
-    node ask every peer) and is refreshed as soon as the tab is shown again.
+    node ask every peer) and is refreshed as soon as the tab is shown again;
+  * the mapping form's Device field: "Other device path…" gives the select's name to the
+    text box (the typed path is posted as serial_port), ↻ lists the ports again and keeps
+    the typed path; the ports panel's Refresh keeps "show all ports".
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -256,6 +259,36 @@ def main():
                     page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
                     page.wait_for_selector("#backups h3")
                     check(f"{lang} restore preview @{w}")
+
+            # the Device field: a typed path, ↻; the ports panel's Refresh keeps "show all"
+            page.set_viewport_size({"width": 1280, "height": 900})
+            page.goto(f"{base}/lang/en?next=/")
+            dashboard()
+            open_view("Edit")
+            pick = page.locator("#serial_port-pick")
+            pick.locator("select").select_option(label="Other device path…")
+            typed = pick.locator("[data-port-typed]")
+            if not typed.is_visible() or typed.get_attribute("name") != "serial_port" \
+                    or pick.locator("select").get_attribute("name") is not None:
+                problems.append("Other device path: the text box did not take the field's name")
+            typed.fill("/dev/ttymxc7")
+            with page.expect_request(lambda r: "/api/ports/select" in r.url) as rescan:
+                pick.locator("[data-port-rescan]").click()
+            if "selected=%2Fdev%2Fttymxc7" not in rescan.value.url:
+                problems.append(f"↻ did not send the typed path: {rescan.value.url}")
+            page.wait_for_function("() => { const s = document.querySelector("
+                                   "'#serial_port-pick select'); return s && s.value === "
+                                   "'/dev/ttymxc7' && s.name === 'serial_port'; }")
+            check("en device field after ↻ @1280")
+            dashboard()
+            page.evaluate("document.getElementById('ports-table')"
+                          ".setAttribute('data-show-all', '1')")
+            with page.expect_request(lambda r: "/api/ports/table" in r.url) as table:
+                page.get_by_role("button", name="↻ Refresh").click()
+            if "all=1" not in table.value.url:
+                problems.append(f"Refresh dropped 'show all ports': {table.value.url}")
+            print("device field: a typed path is posted as serial_port, ↻ keeps it; Refresh "
+                  "keeps 'show all'")
 
             # the cluster panel polls every 5 s: not from a hidden tab, and at once when
             # the tab is shown again
