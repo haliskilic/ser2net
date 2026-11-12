@@ -31,7 +31,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, console, datalock, i18n, logsetup, standalone
+from . import accounts, console, datalock, i18n, logsetup, sdnotify, standalone, watchdog
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
@@ -115,6 +115,14 @@ def _access_hint(path: str, data_dir: str | None) -> str:
 # sets the event and calls the hook a running _serve() registered.
 _shutdown_requested = threading.Event()
 _shutdown_hooks: list = []
+# Called once the server is ready (when_ready): the Windows service reports RUNNING then.
+_ready_hooks: list[Callable[[], None]] = []
+
+
+def when_ready(hook: Callable[[], None]) -> None:
+    """Call ``hook()`` once the server has started: its mappings were started and its admin
+    UI listens (from the event loop's thread; not at all when the start fails)."""
+    _ready_hooks.append(hook)
 
 
 def request_shutdown() -> None:
@@ -383,6 +391,11 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
     _log_thread_errors(state.log)
+    # a stuck event loop ends the process (to be started again): app/watchdog.py
+    if hang := watchdog.previous_hang(state.data_dir):
+        state.log(hang)
+        state.previous_hang = hang
+    dog = state.loop_watchdog = watchdog.start(state.data_dir, state.log)
     # uvicorn's warnings and errors (a port it can't use, a TLS error, the traceback of a
     # request that failed) and other libraries' go to all.log (logsetup.LibraryLogHandler)
     logsetup.route_library_logs(logging.getLogger("ser2net"))
@@ -440,6 +453,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
 
     loop = asyncio.get_running_loop()
     serve_task = asyncio.create_task(server.serve())
+    ready_task = asyncio.create_task(_when_started(server, serve_task, state), name="ready")
 
     def _request_shutdown() -> None:
         server.should_exit = True
@@ -463,8 +477,38 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         with contextlib.suppress(Exception):
             await serve_task
     finally:
+        sdnotify.stopping()
+        ready_task.cancel()
         _shutdown_hooks.remove(_from_other_thread)
         guard.close()
         state.log("shutting down — stopping all mappings")
         await state.stop_engine()
+        await dog.stop()
     return 0
+
+
+async def _when_started(server, serve_task: asyncio.Task, state: AppState) -> None:
+    """Once uvicorn listens (server.started): _announce_ready. Not when it stops first."""
+    while not server.started:
+        if serve_task.done():
+            return
+        await asyncio.sleep(0.05)
+    _announce_ready(state)
+
+
+def _announce_ready(state: AppState) -> None:
+    """The server has started (its mappings were started, its admin UI listens): tell
+    systemd (READY=1, under the optional Type=notify unit) and the when_ready hooks (the
+    Windows service reports RUNNING only now, so --install-service sees a start that
+    fails)."""
+    statuses = state.supervisor.all_status()
+    running = sum(1 for st in statuses.values() if st.get("state") == "running")
+    admin = state.config.admin_ui
+    sdnotify.ready(f"{running} of {len(state.config.mappings)} mapping(s) running, admin UI "
+                   f"on {admin.bind_ip}:{admin.port}")
+    hooks, _ready_hooks[:] = list(_ready_hooks), []
+    for hook in hooks:
+        try:
+            hook()
+        except Exception as e:  # (the server runs on; only the report is lost)
+            state.log(f"WARNING: could not report that ser2net is ready: {e}")

@@ -648,7 +648,10 @@ is no account at all; later starts ignore it.
   `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
-  **Do not run as root.**
+  **Do not run as root.** Optional: the drop-in `systemd/ser2net.service.d/notify.conf`
+  (`Type=notify`, `WatchdogSec=120`) makes systemd count ser2net as started only once its
+  mappings run and its UI listens, and restart it when its event loop stops answering
+  (remove it before going back to a version before 2.9.0, which never reports ready).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -668,6 +671,19 @@ is no account at all; later starts ignore it.
   window can be closed or signed out of. A click into a console window (QuickEdit) pauses
   its output until Esc or Enter; ser2net keeps forwarding meanwhile, only the console's
   lines wait (and past a limit are dropped and counted; `all.log` has them all).
+- **A stuck event loop is restarted.** All mappings and the web UI run on one event loop.
+  When a call blocks it, ser2net writes every thread's stack to `hang.log` in the data
+  directory and exits (code 70) after 90 s, so the restart policy (Docker, systemd, the
+  Windows service) starts it again; the next start keeps the file as `hang.log.1` and says
+  so in `all.log`. `SER2NET_LOOP_WATCHDOG=<seconds>` changes the limit, `0` switches it
+  off. 90 s is far above what a busy instance needs to get back to its loop (about a
+  second), and a machine that slept or a container that was paused is not counted.
+  `/metrics` has the loop's lag (`ser2net_event_loop_lag_seconds`). `/healthz` answers
+  `ok` while the loop runs and is only a liveness check: Docker marks a container that
+  stops answering *unhealthy* but restarts nothing for it; under Kubernetes use it as a
+  liveness probe with room for a busy moment, e.g.
+  `livenessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 30,
+  timeoutSeconds: 5, failureThreshold: 4}` (add `scheme: HTTPS` with TLS).
 - **Many mappings:** a running mapping keeps about three files open (its serial port, its
   listener and its log), plus one per connected client. At start ser2net raises its soft
   open-file limit toward the hard limit (at most 65536) and logs the result (`open files:

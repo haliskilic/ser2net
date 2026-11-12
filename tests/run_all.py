@@ -116,6 +116,7 @@ PORTABLE = [
     "test_metrics.py",         # /metrics: HELP/TYPE, states, 401 for scrapers, quiet scrapes
     "test_console_log.py",     # the console copy of the log is written off the event loop
     "test_error_logs.py",      # library warnings, 500s, reset at the banner, all.log rotation blocked
+    "test_liveness.py",        # event loop watchdog, hang.log, sd_notify, readiness hooks
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

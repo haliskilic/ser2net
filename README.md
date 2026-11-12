@@ -668,7 +668,11 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   container için: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
-  **root ile çalıştırmayın.**
+  **root ile çalıştırmayın.** İsteğe bağlı: `systemd/ser2net.service.d/notify.conf`
+  drop-in'i (`Type=notify`, `WatchdogSec=120`) systemd'nin ser2net'i ancak eşlemeleri
+  çalışıp arayüzü dinlemeye başladığında başlamış saymasını ve event loop'u yanıt vermeyi
+  bırakınca yeniden başlatmasını sağlar (2.9.0'dan eski bir sürüme dönmeden önce kaldırın:
+  eski sürümler hazır olduğunu bildirmez).
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -690,6 +694,19 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   Esc ya da Enter'a basılana kadar duraklatır; ser2net bu sırada iletmeye devam eder,
   yalnızca konsol satırları bekler (bir sınırdan sonra düşürülür ve sayılır; `all.log`
   hepsini tutar).
+- **Takılan event loop yeniden başlatılır.** Tüm eşlemeler ve web arayüzü tek bir event
+  loop'ta çalışır. Bir çağrı onu bloklarsa ser2net 90 sn sonra her thread'in yığınını veri
+  klasöründeki `hang.log`'a yazar ve çıkar (kod 70); yeniden başlatma politikası (Docker,
+  systemd, Windows servisi) onu yeniden başlatır, sonraki açılış dosyayı `hang.log.1`
+  olarak saklar ve `all.log`'a yazar. Süreyi `SER2NET_LOOP_WATCHDOG=<saniye>` değiştirir,
+  `0` kapatır. 90 sn, meşgul bir örneğin loop'una dönmesi için gerekenin (yaklaşık bir
+  saniye) çok üstündedir; uykuya geçen bir makine ya da duraklatılan bir container
+  sayılmaz. `/metrics` loop gecikmesini verir (`ser2net_event_loop_lag_seconds`).
+  `/healthz` loop çalıştığı sürece `ok` yanıtı verir ve yalnızca bir canlılık kontrolüdür:
+  Docker yanıt vermeyen bir container'ı *unhealthy* olarak işaretler ama bunun için hiçbir
+  şeyi yeniden başlatmaz; Kubernetes'te meşgul bir ana pay bırakan bir liveness probe
+  olarak kullanın, ör. `livenessProbe: {httpGet: {path: /healthz, port: 8080},
+  periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 4}` (TLS ile `scheme: HTTPS`).
 - **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
   dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
   açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar

@@ -118,6 +118,10 @@ METRIC_INFO = {
     "ser2net_up": ("gauge", "1 while ser2net answers"),
     "ser2net_build_info": ("gauge", "The version that runs (labels), always 1"),
     "ser2net_start_time_seconds": ("gauge", "When this ser2net process started (Unix time)"),
+    "ser2net_event_loop_lag_seconds": ("gauge", "How late the event loop's last heartbeat "
+                                                "was (a loop that is held up)"),
+    "ser2net_event_loop_stalls_total": ("counter", "Heartbeats of the event loop 2 s or more "
+                                                   "late"),
     "ser2net_mappings_total": ("gauge", "Mappings configured"),
     "ser2net_open_fds": ("gauge", "Files the process has open (POSIX)"),
     "ser2net_fd_limit": ("gauge", "The process's open-file limit (POSIX)"),
@@ -161,7 +165,7 @@ MAPPING_STATES = ("running", "reconnecting", "device-missing", "error", "stopped
 
 
 def process_metrics(state) -> list[str]:
-    """The version that runs and when it started."""
+    """The version that runs, when it started and how its event loop keeps up."""
     labels = (f'version="{_metric_label(__version__)}",'
               f'python="{_metric_label(platform.python_version())}",'
               f'platform="{_metric_label(sys.platform)}"')
@@ -169,6 +173,10 @@ def process_metrics(state) -> list[str]:
     started = getattr(state, "started_at", None)
     if started is not None:
         lines.append(f"ser2net_start_time_seconds {started:.3f}")
+    dog = getattr(state, "loop_watchdog", None)  # (app/watchdog.py)
+    if dog is not None:
+        lines.append(f"ser2net_event_loop_lag_seconds {dog.lag:.3f}")
+        lines.append(f"ser2net_event_loop_stalls_total {dog.slow_beats}")
     return lines
 
 
