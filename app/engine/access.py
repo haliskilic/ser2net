@@ -2,7 +2,8 @@
 (bridge.MappingRunner) and the Modbus gateway (modbus_gateway.ModbusGatewayRunner).
 
 - ``allowed_client_ips``: blank admits every source, otherwise only the listed IPs/CIDRs
-  (an IPv4-mapped IPv6 peer counts as its IPv4 address);
+  (an IPv4-mapped IPv6 peer counts as its IPv4 address, an IPv4-mapped entry as the IPv4
+  addresses it maps, and a bare 0.0.0.0 or :: as every source, IPv4 and IPv6);
 - at ``max_connections`` a source in ``priority_client_ips`` always gets in by kicking a
   client (the oldest non-priority one, else the oldest); any other source gets in only
   with ``kick_old_user``, by kicking the oldest non-priority client: it never takes a
@@ -24,7 +25,7 @@ import ipaddress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Collection, Iterable, Optional, Protocol, Union
 
-from ..config import normalize_cidr
+from ..config import canonical_ip, normalize_cidr
 
 if TYPE_CHECKING:
     import ssl
@@ -46,12 +47,32 @@ class Client(Protocol):
     def kick(self, reason: str = ...) -> None: ...
 
 
+# a bare wildcard in an IP/CIDR list: every client, of either family
+_ANY: tuple[Network, ...] = (ipaddress.IPv4Network("0.0.0.0/0"), ipaddress.IPv6Network("::/0"))
+_MAPPED = ipaddress.IPv6Network("::ffff:0:0/96")
+
+
+def _unmapped(net: Network) -> Network:
+    """An IPv4-mapped IPv6 network (::ffff:10.0.0.0/120) as the IPv4 network it maps
+    (10.0.0.0/24): a client's IPv4-mapped address is compared as its IPv4 address."""
+    if isinstance(net, ipaddress.IPv6Network) and net.prefixlen >= 96 and net.subnet_of(_MAPPED):
+        return ipaddress.IPv4Network((int(net.network_address) & 0xFFFFFFFF, net.prefixlen - 96))
+    return net
+
+
 def parse_nets(cidrs: Iterable[str]) -> list[Network]:
-    """The networks of an IP/CIDR list; an unparsable entry is skipped (validated elsewhere)."""
-    nets = []
+    """The networks of an IP/CIDR list. A bare wildcard address (0.0.0.0, ::) stands for
+    every client, IPv4 and IPv6 alike (0.0.0.0/0 and ::/0 are each one family); an
+    IPv4-mapped entry for the IPv4 addresses it maps. An unparsable entry is skipped
+    (validated elsewhere)."""
+    nets: list[Network] = []
     for c in cidrs:
+        with contextlib.suppress(ValueError, TypeError):
+            if "/" not in c and ipaddress.ip_address(canonical_ip(c.strip())).is_unspecified:
+                nets += _ANY
+                continue
         with contextlib.suppress(ValueError):
-            nets.append(ipaddress.ip_network(normalize_cidr(c), strict=False))
+            nets.append(_unmapped(ipaddress.ip_network(normalize_cidr(c), strict=False)))
     return nets
 
 

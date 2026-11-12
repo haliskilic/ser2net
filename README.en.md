@@ -458,7 +458,9 @@ The UI is **password-protected by default** and binds to **127.0.0.1** by defaul
 Exposing it to the network requires an explicit IP choice at startup and warns when
 bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mapping
 `allowed_client_ips`. Raw TCP is plaintext — be careful on untrusted networks. A bare
-`0.0.0.0`/`::` in an allow/priority list means "any client". A mapping's serial port is a
+`0.0.0.0`/`::` in an allow/priority list means "any client", IPv4 and IPv6 alike;
+`0.0.0.0/0` is every IPv4 client and `::/0` every IPv6 one. An IPv4-mapped entry
+(`::ffff:192.168.1.0/120`) matches the IPv4 addresses it maps. A mapping's serial port is a
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
 
