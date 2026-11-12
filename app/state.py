@@ -48,6 +48,7 @@ LOG_TRIM_TO = 0.9                      # ... cut to 90% of it then, so the next 
 LOG_MAX_AGE_DAYS = 15                  # drop entries older than 15 days ...
 LOG_VIEW_LINES = 1000                  # ... but never one of the last lines the Log panel shows
 LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at startup)
+CONFIG_CHECK_S = 5.0                   # how often config.json is looked at for outside edits
 # Global log rotation (all.log via RetainingFileHandler; audit.log rotated manually).
 ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
 ALL_LOG_BACKUPS = 5                    # keep 5 rotations (~60 MB total worst case)
@@ -582,6 +583,8 @@ class AppState:
         self.config = config
         self.data_dir = os.path.dirname(os.path.abspath(store.path))
         store.log = self.log  # a backup that fails, a clock behind the backups
+        store.on_replaced = self._outside_edit_replaced  # (a save replaced a hand edit)
+        self._outside_edit: tuple[float, float] | None = None  # (checked at, noted mtime)
         # all.log lives next to config.json; per-mapping logs live in data/logs/
         self.log_path = os.path.join(self.data_dir, "all.log")
         self.logs_dir = os.path.join(self.data_dir, "logs")
@@ -1162,12 +1165,42 @@ class AppState:
         with _suppress(OSError):
             os.remove(self.setup_code_path)
 
+    # ---------------- config.json changed outside ser2net ----------------
+    def _outside_edit_replaced(self, info: dict) -> None:
+        """ConfigStore.on_replaced (in the thread that saves): the audit record."""
+        self.audit("local", "config_outside_edit_replaced",
+                   f"kept as backups/{info['backup']}" if info["backup"] else "no backup")
+
+    async def check_config_file(self, now: float | None = None) -> None:
+        """Say once (all.log) when config.json was changed outside ser2net and is not in
+        use: it takes a reload, or the next save replaces it. Looked at every
+        CONFIG_CHECK_S."""
+        now = time.monotonic() if now is None else now
+        checked, noted = self._outside_edit or (0.0, -1.0)
+        if now - checked < CONFIG_CHECK_S:
+            return
+        changed = await asyncio.to_thread(self.store.changed_on_disk)
+        if changed is None or changed == noted:
+            self._outside_edit = (now, noted if changed is not None else -1.0)
+            return
+        self._outside_edit = (now, changed)
+        if changed == 0.0:
+            self.log("WARNING: config.json is gone from the data directory; ser2net goes on "
+                     "with the configuration in use and writes it again at the next change")
+            return
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(changed))
+        self.log(f"WARNING: config.json was changed outside ser2net ({when}) and is not in "
+                 "use: reload it (systemctl reload ser2net, kill -HUP, ser2net --reload or "
+                 "Settings → Configuration backups). A change saved here before that "
+                 "replaces it (the edited file is then kept in backups/)")
+
     # ---------------- `ser2net --set-password` / `--sign-out-all` while running ----------------
     async def _account_requests_loop(self) -> None:
         while True:
             await asyncio.sleep(accounts.POLL_S)
             try:
                 await self.handle_account_requests()
+                await self.check_config_file()
             except Exception as e:  # never let a bad request end the loop
                 self.log(f"command-line request failed: {e}")
 

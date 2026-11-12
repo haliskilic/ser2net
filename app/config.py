@@ -2151,6 +2151,20 @@ def now() -> float:
     return time.time()
 
 
+class _Seen(typing.NamedTuple):
+    """config.json as a store last read or wrote it."""
+    key: Optional[tuple[int, int]]   # (mtime_ns, size); None: unknown
+    digest: str                      # sha256 of its text
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _stat_key(st: os.stat_result) -> tuple[int, int]:
+    return st.st_mtime_ns, st.st_size
+
+
 class ConfigStore:
     """config.json with atomic writes, plus automatic backups.
 
@@ -2164,7 +2178,14 @@ class ConfigStore:
     the backups of real changes out. A new name always sorts first, also when the clock
     went back (it then takes the newest name's time, with the next number). Backups are
     never read back on their own: deleting config.json still resets the system; restoring
-    one is an explicit admin action."""
+    one is an explicit admin action.
+
+    The store remembers what config.json held when it last read or wrote it. A save that
+    finds something else there replaces an edit made outside ser2net (by hand, a tool)
+    that was not reloaded: the save goes ahead (sign-ins, starts and stops must not fail
+    for it), the edited file is kept in backups/ first as any replaced version is, and
+    the replacement is reported (replaced_edit, a WARNING via log, on_replaced).
+    changed_on_disk() tells of such an edit before a save does."""
 
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
@@ -2178,6 +2199,12 @@ class ConfigStore:
         # sets its log; a save itself never fails because of a backup)
         self.log: Any = lambda _msg: None
         self._clock_noted = False
+        self._seen: Optional[_Seen] = None
+        # the last edit made outside ser2net that a save replaced: {"edited": its mtime,
+        # "saved": when, "backup": the backup's name ("" when none could be written)};
+        # on_replaced(that) is called too (AppState: an audit record)
+        self.replaced_edit: Optional[dict] = None
+        self.on_replaced: Any = None
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)
@@ -2185,9 +2212,48 @@ class ConfigStore:
     def load(self) -> AppConfig:
         if not self.exists():
             return AppConfig()
+        text, seen = self.read_current()
+        config = AppConfig.from_dict(json.loads(text))
+        self.note_read(seen)
+        return config
+
+    def read_current(self) -> tuple[str, _Seen]:
+        """config.json's text, and what note_read() remembers of it once it is used."""
         with open(self.path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return AppConfig.from_dict(data)
+            st = os.fstat(fh.fileno())
+            text = fh.read()
+        return text, _Seen(_stat_key(st), _digest(text))
+
+    def note_read(self, seen: _Seen) -> None:
+        """The configuration in use is the one read_current() gave (a load, a reload)."""
+        self._seen = seen
+
+    def changed_on_disk(self) -> Optional[float]:
+        """When config.json holds something other than what this store last read or wrote
+        (an edit made outside ser2net, which is not in use until it is reloaded): when it
+        was changed (its mtime; 0.0 when the file is gone). Else None. Blocking: a stat, and
+        a read only when the stat differs from what was seen."""
+        seen = self._seen
+        if seen is None:
+            return None
+        try:
+            st = os.stat(self.path)
+        except FileNotFoundError:
+            return 0.0
+        except OSError:
+            return None
+        if _stat_key(st) == seen.key:
+            return None
+        try:
+            text, now_seen = self.read_current()
+        except FileNotFoundError:
+            return 0.0
+        except (OSError, ValueError):
+            return st.st_mtime
+        if now_seen.digest == seen.digest:  # only touched
+            self._seen = now_seen
+            return None
+        return st.st_mtime
 
     def matches(self, config: AppConfig) -> bool:
         """True when config.json already holds exactly this configuration, so saving it
@@ -2223,20 +2289,24 @@ class ConfigStore:
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
         try:
-            with open(self.path, "r", encoding="utf-8") as fh:
-                current: Optional[str] = fh.read()
+            current, current_seen = self.read_current()
         except OSError:
-            current = None  # first save: nothing to keep
+            current, current_seen = None, None  # first save: nothing to keep
         if current == data:  # config.json holds this already: nothing to write
             config.tolerated = still_accepted
             self._add_backup(data)  # (newest already, unless backups/ was emptied)
+            self._seen = current_seen
             return True
-        kept, replaces = True, None
+        # an edit made outside ser2net, which this save replaces (kept, and reported)
+        outside = (current_seen is not None and self._seen is not None
+                   and current_seen.digest != self._seen.digest)
+        kept, replaces, kept_as = True, None, ""
         if current is not None:
             if not backup and (newest := self._newest()) is not None and newest[1] == current:
                 replaces = newest[0]  # the newest backup is the file replaced: it goes
             else:
-                kept = self._add_backup(current)
+                kept_as = self._add_backup(current)
+                kept = bool(kept_as)
 
         fd, tmp = tempfile.mkstemp(dir=directory, prefix=".cfg.", suffix=".tmp")
         try:
@@ -2244,17 +2314,35 @@ class ConfigStore:
                 fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
+                written = _stat_key(os.fstat(fh.fileno()))
             os.replace(tmp, self.path)
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+        self._seen = _Seen(written, _digest(data))
         # written: only now does a part this save fixed stop being accepted while broken
         config.tolerated = still_accepted
         _fsync_dir(directory)
         if self._add_backup(data, prune=replaces is None) and replaces is not None:
             with contextlib.suppress(OSError):
                 os.remove(os.path.join(self.backup_dir, replaces))
+        if outside and current_seen is not None:
+            self._replaced(current_seen, kept_as)
         return kept
+
+    def _replaced(self, edited: _Seen, backup: str) -> None:
+        """Report that a save replaced an edit made outside ser2net (see the class doc)."""
+        mtime = edited.key[0] / 1e9 if edited.key else 0.0
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)) if mtime else "?"
+        self.replaced_edit = {"edited": mtime, "saved": time.time(), "backup": backup}
+        where = (os.path.join("backups", backup) if backup
+                 else "nowhere: its backup could not be written (see above)")
+        self.log(f"WARNING: config.json had been changed outside ser2net ({when}) and was not "
+                 "reloaded; this save replaced it with the configuration in use. The edited "
+                 f"file is kept as {where}: restore it under Settings → Configuration backups, "
+                 "or edit config.json again and reload it")
+        if self.on_replaced is not None:
+            self.on_replaced(self.replaced_edit)
 
     # ----- backups -----
     def _newest(self) -> Optional[tuple[str, str]]:
@@ -2267,17 +2355,17 @@ class ConfigStore:
                 return None
         return None
 
-    def _add_backup(self, current: str, *, prune: bool = True) -> bool:
+    def _add_backup(self, current: str, *, prune: bool = True) -> str:
         """Make `current` (a config.json's text) the newest backup, unless it is that
-        already; True when it is now. Best effort: a failing backup is logged, and never
-        stops the save itself. The name sorts first: when the clock is behind the newest
-        backup, the new one takes that one's time with the next number."""
+        already; its name when it is now, "" when not. Best effort: a failing backup is
+        logged, and never stops the save itself. The name sorts first: when the clock is
+        behind the newest backup, the new one takes that one's time with the next number."""
         try:
             os.makedirs(self.backup_dir, exist_ok=True)
             lock_down_dir(self.backup_dir)
             newest = self._newest()
             if newest is not None and newest[1] == current:
-                return True  # this version is already the newest backup
+                return newest[0]  # this version is already the newest backup
             clock = time.strftime("%Y%m%dT%H%M%S", time.gmtime(now()))
             stamp = clock
             if newest is not None and (top := _backup_order(newest[0])[0]) > clock:
@@ -2304,11 +2392,11 @@ class ConfigStore:
                 if old != name:  # (it sorts first; never the one just written)
                     with contextlib.suppress(OSError):
                         os.remove(os.path.join(self.backup_dir, old))
-            return True
+            return name
         except OSError as e:
             self.log(f"WARNING: could not keep a backup of config.json in {self.backup_dir}: "
                      f"{e}")
-            return False
+            return ""
 
     def prune_backups(self, max_age_s: float, now: float) -> list[str]:
         """Delete the backups named for a time more than max_age_s before `now` (UTC, as
