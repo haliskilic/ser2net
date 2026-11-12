@@ -135,7 +135,11 @@ def test_dashboard_and_api():
         b = Browser(srv.base)
         b.login("admin", PW)
         st, _, body = b.get("/api/status")
-        assert st == 200 and en_text in html.unescape(body.replace("<wbr>", "")), body[:2000]
+        shown = html.unescape(body.replace("<wbr>", ""))
+        assert st == 200 and en_text in shown, body[:2000]
+        # in place of the general sentence for a refused bind (wrong on Windows), once
+        assert "No permission to listen on this port" not in shown, body[:2000]
+        assert shown.count(en_text) == 1, body[:2000]
         b.get("/lang/tr?next=/")
         st, _, body = b.get("/api/status")
         assert st == 200 and tr_text in html.unescape(body.replace("<wbr>", "")), body[:2000]
