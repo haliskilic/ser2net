@@ -6,6 +6,8 @@ Portable part (any OS):
   * service names are validated; on Linux the options refuse with a hint (no files);
   * runtime.request_shutdown() — what the service's stop request calls, from another
     thread — stops a running server cleanly;
+  * the service is RUNNING only once the server is ready (START_PENDING with growing
+    checkpoints until then), so --install-service reports a start that fails;
   * the service's stderr goes to service.log, and a service that stops on an error says
     why in all.log and the Application event log (the entry itself on Windows only).
 Windows part (SER2NET_SERVICE_TESTS=1, as Administrator; CI runs it): install a
@@ -364,7 +366,8 @@ def fake_windows(scm, previous_cmd, calls):
     saved = {n: getattr(w, n) for n in (
         "_advapi", "_win", "_query_registration", "_stop_and_wait", "_wait_lock_free",
         "_mkdir_admin_only", "_harden", "_require_protected", "_check_adoptable",
-        "_exposed_ancestors", "_service_extras", "_wait_state", "_unsafe_locations")}
+        "_exposed_ancestors", "_service_extras", "_wait_state", "_wait_started",
+        "_unsafe_locations")}
 
     def stop(api, svc, name, log):
         calls.append(("stop",))
@@ -387,6 +390,8 @@ def fake_windows(scm, previous_cmd, calls):
     w._service_extras = lambda *a: None
     w._wait_state = lambda api, svc, want, timeout=30.0: (
         w.SERVICE_RUNNING if scm.running else w.SERVICE_STOPPED)
+    w._wait_started = lambda api, svc, timeout=30.0: (
+        (w.SERVICE_RUNNING, 0) if scm.running else (w.SERVICE_STOPPED, 3))
     w._unsafe_locations = lambda paths, log: []
 
     def undo():
@@ -468,6 +473,7 @@ def test_install_flow_with_a_fake_scm():
         except w.ServiceError as e:
             msg = str(e)
             assert "\n" not in msg and "did not reach RUNNING" in msg, msg
+            assert "stopped while starting (exit code 3)" in msg and "service.log" in msg, msg
             assert "previous version is running again" in msg, msg
         else:
             raise AssertionError("a start failure was not reported")
@@ -526,6 +532,85 @@ def test_install_flow_with_a_fake_scm():
         for k, v in env_saved.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         shutil.rmtree(work, ignore_errors=True)
+
+
+def test_run_reports_running_when_ready():
+    """run() against a stand-in dispatcher (any OS): START_PENDING, its checkpoint counted
+    up while the server starts, RUNNING only once the server is ready (when_ready), then
+    STOPPED with the exit code; a start that fails never reports RUNNING; without the
+    readiness hook RUNNING comes first, as before."""
+    import ctypes
+
+    class Status(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint32) for n in (
+            "dwServiceType", "dwCurrentState", "dwControlsAccepted", "dwWin32ExitCode",
+            "dwServiceSpecificExitCode", "dwCheckPoint", "dwWaitHint")]
+
+    class Times(type):
+        def __mul__(cls, n):
+            return lambda *entries: list(entries)
+
+    class Entry(metaclass=Times):
+        def __init__(self, name, fn=None):
+            self.name, self.fn = name, fn
+
+    reports = []
+
+    class Dll:
+        def RegisterServiceCtrlHandlerExW(self, name, handler, ctx):  # noqa: N802
+            return 7
+
+        def SetServiceStatus(self, h, ref):  # noqa: N802
+            st = ref._obj
+            reports.append((st.dwCurrentState, st.dwCheckPoint, st.dwServiceSpecificExitCode))
+            return 1
+
+        def StartServiceCtrlDispatcherW(self, table):  # noqa: N802
+            table[0].fn(0, None)
+            return 1
+
+    api = SimpleNamespace(dll=Dll(), SERVICE_STATUS=Status, SERVICE_TABLE_ENTRYW=Entry,
+                          handler_fn=lambda f: f, main_fn=lambda f=None: f)
+    w = winservice
+    saved = w._advapi, w.START_PROGRESS_S
+    w._advapi, w.START_PROGRESS_S = (lambda: api), 0.1
+    try:
+        hooks = []
+
+        def main_ready():
+            time.sleep(0.35)       # starting: the mappings, the admin UI
+            hooks.pop()()          # ready (runtime._announce_ready calls it)
+            time.sleep(0.05)
+            return 0
+        assert w.run("ser2net", main_ready, lambda: None, on_ready=hooks.append) == 0
+        states = [r[0] for r in reports]
+        first_running = states.index(w.SERVICE_RUNNING)
+        assert states[:first_running] == [w.SERVICE_START_PENDING] * first_running, states
+        assert first_running >= 3, f"START_PENDING reported again while starting: {states}"
+        checkpoints = [r[1] for r in reports[:first_running]]
+        assert checkpoints == sorted(set(checkpoints)), checkpoints
+        assert states[first_running:] == [w.SERVICE_RUNNING, w.SERVICE_STOPPED], states
+        assert reports[-1][2] == 0
+
+        reports.clear()
+
+        def main_fails():
+            time.sleep(0.15)
+            raise SystemExit(3)    # e.g. the admin UI's port is in use
+        assert w.run("ser2net", main_fails, lambda: None, on_ready=hooks.append) == 3
+        states = [r[0] for r in reports]
+        assert w.SERVICE_RUNNING not in states and states[-1] == w.SERVICE_STOPPED, states
+        assert reports[-1][2] == 3
+        hooks.clear()
+
+        reports.clear()
+        assert w.run("ser2net", lambda: 0, lambda: None) == 0
+        assert [r[0] for r in reports] == [w.SERVICE_START_PENDING, w.SERVICE_RUNNING,
+                                           w.SERVICE_STOPPED], reports
+    finally:
+        w._advapi, w.START_PROGRESS_S = saved
+    print("service status: START_PENDING (checkpoints counted up) until ready, then RUNNING; "
+          "a failed start never RUNNING, its exit code reported  OK")
 
 
 def test_cli_leaves_the_choice_to_install():
@@ -837,6 +922,7 @@ def main():
     test_upgrade_paths()
     test_install_locations()
     test_install_flow_with_a_fake_scm()
+    test_run_reports_running_when_ready()
     test_cli_leaves_the_choice_to_install()
     test_not_windows()
     test_request_shutdown()

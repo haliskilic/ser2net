@@ -250,7 +250,8 @@ def main(argv: list[str] | None = None) -> int:
                               lambda: runtime.service_main(config_path, args.service_name),
                               runtime.request_shutdown,
                               log_path=os.path.join(os.path.dirname(os.path.abspath(config_path)),
-                                                    winservice.SERVICE_LOG))
+                                                    winservice.SERVICE_LOG),
+                              on_ready=runtime.when_ready)
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
 
 
