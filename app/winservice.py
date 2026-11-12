@@ -1198,13 +1198,15 @@ def uninstall(name: str, log: Callable[[str], None] = print) -> None:
         os.rmdir(install_dir())  # only when no other service's copy is left in it
 
 
-def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
+def run(name: str, main: Callable[[], int], stop: Callable[[], None],
+        log_path: Optional[str] = None) -> int:
     """For --service: hand the process to the SCM dispatcher (blocks until the service
     has stopped). ``main`` runs the server in the service thread; ``stop`` is called
-    (from the SCM's thread) on a stop or shutdown request."""
+    (from the SCM's thread) on a stop or shutdown request. ``log_path``: where stderr goes
+    (service_log)."""
     api = _advapi()
     name = check_name(name)
-    redirect_missing_stdio()
+    redirect_missing_stdio(log_path)
     result = {"code": 0}
     handle = {"h": None}
     status = api.SERVICE_STATUS(SERVICE_WIN32_OWN_PROCESS, SERVICE_START_PENDING, 0, 0, 0, 0, 0)
@@ -1257,8 +1259,112 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
     return result["code"]
 
 
-def redirect_missing_stdio() -> None:
-    """A service has no console: print() / logging to a missing stdout must not fail."""
+def redirect_missing_stdio(log_path: Optional[str] = None) -> None:
+    """A service has no console: print() / logging to a missing stdout must not fail.
+    With ``log_path`` a missing stderr goes there (service_log) instead of nowhere."""
+    if log_path is not None and sys.stderr is None:
+        log = service_log(log_path)
+        if log is not None:
+            sys.stderr = log
     for stream in ("stdout", "stderr"):
         if getattr(sys, stream) is None:
             setattr(sys, stream, open(os.devnull, "w", encoding="utf-8"))
+
+
+EVENTLOG_ERROR_TYPE = 0x0001
+EVENT_START_FAILED = 1  # the event id of "the service stopped: <why>"
+
+
+def report_event(source: str, text: str) -> bool:
+    """An error entry in the Windows Application event log, from ``source`` (the service
+    name), where an administrator looks first. The source is not registered: Event
+    Viewer says it has no description for event 1 and shows ``text`` below that. Best
+    effort, never raises; False when it couldn't be written (or not on Windows)."""
+    if os.name != "nt":
+        return False
+    try:
+        from ctypes import wintypes as w
+        dll = _win.WinDLL("advapi32", use_last_error=True)
+        dll.RegisterEventSourceW.restype = w.HANDLE
+        dll.RegisterEventSourceW.argtypes = [w.LPCWSTR, w.LPCWSTR]
+        dll.ReportEventW.restype = w.BOOL
+        dll.ReportEventW.argtypes = [w.HANDLE, w.WORD, w.WORD, w.DWORD, ctypes.c_void_p,
+                                     w.WORD, w.DWORD, ctypes.POINTER(w.LPCWSTR),
+                                     ctypes.c_void_p]
+        dll.DeregisterEventSource.argtypes = [w.HANDLE]
+        handle = dll.RegisterEventSourceW(None, source)
+        if not handle:
+            return False
+        try:
+            strings = (w.LPCWSTR * 1)(text[:31000])  # (an entry holds at most 31839)
+            return bool(dll.ReportEventW(handle, EVENTLOG_ERROR_TYPE, 0, EVENT_START_FAILED,
+                                         None, 1, 0, strings, None))
+        finally:
+            dll.DeregisterEventSource(handle)
+    except Exception:
+        return False
+
+
+SERVICE_LOG = "service.log"
+SERVICE_LOG_MAX = 10 * 1024 * 1024  # what one run writes to it at most
+
+
+class CappedLog:
+    """A text stream that takes at most ``limit`` bytes, then one line saying so: what
+    Python itself reports on stderr (tracebacks), which a fault repeated for days must not
+    turn into a full disk."""
+
+    def __init__(self, fh, limit: int = SERVICE_LOG_MAX) -> None:
+        self._fh = fh
+        self._left = limit
+        self._full = False
+        self.encoding = fh.encoding
+        self.errors = fh.errors
+
+    def write(self, text: str) -> int:
+        if self._full:
+            return len(text)
+        data = text.encode(self.encoding, "replace")
+        out = text
+        if len(data) > self._left:
+            self._full = True
+            out = data[:self._left].decode(self.encoding, "ignore") + \
+                "\n... service.log is full for this run: what follows is not kept\n"
+        self._left -= len(data)
+        try:
+            self._fh.write(out)
+            self._fh.flush()
+        except (OSError, ValueError):
+            self._full = True
+        return len(text)
+
+    def flush(self) -> None:
+        with contextlib.suppress(OSError, ValueError):
+            self._fh.flush()
+
+    def fileno(self) -> int:
+        return self._fh.fileno()
+
+    def isatty(self) -> bool:
+        return False
+
+
+def service_log(path: str) -> Optional[CappedLog]:
+    """stderr for the Windows service: <data>/service.log, begun anew at each start (the
+    previous one kept as service.log.1). Python's own reports go there: a traceback that
+    no handler took, faulthandler's dump of a crash. The service's log lines are in
+    all.log; this is a separate file because a second handle on all.log would keep
+    Windows from rotating it. None when it can't be opened."""
+    with contextlib.suppress(OSError):
+        if os.path.exists(path):
+            os.replace(path, path + ".1")
+    try:
+        fh = open(path, "w", encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    log = CappedLog(fh)
+    log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} service start (pid {os.getpid()})\n")
+    with contextlib.suppress(Exception):  # a crash in native code: the threads' stacks
+        import faulthandler
+        faulthandler.enable(file=fh, all_threads=True)
+    return log

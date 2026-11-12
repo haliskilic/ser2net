@@ -706,7 +706,9 @@ inside aren't readable by other users:
   server and other libraries (an address the admin UI can't use, a request it can't parse,
   the traceback of a request that failed; each message at most once a minute). On Windows,
   when another program holds it open and it can't be rotated, it is written on and rotated
-  later, its older files kept; `audit.log` — sign-ins, config changes,
+  later, its older files kept. The Windows service also writes `service.log` (what Python
+  itself reports, e.g. a crash; the previous start's kept as `service.log.1`) and, when it
+  stops on an error, an entry in the Application event log; `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
   under Settings → *Audit log*, CSV export.
 - **Retention.** By default the logs keep their size limits however old the records are

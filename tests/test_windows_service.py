@@ -5,7 +5,9 @@ Portable part (any OS):
     quotes, trailing backslashes) for a frozen executable and a source checkout;
   * service names are validated; on Linux the options refuse with a hint (no files);
   * runtime.request_shutdown() — what the service's stop request calls, from another
-    thread — stops a running server cleanly.
+    thread — stops a running server cleanly;
+  * the service's stderr goes to service.log, and a service that stops on an error says
+    why in all.log and the Application event log (the entry itself on Windows only).
 Windows part (SER2NET_SERVICE_TESTS=1, as Administrator; CI runs it): install a
 service on a throwaway data directory, wait until the UI answers, set the admin's
 password with --set-password while it runs (the service applies it; the request folder
@@ -17,6 +19,7 @@ else python + ser2net.py.
 
 Run: python3 tests/test_windows_service.py
 """
+import io
 import json
 import os
 import shutil
@@ -593,6 +596,76 @@ def test_request_shutdown():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_service_log_and_event():
+    """The service's stderr goes to service.log (size-capped, the previous run's kept) instead
+    of nowhere; a service that stops on an error writes the reason to the Application
+    event log (Windows; elsewhere a no-op) and all.log."""
+    d = tempfile.mkdtemp(prefix="s2n_svclog_")
+    path = os.path.join(d, winservice.SERVICE_LOG)
+    saved = sys.stdout, sys.stderr
+    try:
+        with open(path, "w") as fh:
+            fh.write("previous run\n")
+        sys.stdout = sys.stderr = None
+        winservice.redirect_missing_stdio(path)
+        log, out = sys.stderr, sys.stdout
+        sys.stdout, sys.stderr = saved
+        import faulthandler
+        faulthandler.disable()
+        assert isinstance(log, winservice.CappedLog) and out is not None
+        print("Traceback (most recent call last):\n  boom", file=log)
+        assert _read_text(path + ".1") == "previous run\n"
+        text = _read_text(path)
+        assert "service start (pid" in text and "boom" in text, text
+        small = winservice.CappedLog(io.StringIO(), limit=50)
+        small.encoding = "utf-8"
+        for _ in range(10):
+            small.write("0123456789")
+        kept = small._fh.getvalue()
+        assert kept.startswith("0123456789" * 5) and kept.count("service.log is full") == 1, kept
+        out.close()
+        log._fh.close()
+        print("Windows service: stderr to service.log (previous run kept, size capped)  OK")
+    finally:
+        sys.stdout, sys.stderr = saved
+        shutil.rmtree(d, ignore_errors=True)
+
+    if os.name == "nt":
+        ok = winservice.report_event("ser2net-tests", "ser2net test entry (can be ignored)")
+        print(f"Application event log entry written: {ok}")
+    else:
+        assert winservice.report_event("ser2net", "x") is False
+        print("SKIP: the event log entry itself is written on Windows only")
+
+    # a service that stops on a configuration error: all.log and the event log say why
+    d = tempfile.mkdtemp(prefix="s2n_svcevent_")
+    events = []
+    saved_report, saved_flag = winservice.report_event, runtime._as_service
+    try:
+        with open(os.path.join(d, "config.json"), "w") as fh:
+            fh.write("{ not json")
+        winservice.report_event = lambda source, text: events.append((source, text)) or True
+        try:
+            runtime.service_main(os.path.join(d, "config.json"), "plant-2")
+        except SystemExit as e:
+            assert "is not a valid configuration" in str(e.code), e.code
+        else:
+            raise AssertionError("the bad configuration was accepted")
+        assert len(events) == 1 and events[0][0] == "plant-2", events
+        assert "is not a valid configuration" in events[0][1] and "service.log" in events[0][1]
+        assert "is not a valid configuration" in _read_text(os.path.join(d, "all.log"))
+        print("service stops on a bad config.json: reason in all.log and the event log  OK")
+    finally:
+        winservice.report_event = saved_report
+        runtime._as_service = saved_flag
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _read_text(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
 # ---------------------------------------------------------------- Windows, real SCM
 def sc(*args):
     return subprocess.run(["sc.exe", *args], capture_output=True, text=True, timeout=60)
@@ -767,6 +840,7 @@ def main():
     test_cli_leaves_the_choice_to_install()
     test_not_windows()
     test_request_shutdown()
+    test_service_log_and_event()
     test_real_service()
     print("\nPASS: Windows service mode")
 

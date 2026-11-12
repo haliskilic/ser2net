@@ -729,7 +729,9 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   uyarı ve hataları da (yönetim arayüzünün kullanamadığı bir adres, çözemediği bir istek,
   başarısız bir isteğin traceback'i; her mesaj dakikada en fazla bir kez). Windows'ta başka
   bir program onu açık tuttuğu için döndürülemezse yazmaya devam edilir ve sonra döndürülür,
-  eski dosyaları korunur; `audit.log` — girişler, config değişiklikleri,
+  eski dosyaları korunur. Windows servisi ayrıca `service.log`'a (Python'un kendi
+  bildirdikleri, ör. bir çökme; önceki açılışınki `service.log.1` olarak kalır) yazar ve bir
+  hatayla durduğunda Uygulama olay günlüğüne bir kayıt ekler; `audit.log` — girişler, config değişiklikleri,
   konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
   *Audit log*'da aranabilir, CSV olarak indirilebilir.
 - **Saklama süresi.** Varsayılan olarak log'lar, kayıtlar ne kadar eski olursa olsun yalnızca

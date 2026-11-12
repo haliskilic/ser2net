@@ -61,6 +61,20 @@ Run several instances side by side with `--service-name NAME` (each needs its ow
 ser2net-windows-x64.exe --uninstall-service
 ```
 
+### When the service doesn't start
+
+Look in the data directory (`C:\ProgramData\ser2net\` by default):
+
+- `all.log` — ser2net's log, with the reason a start failed (a `config.json` that can't be
+  read, an admin UI address that is in use or not on this machine, a TLS file that can't
+  be loaded).
+- `service.log` — what Python itself reports (a traceback no handler took, a crash
+  dump), begun anew at each start; the previous start's is `service.log.1`.
+- *Event Viewer → Windows Logs → Application*, source `ser2net` (the service name): one
+  error entry with the reason when the service stops on an error. (The source is not
+  registered, so Event Viewer first says it can't find a description for event 1; the
+  reason follows.)
+
 ### Upgrading the service
 
 Download the new `ser2net-windows-x64.exe` and, from an elevated prompt, run
