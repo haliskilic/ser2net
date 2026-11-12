@@ -919,5 +919,11 @@
   "only for an encrypted key": "yalnızca şifreli bir anahtar için",
   "Remove the stored password": "Kayıtlı parolayı sil",
   "Key password": "Anahtar parolası",
-  "The TLS key {0} is the admin UI's own key. Give the mapping a certificate and key of its own.": "TLS anahtarı {0}, yönetim arayüzünün kendi anahtarı. Eşlemeye kendine ait bir sertifika ve anahtar ver."
+  "The TLS key {0} is the admin UI's own key. Give the mapping a certificate and key of its own.": "TLS anahtarı {0}, yönetim arayüzünün kendi anahtarı. Eşlemeye kendine ait bir sertifika ve anahtar ver.",
+  "Connect-out TLS: set both a certificate and a key (for a server that asks for a client certificate), or neither.": "Dışarı bağlanma modunda TLS: hem bir sertifika hem bir anahtar belirle (istemci sertifikası isteyen bir sunucu için) ya da hiçbirini belirleme.",
+  "TLS server fingerprint: {0} is not a SHA-256 fingerprint (64 hex digits, with or without colons).": "TLS sunucu parmak izi: {0} bir SHA-256 parmak izi değil (iki nokta üst üsteli ya da değil, 64 onaltılık rakam).",
+  "optional: for a server that asks for a client certificate": "isteğe bağlı: istemci sertifikası isteyen bir sunucu için",
+  "Server certificate fingerprint (SHA-256)": "Sunucu sertifikası parmak izi (SHA-256)",
+  "blank = not checked; several: separate with commas": "boş = denetlenmez; birden çok: virgülle ayır",
+  "Without a fingerprint the link is encrypted, but the server’s certificate is not checked: anyone on the network path could pose as the server. The mapping’s log shows the fingerprint of the certificate at each connection.": "Parmak izi olmadan bağlantı şifrelenir ama sunucunun sertifikası denetlenmez: ağ yolundaki herkes kendini sunucu gibi gösterebilir. Eşlemenin logu her bağlantıda sertifikanın parmak izini gösterir."
 }

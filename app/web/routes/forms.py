@@ -143,6 +143,8 @@ _OPTIONAL_FORM_FIELDS = {
     "network_keepalive_idle_s": ("network", ("tcp_keepalive", "keepalive_idle_s",
                                              "keepalive_interval_s", "keepalive_count")),
     "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
+    # connect-out TLS: the server certificate's pin
+    "network_tls_fingerprint": ("network", ("tls_fingerprint",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
@@ -207,6 +209,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         )
     if "network_dual_stack_shown" in form:
         network["dual_stack"] = both
+    if "network_tls_fingerprint" in form:
+        network["tls_fingerprint"] = form.get("network_tls_fingerprint", "").strip()
     if "network_connect_timeout_s" in form:
         network["connect_timeout_s"] = _num(form, "network_connect_timeout_s", 10.0,
                                             strict=strict, cast=float)
