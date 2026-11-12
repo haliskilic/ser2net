@@ -29,6 +29,7 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 | Coverage (CI fails below the floor in `ci.yml`, job `coverage`) | `pip install coverage && python tests/coverage_run.py && coverage report` |
 | Browser layout | `pip install playwright && python -m playwright install chromium`, then `SER2NET_UI_TESTS=1 python tests/test_ui_layout.py` |
 | Offline wheels | `python tests/test_vendor_wheels.py`; against PyPI (network): `python tools/refresh_wheels.py --verify` |
+| Offline first start (a fresh checkout without `lib/`; CI: Linux arm64, macOS, armv7 under QEMU) | `tests/offline_first_start.sh python3` |
 | Known vulnerabilities | `pip install pip-audit && pip-audit -r requirements.txt` |
 | Workflow lint | `pip install zizmor && zizmor --offline .` (settings in `.github/zizmor.yml`) |
 
@@ -173,7 +174,8 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 Yukarıdaki tablodaki komutların hepsi her pull request'te CI'da çalışır: `ruff check .`,
 `mypy` (ayrıca `--platform win32` ile), `python tests/run_all.py -v` (Linux'ta `socat` ile
 `--socat`), coverage, tarayıcı yerleşim testi, çevrimdışı wheel kontrolü, `pip-audit` ve
-workflow denetimi (`zizmor`).
+workflow denetimi (`zizmor`). `tests/offline_first_start.sh python3`, `lib/`'i olmayan temiz
+bir checkout'ta çevrimdışı ilk açılışı dener (CI'da Linux arm64, macOS ve QEMU altında armv7).
 
 `ci-ok` işi ancak diğer bütün CI işleri geçince geçer (zorunlu olmayan en yeni Python leg'i
 hariç); birleştirme onu bekler, bu yüzden `ci.yml`'ye eklenen her iş onun `needs` listesine

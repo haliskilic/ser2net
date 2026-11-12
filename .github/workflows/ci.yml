@@ -351,6 +351,61 @@ jobs:
         timeout-minutes: 10
         run: tests/systemd_smoke.sh
 
+  # The offline first start of a source checkout where vendor/wheels has no psutil wheel for
+  # the machine (bootstrap.py installs the set without it): bootstrap.py with pip
+  # --no-index, the app from ./lib, --about, a start answering /healthz
+  # (tests/offline_first_start.sh). The test legs above do the same on Linux x86_64 and
+  # Windows, where every wheel is bundled.
+  offline:
+    name: offline first start ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-latest]
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: bootstrap.py from vendor/wheels, then ser2net from ./lib
+        timeout-minutes: 10
+        run: tests/offline_first_start.sh python
+
+  # The same on 32-bit ARM (Raspberry Pi OS 32-bit, armv7 gateways: no binary there), in a
+  # Debian arm32v7 container under QEMU: Debian 12's own python3 (3.11, what Raspberry Pi
+  # OS 12 has) and the oldest supported Python (the python:3.10 image).
+  offline-armv7:
+    name: offline first start linux/arm/v7 (QEMU, ${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:bookworm", "python:3.10-slim-bookworm"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm
+      - name: bootstrap.py from vendor/wheels, then ser2net from ./lib (armv7l, emulated)
+        timeout-minutes: 30
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm --platform linux/arm/v7 -v "$PWD:/src:ro" "$IMAGE" sh -ec '
+            uname -m
+            if ! command -v python3 >/dev/null; then
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends python3 python3-pip >/dev/null
+            fi
+            cp -a /src /work
+            /work/tests/offline_first_start.sh python3'
+
   # The Docker image on amd64 + arm64 (for a release, release.yml then smoke-tests the
   # image it pushes to GHCR with the same script).
   docker:
@@ -380,7 +435,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [lint, typecheck, workflows, audit, vendor, ui, test, coverage, systemd, docker, standalone]
+    needs: [lint, typecheck, workflows, audit, vendor, ui, test, coverage, systemd, offline, offline-armv7, docker, standalone]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
