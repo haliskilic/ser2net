@@ -245,13 +245,17 @@ async def paho_checks():
         pub._client.reconnect_delay_set(min_delay=0.2, max_delay=0.2)
         return pub
 
+    import paho.mqtt
+    # paho 2 names the CONNACK code itself, paho 1.x through connack_string()
+    refusal = ("Connection Refused: not authorised." if paho.mqtt.__version__.startswith("1.")
+               else "Not authorized")
     with MqttBroker(connack=5) as broker:  # not authorised
         pub = publisher(broker.port)
         assert await until(lambda: len(broker.connects) >= 3), broker.connects
         await asyncio.sleep(0.1)
         pub.close()
         assert logs == [f"MQTT: connecting to 127.0.0.1:{broker.port}, topic 'plant/a'",
-                        f"MQTT: 127.0.0.1:{broker.port} refused the connection: Not authorized;"
+                        f"MQTT: 127.0.0.1:{broker.port} refused the connection: {refusal};"
                         " trying again"], logs
     print("paho: a refused connection is logged once over several attempts  OK")
 
