@@ -211,10 +211,13 @@ class Notifier:
                       settings=None) -> list[str]:
         """Send to every configured channel now; returns the errors (empty = all sent).
         Messages are in the UI's default language (Settings -> Web UI access), or
-        English when that is "the browser's"."""
+        English when that is "the browser's" — the test message too (an empty detail:
+        its text in that language)."""
         s = settings or self.settings
         token = i18n.set_language(self.state.config.admin_ui.language)
         try:
+            if event == "test" and not detail:
+                detail = _("If you can read this, ser2net can reach you.")
             return await self._deliver(s, event, mapping, detail)
         finally:
             i18n.reset(token)

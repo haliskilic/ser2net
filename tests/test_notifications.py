@@ -9,8 +9,9 @@ Checks:
     reported, not raised;
   * Settings -> Notifications saves (secrets kept when left blank), validates, and
     "Save and send a test" delivers; a failed sign-in is notified;
-  * with Turkish as the UI's default language the messages are Turkish, and an e-mail
-    with non-ASCII text stays 7-bit (quoted-printable, encoded subject).
+  * with Turkish as the UI's default language the messages are Turkish, the test message
+    wholly (title and text), and an e-mail with non-ASCII text stays 7-bit
+    (quoted-printable, encoded subject).
 
 Run: python3 tests/test_notifications.py
 """
@@ -157,7 +158,15 @@ async def test_delivery(hook_port, smtp_port):
     assert raw.isascii(), "the e-mail must stay 7-bit"
     assert "Kazan dairesi ğüşıöç" in mail["Subject"] and lost in mail["Subject"], mail["Subject"]
     assert "Kazan dairesi ğüşıöç" in mail.get_content()
+    # the test message wholly in the notification language: its title and its text
+    errors = await n.deliver("test", "", "")
+    text = RECEIVED[-1][1]["text"]
+    tr = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))
+    assert errors == [] and tr["test notification"] in text and \
+        tr["If you can read this, ser2net can reach you."] in text, text
     st.config.admin_ui.language = "auto"
+    errors = await n.deliver("test", "", "")
+    assert "test notification" in RECEIVED[-1][1]["text"] and "If you can read this" in RECEIVED[-1][1]["text"]
     s.webhook_url = f"http://127.0.0.1:{hook_port}/fail"
     errors = await n.deliver("device_lost", "PLC", "gone")
     assert errors and "HTTP 500" in errors[0], errors
