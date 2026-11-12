@@ -15,6 +15,8 @@ longer:
   * every element stays inside its panel; row buttons stay inside their cell
     and never overlap; no cell's content overflows the cell;
   * the browser reports no errors (e.g. a Content-Security-Policy violation);
+  * the filter rows (the dashboard's toolbar, the audit log's filters) take one line in
+    wide windows, and their search boxes are drawn like the other fields;
   * the cluster panel isn't refreshed while the tab is hidden (each refresh makes the
     node ask every peer) and is refreshed as soon as the tab is shown again;
   * what app.js does around the dashboard's requests (feedback_checks): the keyboard
@@ -108,6 +110,20 @@ CHECK_JS = r"""() => {
     if (shown(el) && r.right > vw + 1) bad.push(`top bar ${label(el)} goes past the window edge`);
   }
   return bad;
+}"""
+
+
+# The filter rows (the dashboard's toolbar, the audit log's filters): how many lines their
+# visible fields take, and whether a search box is drawn by the browser (white) rather than
+# like the other fields.
+FILTER_ROW_JS = r"""sel => {
+  const row = document.querySelector(sel);
+  if (!row) return null;
+  const tops = new Set([...row.children].filter(el => el.getBoundingClientRect().width > 0)
+                       .map(el => Math.round(el.getBoundingClientRect().top / 8)));
+  const search = row.querySelector('input[type=search]');
+  return {lines: tops.size, searchBg: getComputedStyle(search).backgroundColor,
+          pageBg: getComputedStyle(document.body).backgroundColor};
 }"""
 
 
@@ -386,6 +402,18 @@ def main():
                     "() => (document.querySelector('#cluster') || {}).textContent?.includes('B-short')",
                     timeout=20000)
 
+            def filter_row(where, sel):
+                """At these widths the row fits on one line: each select used to take a
+                line of its own (and the search box was drawn white in the dark theme)."""
+                r = page.evaluate(FILTER_ROW_JS, sel)
+                if r is None:
+                    problems.append(f"{where}: no {sel}")
+                elif r["lines"] != 1:
+                    problems.append(f"{where}: {sel} takes {r['lines']} lines")
+                elif r["searchBg"] != r["pageBg"]:
+                    problems.append(f"{where}: the search box is drawn {r['searchBg']}, "
+                                    f"the other fields {r['pageBg']}")
+
             def open_view(button):
                 row = page.locator("#mappings tr", has_text=LONG_NAME).first
                 row.get_by_role("button", name=button, exact=True).click()
@@ -398,6 +426,8 @@ def main():
                     page.set_viewport_size({"width": w, "height": 900})
                     dashboard()
                     check(f"{lang} dashboard @{w}")
+                    if w >= 1024:
+                        filter_row(f"{lang} dashboard @{w}", "[data-mapping-tools]")
                 for w in (1024, 390):
                     page.set_viewport_size({"width": w, "height": 900})
                     for view in ("Log", "Monitor", "Edit"):
@@ -410,6 +440,11 @@ def main():
                     page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
                     page.wait_for_selector("#backups h3")
                     check(f"{lang} restore preview @{w}")
+                    page.goto(f"{base}/settings/audit")
+                    page.wait_for_selector("form.filters")
+                    check(f"{lang} audit log @{w}")
+                    if w >= 1024:
+                        filter_row(f"{lang} audit log @{w}", "form.filters")
 
             # the cluster panel polls every 5 s: not from a hidden tab, and at once when
             # the tab is shown again

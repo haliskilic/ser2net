@@ -150,10 +150,12 @@ table.ports { min-width: 40rem; }
 .mform, .authform { display: block; }
 label { display: block; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
 label.chk { display: flex; align-items: center; gap: 7px; color: var(--text); }
-input[type=text], input[type=password], input[type=number], select, textarea {
+input[type=text], input[type=password], input[type=number], input[type=search], select, textarea {
   width: 100%; margin-top: 4px; padding: 8px 10px; background: var(--bg);
   color: var(--text); border: 1px solid var(--border); border-radius: 7px; font-size: 13px;
 }
+/* WebKit/Blink draw a search box their own way unless told it is a text field */
+input[type=search] { -webkit-appearance: textfield; appearance: textfield; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
 /* a checkbox, radio button or file picker shows no border colour: it gets an outline */
 input[type=checkbox]:focus-visible, input[type=radio]:focus-visible, input[type=file]:focus-visible {
@@ -255,6 +257,11 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 /* audit log page */
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .filters input[type=search] { flex: 1 1 16rem; min-width: 0; }
+/* in the filter rows (audit log, dashboard toolbar) a field is as wide as its content and
+   sits on the row's line: the form fields' full width and top margin would put each
+   select on a line of its own */
+.filters select, .toolbar select { width: auto; max-width: 100%; }
+.filters > *, .toolbar > *, .filters > input, .toolbar > input { margin-top: 0; }
 .pager { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
 
 /* dashboard toolbar: search / filter / sort / bulk actions */
