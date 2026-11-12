@@ -86,7 +86,11 @@ executables install from hash-locked files instead (`pip install --require-hashe
 `requirements-lock.txt` (the same pins for Python 3.12, with the sha256 of each release's
 files) and `requirements-build.txt` (PyInstaller and its dependencies); Dependabot updates
 them with `requirements.txt`, and `python tools/refresh_locks.py` regenerates them after a
-hand-made change (`tests/test_build_lock.py` checks that they match). GitHub's dependency graph (and so the
+hand-made change (`tests/test_build_lock.py` checks that they match). The browser libraries
+in `app/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; change a
+version there and run `python tools/refresh_assets.py`, which copies the files out of the npm
+release and records their sha256 (Dependabot proposes minor updates, `refresh-pins.yml`
+copies them in; test the console by hand before a major one). GitHub's dependency graph (and so the
 Dependabot alerts) reads `requirements.txt` for its newest Python only; the pins only
 Python 3.10 installs are submitted to it from `main` by
 `.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`), so they get
@@ -200,7 +204,11 @@ kurulur (`pip install --require-hashes`): `requirements-lock.txt` (Python 3.12 i
 pin'ler, her sürümün dosyalarının sha256'larıyla) ve `requirements-build.txt` (PyInstaller ve
 bağımlılıkları). Dependabot bunları `requirements.txt` ile birlikte günceller; elle yapılan bir
 değişiklikten sonra `python tools/refresh_locks.py` yeniden üretir
-(`tests/test_build_lock.py` eşleştiklerini denetler). GitHub'ın bağımlılık grafiği (dolayısıyla Dependabot uyarıları) `requirements.txt`'i
+(`tests/test_build_lock.py` eşleştiklerini denetler). `app/web/static/` içindeki tarayıcı
+kütüphaneleri (htmx, xterm.js) `vendor/npm/package.json`'da sabitlenir; oradaki sürümü
+değiştirip `python tools/refresh_assets.py` çalıştırın: dosyaları npm sürümünden kopyalar ve
+sha256'larını kaydeder (Dependabot minor güncellemeleri önerir, `refresh-pins.yml` onları
+kopyalar; major bir güncellemeden önce konsolu elle deneyin). GitHub'ın bağımlılık grafiği (dolayısıyla Dependabot uyarıları) `requirements.txt`'i
 yalnızca en yeni Python için okur; yalnızca Python 3.10'un kurduğu pin'leri
 `.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`) `main`'den grafiğe
 gönderir, böylece onlar için de uyarı çıkar.

@@ -10,7 +10,8 @@ portable test guards the template side of the contract on every platform:
     every data cell (not the name, not the buttons) has a data-label for the
     phone card layout; each row spans exactly as many columns as the header;
   * a mapping name / device path full of HTML is rendered escaped;
-  * the static assets carry ?v=<version> (fresh CSS/JS right after an upgrade);
+  * the static assets carry ?v=<a hash of the static files> (fresh CSS/JS as soon as
+    one changes), and only the dashboard (where the console opens) loads xterm.js;
   * the mapping form does not offer a Modbus gateway the options it doesn't use.
 
 Run: python3 tests/test_ui_markup.py
@@ -28,7 +29,7 @@ from markupsafe import Markup
 
 from app import __version__
 from app.config import MappingConfig
-from app.web.server import make_templates, softbreak
+from app.web.server import asset_version, make_templates, softbreak
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
         "source", "track", "wbr"}
@@ -209,9 +210,20 @@ def test_ports_table_and_assets():
             csrf_token = "t"
             user = None
     page = env.get_template("base.html").render(request=Req)
-    for asset in ("app.css", "app.js", "htmx.min.js", "xterm.js", "xterm.css"):
-        assert f"/static/{asset}?v={__version__}" in page, f"{asset} lacks the ?v= cache-buster"
-    print("ports table contract + versioned static asset URLs  OK")
+    version = asset_version()
+    assert len(version) == 12 and version != __version__, version
+    for asset in ("app.css", "app.js", "htmx.min.js"):
+        assert f"/static/{asset}?v={version}" in page, f"{asset} lacks the ?v= cache-buster"
+    assert "xterm" not in page, "xterm.js loads on the dashboard only"
+    tpl = env.get_template("dashboard.html")
+    head = "".join(tpl.blocks["head"](tpl.new_context({"request": Req})))
+    for asset in ("xterm.js", "xterm.css", "xterm-addon-fit.js"):
+        assert f"/static/{asset}?v={version}" in head, f"the dashboard lacks {asset}"
+    with open(os.path.join(ROOT, "app", "web", "templates", "base.html"), encoding="utf-8") as fh:
+        base = fh.read()
+    assert base.index("{% block head %}") < base.index('href="/static/app.css'), \
+        "app.css comes after a page's own CSS"
+    print("ports table contract + versioned static asset URLs, xterm on the dashboard only  OK")
 
 
 def test_mapping_form_modbus_fields():

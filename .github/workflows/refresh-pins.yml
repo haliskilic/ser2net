@@ -7,13 +7,16 @@ name: Refresh pinned files
 # repository, and on any other branch but main when started by hand (Actions -> Refresh
 # pinned files -> Run workflow -> the branch). It commits the result as github-actions[bot]
 # and starts CI on that commit: a push made with the workflow's token starts no workflow by
-# itself, but a workflow_dispatch does, and its checks count for the pull request. Review
-# the pull request's diff as before; the wheels are PyPI's files (CI compares their sha256).
+# itself, but a workflow_dispatch does, and its checks count for the pull request. A
+# Dependabot npm pull request (vendor/npm/package.json) gets the bumped browser libraries'
+# files copied into app/web/static the same way. Review the pull request's diff as before:
+# the wheels are PyPI's files and the browser libraries the npm releases' (CI checks both).
 on:
   pull_request:
     paths:
       - requirements.txt
       - requirements-optional.txt
+      - vendor/npm/package.json   # the browser libraries (Dependabot's npm updates)
   workflow_dispatch:
 
 permissions:
@@ -25,7 +28,7 @@ concurrency:
 
 jobs:
   refresh:
-    name: refresh the offline wheels and build locks on the branch
+    name: refresh the offline wheels, build locks and browser libraries on the branch
     # a pull request Dependabot opened from a branch of this repository (a fork's pull
     # request never gets a writing token anyway); or a manual run
     if: >-
@@ -50,18 +53,21 @@ jobs:
         with:
           python-version: "3.12"
       # pip download --no-deps --only-binary=:all: of the pinned versions: no package code runs
-      - name: Refresh vendor/wheels (and the locks, if they don't match the pins)
+      - name: Refresh vendor/wheels (and the locks and browser libraries, if they don't match)
         run: |
           python tools/refresh_wheels.py
           python tools/refresh_locks.py --check || python tools/refresh_locks.py
+          python tools/refresh_assets.py --check || python tools/refresh_assets.py
           python tools/refresh_wheels.py --verify
           python tools/refresh_locks.py --verify
+          python tools/refresh_assets.py --verify
       - id: push
         name: Commit and push them to the branch
         env:
           TOKEN: ${{ github.token }}
         run: |
-          git add vendor/wheels requirements-lock.txt requirements-build.txt
+          git add vendor/wheels requirements-lock.txt requirements-build.txt vendor/npm \
+                  app/web/static tools/licenses/npm
           if git diff --cached --quiet; then
             echo "nothing to refresh on $BRANCH"
             exit 0
@@ -69,7 +75,7 @@ jobs:
           git diff --cached --stat
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -q -m "deps: refresh the offline wheels and build locks"
+              commit -q -m "deps: refresh the offline wheels, build locks and browser libraries"
           auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
           echo "::add-mask::$auth"
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \

@@ -23,7 +23,8 @@ def test_one_job_checks_the_pins():
     assert key(vendor, "name") == "offline wheels match requirements.txt"
     assert "SER2NET_SKIP_PIN_CHECKS" not in vendor.split("\n    steps:\n", 1)[1]
     for cmd in ("python tests/test_vendor_wheels.py", "python tests/test_build_lock.py",
-                "python tools/refresh_wheels.py --verify", "python tools/refresh_locks.py --verify"):
+                "python tests/test_vendor_assets.py", "python tools/refresh_wheels.py --verify",
+                "python tools/refresh_locks.py --verify", "python tools/refresh_assets.py --verify"):
         assert cmd in vendor, cmd
     on_failure = [s for s in steps(vendor) if "\n        if: failure()\n" in s]
     assert len(on_failure) == 2, on_failure
@@ -37,6 +38,7 @@ def test_refresh_workflow():
     text = read("refresh-pins.yml")
     on = text.split("\npermissions:", 1)[0]
     assert "\n  pull_request:\n" in on and "pull_request_target" not in on, on
+    assert "      - vendor/npm/package.json" in on, "Dependabot's npm updates too"
     assert "\n  workflow_dispatch:\n" in on
     assert "\npermissions:\n  contents: read\n" in text
     job = jobs(text)["refresh"]
@@ -52,7 +54,8 @@ def test_refresh_workflow():
     assert "persist-credentials: false" in job
     run = "".join(steps(job))
     for cmd in ("python tools/refresh_wheels.py\n", "python tools/refresh_wheels.py --verify",
-                "python tools/refresh_locks.py --verify", 'push origin "HEAD:refs/heads/$BRANCH"',
+                "python tools/refresh_locks.py --verify", "python tools/refresh_assets.py --verify",
+                'push origin "HEAD:refs/heads/$BRANCH"',
                 'gh workflow run ci.yml --ref "$BRANCH"'):
         assert cmd in run, cmd
     assert "${{" not in run.split("run: |", 1)[1].split("- id: push", 1)[0], "no expressions in run:"

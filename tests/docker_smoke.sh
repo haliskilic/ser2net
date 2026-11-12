@@ -244,7 +244,8 @@ os.chdir("/app")
 need = ["ser2net.py", "bootstrap.py", "requirements.txt", "requirements-optional.txt",
         "requirements-lock.txt",
         "LICENSE", "NOTICE", "COMMERCIAL_LICENSE.md", "THIRD-PARTY-NOTICES.md",
-        "tools/docker-entrypoint.sh", "tools/licenses/pyserial.txt", "app/locale/tr.json",
+        "tools/docker-entrypoint.sh", "tools/licenses/pyserial.txt", "tools/licenses/npm/xterm.txt",
+        "app/locale/tr.json",
         "app/web/templates/base.html", "app/web/static/app.css"]
 missing = [f for f in need if not os.path.isfile(f)]
 extra = [d for d in ("tests", "vendor", "docs", ".github", "Dockerfile") if os.path.exists(d)]
