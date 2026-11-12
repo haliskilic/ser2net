@@ -20,7 +20,7 @@ import time
 from typing import Any, Callable, Optional, Protocol
 
 from ..config import AppConfig, MappingConfig
-from . import serial_io
+from . import portlist, serial_io
 from .bridge import MappingRunner, RunnerStatus
 from .netguard import BindError
 from .serial_link import Backoff
@@ -301,7 +301,7 @@ class Supervisor:
         """PortWatcher's on_change: when a serial port appeared, the mappings waiting to
         open theirs again try now (a re-plugged adapter is used within the watcher's poll,
         not after up to 10 s of backoff)."""
-        names = {n for p in ports for n in (p.get("device"), p.get("by_id")) if n}
+        names = {n for p in ports for n in portlist.names(p)}
         new, self._ports = (names - self._ports if self._ports is not None else names), names
         if not new:
             return

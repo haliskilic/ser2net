@@ -197,6 +197,8 @@ def make_templates() -> Jinja2Templates:
         asset_version=__version__,
     )
     templates.env.filters["softbreak"] = softbreak
+    from ..engine.portlist import choice as port_choice
+    templates.env.globals["port_choice"] = port_choice
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")

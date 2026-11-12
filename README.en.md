@@ -121,9 +121,15 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   went (Linux: the tty devices in sysfs and the `/dev/serial` links; Windows: the COM ports
   the registry lists), and the ports are enumerated again only then, when the UI or the API
   shows a list older than 2 s, and at least every minute. On Linux the kernel's placeholder
-  `ttyS` ports without hardware are hidden and the stable `/dev/serial/by-id` names are
-  shown and selectable. **IP picker** from the machine's own addresses (localhost / LAN /
-  0.0.0.0) or custom.
+  `ttyS` ports without hardware are hidden, and udev's names are shown and selectable:
+  `/dev/serial/by-id` (by serial number: survives re-plugging, in any USB socket) and
+  `/dev/serial/by-path` (by USB socket: right while the adapter stays in that socket). A
+  by-id name is made from vendor, model and serial number, so identical adapters without a
+  serial number of their own (CH340, most PL2303, clones that all carry one number) share
+  one, which udev gives to one of them, and which one can change at a reboot or a
+  re-plug: the Ports page marks such adapters (`same USB identity`, `by-id not unique`) and
+  the form says so; bind those by USB socket. **IP picker** from the machine's own
+  addresses (localhost / LAN / 0.0.0.0) or custom.
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
   COM number still opens the right device. Identical adapters without a serial number of

@@ -50,17 +50,49 @@ def _normalize(p: Any) -> dict[str, Any]:
     }
 
 
-def _by_id_links(by_id_dir: str = BY_ID_DIR) -> dict[str, str]:
-    """Linux: real device path -> its stable /dev/serial/by-id/... name (udev)."""
+def _links(link_dir: str) -> dict[str, str]:
+    """Linux: real device path -> its udev link in ``link_dir`` (the first by name when it
+    has several, as by-path's usb- and usbv2- forms)."""
     try:
-        names = sorted(os.listdir(by_id_dir))
+        names = sorted(os.listdir(link_dir))
     except OSError:
         return {}
     out: dict[str, str] = {}
     for n in names:
-        link = os.path.join(by_id_dir, n)
+        link = os.path.join(link_dir, n)
         out.setdefault(os.path.realpath(link), link)
     return out
+
+
+def _by_id_links(by_id_dir: str = BY_ID_DIR) -> dict[str, str]:
+    """Linux: real device path -> its /dev/serial/by-id/... name (udev: by vendor, model
+    and serial number)."""
+    return _links(by_id_dir)
+
+
+def _identities(ports: list[dict[str, Any]], udev: bool) -> None:
+    """Mark each port with ``same_identity``: the other listed ports that have its USB
+    identity (VID:PID and serial number, in any letter case), which finding a device by its
+    USB identity can't tell from it (identical adapters without a serial number of their
+    own, a multi-port chip's channels); and ``ambiguous``: a USB port without a by-id name
+    of its own (Linux, where udev makes them). A by-id name is made from vendor, model and
+    serial number, so identical adapters without their own serial number get one name, which
+    udev gives to one of them: the one that has it may change at a reboot or a re-plug.
+    Compared across the listed ports, not by a missing serial number (a lone adapter without
+    one is unambiguous; clones that all carry one serial number are not)."""
+    def ident(p: dict[str, Any]) -> tuple:
+        return p.get("vid"), p.get("pid"), str(p.get("serial_number") or "").casefold()
+
+    groups: dict[tuple, list[dict[str, Any]]] = {}
+    for p in ports:
+        if p.get("vid") and p.get("pid"):
+            groups.setdefault(ident(p), []).append(p)
+    for p in ports:
+        usb = bool(p.get("vid") and p.get("pid"))
+        twins = [q for q in groups.get(ident(p), []) if q is not p] if usb else []
+        p["same_identity"] = sorted(q["device"] for q in twins)
+        p["ambiguous"] = bool(udev and usb and (not p.get("by_id")
+                                                 or any(not q.get("by_id") for q in twins)))
 
 
 def has_hardware(device: str, sys_class: str = "/sys/class/tty") -> Optional[bool]:
@@ -79,23 +111,30 @@ def has_hardware(device: str, sys_class: str = "/sys/class/tty") -> Optional[boo
 
 def snapshot() -> list[dict[str, Any]]:
     """Synchronous one-shot enumeration (blocking; call via executor in async code).
-    Each port also gets ``by_id`` (Linux udev stable name, else None), ``hardware``
-    (see has_hardware), ``warnings`` (what else may use it: portdiag.port_warnings) and
-    ``access`` (whether this process may open it; None: can't tell, Windows)."""
+    Each port also gets ``by_id`` and ``by_path`` (its Linux udev names: by serial number,
+    by USB socket; else None), ``same_identity`` and ``ambiguous`` (_identities),
+    ``hardware`` (see has_hardware), ``warnings`` (what else may use it:
+    portdiag.port_warnings) and ``access`` (whether this process may open it; None: can't
+    tell, Windows)."""
     from serial.tools import list_ports
 
     from . import portdiag
 
-    links = _by_id_links() if sys.platform.startswith("linux") else {}
+    linux = sys.platform.startswith("linux")
+    by_id = _links(BY_ID_DIR) if linux else {}
+    by_path = _links(BY_PATH_DIR) if linux else {}
     ports = []
     for p in list_ports.comports():
         d = _normalize(p)
-        d["by_id"] = links.get(os.path.realpath(d["device"]))
+        real = os.path.realpath(d["device"])
+        d["by_id"] = by_id.get(real)
+        d["by_path"] = by_path.get(real)
         d["hardware"] = has_hardware(d["device"])
         d["warnings"] = portdiag.port_warnings(d["device"])
         d["access"] = portdiag.access(d["device"])
         ports.append(d)
     ports.sort(key=lambda d: d["device"])
+    _identities(ports, udev=bool(by_id or by_path))
     return ports
 
 
@@ -127,6 +166,23 @@ def find(ports: list[dict[str, Any]], device: str,
         if real != device:
             return next((p for p in ports if p.get("device") == real), None)
     return None
+
+
+def choice(ports: list[dict[str, Any]], selected: str,
+           links: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    """What the Device field shows for the configured port ``selected``: ``port``, the
+    listed port it names (find), and ``as``, how: "device", "by_id", "by_path" (that name of
+    the port), "alias" (another name of it: another spelling, a link elsewhere), None (not
+    listed). ``links``: {name: the device it leads to}, worked out on the machine the ports
+    are on (a link such as /dev/serial0 is not one of the port's own names)."""
+    port = find(ports, selected)
+    if port is None and links and links.get(selected):
+        port = next((p for p in ports if p.get("device") == links[selected]), None)
+    how = None
+    if port is not None:
+        how = next((k for k in ("device", "by_id", "by_path") if port.get(k) == selected),
+                   "alias")
+    return {"port": port, "as": how}
 
 
 def used(ports: list[dict[str, Any]], devices: Any) -> set[str]:
