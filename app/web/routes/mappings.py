@@ -15,7 +15,7 @@ from ...config import ConfigError, MappingConfig
 from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
-from .common import TRIGGER, Ctx, console_interactive, sees_to_device
+from .common import TRIGGER, Ctx, console_interactive, read_form, sees_to_device
 from .forms import _form_error, _modbus_points_json
 
 
@@ -77,7 +77,7 @@ def routes(ctx: Ctx) -> list:
         """Start / stop / restart several mappings at once (the dashboard's selection)."""
         if deny := require_role(request, "operator"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         action = form.get("action", "")
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
@@ -179,7 +179,7 @@ def routes(ctx: Ctx) -> list:
     async def mapping_save(request):
         if deny := require_role(request, "operator"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         ok, msg = await ops.save_mapping_from_form(state, form)
         if not ok:
             return _form_error(render, request, state, form, msg)

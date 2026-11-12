@@ -44,6 +44,7 @@ PORTABLE = [
     "test_web_auth.py",
     "test_open_access.py",
     "test_form_validation.py",
+    "test_form_uploads.py",    # form posts refuse file parts (400, not 500)
     "test_rest_api.py",
     "test_api_token_role.py",
     "test_modbus_frame.py",

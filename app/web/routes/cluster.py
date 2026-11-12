@@ -27,7 +27,7 @@ from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_
 from ...i18n import _
 from .. import auth
 from . import ops
-from .common import Ctx, csrf_failed
+from .common import Ctx, csrf_failed, read_form
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -254,7 +254,7 @@ def routes(ctx: Ctx) -> list:
         a, deny = await _peer_auth(request)
         if deny:
             return deny
-        form = await request.form()
+        form = await read_form(request)
         mid, action = form.get("mapping_id", ""), form.get("action", "")
         if action not in ("start", "stop", "restart"):
             return _peer_json(a, {"error": "bad_action"}, 400)
@@ -272,7 +272,7 @@ def routes(ctx: Ctx) -> list:
         at an arbitrary host); the call goes to its address with the shared key."""
         if deny := require_peer_access(request):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         action, mid = form.get("action", ""), form.get("mid", "")
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
@@ -310,7 +310,7 @@ def routes(ctx: Ctx) -> list:
         a, deny = await _peer_auth(request)
         if deny:
             return deny
-        form = await request.form()
+        form = await read_form(request)
         ok, msg = await ops.save_mapping_from_form(state, form)
         if not ok:
             return _peer_json(a, {"ok": False, "error": msg}, 400)
@@ -363,7 +363,7 @@ def routes(ctx: Ctx) -> list:
         already exist on the peer. On a peer or validation error, re-render the form."""
         if deny := require_peer_access(request):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         target, err = _peer_target(form.get)
         if err:
             return err
