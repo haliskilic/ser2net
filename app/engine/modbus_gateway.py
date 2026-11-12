@@ -145,9 +145,9 @@ class ModbusGatewayRunner:
         # the listener first (as MappingRunner.start): a start that fails there has opened
         # neither the serial port nor a broker connection, so it can be tried again
         self._server = await netguard.start_server(
-            self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
+            self._on_client, netguard.listen_hosts(net), net.port, ssl=server_ssl(net),
             allowed=self._access.allowed, log=self._log)
-        self._log(f"modbus gateway listening on {net.bind_ip}:{net.port}"
+        self._log(f"modbus gateway listening on {netguard.listen_where(net, self._server.sockets)}"
                   f" ({'TLS, ' if net.tls else ''}{sockopts.describe(net)})")
         try:
             self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)

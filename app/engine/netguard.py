@@ -32,7 +32,12 @@ listener they reach, before they cost anything more:
 a TLS listener it also applies the mapping's allow-list before the handshake (a refused
 host never gets one) and does the handshake itself (``start_tls``): the mapping sees the
 connection only once it is done, and decides about capacity, kicking and "Busy" then.
-When the listener can't take its address it raises ``BindError``.
+When the listener can't take its address it raises ``BindError``; ``udp_socket`` makes a
+UDP mapping's socket, with the same error.
+
+Address families: a TCP listener on :: takes IPv6 clients only (asyncio sets IPV6_V6ONLY);
+one that takes both (network.dual_stack on a wildcard, ``listen_hosts``) has two sockets,
+0.0.0.0 and ::, so its IPv4 clients have plain IPv4 addresses.
 """
 from __future__ import annotations
 
@@ -40,9 +45,15 @@ import asyncio
 import errno
 import os
 import selectors
+import socket
 import sys
 import time
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Union
+
+from ..config import WILDCARDS, canonical_ip, host_port
+
+if TYPE_CHECKING:
+    from ..config import NetworkSettings
 
 # the soft open-file limit raise_fd_limit aims for: far above what a few hundred
 # mappings need, without handing child processes a huge limit
@@ -575,13 +586,76 @@ class Listener:
         task.add_done_callback(lambda _t: self._handshakes.pop(transport, None))
 
 
-async def start_server(client_connected_cb: Callable, host: str, port: int, *, ssl: Any = None,
+def listen_hosts(net: NetworkSettings) -> list[str]:
+    """The addresses a mapping's TCP listener binds: both wildcards when it takes IPv4 and
+    IPv6 clients (NetworkSettings.both_families), else its bind IP."""
+    return list(WILDCARDS) if net.both_families else [net.bind_ip]
+
+
+def listen_where(net: NetworkSettings, sockets: Sequence[socket.socket]) -> str:
+    """Where a mapping listens, for its log line: its address and port, and which clients
+    that takes when it is a wildcard of one family or both (``sockets``: what it got)."""
+    if net.both_families:
+        families = {sock.family for sock in sockets}
+        if families == {socket.AF_INET6} and _takes_ipv4(sockets[0]):
+            families.add(socket.AF_INET)  # (UDP: one socket for both)
+        if families == {socket.AF_INET, socket.AF_INET6}:
+            return f"{host_port('0.0.0.0', net.port)} and {host_port('::', net.port)}, IPv4 and IPv6"
+        if families == {socket.AF_INET}:
+            return f"{host_port('0.0.0.0', net.port)}, IPv4 only (IPv6 is not available here)"
+    where = host_port(net.bind_ip, net.port)
+    if canonical_ip(net.bind_ip) == "::" and not net.both_families and net.mode != "udp":
+        where += ", IPv6 clients only"
+    return where
+
+
+def _takes_ipv4(sock: socket.socket) -> bool:
+    try:
+        return not sock.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY)
+    except (OSError, AttributeError):
+        return False
+
+
+async def udp_socket(net: NetworkSettings) -> socket.socket:
+    """A UDP mapping's socket, bound to its address and port. One that takes both families
+    (NetworkSettings.both_families) is one socket on :: with IPV6_V6ONLY off (where this
+    machine has no IPv6, an IPv4 one on 0.0.0.0). Raises BindError when the address and
+    port can't be taken."""
+    both = net.both_families
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            "::" if both else net.bind_ip, net.port, type=socket.SOCK_DGRAM,
+            flags=socket.AI_PASSIVE | socket.AI_NUMERICHOST)
+        family, kind, proto, _name, address = infos[0]
+        try:
+            sock = socket.socket(family, kind, proto)
+        except OSError:
+            if not both:
+                raise
+            family, address = socket.AF_INET, ("0.0.0.0", net.port)  # no IPv6 here
+            sock = socket.socket(family, kind, proto)
+    except OSError as e:
+        raise BindError.of(e) from e
+    try:
+        if both and family == socket.AF_INET6:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        sock.bind(address)
+        sock.setblocking(False)
+    except OSError as e:
+        sock.close()
+        raise BindError.of(e) from e
+    return sock
+
+
+async def start_server(client_connected_cb: Callable, host: Union[str, Sequence[str]], port: int,
+                       *, ssl: Any = None,
                        allowed: Optional[Callable[[str], bool]] = None,
                        log: Optional[Callable[[str], None]] = None,
                        limit: int = 2 ** 16) -> Listener:
-    """asyncio.start_server(client_connected_cb, host, port, ssl=ssl), admitting each
-    connection right after accept: the process's budget, then (TLS) ``allowed`` (the
-    mapping's allow-list) and the handshakes in progress, before the handshake.
+    """asyncio.start_server(client_connected_cb, host, port, ssl=ssl) (``host``: one
+    address, or several: listen_hosts), admitting each connection right after accept: the
+    process's budget, then (TLS) ``allowed`` (the mapping's allow-list) and the handshakes
+    in progress, before the handshake.
     ``client_connected_cb(reader, writer)`` gets TLS connections once their handshake is
     done. ``log``: where refusals and failed handshakes are reported (the mapping's log).
     Raises BindError when the address and port can't be taken."""

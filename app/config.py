@@ -224,6 +224,11 @@ def normalize_cidr(value: str) -> str:
     return v
 
 
+# the bind IPs of a listener on every interface: 0.0.0.0 takes IPv4 clients, :: IPv6 ones
+# (IPV6_V6ONLY); NetworkSettings.dual_stack makes either take both
+WILDCARDS = ("0.0.0.0", "::")
+
+
 def canonical_ip(value: Any) -> Any:
     """An IP address as it is stored: in its canonical form ('0:0:0:0:0:0:0:1' is '::1'),
     an IPv4-mapped IPv6 address ('::ffff:10.0.0.5') as the IPv4 address it stands for
@@ -238,6 +243,17 @@ def canonical_ip(value: Any) -> Any:
     if ip.version == 6 and ip.ipv4_mapped is not None:
         return str(ip.ipv4_mapped)
     return str(ip)
+
+
+def host_port(host: Any, port: Any) -> str:
+    """host:port as the log and the UI write it: an IPv6 address in brackets ([::1]:4001),
+    the admin UI's "" (every interface) as *."""
+    h = "" if host is None else str(host)
+    if not h:
+        h = "*"
+    elif ":" in h and not h.startswith("["):
+        h = f"[{h}]"
+    return f"{h}:{port}"
 
 
 def bind_ip_problem(value: Any) -> str:
@@ -453,7 +469,12 @@ NET_MODES = ("server", "client", "udp")
 class NetworkSettings:
     mode: str = "server"  # server (listen) | client (connect-out) | udp
     protocol: str = "raw"  # raw | telnet | rfc2217
+    # A listener on 0.0.0.0 takes IPv4 clients only, one on :: IPv6 clients only. With
+    # dual_stack a wildcard bind IP (either of the two) takes both: the picker's "All
+    # interfaces, IPv4 and IPv6". It means nothing with another address (edits refuse
+    # that); a release without it listens on the bind IP alone.
     bind_ip: str = "0.0.0.0"
+    dual_stack: bool = False
     port: int = 4001
     # client mode: the connect-out target (UDP does not use these: see udp_peer_host)
     remote_host: str = ""
@@ -500,6 +521,12 @@ class NetworkSettings:
     @property
     def listens(self) -> bool:
         return self.mode in ("server", "udp")
+
+    @property
+    def both_families(self) -> bool:
+        """The listener takes IPv4 and IPv6 clients: dual_stack (true itself, not text
+        that reads as true) with a wildcard bind IP."""
+        return self.dual_stack is True and canonical_ip(self.bind_ip) in WILDCARDS
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "NetworkSettings":
@@ -858,7 +885,11 @@ class MappingConfig:
         if (self.kind == "serialbridge" and self.serial.port
                 and canonical_device(self.serial.port) == canonical_device(self.serial_b.port)):
             raise ConfigError(_("Serial-to-serial bridge needs two different ports."))
-        if self.kind == "net" and self.network.mode == "udp":
+        net = self.network
+        if self.kind == "net" and net.listens and net.dual_stack is True and not net.both_families:
+            raise ConfigError(_("Listening for IPv4 and IPv6 clients (dual_stack) needs the bind "
+                                "IP 0.0.0.0 or ::, not {0}.").format(net.bind_ip))
+        if self.kind == "net" and net.mode == "udp":
             self._validate_udp_peer()
 
     def _validate_udp_peer(self) -> None:
@@ -880,7 +911,7 @@ class MappingConfig:
                 bind_v4 = ipaddress.ip_address(net.bind_ip).version == 4
             except ValueError:
                 bind_v4 = False  # validate() reports a bad bind IP
-            if ip.version == 6 and bind_v4:
+            if ip.version == 6 and bind_v4 and not net.both_families:
                 raise ConfigError(_("The UDP reply address {0} is IPv6, but the mapping listens "
                                     "on an IPv4 address ({1}).").format(host, net.bind_ip))
         timeout = net.udp_peer_timeout_s
@@ -1582,11 +1613,12 @@ class AppConfig:
         net = m.network
         if net.mode == "server":
             admin = self.admin_ui
-            # "" binds every interface (as asyncio and uvicorn read it), "localhost" both
-            # loopback addresses
-            ips = {"": ["0.0.0.0"], "localhost": ["127.0.0.1", "::1"]}.get(
+            # "" binds every interface of both families (as asyncio and uvicorn read it),
+            # "localhost" both loopback addresses
+            ips = {"": ["0.0.0.0", "::"], "localhost": ["127.0.0.1", "::1"]}.get(
                 admin.bind_ip, [admin.bind_ip])
-            if net.port == admin.port and any(_ip_overlaps(ip, net.bind_ip) for ip in ips):
+            if net.port == admin.port and any(
+                    _ip_overlaps(ip, net.bind_ip, b_both=net.both_families) for ip in ips):
                 return _("Mapping '{0}': TCP port {1} on {2} is the admin UI's port ({3}:{4}), "
                          "so the mapping could not listen there. Pick another port.").format(
                     m.name, net.port, net.bind_ip, admin.bind_ip or "*", admin.port)
@@ -1596,7 +1628,9 @@ class AppConfig:
             discovery = int(cluster.discovery_port)
         except (TypeError, ValueError):
             return ""
-        if cluster.active and cluster.discovery and net.port == discovery:
+        # discovery listens on IPv4 (0.0.0.0): an IPv6-only listener doesn't get its beacons
+        if (cluster.active and cluster.discovery and net.port == discovery and _ip_overlaps(
+                "0.0.0.0", net.bind_ip, b_both=net.both_families, udp=True)):
             return _("Mapping '{0}': UDP port {1} is the LAN cluster's discovery port, so the "
                      "mapping would get the other nodes' beacons. Pick another port (or "
                      "another discovery port under Settings → LAN cluster).").format(
@@ -1659,7 +1693,7 @@ class AppConfig:
         by the resource and both mapping ids."""
         found = []
         serial_users: list[tuple[str, MappingConfig]] = []          # (device, mapping)
-        listeners: list[tuple[str, str, int, MappingConfig]] = []   # (proto, bind_ip, port, mapping)
+        listeners: list[tuple[str, int, MappingConfig]] = []   # (proto, port, mapping)
         for m in self.mappings:
             # A serial port can only be opened by one mapping. Flag two ENABLED
             # mappings that target the same literal device (skip dynamic VID/PID
@@ -1684,13 +1718,18 @@ class AppConfig:
             # A TCP listener and a UDP listener CAN share the same port number (they
             # bind different transports), so the clash key includes the transport.
             proto = "udp" if m.network.mode == "udp" else "tcp"
-            # 0.0.0.0 collides with everything on that port; treat any overlap as a clash.
-            for sproto, bip, bport, other in listeners:
-                if sproto == proto and bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
-                    found.append((f"{proto} {m.network.port} {other.id} {m.id}", ConfigError(
+            # A wildcard collides with every address of its family on that port (and, for
+            # UDP, :: with IPv4 too: see _ip_overlaps); treat any overlap as a clash.
+            net = m.network
+            for sproto, bport, other in listeners:
+                onet = other.network
+                if sproto == proto and bport == net.port and _ip_overlaps(
+                        onet.bind_ip, net.bind_ip, onet.both_families, net.both_families,
+                        udp=proto == "udp"):
+                    found.append((f"{proto} {net.port} {other.id} {m.id}", ConfigError(
                         _("Mappings '{0}' and '{1}' both use {2} port {3} on overlapping "
-                          "addresses ({4} / {5}).").format(other.name, m.name, proto.upper(), m.network.port, bip, m.network.bind_ip))))
-            listeners.append((proto, m.network.bind_ip, m.network.port, m))
+                          "addresses ({4} / {5}).").format(other.name, m.name, proto.upper(), net.port, onet.bind_ip, net.bind_ip))))
+            listeners.append((proto, net.port, m))
         return found
 
     def _broken(self) -> list[tuple[str, str, Any]]:
@@ -1817,15 +1856,28 @@ def _expire_days(value: Any) -> int:
     return 0 if days <= 0 else min(max(days, EXPIRE_DAYS_MIN), EXPIRE_DAYS_MAX)
 
 
-def _ip_overlaps(a: str, b: str) -> bool:
+def _ip_overlaps(a: str, b: str, a_both: bool = False, b_both: bool = False,
+                 udp: bool = False) -> bool:
     """Whether listeners on bind IPs ``a`` and ``b`` (on one port) need the same address:
-    the same address however it is written ('::' and '0:0:0:0:0:0:0:0'), or a wildcard
-    and any address."""
+    the same address however it is written ('::' and '0:0:0:0:0:0:0:0'), or a wildcard and
+    an address of its family. A TCP listener on :: takes IPv6 only (IPV6_V6ONLY), so it can
+    share a port with one on 0.0.0.0 or another IPv4 address; one that takes both families
+    (``a_both`` / ``b_both``: NetworkSettings.both_families) overlaps either. A UDP socket
+    on :: follows the OS (Linux: IPv4 too), so ``udp`` counts it as both."""
+    xs = list(WILDCARDS) if a_both or (udp and canonical_ip(a) == "::") else [a]
+    ys = list(WILDCARDS) if b_both or (udp and canonical_ip(b) == "::") else [b]
+    return any(_address_overlaps(x, y) for x in xs for y in ys)
+
+
+def _address_overlaps(a: str, b: str) -> bool:
     x, y = canonical_ip(a), canonical_ip(b)
     if x == y:
         return True
-    wildcards = {"0.0.0.0", "::"}
-    return x in wildcards or y in wildcards
+    try:
+        ax, ay = ipaddress.ip_address(x), ipaddress.ip_address(y)
+    except ValueError:
+        return False  # not an address (validate() says so): only the same text overlaps
+    return ax.version == ay.version and (ax.is_unspecified or ay.is_unspecified)
 
 
 # ---------------------------------------------------------------------------
