@@ -118,6 +118,9 @@ def test_spec():
         assert sch["additionalProperties"] is True and "required" not in sch, name
         hints = typing.get_type_hints(cls)
         for f in dataclasses.fields(cls):
+            if cls is config.MappingConfig and f.name == "input_notes":
+                assert f.name not in sch["properties"], "what reading noted is no JSON field"
+                continue
             prop = sch["properties"][f.name]
             if dataclasses.is_dataclass(hints[f.name]):
                 assert prop == {"$ref": f"#/components/schemas/{names[hints[f.name]]}"}, prop

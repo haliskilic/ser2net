@@ -479,8 +479,9 @@ def mapping_schemas() -> dict:
     out = {}
     for name, cls in _MAPPING_CLASSES.items():
         hints = typing.get_type_hints(cls)
+        # id: below; input_notes: what reading it noted, never part of the JSON (to_dict)
         props = {f.name: _field_schema(cls, f, hints[f.name]) for f in dataclasses.fields(cls)
-                 if not (cls is config.MappingConfig and f.name == "id")}  # id: below
+                 if not (cls is config.MappingConfig and f.name in ("id", "input_notes"))}
         if cls is config.MappingConfig:
             props["id"] = {"type": "string", "readOnly": True,
                            "description": _NOTES["MappingConfig", "id"]}
