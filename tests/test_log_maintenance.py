@@ -378,12 +378,13 @@ async def _integration():
         path = state.mapping_log_path(m.id)
         os.makedirs(state.logs_dir, exist_ok=True)
         with open(path, "w") as fh:
-            fh.write(f"{ts(-20*86400)} ANCIENT\n{ts(-60)} fresh event 1\n")
+            ancient = f"{ts(-20*86400)} ANCIENT"   # one stamp: the clock may tick before the check
+            fh.write(f"{ancient}\n{ts(-60)} fresh event 1\n")
 
         log = state.make_mapping_logger(m)   # opens the file handler (append)
         handler = state._mapping_loggers[m.id].handlers[0]
         await state.run_log_maintenance()    # the last 1000 lines stay
-        assert open(path).read().startswith(f"{ts(-20*86400)} ANCIENT")
+        assert open(path).read().startswith(ancient)
         with mock.patch.object(state_mod, "LOG_VIEW_LINES", 0):
             await state.run_log_maintenance()    # should drop ANCIENT, keep fresh
         assert state._mapping_loggers[m.id].handlers == [handler], "the handler stays"
