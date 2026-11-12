@@ -914,5 +914,7 @@
   "ISO-8859-1 (Latin-1, Western European)": "ISO-8859-1 (Latin-1, Batı Avrupa)",
   "Windows-1252 (Western European)": "Windows-1252 (Batı Avrupa)",
   "CP437 (DOS, US)": "CP437 (DOS, ABD)",
-  "Unknown console text encoding {0}: use one of {1}.": "Bilinmeyen konsol metin kodlaması {0}: şunlardan birini kullan: {1}."
+  "Unknown console text encoding {0}: use one of {1}.": "Bilinmeyen konsol metin kodlaması {0}: şunlardan birini kullan: {1}.",
+  "CSV for Excel": "Excel için CSV",
+  "UTF-16 text with tabs between the columns: Excel opens it by double-click with every letter and column, whatever the regional settings": "Sütunları sekmeyle ayrılmış UTF-16 metin: Excel, bölge ayarları ne olursa olsun çift tıklayınca tüm harfleri ve sütunlarıyla açar"
 }

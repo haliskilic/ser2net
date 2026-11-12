@@ -1027,11 +1027,22 @@ def routes(ctx: Ctx) -> list:
         if deny := require_role(request, "admin"):
             return deny
         records, *_ = await _audit_records(request)
+        # ?excel=1: UTF-16 with a BOM, tab-separated — Excel opens that by double-click
+        # with every letter and column whatever the regional settings. The default file
+        # (UTF-8 without a BOM, commas) is what scripts read; Excel reads it in the ANSI
+        # code page, split at the regional list separator (Turkish Windows: ';'), so all
+        # in column A with garbled letters. Audit fields hold no tabs (state.audit).
+        excel = request.query_params.get("excel") == "1"
         buf = io.StringIO()
-        out = csv.writer(buf)
+        out = csv.writer(buf, delimiter="\t" if excel else ",")
         out.writerow(["time", "ip", "user", "action", "detail"])
         for r in records:
             out.writerow([_csv_cell(r[k]) for k in ("time", "ip", "user", "action", "detail")])
+        if excel:
+            return Response(("\ufeff" + buf.getvalue()).encode("utf-16-le"),
+                            media_type="text/csv; charset=utf-16",
+                            headers={"Content-Disposition":
+                                     "attachment; filename=ser2net-audit-excel.csv"})
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": "attachment; filename=ser2net-audit.csv"})
 

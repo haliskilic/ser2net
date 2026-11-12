@@ -6,6 +6,7 @@
     <h2>{{ _("Audit log") }}</h2>
     <div class="actions">
       <a class="btn sm" href="/settings/audit.csv{% if qs %}?{{ qs }}{% endif %}">⤓ CSV</a>
+      <a class="btn sm" href="/settings/audit.csv?{% if qs %}{{ qs }}&amp;{% endif %}excel=1" title="{{ _('UTF-16 text with tabs between the columns: Excel opens it by double-click with every letter and column, whatever the regional settings') }}">⤓ {{ _("CSV for Excel") }}</a>
       <a class="btn sm" href="/settings">{{ _("← Settings") }}</a>
     </div>
   </div>

@@ -654,7 +654,9 @@ inside aren't readable by other users:
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
   under Settings → *Audit log* (letter case and accents ignored, as on the dashboard),
-  CSV export.
+  CSV export (UTF-8, commas, for scripts) and *CSV for Excel* (UTF-16 with tabs: opens in
+  Excel by double-click with Turkish letters and columns intact, whatever the regional
+  settings).
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs

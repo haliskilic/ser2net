@@ -674,6 +674,8 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
   konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
   *Audit log*'da aranabilir (panodaki gibi büyük/küçük harfe ve aksanlara bakılmaz), CSV
+  (UTF-8, virgüllü, betikler için) ya da *Excel için CSV* (sekmeli UTF-16: bölge ayarları
+  ne olursa olsun Excel'de çift tıklayınca Türkçe harfler ve sütunlar bozulmadan açılır)
   olarak indirilebilir.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
