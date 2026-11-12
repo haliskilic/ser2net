@@ -60,7 +60,9 @@ from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
 from .protocols.base import ProtocolError, ProtocolSession
-from .serial_link import Backoff, FailureLog, NoteLog, SerialLink, close_stream, fmt_duration
+from .serial_link import (
+    Backoff, FailureLog, NoteLog, SerialLink, close_stream, explain, fmt_duration,
+)
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -319,8 +321,11 @@ class RunnerStatus:
     link_error: str = ""
     link_since: float = 0.0   # time.time() of the last change of `link`
     connect_failures: int = 0  # connect-out attempts that failed
+    # why the serial port can't be opened, when that can be told (portdiag.Note: the group
+    # the device needs, the mapping that has it open, ...); last_error keeps the error itself
+    hint: Optional[portdiag.Note] = None
     # what to know about the serial port(s) open now (portdiag.Note): a setting a port did
-    # not take at open (RTS / DTR, RS-485 mode); as_dict() has them as text
+    # not take at open (RTS / DTR, RS-485 mode); as_dict() has them (and hint) as text
     warnings: tuple = ()
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
@@ -369,6 +374,7 @@ class RunnerStatus:
             "link_since": int(self.link_since),
             "connect_failures": self.connect_failures,
             # in the web UI's language on the dashboard (English for the REST API)
+            "hint": self.hint.text(i18n.gettext) if self.hint else "",
             "warnings": portdiag.texts(self.warnings, i18n.gettext),
         }
 
@@ -615,7 +621,7 @@ class MappingRunner:
         self._stop = asyncio.Event()
         # the serial port shared by server/client/udp (a serial<->serial bridge opens its own)
         self._link = SerialLink(mapping.serial, self.status, self._stop, self._log,
-                                on_change=self._serial_changed)
+                                on_change=self._serial_changed, owner=mapping.name)
         self._access = AccessPolicy(mapping.network)
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
         co = mapping.options.closeon
@@ -1051,11 +1057,13 @@ class MappingRunner:
                     except Exception:
                         first = side
                         raise
+                    portdiag.opened(opened[side][2], self.mapping.name, opened[side][3])
                 was_open = True
                 (ra, wa, sa, da), (rb, wb, sb, db) = opened
                 self.status.device = f"{da} <-> {db}"
                 self.status.devices = (da, db)
                 self.status.last_error = ""
+                self.status.hint = None
                 self.status.warnings = tuple(
                     portdiag.Note("side", (side, note))
                     for side, ser in (("A", sa), ("B", sb)) for note in serial_io.open_notes(ser))
@@ -1081,7 +1089,10 @@ class MappingRunner:
                     else:
                         st.open_failures += 1
                         st.state = "device-missing" if portdiag.missing(e) else "reconnecting"
-                    failures.failed(st.last_error)
+                    if failures.failed(st.last_error):
+                        hint = None if was_open else await asyncio.to_thread(
+                            explain, e, sides[first])
+                        st.hint = portdiag.Note("side", ("AB"[first], hint)) if hint else None
             finally:
                 self.status.warnings = ()
                 await asyncio.gather(*(close_stream(port[1], self._log)

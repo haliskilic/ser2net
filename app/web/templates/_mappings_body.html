@@ -44,6 +44,7 @@
         {% if st and st.last_error and state in ('error','device-missing','reconnecting')
               and not (link_down and st.last_error == st.link_error) %}
           <div class="err-small" title="{{ st.last_error }}">{{ st.last_error|softbreak }}</div>
+          {% if st.hint and state != 'error' %}<div class="warn-small" title="{{ st.hint }}">{{ st.hint|softbreak }}</div>{% endif %}
         {% endif %}
         {% if link_down and st.link_error %}
           <div class="err-small" title="{{ st.link_error }}">{{ st.link_error|softbreak }}</div>

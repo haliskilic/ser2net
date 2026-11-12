@@ -157,8 +157,8 @@ async def _states_and_counters(folder):
     seen = set()
     real = runner._link._failed
 
-    def failed(e, was_open):  # every state right after a failure (the dashboard's view)
-        real(e, was_open)
+    async def failed(e, was_open):  # every state right after a failure (the dashboard's)
+        await real(e, was_open)
         seen.add(st.state)
 
     runner._link._failed = failed

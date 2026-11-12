@@ -82,7 +82,8 @@ class ModbusGatewayRunner:
         self._server: Optional[netguard.Listener] = None
         self._stop = asyncio.Event()
         # the RTU bus; is_open / ready say whether requests can reach it right now
-        self._link = SerialLink(mapping.serial, self.status, self._stop, self._log)
+        self._link = SerialLink(mapping.serial, self.status, self._stop, self._log,
+                                owner=mapping.name)
         self._bus_lock = asyncio.Lock()      # RTU is single-master: one txn at a time
         self._clients: set[_Master] = set()
         self._monitors: set = set()           # browser console observers (read the bus)
