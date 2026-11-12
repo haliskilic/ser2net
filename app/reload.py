@@ -147,8 +147,11 @@ def _refusals(cur: AppConfig, new: AppConfig) -> tuple[list[str], dict[str, Any]
     still: dict[str, Any] = {}
     try:
         still = new.validate_for_save()
-    except ConfigError as e:
+    except Exception as e:  # (a ConfigError; anything else is no valid configuration either)
         problems.append(str(e))
+    ids = [m.id for m in new.mappings]
+    for mid in sorted({mid for mid in ids if ids.count(mid) > 1}):
+        problems.append(f"the mapping id {mid} is used more than once")
     if cur.users and not new.users:
         problems.append("it has no user accounts: the first-run setup page would be open to "
                         "anyone who can reach the UI (restart ser2net to begin afresh)")
@@ -160,7 +163,7 @@ def _refusals(cur: AppConfig, new: AppConfig) -> tuple[list[str], dict[str, Any]
         if old is None or old.to_dict() != m.to_dict():
             try:
                 m.validate_input()  # what an edit of the mapping is held to as well
-            except ConfigError as e:
+            except Exception as e:
                 problems.append(f"mapping '{m.name}': {e}")
     return problems, still
 
