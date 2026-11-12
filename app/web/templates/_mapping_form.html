@@ -11,8 +11,10 @@
       {% if not ports and not s.port %}<option value="">{{ _("(no serial ports detected)") }}</option>{% endif %}
     </select>
   </label>
+  {% if 'usb_match' not in hide %}
   <input type="hidden" name="{{ prefix }}usb_match_shown" value="1">
   <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.match %}checked{% endif %}> {{ _("Find this device by its USB identity if its name changes") }} <span class="muted">({{ _("COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number") }}{% if s.match %} · {{ _("bound to") }} <span class="mono">{{ s.match.vid }}:{{ s.match.pid }}{% if s.match.serial_number %} [{{ s.match.serial_number }}]{% endif %}</span>{% endif %})</span></label>
+  {% endif %}
   <div class="grid3">
     <label>{{ _("Baud rate") }}
       <select name="{{ prefix }}baudrate" data-custom="{{ prefix }}custom_baud">
@@ -74,6 +76,7 @@
     <h3>{{ _("New mapping") if is_new else _("Edit mapping") }}{% if remote %} <span class="tag">{{ _("on %(host)s", host=remote.addr) }}</span>{% endif %}</h3>
     <button type="button" class="btn sm" data-cancel>{{ _("Cancel") }}</button>
   </div>
+  {% if remote and remote.version_note %}<div class="banner warn">{{ remote.version_note }}</div>{% endif %}
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
   {% for note in mapping.ignored_settings() %}<div class="banner warn">{{ note }}</div>{% endfor %}
 
@@ -157,6 +160,7 @@
       </label>
     </div>
 
+    {% if 'udp_reply' not in hide %}
     <div data-show-when="network_mode=udp">
       <div class="grid3">
         <label>{{ _("Reply to IP") }} <span class="muted">({{ _("blank = the last sender") }})</span>
@@ -167,6 +171,7 @@
       </div>
       <p class="sub mb-sm">{{ _("The device’s output goes to the sender of the last datagram from an allowed IP, so any of them can take it over; with a reply address it always goes there. The allow-list checks a datagram’s source address, which can be forged: on an untrusted network use TCP with TLS, or a firewall.") }}</p>
     </div>
+    {% endif %}
 
     <div data-show-when="network_mode=server,client">
       <label class="chk"><input type="checkbox" name="network_tls" {% if mapping.network.tls %}checked{% endif %}> {{ _("TLS (encrypt the data bridge)") }}</label>
@@ -196,10 +201,12 @@
         <input type="text" name="opt_closeon" value="{{ mapping.options.closeon }}" placeholder="{{ _('optional') }}">
       </label>
     </div>
+    {% if 'rfc2217_restore' not in hide %}
     <div data-show-when="network_protocol=rfc2217">
       <input type="hidden" name="opt_rfc2217_restore_on_disconnect_shown" value="1">
       <label class="chk"><input type="checkbox" name="opt_rfc2217_restore_on_disconnect" {% if mapping.options.rfc2217_restore_on_disconnect %}checked{% endif %}> {{ _("Restore the serial settings when the RFC 2217 client leaves") }} <span class="muted">({{ _("baud rate, data bits, parity, stop bits and flow control go back to this mapping’s; RTS/DTR stay as they are") }})</span></label>
     </div>
+    {% endif %}
     <div class="grid2">
       <label>{{ _("Idle timeout (s)") }} <span class="muted">({{ _("TCP; no traffic either way · 0 = off") }})</span>
         <input type="number" name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
@@ -212,12 +219,14 @@
       </label>
       <label class="chk chk-pad"><input type="checkbox" name="opt_trace_hexdump" {% if mapping.options.trace_hexdump %}checked{% endif %}> {{ _("Trace as hex dump") }}</label>
     </div>
+    {% if 'trace_rotation' not in hide %}
     <div class="grid2">
       <label>{{ _("Trace file size (MB)") }} <span class="muted">({{ _("then it is rotated") }})</span>
         <input type="number" name="opt_trace_max_mb" min="0.1" max="1024" step="any" value="{{ '%g'|format(mapping.options.trace_max_mb) }}"></label>
       <label>{{ _("Rotated trace files kept") }} <span class="muted">({{ _("0 = start over") }})</span>
         <input type="number" name="opt_trace_keep" min="0" max="50" value="{{ mapping.options.trace_keep }}"></label>
     </div>
+    {% endif %}
   </fieldset>
 
   <fieldset data-show-when="kind=net">
@@ -243,6 +252,7 @@
       <label>{{ _("Password") }} <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="{{ _('optional') }}"></label>
       <label class="chk chk-pad"><input type="checkbox" name="mqtt_tls" {% if mapping.mqtt.tls %}checked{% endif %}> TLS</label>
     </div>
+    {% if 'payload_format' not in hide %}
     <div class="grid3" data-show-when="network_protocol=modbus">
       <label>{{ _("Payload format") }} <span class="muted">({{ _("Modbus points") }})</span>
         <select name="mqtt_payload_format">
@@ -253,6 +263,7 @@
       <label>{{ _("Sparkplug edge node ID") }} <span class="muted">({{ _("blank = mapping name") }})</span>
         <input type="text" name="mqtt_sparkplug_node_id" value="{{ mapping.mqtt.sparkplug_node_id }}" placeholder="{{ _('e.g. %(example)s', example='line-3-plc') }}"></label>
     </div>
+    {% endif %}
   </fieldset>
 
   <fieldset data-show-when="network_protocol=modbus">
@@ -265,10 +276,12 @@
     </label>
     <p class="sub mb-sm">{{ _('Who may write is up to the broker: let only trusted clients publish to <span class="mono">&lt;topic&gt;/+/set</span> (Sparkplug: the node’s NCMD and DCMD topics), and use TLS and a username. Read-only refuses every write.') }}</p>
     {% if mapping.accepts_mqtt_writes and not (mapping.mqtt.tls and mapping.mqtt.username) %}<div class="banner warn">{{ _('Writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them. Restrict those topics with the broker’s ACLs, and use TLS and credentials.') }}</div>{% endif %}
+    {% if 'retained_set' not in hide %}
     <div data-show-when="mqtt_payload_format=plain">
       <input type="hidden" name="mqtt_apply_retained_set_shown" value="1">
       <label class="chk"><input type="checkbox" name="mqtt_apply_retained_set" {% if mapping.mqtt.apply_retained_set %}checked{% endif %}> {{ _("Re-apply a retained /set after every connect") }} <span class="muted">({{ _("off: a command is written when it is published; the retained copy the broker sends again after a reconnect, restart or save is ignored") }})</span></label>
     </div>
+    {% endif %}
   </fieldset>
 
   <button class="btn primary" type="submit">{{ _("Create mapping") if is_new else _("Save changes") }}</button>

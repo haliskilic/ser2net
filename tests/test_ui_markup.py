@@ -16,6 +16,7 @@ portable test guards the template side of the contract on every platform:
 Run: python3 tests/test_ui_markup.py
 """
 import html.parser
+import re
 import json
 import os
 import sys
@@ -175,7 +176,8 @@ def test_cluster_table():
         {"name": "peer-host", "self": False, "source": "manual", "ip": "fd00::2", "port": 8443,
          "addr": "[fd00::2]:8443", "url": "https://[fd00::2]:8443/", "reported": EVIL,
          "scheme": "https", "online": True, "uptime": "2h", "version": __version__,
-         "running_count": 1, "mapping_count": 2, "mappings": node_maps},
+         "running_count": 1, "mapping_count": 2, "mappings": node_maps,
+         "caps": frozenset({"control", "edit"})},
         {"name": "gone", "self": False, "source": "auto", "ip": "10.0.0.3", "port": 8080,
          "addr": "10.0.0.3:8080", "url": "http://10.0.0.3:8080/", "scheme": "http",
          "online": False, "mappings": []},
@@ -195,6 +197,30 @@ def test_cluster_table():
     assert opens == ["https://[fd00::2]:8443/"], "Open only for an online peer, at its URL"
     check_table_contract(tpl.render(nodes=[], can_edit=True), "empty cluster table")
     print("cluster table: wrapper, card labels, buttons in their cell, escaping  OK")
+
+    # what a peer can do decides its buttons: 2.5.x (no version) is only shown, 2.6.0
+    # has no remote edit; another version is tagged, and a mixed cluster gets a banner
+    from app.web.routes.cluster import peer_caps
+    for payload, caps, labels in (
+            ({"version": __version__, "caps": ["control", "edit"]}, {"control", "edit"},
+             ["Stop", "Restart", "Edit", "Start", "Edit"]),
+            ({}, set(), []), ({"version": "2.5.0"}, set(), []),
+            ({"version": "2.6.0"}, {"control"}, ["Stop", "Restart", "Start"]),
+            ({"version": "2.6.1"}, {"control", "edit"}, ["Stop", "Restart", "Edit", "Start", "Edit"]),
+            ({"version": "3.0.0", "caps": ["control"]}, {"control"}, ["Stop", "Restart", "Start"])):
+        assert peer_caps(payload) == caps, (payload, peer_caps(payload))
+        peer = dict(nodes[1], caps=peer_caps(payload), version=payload.get("version", ""),
+                    age="older" if payload.get("version", "x") < __version__ else "")
+        out = tpl.render(nodes=[nodes[0], peer], can_edit=True,
+                         notes={"versions": ["2.6.0", __version__]})
+        got = re.findall(r'<button class="btn sm"[^>]*>([^<]*)</button>', out)
+        assert got == labels, (payload, got)
+        assert ("view only" in out) == (not caps) and ("no remote edit" in out) == (
+            caps == {"control"}), (payload, out[:2000])
+        assert ("older version" in out) == (peer["age"] == "older"), payload
+        assert "run different versions (2.6.0, " in out
+    print("cluster table: actions follow what the peer can do (caps, else its version); "
+          "other versions tagged, a mixed cluster pointed out  OK")
 
 
 def test_ports_table_and_assets():
