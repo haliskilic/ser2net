@@ -136,6 +136,11 @@ düzenlemeye gerek yok.
   sonra yeniden uygula** işaretli değilse yok sayılır (ve loglanır); retained bir
   Sparkplug NCMD/DCMD her zaman yok sayılır, boş bir mesaj (retained mesajı temizleyen)
   komut değildir ve ser2net bağlı değilken yayınlanan bir komut sonradan iletilmez.
+- **MQTT komutları (edge modu):** `/set` ve Sparkplug DCMD yazmaları geldikleri sırayla,
+  tek tek yapılır ve hatta poll ile Modbus/TCP master'larıyla sırayla erişir;
+  `.../set/result` cevapları da bu sırayı korur. Hat için en çok 32 yazma bekler: fazlası
+  `error: busy` alır, sırası gelene kadar 10 sn'den uzun bekleyen bir yazma yapılmaz
+  (`error: expired`).
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
