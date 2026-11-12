@@ -12,11 +12,16 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from .. import __version__
 from ..config import ROLE_RANK, ConfigError, ConfigWriteError, MappingConfig, valid_mapping_id
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
 API_PREFIX = "/api/v1"
+# The REST API's own version (OpenAPI info.version, GET /info) and what it offers beyond
+# 1.0.0, so a client can tell what it may use without parsing the software version.
+API_VERSION = "1.1.0"
+API_FEATURES = ("warnings", "changed")
 
 REDACTED = "********"
 
@@ -173,12 +178,17 @@ def build_api_routes(state):
     async def health(request):
         return JSONResponse({"status": "ok", "mappings": len(state.config.mappings)})
 
+    async def info(request):
+        return JSONResponse({"version": __version__, "api": API_VERSION,
+                             "features": list(API_FEATURES)})
+
     async def openapi(request):
         return JSONResponse(openapi_spec(state.config.admin_ui))
 
     return [
         Route(f"{API_PREFIX}/health", health, methods=["GET"]),
         Route(f"{API_PREFIX}/openapi.json", openapi, methods=["GET"]),
+        Route(f"{API_PREFIX}/info", info, methods=["GET"]),
         Route(f"{API_PREFIX}/status", status, methods=["GET"]),
         Route(f"{API_PREFIX}/ports", ports, methods=["GET"]),
         Route(f"{API_PREFIX}/mappings", list_mappings, methods=["GET"]),
@@ -206,7 +216,7 @@ def openapi_spec(admin) -> dict:
         "openapi": "3.0.3",
         "info": {
             "title": "ser2net REST API",
-            "version": "1.0.0",
+            "version": API_VERSION,
             "description": "Manage serial<->network mappings, status and ports. "
                            "Authenticate with `Authorization: Bearer <token>` "
                            "(generate the token in Settings).",
@@ -222,6 +232,13 @@ def openapi_spec(admin) -> dict:
         "paths": {
             "/health": {"get": {"summary": "Liveness probe (no auth)", "security": [],
                                 "responses": {"200": {"description": "ok"}}}},
+            "/info": {"get": {"summary": "Software and API version, API features",
+                              "security": bearer, "description": (
+                                  "`version`: ser2net's version; `api`: this API's version "
+                                  "(info.version here); `features`: what it offers beyond "
+                                  "1.0.0 (`warnings` and `changed` in create / update / "
+                                  "action answers)."),
+                              "responses": {"200": {"description": "version, api, features"}}}},
             "/status": {"get": {"summary": "Live status of all mappings", "security": bearer,
                                 "responses": {"200": {"description": "status map"}}}},
             "/ports": {"get": {"summary": "Detected serial ports", "security": bearer,

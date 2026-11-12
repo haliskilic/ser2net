@@ -21,6 +21,9 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, ROOT)
+from app import __version__  # noqa: E402
+
 UI = 8095
 BASE = f"http://127.0.0.1:{UI}"
 
@@ -119,6 +122,14 @@ def main():
         code, listing = api("GET", "/api/v1/mappings", token=token, expect=200)
         assert listing == {"mappings": []}, listing
         print("auth: bad token -> 401, valid token -> 200 (empty list)  OK")
+
+        # ---- the versions and what the API offers (token needed) ----
+        api("GET", "/api/v1/info", expect=401)
+        _code, info = api("GET", "/api/v1/info", token=token, expect=200)
+        assert info["version"] == __version__ and info["api"] == spec["info"]["version"], info
+        assert {"warnings", "changed"} <= set(info["features"]), info
+        assert "/info" in spec["paths"], spec["paths"].keys()
+        print("GET /info (token): software + API version, features  OK")
 
         # ---- create ----
         port = free_port()
