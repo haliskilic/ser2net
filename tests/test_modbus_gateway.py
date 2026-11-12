@@ -520,6 +520,7 @@ class ThreadSlave:
 
     def __init__(self, answer):
         self.answer = answer
+        self.conn = None
         self.sock = socket.create_server(("127.0.0.1", 0))
         self.port = self.sock.getsockname()[1]
         self.thread = threading.Thread(target=self._serve, daemon=True)
@@ -528,6 +529,7 @@ class ThreadSlave:
     def _serve(self):
         with suppress(OSError):
             conn, _addr = self.sock.accept()
+            self.conn = conn
             with conn:
                 conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 buf = bytearray()
@@ -543,6 +545,9 @@ class ThreadSlave:
                         conn.sendall(part)
 
     def close(self):
+        if self.conn is not None:  # ends the thread's recv() (the event loop waits meanwhile)
+            with suppress(OSError):
+                self.conn.shutdown(socket.SHUT_RDWR)
         self.sock.close()
         self.thread.join(timeout=5)
 
