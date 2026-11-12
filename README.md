@@ -723,8 +723,13 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yollar dosya adına indirgenir ve açılışta log'a yazılır. Yazılamayan bir trace (klasör
   silinmiş, disk dolu, dosya tanıtıcısı kalmamış) durmak yerine bekler: panodaki satır ve
   Trace paneli nedenini gösterir, ser2net birkaç saniyede bir yeniden dener (klasörü de
-  yeniden oluşturur) ve trace sonra kaç baytın eksik olduğunu yazar. Trace'ler iki yöndeki
-  ham trafiği, kişisel veriler ve cihaza yazılan parolalar dahil, olduğu gibi tutar: artık
+  yeniden oluşturur) ve trace sonra kaç baytın eksik olduğunu yazar. Trace, disk dolmadan
+  önce de bekler: veri klasörünün diskinde 256 MB'tan az boş yer kaldığında (daha büyük bir
+  diskte diskin %5'i, en fazla 1 GB; her yeni dosyada ve her 8 MB yazıldığında bakılır).
+  Bunun %10 fazlası boşalınca kendiliğinden devam eder. *Saklanan eski trace dosyası
+  sayısı* düşürülünce fazladan kalan döndürülmüş dosyalar trace başlarken silinir.
+  Trace'ler iki yöndeki ham trafiği, kişisel veriler ve cihaza yazılan parolalar dahil,
+  olduğu gibi tutar: artık
   gerekmediklerinde Trace panelinden silin (yazılmakta olan dosya bir sonraki trafikle
   yeniden başlar) ya da Ayarlar → *Saklama süresi* ile belli bir gün sayısı boyunca
   yazılmayanların silinmesini sağlayın (varsayılan olarak kapalı; her saat kontrol edilir).

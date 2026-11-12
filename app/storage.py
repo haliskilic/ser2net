@@ -1,4 +1,10 @@
-"""What ser2net keeps on disk: the clock its retention goes by.
+"""What ser2net keeps on disk: the free space it needs, and the clock its retention goes by.
+
+Traces can fill a disk (up to trace_max_mb x (1 + trace_keep) per mapping), and a full
+disk keeps config.json, the logs and the audit log from being written. Below ``floor()``
+free space on the data folder's disk (max(256 MiB, 5% of the disk), at most 1 GiB, and at
+most a quarter of a small disk) a trace pauses (``check_space``, in its writer thread) and
+goes on by itself once there is 10% more than that again.
 
 Retention deletes by age (the mapping logs' 15 days, Settings -> Retention). ``now()`` is
 the time it compares with: the system clock, but never ahead of the system clock at
@@ -9,7 +15,52 @@ system clock counts again: by then the step is either corrected or a real one.
 """
 from __future__ import annotations
 
+import errno
+import shutil
 import time
+
+FREE_FLOOR_MIN = 256 * 1024 * 1024
+FREE_FLOOR_SHARE = 0.05
+FREE_FLOOR_MAX = 1024 * 1024 * 1024
+FREE_RESUME = 1.1  # a trace paused for space goes on above floor() x this
+
+
+class LowSpace(OSError):
+    """Too little free space on the disk to write a trace (check_space)."""
+
+
+def space(path: str) -> tuple[int, int] | None:
+    """(free, total) bytes of the file system `path` is on (free: what this process may
+    use, without the part reserved for root), or None when that can't be read."""
+    try:
+        usage = shutil.disk_usage(path)
+    except (OSError, ValueError):
+        return None
+    return usage.free, usage.total
+
+
+def floor(total: int) -> int:
+    """The free space below which traces pause on a disk of `total` bytes."""
+    return min(max(FREE_FLOOR_MIN, min(int(total * FREE_FLOOR_SHARE), FREE_FLOOR_MAX)),
+               total // 4)
+
+
+def mb(n: float) -> str:
+    return f"{n / 1048576:.0f} MB"
+
+
+def check_space(path: str, resuming: bool = False) -> None:
+    """Raise LowSpace when the disk `path` is on has less free space than floor() (with
+    `resuming`: than FREE_RESUME times that, so that a trace paused for it doesn't flap);
+    nothing when there is enough, or when that can't be told."""
+    found = space(path)
+    if found is None:
+        return
+    free, total = found
+    need = floor(total)
+    if free < (need * FREE_RESUME if resuming else need):
+        raise LowSpace(errno.ENOSPC, f"the disk is almost full ({mb(free)} free; traces "
+                                     f"pause below {mb(need)})")
 
 
 def _elapsed() -> float:

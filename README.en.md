@@ -701,8 +701,12 @@ inside aren't readable by other users:
   are reduced to the file name, which is logged at start-up. A trace that can't be written
   (folder removed, disk full, no file handle left) pauses instead of stopping: the
   dashboard row and the Trace panel say why, ser2net tries again every few seconds (making
-  the folder again) and the trace then notes how many bytes are missing. Traces hold the
-  raw traffic in both directions, personal data and passwords typed to a device included:
+  the folder again) and the trace then notes how many bytes are missing. A trace also
+  pauses before the disk fills up: while the data folder's disk has less than 256 MB free
+  (5% of a larger disk, at most 1 GB), checked at each new file and every 8 MB written; it
+  goes on by itself once there is 10% more. Rotated files past a lowered *Rotated trace
+  files kept* are deleted when the trace starts. Traces hold the raw traffic in both
+  directions, personal data and passwords typed to a device included:
   delete them in the Trace panel once they are no longer needed (the file being written
   begins again with the next traffic), or have them deleted after a number of days without
   writes under Settings → *Retention* (off by default; checked every hour). Deleting a
