@@ -9,7 +9,11 @@
     the UI is missing, and the UI comes up by itself once the port is free;
   - an admin TLS pair that exists but does not load stops the start before any mapping
     starts, with the reason in all.log and no traceback; saving such a pair in Settings
-    is refused (a pair that loads is saved).
+    is refused (a pair that loads is saved);
+  - a mapping that would listen on the admin UI's TCP address and port (or, as UDP, on
+    the active cluster discovery port) is refused where it is created or changed: the
+    mapping form, the REST API, an import; a copy's port bump skips the UI's port.
+    validate() itself does not refuse it (a stored clash must keep loading and saving).
 The servers run as child processes on 127.0.0.1.
 
 Run: python3 tests/test_admin_ui_first.py
@@ -28,9 +32,10 @@ import urllib.request
 
 from _server import ROOT, Browser, Server, free_port
 
+from app.config import AppConfig, MappingConfig
 from app.engine import netguard
 from app.web import httpguard
-from app.web.auth import hash_password
+from app.web.auth import hash_password, hash_token
 
 PW = "ui-first-pass-1"
 USERS = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
@@ -226,10 +231,95 @@ def test_tls_checked_when_saved():
           "saved  OK")
 
 
+def test_own_port_conflict():
+    def conflict(admin=("127.0.0.1", 8080), cluster=None, **net):
+        cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": admin[0], "port": admin[1]},
+                                   "cluster": cluster or {}})
+        m = MappingConfig.from_dict({"name": "M", "serial": {"port": "/dev/ttyX"},
+                                     "network": dict({"mode": "server", "bind_ip": "0.0.0.0",
+                                                      "port": 8080}, **net)})
+        return cfg.own_port_conflict(m)
+
+    assert "admin UI's port (127.0.0.1:8080)" in conflict(), conflict()  # the defaults clash
+    assert conflict(bind_ip="127.0.0.1") and conflict(protocol="modbus")
+    assert not conflict(bind_ip="10.0.0.5"), "another address is no clash"
+    assert not conflict(port=8081) and not conflict(mode="udp"), "UDP or another port: fine"
+    assert not conflict(mode="client", remote_host="10.0.0.9", remote_port=8080)
+    assert conflict(admin=("", 8080), bind_ip="10.0.0.5"), "'' is every interface"
+    assert conflict(admin=("0.0.0.0", 8080), bind_ip="10.0.0.5")
+    assert conflict(admin=("localhost", 8080), bind_ip="::1")
+    keyed = {"enabled": True, "key": "k" * 20}
+    assert "discovery port" in conflict(cluster=keyed, mode="udp", port=41750)
+    assert not conflict(cluster=dict(keyed, discovery=False), mode="udp", port=41750)
+    assert not conflict(cluster={"enabled": False, "key": "k" * 20}, mode="udp", port=41750)
+    assert not conflict(cluster=keyed, mode="server", bind_ip="10.0.0.5", port=41750)
+    # validate() still accepts a stored one: a config.json with it keeps loading and saving
+    cfg = AppConfig.from_dict({"mappings": [{"name": "M", "serial": {"port": "/dev/ttyX"},
+                                             "network": {"bind_ip": "0.0.0.0", "port": 8080}}]})
+    cfg.validate()
+    print("own_port_conflict: TCP on the admin UI's address/port ('' and 0.0.0.0 = every "
+          "interface), UDP on the active discovery port; validate() unchanged  OK")
+
+
+def test_saves_refuse_the_admin_port():
+    token = "s2n_" + "t" * 40
+    srv = Server()
+    near = mapping("Near", srv.port - 1, "near00000001")
+    near["enabled"] = False
+    with open(srv.config_path, "w", encoding="utf-8") as fh:
+        json.dump({"users": USERS, "api_token_hash": hash_token(token), "api_token_role": "admin",
+                   "mappings": [near]}, fh)
+    with srv:
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        form = {"name": "Form", "kind": "net", "network_mode": "server",
+                "network_protocol": "raw", "network_bind_ip": "0.0.0.0",
+                "network_port": str(srv.port), "serial_port": "/dev/ttyNOPE-form"}
+        st, _h, body = b.post("/api/mappings/save", form, htmx=True)
+        assert st == 400 and ("admin UI&#39;s port" in body or "admin UI's port" in body), \
+            (st, body[-1500:])
+        st, _h, _body = b.post("/api/mappings/save", dict(form, network_port=str(srv.port + 2)),
+                               htmx=True)
+        assert st == 200, st
+
+        req = urllib.request.Request(
+            srv.base + "/api/v1/mappings", method="POST",
+            data=json.dumps({"name": "Api", "serial": {"port": "/dev/ttyNOPE-api"},
+                             "network": {"mode": "server", "bind_ip": "127.0.0.1",
+                                         "port": srv.port}}).encode(),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+        except urllib.error.HTTPError as e:
+            detail = json.loads(e.read())
+            assert e.code == 400 and "admin UI's port" in detail["detail"], detail
+        else:
+            raise AssertionError("the REST API took a mapping on the admin UI's port")
+
+        export = json.dumps({"mappings": [mapping("Imported", srv.port, "impo00000001")]})
+        st, _h, page = b.post("/settings/config/import", {"mode": "merge", "step": "preview"},
+                              files={"file": ("m.json", export.encode())})
+        assert "admin UI" in page and "Imported" in page, page[-2000:]
+        st, _h, page = b.post("/settings/config/import", {},
+                              files={"file": ("m.json", export.encode())})
+        assert "Import rejected" in page, page[-2000:]
+        names = [m["name"] for m in srv.saved_config()["mappings"]]
+        assert "Imported" not in names and "Api" not in names and "Form" in names, names
+
+        st, _h, _body = b.post(f"/api/mappings/{near['id']}/duplicate", {}, htmx=True)
+        assert st == 200, st
+        copy = next(m for m in srv.saved_config()["mappings"] if m["name"] == "Near (copy)")
+        assert copy["network"]["port"] == srv.port + 1, (copy["network"]["port"], srv.port)
+    print("the mapping form, the REST API and an import refuse a mapping on the admin UI's "
+          "port; a copy's port bump skips it  OK")
+
+
 if __name__ == "__main__":
+    test_own_port_conflict()
     test_listen()
     test_mapping_on_the_ui_port()
     test_ui_port_held_at_start()
     test_tls_that_does_not_load()
     test_tls_checked_when_saved()
+    test_saves_refuse_the_admin_port()
     print("\nPASS: the admin UI starts before the mappings")

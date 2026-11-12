@@ -841,5 +841,7 @@
   "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış.",
   "retrying in %(n)s s": "%(n)s sn sonra yeniden denenecek",
   "retrying now": "şimdi yeniden deneniyor",
-  "The TLS certificate and key could not be loaded: {0}": "TLS sertifikası ve anahtarı yüklenemedi: {0}"
+  "The TLS certificate and key could not be loaded: {0}": "TLS sertifikası ve anahtarı yüklenemedi: {0}",
+  "Mapping '{0}': TCP port {1} on {2} is the admin UI's port ({3}:{4}), so the mapping could not listen there. Pick another port.": "'{0}' eşlemesi: {2} üzerindeki TCP {1} portu yönetim arayüzünün portu ({3}:{4}); eşleme orada dinleyemez. Başka bir port seç.",
+  "Mapping '{0}': UDP port {1} is the LAN cluster's discovery port, so the mapping would get the other nodes' beacons. Pick another port (or another discovery port under Settings → LAN cluster).": "'{0}' eşlemesi: UDP {1} portu LAN cluster'ın keşif portu; eşleme diğer düğümlerin keşif paketlerini alırdı. Başka bir port seç (ya da Ayarlar → LAN cluster altında başka bir keşif portu)."
 }

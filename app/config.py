@@ -1385,6 +1385,40 @@ class AppConfig:
     def get_mapping(self, mapping_id: str) -> Optional[MappingConfig]:
         return next((m for m in self.mappings if m.id == mapping_id), None)
 
+    def own_port_conflict(self, m: MappingConfig) -> str:
+        """Why mapping ``m`` can't listen where it is set to next to ser2net's own
+        listeners ("" when it can): a TCP listener on the admin UI's address and port, or a
+        UDP one on the LAN cluster's discovery port while discovery is on (it would get the
+        other nodes' beacons). Checked where a mapping is created or changed (the form, the
+        REST API, a cluster peer, an import, a copy), never by validate(): a stored clash
+        must not stop a start or another save, and the admin UI wins at start-up anyway
+        (it listens before the mappings start), so such a mapping only fails to start."""
+        if m.kind != "net" or not m.network.listens:
+            return ""
+        net = m.network
+        if net.mode == "server":
+            admin = self.admin_ui
+            # "" binds every interface (as asyncio and uvicorn read it), "localhost" both
+            # loopback addresses
+            ips = {"": ["0.0.0.0"], "localhost": ["127.0.0.1", "::1"]}.get(
+                admin.bind_ip, [admin.bind_ip])
+            if net.port == admin.port and any(_ip_overlaps(ip, net.bind_ip) for ip in ips):
+                return _("Mapping '{0}': TCP port {1} on {2} is the admin UI's port ({3}:{4}), "
+                         "so the mapping could not listen there. Pick another port.").format(
+                    m.name, net.port, net.bind_ip, admin.bind_ip or "*", admin.port)
+            return ""
+        cluster = self.cluster
+        try:
+            discovery = int(cluster.discovery_port)
+        except (TypeError, ValueError):
+            return ""
+        if cluster.active and cluster.discovery and net.port == discovery:
+            return _("Mapping '{0}': UDP port {1} is the LAN cluster's discovery port, so the "
+                     "mapping would get the other nodes' beacons. Pick another port (or "
+                     "another discovery port under Settings → LAN cluster).").format(
+                m.name, net.port)
+        return ""
+
     def validate(self) -> None:
         """Validate every part (the admin UI settings, each section, each mapping) and the
         cross-mapping invariants (unique IP:port, one mapping per serial port); raises
