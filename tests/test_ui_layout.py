@@ -15,8 +15,9 @@ longer:
   * every element stays inside its panel; row buttons stay inside their cell
     and never overlap; no cell's content overflows the cell;
   * the browser reports no errors (e.g. a Content-Security-Policy violation);
-  * the filter rows (the dashboard's toolbar, the audit log's filters) take one line in
-    wide windows, and their search boxes are drawn like the other fields;
+  * the filter rows take one line (the dashboard's toolbar) or two (the audit log's
+    filters, with the long account names in its user filter) in wide windows instead of
+    a line per field, and their search boxes are drawn like the other fields;
   * the self-refreshing panels (mappings, cluster, ports) aren't refreshed while the tab
     is hidden (a cluster refresh makes the node ask every peer) and are refreshed as soon
     as the tab is shown again;
@@ -524,13 +525,13 @@ def main():
                     "() => (document.querySelector('#cluster') || {}).textContent?.includes('B-short')",
                     timeout=20000)
 
-            def filter_row(where, sel):
-                """At these widths the row fits on one line: each select used to take a
+            def filter_row(where, sel, most=1):
+                """At these widths the row fits on `most` lines: each select used to take a
                 line of its own (and the search box was drawn white in the dark theme)."""
                 r = page.evaluate(FILTER_ROW_JS, sel)
                 if r is None:
                     problems.append(f"{where}: no {sel}")
-                elif r["lines"] != 1:
+                elif r["lines"] > most:
                     problems.append(f"{where}: {sel} takes {r['lines']} lines")
                 elif r["searchBg"] != r["pageBg"]:
                     problems.append(f"{where}: the search box is drawn {r['searchBg']}, "
@@ -565,8 +566,8 @@ def main():
                     page.goto(f"{base}/settings/audit")
                     page.wait_for_selector("form.filters")
                     check(f"{lang} audit log @{w}")
-                    if w >= 1024:
-                        filter_row(f"{lang} audit log @{w}", "form.filters")
+                    if w >= 1024:   # (its user filter lists the long account names)
+                        filter_row(f"{lang} audit log @{w}", "form.filters", most=2)
 
             # the cluster panel polls every 5 s: not from a hidden tab, and at once when
             # the tab is shown again
