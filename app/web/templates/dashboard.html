@@ -22,6 +22,8 @@
       <option value="port">{{ _("Network port") }}</option>
     </select>
     {% if can_edit %}
+    {# ticks / unticks every row the search and the state filter show (only those) #}
+    <label class="chk select-shown"><input type="checkbox" id="select-shown" data-select-shown> {{ _("Select all shown") }}</label>
     <span class="bulk" data-bulk hidden>
       <span class="muted" data-bulk-count aria-live="polite"></span>
       <button class="btn sm" type="button" data-bulk-action="start" hx-disabled-elt="this">{{ _("Start") }}</button>

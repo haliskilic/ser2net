@@ -26,7 +26,8 @@
     {% set problem = state in ('error', 'device-missing', 'reconnecting') %}
     <tr data-mid="{{ m.id }}" data-name="{{ m.name|lower }}" data-state="{{ 'problem' if problem else state }}"
         data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
-        data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}">
+        data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}"
+        data-clients="{{ st.client_count|default(0) if st else 0 }}">
       {# the ids: htmx puts the keyboard focus back on a control after the table's 2-second
          refresh; every row button is described by the mapping's name (screen readers) #}
       {% set rid = 'm-' ~ m.id %}

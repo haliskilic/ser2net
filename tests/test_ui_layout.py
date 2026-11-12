@@ -30,7 +30,9 @@ longer:
     form changes are not thrown away without asking; a save says so and the focus goes
     back to the row; Shift+Tab leaves the console; a failed action, a lost connection
     and an ended session are shown (refreshing panels marked "not up to date") and
-    cleared once requests work again.
+    cleared once requests work again; a bulk action acts on the ticked rows shown only
+    ("Select all shown" ticks those), asks first with the counts and clears the
+    selection; a filter that matches nothing says so, with a button that clears it.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -265,8 +267,11 @@ def feedback_checks(browser, base, problems):
             and errors.append(m.text))
     page.on("pageerror", lambda e: errors.append(str(e)))
 
+    messages = []
+
     def on_dialog(d):
         dialogs.append(d.type)
+        messages.append(d.message)
         d.accept() if answer["accept"] else d.dismiss()
     page.on("dialog", on_dialog)
 
@@ -406,6 +411,44 @@ def feedback_checks(browser, base, problems):
     if not until("() => !document.querySelector('#mappings.stale') && "
                  "!document.getElementById('ui-alert').textContent.trim()"):
         bad("the session note stayed after signing in again")
+
+    # bulk actions act on the ticked rows shown, ask first, and clear the selection after;
+    # a filter that matches nothing says so
+    js_click = "sel => document.querySelector(sel).click()"
+    count = "document.querySelector('[data-bulk-count]').textContent"
+    page.evaluate("document.querySelector('#mappings tr[data-mid] .row-select').click()")  # LONG_NAME
+    page.fill("[data-filter-text]", "short")
+    if "1 more hidden" not in page.evaluate(count):
+        bad(f"a ticked row the filter hides is not counted as left out: {page.evaluate(count)!r}")
+    page.evaluate(js_click, "[data-select-shown]")
+    short = page.evaluate("document.querySelector('#mappings tr[data-mid]:not([hidden])').getAttribute('data-mid')")
+    if not page.evaluate(f"document.getElementById('m-{short}-select').checked"):
+        bad("“Select all shown” did not tick the row shown")
+    posts = []
+    page.on("request", lambda r: r.url.endswith("/api/mappings/bulk") and posts.append(r.post_data))
+    answer["accept"], del_messages = False, len(messages)
+    page.evaluate(js_click, "[data-bulk-action=restart]")
+    page.wait_for_timeout(300)
+    asked = messages[del_messages:]
+    n = int(page.evaluate(f"document.querySelector('tr[data-mid=\"{short}\"]').getAttribute('data-clients')"))
+    want = ("Restart 1 mapping", f"{n} connected client" if n else "?",
+            "1 selected mapping(s) hidden")
+    if not asked or not all(t in asked[0] for t in want):
+        bad(f"the bulk restart did not ask with the counts ({n} clients): {asked}")
+    if posts:
+        bad("a dismissed bulk restart was sent")
+    answer["accept"] = True
+    page.evaluate(js_click, "[data-bulk-action=restart]")
+    if not until("() => document.querySelector('[data-bulk]').hidden"):
+        bad("the selection was not cleared after the bulk action")
+    if len(posts) != 1 or f"ids={short}" not in (posts[0] or "") or posts[0].count("ids=") != 1:
+        bad(f"the bulk action did not send just the row shown: {posts}")
+    page.fill("[data-filter-text]", "no-such-mapping-zzz")
+    if not page.query_selector("#mappings tr.no-match button[data-filter-clear]"):
+        bad("a filter matching nothing does not say so in the table")
+    page.click("#mappings tr.no-match button[data-filter-clear]")
+    if page.query_selector("#mappings tr.no-match") or page.input_value("[data-filter-text]"):
+        bad("“Show all” did not clear the filter")
     problems.extend(f"feedback: browser error: {e}" for e in errors)
     ctx.close()
 

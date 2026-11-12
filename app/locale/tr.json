@@ -875,5 +875,12 @@
   "No mapping matches the search or the state filter.": "Aramaya ya da durum filtresine uyan eşleme yok.",
   "Show all": "Tümünü göster",
   "Copied to the clipboard.": "Panoya kopyalandı.",
-  "Selected: press Ctrl+C (⌘C on a Mac) to copy it.": "Seçildi: kopyalamak için Ctrl+C'ye (Mac'te ⌘C) bas."
+  "Selected: press Ctrl+C (⌘C on a Mac) to copy it.": "Seçildi: kopyalamak için Ctrl+C'ye (Mac'te ⌘C) bas.",
+  "Select all shown": "Gösterilenlerin hepsini seç",
+  "{0} selected ({1} more hidden by the filter: left out)": "{0} seçili (filtrenin gizlediği {1} tane daha: dahil değil)",
+  "Start {0} mapping(s)?": "{0} eşleme başlatılsın mı?",
+  "Stop {0} mapping(s)? They stay stopped until they are started again.": "{0} eşleme durdurulsun mu? Yeniden başlatılana kadar durdurulmuş kalırlar.",
+  "Restart {0} mapping(s)?": "{0} eşleme yeniden başlatılsın mı?",
+  "{0} connected client(s) will be disconnected.": "Bağlı {0} istemcinin bağlantısı kesilecek.",
+  "{0} selected mapping(s) hidden by the filter are left out.": "Seçili olup filtrenin gizlediği {0} eşleme dahil edilmez."
 }

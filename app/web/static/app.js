@@ -477,19 +477,51 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     body.appendChild(row);
   }
 
+  // A bulk action acts on the ticked rows the table shows: a row the search or the state
+  // filter hides stays ticked (it is shown again with the filter) but is left out, and
+  // the bar says how many those are. (A ticked row can be hidden without anyone touching
+  // the filter: a state filter hides it when its state changes.)
+  function shownRows() {
+    var box = document.getElementById("mappings");
+    return box ? Array.prototype.filter.call(box.querySelectorAll("table.list tbody tr[data-mid]"),
+                                             function (r) { return !r.hidden; }) : [];
+  }
+  function shownSelected() {
+    return shownRows().filter(function (r) { return selected.has(r.getAttribute("data-mid")); });
+  }
+
   function updateBulk() {
     var t = tools(); if (!t) return;
     var bar = t.querySelector("[data-bulk]"); if (!bar) return;
+    var rows = shownRows(), on = shownSelected(), hidden = selected.size - on.length;
     bar.hidden = selected.size === 0;
     var count = t.querySelector("[data-bulk-count]");
-    var said = tr("selected", "{0} selected", selected.size);
+    var said = hidden
+      ? tr("selected_hidden", "{0} selected ({1} more hidden by the filter: left out)", on.length, hidden)
+      : tr("selected", "{0} selected", on.length);
     if (count.textContent !== said) count.textContent = said;   // a live region, as above
+    bar.querySelectorAll("[data-bulk-action]").forEach(function (b) { b.disabled = !on.length; });
+    // "Select all shown": ticked when every row shown is, half when some are
+    var all = t.querySelector("[data-select-shown]");
+    if (all) {
+      all.disabled = !rows.length;
+      all.checked = rows.length > 0 && on.length === rows.length;
+      all.indeterminate = on.length > 0 && on.length < rows.length;
+    }
   }
 
   document.addEventListener("input", function (e) {
     if (e.target.closest && e.target.closest("[data-mapping-tools]")) apply();
   });
   document.addEventListener("change", function (e) {
+    if (e.target.hasAttribute && e.target.hasAttribute("data-select-shown")) {
+      var tick = e.target.checked;
+      shownRows().forEach(function (r) {
+        if (tick) selected.add(r.getAttribute("data-mid")); else selected.delete(r.getAttribute("data-mid"));
+      });
+      apply();
+      return;
+    }
     if (e.target.closest && e.target.closest("[data-mapping-tools]")) apply();
     if (e.target.classList && e.target.classList.contains("row-select")) {
       if (e.target.checked) selected.add(e.target.value); else selected.delete(e.target.value);
@@ -509,11 +541,32 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     var b = e.target.closest ? e.target.closest("[data-bulk-action], [data-bulk-clear]") : null;
     if (!b) return;
     if (b.hasAttribute("data-bulk-clear")) { selected.clear(); apply(); return; }
-    if (!selected.size || !window.htmx) return;
+    var rows = shownSelected(), action = b.getAttribute("data-bulk-action");
+    if (!rows.length || !window.htmx) return;
+    // asked every time: how many, how many connected clients that drops, how many ticked
+    // rows the filter hides (left out)
+    var clients = rows.reduce(function (n, r) { return n + (+r.getAttribute("data-clients") || 0); }, 0);
+    var hidden = selected.size - rows.length;
+    var q = action === "stop" ? tr("bulk_stop", "Stop {0} mapping(s)? They stay stopped until they are started again.", rows.length)
+          : action === "restart" ? tr("bulk_restart", "Restart {0} mapping(s)?", rows.length)
+          : tr("bulk_start", "Start {0} mapping(s)?", rows.length);
+    if (action !== "start" && clients)
+      q += " " + tr("bulk_clients", "{0} connected client(s) will be disconnected.", clients);
+    if (hidden)
+      q += " " + tr("bulk_hidden", "{0} selected mapping(s) hidden by the filter are left out.", hidden);
+    if (!window.confirm(q)) return;
     // the button is the source: its hx-disabled-elt holds a second click off while the
     // request runs, and the feedback area (7) gets the answer
     htmx.ajax("POST", "/api/mappings/bulk", { source: b, swap: "none", values: {
-      action: b.getAttribute("data-bulk-action"), ids: Array.from(selected) } });
+      action: action, ids: rows.map(function (r) { return r.getAttribute("data-mid"); }) } });
+  });
+  // done: the selection is cleared (an old one is not acted on again by mistake)
+  document.addEventListener("htmx:afterRequest", function (e) {
+    var el = e.detail.askedBy;
+    if (el && el.hasAttribute && el.hasAttribute("data-bulk-action") && e.detail.successful) {
+      selected.clear();
+      apply();
+    }
   });
 
   document.addEventListener("htmx:afterSwap", function (e) {

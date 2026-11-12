@@ -435,6 +435,31 @@ def test_feedback_area():
     print("feedback area: alert + status live regions on every shell page, texts for app.js  OK")
 
 
+def test_select_all_shown():
+    """"Select all shown" sits in the toolbar, which is always there - not in the table's
+    head (hidden on narrow screens, replaced at every refresh) nor in the bulk bar (hidden
+    while nothing is ticked) - and only for those who may act; the rows carry their client
+    count for the bulk action's question; app.js acts on the rows shown only."""
+    root = parse(dashboard())
+    box = [n for n in root.walk() if "data-select-shown" in n.attrs]
+    assert len(box) == 1 and box[0].attrs.get("type") == "checkbox", box
+    anc = list(box[0].ancestors())
+    assert any("data-mapping-tools" in a.attrs for a in anc), "in the toolbar"
+    assert not any("data-bulk" in a.attrs or a.tag == "thead" for a in anc)
+    assert not any("data-select-shown" in n.attrs for n in parse(dashboard(can_edit=False)).walk())
+    rows = make_templates().env.get_template("_mappings_body.html").render(
+        mappings=mappings(), can_edit=True, statuses={"m1": {"state": "running", "client_count": 3}})
+    assert 'data-mid="m1"' in rows and 'data-clients="3"' in rows and 'data-clients="0"' in rows
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert "ids: rows.map(" in js and "Array.from(selected)" not in js, "only the rows shown"
+    assert "window.confirm(q)" in js, "a bulk action asks first"
+    texts = json.loads(next(n for n in root.walk() if n.tag == "body").attrs["data-i18n"])
+    for key in ("selected_hidden", "bulk_start", "bulk_stop", "bulk_restart", "bulk_clients",
+                "bulk_hidden", "no_match", "show_all"):
+        assert texts.get(key), key
+    print("select all shown: in the toolbar for operators; rows carry their clients  OK")
+
+
 def test_actions_hold_a_second_click():
     """A state-changing button is disabled while its request runs (hx-disabled-elt), so a
     second click is not queued and sent afterwards (a second copy, a second restart)."""
@@ -620,6 +645,7 @@ def main():
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()
     test_feedback_area()
+    test_select_all_shown()
     test_actions_hold_a_second_click()
     test_polled_controls_keep_their_ids()
     test_panel_openers_scroll_it_into_view()
