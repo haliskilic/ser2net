@@ -22,7 +22,10 @@
 # 9. a read-only /data whose config.json needs updating still starts, with a warning;
 # 10. a host folder mounted inside /data (certificates, say) is never taken over;
 # 11. the first admin without the browser: `docker exec ... --set-password` on the running
-#    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
+#    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE;
+# 12. upgrade: a volume a v2.8.0 image left (owned by uid 10001: config.json, backups with a
+#    -2 name, audit.log, traces) starts as it is, keeps its owner and the 2.8.0 settings, and
+#    the accounts 2.8.0 made sign in.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -33,7 +36,8 @@ dev_dir=""
 fail() { echo "FAIL: $*"; docker logs s2n-smoke 2>&1 | tail -40 || true; exit 1; }
 cleanup() {
     docker rm -f s2n-smoke >/dev/null 2>&1 || true
-    docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d s2n-smoke-e >/dev/null 2>&1 || true
+    docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d s2n-smoke-e s2n-smoke-f \
+        >/dev/null 2>&1 || true
     for d in "$host_dir" "$dev_dir"; do [ -n "$d" ] && sudo rm -rf "$d"; done
     rm -f "$JAR"
 }
@@ -302,5 +306,46 @@ grep -q "env-pass-123" <<<"$logs" && fail "the password is in the log"
 docker rm -f -v s2n-smoke >/dev/null  # -v: its anonymous /data volume too
 rm -rf "$secret_dir"
 echo "SER2NET_ADMIN_PASSWORD_FILE: the first admin signs in, the password is not logged  OK"
+
+echo "== 12. upgrade from a v2.8.0 volume (owned by uid 10001)"
+docker run --rm --user 0 --entrypoint python -v s2n-smoke-f:/data -v "$HERE/fixtures:/fx:ro" "$IMAGE" -c '
+import json, os
+for d in ("backups", "logs", "traces"):
+    os.makedirs("/data/" + d, exist_ok=True)
+text = open("/fx/config-2.8.0.json", encoding="utf-8").read()
+open("/data/config.json", "w", encoding="utf-8").write(text)
+# two saves in one second, before the last two mappings were added
+for name, last in (("config-20261104T093000Z.json", -2), ("config-20261104T093000Z-2.json", -1)):
+    earlier = json.loads(text)
+    earlier["mappings"] = earlier["mappings"][:last]
+    open("/data/backups/" + name, "w", encoding="utf-8").write(json.dumps(earlier, indent=2))
+open("/data/audit.log", "w").write("2026-11-04 09:30:00\t10.0.0.8\tmapping_save\tPLC-1 raw\top1\n")
+open("/data/traces/aaaa00000001-plc1.trace.1", "w").write("net>ser hello\n")
+for top, dirs, files in os.walk("/data"):
+    for p in [top] + [os.path.join(top, f) for f in files]:
+        os.chown(p, 10001, 10001)
+        os.chmod(p, 0o700 if os.path.isdir(p) else 0o600)'
+sum_before=$(docker run --rm -v s2n-smoke-f:/data --entrypoint sha256sum "$IMAGE" /data/config.json)
+docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
+    -v s2n-smoke-f:/data "$IMAGE" >/dev/null
+wait_healthy
+logs=$(docker logs s2n-smoke 2>&1)
+grep -q "Traceback" <<<"$logs" && fail "traceback in the log"
+grep -q "handing" <<<"$logs" && fail "a volume owned by the image's user was handed over again"
+docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "files not owned by 10001"
+docker exec s2n-smoke sh -c 'ls /data/backups'
+sums=$(docker exec s2n-smoke sh -c 'sha256sum /data/backups/config-*.json')
+grep -q "${sum_before%% *}" <<<"$sums" || fail "the 2.8.0 config.json was not kept in backups/"
+grep -q "config-20261104T093000Z-2.json" <<<"$sums" || fail "the 2.8.0 backup with a -2 name is gone"
+docker exec s2n-smoke python -c 'import json, sys
+c = json.load(open("/data/config.json"))
+n, gw = c["notifications"], c["mappings"][5]
+sys.exit(0 if n["enabled"] and n["smtp_password"] == "dummy-smtp-pass-2.8.0"
+         and c["admin_ui"]["language"] == "tr" and gw["mqtt"]["payload_format"] == "sparkplug_b"
+         and len(gw["modbus_poll"]["points"]) == 5 else 1)' || fail "2.8.0 settings were lost"
+[ "$(sign_in op28 new-in-2.8.0-pass-1)" = 303 ] || fail "the account made by 2.8.0 did not sign in"
+[ "$(sign_in admin old-admin-pass-1)" = 303 ] || fail "the admin password did not sign in"
+docker rm -f s2n-smoke >/dev/null
+echo "v2.8.0 volume: starts as it is, owner kept, 2.8.0 file and its -2 backup kept, settings and accounts work  OK"
 echo
 echo "PASS: Docker image smoke test"

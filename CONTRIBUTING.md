@@ -133,6 +133,12 @@ code change gets a new patch version instead of a moved tag. **Actions → Relea
 pipeline on any branch: it attests, releases and tags nothing (it leaves one untagged image
 version on GHCR).
 
+After a minor release (`vX.Y.0`) is tagged, freeze the `config.json` it writes: add the
+settings it introduced to `FEATURES` in `tests/make_config_fixture.py`, run
+`python tests/make_config_fixture.py vX.Y.0` and commit `tests/fixtures/config-X.Y.0.json`
+with an upgrade test like `tests/test_upgrade_from_2_8.py` (its data folder layout too, and
+a step in `tests/docker_smoke.sh`), before the next release changes the config model.
+
 ## Türkçe
 
 Katkınız için teşekkürler! Hata bildirimleri ve özellik istekleri
@@ -250,3 +256,10 @@ değişikliği gereken bir release tag taşınarak değil, yeni bir yama sürüm
 **Actions → Release → Run workflow** aynı akışı herhangi bir dalda
 deneme olarak çalıştırır: hiçbir şeyi attest etmez, yayımlamaz ya da tag'lemez (GHCR'da
 tag'siz bir imaj sürümü bırakır).
+
+Bir ara sürüm (`vX.Y.0`) tag'lendikten sonra yazdığı `config.json` dondurulur: getirdiği
+ayarlar `tests/make_config_fixture.py` içindeki `FEATURES`'a eklenir,
+`python tests/make_config_fixture.py vX.Y.0` çalıştırılır ve
+`tests/fixtures/config-X.Y.0.json`, `tests/test_upgrade_from_2_8.py` gibi bir yükseltme
+testiyle (data klasörü düzeni ve `tests/docker_smoke.sh`'ta bir adımla birlikte), bir
+sonraki sürüm config modelini değiştirmeden önce commit'lenir.
