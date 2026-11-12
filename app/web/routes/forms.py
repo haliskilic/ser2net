@@ -309,12 +309,19 @@ def _mapping_from_form(form) -> dict:
     return _build_mapping_dict(form, strict=True)
 
 
+def in_text_box(value: str) -> str:
+    """`value` as a browser sends it back from <input type=text value=...>: a NUL read as
+    U+FFFD, CR and LF taken out."""
+    return value.replace("\0", "\ufffd").replace("\r", "").replace("\n", "")
+
+
 def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     """Carry over config fields the mapping form does not expose, so editing an
     existing mapping never silently discards them: the stable-id `match` (when the
     form has no USB-identity field), the two
     advanced serial flags the form omits (`hangup_when_done`, `nobreak`), open/close
-    strings, the trace-timestamp flag and the RFC2217 interop knobs. The RS-485 fields
+    strings, the trace-timestamp flag and the RFC2217 interop knobs (and a banner or
+    close-on string the text box could not show as it is). The RS-485 fields
     ARE in the form now, so they're taken from the submission. Given the submitted
     `form`, the not-always-posted fields (_OPTIONAL_FORM_FIELDS) are kept too when
     absent. No-op when creating."""
@@ -337,6 +344,13 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     o, prev = new_map.options, existing.options
     o.openstr = prev.openstr
     o.closestr = prev.closestr
+    # the banner and close-on string are one-line text boxes, which hand a value back with
+    # a NUL as U+FFFD and without its CR/LF (HTML): a value that comes back so is the
+    # stored one (an imported close-on string like "ctrl-a\001nil\000" or "\r\n")
+    for key in ("banner", "closeon"):
+        stored = getattr(prev, key)
+        if getattr(o, key) == in_text_box(stored) != stored:
+            setattr(o, key, stored)
     o.trace_timestamp = prev.trace_timestamp
     o.rfc2217_poll_modem_interval_s = prev.rfc2217_poll_modem_interval_s
     o.rfc2217_net_timeout_s = prev.rfc2217_net_timeout_s

@@ -28,6 +28,7 @@ from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
 from .routes.common import bytesize, domid, duration, since
+from .routes.forms import in_text_box
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -222,6 +223,7 @@ def make_templates() -> Jinja2Templates:
     templates.env.filters["explain"] = explain
     # data-search of the dashboard rows: app.js folds what is typed the same way
     templates.env.filters["searchkey"] = search_key
+    templates.env.filters["in_text_box"] = in_text_box   # a value as a text box sends it
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")
