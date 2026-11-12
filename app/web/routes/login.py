@@ -554,7 +554,7 @@ def routes(ctx: Ctx) -> list:
             return proxy.redirect(request, "/login")
         state.first_run_done()
         if (user := state.config.get_user(username)) is None:  # (created just above)
-            return RedirectResponse("/login", status_code=303)
+            return proxy.redirect(request, "/login")
         state.log(f"first-run setup complete; admin user '{username}' created")
         ctx.audit(request, "first_run_setup", username, user=username)
         resp = proxy.redirect(request, "/")
