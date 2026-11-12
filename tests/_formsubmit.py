@@ -18,7 +18,8 @@ run_app_js() repeats app.js on a swapped-in fragment: syncCustomInputs (a
 then applyShowWhen (each [data-show-when="field=v1,v2"] element in document order:
 an <option> is disabled when it doesn't apply, and if it was the selected one the
 first option that is not disabled is selected; any other element sets every input,
-select and textarea inside it disabled or enabled). option_rule=False is app.js
+select and textarea inside it disabled or enabled, but a "Custom..." input stays
+disabled while its select is not on "custom"). option_rule=False is app.js
 before 2.9.0 (options were only hidden). tests/test_ui_layout.py checks the result
 against a real browser.
 """
@@ -181,8 +182,17 @@ class Form:
                 continue
             for inp in el.walk():
                 if inp is not el and inp.tag in CONTROLS:
-                    inp.disabled = not show
+                    inp.disabled = not show or self._custom_unused(inp)
         return self
+
+    def _custom_unused(self, inp: El) -> bool:
+        """app.js customUnused: a "Custom..." input whose select has another value."""
+        name = inp.attrs.get("name")
+        if not name or inp.parent is None:
+            return False
+        sel = next((e for e in inp.parent.walk()
+                    if e.tag == "select" and e.attrs.get("data-custom") == name), None)
+        return sel is not None and self.value(sel) != "custom"
 
     def data(self) -> list:
         """new FormData(form): (name, value) of every control that is submitted."""
