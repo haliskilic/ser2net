@@ -184,8 +184,18 @@ def _mappings_shape():
     assert _row_shape(alarmed, dict(quiet, rx_idle_s=31.0)) != \
         _row_shape(alarmed, dict(quiet, rx_idle_s=33.0)), "the seconds shown"
     assert _row_shape(m, dict(quiet, rx_idle_s=31.0)) == _row_shape(m, quiet), "no alarm: no shape"
+    # a Modbus gateway's units and the MQTT link: what the row says (a unit that stopped
+    # answering, the link's state and error) is the shape, their counters are not
+    unit = {"unit": 1, "state": "online", "cause": "", "since": 5, "errors": 0}
+    link = {"state": "connected", "broker": "b:1883", "since": 5, "error": "", "dropped": 0}
+    busy = dict(quiet, units=[unit], mqtt=link)
+    assert _row_shape(m, busy) == _row_shape(m, dict(busy, units=[dict(unit, errors=9)],
+                                                   mqtt=dict(link, dropped=4)))
+    assert _row_shape(m, busy) != _row_shape(m, dict(busy, units=[dict(unit, state="offline")]))
+    assert _row_shape(m, busy) != _row_shape(m, dict(busy, mqtt=dict(link, state="down",
+                                                                    error="refused")))
     print("mappings table: connection times and counters are not part of the shape, a "
-          "no-data alarm is  OK")
+          "no-data alarm, an offline unit and the MQTT link are  OK")
 
 
 def test_fleet_shape():

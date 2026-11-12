@@ -76,6 +76,8 @@ class Opened:
         counter = self
 
         class FakePublisher:
+            state: dict = {}  # (MqttPublisher.state: the mapping status' mqtt)
+
             def connect(self):
                 counter.mqtt += 1
 
@@ -260,7 +262,7 @@ async def _changed_error_and_cancel_mid_attempt():
             raise netguard.BindError(f"try {min(len(calls), 3)}")
 
     with mock.patch.object(supervisor, "make_runner",
-                           lambda mm, log, trace_dir=None: Flaky(mm, logger=log)), \
+                           lambda mm, log, trace_dir=None, state_dir=None: Flaky(mm, logger=log)), \
             mock.patch.object(supervisor, "BIND_RETRY_MAX_S", 0.5):
         await sup.apply_mapping(m)
         assert await _wait_for(lambda: len(calls) >= 4, 10)

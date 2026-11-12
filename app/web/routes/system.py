@@ -147,6 +147,27 @@ async def metrics_text(state) -> str:
                 f"ser2net_mapping_connect_failures_total{{{lbl}}} "
                 f"{st.get('connect_failures', 0)}",
             ]
+    # Modbus gateways in edge mode: each polled unit, up = it answers (left out until it
+    # has been polled), and its failed point reads
+    units = [(m, u) for m in state.config.mappings
+             for u in (statuses.get(m.id) or {}).get("units") or []]
+    for m, u in units:
+        if u.get("state") in ("online", "offline"):
+            lines.append(f"ser2net_modbus_unit_up{{{_unit_label(m, u)}}} "
+                         f"{1 if u['state'] == 'online' else 0}")
+    for m, u in units:
+        lines.append(f"ser2net_modbus_unit_poll_errors_total{{{_unit_label(m, u)}}} "
+                     f"{u.get('errors', 0)}")
+    # mappings that publish to MQTT (while they run): connected to the broker, and the
+    # messages not handed to it (see MqttPublisher.state)
+    brokers = [(m, mq) for m in state.config.mappings
+               if (mq := (statuses.get(m.id) or {}).get("mqtt"))]
+    for m, mq in brokers:
+        lines.append(f"ser2net_mqtt_connected{{{_label(m)}}} "
+                     f"{1 if mq.get('state') == 'connected' else 0}")
+    for m, mq in brokers:
+        lines.append(f"ser2net_mqtt_messages_dropped_total{{{_label(m)}}} "
+                     f"{mq.get('dropped', 0)}")
     return exposition(lines)
 
 
@@ -264,6 +285,15 @@ def exposition(lines: list[str]) -> str:
             out += [f"# HELP {name} {text}", f"# TYPE {name} {kind}"]
         out += samples
     return "\n".join(out) + "\n"
+
+
+def _label(mapping) -> str:
+    return f'mapping="{_metric_label(mapping.name)}",id="{_metric_label(mapping.id)}"'
+
+
+def _unit_label(mapping, unit: dict) -> str:
+    return (f'mapping="{_metric_label(mapping.name)}",id="{_metric_label(mapping.id)}",'
+            f'unit="{unit.get("unit")}"')
 
 
 def _metric_label(name: str) -> str:

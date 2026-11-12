@@ -141,6 +141,26 @@ jobs:
         if: runner.os == 'Linux'
         run: python tests/run_all.py --socat -v
 
+  # requirements.txt allows paho-mqtt 1.6 or newer for source installs (the binaries and the
+  # image bundle requirements-optional.txt's 2.x): run the MQTT tests with the 1.x client too
+  paho1:
+    name: MQTT with paho-mqtt 1.6
+    runs-on: ubuntu-latest
+    env:
+      SER2NET_OPTIONAL_TESTS: "1"   # a missing paho-mqtt fails these tests instead of skipping
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt cryptography paho-mqtt==1.6.1
+      - name: The MQTT tests (publisher, connection log, TLS, Modbus edge mode with a broker)
+        run: |
+          for t in test_mqtt_pub test_mqtt_link test_mqtt_tls test_modbus_mqtt_write \
+                   test_modbus_mqtt_broker; do
+            python "tests/$t.py" || exit 1
+          done
+
   coverage:
     name: coverage (Linux, full suite)
     runs-on: ubuntu-latest

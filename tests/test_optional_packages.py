@@ -156,6 +156,9 @@ def test_features_with_broken_packages():
         assert logs[-1] == ("MQTT publishing disabled: paho-mqtt is installed but failed to "
                             "import: ModuleNotFoundError: No module named "
                             f"'s2n_test_missing_dependency' ({PIP}, then restart ser2net)"), logs
+        # the mapping status says so too (dashboard: "MQTT off: ...")
+        assert pub.state["state"] == "off" and "failed to import" in pub.state["error"], \
+            pub.state
     print("LDAP / OIDC sign-in and MQTT: a broken package is logged as such, nothing raises  OK")
 
 

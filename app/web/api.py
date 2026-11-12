@@ -43,16 +43,17 @@ def _caller(request) -> str:
 
 def _mapping_view(mapping, state, request=None) -> dict:
     """A mapping's full config plus its live runtime status. A read-only (viewer)
-    token doesn't get stored secrets (the MQTT password, the TLS key password) — the
-    same rule as the web UI, where viewers can't open the edit form or the export.
-    Operator/admin tokens see the real value, so a GET -> PUT round trip keeps working
-    for them (a PUT that sends the mask back keeps the stored TLS key password). The
-    role is the calling token's (GuardMiddleware puts it on the request)."""
+    token doesn't get stored secrets (the MQTT password and client key password, the
+    TLS key password) — the same rule as the web UI, where viewers can't open the edit
+    form or the export. Operator/admin tokens see the real value, so a GET -> PUT round
+    trip keeps working for them (a PUT that sends the mask back keeps the stored TLS key
+    password). The role is the calling token's (GuardMiddleware puts it on the request)."""
     view = mapping.to_dict()
     token = getattr(request.state, "api_token", None) if request is not None else None
     role = token.role if token is not None else state.config.api_token_role
     if ROLE_RANK.get(role, 0) < ROLE_RANK["operator"]:
-        for section, secret in (("mqtt", "password"), ("network", "tls_key_password")):
+        for section, secret in (("mqtt", "password"), ("mqtt", "client_key_password"),
+                                ("network", "tls_key_password")):
             if view[section].get(secret):
                 view[section][secret] = REDACTED
     view["status"] = state.supervisor.status(mapping.id)
@@ -60,8 +61,10 @@ def _mapping_view(mapping, state, request=None) -> dict:
 
 
 async def _check_tls_files(mapping) -> None:
-    """MappingConfig.check_tls_files, off the event loop (it reads the files)."""
+    """MappingConfig.check_tls_files and check_mqtt_tls_files, off the event loop (they
+    read the files)."""
     await asyncio.to_thread(mapping.check_tls_files)
+    await asyncio.to_thread(mapping.check_mqtt_tls_files)
 
 
 def merge_patch(target, patch):
@@ -188,6 +191,8 @@ def build_api_routes(state):
             stored = state.config.get_mapping(mid)
             if mapping.network.tls_key_password == REDACTED and stored is not None:
                 mapping.network.tls_key_password = stored.network.tls_key_password
+            if mapping.mqtt.client_key_password == REDACTED and stored is not None:
+                mapping.mqtt.client_key_password = stored.mqtt.client_key_password
             mapping.validate()
             mapping.validate_input()
             await _check_tls_files(mapping)
@@ -254,6 +259,8 @@ def build_api_routes(state):
                         mapping.mqtt.password = existing.mqtt.password
                     if mapping.network.tls_key_password == REDACTED:
                         mapping.network.tls_key_password = existing.network.tls_key_password
+                    if mapping.mqtt.client_key_password == REDACTED:
+                        mapping.mqtt.client_key_password = existing.mqtt.client_key_password
                     mapping.validate()
                     mapping.validate_input()
                     await _check_tls_files(mapping)
@@ -415,8 +422,11 @@ _ENUMS = {
     ("NetworkSettings", "protocol"): config.PROTOCOLS,
     ("MqttSettings", "qos"): (0, 1, 2),
     ("MqttSettings", "payload_format"): config.MQTT_FORMATS,
+    ("MqttSettings", "line_end"): config.MQTT_LINE_ENDS,
+    ("MqttSettings", "value_format"): config.MQTT_VALUE_FORMATS,
     ("ModbusPoint", "fn"): (1, 2, 3, 4),
     ("ModbusPoint", "dtype"): config.MODBUS_DTYPES,
+    ("ModbusPoint", "word_order"): config.MODBUS_WORD_ORDERS,
 }
 _NOTES = {
     ("MappingConfig", "id"): "Assigned by the server (1-64 letters, digits or _); "
@@ -435,6 +445,9 @@ _NOTES = {
     ("NetworkSettings", "read_only"): "Clients only read: nothing they send reaches the device.",
     ("MqttSettings", "password"): "Masked as ******** for a viewer token; sent back so in a PUT "
                                   "or PATCH, the stored one stays.",
+    ("MqttSettings", "client_key_password"): "The password of an encrypted client_key. "
+                                             "Masked as ******** for a viewer token; sent back "
+                                             "so in a PUT or PATCH, the stored one stays.",
     ("NetworkSettings", "tls_key_password"): "The password of an encrypted tls_key. Masked as "
                                              "******** for a viewer token; sent back so in a "
                                              "PUT or PATCH, the stored one stays.",

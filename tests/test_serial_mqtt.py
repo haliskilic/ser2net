@@ -244,7 +244,12 @@ def test_tx_config():
         assert "can't contain '+', '#'" in str(e), e
     else:
         raise AssertionError("a wildcard base topic took writes")
-    m(base_topic="lab/#").validate_input()  # (publishing only: up to the MQTT client)
+    try:  # publishing only: refused as well (every plain-format MQTT mapping)
+        m(base_topic="lab/#").validate_input()
+    except ConfigError as e:
+        assert "can't contain '+', '#'" in str(e), e
+    else:
+        raise AssertionError("a wildcard base topic was taken")
     print("tx: edits refuse a wildcard base topic; mqtt_tx_topics names the two topics  OK")
 
 

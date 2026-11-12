@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import difflib
 import json
 import math
 import re
 
 from ...config import (
-    REDACTED, ConfigError, LdapSettings, MappingConfig, OidcSettings, SerialSettings,
-    mapping_revision,
+    MODBUS_TIMEOUT_DEFAULT_S, REDACTED, ConfigError, LdapSettings, MappingConfig, ModbusPoint,
+    OidcSettings, SerialSettings, mapping_revision, unstorable_text, valid_mapping_id,
 )
 from ...engine import netinfo, portlist
 from ...i18n import _
@@ -218,6 +219,8 @@ _OPTIONAL_FORM_FIELDS = {
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
     # every node since 2.3.0 reads it, but forms before 2.9.0 have no input for it
     "mqtt_client_id": ("mqtt", ("client_id",)),
+    # shown for Sparkplug B only (the field is its own marker)
+    "mqtt_sparkplug_primary_host_id": ("mqtt", ("sparkplug_primary_host_id",)),
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
     # serial lines (not a Modbus gateway): the line end, and writes from <base_topic>/tx
@@ -225,6 +228,14 @@ _OPTIONAL_FORM_FIELDS = {
     "mqtt_tx_shown": ("mqtt", ("tx_enabled",)),
     # not a Modbus gateway: the poll string (its checkbox is absent when unticked)
     "opt_poll_interval_s": ("options", ("poll_string", "poll_interval_s", "poll_with_clients")),
+    "mqtt_unit_status_shown": ("mqtt", ("unit_status",)),
+    # plain format: retained data (a checkbox shown for plain-format mappings) and the
+    # Modbus value format (shown for plain-format points; the select is its own marker)
+    "mqtt_retain_shown": ("mqtt", ("retain",)),
+    "mqtt_value_format": ("mqtt", ("value_format",)),
+    # MQTT over TLS: CA file, client certificate (mutual TLS), host name check (2.9)
+    "mqtt_ca_file": ("mqtt", ("ca_file", "client_cert", "client_key", "client_key_password",
+                              "tls_check_hostname")),
     # not offered for a Modbus gateway, which has no per-client output buffer and can't
     # send a banner or act on a close-on string (bytes outside Modbus frames)
     "network_client_queue_max": ("network", ("client_queue_max",)),
@@ -236,6 +247,9 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_rfc2217_signature": ("options", ("rfc2217_signature",)),
     # a checkbox (absent when unticked) shown for TCP raw / telnet / RFC 2217 mappings only
     "network_disconnect_without_device_shown": ("network", ("disconnect_without_device",)),
+    # Modbus gateways only (before 2.9 it was in config.json only, and every edit kept it)
+    "opt_modbus_response_timeout_s": ("options", ("modbus_response_timeout_s",)),
+    "opt_modbus_unit_map": ("options", ("modbus_unit_map",)),
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
@@ -249,7 +263,23 @@ _OPTIONAL_FORM_FIELDS = {
     "serial_b_port_lock_shown": ("serial_b.advanced", ("tiocexcl", "respect_uucp_locks")),
     # Modbus gateways only (the points: see _keep_point_fields)
     "modbus_poll_interval_s": ("modbus_poll", ("interval_s",)),
+    # the points' min / max / allowed / poll, word_order, bit and length (2.9), inside the
+    # points JSON: a form without this marker (an older peer's, whose JSON can't carry them)
+    # keeps each point's stored ones, by point name (see _keep_point_options)
+    "modbus_point_options_shown": ("modbus_poll", ()),
+    # block reads (2.9): a checkbox and the gap, shown for Modbus gateways
+    "modbus_block_reads_shown": ("modbus_poll", ("block_reads", "block_gap")),
 }
+# the point options an older form drops (see "modbus_point_options_shown"), and what they
+# apply to: one is kept only for a point it still fits (its type may have been changed)
+_POINT_OPTIONS = {
+    "min": lambda p: True, "max": lambda p: True, "allowed": lambda p: True,
+    "poll": lambda p: True,
+    "word_order": lambda p: p.dtype != "bool",
+    "bit": lambda p: p.dtype == "bool" and p.fn in (3, 4),
+    "length": lambda p: p.dtype == "string",
+}
+
 
 # Settings the mapping form doesn't have: an edit always keeps the stored values.
 #   config section -> attributes
@@ -257,7 +287,7 @@ _UNMANAGED_FIELDS = {
     "serial.advanced": ("hangup_when_done", "nobreak"),
     "serial_b.advanced": ("hangup_when_done", "nobreak"),
     "options": ("openstr", "closestr", "trace_timestamp", "rfc2217_poll_modem_interval_s",
-                "rfc2217_net_timeout_s", "modbus_response_timeout_s"),
+                "rfc2217_net_timeout_s"),
 }
 
 # One-line text inputs that can hold a stored value they can't show: a browser drops
@@ -392,6 +422,13 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             poll_interval_s=(_num(form, "opt_poll_interval_s", 0.0, strict=strict, cast=float)
                              if form.get("opt_poll_interval_s") else 0.0),
             poll_with_clients=_checkbox(form, "opt_poll_with_clients"))
+    if "opt_modbus_unit_map" in form:
+        options["modbus_unit_map"] = _parse_unit_map(form.get("opt_modbus_unit_map", ""), strict)
+    if "opt_modbus_response_timeout_s" in form:  # blank: the default
+        options["modbus_response_timeout_s"] = (
+            _num(form, "opt_modbus_response_timeout_s", MODBUS_TIMEOUT_DEFAULT_S,
+                 strict=strict, cast=float)
+            if form.get("opt_modbus_response_timeout_s", "").strip() else MODBUS_TIMEOUT_DEFAULT_S)
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),
@@ -416,37 +453,139 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                 "sparkplug_group_id": form.get("mqtt_sparkplug_group_id", "").strip() or "ser2net",
                 "sparkplug_node_id": form.get("mqtt_sparkplug_node_id", "").strip()}
                if "mqtt_payload_format" in form else {}),
+            **({"sparkplug_primary_host_id": form.get("mqtt_sparkplug_primary_host_id", "").strip()}
+               if "mqtt_sparkplug_primary_host_id" in form else {}),
             **({"apply_retained_set": _checkbox(form, "mqtt_apply_retained_set")}
                if "mqtt_apply_retained_set_shown" in form else {}),
             **({"line_end": form.get("mqtt_line_end", "lf")} if "mqtt_line_end" in form else {}),
             **({"tx_enabled": _checkbox(form, "mqtt_tx_enabled")}
                if "mqtt_tx_shown" in form else {}),
+            **({"unit_status": _checkbox(form, "mqtt_unit_status")}
+               if "mqtt_unit_status_shown" in form else {}),
+            **({"retain": _checkbox(form, "mqtt_retain")}
+               if "mqtt_retain_shown" in form else {}),
+            **({"value_format": form.get("mqtt_value_format", "text")}
+               if "mqtt_value_format" in form else {}),
+            **({"ca_file": form.get("mqtt_ca_file", "").strip(),
+                "client_cert": form.get("mqtt_client_cert", "").strip(),
+                "client_key": form.get("mqtt_client_key", "").strip(),
+                # never shown in the form: blank keeps the stored one
+                # (_preserve_unmanaged_fields)
+                "client_key_password": form.get("mqtt_client_key_password", ""),
+                "tls_check_hostname": _checkbox(form, "mqtt_tls_check_hostname")}
+               if "mqtt_ca_file" in form else {}),
         },
         "modbus_poll": {
             "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),
             "points": _parse_modbus_points(form.get("modbus_points", ""), strict),
+            **({"block_reads": _checkbox(form, "modbus_block_reads"),
+                "block_gap": (_num(form, "modbus_block_gap", 0, strict=strict)
+                              if form.get("modbus_block_gap", "").strip() else 0)}
+               if "modbus_block_reads_shown" in form else {}),
         },
     }
 
 
 def _modbus_points_json(mapping) -> str:
     pts = [{"name": p.name, "unit": p.unit, "fn": p.fn, "address": p.address,
-            "dtype": p.dtype, "scale": p.scale, **({"writable": True} if p.writable else {})}
+            "dtype": p.dtype, "scale": p.scale, **({"writable": True} if p.writable else {}),
+            # the options only when set (their defaults keep a point as before)
+            **{k: getattr(p, k) for k in ("min", "max", "allowed") if getattr(p, k) is not None},
+            **({"poll": p.poll} if p.poll is not True else {}),
+            **({"word_order": p.word_order} if p.word_order != "ABCD" else {}),
+            **{k: getattr(p, k) for k in ("bit", "length") if getattr(p, k) is not None}}
            for p in mapping.modbus_poll.points]
-    return json.dumps(pts, indent=2) if pts else ""
+    return json_text(pts, indent=2) if pts else ""
+
+
+def json_text(value, **kwargs) -> str:
+    """JSON with non-ASCII text as it is ("Sıcaklık", not S\\u0131cakl\\u0131k), so it can be
+    read and edited; escaped only if it holds what UTF-8 can't carry (an unpaired surrogate,
+    which an edit refuses: see config.unstorable_text)."""
+    text = json.dumps(value, ensure_ascii=False, **kwargs)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return json.dumps(value, **kwargs)
+    return text
+
+
+def _keep_point_options(new_map, existing) -> None:
+    """A form that can't carry the points' options (an older peer's): each point keeps the
+    stored ones of the point with its name."""
+    stored = {p.name: p for p in existing.modbus_poll.points}
+    for p in new_map.modbus_poll.points:
+        if (old := stored.get(p.name)) is not None:
+            for key, fits in _POINT_OPTIONS.items():
+                if fits(p):
+                    setattr(p, key, getattr(old, key))
+
+
+def _parse_unit_map(raw: str, strict: bool) -> dict:
+    """A Modbus gateway's unit map as the form takes it: pairs such as "255=1, 0=1" (the unit
+    id a master sends = the RTU unit the request goes to), separated by commas or spaces.
+    ``strict``: a pair that is not one raises ValueError; else it is left out."""
+    out: dict = {}
+    for item in re.split(r"[\s,;]+", raw or ""):
+        if not item:
+            continue
+        sent, eq, unit = item.partition("=")
+        if eq and re.fullmatch(r"[0-9]{1,5}", sent) and re.fullmatch(r"[0-9]{1,5}", unit):
+            out[str(int(sent))] = int(unit)
+        elif strict:
+            raise ValueError(_("The unit map is a list of pairs such as 255=1 (the unit id a "
+                               "master sends = the RTU unit it goes to); {0} is not one.").format(
+                                   repr(item[:40])))
+    return out
+
+
+_POINT_KEYS = tuple(f.name for f in dataclasses.fields(ModbusPoint))
 
 
 def _parse_modbus_points(raw: str, strict: bool) -> list:
+    """The points JSON of a mapping form: a list of point objects (one object alone is a list
+    of one; blank: no points). ``strict`` (a save): anything else raises ValueError saying
+    what is wrong — where the JSON breaks (line and column), which point is not an object,
+    a key that looks like a misspelt one ("adress"; other unknown keys are left alone, as
+    everywhere else: a newer node's). Not strict (showing a refused form again): what can't
+    be read is left out."""
     raw = (raw or "").strip()
     if not raw:
         return []
     try:
         points = json.loads(raw)
-    except (ValueError, TypeError):
+    except json.JSONDecodeError as e:
+        if strict:
+            raise ValueError(_("Modbus poll points: the JSON is not valid at line {0}, column "
+                               "{1}: {2}.").format(e.lineno, e.colno, e.msg)) from None
+        return []
+    except (ValueError, RecursionError):  # (nested too deeply)
         if strict:
             raise ValueError(_("Modbus poll points must be a valid JSON array of objects.")) from None
         return []
-    return points if isinstance(points, list) else []
+    if isinstance(points, dict):
+        points = [points]
+    if not isinstance(points, list):
+        if strict:
+            raise ValueError(_("Modbus poll points must be a valid JSON array of objects."))
+        return []
+    if not strict:
+        return [p for p in points if isinstance(p, dict)]
+    for i, p in enumerate(points, 1):
+        if not isinstance(p, dict):
+            raise ValueError(_("Modbus poll point #{0} is not an object.").format(i))
+        if unstorable_text(p) is not None:
+            raise ValueError(_("Modbus poll point #{0} has a character that can't be stored: "
+                               "an unpaired surrogate escape (\\ud800 to \\udfff).").format(i))
+        for key in p:
+            if key in _POINT_KEYS:
+                continue
+            near = difflib.get_close_matches(str(key), _POINT_KEYS, n=1, cutoff=0.7)
+            if near:
+                raise ValueError(_("Modbus poll point #{0} ({1}): unknown key {2}. Did you "
+                                   "mean {3}?").format(i, repr(p.get("name"))[:40],
+                                                      json.dumps(key), json.dumps(near[0])))
+    return points
 
 
 def _mapping_from_form(form) -> dict:
@@ -506,13 +645,26 @@ def mapping_for_rerender(form, existing, ports: list) -> MappingConfig:
     """The mapping to show again in a form that came back with an error (local or a
     cluster peer's): what was submitted, read leniently, with what a save would keep —
     the stored values for fields the form didn't post, the USB identity — so saving the
-    form shown again never silently resets them. Never raises."""
+    form shown again never silently resets them, and the posted id, so the next save still
+    edits that mapping. Points that can't be read are left out: the form shows their text
+    as it was posted (_reshown_points). Never raises."""
+    posted_id = form.get("id") or ""
     try:
-        mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
+        d = _build_mapping_dict(form, strict=False)
+        try:
+            mapping = MappingConfig.from_dict(d)
+        except Exception:  # (a point that is not one): the rest of the form still counts
+            d["modbus_poll"]["points"] = []
+            mapping = MappingConfig.from_dict(d)
+    except Exception:
+        mapping = MappingConfig(name=str(form.get("name", "")))
+    if valid_mapping_id(posted_id):
+        mapping.id = posted_id
+    try:
         _preserve_unmanaged_fields(mapping, existing, form)
         apply_usb_match(mapping, form, ports, existing, strict=False)
-    except Exception:
-        mapping = MappingConfig(name=form.get("name", ""))
+    except Exception:  # (stored values that don't fit the posted ones: shown as posted)
+        pass
     return mapping
 
 
@@ -539,22 +691,27 @@ def blocks_not_read(version) -> frozenset[str]:
 
 def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool,
                  error=None, remote=None, hide=frozenset(), rev: str = "", links=None,
-                 mqtt_stored: str = "", tls_stored: str | None = None, form=None) -> dict:
+                 mqtt_stored: str = "", tls_stored: str | None = None, form=None,
+                 mqtt_key_stored: str | None = None) -> dict:
     """What _mapping_form.html is rendered with (every place that shows the form);
     `hide`: blocks the node that saves it doesn't read (blocks_not_read); `rev`: the
     stored mapping's revision (config.mapping_revision) on the node that saves it;
     `links`: the other names of the serial ports (portlist.links). The stored MQTT
-    password and TLS key password are never shown, only whether there is one
-    (`mqtt_stored`, `tls_stored`; None: the form goes by the mapping it shows), and after
-    an error what was typed and the remove boxes of the submitted `form`
-    (mqtt_password_view, tls_password_view)."""
+    password, TLS key password and MQTT client key password are never shown, only whether
+    there is one (`mqtt_stored`, `tls_stored`, `mqtt_key_stored`; None: the form goes by the
+    mapping it shows), and after an error what was typed and the remove boxes of the
+    submitted `form` (mqtt_password_view, tls_password_view, mqtt_key_password_view) and
+    its points JSON as it was posted (_reshown_points)."""
     out = {"mapping": mapping, "is_new": is_new,
-           "modbus_points_json": _modbus_points_json(mapping),
+           "modbus_points_json": (_reshown_points(form, mapping) if form is not None
+                                  else _modbus_points_json(mapping)),
            "ports": portlist.visible(ports), "ips": ips, "error": error, "remote": remote,
            "hide": hide, "rev": rev, "links": links or {},
            **mqtt_password_view(mqtt_stored, form)}
     if tls_stored is not None:
         out.update(tls_password_view(tls_stored, form))
+    if mqtt_key_stored is not None:
+        out.update(mqtt_key_password_view(mqtt_key_stored, form))
     return out
 
 
@@ -566,8 +723,9 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     the stored value (_TEXT_INPUTS: a banner or close-on string with a NUL, CR or LF,
     in_text_box), the stored MQTT password and TLS key password, which the form never
     shows, when it keeps them (mqtt_password_from_form; a blank key password field), the
-    dual-stack choice of a form that doesn't offer it, and the per-point Modbus fields a
-    form from before 2.8.0 leaves out. No-op when creating."""
+    dual-stack choice of a form that doesn't offer it, the per-point Modbus fields a
+    form from before 2.8.0 leaves out and the points' options (min, max, ...) of a form
+    whose points JSON can't carry them (_keep_point_options). No-op when creating."""
     if existing is None:
         return
     posted = form is not None
@@ -583,8 +741,16 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
         cur, old = _section(new_map, section), _section(existing, section)
         if field in form and getattr(cur, attr) == in_text_box(getattr(old, attr)):
             setattr(cur, attr, getattr(old, attr))
+    if "modbus_point_options_shown" not in form and "modbus_points" in form:
+        _keep_point_options(new_map, existing)
     if posted:
         new_map.mqtt.password = mqtt_password_from_form(form, existing.mqtt.password)
+        if "mqtt_ca_file" in form and form.get("mqtt_client_key_password", "") in ("", REDACTED):
+            # nor the MQTT client key password: a blank field keeps it, unless the remove
+            # box is ticked (a form without the MQTT TLS block keeps all of it, above)
+            new_map.mqtt.client_key_password = (
+                "" if _checkbox(form, "mqtt_client_key_password_clear")
+                else existing.mqtt.client_key_password)
         net = new_map.network
         if not form.get("network_tls_key_password", ""):
             # the form never shows the stored TLS key password: a blank field (or a form
@@ -627,6 +793,22 @@ def tls_password_view(stored: str, form=None) -> dict:
             "tls_pw_clear": form is not None and _checkbox(form, "network_tls_key_password_clear")}
 
 
+def mqtt_key_password_view(stored: str, form=None) -> dict:
+    """The same for the MQTT client key password (mqtt.client_key_password)."""
+    return {"mqtt_key_pw_stored": bool(stored),
+            "mqtt_key_pw_typed": form.get("mqtt_client_key_password", "") if form is not None else "",
+            "mqtt_key_pw_clear": form is not None and _checkbox(form, "mqtt_client_key_password_clear")}
+
+
+def _reshown_points(form, mapping) -> str:
+    """The points JSON of a refused form, to show it again: the text as it was posted (a
+    typo in it is then fixed, not lost, and Save never stores the points it could not read
+    as none), or the mapping's points when the form did not post them."""
+    if "modbus_points" in form:
+        return str(form.get("modbus_points") or "")
+    return _modbus_points_json(mapping)
+
+
 def _form_error(render, request, state, form, message: str):
     """Re-render the mapping form with the submitted values and an error banner. It
     carries the mapping's current revision: the save checks the revision before anything
@@ -644,4 +826,5 @@ def _form_error(render, request, state, form, message: str):
                                                       (mapping.serial.port, mapping.serial_b.port)),
                                  mqtt_stored=stored.mqtt.password if stored else "",
                                  tls_stored=stored.network.tls_key_password if stored else "",
+                                 mqtt_key_stored=stored.mqtt.client_key_password if stored else "",
                                  form=form))

@@ -90,9 +90,22 @@ düzenlemeye gerek yok.
   Desteklenmeyen bir telnet seçeneği her istendiğinde reddedilir.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
-  RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
-  adaptör çıkarıldığında) master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır ve
-  port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
+  RTU yanıtı yanıt süresi içinde gelmezse `0x0B` (gateway-timeout) exception; süre, istek
+  hatta tamamen gönderildikten sonra başlar ve eşleme formunun Seçenekler bölümünde
+  ayarlanır (varsayılan 1 sn, 0,01–60 sn). Bir yanıt, başlığının söylediği uzunluğa
+  ulaşınca biter (başlığı uzunluk vermeyen FC8, FC43 ya da kullanıcı tanımlı fonksiyon
+  kodlarında hat 50 ms sessiz kalınca); USB adaptörlerin gecikmesi ya da Windows'un saati
+  yanıtları bölmez. Yanıt isteğe uymalıdır (aynı fonksiyon ya da onun exception'ı, okunan
+  adede uyan bayt sayısı, yazmanın yankısı); zamanında yanıt alamayan bir istekten sonra
+  gateway, sıradaki isteği göndermeden önce hattın 250 ms'ye kadar (en çok yanıt süresi
+  kadar) sessiz kalmasını bekler; geç gelen bir yanıt böylece sıradaki master'a ya da poll
+  noktasına verilmez, atılır ve geç kalan slave loglanır. Yanıt olmayan baytlar atılır;
+  trace'te `ser>drop` olarak, konsolda ve hex görünümünde görünür. Broadcast (unit 0) bir
+  yazma (FC5/6/15/16/22) hatta gönderilir ve 200 ms'lik dönüş beklemesinden (en çok yanıt
+  süresi kadar) sonra bir slave'in vereceği yankıyla yanıtlanır; unit 0'a okuma hatta hiç
+  gitmeden hemen `0x0B` alır. Seri port kaybolursa (USB adaptör çıkarıldığında)
+  master'lar bu sürede hemen `0x0A` (gateway yolu yok) alır (o anda yanıt bekleyen istek
+  de) ve port, her eşlemede olduğu gibi yeniden açılır (durum `reconnecting`, cihaz
   kayboldu/geri geldi bildirimleri).
   Master'lar diğer istemciler gibi kabul edilir (izinli IP'ler, max bağlantı, öncelikli
   IP'ler, eski-kullanıcıyı-at); **salt okunur** bir gateway okuma olmayan her isteği
@@ -100,20 +113,121 @@ düzenlemeye gerek yok.
   komutları, bilinmeyen fonksiyon kodları) hatta göndermeden `0x01` exception ile yanıtlar.
   Banner, open/close string ve `closeon` burada kullanılmaz (Modbus çerçevelerini bozar).
   **Edge modu:** coil ve register'ları periyodik okuyup MQTT'ye yayınlar (bool,
-  uint/int/float 16/32, ölçek); `"writable": true` noktalar MQTT'den yazılır
+  uint/int 16/32/64, float 32/64, metin, register'ın tek biti, ölçek, kelime sırası:
+  aşağıda Modbus noktaları); `"writable": true` noktalar MQTT'den yazılır
   (`<topic>/<nokta>/set`, yalnızca o noktaya tek değer: coil için FC5, holding register için
-  kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
-  `.../set/result`'ta `error: …` alır). **Salt okunur** bu yazmaları da reddeder (`error:
-  mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler panoda
-  **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker karar
-  verir). İstenirse **Sparkplug B**
-  edge node olarak, her Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH,
-  `seq` ile DBIRTH/DDATA, DCMD ile yazma, NCMD ile rebirth. Bir komut yayınlandığında bir
-  kez yazılır: broker'ın yeniden bağlanma, yeniden başlatma ya da config kaydından sonra
-  tekrar gönderdiği retained bir `/set`, **Retained /set komutunu her bağlantıdan sonra
-  yeniden uygula** işaretli değilse yok sayılır (ve loglanır); retained bir Sparkplug
-  NCMD/DCMD her zaman yok sayılır, boş bir mesaj (retained mesajı temizleyen) komut
-  değildir ve ser2net bağlı değilken yayınlanan bir komut sonradan iletilmez.
+  kendi register'larına FC6/FC16; JSON liste ya da başka bir metin `.../set/result`'ta
+  `error: …` alır). Unit 0'daki bir nokta okunmaz; ona yazma broadcast
+  olarak gider ve geri okunmaz. Eşleme formu ve log, unit 0'daki ve seri hattın ayırdığı
+  248–255 unit'lerindeki noktalar için uyarır. **Salt okunur** bu yazmaları da reddeder
+  (`error: mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler
+  panoda **CMD** etiketiyle gösterilir (bkz. Güvenlik: kimin komut gönderebileceğine broker
+  karar verir). Noktalar unit unit okunur ve her unit'in sağlığı izlenir: art arda 3
+  okumada noktalarının hiçbirine yanıt vermeyen (ya da seri portu o kadar süre yok olan)
+  bir unit **offline** olur, bir kez loglanır ve bundan sonra her turda tek noktayla
+  (sırayla) yoklanır; böylece hattı her turda bir yanıt süresi kadar tutar. Yanıt verince
+  bütün noktaları yeniden okunur. Bir slave exception'ı (olmayan bir register için `0x02`
+  gibi) da yanıttır; böyle bir nokta hata vermeye başladığında (en çok dakikada bir) ve
+  yeniden okunduğunda unit'iyle birlikte loglanır. Modbus/TCP master'larının istekleri
+  bundan etkilenmez. Her unit'in durumu status'ta (REST API) ve `/metrics`'te yer alır;
+  pano yanıt vermeyen unit'leri gösterir, **Modbus unit'i yanıt vermiyor / yeniden yanıt
+  veriyor** bildirimleri (işaretlenene kadar kapalı) haber verir ve düz MQTT bu durumu
+  `<topic>/unit<N>/status`'a retained olarak yayınlayabilir (`online` / `offline`; eşleme
+  formunda **Her unit'in durumunu yayınla**; eşleme durduğunda son durumu korur, bu yüzden
+  `<topic>/status` ile birlikte okunmalı). İstenirse **Sparkplug B** edge node olarak, her
+  Modbus unit'i bir cihaz (`unit1`, …): `bdSeq` ile NBIRTH/NDEATH, `seq` ile DBIRTH/DDATA,
+  DCMD ile yazma, NCMD ile rebirth. Offline olan bir unit DDEATH alır ve birth'lerin
+  dışında kalır; yeniden yanıt verince yeni okunan değerlerle DBIRTH alır (okunamayan bir
+  nokta birth'te eski değeriyle değil null olarak gider). Veri ancak oturumun NBIRTH ve
+  DBIRTH'lerinden sonra gider, her metrik okunduğu anla damgalanır ve NaN olarak kalan bir
+  değer bir kez gönderilir. `bdSeq` (Int64) yeniden başlatmalardan sonra devam eder
+  (`data/sparkplug-bdseq.json`); böylece host, elektrik kesintisinde kopan oturumun
+  Will'ini yeni oturumdan ayırabilir. DDATA metrik datatype'larını taşımaya devam eder
+  (spesifikasyon yalnızca göndermemeyi öneriyor; eski Tahu host'ları ve basit tüketiciler
+  bunlara dayanıyor). İsteğe bağlı bir **primary host ID** ile düğüm o host uygulamasının
+  STATE mesajını izler (Sparkplug 3.0 `spBv1.0/STATE/<id>` ya da eski `STATE/<id>`):
+  birth'ler yalnızca host online iken gider; host offline olunca düğüm NDEATH gönderir ve
+  onu beklemek için yeniden bağlanır. Eşleme başına tek broker vardır (dolaşılacak broker
+  listesi yok; yedekli broker'ların önüne konan bir DNS adı ya da sanal IP temel failover
+  sağlar) ve host yokken veri saklanmaz (store and forward yok). Bir komut yayınlandığında
+  bir kez yazılır: broker'ın yeniden bağlanma, yeniden başlatma ya da config kaydından
+  sonra tekrar gönderdiği retained bir `/set`, **Retained /set komutunu her bağlantıdan
+  sonra yeniden uygula** işaretli değilse yok sayılır (ve loglanır); retained bir
+  Sparkplug NCMD/DCMD her zaman yok sayılır, boş bir mesaj (retained mesajı temizleyen)
+  komut değildir ve ser2net bağlı değilken yayınlanan bir komut sonradan iletilmez.
+- **MQTT komutları (edge modu):** `/set` ve Sparkplug DCMD yazmaları geldikleri sırayla,
+  tek tek yapılır ve hatta poll ile Modbus/TCP master'larıyla sırayla erişir;
+  `.../set/result` cevapları da bu sırayı korur. Hat için en çok 32 yazma bekler: fazlası
+  `error: busy` alır, sırası gelene kadar 10 sn'den uzun bekleyen bir yazma yapılmaz
+  (`error: expired`). 64 KiB'tan büyük bir `/set` `error: too large: …` alır; 256 KiB'tan
+  büyük bir Sparkplug NCMD/DCMD, cihazının nokta sayısından çok metrik taşıyan bir DCMD ve
+  64'ten çok metrikli bir NCMD yok sayılır; bir komutun dışarıda bıraktıkları (cihazın
+  yazılabilir noktası olmayan metrikler, null'lar) tek satırda, en çok dakikada bir
+  loglanır. Son birth'lerden sonraki 2 sn içinde istenen bir rebirth bu süre dolunca
+  gönderilir. Broker'ın kendi sınırları (Mosquitto `message_size_limit`) ve ACL'ler ilk
+  savunma olmaya devam eder. Cevaplar, `/set` aboneliğiyle uyumlu olarak QoS 1 ile (eşlemenin
+  QoS'u daha yüksekse onunla) gider. Bir `/set` JSON da olabilir: `{"value": 25, "id":
+  "abc"}` (id isteğe bağlıdır: en çok 64 karakterlik bir metin ya da bir tamsayı); cevabı
+  da JSON olur: cihazdan geri okunan değerle `{"id": "abc", "ok": true, "value": 25}`
+  (okunamazsa null) ya da `{"id": "abc", "ok": false, "error": "…"}`. Düz bir değer yine
+  düz `ok` / `error: …` alır. Bir yazmaya yanıt vermeyen unit `error: no reply from unit N
+  within T s` verir. Sparkplug B'de yazılabilir bir noktaya gelen her DCMD'den sonra nokta
+  geri okunur ve değişmiş olsun olmasın DDATA ile gönderilir (yazma reddedildiğinde ya da
+  slave exception ile yanıt verdiğinde de); böylece host sonucu görür. Yanıt vermeyen bir
+  unit ise bunun yerine offline olur (DDEATH). Bir nokta MQTT'nin ona yazabileceği
+  değerleri sınırlayabilir (isteğe bağlı, nokta JSON'unda): `"min"` ve `"max"` (noktanın
+  kendi biriminde, yayınlandığı gibi) ve `"allowed": [0, 1, 2]` (yalnızca açılabilen bir
+  coil için `[true]`); bunların dışındaki bir değer hatta ulaşmadan reddedilir (`error:
+  3000 is outside the range 0..1500 of 'setpoint'`). Bu sınırlar Modbus/TCP master'larını
+  kapsamaz; v2.8 bir düğüm (onun yaptığı bir küme düzenlemesi) ya da sürüm düşürme onları
+  atar. `"poll": false` yazılabilir bir noktayı, okunamayan bir komut register'ı için
+  yalnızca yazılan bir nokta yapar: hiç okunmaz, yazıldıktan sonra geri okunmaz. Tamsayı
+  tipleri ondalıklı bir değeri yuvarlar (eşitlikte çifte: `12.5` → 12) ve cevap yine `ok`
+  olur; yazmanın log satırı yazılan ham değeri gösterir (`raw value 13`). **Güvenli
+  çıkışlar:** ser2net, broker ya da host gidince kendiliğinden güvenli bir değer yazmaz.
+  Bunun için heartbeat kullanın: host birkaç saniyede bir `/set` (ya da DCMD) ile bir
+  holding register'a artan bir sayaç yazar, PLC'nin kendi mantığı (bir watchdog
+  zamanlayıcısı) sayaç değişmez olunca çıkışları güvenli duruma alır. Cihazın kendi
+  iletişim kaybı timeout'u tek başına yetmez, çünkü ser2net'in poll'u cihazla konuşmayı
+  sürdürür. Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
+  içe aktarma da) MQTT bağlantısı kapanmadan önce her yazmayı cevaplar: hattaki yazma
+  bitebilir (en çok 2 sn; bitmezse `error: cancelled: mapping stopped (sent, outcome
+  unknown)` ya da `(not sent)`), bekleyenler `error: cancelled: mapping stopped`, bu
+  sırada gelen bir komut `error: mapping stopped` alır; yapılmayan yazmalar loglanır.
+- **Modbus noktaları (edge modu):** her nokta, eşleme formundaki noktalar JSON'unda
+  `{"name", "unit", "fn", "address", "dtype", "scale", …}` olarak yazılır; **Noktaları
+  alanlarla düzenle** ile her nokta için bir alan kutusu da kullanılabilir (formun kaydettiği
+  yine JSON'dur; alanı olmayan anahtarlar, örneğin `"min"`, korunur). Tipler: `uint16`/`int16`
+  (bir register), `uint32`/`int32`/`float32` (iki), `int64`/`uint64`/`float64` (dört, FC16
+  ile yazılır), register cinsinden `"length"` değeriyle `"string"` (register başına iki
+  karakter; ilk NUL'da biter, sondaki boşluklar atılır) ve `"bool"`: coil ya da discrete
+  input, veya `"bit": 0–15` ile bir holding ya da input register'ın tek biti; string'ler ve
+  register bitleri salt okunurdur. `"word_order"` cihazın değerin baytlarını register'lara
+  nasıl dizdiğini söyler, okuma ve yazmada geçerlidir: `"ABCD"` (varsayılan, önce yüksek
+  register), `"CDAB"` (önce düşük register; 32-bit sayaçlarda sık görülen "word swap"),
+  `"BADC"` (her register'ın baytları yer değiştirmiş) ya da `"DCBA"`; bir string'in
+  karakterleri önce yüksek baytta (`"ABCD"`) ya da önce düşük baytta (`"BADC"`) olur.
+  Sparkplug B bunları Int64, UInt64, Double, String ve Boolean olarak gönderir (diğer
+  tiplerin veri tipleri değişmez). Değerler eşleme düzenlenirken denetlenir (form, REST API,
+  içe aktarma, küme düzenlemesi): `"unit": "1"` ve `"scale": "0.1"` sayı, `"writable":
+  "false"` false sayılır; kullanılamayanlar (sayı olmayan bir scale, formda `"adress"` gibi
+  yanlış yazılmış bir anahtar) noktanın adını veren bir mesajla reddedilir; form geçersiz
+  JSON'un nerede bozulduğunu (satır ve sütun) söyler ve yazılanı korur. **Komşu noktaları
+  tek istekle oku** (varsayılan kapalı), bir birimin aynı fonksiyondaki yakın noktalarını
+  tek istekle okur (en çok 125 register ya da 2000 coil, arada verilen sayıda kullanılmayan
+  register olabilir): 9600 baud'da 100 nokta okuma başına birkaç saniye yerine saniyenin bir
+  bölümünde okunur. Slave'in reddettiği bir blok (exception 02 ya da 03) o andan itibaren
+  nokta nokta okunur (bir kez loglanır), yanıtsız kalan bir blok ise içindeki her nokta için
+  yanıt yok sayılır. Düzenleme formundaki **Bu noktaları şimdi oku**, noktaları yazıldığı gibi
+  (kaydetmeden) çalışan ağ geçidi üzerinden okur ve değerlerini gösterir; status (REST API)
+  her noktanın son değerini, ne zaman okunduğunu ve son okumanın neden başarısız olduğunu
+  listeler. **Birim yönlendirme** (Modbus ağ geçitleri, isteğe bağlı): `255=1, 0=1`,
+  master'ın unit 255 ve unit 0 isteklerini RTU unit 1'e gönderir ve master'ın gönderdiği id
+  ile yanıtlar (birçok master ağ geçidinin arkasındaki cihazı 255 ya da 0 ile adresler).
+  Retry eklenmez: yanıt vermeyi kesen bir birim döngü başına bir kez okunur (yukarıya
+  bakın). v2.8 bir düğüm (ya da oradan yapılan bir küme düzenlemesi) veya sürüm düşürme
+  `word_order`, `bit`, `length`, blok okuma ve birim yönlendirme ayarlarını atar; o
+  sürümlerde yeni tiplerin okunması hata verir.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -264,8 +378,10 @@ düzenlemeye gerek yok.
   düğümünün çevrimdışı olması** (sesi gelen bir düğümün 20 sn boyunca duyulmaması ya da
   yapılandırılmış bir eşin bir dakika arayla iki isteğe yanıt vermemesi) ve geri gelmesi,
   **ser2net'in başlaması** (bir açılıştan 15 sn sonra: hangi eşlemelerin çalıştığı ve önceki
-  çalışmayı event loop watchdog'unun sonlandırıp sonlandırmadığı). Bu olaylar gönderilsin ya
-  da gönderilmesin all.log'a yazılır.
+  çalışmayı event loop watchdog'unun sonlandırıp sonlandırmadığı) ve bir gateway'in periyodik
+  okuduğu bir **Modbus unit'inin yanıt vermeyi kesmesi** (3 okuma üst üste hiçbir noktasına
+  yanıt vermemesi) ve yeniden yanıt vermesi. Bu olaylar gönderilsin ya da gönderilmesin
+  all.log'a yazılır.
   Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
   bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını
   (ya da `(unknown user)`) ve IP adresini gönderir; *Kişisel verileri gönderme* seçeneği
@@ -318,9 +434,67 @@ düzenlemeye gerek yok.
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
-  yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla. `paho-mqtt`
-  gerektirir (opsiyonel; yoksa köprü normal çalışır). Bir satır **LF**'de (varsayılan;
-  önündeki CR satıra dahil edilmez), **CR**'de (kayıtlarını CR ile bitiren terazi, analizör
+  yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla:
+  `<topic>/status` broker'a her bağlanışta (yeniden bağlanınca da) `online`, eşleme
+  durunca ya da broker bağlantıyı kaybedince (Last-Will) `offline` olur. Client ID boşsa
+  broker yeni bağlantıyı kopan eskisiyle eşleştiremez ve eskisinin Will'ini yeni
+  `online`'dan sonra yayınlayabilir (30 s'lik keepalive'ın 1,5 katına kadar bekler); bu
+  yüzden `online` her bağlantıdan 50 s sonra bir kez daha gönderilir. Bağlantı her
+  değiştiğinde loglanır (bağlanıyor, bağlandı, broker'ın verdiği nedenle reddedildi,
+  hatasıyla bağlanamıyor — DNS, yanıt yok, TLS sertifikası — ve koptu; her sorun, değişene
+  kadar bir kez); broker'ın reddettiği abonelikler ve bir topic'e ilk başarısız yayın da
+  loglanır. Eşlemenin durumu (REST API'de `mqtt`: durum, broker, ne zamandan beri, hata,
+  teslim edilemeyen mesajlar) ve `/metrics` bunu taşır; pano nedeniyle birlikte
+  **⚠ MQTT: … ile bağlantı yok** gösterir. `+` ya da `#` içeren bir base topic (hiçbir mesaj
+  ona yayınlanamaz) eşlemenin MQTT'sini kapalı tutar ve loglanır. Düzenlemeler (eşleme
+  formu, REST API, içe aktarma, bir küme düğümünün kaydı) böyle bir base topic'i, düz
+  biçimde `+`, `#` ya da null karakter içeren bir nokta adını (`/` sorun değil) ve topic'i
+  eşlemede zaten kullanılan bir noktayı reddeder: `status`, unit durumları açıkken
+  `unit<N>/status` ya da başka bir noktanın `<nokta>/set` veya `/set/result` topic'i. Aynı
+  broker'daki (host:port) iki etkin eşleme açık bir client ID'yi (broker her ID için tek
+  bağlantı tutar), bir Sparkplug B grup ve edge düğüm ID'sini ya da bir komut topic'ini —
+  ikisinin de alacağı bir `/set`'i (ya da bir seri eşlemenin `<topic>/tx`'ini) ya da
+  birinin verisini yayınladığı, diğerinin komut aldığı bir topic'i — paylaşamaz. Yalnızca aynı topic'lere yayın yapan eşlemelere (ortak
+  bir base topic; `<topic>/status` o zaman en son bağlananı gösterir) izin verilir, eşleme
+  başlarken log'una bir uyarı yazılır. Böyle bir çakışması zaten olan bir config.json
+  yüklenmeye ve çalışmaya devam eder: açılış ve eşlemenin her başlatılışı bunu loglar,
+  iki eşlemeden birinin düzenlemesi ise çakışmayı gidermeli (ya da birini kapatmalı); etkin
+  bir eşlemeyle çakışacak kapalı bir eşlemeyi başlatmak (Başlat, toplu başlatma, REST API,
+  bir küme düğümü) paylaşılan bir seri porttaki gibi nedeniyle reddedilir. İki
+  ayrı ser2net kurulumu birbirinin eşlemelerini göremez: her birine kendi topic'lerini ve
+  client ID'lerini ver. **TLS**'te broker'ın
+  sertifikası sistemin güvendiği bir CA'ya — **CA sertifika dosyası** (PEM ya da DER)
+  verilmişse yalnızca o dosyadaki bir CA'ya — bağlanmalı ve broker'ın host adını (DNS adı
+  ya da IP adresi) taşımalı; **Broker'ın host adını doğrula** kapalıyken host adını
+  taşımayan bir sertifika da kabul edilir (yine de güvenilen bir CA'dan gelmeli). Bir
+  **istemci sertifikası** (PEM; anahtarı ayrı dosyada ya da aynı dosyada, şifreli anahtar
+  **parolasıyla**) sertifika isteyen broker'a sunulur (karşılıklı TLS, ör. AWS IoT Core);
+  form kayıtlı anahtar parolasını hiç göstermez (boş bırakılan alan onu korur, *Kayıtlı
+  parolayı sil* siler).
+  Eşleme formu ve REST API kullanılamayan dosyaları reddeder; içe aktarma böyle bir eşlemeyi
+  uyarıyla alır, dosyaları kaybolan bir eşleme ise yüklenmeye devam eder ve MQTT'siz çalışır
+  (loglanır, panoda görünür) — asla düz metinle bağlanmaz. Göreli bir yol, bir eşlemenin TLS
+  dosyalarında olduğu gibi veri klasöründeki bir dosyayı gösterir. Docker'da dosyaları `/data`
+  altına koy (ör. `/data/certs/`); Windows servisi bunları okuyabilmeli. Broker'a
+  ulaşılamadığı sürece QoS 0 mesajlar kaybolur (teslim edilemeyen olarak sayılır); QoS
+  1/2'de eşleme başına en çok 10 000 mesaj bekler ve yeniden bağlanınca gönderilir — bunun
+  ötesinde en yeniler atılır (sayılır, kesinti başına bir kez loglanır) — periyodik okunan
+  Modbus değerlerinde ise her noktanın yalnızca son değeri tutulur (kesintiden sonra eski
+  okumalar art arda gönderilmez). Bir eşlemeyi durdurmak ya da yeniden başlatmak,
+  broker'ın son mesajı (`offline` ya da Sparkplug NDEATH) almasını en çok 3 s bekler
+  (ötesinde aynısını Last-Will söyler); bu sırada diğer eşlemeler ve arayüz beklemez.
+  **Verileri retained yayınla** (düz biçim) seri satırları ve periyodik okunan Modbus
+  değerlerini retained yayınlar; böylece sonradan bağlanan bir abone (Home Assistant,
+  Node-RED, Telegraf) bir sonraki okumayı ya da satırı beklemeden son değeri hemen alır
+  (Sparkplug B veriyi hiç retain etmez, komut sonuçları retain edilmez; retained bir değeri
+  silmek için topic'ine boş bir retained mesaj yayınla). Modbus değerleri varsayılan olarak
+  düz metindir; **Değer biçimi: JSON** `{"value": 21.5, "ts": 1731400000123, "quality":
+  "good"}` yayınlar (`ts`: okunduğu an, epoch'tan beri ms; bit `true` / `false`, NaN okuma
+  `null`) ve okuması başarısız olan ya da unit'i yanıt vermeyi kesen bir nokta için, yeniden
+  okunana kadar bir kez `{"value": null, …, "quality": "bad"}` gönderir. İstemci MQTT 3.1.1
+  konuşur. `paho-mqtt` gerektirir (opsiyonel; yoksa köprü normal çalışır). Bir satır
+  **LF**'de (varsayılan; önündeki CR satıra dahil edilmez), **CR**'de (kayıtlarını CR ile
+  bitiren terazi, analizör
   gibi cihazlar; yanındaki LF dahil edilmez) ya da **CR ya da LF**'de biter
   (`mqtt.line_end`); 64 KiB boyunca satır sonu gelmezse en eski baytlar atılır ve log bunu
   bir kez söyler. **`<topic>/tx` mesajlarını cihaza yaz** (`mqtt.tx_enabled`, varsayılan
@@ -429,7 +603,8 @@ Linux notları:
   geçici dosya temizleyicileri uzun süre çalışan bir binary'nin dosyalarını silmez.
   Öldürülen bir sürecin geride bıraktığı kopya ise her zamanki gibi temizlenir.
 - Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
-  paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır.
+  paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır (MQTT eşlemesi ya da LDAP için bir CA
+  dosyası verilmemişse).
 
 `ser2net --about` sürümleri (Python, OpenSSL, bileşenler) ve her bileşenin nereden
 yüklendiğini gösterir; bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `<bundle>`,
@@ -499,12 +674,16 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
   ağ modu (server/client/udp), protokol, bind/remote IP:port, erişim kuralları.
 - **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda. Bağlı istemci varken
   Durdur ve Yeniden başlat önce sorar (istemcilerin bağlantısı kesilir; durdurulan eşleme
-  durdurulmuş kalır); Sil, eşlemenin log ve trace dosyalarını da siler.
+  durdurulmuş kalır); Sil, eşlemenin log ve trace dosyalarını da siler. **Kopyala**,
+  `<ad> (copy)` (`(copy 2)`, …) adlı kapalı bir kopya oluşturur: bir sonraki boş port
+  (taşıma protokolü ve adresine göre, ser2net'in kendi portlarından biri değil; 65535'ten
+  sonra aşağı doğru aranır), MQTT client ID'si yok, base topic `<topic>-copy` (`-copy-2`,
+  …) ve yeni adından türeyen bir Sparkplug B edge düğüm ID'si; böylece seri portu
+  değiştirilince orijinalin yanında çalışabilir.
 - **Düzenle:** eşleme değişmeden önce açılmış bir düzenleme formu (başka bir kullanıcı ya da
   sekme, bir başlatma ya da durdurma, REST API) kaydedilmez: girdiğin değerler ve bir notla
   geri gelir; yeniden kaydetmek o değişikliklerin yerine bunları yazar. Eşlemesi bu arada
-  silinmiş bir form yeni bir eşleme olarak geri gelir. Bir kopyanın (*Kopyala*) siz
-  verene kadar kendi MQTT client ID'si olmaz.
+  silinmiş bir form yeni bir eşleme olarak geri gelir.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); salt okunur olmayan ağ
   eşlemelerinde operator'ler cihaza yazabilir (Modbus gateway konsolu yalnızca hattı izler
@@ -551,7 +730,11 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
   sıra bekleyen TLS el sıkışmaları, kabulden hemen sonra reddedilen bağlantılar
   (`ser2net_connections_refused_total`, nedene göre), veri klasörünün diski
   (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) ve orada trace'lerle log'ların
-  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`). Her serinin `# HELP` ve
+  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`); bir Modbus gateway'in
+  periyodik okuduğu her unit için yanıt verip vermediği (`ser2net_modbus_unit_up`) ve
+  başarısız okumaları (`ser2net_modbus_unit_poll_errors_total`); MQTT'ye yayın yapan bir
+  eşlemenin broker'ına bağlı olup olmadığı (`ser2net_mqtt_connected`) ve broker'a teslim
+  edemediği mesajlar (`ser2net_mqtt_messages_dropped_total`). Her serinin `# HELP` ve
   `# TYPE` satırı vardır. Oturum olmadan gelen bir scraper `401` alır (tarayıcı giriş
   sayfasına yönlenir) ve başarılı scrape'ler `all.log`'a yazılmaz.
 
@@ -633,10 +816,11 @@ uymayan bir değer `400` ve ayarın yoluyla reddedilir (`serial.baudrate: "fast"
 number.`). Koruyucu bir ayar (`read_only`, `tls`) yalnızca JSON `true` / `false` alır: metin
 reddedilir (`network.read_only: use true or false (JSON booleans), not a string.`), böyle bir
 dosyanın içe aktarılması da. Elle düzenlenmiş bir `config.json`'da koruyucu bir ayardaki
-(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`) metin, 2.9.0 öncesindeki gibi
-boş değilse onu açık tutar ve açılışta not düşülür. Yalnızca JSON `true` ile bir şeyi açan
+(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`,
+MQTT'nin `tls_check_hostname`'i) metin,
+2.9.0 öncesindeki gibi boş değilse onu açık tutar ve açılışta not düşülür. Yalnızca JSON `true` ile bir şeyi açan
 ayarlar (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
-MQTT'nin `tx_enabled`'ı, `proxy_hsts`, `mask_personal_data`, `email_separately`) de metni
+MQTT'nin `tx_enabled`'ı, `proxy_hsts`, `email_separately`) de metni
 reddeder; elle düzenlenmiş bir `config.json`'da metin onları kapalı bırakır ve açılışta not
 düşülür. Ayar olmayan anahtarlar yok sayılır ve yanıttaki `warnings` listesinde
 adlandırılır. Beklenmeyen bir sunucu hatası da JSON bir `500`
@@ -674,7 +858,8 @@ scrape_configs:
 ```
 Token, üretilirken seçilen rolü taşır (*Yalnızca rolü değiştir* token'ı koruyarak rolü
 değiştirir): `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
-sırları (MQTT parolası, bir eşlemenin TLS anahtar parolası) `********` olarak maskeli görür;
+sırları (MQTT parolası ve istemci anahtarı parolası, bir eşlemenin TLS anahtar parolası)
+`********` olarak maskeli görür;
 bu maskeyi geri gönderen bir `PUT` ya da `PATCH` kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
 ve açılış log'u bunu yazar.
 
@@ -1388,15 +1573,20 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yolla kaydedilir); taşımadan önceki yedekler ve içe aktarmalar da aynı şekilde ele alınır.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
+- `sparkplug-bdseq.json` — her Sparkplug B edge node'unun (grup/düğüm) son oturumunun
+  `bdSeq`'i; yeniden başlatmadan sonra numara buradan devam eder. Silinirse sonraki
+  açılış 0'dan başlar.
 
 **Gizli değerler:** `config.json` LDAP bind parolasını, OIDC client secret'ı, SMTP
 parolasını, webhook URL'sini (çoğu zaman içinde bir token vardır), her eşlemenin MQTT broker
-parolasını, TLS anahtar parolalarını (bir eşlemenin ve yönetim arayüzünün), cluster
+parolasını ve MQTT istemci anahtarı parolasını, TLS anahtar parolalarını (bir eşlemenin ve
+yönetim arayüzünün), cluster
 anahtarını (tüm düğümlerin eşlemelerini okumaya ve değiştirmeye yeter) ve oturum anahtarı
 `secret_key`'i (aynı dosyadaki hesaplarla birlikte geçerli bir oturum üretmeye yeter) ve
 iki adımlı giriş kullanan her hesabın anahtarını açık metin olarak tutar. Yerel parolalar
 scrypt hash'i, REST API token'ları da yalnızca hash'leri olarak saklanır. `backups/` aynı dosyanın önceki kopyalarını tutar (indirilen bir yedekte oturum
-anahtarı yoktur), eşleme dışa aktarımı da MQTT ve TLS anahtar parolalarını içerir. Bu
+anahtarı yoktur), eşleme dışa aktarımı da MQTT parolalarını ve MQTT ile TLS anahtar
+parolalarını içerir. Bu
 makinede bunları yalnızca ser2net'in çalıştığı hesap okuyabilir; her kopyayı — kopyalanan bir
 veri klasörünü ya da Docker volume'unu, bir disk ya da VM imajını, indirilen bir yedeği, bir
 dışa aktarımı — bir parola kasası gibi koruyun. Böyle bir kopya sızarsa neyin değiştirileceği
@@ -1436,7 +1626,8 @@ bir düzenlemeden sonra dosyayı yeniden okutun — yeniden başlatma gerekmez:
 Windows servisi ve konteyner için de) ya da Ayarlar → *Yapılandırma yedekleri* →
 *config.json'u yeniden yükle*. Dosya bir düzenleme gibi denetlenir: okunamıyor ya da
 doğrulanmıyorsa (değişen bir eşlemede yanlış tipte bir değer, aynı portu kullanan iki eşleme,
-hiç kullanıcı hesabı olmaması, yüklenemeyen bir TLS çifti) hiçbir şey değişmez ve nedeni
+hiç kullanıcı hesabı olmaması, yüklenemeyen bir TLS çifti, aynı broker'da etkin başka bir
+eşlemenin kullandığı bir MQTT client ID'si) hiçbir şey değişmez ve nedeni
 `all.log`'a yazılır. Aksi halde parça parça uygulanır: ayarları değişmeyen bir eşleme
 istemcileriyle çalışmayı sürdürür (çalışması gerekip çalışmayan başlatılır), değişen yeniden
 başlar, kaldırılan durur, yeni olan başlar; küme yalnızca ayarları değiştiyse yeniden başlar.
@@ -1500,6 +1691,8 @@ olmayan ayarlar (ör. 2.7'nin Modbus noktalarında `writable`, trace rotasyonu, 
 ile varsayılanları alır. 2.7 betiklerinin tek adımlı içe aktarması (`step=preview` olmadan
 gelen POST) JSON dosyasıyla yine bütün eşlemeleri değiştirir; klasik ser2net dosyası
 yalnızca önizlemeyle alınır.
+**Dışa aktarma** eşlemeleri UTF-8 bir JSON dosyası olarak verir (Türkçe adlar ve topic'ler
+kaçışsız, `config.json` gibi); içe aktarma onu (ve eski sürümlerin kaçışlı dosyalarını) okur.
 
 ---
 

@@ -46,7 +46,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from _server import ROOT, Browser, Server
 
 from app import i18n, notify
-from app.config import AdminUI, ConfigError, NotificationSettings
+from app.config import (
+    NOTIFY_DEFAULT_EVENTS, NOTIFY_EVENTS, AdminUI, ConfigError, NotificationSettings,
+)
 from app.web.auth import hash_password
 
 RECEIVED: list = []
@@ -199,6 +201,56 @@ def test_repeat_keys():
           f"remembered expires after repeat_s, at most {notify.MAX_KEYS} keys  OK")
 
 
+def test_unit_events():
+    """A polled Modbus unit: unit_offline when it stops answering, unit_back when it answers
+    again; nothing while the serial port is down (device_lost / device_back say that), and its
+    return is still reported after a restart of the mapping (units unknown again)."""
+    names = {"gw": "Line 3"}
+
+    def status(state="running", **units):
+        return {"gw": {"state": state, "clients": [], "units": [
+            {"unit": int(n[1:]), "state": st, "cause": cause, "since": None, "errors": 0}
+            for n, (st, cause) in units.items()]}}
+    on, silent, port = ("online", ""), ("offline", "no reply"), ("offline", "port down")
+    unknown = ("unknown", "")
+    steps = [  # (status, events expected against the previous one)
+        (status(u1=unknown, u2=unknown), []),
+        (status(u1=on, u2=on), []),
+        (status(u1=on, u2=silent), [("unit_offline", "gw:unit2", "Line 3", "unit 2")]),
+        (status(u1=on, u2=silent), []),
+        (status(u1=on, u2=on), [("unit_back", "gw:unit2", "Line 3", "unit 2")]),
+        # the port goes away: device_lost, the units go offline because of it, come back
+        (status("reconnecting", u1=on, u2=on), ["device_lost"]),
+        (status("reconnecting", u1=port, u2=port), []),
+        (status(u1=port, u2=port), ["device_back"]),
+        (status(u1=on, u2=port), []),
+        # the port came back but unit 2 is silent: that is reported now
+        (status(u1=on, u2=silent), [("unit_offline", "gw:unit2", "Line 3", "unit 2")]),
+        # a save restarts the mapping (units unknown), then unit 2 answers
+        (status(u1=unknown, u2=unknown), []),
+        (status(u1=on, u2=on), [("unit_back", "gw:unit2", "Line 3", "unit 2")]),
+        # a unit that is silent from the start (or after a restart) is reported
+        (status(u1=unknown, u2=unknown, u5=unknown), []),
+        (status(u1=on, u2=on, u5=silent), [("unit_offline", "gw:unit5", "Line 3", "unit 5")]),
+    ]
+    prev = notify.snapshot(steps[0][0])
+    for st, expected in steps[1:]:
+        events = notify.status_events(prev, st, names)
+        whole = bool(expected) and isinstance(expected[0], tuple)  # else: the event names
+        assert [e if whole else e[0] for e in events] == expected, (st, events)
+        prev = notify.snapshot(st, prev)
+    # a status without units (an older runner) and an older 2-tuple snapshot still work
+    assert notify.status_events({"gw": ("running", set())}, status(u2=silent), names)[0][0] \
+        == "unit_offline"
+    assert notify.status_events(notify.snapshot(status(u2=silent)),
+                                {"gw": {"state": "running", "clients": []}}, names) == []
+    assert "unit_offline" in NOTIFY_EVENTS and "unit_offline" not in NOTIFY_DEFAULT_EVENTS
+    assert "unit_back" not in NotificationSettings().events, "new events are opt-in"
+    assert NotificationSettings.from_dict({"events": ["unit_back"]}).events == ["unit_back"]
+    print("Modbus units: unit_offline / unit_back (not for a port outage; across a restart); "
+          "opt-in  OK")
+
+
 def test_formats_and_validation():
     for fmt, key in (("slack", "text"), ("discord", "content"), ("telegram", "chat_id"),
                      ("json", "event"), ("teams", "attachments")):
@@ -259,10 +311,21 @@ def test_personal_data():
     s.mask_personal_data = False
     assert n.emit("client_connected", "m1:10.0.0.7", "PLC", "10.0.0.7:5000")
     assert n._queue.get_nowait()[2] == "10.0.0.7:5000", "off: the address as it is"
-    # older configs (and hand-edited values other than true) keep today's payloads
-    for raw in ({}, {"mask_personal_data": "yes", "email_separately": 1}):
-        loaded = NotificationSettings.from_dict(raw)
-        assert loaded.mask_personal_data is False and loaded.email_separately is False, raw
+    # older configs keep today's payloads; text in a hand-edited privacy switch keeps it on
+    # (a protective switch: on unless empty, with a load note; an edit refuses it), the
+    # e-mail switch takes only JSON true
+    loaded = NotificationSettings.from_dict({})
+    assert loaded.mask_personal_data is False and loaded.email_separately is False
+    for raw, masked in (("yes", True), ("false", True), ("", False)):
+        notes = []
+        loaded = NotificationSettings.from_dict(
+            {"mask_personal_data": raw, "email_separately": "yes"}, notes, "notifications.")
+        assert loaded.mask_personal_data is masked and loaded.email_separately is False, raw
+        kinds = {n.path: n.kind for n in notes}
+        assert kinds == {"notifications.mask_personal_data": "switch_text",
+                         "notifications.email_separately": "invalid"}, notes
+        assert "use true or false" in notes[0].error(), notes[0].error()
+    assert NotificationSettings.from_dict({"email_separately": 1}).email_separately is False
     body = notify.webhook_body("discord", "start_failed", "@everyone", "x")
     assert body["allowed_mentions"] == {"parse": []} and "@everyone" in body["content"], body
     print("personal data: addresses as their network (IPv4 /24, IPv6 /48, repeat key "
@@ -418,8 +481,10 @@ def test_settings_ui(hook_port):
         b.login("admin", "notify-pass-1")
         st, _, page = b.get("/settings")
         assert 'id="notifications"' in page
+        assert 'name="notify_event_unit_offline"' in page and "Modbus unit answering again" in page
         form = {"notify_enabled": "on", "notify_event_device_lost": "on",
-                "notify_event_login_failed": "on", "notify_repeat_min": "0",
+                "notify_event_login_failed": "on", "notify_event_unit_back": "on",
+                "notify_repeat_min": "0",
                 "notify_webhook_url": f"http://127.0.0.1:{hook_port}/ui",
                 "notify_webhook_format": "slack", "notify_smtp_port": "587",
                 "notify_smtp_security": "starttls", "then": "test"}
@@ -427,7 +492,8 @@ def test_settings_ui(hook_port):
         assert "the test notification was sent" in page, page[page.find("banner"):][:300]
         assert RECEIVED[-1][0] == "/ui" and "test notification" in RECEIVED[-1][1]["text"]
         saved = srv.saved_config()["notifications"]
-        assert saved["events"] == ["device_lost", "login_failed"] and saved["webhook_format"] == "slack"
+        assert saved["events"] == ["device_lost", "login_failed", "unit_back"], saved["events"]
+        assert saved["webhook_format"] == "slack"
         form.pop("notify_webhook_url")
         form.pop("then")
         st, _, page = b.post("/settings/notifications", form)
@@ -502,6 +568,7 @@ def test_settings_ui(hook_port):
 def main():
     test_events()
     test_repeat_keys()
+    test_unit_events()
     test_formats_and_validation()
     test_personal_data()
     hook = serve(HTTPServer, Hook)

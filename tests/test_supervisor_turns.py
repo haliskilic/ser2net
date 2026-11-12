@@ -134,7 +134,8 @@ async def test_other_mappings_side_by_side():
             await asyncio.wait_for(both.wait(), 2)  # times out if the starts were serialized
             await super().start()
 
-    supervisor.make_runner, real = (lambda m, log, trace_dir=None: Waits(m)), supervisor.make_runner
+    supervisor.make_runner, real = ((lambda m, log, trace_dir=None, state_dir=None: Waits(m)),
+                                    supervisor.make_runner)
     try:
         results = await asyncio.gather(sup.apply_mapping(mapping("bbbbbbbbbbb1", 7011)),
                                        sup.apply_mapping(mapping("bbbbbbbbbbb2", 7012)))
@@ -266,7 +267,8 @@ async def test_real_runner_stopped_while_listening_starts():
 
 
 async def main():
-    supervisor.make_runner, real = (lambda m, log, trace_dir=None: FakeRunner(m)), supervisor.make_runner
+    supervisor.make_runner, real = ((lambda m, log, trace_dir=None, state_dir=None: FakeRunner(m)),
+                                    supervisor.make_runner)
     try:
         await test_same_mapping_takes_turns()
         await test_other_mappings_side_by_side()
