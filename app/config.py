@@ -706,6 +706,9 @@ def udp_peer_timeout(net: NetworkSettings) -> float:
 # ---------------------------------------------------------------------------
 # Per-mapping options
 # ---------------------------------------------------------------------------
+RFC2217_SIGNATURE_MAX = 128  # characters (an edit's rule)
+
+
 @dataclass
 class MappingOptions:
     banner: str = ""
@@ -731,6 +734,8 @@ class MappingOptions:
     # rate, data bits, parity, stop bits and flow control (off: what the client set stays
     # until the port is reopened). RTS/DTR are left alone: toggling them can reset a device.
     rfc2217_restore_on_disconnect: bool = False
+    # RFC2217: what a client's SIGNATURE request is answered with (blank: "ser2net")
+    rfc2217_signature: str = ""
     # Modbus gateway: how long to wait for an RTU slave's reply before returning a
     # Modbus exception (0x0B gateway-target-failed) to the TCP master.
     modbus_response_timeout_s: float = 1.0
@@ -982,6 +987,10 @@ class MappingConfig:
                                 "IP 0.0.0.0 or ::, not {0}.").format(net.bind_ip))
         if self.kind == "net" and net.mode == "udp":
             self._validate_udp_peer()
+        sig = self.options.rfc2217_signature
+        if not isinstance(sig, str) or len(sig) > RFC2217_SIGNATURE_MAX or _CONTROL_CHARS.search(sig):
+            raise ConfigError(_("The RFC 2217 signature must be text of at most {0} characters, "
+                                "without control characters.").format(RFC2217_SIGNATURE_MAX))
         if self.kind == "net" and net.tls and net.mode == "client":
             from .engine.tls import parse_pins
             try:

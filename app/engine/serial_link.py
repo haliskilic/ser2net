@@ -369,6 +369,13 @@ async def close_stream(writer: asyncio.StreamWriter,
     await _done_within(closed, SERIAL_CLOSE_TIMEOUT_S)
 
 
+async def sent_within(writer: asyncio.StreamWriter, seconds: float) -> int:
+    """Wait until an open port has sent what was written to it (the transport's buffer and
+    the OS's output queue), at most ``seconds``; the bytes still waiting then."""
+    transport: Any = writer.transport
+    return await _sent_within(transport, getattr(transport, "serial", None), seconds)
+
+
 async def _sent_within(transport: Any, ser: Any, seconds: float) -> int:
     """Wait until the port has sent what it holds, at most ``seconds`` (and only while the
     transport is open); the bytes still waiting then, 0 when all is gone."""

@@ -67,6 +67,16 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   returns to the mapping's settings when the client leaves (see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md)). A telnet or RFC 2217 subnegotiation longer
   than 1 KiB (real ones are a few bytes) ends that client's session, and the log says why.
+  **Serial BREAK:** a telnet client's BREAK (IAC BRK: PuTTY's *Special Command → Break*,
+  `send brk` in telnet) and an RFC 2217 client's (SET-CONTROL BREAK on/off, or IAC BRK)
+  reach the serial line after the data sent before them (a telnet BREAK lasts 0.25 s); a
+  read-only mapping sends none, and a BREAK an RFC 2217 client leaves on is turned off when
+  it disconnects. Raw TCP has no in-band BREAK. Commands keep their order with the data:
+  what a client sends before an RFC 2217 setting change goes out at the old setting. An
+  RFC 2217 client is also answered on SIGNATURE (`ser2net`, or the mapping's **RFC 2217
+  signature**), on the BREAK / DTR / RTS and inbound flow control queries and on the
+  line/modem state masks; flow control is one mode at a time. An unsupported telnet option
+  is refused each time it is asked for.
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
@@ -265,7 +275,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   addresses keep their family (`ipv6,::1` stays `::1`, `ipv6`/`ipv6n4` without an address
   is `::`); an accepter with neither (`tcp,2000`), on which ser2net took IPv4 and IPv6
   clients, comes in on `0.0.0.0`, IPv4 only, and a warning names those to switch to **All
-  interfaces (IPv4 + IPv6)**.
+  interfaces (IPv4 + IPv6)**. An RFC 2217 connection's signature (4.x `signature`, 3.x
+  `SIGNATURE`) becomes its **RFC 2217 signature**; `hangup-when-done` and `nobreak` are kept
+  but have no effect here (the port stays open between connections), and the import says so.
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
   notifications use as well. Logs, the audit log and the REST API stay English.

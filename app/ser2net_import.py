@@ -37,8 +37,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .config import (
-    MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, bind_ip_problem, canonical_device,
-    canonical_ip, trace_file_name, url_port,
+    MAX_TIMER_S, RFC2217_SIGNATURE_MAX, ConfigError, MappingConfig, _ip_overlaps,
+    bind_ip_problem, canonical_device, canonical_ip, trace_file_name, url_port,
 )
 from .i18n import _
 
@@ -1027,7 +1027,7 @@ def _option(c: _Conn, key: str, value: str) -> None:
             c.network["max_connections"] = int(n)
         else:
             c.note(_("max-connections '{0}' is not a number >= 1, ignored").format(value))
-    elif k in ("banner", "openstr", "closestr", "closeon"):
+    elif k in ("banner", "openstr", "closestr", "closeon", "signature"):
         c.strings[k] = value
     elif k in ("trace-both", "trace-read", "trace-write"):
         if value.strip():
@@ -1131,6 +1131,21 @@ def _finish(c: _Conn) -> None:
         if key in c.strings:
             c.options[key] = _convert(c, c.strings[key], "banner" if key == "banner" else "bytes",
                                       key)
+    if "signature" in c.strings and net["protocol"] == "rfc2217":  # (only RFC 2217 sends it)
+        sig = _convert(c, c.strings["signature"], "bytes", "signature")
+        if len(sig) > RFC2217_SIGNATURE_MAX or re.search(r"[\x00-\x1f\x7f]", sig):
+            c.note(_("the RFC 2217 signature is not imported: here it is text of at most {0} "
+                     "characters, without control characters").format(RFC2217_SIGNATURE_MAX))
+        else:
+            c.options["rfc2217_signature"] = sig
+    for flag, name in (("hangup_when_done", "hangup-when-done"), ("nobreak", "nobreak")):
+        if c.advanced.get(flag):
+            # kept (the form keeps it too) but not acted on: the port stays open between
+            # connections, so it is never closed (DTR dropped) or opened (BREAK cleared)
+            # for one
+            c.note(_("{0} is kept in the mapping but has no effect here: the serial port "
+                     "stays open between connections").format(name.upper().replace("-", "_")
+                                                              if c.v3 else name))
     labels = ({"both": "tb", "read": "tr", "write": "tw"} if c.v3 else
               {k: f"trace-{k}" for k in ("both", "read", "write")})
     kind = next((k for k in ("both", "read", "write") if k in c.traces), "")
@@ -1186,7 +1201,7 @@ _SERIAL_DEFAULTS = {"speed", "nobreak", "rtscts", "xonxoff", "local", "hangup-wh
                     "dtr", "rts", "custspeed", "rs485", "uucplock", "flock", "wronly"}
 _OPTION_DEFAULTS = {"kickolduser", "max-connections", "remaddr", "telnet-brk-on-sync",
                     "chardelay", "trace-hexdump", "trace-timestamp", "trace-both-hexdump",
-                    "trace-both-timestamp"}
+                    "trace-both-timestamp", "signature"}
 
 
 _REFERENCE = {act: re.compile("[" + re.escape(act) + "$]") for act in ("*", "=", "*=")}
@@ -1482,12 +1497,12 @@ class _V3:
             self.devices[name] = value.strip()
         elif kind == "TRACEFILE":
             self.tracefiles[name] = value.strip()
-        elif kind in ("LED", "SIGNATURE", "ROTATOR"):
-            what = {"LED": _("LEDs"), "SIGNATURE": _("RFC2217 signatures"), "ROTATOR": _("rotators")}
+        elif kind in ("LED", "ROTATOR"):
+            what = {"LED": _("LEDs"), "ROTATOR": _("rotators")}
             self.warnings.append(_("line {0}: {1} {2} is not imported ({3} are not supported "
                                    "here)").format(n, kind, name, what[kind]))
             self.strings[name] = (kind, value)
-        else:  # BANNER OPENSTR CLOSESTR CLOSEON RS485CONF
+        else:  # BANNER OPENSTR CLOSESTR CLOSEON SIGNATURE RS485CONF
             self.strings[name] = (kind, value)
 
     def port(self, n: int, line: str, m: re.Match[str]) -> None:
@@ -1568,12 +1583,12 @@ class _V3:
         named = self.strings.get(tok)
         if named is not None:
             kind, value = named
-            if kind in ("BANNER", "OPENSTR", "CLOSESTR", "CLOSEON"):
+            if kind in ("BANNER", "OPENSTR", "CLOSESTR", "CLOSEON", "SIGNATURE"):
                 c.strings[kind.lower()] = value
             elif kind == "RS485CONF":
                 c.note(_("RS485CONF {0} is not imported: set RS-485 in the mapping's serial "
                          "settings").format(tok))
-            return  # LED / SIGNATURE: reported where they are defined
+            return  # LED: reported where it is defined
         if not self.serial(c, tok.upper()):
             c.note(_("unknown option '{0}' ignored").format(tok))
 

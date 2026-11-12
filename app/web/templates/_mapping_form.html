@@ -214,6 +214,8 @@
     <div data-show-when="network_protocol=rfc2217">
       <input type="hidden" name="opt_rfc2217_restore_on_disconnect_shown" value="1">
       <label class="chk"><input type="checkbox" name="opt_rfc2217_restore_on_disconnect" {% if mapping.options.rfc2217_restore_on_disconnect %}checked{% endif %}> {{ _("Restore the serial settings when the RFC 2217 client leaves") }} <span class="muted">({{ _("baud rate, data bits, parity, stop bits and flow control go back to this mapping’s; RTS/DTR stay as they are") }})</span></label>
+      <label>{{ _("RFC 2217 signature") }} <span class="muted">({{ _("the answer to a client that asks for the server’s signature · blank = ser2net") }})</span>
+        <input type="text" name="opt_rfc2217_signature" maxlength="128" value="{{ mapping.options.rfc2217_signature }}" placeholder="ser2net"></label>
     </div>
     <div class="grid2">
       <label>{{ _("Idle timeout (s)") }} <span class="muted">({{ _("TCP; no traffic either way · 0 = off") }})</span>

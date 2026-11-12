@@ -419,6 +419,29 @@ def test_form_rfc2217_restore_on_disconnect():
           "shown  OK")
 
 
+def test_form_rfc2217_signature():
+    """The RFC 2217 signature is a text field of the RFC 2217 block (not posted for another
+    protocol, unknown to an older cluster peer's form): absent, the stored one is kept."""
+    base = {"name": "vc", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "rfc2217",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+    existing = MappingConfig.from_dict({"name": "vc", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "rfc2217", "port": 4001},
+                                        "options": {"rfc2217_signature": "Line 3"}})
+    assert MappingConfig().options.rfc2217_signature == "", "blank by default (ser2net)"
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.options.rfc2217_signature
+
+    assert parsed(dict(base, id=existing.id)) == "Line 3", "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, opt_rfc2217_signature=" COM 7 ")) == "COM 7"
+    assert parsed(dict(base, id=existing.id, opt_rfc2217_signature="")) == ""
+    assert parsed(base) == ""
+    print("form: rfc2217_signature kept when the form leaves it out, set when shown  OK")
+
+
 def test_form_port_lock_options():
     """'Keep other programs out' (TIOCEXCL) and 'don't open a port another program has
     locked' (UUCP lock files) are checkboxes (absent when unticked) with a hidden marker per
@@ -510,6 +533,7 @@ def main():
     test_form_modbus_fields_not_offered()
     test_form_apply_retained_set()
     test_form_rfc2217_restore_on_disconnect()
+    test_form_rfc2217_signature()
     test_form_port_lock_options()
     test_form_udp_reply_fields()
     test_invalid_admin_bind_ip_rejected()

@@ -160,6 +160,8 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_closeon": ("options", ("closeon",)),
     # a checkbox (absent when unticked) shown for RFC 2217 mappings only
     "opt_rfc2217_restore_on_disconnect_shown": ("options", ("rfc2217_restore_on_disconnect",)),
+    # shown for RFC 2217 mappings only
+    "opt_rfc2217_signature": ("options", ("rfc2217_signature",)),
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
@@ -245,6 +247,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_rfc2217_restore_on_disconnect_shown" in form:
         options["rfc2217_restore_on_disconnect"] = _checkbox(
             form, "opt_rfc2217_restore_on_disconnect")
+    if "opt_rfc2217_signature" in form:
+        options["rfc2217_signature"] = form.get("opt_rfc2217_signature", "").strip()
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),

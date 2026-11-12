@@ -70,7 +70,16 @@ düzenlemeye gerek yok.
   ayrılınca port eşlemenin ayarlarına döner (bkz.
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md)). 1 KiB'tan uzun bir telnet ya da RFC 2217
   alt müzakeresi (gerçekleri birkaç bayttır) o istemcinin oturumunu sonlandırır; nedeni
-  log'a yazılır.
+  log'a yazılır. **Seri BREAK:** telnet istemcisinin BREAK'i (IAC BRK: PuTTY'de *Special
+  Command → Break*, telnet'te `send brk`) ve RFC 2217 istemcisininki (SET-CONTROL BREAK
+  on/off ya da IAC BRK), kendilerinden önce gönderilen veriden sonra seri hatta ulaşır
+  (telnet BREAK'i 0,25 sn sürer); salt okunur eşleme BREAK göndermez, bir RFC 2217
+  istemcisinin açık bırakıp ayrıldığı BREAK de kapatılır. Raw TCP'de bant içi BREAK yoktur.
+  Komutlar veriyle sıralarını korur: istemcinin bir RFC 2217 ayar değişikliğinden önce
+  gönderdiği veri eski ayarla çıkar. RFC 2217 istemcisi ayrıca SIGNATURE'a (`ser2net` ya da
+  eşlemenin **RFC 2217 imzası**), BREAK / DTR / RTS ve gelen yön akış kontrolü sorgularına
+  ve hat/modem durumu maskelerine yanıt alır; akış kontrolü aynı anda tek moddadır.
+  Desteklenmeyen bir telnet seçeneği her istendiğinde reddedilir.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
   RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
@@ -278,7 +287,10 @@ düzenlemeye gerek yok.
   ve kilit dosyası oluşturmaz). Dinleme adresleri ailesini korur (`ipv6,::1` `::1` kalır,
   adressiz `ipv6`/`ipv6n4` `::` olur). İkisini de belirtmeyen bir accepter (`tcp,2000`)
   ser2net'te IPv4 ve IPv6 istemcileri alıyordu; burada `0.0.0.0` olarak, yalnızca IPv4 için
-  gelir ve bir uyarı **Tüm arayüzler (IPv4 + IPv6)**'ya geçirilebilecek olanları sayar.
+  gelir ve bir uyarı **Tüm arayüzler (IPv4 + IPv6)**'ya geçirilebilecek olanları sayar. Bir
+  RFC 2217 bağlantısının imzası (4.x `signature`, 3.x `SIGNATURE`) **RFC 2217 imzası** olur;
+  `hangup-when-done` ve `nobreak` saklanır ama burada etkisi yoktur (port bağlantılar
+  arasında açık kalır), içe aktarma da bunu söyler.
 - **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.
