@@ -269,10 +269,16 @@ def test_load_normalizes_and_notes():
 
 
 def test_cluster_flags():
-    for raw, want in ((None, True), ("false", False), ("maybe", True), (0, False)):
+    # as in 2.8.1: anything but true/false is the default (true), so no text cuts off older
+    # nodes or discovery; a previous key that is no text is none
+    for raw in (None, "false", "maybe", 0):
         c = ClusterSettings.from_dict({"legacy_auth": raw, "discovery": raw})
-        assert (c.legacy_auth, c.discovery) == (want, want), (raw, c)
-    print("cluster legacy_auth / discovery: 'false' is false, anything unreadable the default  OK")
+        assert (c.legacy_auth, c.discovery) == (True, True), (raw, c)
+    assert ClusterSettings.from_dict({"legacy_auth": False}).legacy_auth is False
+    assert ClusterSettings.from_dict({"previous_key": 5}).previous_key == ""
+    assert ClusterSettings.from_dict({"key": 1234}).key == "1234"
+    print("cluster legacy_auth / discovery / previous_key: a value of another type is the "
+          "default, as in 2.8.1  OK")
 
 
 async def test_poll_loop_survives():
