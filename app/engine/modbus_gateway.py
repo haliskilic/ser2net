@@ -46,7 +46,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from ..config import MappingConfig, ModbusPoint, modbus_response_timeout
+from ..config import MappingConfig, ModbusPoint, modbus_response_timeout, point_scale
 from . import modbus, netguard, sockopts
 from .access import AccessPolicy, server_ssl
 from .bridge import (
@@ -401,7 +401,7 @@ class ModbusGatewayRunner:
         req = modbus.read_pdu(p.fn, p.address, modbus.dtype_registers(p.dtype))
         rpdu = await self._transaction(p.unit, req)
         self._check_answered(rpdu, p)
-        return modbus.decode_value(modbus.response_data(rpdu, p.fn), p.dtype, p.scale)
+        return modbus.decode_value(modbus.response_data(rpdu, p.fn), p.dtype, point_scale(p))
 
     def _check_answered(self, rpdu: bytes, p) -> None:
         """Raise NoReply for the exceptions the gateway answers itself when no reply came:
@@ -605,7 +605,7 @@ class ModbusGatewayRunner:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"{point.name!r} takes a number, not {shown(value)}")
             check_limits(point, value)
-            regs = modbus.encode_value(value, point.dtype, point.scale or 1.0)
+            regs = modbus.encode_value(value, point.dtype, point_scale(point) or 1.0)
             pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
                    else modbus.write_multiple_registers_pdu(point.address, regs))
             raw = _raw_text(value, regs, point)
@@ -959,6 +959,9 @@ class ModbusGatewayRunner:
             if p.writable and unusable:
                 self._log(f"warning: point {p.name!r}: {' and '.join(unusable)} ignored (not a "
                           "number, or for allowed not a list of values of the point's type)")
+            if point_scale(p) is not p.scale:
+                self._log(f"warning: point {p.name!r}: scale {shown(p.scale)} ignored (not a "
+                          "number): its values are not scaled")
         mq = self.mapping.mqtt
         missing = [what for what, have in (("TLS", mq.tls), ("a username", mq.username))
                    if not have]
@@ -1127,7 +1130,8 @@ def _raw_text(value, regs: list[int], point) -> str:
     """For the log: the raw register value written, when it is not the value itself (an
     integer type rounds a fraction, a scale divides it)."""
     raw = modbus.decode_value(b"".join(r.to_bytes(2, "big") for r in regs), point.dtype)
-    scaled = bool(point.scale) and point.scale != 1.0
+    scale = point_scale(point)
+    scaled = bool(scale) and scale != 1.0
     if not scaled and (point.dtype == "float32" or raw == value):
         return ""
     return f", raw value {_num(raw)}"

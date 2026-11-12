@@ -898,5 +898,12 @@
   "Mapping '{0}' is already the Sparkplug B edge node {1} (group/edge node ID) on the MQTT broker {2}. Two edge nodes can't share it: a host takes them for one and sends its commands to both. Set another edge node ID (a blank one is made from the mapping's name).": "'{0}' eşlemesi {2} MQTT broker'ında zaten {1} Sparkplug B edge düğümü (grup/edge düğüm ID'si). İki edge düğümü aynı kimliği paylaşamaz: host onları tek düğüm sanar ve komutlarını ikisine de gönderir. Başka bir edge düğüm ID'si gir (boş bırakılırsa eşlemenin adından türetilir).",
   "Mapping '{0}' also uses the MQTT topic {1} on the broker {2}, and one of the two takes writes from it (a point's /set): one MQTT command would be written by both, or the data of one taken as a command by the other. Give one of them another base topic.": "'{0}' eşlemesi de {2} broker'ında {1} MQTT topic'ini kullanıyor ve ikisinden biri bu topic'ten yazma komutu alıyor (bir noktanın /set'i): tek bir MQTT komutu iki eşlemece de yazılır ya da birinin verisi diğerince komut sayılır. Birine başka bir ana topic ver.",
   "Mapping '{0}': {1}": "'{0}' eşlemesi: {1}",
-  "No free {0} port is left on {1} for the copy.": "Kopya için {1} adresinde boş {0} portu kalmadı."
+  "No free {0} port is left on {1} for the copy.": "Kopya için {1} adresinde boş {0} portu kalmadı.",
+  "Modbus poll point #{0} is not an object.": "Modbus okuma noktası #{0} bir JSON nesnesi değil.",
+  "Modbus poll point names are text: {0} is not.": "Modbus okuma noktalarının adları metin olmalı: {0} metin değil.",
+  "Point {0}: {1} must be a whole number.": "{0} noktası: {1} bir tam sayı olmalı.",
+  "Point {0}: scale must be a number (0 or 1: not scaled).": "{0} noktası: scale bir sayı olmalı (0 ya da 1: ölçeklenmez).",
+  "Point {0}: writable must be true or false.": "{0} noktası: writable true ya da false olmalı.",
+  "Modbus poll points: the JSON is not valid at line {0}, column {1}: {2}.": "Modbus okuma noktaları: JSON {0}. satırın {1}. sütununda geçersiz: {2}.",
+  "Modbus poll point #{0} ({1}): unknown key {2}. Did you mean {3}?": "Modbus okuma noktası #{0} ({1}): bilinmeyen anahtar {2}. {3} mı demek istedin?"
 }

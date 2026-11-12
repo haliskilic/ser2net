@@ -610,6 +610,50 @@ class MqttSettings:
 # Modbus register polling (gateway edge mode: read registers -> MQTT)
 # ---------------------------------------------------------------------------
 MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32", "bool")
+# a point's keys whose type was not checked before 2.9, as ModbusPoint.from_dict reads them
+# (and writable; the keys 2.9 added are typed from the start: validate_input)
+_POINT_INTS = ("unit", "fn", "address")
+_TRUE_WORDS = ("true", "1", "yes", "on")
+_FALSE_WORDS = ("false", "0", "no", "off", "")
+
+
+def _loose_number(value: Any, whole: bool) -> Any:
+    """A point's number as stored before its type was checked: a numeric string counts as
+    its number, and where a whole number belongs (``whole``) an integral float as an int.
+    Anything else is returned as it is (edits refuse it)."""
+    if isinstance(value, str):
+        text = value.strip()
+        if re.fullmatch(r"[+-]?\d{1,30}", text):
+            return int(text)
+        try:
+            number = float(text)
+        except ValueError:
+            return value
+        if not math.isfinite(number):
+            return value
+        value = number
+    if whole and isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _loose_bool(value: Any, default: bool) -> Any:
+    """A point's true/false as stored before its type was checked: "true" / "false" (also
+    "1" / "0", yes / no, on / off; any case) and the numbers 1 / 0 count as the bool, null
+    as ``default``. Anything else is returned as it is (edits refuse it)."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return value == 1
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in _TRUE_WORDS:
+            return True
+        if word in _FALSE_WORDS:
+            return False
+    return value
 
 
 @dataclass
@@ -639,7 +683,24 @@ class ModbusPoint:
     def from_dict(d: dict[str, Any]) -> "ModbusPoint":
         d = dict(d or {})
         known = {f.name for f in dataclasses.fields(ModbusPoint)}
-        return ModbusPoint(**{k: v for k, v in d.items() if k in known})
+        p = ModbusPoint(**{k: v for k, v in d.items() if k in known})
+        # before 2.9 the points JSON, the REST API and imports took any JSON value here:
+        # read what was meant ("unit": "1", "scale": "0.1", "writable": "false"), and leave
+        # the rest for the edits to refuse (validate_input), so a stored config still loads
+        for key in _POINT_INTS:
+            setattr(p, key, _loose_number(getattr(p, key), whole=True))
+        p.scale = _loose_number(p.scale, whole=False)
+        p.writable = _loose_bool(p.writable, False)
+        return p
+
+
+def point_scale(p: ModbusPoint) -> Any:
+    """The scale a point's values are read and written with: its own when it is a number
+    (0 and 1: not scaled), else 1. A stored scale the edits refuse (text, NaN: see
+    ModbusPoll.validate_input) is ignored rather than multiplied in, with a warning in the
+    gateway's log at start."""
+    s = p.scale
+    return s if _is_number(s) and math.isfinite(s) else 1.0
 
 
 @dataclass
@@ -650,10 +711,13 @@ class ModbusPoll:
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "ModbusPoll":
         d = dict(d or {})
-        return ModbusPoll(
-            interval_s=float(d.get("interval_s", 5.0) or 5.0),
-            points=[ModbusPoint.from_dict(p) for p in d.get("points", [])],
-        )
+        points = []
+        for i, p in enumerate(d.get("points", []), 1):
+            try:
+                points.append(ModbusPoint.from_dict(p))
+            except (TypeError, ValueError):  # (a list or a string where a point belongs)
+                raise ConfigError(_("Modbus poll point #{0} is not an object.").format(i)) from None
+        return ModbusPoll(interval_s=float(d.get("interval_s", 5.0) or 5.0), points=points)
 
     @property
     def broadcast_points(self) -> list[str]:
@@ -675,17 +739,21 @@ class ModbusPoll:
             raise ConfigError(_("Modbus poll interval must be > 0 seconds."))
         seen = set()
         for p in self.points:
+            if not isinstance(p.name, str):  # (no rule of its own: it failed before as well)
+                raise ConfigError(_("Modbus poll point names are text: {0} is not.").format(
+                    repr(p.name)[:40]))
             if not p.name.strip():
                 raise ConfigError(_("Each Modbus poll point needs a name."))
             if p.name in seen:
                 raise ConfigError(_("Duplicate Modbus poll point name: {0}.").format(repr(p.name)))
             seen.add(p.name)
-            if not (0 <= p.unit <= 255):
+            # (a number of any type compares as it did; anything else failed before too)
+            if not isinstance(p.unit, (int, float)) or not (0 <= p.unit <= 255):
                 raise ConfigError(_("Point {0}: unit must be 0-255.").format(repr(p.name)))
             if p.fn not in (1, 2, 3, 4):
                 raise ConfigError(_("Point {0}: function must be 1 (coils), 2 (discrete "
                                     "inputs), 3 (holding registers) or 4 (input registers).").format(repr(p.name)))
-            if not (0 <= p.address <= 65535):
+            if not isinstance(p.address, (int, float)) or not (0 <= p.address <= 65535):
                 raise ConfigError(_("Point {0}: address must be 0-65535.").format(repr(p.name)))
             if p.dtype not in MODBUS_DTYPES:
                 raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), MODBUS_DTYPES))
@@ -702,6 +770,16 @@ class ModbusPoll:
         ignored, with a warning in the gateway's log at start."""
         for p in self.points:
             name = repr(p.name)
+            # the types validate() leaves alone: a stored point loads as it was
+            for key in _POINT_INTS:
+                if not _is_int(getattr(p, key)):
+                    raise ConfigError(_("Point {0}: {1} must be a whole number.").format(
+                        name, key))
+            if not (_is_number(p.scale) and math.isfinite(p.scale)):
+                raise ConfigError(_("Point {0}: scale must be a number (0 or 1: not "
+                                    "scaled).").format(name))
+            if not isinstance(p.writable, bool):
+                raise ConfigError(_("Point {0}: writable must be true or false.").format(name))
             if not p.writable and any(v is not None for v in (p.min, p.max, p.allowed)):
                 raise ConfigError(_("Point {0}: min, max and allowed limit what MQTT may "
                                     "write, so they need \"writable\": true.").format(name))

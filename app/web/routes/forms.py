@@ -6,10 +6,13 @@ to defaults (new mapping) or the stored values (edit, see _preserve_unmanaged_fi
 """
 from __future__ import annotations
 
+import dataclasses
+import difflib
 import json
 import re
 
-from ...config import MODBUS_TIMEOUT_DEFAULT_S, LdapSettings, MappingConfig, OidcSettings
+from ...config import (MODBUS_TIMEOUT_DEFAULT_S, LdapSettings, MappingConfig, ModbusPoint,
+                       OidcSettings, valid_mapping_id)
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -306,17 +309,50 @@ def _keep_point_options(new_map, existing) -> None:
                 setattr(p, key, getattr(old, key))
 
 
+_POINT_KEYS = tuple(f.name for f in dataclasses.fields(ModbusPoint))
+
+
 def _parse_modbus_points(raw: str, strict: bool) -> list:
+    """The points JSON of a mapping form: a list of point objects (one object alone is a list
+    of one; blank: no points). ``strict`` (a save): anything else raises ValueError saying
+    what is wrong — where the JSON breaks (line and column), which point is not an object,
+    a key that looks like a misspelt one ("adress"; other unknown keys are left alone, as
+    everywhere else: a newer node's). Not strict (showing a refused form again): what can't
+    be read is left out."""
     raw = (raw or "").strip()
     if not raw:
         return []
     try:
         points = json.loads(raw)
-    except (ValueError, TypeError):
+    except json.JSONDecodeError as e:
+        if strict:
+            raise ValueError(_("Modbus poll points: the JSON is not valid at line {0}, column "
+                               "{1}: {2}.").format(e.lineno, e.colno, e.msg)) from None
+        return []
+    except (ValueError, RecursionError):  # (nested too deeply)
         if strict:
             raise ValueError(_("Modbus poll points must be a valid JSON array of objects.")) from None
         return []
-    return points if isinstance(points, list) else []
+    if isinstance(points, dict):
+        points = [points]
+    if not isinstance(points, list):
+        if strict:
+            raise ValueError(_("Modbus poll points must be a valid JSON array of objects."))
+        return []
+    if not strict:
+        return [p for p in points if isinstance(p, dict)]
+    for i, p in enumerate(points, 1):
+        if not isinstance(p, dict):
+            raise ValueError(_("Modbus poll point #{0} is not an object.").format(i))
+        for key in p:
+            if key in _POINT_KEYS:
+                continue
+            near = difflib.get_close_matches(str(key), _POINT_KEYS, n=1, cutoff=0.7)
+            if near:
+                raise ValueError(_("Modbus poll point #{0} ({1}): unknown key {2}. Did you "
+                                   "mean {3}?").format(i, repr(p.get("name"))[:40],
+                                                      json.dumps(key), json.dumps(near[0])))
+    return points
 
 
 def _mapping_from_form(form) -> dict:
@@ -358,18 +394,48 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     o.rfc2217_net_timeout_s = prev.rfc2217_net_timeout_s
 
 
+def _reshown_mapping(form, existing) -> MappingConfig:
+    """The mapping a refused form showed, to show it again with the error: the posted values
+    (read leniently), the stored ones (``existing``: the stored mapping, or None) for the
+    fields the form did not post — else the hidden inputs would carry defaults into the next
+    save — and the posted id, so the next save still edits that mapping. Points that can't
+    be read are left out: the form shows their text as it was posted (_reshown_points)."""
+    posted_id = form.get("id") or ""
+    try:
+        d = _build_mapping_dict(form, strict=False)
+        try:
+            mapping = MappingConfig.from_dict(d)
+        except Exception:  # (a point that is not one): the rest of the form still counts
+            d["modbus_poll"]["points"] = []
+            mapping = MappingConfig.from_dict(d)
+    except Exception:
+        mapping = MappingConfig(name=str(form.get("name", "")))
+    if valid_mapping_id(posted_id):
+        mapping.id = posted_id
+    try:
+        _preserve_unmanaged_fields(mapping, existing, form)
+    except Exception:  # (stored values that don't fit the posted ones: shown as posted)
+        pass
+    return mapping
+
+
+def _reshown_points(form, mapping) -> str:
+    """The points JSON of a refused form, to show it again: the text as it was posted (a
+    typo in it is then fixed, not lost, and Save never stores the points it could not read
+    as none), or the mapping's points when the form did not post them."""
+    if "modbus_points" in form:
+        return str(form.get("modbus_points") or "")
+    return _modbus_points_json(mapping)
+
+
 def _form_error(render, request, state, form, message: str):
     """Re-render the mapping form with the submitted values and an error banner."""
-    try:
-        mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
-        # keep stored values for fields this form didn't post (else the re-rendered,
-        # hidden inputs would carry defaults into the next save)
-        _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id), form)
-    except Exception:
-        mapping = MappingConfig(name=form.get("name", ""))
-    is_new = not form.get("id")
+    posted_id = form.get("id") or ""
+    existing = state.config.get_mapping(posted_id) if valid_mapping_id(posted_id) else None
+    mapping = _reshown_mapping(form, existing)
+    is_new = not posted_id
     return render(request, "_mapping_form.html", status_code=400,
                   mapping=mapping, is_new=is_new,
-                  modbus_points_json=_modbus_points_json(mapping),
+                  modbus_points_json=_reshown_points(form, mapping),
                   ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
                   error=message)

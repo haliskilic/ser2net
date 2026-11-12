@@ -54,6 +54,7 @@ PORTABLE = [
     "test_mqtt_link.py",      # MQTT connection log, status, /metrics; broker parts need paho
     "test_mqtt_tls.py",       # MQTT TLS options; needs cryptography, broker parts paho
     "test_mqtt_identity.py",  # MQTT topics, client IDs, Sparkplug nodes apart; Copy
+    "test_modbus_points.py",  # point types, the points JSON and its error path
     "test_modbus_poll.py",
     "test_modbus_unit_health.py",
     "test_ldap.py",
