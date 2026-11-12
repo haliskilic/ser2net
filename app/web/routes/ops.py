@@ -53,7 +53,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         if posted_id and existing is None:
             return False, _gone()
         _preserve_unmanaged_fields(mapping, existing, form)
-        apply_usb_match(mapping, form, state.ports.get(), existing)
+        apply_usb_match(mapping, form, await state.ports.current(), existing)
         mapping.validate()
         mapping.validate_input()
     except (ValueError, ConfigError) as e:

@@ -125,10 +125,12 @@ düzenlemeye gerek yok.
   container'ın kendi cihaz düğümüdür ve flock düğümü kilitler; bu yüzden host'taki
   programları dışarıda tutması beklenmez (`-v /dev:/dev` ile düğüm host'unkidir);
   `TIOCEXCL` ise portun kendisi için geçerlidir.
-- **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
-  hotplug (Linux pyudev / Windows WM_DEVICECHANGE), yoksa polling'e düşer. Linux'ta
-  arkasında donanım olmayan `ttyS` portları gizlenir, `/dev/serial/by-id` kalıcı adları
-  gösterilir ve seçilebilir.
+- **Canlı port listesi:** ayrıcalık gerektirmez. Her 2 sn'de ucuz bir kontrol bir portun
+  gelip gelmediğine bakar (Linux: sysfs'teki tty cihazları ve `/dev/serial` linkleri;
+  Windows: kayıt defterinin listelediği COM portları); portlar yalnızca o zaman, arayüz ya
+  da API 2 sn'den eski bir liste gösterecekken ve en az dakikada bir yeniden taranır.
+  Linux'ta arkasında donanım olmayan `ttyS` portları gizlenir, `/dev/serial/by-id` kalıcı
+  adları gösterilir ve seçilebilir.
 - **Cihazı USB kimliğiyle bulma:** eşleme formundaki kutu işaretlenince adaptör VID:PID
   (+ seri no) ile bağlanır; çıkarılıp takılınca `ttyUSB0`→`ttyUSB1` ya da COM numarası
   değişse de eşleme doğru cihazı açar. Kendi seri numarası olmayan özdeş adaptörler (CH340,
@@ -265,8 +267,7 @@ düzenlemeye gerek yok.
   sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # ardından oturumu kapatıp aç
   ```
 - Windows'ta COM portları için ek yetki gerekmez.
-- (Opsiyonel) TLS self-signed üretimi için `openssl`; olay-tabanlı hotplug için
-  `pyudev` (Linux) / `pywin32` (Windows) — yoksa polling kullanılır.
+- (Opsiyonel) TLS self-signed üretimi için `openssl`.
 
 ---
 

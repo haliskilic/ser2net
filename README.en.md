@@ -117,8 +117,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   passed with `--device` is a device node of the container's own, and a flock locks the
   node, so it isn't expected to keep out programs on the host (with `-v /dev:/dev` it is the
   host's node); `TIOCEXCL` holds for the port itself.
-- **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
-  Windows WM_DEVICECHANGE), falling back to polling. On Linux the kernel's placeholder
+- **Live port list:** privilege-free. Every 2 s a cheap check tells whether a port came or
+  went (Linux: the tty devices in sysfs and the `/dev/serial` links; Windows: the COM ports
+  the registry lists), and the ports are enumerated again only then, when the UI or the API
+  shows a list older than 2 s, and at least every minute. On Linux the kernel's placeholder
   `ttyS` ports without hardware are hidden and the stable `/dev/serial/by-id` names are
   shown and selectable. **IP picker** from the machine's own addresses (localhost / LAN /
   0.0.0.0) or custom.
@@ -252,8 +254,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # then log out/in
   ```
 - Windows: no extra privileges for COM ports.
-- Optional: `openssl` (self-signed TLS); `pyudev` (Linux) / `pywin32` (Windows) for
-  event-driven hotplug — polling is used otherwise.
+- Optional: `openssl` (self-signed TLS).
 
 ---
 
