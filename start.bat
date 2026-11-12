@@ -18,6 +18,6 @@ if not defined PY (
     exit /b 1
 )
 
-%PY% ser2net.py %*
+%PY% ser2netweb.py %*
 if errorlevel 1 pause
 endlocal

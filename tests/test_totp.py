@@ -238,7 +238,7 @@ def test_live():
               "code  OK")
 
         # ---- recovery: --set-password turns it off, while ser2net runs ----
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", srv.data,
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", srv.data,
                             "--set-password", "admin"], cwd=ROOT, capture_output=True, text=True,
                            timeout=120, input=NEW_PW + "\n", env=srv.env)
         assert p.returncode == 0 and "two-factor sign-in was turned off" in p.stdout, p.stdout + p.stderr

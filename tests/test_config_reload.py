@@ -112,7 +112,7 @@ def sighup(srv, mark: int) -> str:
 
 def cli_reload(data_dir, env=None):
     child = {k: v for k, v in os.environ.items() if k.lower() != "no_proxy"}
-    p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data_dir,
+    p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data_dir,
                         "--reload"], cwd=ROOT, capture_output=True, text=True, timeout=90,
                        env=dict(child, **(env or {})))
     return p.returncode, (p.stdout + p.stderr).strip()
@@ -347,7 +347,7 @@ def test_terminal_hangup() -> None:
     def take_terminal() -> None:  # (after setsid: the pty becomes its controlling terminal)
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-    proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir",
+    proc = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir",
                              srv.data], cwd=ROOT, env=srv.env, stdin=slave, stdout=log,
                             stderr=subprocess.STDOUT, start_new_session=True,
                             preexec_fn=take_terminal)

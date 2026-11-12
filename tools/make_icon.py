@@ -1,4 +1,4 @@
-"""Generate tools/ser2net.ico, the Windows executable icon (ser2net.spec).
+"""Generate tools/ser2net.ico, the Windows executable icon (ser2netweb.spec).
 
 Pure standard library, no image libraries, so the icon is reproducible from source. It
 writes a classic BMP-format .ico (32-bit BGRA + 1-bpp AND mask) with the sizes Windows

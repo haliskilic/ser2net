@@ -136,7 +136,8 @@ def test_no_unread_server_pipes():
                     call.func, "id", "")) in ("Popen", "create_subprocess_exec")):
                 continue
             runs_server = any(isinstance(n, ast.Constant) and isinstance(n.value, str)
-                              and n.value.endswith("ser2net.py") for n in ast.walk(call))
+                              and n.value.endswith(("ser2netweb.py", "ser2net.py"))
+                              for n in ast.walk(call))
             piped = [k.arg for k in call.keywords if k.arg in ("stdout", "stderr")
                      and _is_pipe(k.value)]
             if runs_server and piped:

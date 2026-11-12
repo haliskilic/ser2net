@@ -202,7 +202,7 @@ def test_endpoints():
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": ui},
                    "cluster": {"enabled": True, "key": key, "discovery_port": free_port()}}, fh)
     log = open(os.path.join(tmp, "server.out"), "wb")
-    srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
+    srv = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
 
     def srv_output():
@@ -427,7 +427,7 @@ def start_node(cfg_obj, env=None):
         json.dump(cfg_obj, fh)
     child = {k: v for k, v in os.environ.items() if k.lower() != "no_proxy"}
     out = server_log(tmp)  # the node's output: a file, never an unread pipe
-    proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
+    proc = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg],
                             cwd=ROOT, stdin=subprocess.DEVNULL, env=dict(child, **(env or {})),
                             stdout=out, stderr=subprocess.STDOUT)
     out.close()  # (the node has its own copy)

@@ -80,7 +80,7 @@ def main():
 
     out = server_log(tmp)  # the server's output: a file, never an unread pipe
     server = subprocess.Popen(
-        [sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg_path],
+        [sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg_path],
         cwd=ROOT, stdin=subprocess.DEVNULL,
         stdout=out, stderr=subprocess.STDOUT,
     )

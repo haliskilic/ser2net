@@ -580,7 +580,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 
 ```bash
 # Linux / macOS / Raspberry Pi (any CPU)
-python3 ser2net.py            # or: ./start.sh
+python3 ser2netweb.py            # or: ./start.sh
 
 # Windows
 start.bat
@@ -599,7 +599,7 @@ run; config/logs are written to `data/` next to the binary.
 | `ser2net-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
 
 Other platforms — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateways), macOS, Windows on ARM:
-run from source (`python3 ser2net.py`), which works offline there too (see *Offline install*),
+run from source (`python3 ser2netweb.py`), which works offline there too (see *Offline install*),
 or on 32-bit ARM the Docker image (arm/v7).
 Windows 11 on ARM also runs the x64 exe (emulated).
 
@@ -641,7 +641,7 @@ executable (releases also attach it as `*.THIRD-PARTY-LICENSES.txt`).
 Build it yourself — Windows: `pwsh tools\build_standalone_windows.ps1` (what the release
 runs: the pinned python-build-standalone interpreter, the hash-locked packages, license
 texts and SBOM), or with a Python 3.12 of your own
-`pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`
+`pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2netweb.spec`
 (the spec then writes the `--licenses` text itself, from that environment);
 Linux (in an old-glibc container, so the result runs on older distributions too):
 `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`.
@@ -659,16 +659,16 @@ On first run:
 
 Change the bind IP later:
 ```bash
-python3 ser2net.py --reconfigure
+python3 ser2netweb.py --reconfigure
 ```
 
 ### Command-line options
-`python3 ser2net.py [options]`, `ser2net-linux-x64 [options]`, `ser2net-windows-x64.exe
+`python3 ser2netweb.py [options]`, `ser2net-linux-x64 [options]`, `ser2net-windows-x64.exe
 [options]` (`--help` lists them):
 
 | Option | What it does |
 |---|---|
-| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2net.py` or the binary); give ser2net a folder of its own |
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2netweb.py` or the binary); give ser2net a folder of its own |
 | `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
 | `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
 | `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |
@@ -686,7 +686,7 @@ python3 ser2net.py --reconfigure
 `--healthcheck` do their work and exit; the others start ser2net.
 
 ### Offline install (no-internet machine)
-Dependencies live in `vendor/wheels/`; `ser2net.py` installs them to `./lib` on first
+Dependencies live in `vendor/wheels/`; `ser2netweb.py` installs them to `./lib` on first
 launch (`pip install --no-index`). No internet needed. The set covers Python 3.10–3.14 on
 every OS and CPU: everything but psutil is pure Python, and psutil (the network interface
 list) is bundled for Linux x86_64 and Windows x64. Elsewhere — ARM Linux (32- and 64-bit
@@ -1346,10 +1346,10 @@ directory's owner by itself):
 
 | Install | Command |
 |---|---|
-| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2net-linux-x64 --set-password admin`) |
+| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2net-linux-x64 --set-password admin`) |
 | Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
-| an instance of `ser2net@.service` | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /var/lib/ser2net/<name> --set-password admin` |
-| Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
+| an instance of `ser2net@.service` | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2net/<name> --set-password admin` |
+| Docker | `docker exec -it ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` |
 
 **First admin without the browser:** run `ser2net --set-password admin` before the first
 start (a source install under systemd: after the service's first start, which makes its

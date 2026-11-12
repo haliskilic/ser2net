@@ -167,7 +167,7 @@ def test_about():
     try:
         write_packages(folder, BROKEN)
         env = dict(os.environ, SER2NET_LIB_OVERRIDE=folder)
-        out = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--about"], cwd=ROOT,
+        out = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--about"], cwd=ROOT,
                              env=env, capture_output=True, text=True, encoding="utf-8",
                              timeout=60).stdout
         lines = {ln.split()[0]: ln for ln in out.splitlines() if ln.startswith("  ")}
@@ -198,7 +198,7 @@ def test_about_paths():
     """--about writes a package's folder under a known root as that root's label, the most
     specific root first: which copy is loaded stays visible, the account name doesn't."""
     sys.path.insert(0, ROOT)
-    import ser2net as entry
+    from ser2netweb import cli as entry
 
     def p(*parts):
         return os.path.abspath(os.path.join(os.sep, *parts))

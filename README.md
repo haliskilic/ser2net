@@ -602,7 +602,7 @@ düzenlemeye gerek yok.
 
 ```bash
 # Linux / macOS / Raspberry Pi (her işlemci)
-python3 ser2net.py            # veya: ./start.sh
+python3 ser2netweb.py            # veya: ./start.sh
 
 # Windows
 start.bat
@@ -621,7 +621,7 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 | `ser2net-linux-arm64` | glibc ≥ 2.28 olan 64-bit ARM Linux: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ veya Ubuntu), ARM endüstriyel gateway'ler, AWS Graviton, aynı dağıtımlar |
 
 Diğer platformlar — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateway'ler), macOS, ARM
-üzerinde Windows: kaynaktan çalıştırın (`python3 ser2net.py`); orada da offline çalışır (bkz.
+üzerinde Windows: kaynaktan çalıştırın (`python3 ser2netweb.py`); orada da offline çalışır (bkz.
 *Offline kurulum*). 32-bit ARM'da Docker imajı (arm/v7) da kullanılabilir. ARM üzerindeki Windows 11 x64 exe'yi de (emülasyonla) çalıştırır.
 
 Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`), lisans
@@ -666,7 +666,7 @@ Kendin derlemek için:
 - Windows: `pwsh tools\build_standalone_windows.ps1` (sürümlerde çalışan derleme: sabitlenmiş
   python-build-standalone yorumlayıcısı, hash kilitli paketler, lisans metinleri ve SBOM) ya
   da kendi Python 3.12'nizle
-  `pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`
+  `pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2netweb.spec`
   (spec, `--licenses` metnini o ortamdan kendisi yazar)
 - Linux (eski dağıtımlarda da çalışsın diye eski glibc'li bir konteynerde):
   `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`
@@ -684,16 +684,16 @@ Kendin derlemek için:
 
 Bind IP'yi sonradan değiştirmek:
 ```bash
-python3 ser2net.py --reconfigure
+python3 ser2netweb.py --reconfigure
 ```
 
 ### Komut satırı seçenekleri
-`python3 ser2net.py [seçenekler]`, `ser2net-linux-x64 [seçenekler]`,
+`python3 ser2netweb.py [seçenekler]`, `ser2net-linux-x64 [seçenekler]`,
 `ser2net-windows-x64.exe [seçenekler]` (`--help` hepsini listeler):
 
 | Seçenek | Ne yapar |
 |---|---|
-| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2net.py`'nin ya da binary'nin yanındaki `data/`); ser2net'e kendine ait bir klasör verin |
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2netweb.py`'nin ya da binary'nin yanındaki `data/`); ser2net'e kendine ait bir klasör verin |
 | `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
 | `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
 | `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
@@ -711,7 +711,7 @@ python3 ser2net.py --reconfigure
 `--healthcheck` işini yapıp çıkar; diğerleri ser2net'i başlatır.
 
 ### Offline kurulum (internetsiz makine)
-Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2net.py` ilk açılışta bunları
+Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2netweb.py` ilk açılışta bunları
 `./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, her işletim
 sisteminde ve işlemcide Python 3.10–3.14'ü kapsar: psutil dışında her şey saf Python'dur,
 psutil (ağ arayüzü listesi) ise Linux x86_64 ve Windows x64 için pakette vardır. Başka
@@ -1399,10 +1399,10 @@ sahibine geçer):
 
 | Kurulum | Komut |
 |---|---|
-| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (`ser2net-standalone.service` ile binary: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; elle başlatılan: `./ser2net-linux-x64 --set-password admin`) |
+| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --data-dir /opt/ser2net/data --set-password admin` (`ser2net-standalone.service` ile binary: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; elle başlatılan: `./ser2net-linux-x64 --set-password admin`) |
 | Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (servisin veri klasörü: `sc qc ser2net` gösterir) |
-| bir `ser2net@.service` örneği | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /var/lib/ser2net/<ad> --set-password admin` |
-| Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
+| bir `ser2net@.service` örneği | `sudo -u ser2net python3 /opt/ser2net/ser2netweb.py --no-bootstrap --data-dir /var/lib/ser2net/<ad> --set-password admin` |
+| Docker | `docker exec -it ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --set-password admin` |
 
 **Tarayıcısız ilk admin:** ilk açılıştan önce `ser2net --set-password admin` çalıştırın
 (systemd altındaki bir kaynak kurulumda servisin `data/`'yı oluşturan ilk açılışından sonra;

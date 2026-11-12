@@ -54,7 +54,7 @@ done
 "$PY" tools/third_party.py licenses build/THIRD-PARTY-LICENSES.txt --strict --extra build/licenses-native
 # fail the build if this interpreter's OpenSSL is an unsupported (EOL) series
 "$PY" tools/release_guard.py interpreter --min-openssl 3.5
-"$PY" -m PyInstaller --clean --noconfirm ser2net.spec
+"$PY" -m PyInstaller --clean --noconfirm ser2netweb.spec
 # after the build: the spec lists the binaries the executable carries
 "$PY" tools/third_party.py sbom build/ser2net.cdx.json --strict --binaries build/bundled-binaries.txt
 dist/ser2net --version

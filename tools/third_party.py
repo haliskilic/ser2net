@@ -4,12 +4,12 @@
     python tools/third_party.py sbom OUT.cdx.json [--binaries LIST] [--strict]
 
 Run it with the interpreter that builds the standalone executable (PyInstaller). It
-writes every bundled component's license text into one file, which ser2net.spec
+writes every bundled component's license text into one file, which ser2netweb.spec
 packs into the executable (``ser2net --licenses`` prints it) and the release attaches,
 and a CycloneDX SBOM of the same components. Components:
   * ser2net itself (AGPL-3.0-only, or a commercial license),
   * CPython and the native libraries in it: OpenSSL, zlib, and — when the executable
-    carries their extension modules (``--binaries``: the list ser2net.spec writes) —
+    carries their extension modules (``--binaries``: the list ser2netweb.spec writes) —
     expat, mpdecimal and SQLite, each with the version the interpreter reports and a CPE
     where NVD has one; the OpenSSL that cryptography links into its own module too,
   * every Python distribution the app imports at run time: the pins in
@@ -190,7 +190,7 @@ def npm_packages() -> list[dict]:
 def native_libraries(binaries: list[str] | None) -> list[dict]:
     """The native libraries in the interpreter (and cryptography) that the executable
     carries, with the versions they report. binaries: the executable's binary entries
-    (ser2net.spec's list); None: only what every build has (OpenSSL, zlib)."""
+    (ser2netweb.spec's list); None: only what every build has (OpenSSL, zlib)."""
     import ssl
     import zlib
 
@@ -412,7 +412,7 @@ def main(argv: list[str]) -> int:
     bom.add_argument("out")
     bom.add_argument("--strict", action="store_true")
     bom.add_argument("--binaries", metavar="LIST",
-                     help="the executable's binaries, one per line (ser2net.spec writes "
+                     help="the executable's binaries, one per line (ser2netweb.spec writes "
                           "build/bundled-binaries.txt): which native libraries it carries")
     args = ap.parse_args(argv)
     if args.cmd == "licenses":

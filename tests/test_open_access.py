@@ -127,7 +127,7 @@ def main():
     # The server logs to stdout: send it to a file, never an unread pipe — on Windows the
     # pipe buffer is ~4 KB and a full pipe blocks the server's event loop mid-test.
     server_log = open(os.path.join(tmp, "server.log"), "wb")
-    srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg_path],
+    srv = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg_path],
                            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=server_log,
                            stderr=subprocess.STDOUT)
 

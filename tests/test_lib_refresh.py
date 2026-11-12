@@ -1,4 +1,4 @@
-"""A source install's ./lib follows the pins after an upgrade (bootstrap.py, ser2net.py).
+"""A source install's ./lib follows the pins after an upgrade (bootstrap.py, ser2netweb.py).
 
 lib/ is not in git, so `git pull` or new source unpacked over the old keeps the packages
 an older release installed there; before 2.9 the bootstrap only checked that they import,
@@ -15,7 +15,7 @@ place and offline. Checked here, with the real pip and vendor/wheels in a scratc
 - one-off commands and --no-bootstrap only warn; no lib/ (a virtualenv) or an empty one
   is left alone; a comment-only change to requirements.txt refreshes nothing;
 - `python3 bootstrap.py` reinstalls whatever is there, and refuses while lib/ is in use;
-- ser2net.py: a server start refreshes, --about doesn't, the warnings reach the start-up
+- ser2netweb.py: a server start refreshes, --about doesn't, the warnings reach the start-up
   log, an old lib/ that can't run this version stops the start with one line (2.8.1's
   code doesn't import with 2.7's starlette), and the Windows service loads its
   dependencies only after connecting to the Service Control Manager (a stop asked
@@ -300,7 +300,7 @@ def test_bootstrap_py_reinstalls():
 
 
 def test_ser2net_entry_points():
-    import ser2net as cli
+    from ser2netweb import cli
     from ser2netweb import runtime, standalone, winservice
 
     calls: list = []
@@ -379,7 +379,7 @@ def test_ser2net_entry_points():
         runtime._ready_hooks.clear()
         standalone.notes.clear()
         shutil.rmtree(d, ignore_errors=True)
-    print("ser2net.py: a start refreshes, --about doesn't; warnings reach the log; an old "
+    print("ser2netweb.py: a start refreshes, --about doesn't; warnings reach the log; an old "
           "lib/ that can't run this version stops with one line; the service connects to "
           "the SCM before loading its dependencies  OK")
 

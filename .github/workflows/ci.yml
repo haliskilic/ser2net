@@ -203,7 +203,7 @@ jobs:
       # as Administrator on Windows). Set in CI, a missing backend fails, not skips.
       SER2NET_BLACKHOLE_TESTS: "1"
       # tests/test_windows_service.py: install / restart / remove a real service
-      # (python + ser2net.py) on the Windows runner (Administrator)
+      # (python + ser2netweb.py) on the Windows runner (Administrator)
       SER2NET_SERVICE_TESTS: "1"
       # tests/_optional.py: where the optional packages are installed, a test that
       # needs a missing one fails instead of skipping
@@ -229,7 +229,7 @@ jobs:
           import serial, starlette, uvicorn, ser2netweb.runtime, ser2netweb.web.server
           lib = os.path.abspath('lib')
           assert all(os.path.abspath(m.__file__).startswith(lib) for m in (serial, starlette, uvicorn))"
-          python ser2net.py --about
+          python ser2netweb.py --about
           rm -rf lib
       - name: Install dependencies (+ cryptography for the in-process certificate tests)
         run: pip install -r requirements.txt cryptography

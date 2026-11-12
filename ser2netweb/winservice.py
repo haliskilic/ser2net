@@ -8,7 +8,7 @@ pywin32 nor a wrapper program (NSSM, Shawl) is needed.
 after it dies or exits with an error, and starts it. A standalone exe copies itself to
 %ProgramFiles%\\ser2net first and runs from there; a new service keeps its data in
 %ProgramData%\\ser2net. Both folders are left to SYSTEM and Administrators alone: nobody
-else may change what the service runs. A source checkout (python + ser2net.py) can't
+else may change what the service runs. A source checkout (python + ser2netweb.py) can't
 move, so it is refused where another account could change it. Run again on an existing
 service, it upgrades it in place: stops it, keeps its data directory, puts the current
 build in place, starts it — and on a failure puts the previous version back.
@@ -117,7 +117,7 @@ def _quote(arg: str) -> str:
 def service_command(name: str, data_dir: str, config: Optional[str] = None,
                     frozen: Optional[bool] = None, executable: Optional[str] = None,
                     script: Optional[str] = None) -> str:
-    """The command line the SCM starts: this executable (or python + ser2net.py) with
+    """The command line the SCM starts: this executable (or python + ser2netweb.py) with
     --service and the absolute data directory."""
     frozen = getattr(sys, "frozen", False) if frozen is None else frozen
     executable = executable or sys.executable
@@ -857,7 +857,8 @@ def _program_paths(frozen: bool) -> list[str]:
     base = sys.base_prefix
     candidates = [sys.executable, os.path.dirname(os.path.abspath(sys.executable)), sys.prefix,
                   base, os.path.join(base, "Lib"), os.path.join(base, "DLLs"), root,
-                  os.path.join(root, "ser2net.py"), os.path.join(root, "bootstrap.py"),
+                  os.path.join(root, "ser2netweb.py"), os.path.join(root, "ser2net.py"),
+                  os.path.join(root, "bootstrap.py"),
                   os.path.join(root, "ser2netweb"), os.path.join(root, "lib")]
     seen, out = set(), []
     for p in candidates:

@@ -184,7 +184,7 @@ def test_web_button_with_empty_path():
     empty = tempfile.mkdtemp()
     env = dict(os.environ, PATH=empty)
     log = open(os.path.join(tmp, "server.log"), "wb")  # never an unread pipe
-    srv = subprocess.Popen([sys.executable, os.path.abspath(os.path.join(ROOT, "ser2net.py")),
+    srv = subprocess.Popen([sys.executable, os.path.abspath(os.path.join(ROOT, "ser2netweb.py")),
                             "--no-bootstrap", "--config", cfg_path],
                            cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=log,
                            stderr=subprocess.STDOUT)

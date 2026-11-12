@@ -108,16 +108,16 @@ def start_node(tmp: str, name: str, cfg: dict, version: str):
     path = os.path.join(folder, "config.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh)
-    # --as-version: the version is set before ser2net.py imports ser2netweb (every module takes it
+    # --as-version: the version is set before ser2netweb.py imports ser2netweb (every module takes it
     # from there)
     code = ("import runpy, sys, ser2netweb\n"
             f"if {version!r}: ser2netweb.__version__ = {version!r}\n"
-            "sys.argv = ['ser2net.py'] + sys.argv[1:]\n"
-            "runpy.run_path('ser2net.py', run_name='__main__')\n")
+            "sys.argv = ['ser2netweb.py'] + sys.argv[1:]\n"
+            "runpy.run_path('ser2netweb.py', run_name='__main__')\n")
     log = open(os.path.join(folder, "out.log"), "wb")
     # run in the temporary folder, where the demo GPS device is (a short relative path on
-    # the pages instead of this machine's folders); ser2net.py by its full path
-    code = code.replace("'ser2net.py', run_name", repr(os.path.join(ROOT, "ser2net.py")) + ", run_name")
+    # the pages instead of this machine's folders); ser2netweb.py by its full path
+    code = code.replace("'ser2netweb.py', run_name", repr(os.path.join(ROOT, "ser2netweb.py")) + ", run_name")
     return subprocess.Popen([sys.executable, "-c", code, "--no-bootstrap", "--config", path],
                             cwd=tmp, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                             env=dict(os.environ, PYTHONPATH=ROOT))

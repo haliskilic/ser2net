@@ -69,6 +69,6 @@ ENV SER2NET_BIND_IP=0.0.0.0 \
 
 # "healthy" once the web UI answers on /healthz (also before the first-run setup)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD ["python", "/app/ser2net.py", "--no-bootstrap", "--data-dir", "/data", "--healthcheck"]
+  CMD ["python", "/app/ser2netweb.py", "--no-bootstrap", "--data-dir", "/data", "--healthcheck"]
 
 ENTRYPOINT ["/app/tools/docker-entrypoint.sh"]

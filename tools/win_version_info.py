@@ -1,4 +1,4 @@
-"""Write the Windows VS_VERSIONINFO resource text for ser2net.exe (ser2net.spec).
+"""Write the Windows VS_VERSIONINFO resource text for ser2net.exe (ser2netweb.spec).
 
 PyInstaller stamps the executable with the version resource this prints, built from the
 single source of truth ser2netweb.__version__ (so the exe's Details tab, and anything that reads
