@@ -232,10 +232,13 @@ düzenlemeye gerek yok.
 
 - **Python 3.10+** (sistemde kurulu). Başka hiçbir şey gerekmez — bağımlılıklar
   `vendor/wheels/` içinde gelir ve ilk çalıştırmada `./lib`'e kurulur (offline).
-- Linux'ta seri portu **açmak** için kullanıcının `dialout` grubunda olması gerekir
-  (port **listelemek** için ayrıcalık gerekmez):
+- Linux'ta seri portu **açmak** için kullanıcının seri cihazların grubunda olması gerekir
+  (port **listelemek** için ayrıcalık gerekmez). Bu grup Debian, Ubuntu, Raspberry Pi OS,
+  Fedora, RHEL ve openSUSE'de `dialout`, Arch, Manjaro ve EndeavourOS'ta ise `uucp`'dir (bu
+  dağıtımlarda `dialout` grubu yoktur); hangisi olduğunu cihaz söyler:
+  `stat -L -c %G /dev/ttyUSB0`.
   ```bash
-  sudo usermod -aG dialout "$USER"   # ardından oturumu kapatıp aç
+  sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # ardından oturumu kapatıp aç
   ```
 - Windows'ta COM portları için ek yetki gerekmez.
 - (Opsiyonel) TLS self-signed üretimi için `openssl`; olay-tabanlı hotplug için
@@ -283,7 +286,8 @@ Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
   (250000 baud) bir seri port da açabilmeli.
 
 Linux notları:
-- `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.
+- `chmod +x ser2net-linux-x64`; seri portlar cihazların grubunu gerektirir (`dialout`;
+  Arch'ta `uucp`, bkz. Gereklilikler).
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
   bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin. Çalıştığı sürece bu kopyayı
   kilitli tutar ve erişim zamanlarını tazeler; böylece systemd-tmpfiles, tmpreaper gibi
@@ -642,7 +646,10 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   `--restart unless-stopped --init --stop-timeout 30` ekleyin (var olan bir container için:
   `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
+  `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri. Arch,
+  Manjaro ve EndeavourOS'ta seri grup `uucp`'dir ve `dialout` grubu yoktur (unit
+  `status=216/GROUP` ile başlamaz): grubu `systemctl edit ser2net` ile ayarla (`[Service]`,
+  `SupplementaryGroups=`, ardından `SupplementaryGroups=uucp`; unit'in yorumunda yazıyor).
   **root ile çalıştırmayın.**
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat

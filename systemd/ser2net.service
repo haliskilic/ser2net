@@ -5,8 +5,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Run as a dedicated unprivileged user that is a member of the 'dialout' group
-# so it can open serial devices (NEVER run this as root).
+# Run as a dedicated unprivileged user that may open the serial devices (NEVER run this
+# as root). SupplementaryGroups names the group the devices belong to: dialout on Debian,
+# Ubuntu, Raspberry Pi OS, Fedora, RHEL and openSUSE; uucp on Arch, Manjaro and
+# EndeavourOS, which have no dialout group (the unit then fails with status=216/GROUP).
+# A device says which: stat -L -c %G /dev/ttyUSB0. To set another one without editing this
+# file, run "systemctl edit ser2net" and add:
+#   [Service]
+#   SupplementaryGroups=
+#   SupplementaryGroups=uucp
 User=ser2net
 SupplementaryGroups=dialout
 WorkingDirectory=/opt/ser2net

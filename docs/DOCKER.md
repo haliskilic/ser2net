@@ -108,7 +108,9 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   `/dev/serial/by-id/*`), so no `--group-add` is needed (a console's `tty` group is never
   added). A device passed under another name inside the container
   (`--device /dev/ttyUSB0:/dev/plc`) still needs `--group-add` with the host's numeric
-  serial GID (`getent group dialout | cut -d: -f3`), and so does the 2.8.0 image. A
+  serial GID, read from the device (`--group-add "$(stat -L -c %g /dev/ttyUSB0)"`: `-L`
+  follows a `/dev/serial/by-id` link, whose own GID is root's; `getent group dialout`
+  finds nothing on Arch, whose serial group is `uucp`), and so does the 2.8.0 image. A
   device the server can't open (mode `0600`, say) is reported at start:
   `[ser2net] warning: uid … can't open /dev/…`.
 - **A device missing at start** (an adapter unplugged at boot) makes Docker refuse to
@@ -116,7 +118,9 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   (`ttyUSB0` → `ttyUSB1`) isn't seen inside either. Both are what hot-plug avoids.
 - **Hot-plug.** Bind the host's `/dev` and allow the device types instead of listing
   devices: `-v /dev:/dev --device-cgroup-rule='c 188:* rmw' --device-cgroup-rule='c 166:* rmw'`
-  (USB-serial `ttyUSB*`, USB CDC `ttyACM*`) plus `--group-add <host serial GID>`, for an
+  (USB-serial `ttyUSB*`, USB CDC `ttyACM*`) plus `--group-add <host serial GID>`
+  (`stat -L -c %g` of a serial device on the host: 20 on Debian/Ubuntu, 18 on Fedora, 14 —
+  `uucp` — on Arch), for an
   adapter plugged in after the start; the compose file has this variant. The port list
   and mappings bound to a USB identity then see a re-plugged adapter too.
 - USB passthrough into containers is only reliable on Linux hosts (not Docker Desktop on

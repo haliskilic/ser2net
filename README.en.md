@@ -223,10 +223,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 
 - **Python 3.10+** installed. Nothing else — dependencies ship in `vendor/wheels/` and
   install to `./lib` on first run (offline).
-- Linux: membership in the `dialout` group to **open** serial ports (listing ports
-  needs no privilege):
+- Linux: membership in the serial devices' group to **open** serial ports (listing ports
+  needs no privilege). It is `dialout` on Debian, Ubuntu, Raspberry Pi OS, Fedora, RHEL and
+  openSUSE, but `uucp` on Arch, Manjaro and EndeavourOS (which have no `dialout` group); a
+  device says which: `stat -L -c %G /dev/ttyUSB0`.
   ```bash
-  sudo usermod -aG dialout "$USER"   # then log out/in
+  sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # then log out/in
   ```
 - Windows: no extra privileges for COM ports.
 - Optional: `openssl` (self-signed TLS); `pyudev` (Linux) / `pywin32` (Windows) for
@@ -272,8 +274,8 @@ work with an empty `PATH` (no Python, no `openssl`), and the Linux one must run 
 AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04/26.04, openSUSE Leap 15.6 and Fedora
 containers, including a serial port at a rate without a termios constant (250000 baud).
 
-Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
-group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
+Linux notes: `chmod +x ser2net-linux-x64`; serial ports need the devices' group
+(`dialout`; `uucp` on Arch, see Requirements). The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
 mounted `noexec`, point `TMPDIR` at a directory that isn't. While it runs it keeps that
 copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
 don't delete it under a long-running instance; a copy left behind by a killed process
@@ -624,7 +626,11 @@ is no account at all; later starts ignore it.
   volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
   that (an existing container: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
+  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives. On Arch,
+  Manjaro and EndeavourOS the serial group is `uucp` and there is no `dialout` group (the
+  unit would fail with `status=216/GROUP`): set it with `systemctl edit ser2net`
+  (`[Service]`, `SupplementaryGroups=`, then `SupplementaryGroups=uucp`; the unit's comment
+  has it).
   **Do not run as root.**
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
