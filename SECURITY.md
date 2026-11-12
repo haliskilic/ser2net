@@ -48,6 +48,9 @@ forms that post only to the UI itself. Inline *styles* are allowed (`style-src
 attributes at runtime and has no nonce support (upstream issue xtermjs/xterm.js#4445);
 this goes back to a strict `style-src` once a vendored xterm.js no longer needs it. htmx
 runs with `eval`, `<script>` elements in fragments and its injected indicator styles off.
+Every response but the static files is sent with `Cache-Control: no-store`, so pages that
+show a secret (a new API token or cluster key, the mapping form, a backup or the export)
+are kept neither in the browser's cache nor for its Back button.
 
 ## Türkçe
 
@@ -96,4 +99,7 @@ gönderir (satır içi betik ya da olay işleyici yok, `eval` yok); `<base>`, ek
 çalışırken `<style>` öğeleri ve style öznitelikleri ekliyor ve nonce desteği yok (upstream
 sorunu xtermjs/xterm.js#4445); gömülü xterm.js buna ihtiyaç duymadığında katı `style-src`'ye
 dönülecek. htmx'te `eval`, parçalardaki `<script>` öğeleri ve kendi eklediği gösterge
-stilleri kapalıdır.
+stilleri kapalıdır. Statik dosyalar dışındaki her yanıt `Cache-Control: no-store` ile
+gönderilir; böylece gizli bir değer gösteren sayfalar (yeni API token'ı ya da cluster
+anahtarı, eşleme formu, bir yedek ya da dışa aktarma) ne tarayıcının önbelleğinde ne de
+Geri tuşu için saklanır.

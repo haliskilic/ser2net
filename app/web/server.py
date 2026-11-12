@@ -71,16 +71,20 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # JSON REST API (/api/v1): bearer-token auth, no cookie session, no CSRF — and
         # English, like the logs (only the web UI is translated).
         if path.startswith("/api/v1"):
-            return await self._dispatch_api(request, call_next, cfg)
+            response = await self._dispatch_api(request, call_next, cfg)
+            self._security_headers(response, cfg, path)
+            return response
 
         lang = i18n.negotiate(request.cookies.get(i18n.COOKIE),
                               request.headers.get("accept-language"), cfg.admin_ui.language)
         request.state.lang = lang
         token = i18n.set_language(lang)
         try:
-            return await self._dispatch_ui(request, call_next, state, cfg, path)
+            response = await self._dispatch_ui(request, call_next, state, cfg, path)
         finally:
             i18n.reset(token)
+        self._security_headers(response, cfg, path)  # also on a refusal or a redirect
+        return response
 
     async def _dispatch_ui(self, request, call_next, state, cfg, path):
 
@@ -132,8 +136,6 @@ class GuardMiddleware(BaseHTTPMiddleware):
             ip = request.client.host if request.client else "?"
             state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
 
-        self._security_headers(response, cfg)
-
         if set_csrf:
             response.set_cookie(
                 auth.CSRF_COOKIE, csrf_cookie, samesite="lax",
@@ -158,12 +160,17 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     {"error": "forbidden", "detail": "API token role 'viewer' is read-only"},
                     status_code=403)
-        response = await call_next(request)
-        self._security_headers(response, cfg)
-        return response
+        return await call_next(request)
 
     @staticmethod
-    def _security_headers(response, cfg) -> None:
+    def _security_headers(response, cfg, path: str) -> None:
+        # Nothing but the static files may be stored by the browser: pages show a new API
+        # token or cluster key once, the mapping form an MQTT password, a download a
+        # backup or the export, and a copy in the disk cache or the back/forward cache
+        # outlives the session (Back after a logout on a shared PC). The static files
+        # carry ?v=<version> and stay cacheable.
+        if not path.startswith("/static"):
+            response.headers.setdefault("Cache-Control", "no-store")
         # script-src stays 'self' (no inline JS — the important XSS guard). style-src
         # allows 'unsafe-inline' because the console's xterm.js DOM renderer adds <style>
         # elements and style attributes at runtime, without a nonce (xtermjs/xterm.js#4445).
