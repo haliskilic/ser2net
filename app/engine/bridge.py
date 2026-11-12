@@ -54,7 +54,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import TaskGroup
     from exceptiongroup import BaseExceptionGroup
 
-from .. import i18n
+from .. import i18n, storage
 from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
 from . import netguard, serial_io, sockopts
 from .netguard import LogEvery as _LogEvery
@@ -199,12 +199,16 @@ class Tracer:
     instead of ending: `error` says why (also the runner's status.trace_error), write()
     only counts the bytes, the writer tries again every RETRY_S seconds (making the folder
     again), and once it writes again the trace says how many bytes are missing. The log
-    says so at most once per LOG_EVERY_S."""
+    says so at most once per LOG_EVERY_S. So does a disk almost full: below
+    storage.floor() free space (checked at each open and after every SPACE_CHECK_BYTES
+    written) the trace pauses before the disk fills up, and goes on once there is 10%
+    more again."""
 
     QUEUE_MAX_BYTES = 8 * 1024 * 1024
     BATCH = 256
     RETRY_S = 5.0
     LOG_EVERY_S = 600.0
+    SPACE_CHECK_BYTES = 8 * 1024 * 1024
 
     def __init__(self, path: str, options, log=None,
                  status: Optional["RunnerStatus"] = None) -> None:
@@ -226,6 +230,8 @@ class Tracer:
         self._closing = False  # aclose() was called: nothing more is queued
         self._done = False     # the writer has ended (remove_files then returns None)
         self._resumed = False  # opened again after an error: logged once it writes
+        self._unchecked = 0    # bytes written since the free space was checked
+        self._low_space = False  # paused for the free space (goes on with some to spare)
         self.error = ""        # why the trace is not written now ("" while it is)
         self._fh: Optional[io.BufferedWriter] = None
         try:
@@ -387,7 +393,12 @@ class Tracer:
     def _write(self, lines: list) -> None:
         if self._fh is None:
             raise OSError(f"{self.path} is not open")
-        self._fh.write(b"".join(line for line, _n in lines))
+        data = b"".join(line for line, _n in lines)
+        self._unchecked += len(data)
+        if self._unchecked >= self.SPACE_CHECK_BYTES:
+            self._unchecked = 0
+            storage.check_space(os.path.dirname(os.path.abspath(self.path)))
+        self._fh.write(data)
         self._fh.flush()
 
     def _rotate(self) -> None:
@@ -415,9 +426,12 @@ class Tracer:
 
     def _reopen(self) -> io.BufferedWriter:
         """Open the file to append, making its folder again (it may have been removed).
-        Raises OSError."""
-        os.makedirs(os.path.dirname(os.path.abspath(self.path)), mode=0o700, exist_ok=True)
+        Raises OSError (storage.LowSpace: the disk is almost full)."""
+        folder = os.path.dirname(os.path.abspath(self.path))
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        storage.check_space(folder, resuming=self._low_space)
         self._fh = open(self.path, "ab")
+        self._unchecked, self._low_space = 0, False
         if self.error:
             self._resumed = True
             self._set_error("")
@@ -441,9 +455,11 @@ class Tracer:
         self._close_file()
         reason = (e.strerror if isinstance(e, OSError) and e.strerror else str(e)) \
             or type(e).__name__
+        self._low_space = isinstance(e, storage.LowSpace)
         with self._lock:
             self._dropped += sum(n for _line, n in lost)
-            self._drop_reason = "the trace file could not be written"
+            self._drop_reason = ("the disk was almost full" if self._low_space else
+                                 "the trace file could not be written")
         self._set_error(reason)
         self._log_failure(f"trace not written ({self.path}): {reason}; trying again every "
                           f"{self.RETRY_S:g} s (the trace will say how much is missing)")

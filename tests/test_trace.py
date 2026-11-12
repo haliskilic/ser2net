@@ -21,6 +21,8 @@ network bytes appended to it. Checks:
   * a trace's files are deleted by its writer thread, in turn with what it writes: the
     file it writes is closed first (no deleted file is kept open) and begun again with
     the next traffic;
+  * below the free-space floor (shutil.disk_usage faked, no disk is filled) a trace pauses
+    at its start and while it writes, says why, and goes on by itself with 10% to spare;
   * with trace_max_age_days set (0, the default, keeps them), the hourly maintenance
     deletes the trace files not written for that long, a running trace's through its
     writer; a hand-edited value out of range is read as 0 or the maximum, with a note;
@@ -47,6 +49,10 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from collections import namedtuple
+from unittest import mock
+
+from app import storage
 from app.config import AppConfig, ConfigError, MappingConfig, MappingOptions, trace_file_name
 from app.engine.bridge import MappingRunner, RunnerStatus, Tracer, trace_path
 
@@ -173,6 +179,52 @@ async def test_tracer_prunes_past_keep(tmp):
     await t.aclose()
     assert not any("rotated file(s)" in ln for ln in logs), logs
     print("tracer: rotated files past a lowered trace_keep deleted at start (logged)  OK")
+
+
+class _QuickTracer(Tracer):
+    RETRY_S = 0.05
+    SPACE_CHECK_BYTES = 4096
+
+
+async def test_tracer_low_space(tmp):
+    """A disk of 8 GiB (floor: 5%, 410 MB) with 100 MB free: the trace pauses at its start
+    (status, log), counts what it misses, stays paused just above the floor and goes on
+    with 10% to spare; then pauses again while writing, before the disk fills up."""
+    usage = namedtuple("usage", "total used free")
+    total = 8 * 1024 ** 3
+    free = [100 * 1024 ** 2]
+    fake = lambda _path: usage(total, total - free[0], free[0])  # noqa: E731
+    floor = storage.floor(total)
+    assert floor == int(total * 0.05), floor
+    path = os.path.join(tmp, "low.log")
+    status, logs = RunnerStatus(), []
+    with mock.patch.object(storage.shutil, "disk_usage", fake):
+        t = _QuickTracer(path, _Opts(hexdump=False), log=logs.append, status=status)
+        assert t.error.startswith("the disk is almost full (100 MB free; traces pause below "
+                                  "410 MB)"), t.error
+        assert status.trace_error == t.error and not os.path.exists(path)
+        t.write("ser>net", b"a" * 300)
+        free[0] = floor + 10 * 1024 ** 2           # above the floor, not by 10%
+        await asyncio.sleep(0.3)
+        assert t.error, "went on without anything to spare"
+        free[0] = int(floor * 1.1) + 1
+        await wait_for(lambda: not t.error)
+        t.write("ser>net", b"b" * 100)
+        await wait_for(lambda: os.path.exists(path) and b"b" * 100 in open(path, "rb").read())
+        text = open(path, "rb").read()
+        assert b"!! 300 bytes not traced (the disk was almost full)" in text, text
+        free[0] = floor - 1                        # gets low while it writes
+        for _ in range(60):
+            t.write("ser>net", b"c" * 100)
+        await wait_for(lambda: bool(t.error))
+        assert status.trace_error.startswith("the disk is almost full"), status.trace_error
+        size = os.path.getsize(path)
+        assert size < 4096 + 2000, size            # stopped after one check's worth
+        await t.aclose()
+    assert sum("trace not written" in ln for ln in logs) == 1, logs  # rate-limited
+    assert any("trace written again" in ln for ln in logs), logs
+    print("tracer: below the free-space floor it pauses (at start and while writing), says "
+          "why and goes on by itself with 10% to spare  OK")
 
 
 class _SlowTracer(Tracer):
@@ -625,6 +677,8 @@ async def main():
         await test_tracer_never_blocks(os.path.join(tmp, "b"))
         await test_keep0_never_cuts_in_place(os.path.join(tmp, "d"))
         await test_tracer_survives_failures(os.path.join(tmp, "e"))
+        os.makedirs(os.path.join(tmp, "l"))
+        await test_tracer_low_space(os.path.join(tmp, "l"))
         await test_tracer_folder_removed(os.path.join(tmp, "f"))
         test_thread_errors_logged()
         os.makedirs(os.path.join(tmp, "g"))
