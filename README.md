@@ -321,7 +321,8 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.
-- **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
+- **/metrics:** Prometheus formatında metrikler (web arayüzü oturumuyla; REST API
+  token'ıyla: `/api/v1/metrics`, bkz. REST API): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
   düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
   `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren ve sıra bekleyen TLS
@@ -352,8 +353,8 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/me
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
 ```
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
-`POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
-`GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+`POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
+`GET /metrics`, `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
 
 **`PUT` eşlemenin tamamını değiştirir.** Gövdenin içermediği her alan, yeni bir eşlemedeki
 gibi varsayılanını alır: `0.0.0.0` üzerinde 4001 portunu dinler, istemci izin listesi yoktur,
@@ -366,6 +367,31 @@ adresini ve izin listesini korur), bir liste ya da değer eskisinin yerine geçe
 alanı varsayılanına döndürür (`{"network":{"allowed_client_ips":null}}`). Sonuç her düzenleme
 gibi denetlenir; reddedilen bir patch hiçbir şeyi değiştirmez (HTTP 400). Her değişiklikten
 önceki yapılandırma `backups/` içinde kalır.
+
+**Tek değişiklikte çok sayıda eşleme:** `POST /import`, **Ayarlar → Eşlemeleri dışa / içe aktar**'ın
+yazdığını ya da `GET /mappings`'in döndürdüğünü (`{"mappings": [...]}`), bütün bir
+`config.json`'u (yalnızca eşlemeleri kullanılır) ya da klasik bir `ser2net.yaml` /
+`ser2net.conf`'u alır. `?mode=merge` (varsayılan) aynı id'li, yoksa aynı adlı eşlemeyi
+günceller, diğerlerini ekler; `?mode=replace` mevcut eşlemelerin hepsini gövdedekilerle
+değiştirir. Tek bir kayıttır — tek yedek, ya hep ya hiç: geçerli olmayan bir sonuç (aynı portta
+iki eşleme gibi) bütünüyle reddedilir (HTTP 400) ve hiçbir şey değişmez. `?dry_run=true` hiçbir
+şeyi değiştirmeden ne olacağını döndürür: her eşleme eklenecek mi, güncellenecek mi, aynı mı
+kalacak, kaldırılacak mı; sonuç reddedilecekse de nedeni:
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --data-binary @ser2net-mappings.json "http://HOST:8080/api/v1/import?mode=merge&dry_run=true"
+```
+**Token ile Prometheus:** `GET /api/v1/metrics`, `/metrics`'in (web arayüzü oturumu ister)
+metriklerinin aynısını her API token'ına döndürür:
+```yaml
+scrape_configs:
+  - job_name: ser2net
+    metrics_path: /api/v1/metrics
+    authorization:
+      credentials_file: /etc/prometheus/ser2net-token   # token, örneğin bir viewer token'ı
+    static_configs:
+      - targets: ["HOST:8080"]
+```
 Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
 sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
 `viewer` sayılır ve açılış log'u bunu yazar.

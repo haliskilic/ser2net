@@ -16,47 +16,7 @@ def routes(ctx: Ctx) -> list:
         return PlainTextResponse("ok")
 
     async def metrics(request):
-        statuses = state.supervisor.all_status()
-        lines = [
-            "# ser2net metrics",
-            "ser2net_up 1",
-            f"ser2net_mappings_total {len(state.config.mappings)}",
-        ]
-        # the process's open files and their limit (POSIX: what serial ports, sockets and
-        # files share; not reported on Windows)
-        fds, fd_limit = netguard.open_fds(), netguard.fd_limit()
-        if fds is not None:
-            lines.append(f"ser2net_open_fds {fds}")
-        if fd_limit is not None:
-            lines.append(f"ser2net_fd_limit {fd_limit}")
-        guard = getattr(state, "admin_guard", None)
-        if guard is not None:
-            lines.append(f"ser2net_admin_connections {len(guard.connections)}")
-        budget = netguard.BUDGET
-        lines.append(f"ser2net_tls_handshakes_in_progress {len(budget.handshakes)}")
-        lines.append(f"ser2net_tls_handshakes_waiting {len(budget.waiting)}")  # for a slot
-        # connections refused right after accept: near the open-file limit or (Windows) the
-        # event loop's socket limit, too many TLS handshakes, the admin UI's own limits
-        for why in netguard.REFUSAL_REASONS:
-            lines.append(f'ser2net_connections_refused_total{{reason="{why}"}} '
-                         f"{budget.refused.get(why, 0)}")
-        for m in state.config.mappings:
-            st = statuses.get(m.id) or {}
-            lbl = f'mapping="{_metric_label(m.name)}",id="{_metric_label(m.id)}"'
-            running = 1 if st.get("state") == "running" else 0
-            lines += [
-                f"ser2net_mapping_running{{{lbl}}} {running}",
-                f"ser2net_mapping_clients{{{lbl}}} {st.get('client_count', 0)}",
-                # bytes read from / written to the serial device, counted once at the device;
-                # dropped: sent for the device but not written (see RunnerStatus)
-                f"ser2net_mapping_bytes_in_total{{{lbl}}} {st.get('bytes_in', 0)}",
-                f"ser2net_mapping_bytes_out_total{{{lbl}}} {st.get('bytes_out', 0)}",
-                f"ser2net_mapping_bytes_dropped_total{{{lbl}}} {st.get('bytes_dropped', 0)}",
-                f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
-                f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
-            ]
-        return PlainTextResponse("\n".join(lines) + "\n",
-                                 media_type="text/plain; version=0.0.4")
+        return PlainTextResponse(metrics_text(state), media_type=METRICS_TYPE)
 
     async def api_ports_json(request):
         return JSONResponse(state.ports.get())
@@ -95,6 +55,55 @@ def routes(ctx: Ctx) -> list:
         Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
         Route("/api/ports/table", api_ports_table),
     ]
+
+
+# the exposition format /metrics and /api/v1/metrics answer in
+METRICS_TYPE = "text/plain; version=0.0.4"
+
+
+def metrics_text(state) -> str:
+    """The Prometheus metrics (text exposition format): served at /metrics to a web UI
+    session and at /api/v1/metrics to an API token."""
+    statuses = state.supervisor.all_status()
+    lines = [
+        "# ser2net metrics",
+        "ser2net_up 1",
+        f"ser2net_mappings_total {len(state.config.mappings)}",
+    ]
+    # the process's open files and their limit (POSIX: what serial ports, sockets and
+    # files share; not reported on Windows)
+    fds, fd_limit = netguard.open_fds(), netguard.fd_limit()
+    if fds is not None:
+        lines.append(f"ser2net_open_fds {fds}")
+    if fd_limit is not None:
+        lines.append(f"ser2net_fd_limit {fd_limit}")
+    guard = getattr(state, "admin_guard", None)
+    if guard is not None:
+        lines.append(f"ser2net_admin_connections {len(guard.connections)}")
+    budget = netguard.BUDGET
+    lines.append(f"ser2net_tls_handshakes_in_progress {len(budget.handshakes)}")
+    lines.append(f"ser2net_tls_handshakes_waiting {len(budget.waiting)}")  # for a slot
+    # connections refused right after accept: near the open-file limit or (Windows) the
+    # event loop's socket limit, too many TLS handshakes, the admin UI's own limits
+    for why in netguard.REFUSAL_REASONS:
+        lines.append(f'ser2net_connections_refused_total{{reason="{why}"}} '
+                     f"{budget.refused.get(why, 0)}")
+    for m in state.config.mappings:
+        st = statuses.get(m.id) or {}
+        lbl = f'mapping="{_metric_label(m.name)}",id="{_metric_label(m.id)}"'
+        running = 1 if st.get("state") == "running" else 0
+        lines += [
+            f"ser2net_mapping_running{{{lbl}}} {running}",
+            f"ser2net_mapping_clients{{{lbl}}} {st.get('client_count', 0)}",
+            # bytes read from / written to the serial device, counted once at the device;
+            # dropped: sent for the device but not written (see RunnerStatus)
+            f"ser2net_mapping_bytes_in_total{{{lbl}}} {st.get('bytes_in', 0)}",
+            f"ser2net_mapping_bytes_out_total{{{lbl}}} {st.get('bytes_out', 0)}",
+            f"ser2net_mapping_bytes_dropped_total{{{lbl}}} {st.get('bytes_dropped', 0)}",
+            f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
+            f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
+        ]
+    return "\n".join(lines) + "\n"
 
 
 def _metric_label(name: str) -> str:

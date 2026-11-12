@@ -104,6 +104,8 @@ ROUTES = {
     ("GET", "/api/v1/health"): (TOKEN_PUBLIC, NONE),
     ("GET", "/api/v1/openapi.json"): (TOKEN_PUBLIC, NONE),
     ("GET", "/api/v1/status"): (TOKEN_READ, NONE),
+    ("GET", "/api/v1/metrics"): (TOKEN_READ, NONE),
+    ("POST", "/api/v1/import"): (TOKEN_WRITE, NONE),
     ("GET", "/api/v1/ports"): (TOKEN_READ, NONE),
     ("GET", "/api/v1/mappings"): (TOKEN_READ, NONE),
     ("POST", "/api/v1/mappings"): (TOKEN_WRITE, NONE),
