@@ -1,7 +1,8 @@
 name: Release
 
-# On a v* tag (git tag -a v2.8.0 -m "..." && git push origin v2.8.0): build the
-# standalone executables (Linux x86_64 + arm64, Windows x64; no Python or anything else
+# On a v* tag (git tag -a v2.8.0 -m "..." && git push origin v2.8.0): check the tag (vX.Y.Z
+# or vX.Y.Z-rc.N, equal to "v" + app.__version__, with a dated CHANGELOG section, on a
+# commit of main), build the standalone executables (Linux x86_64 + arm64, Windows x64; no Python or anything else
 # needed) and the Docker image (amd64 + arm64), run every check on them — bundle
 # contents, empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers,
 # the Windows service, the image's non-root / upgrade smoke test — audit the pinned
@@ -16,7 +17,25 @@ permissions:
   contents: read
 
 jobs:
+  # Before anything is built, so a mis-versioned tag fails in seconds instead of shipping
+  # binaries, SBOMs and an image that carry another version
+  verify:
+    name: check the tag (version, CHANGELOG, on main)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0          # main's history, for the ancestry check
+          persist-credentials: false
+      - name: The tag is "v" + app.__version__, with a dated CHANGELOG.md section
+        run: python3 tools/release_guard.py tag "$GITHUB_REF_NAME"
+      - name: The tagged commit is on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not a commit of main"; exit 1; }
+
   standalone:
+    needs: verify
     permissions:
       contents: read
       actions: read       # the reusable workflow requests it (SignPath); the caller must grant it
@@ -30,10 +49,12 @@ jobs:
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
   docker-test:
+    needs: verify
     uses: ./.github/workflows/docker.yml
 
   # no release with a known vulnerability in a pin the binaries or the image ship
   audit:
+    needs: verify
     uses: ./.github/workflows/audit.yml
 
   publish:
