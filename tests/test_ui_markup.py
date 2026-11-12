@@ -243,9 +243,12 @@ def test_mapping_form_modbus_fields():
     # plain-format /set only (Sparkplug commands are never retained); the hidden marker
     # sits with the checkbox, so it is posted exactly when the checkbox is offered
     for name in ("mqtt_apply_retained_set", "mqtt_apply_retained_set_shown",
-                 "mqtt_unit_status", "mqtt_unit_status_shown"):
+                 "mqtt_unit_status", "mqtt_unit_status_shown", "mqtt_value_format"):
         assert conditions(name) == ["mqtt_payload_format=plain", "network_protocol=modbus"], \
             (name, conditions(name))
+    # retained data: plain format, serial lines too (not only Modbus); marker beside it
+    for name in ("mqtt_retain", "mqtt_retain_shown"):
+        assert conditions(name) == ["mqtt_payload_format=plain", "kind=net"], conditions(name)
     # the Sparkplug primary host: Modbus gateways in Sparkplug B format; its own marker
     assert conditions("mqtt_sparkplug_primary_host_id") == [
         "mqtt_payload_format=sparkplug_b", "network_protocol=modbus", "kind=net"], \

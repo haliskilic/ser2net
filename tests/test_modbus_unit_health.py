@@ -28,6 +28,11 @@ MQTT client is a stand-in that records what is published. Checks:
     ser2net_modbus_unit_up and ser2net_modbus_unit_poll_errors_total per unit (a unit not
     polled yet has no _up line); the notifier sees unit_offline / unit_back.
 
+Plain MQTT with value_format "json" (and retain): each value is {"value", "ts" (its read
+time), "quality": "good"}, retained; a point whose read fails on a live unit and the points
+of a unit that went offline are published once as quality "bad" (value null), and good
+again once they read; a NaN reading is null; text values are unchanged.
+
 Run: python3 tests/test_modbus_unit_health.py
 """
 import asyncio
@@ -401,6 +406,66 @@ async def test_plain_unit_health(slave_port):
             SILENT_UNITS.clear()
 
 
+def test_encode_value():
+    from app.engine.modbus_gateway import encode_value
+    assert encode_value(True, "text", 1) == b"1" and encode_value(False, "text", 1) == b"0"
+    assert encode_value(21.5, "text", 1) == b"21.5" and encode_value(7, "csv", 1) == b"7"
+    assert encode_value(True, "json", 5) == b'{"value":true,"ts":5,"quality":"good"}'
+    assert encode_value(7, "json", 5) == b'{"value":7,"ts":5,"quality":"good"}'
+    for odd in (float("nan"), float("inf")):
+        assert encode_value(odd, "json", 5) == b'{"value":null,"ts":5,"quality":"good"}'
+    assert encode_value(None, "json", 5, good=False) == b'{"value":null,"ts":5,"quality":"bad"}'
+    print("value payloads: text 1 / 0 / number (also for an unknown format); JSON with "
+          "true / false, null for NaN, quality  OK")
+
+
+async def test_plain_json_values(slave_port):
+    import json
+    points = [p for p in POINTS if p["unit"] in (1, 2)]  # temp, ghost, setpoint, level, level2
+    logs = []
+    r, sw, fake = await gateway(slave_port, "plain", logs, points, value_format="json",
+                                retain=True)
+    poll = asyncio.create_task(r._poll_loop())
+
+    def msgs(name):
+        return [(json.loads(p), retain) for t, p, retain in fake.published
+                if t == f"plant/a/{name}"]
+
+    def quality(name):
+        return [m["quality"] for m, _r in msgs(name)]
+    try:
+        t0 = int(time.time() * 1000)
+        assert await wait(lambda: msgs("temp") and msgs("level"))
+        (temp, kept), = msgs("temp")[:1]
+        assert kept is True and temp["quality"] == "good" and temp["value"] == 23.5, temp
+        assert t0 <= temp["ts"] <= int(time.time() * 1000), (t0, temp)
+        assert msgs("level")[0][0]["value"] == REGS[(2, 30)], msgs("level")
+
+        EXCEPTIONS[(1, 99)] = 0x02                    # 'ghost' fails, unit 1 answers
+        assert await wait(lambda: "bad" in quality("ghost"))
+        await asyncio.sleep(0.4)                      # several cycles: "bad" once
+        assert quality("ghost").count("bad") == 1, quality("ghost")
+        bad = msgs("ghost")[-1]
+        assert bad == ({"value": None, "ts": bad[0]["ts"], "quality": "bad"}, True), bad
+        EXCEPTIONS.pop((1, 99))
+        assert await wait(lambda: quality("ghost")[-1] == "good")
+
+        SILENT_UNITS.add(2)                           # unit 2 stops answering
+        assert await wait(lambda: r._units[2].state == "offline")
+        assert await wait(lambda: quality("level")[-1] == "bad" == quality("level2")[-1])
+        await asyncio.sleep(0.4)
+        assert quality("level").count("bad") == 1 and quality("level2").count("bad") == 1
+        SILENT_UNITS.discard(2)
+        assert await wait(lambda: quality("level")[-1] == "good" == quality("level2")[-1])
+        assert all(q == "good" for q in quality("temp")), "unit 1 was fine all along"
+        print("JSON values: value, read time, quality good; bad once for a failing point and "
+              "for an offline unit's points, good again after; retained  OK")
+    finally:
+        await stop(r, sw, poll)
+        SILENT_UNITS.clear()
+        EXCEPTIONS.clear()
+
+
 async def main():
     port = free_port()
     srv = await asyncio.start_server(fake_slave, "127.0.0.1", port)
@@ -408,6 +473,8 @@ async def main():
     try:
         await test_sparkplug_unit_health(port)
         await test_plain_unit_health(port)
+        test_encode_value()
+        await test_plain_json_values(port)
     finally:
         srv.close()
         with suppress(Exception):

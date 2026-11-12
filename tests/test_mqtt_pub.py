@@ -9,7 +9,8 @@ is connected, as paho does, gets it at QoS 0 too), and with a blank client ID on
 after STALE_WILL_S; that while the broker is away at QoS 1/2 polled values keep only the
 latest one per topic (sent after the next connect, after the birth) and paho's queue is
 bounded (MAX_QUEUED_MESSAGES; what it refuses is counted and logged once per outage);
-and that
+that mqtt.retain retains serial lines and polled values (also those kept while away), and
+nothing else; and that
 a command subscription handles a command when it is published, not the broker's retained
 replay of it (unless accept_retained), and never an empty message. Also that paho's
 network thread waits with poll(), not select() (which refuses descriptors >= 1024), and
@@ -305,6 +306,30 @@ def test_paho_queue_limit():
         pub.close()
     print("paho: queue limit set before connecting; QoS 1 beyond it refused, counted, "
           "logged once  OK")
+
+
+def test_retain():
+    """mqtt.retain: serial lines and polled values are published retained (a value kept
+    while the broker was away too); the status topic always is, a command result or a
+    Sparkplug message (publish_raw) only when asked. Off by default."""
+    for retain in (False, True):
+        fake = QueueClient(room=10)
+        pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="p", qos=1,
+                                         retain=retain),
+                            logger=lambda _m: None, client=fake)
+        pub.connect()
+        pub.publish_value("held", b"1")       # kept until the connect
+        fake.up = True
+        pub.handle_connect()
+        pub.feed(b"line\n")
+        pub.publish_value("a", b"2")
+        pub.publish_raw("p/a/set/result", b"ok")
+        flags = {t: r for t, _p, _q, r in fake.published}
+        assert flags == {"p/status": True, "p/held": retain, "p": retain, "p/a": retain,
+                         "p/a/set/result": False}, (retain, flags)
+    assert MqttSettings().retain is False
+    print("retain: serial lines and values (kept ones too) retained when asked; results "
+          "never  OK")
 
 
 def test_will_is_set_for_lwt():
@@ -680,6 +705,7 @@ def main():
     test_birth_after_each_connect()
     test_birth_again_after_a_stale_will()
     test_offline_queue()
+    test_retain()
     test_will_is_set_for_lwt()
     test_retained_commands()
     test_paho_birth_at_qos0()

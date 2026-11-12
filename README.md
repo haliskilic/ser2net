@@ -246,7 +246,16 @@ düzenlemeye gerek yok.
   okumalar art arda gönderilmez). Bir eşlemeyi durdurmak ya da yeniden başlatmak,
   broker'ın son mesajı (`offline` ya da Sparkplug NDEATH) almasını en çok 3 s bekler
   (ötesinde aynısını Last-Will söyler); bu sırada diğer eşlemeler ve arayüz beklemez.
-  `paho-mqtt` gerektirir (opsiyonel; yoksa köprü normal çalışır).
+  **Verileri retained yayınla** (düz biçim) seri satırları ve periyodik okunan Modbus
+  değerlerini retained yayınlar; böylece sonradan bağlanan bir abone (Home Assistant,
+  Node-RED, Telegraf) bir sonraki okumayı ya da satırı beklemeden son değeri hemen alır
+  (Sparkplug B veriyi hiç retain etmez, komut sonuçları retain edilmez; retained bir değeri
+  silmek için topic'ine boş bir retained mesaj yayınla). Modbus değerleri varsayılan olarak
+  düz metindir; **Değer biçimi: JSON** `{"value": 21.5, "ts": 1731400000123, "quality":
+  "good"}` yayınlar (`ts`: okunduğu an, epoch'tan beri ms; bit `true` / `false`, NaN okuma
+  `null`) ve okuması başarısız olan ya da unit'i yanıt vermeyi kesen bir nokta için, yeniden
+  okunana kadar bir kez `{"value": null, …, "quality": "bad"}` gönderir. İstemci MQTT 3.1.1
+  konuşur. `paho-mqtt` gerektirir (opsiyonel; yoksa köprü normal çalışır).
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
   olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
