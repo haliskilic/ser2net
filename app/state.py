@@ -134,10 +134,10 @@ class LineFormatter(logging.Formatter):
     def __init__(self) -> None:
         super().__init__("%(asctime)s %(message)s")
 
-    def formatTime(self, record, datefmt=None) -> str:  # noqa: N802 (logging API)
+    def formatTime(self, record, datefmt=None) -> str:  # logging API
         return clock.stamp(record.created)
 
-    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802 (logging API)
+    def formatMessage(self, record: logging.LogRecord) -> str:  # logging API
         record.message = one_line(record.message)
         return super().formatMessage(record)
 
@@ -251,12 +251,12 @@ class RetainingFileHandler(RotatingFileHandler):
             return False
         return now - self.first >= self.max_age_s / max(1, self.backupCount)
 
-    def shouldRollover(self, record) -> bool:  # noqa: N802 (logging API)
+    def shouldRollover(self, record) -> bool:  # logging API
         if self._retry_at and time.monotonic() < self._retry_at:
             return False
         return bool(super().shouldRollover(record)) or self.too_old(record.created)
 
-    def doRollover(self) -> None:  # noqa: N802 (logging API)
+    def doRollover(self) -> None:  # logging API
         """Rotate: all.log -> all.log.1 -> ... -> all.log.<backupCount> (the oldest gone).
         all.log is moved aside first: when that fails (Windows: another program has it open
         without delete sharing) nothing is shifted or deleted, the record is written to

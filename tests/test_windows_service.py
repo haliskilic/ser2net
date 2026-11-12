@@ -585,15 +585,15 @@ def test_run_reports_running_when_ready():
     reports = []
 
     class Dll:
-        def RegisterServiceCtrlHandlerExW(self, name, handler, ctx):  # noqa: N802
+        def RegisterServiceCtrlHandlerExW(self, name, handler, ctx):
             return 7
 
-        def SetServiceStatus(self, h, ref):  # noqa: N802
+        def SetServiceStatus(self, h, ref):
             st = ref._obj
             reports.append((st.dwCurrentState, st.dwCheckPoint, st.dwServiceSpecificExitCode))
             return 1
 
-        def StartServiceCtrlDispatcherW(self, table):  # noqa: N802
+        def StartServiceCtrlDispatcherW(self, table):
             table[0].fn(0, None)
             return 1
 

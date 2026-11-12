@@ -221,7 +221,7 @@ def test_redirect_uri() -> None:
 class _Discovery(http.server.BaseHTTPRequestHandler):
     """An identity provider's discovery document (loopback http:// is allowed)."""
 
-    def do_GET(self):  # noqa: N802 (http.server API)
+    def do_GET(self):  # http.server API
         iss = f"http://127.0.0.1:{self.server.server_address[1]}"
         body = json.dumps({"issuer": iss, "authorization_endpoint": iss + "/authorize",
                            "token_endpoint": iss + "/token", "jwks_uri": iss + "/jwks"}).encode()

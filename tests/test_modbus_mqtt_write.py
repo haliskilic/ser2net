@@ -852,7 +852,7 @@ async def test_sparkplug_read_back(slave_port):
     unanswered: after every DCMD to a writable point the point is read back and sent in a
     DDATA, changed or not (a write of the current value, a value the gateway or the slave
     refused, a read-only mapping)."""
-    t = lambda kind, dev=None: sparkplug.topic("ser2net", kind, "Line_3_PLC", dev)  # noqa: E731
+    t = lambda kind, dev=None: sparkplug.topic("ser2net", kind, "Line_3_PLC", dev)
     for read_only in (False, True):
         REGS[10], COILS[0] = 5, False
         fake = FakeMqtt()

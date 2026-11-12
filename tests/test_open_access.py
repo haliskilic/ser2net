@@ -47,7 +47,7 @@ def free_port():
 UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
-from _server import ui_cookie  # noqa: E402
+from _server import ui_cookie
 
 
 def wait_port(port, timeout=15):
