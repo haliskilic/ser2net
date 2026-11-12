@@ -259,8 +259,10 @@ class AppState:
         self.traces_dir = os.path.join(self.data_dir, "traces")
         self._logger = self._setup_logging(self.log_path)
         self._mapping_loggers: dict[str, logging.Logger] = {}
+        # each supervisor operation acts on the mapping's config when its turn comes
         self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger,
-                                     trace_dir=self.traces_dir)
+                                     trace_dir=self.traces_dir,
+                                     lookup=lambda mid: self.config.get_mapping(mid))
         self.ports = PortWatcher(interval=2.0)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
