@@ -20,7 +20,7 @@ import os
 import socket
 import sys
 
-from .config import AdminUI, host_port
+from .config import AdminUI, host_port, shown_host
 from .engine import netinfo
 
 # how far past a taken port the picker looks for a free one
@@ -31,7 +31,10 @@ def port_in_use(ip: str, port: int) -> bool:
     """Does another socket listen on ip:port now, so that the admin UI couldn't bind it?
     Tried as asyncio's create_server binds (uvicorn's listener): SO_REUSEADDR on POSIX,
     IPV6_V6ONLY for an IPv6 address; the socket is closed at once. Only "address in use"
-    counts: an address this machine doesn't have is not this check's business."""
+    counts: an address this machine doesn't have is not this check's business. "" (every
+    interface of both families) is tried as 0.0.0.0 and as ::, as httpguard.listen binds it."""
+    if not ip:
+        return port_in_use("0.0.0.0", port) or port_in_use("::", port)
     try:
         family = socket.AF_INET6 if ":" in ip else socket.AF_INET
         sock = socket.socket(family, socket.SOCK_STREAM)
@@ -59,7 +62,7 @@ def next_free_port(ip: str, port: int) -> int | None:
 
 
 def in_use_warning(ip: str, port: int) -> str:
-    return (f"WARNING: port {port} on {ip} is in use (another ser2net instance or another "
+    return (f"WARNING: port {port} on {shown_host(ip)} is in use (another ser2net instance or another "
             "program?) — the web UI can't listen there until it is free. Give this instance "
             "its own port: --reconfigure, or SER2NET_BIND_IP + SER2NET_PORT")
 
@@ -118,7 +121,7 @@ def choose_admin_bind(current: AdminUI | None = None,
 
     if port_in_use(ip, default_port):
         free = next_free_port(ip, default_port)
-        print(f"  Port {default_port} on {ip} is in use (another ser2net instance or another "
+        print(f"  Port {default_port} on {shown_host(ip)} is in use (another ser2net instance or another "
               "program?)" + (f"; {free} is free." if free else "."))
         default_port = free or default_port
     while True:
@@ -131,7 +134,7 @@ def choose_admin_bind(current: AdminUI | None = None,
             pass
         print("  Invalid port, try again.")
     if port_in_use(ip, port):
-        print(f"  NOTE: port {port} on {ip} is in use right now: the web UI can't listen "
+        print(f"  NOTE: port {port} on {shown_host(ip)} is in use right now: the web UI can't listen "
               "there until the program that has it stops.")
         if notes is not None:
             notes.append(in_use_warning(ip, port))

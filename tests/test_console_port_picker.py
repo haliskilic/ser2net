@@ -4,7 +4,9 @@
 A second instance on one machine was offered 8080 again and took it without a check; the
 one that lost the port then failed to start its UI. Checks:
   * port_in_use: a listener on the address (or, on Linux, on 0.0.0.0) makes the port taken,
-    as uvicorn's bind would find it; a closed one or another port doesn't; IPv6 too;
+    as uvicorn's bind would find it; a closed one or another port doesn't; IPv6 too; ""
+    (every interface, IPv4 and IPv6) is taken by a listener of either family, and named
+    "*" in what the picker says;
   * with a terminal: a taken port is reported and the next free one offered as the
     default (Enter takes it); a taken port typed in is still taken, with a note (and a
     warning for the start-up log); a free port is offered as it is, without a word;
@@ -93,8 +95,24 @@ def test_port_in_use() -> None:
         with held6:
             assert console.port_in_use("::1", held6.getsockname()[1])
     assert not console.port_in_use("192.0.2.1", port), "not this machine's: not this check's"
+    # "" (every interface of both families: the console's "IPv4 + IPv6" choice)
+    with listener("0.0.0.0") as anywhere:
+        assert console.port_in_use("", anywhere.getsockname()[1])
+    assert not console.port_in_use("", port)
+    try:   # IPv6 only: '' is taken by the :: half alone
+        held6 = socket.socket(socket.AF_INET6)
+        held6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        held6.bind(("::", 0))
+        held6.listen()
+    except OSError:
+        print("SKIP: no IPv6 here: '' was checked against IPv4 only")
+    else:
+        with held6:
+            assert not console.port_in_use("0.0.0.0", held6.getsockname()[1])
+            assert console.port_in_use("", held6.getsockname()[1])
+    assert console.in_use_warning("", port).startswith(f"WARNING: port {port} on * is in use")
     print("port_in_use: a listener on the address (and 0.0.0.0 on Linux) takes it, a closed "
-          "one doesn't; IPv6; next_free_port  OK")
+          "one doesn't; IPv6; '' by either family; next_free_port  OK")
 
 
 def test_interactive() -> None:
