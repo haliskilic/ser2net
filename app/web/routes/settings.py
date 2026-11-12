@@ -68,7 +68,9 @@ def routes(ctx: Ctx) -> list:
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
-        backups = state.store.backups() if me is not None and me.role == "admin" else []
+        # the list reads the backup files: not on the event loop (ConfigStore.backups)
+        backups = (await asyncio.to_thread(state.store.backups)
+                   if me is not None and me.role == "admin" else [])
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,

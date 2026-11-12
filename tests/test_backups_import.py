@@ -4,6 +4,7 @@ Before v2.8 "Import" replaced every mapping at once and config.json was never ba
 up, so a wrong import or edit could not be undone. Checks:
   * every change keeps the replaced config.json in data/backups (no duplicates,
     newest 50 kept; names that aren't ours are rejected);
+  * listing them (the Settings page, at every visit) parses each file only once;
   * the import form first previews (nothing changes), then merges — same name =
     update keeping the id, new = add, others untouched — or replaces;
   * a 2.7-style one-step POST still replaces everything (scripts keep working);
@@ -28,9 +29,11 @@ import os
 import tempfile
 import urllib.error
 import urllib.request
+from unittest import mock
 
 from _server import Browser, Server, free_port
 
+from app import config as config_module
 from app.config import BACKUPS_KEPT, AppConfig, ConfigError, ConfigStore, MappingConfig
 from app.importer import apply_import, parse_mappings_file, plan_rows
 from app.web.auth import hash_password, verify_password
@@ -76,6 +79,54 @@ def test_store_backups():
     print(f"store: each change backs up the old file, no duplicates, newest {BACKUPS_KEPT} kept  OK")
 
 
+def test_backup_list_cache():
+    """The Settings page lists the backups at every visit: each file is parsed once, and
+    again only when it is new or changed (its size or modification time); the cache
+    follows the pruning and the list stays what it was."""
+    d = tempfile.mkdtemp(prefix="s2n_bkc_")
+    store = ConfigStore(os.path.join(d, "config.json"))
+    cfg = AppConfig()
+    for i in range(BACKUPS_KEPT + 1):
+        cfg.session_timeout_s = 600 + i
+        store.save(cfg)
+    parsed = []
+    real = config_module._backup_summary
+
+    def counting(path):
+        parsed.append(os.path.basename(path))
+        return real(path)
+
+    with mock.patch.object(config_module, "_backup_summary", counting):
+        first = store.backups()
+        assert len(parsed) == len(first) == BACKUPS_KEPT, (len(parsed), len(first))
+        parsed.clear()
+        again = store.backups()
+        assert parsed == [] and again == first, f"the second listing parsed {parsed}"
+        cfg.session_timeout_s = 3600
+        store.save(cfg)                      # one new backup, the oldest pruned
+        names = store.backup_names()
+        listed = store.backups()
+        assert parsed == [names[0]], parsed
+        assert [b["name"] for b in listed] == names and len(names) == BACKUPS_KEPT
+        assert set(store._backup_summaries) == set(names), "a pruned backup stays cached"
+        parsed.clear()
+        path = os.path.join(store.backup_dir, names[3])
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        doc["mappings"] = [mapping("bbbbbbbbbbb1", "X", 5001)]
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        listed = store.backups()
+        assert parsed == [names[3]] and listed[3]["mappings"] == 1, (parsed, listed[3])
+        assert listed[3]["size"] == os.path.getsize(path)
+        parsed.clear()
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"mappings": 5, "users": "x"}')   # not a configuration: no counts, no error
+        listed = store.backups()
+        assert listed[3]["mappings"] is None and listed[3]["users"] is None, listed[3]
+    print("store: the backups list parses each file once, again only when it changed  OK")
+
+
 def test_planner():
     cur = [MappingConfig.from_dict(mapping("aaaaaaaaaaa1", "A", 5001)),
            MappingConfig.from_dict(mapping("aaaaaaaaaaa2", "B", 5002))]
@@ -108,6 +159,7 @@ def test_planner():
 
 def main():
     test_store_backups()
+    test_backup_list_cache()
     test_planner()
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
              {"username": "op", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
