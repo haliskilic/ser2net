@@ -17,6 +17,9 @@ network bytes appended to it. Checks:
   * a download of a trace being written sends it as it was when the download began:
     exactly its Content-Length (a FileResponse sent the lines added meanwhile too, and
     the server broke the download off);
+  * a trace's files are deleted by its writer thread, in turn with what it writes: the
+    file it writes is closed first (no deleted file is kept open) and begun again with
+    the next traffic;
   * deleting a mapping deletes its traces; the start-up prunes the traces of mappings
     that no longer exist (a replace import or a restore leaves them), and those removals
     close the gone mappings' runners and log files at once.
@@ -354,6 +357,38 @@ async def test_live_download(tmp):
           "broke off: too much data for its Content-Length)  OK")
 
 
+def _deleted_but_open(path) -> list:
+    """This process's descriptors of `path` after it was deleted (Linux; [] elsewhere)."""
+    if not sys.platform.startswith("linux"):
+        return []
+    out = []
+    for fd in os.listdir("/proc/self/fd"):
+        with contextlib.suppress(OSError):
+            if os.readlink(f"/proc/self/fd/{fd}") == f"{path} (deleted)":
+                out.append(fd)
+    return out
+
+
+async def test_tracer_remove_files(tmp):
+    path = os.path.join(tmp, "rm.log")
+    t = Tracer(path, _Opts(max_mb=0.002, keep=1, hexdump=False))  # ~2 KB per file
+    for _ in range(4):
+        t.write("ser>net", b"before" * 100)
+    await wait_for(lambda: os.path.isfile(path + ".1"))
+    t.write("ser>net", b"queued")  # written before the deletion: deleted with it
+    done = await asyncio.wrap_future(t.remove_files([path, path + ".1", path + ".9"]))
+    assert done == {path: None, path + ".1": None, path + ".9": None}, done
+    assert not os.path.exists(path) and not os.path.exists(path + ".1")
+    assert not _deleted_but_open(path), "the writer kept the deleted file open"
+    t.write("ser>net", b"after")
+    await t.aclose()
+    assert open(path, "rb").read().endswith(b"ser>net after\n")
+    assert b"before" not in open(path, "rb").read() and b"queued" not in open(path, "rb").read()
+    assert t.remove_files([path]) is None, "the writer has ended: files like any other"
+    print("tracer: its files are deleted by the writer, in turn; the file it writes is closed "
+          "first and begun again with the next traffic  OK")
+
+
 def test_thread_errors_logged():
     from app import runtime
     logs = []
@@ -500,6 +535,8 @@ async def main():
         test_thread_errors_logged()
         os.makedirs(os.path.join(tmp, "g"))
         await test_live_download(os.path.join(tmp, "g"))
+        os.makedirs(os.path.join(tmp, "i"))
+        await test_tracer_remove_files(os.path.join(tmp, "i"))
         await test_runner_confined(os.path.join(tmp, "c"))
         test_state_files(tmp)
         os.makedirs(os.path.join(tmp, "h"))

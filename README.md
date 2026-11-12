@@ -326,8 +326,9 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
   cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
   gönderdiklerini görür.
-- **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir. Tracing
-  açıkken ve kapatıldıktan sonra da dosya kaldığı sürece görünür.
+- **Trace** (operator): eşlemenin trace dosyaları; listelenir, indirilir ve silinir (tek
+  dosya ya da tümü, denetim kaydına yazılır). Tracing açıkken ve kapatıldıktan sonra da
+  dosya kaldığı sürece görünür.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.
@@ -720,8 +721,10 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yollar dosya adına indirgenir ve açılışta log'a yazılır. Yazılamayan bir trace (klasör
   silinmiş, disk dolu, dosya tanıtıcısı kalmamış) durmak yerine bekler: panodaki satır ve
   Trace paneli nedenini gösterir, ser2net birkaç saniyede bir yeniden dener (klasörü de
-  yeniden oluşturur) ve trace sonra kaç baytın eksik olduğunu yazar. Bir eşleme silinince
-  trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
+  yeniden oluşturur) ve trace sonra kaç baytın eksik olduğunu yazar. Trace'ler iki yöndeki
+  ham trafiği, kişisel veriler ve cihaza yazılan parolalar dahil, olduğu gibi tutar: artık
+  gerekmediklerinde Trace panelinden silin (yazılmakta olan dosya bir sonraki trafikle
+  yeniden başlar). Bir eşleme silinince trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
   eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
   açılış onları siler ve kaç dosya olduğunu log'a yazar.
 - `tls/` — self-signed üretilirse sertifika/anahtar.

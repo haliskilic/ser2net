@@ -188,22 +188,49 @@ def routes(ctx: Ctx) -> list:
                         "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))})
         return out
 
+    async def _traces_panel(request, m, ok="", error=""):
+        files = await asyncio.to_thread(_trace_files, m.id)
+        o = m.options
+        st = state.supervisor.status(m.id) or {}
+        return render(request, "_mapping_traces.html", status_code=400 if error else 200,
+                      mid=m.id, mapping_name=m.name, files=files,
+                      tracing=bool(o.trace_both), current=f"{m.id}-{o.trace_both}",
+                      max_mb="%g" % o.trace_max_mb, keep=o.trace_keep, hexdump=o.trace_hexdump,
+                      trace_error=st.get("trace_error", ""), ok=ok, error=error)
+
     # Traces record both directions, what clients type to the device included (see
-    # common.sees_to_device): listing and downloading them needs operator+.
+    # common.sees_to_device): listing, downloading and deleting them needs operator+.
     async def mapping_traces(request):
         if deny := require_role(request, "operator"):
             return deny
-        mid = request.path_params["mid"]
-        m = state.config.get_mapping(mid)
+        m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
-        files = await asyncio.to_thread(_trace_files, mid)
-        o = m.options
-        st = state.supervisor.status(mid) or {}
-        return render(request, "_mapping_traces.html", mid=mid, mapping_name=m.name, files=files,
-                      tracing=bool(o.trace_both), current=f"{mid}-{o.trace_both}",
-                      max_mb="%g" % o.trace_max_mb, keep=o.trace_keep, hexdump=o.trace_hexdump,
-                      trace_error=st.get("trace_error", ""))
+        return await _traces_panel(request, m)
+
+    async def mapping_traces_delete(request):
+        """Delete one of a mapping's trace files (a name of its own list) or, without a
+        name, all of them; audited. Answers the trace panel with what was done (400 when
+        something was not deleted: htmx shows it too)."""
+        if deny := require_role(request, "operator"):
+            return deny
+        m = state.config.get_mapping(request.path_params["mid"])
+        if not m:
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
+        name = request.path_params.get("name")
+        deleted, failed = await state.delete_trace_files(m.id, None if name is None else [name])
+        if deleted:
+            detail = f"{m.name}/{deleted[0]}" if name is not None else \
+                f"{m.name}: {', '.join(deleted)}"
+            state.log(f"trace file(s) deleted: {detail}")
+            ctx.audit(request, "trace_delete", detail)
+        ok = _("Deleted {0} trace file(s).").format(len(deleted)) if deleted else ""
+        if ok and m.options.trace_both and f"{m.id}-{m.options.trace_both}" in deleted:
+            ok += " " + _("Tracing is still on: new traffic begins a new file.")
+        error = "; ".join(_("Could not delete {0}: {1}").format(n, why) for n, why in failed)
+        if not deleted and not failed:
+            ok = _("No trace files to delete.")
+        return await _traces_panel(request, m, ok=ok, error=error)
 
     async def mapping_trace_file(request):
         """Download one of a mapping's trace files — only a name from its own list."""
@@ -284,7 +311,9 @@ def routes(ctx: Ctx) -> list:
         Route("/api/mappings/{mid}/log", mapping_log),
         Route("/api/mappings/{mid}/console-view", console_view),
         Route("/api/mappings/{mid}/traces", mapping_traces),
+        Route("/api/mappings/{mid}/traces", mapping_traces_delete, methods=["DELETE"]),
         Route("/api/mappings/{mid}/traces/{name}", mapping_trace_file),
+        Route("/api/mappings/{mid}/traces/{name}", mapping_traces_delete, methods=["DELETE"]),
         Route("/api/mappings/save", mapping_save, methods=["POST"]),
         Route("/api/mappings/{mid}", mapping_delete, methods=["DELETE"]),
         Route("/api/mappings/{mid}/{action}", mapping_action, methods=["POST"]),
