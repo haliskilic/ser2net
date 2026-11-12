@@ -669,6 +669,9 @@ class MappingRunner:
         except BaseException:
             await self.stop()
             raise
+        if self._stop.is_set():  # stopped while the listener came up: it found none to close
+            await self.stop()
+            return
         # the serial port may already have failed to open while the listener came up
         if self.status.state == "stopped":  # the serial side has not reported yet
             self.status.state = "running"
@@ -840,6 +843,9 @@ class MappingRunner:
         self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if self._stop.is_set():  # accepted while the mapping stops
+            writer.close()
+            return
         peername = writer.get_extra_info("peername") or ("?", 0)
         if isinstance(peername, tuple):
             peer_ip, peer_port = str(peername[0]), int(peername[1]) if len(peername) > 1 else 0

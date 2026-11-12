@@ -104,6 +104,7 @@ PORTABLE = [
     "test_ignored_settings.py",
     "test_allow_list_unusable.py",
     "test_downgrade.py",
+    "test_supervisor_turns.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

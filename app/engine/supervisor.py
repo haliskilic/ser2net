@@ -4,6 +4,13 @@ The web layer mutates + persists the AppConfig, then calls this to reconcile the
 running bridges. Editing a mapping at runtime stops the old runner (awaiting full
 teardown so the listening socket is released) before starting the new one, which
 avoids address-in-use / port races.
+
+The operations on one mapping (apply, restart, stop, remove, and its part of start_all /
+stop_all) take turns: each runs to its end before the next one for that mapping begins, so
+two of them can never build two runners, one of which nobody tracks any more while it
+keeps the port and the serial device. Operations on different mappings still run side by
+side. Given a `lookup`, an operation reads the mapping's config when its turn comes, so one
+that waited (or a copy a request read earlier) can't undo a later change.
 """
 from __future__ import annotations
 
@@ -85,7 +92,8 @@ def _build_runner(mapping: MappingConfig, logger, trace_dir: Optional[str]):
 class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
-                 trace_dir: Optional[str] = None):
+                 trace_dir: Optional[str] = None,
+                 lookup: Optional[Callable[[str], Optional[MappingConfig]]] = None):
         self._runners: dict[str, Runner] = {}
         self.trace_dir = trace_dir  # data/traces: the only place traces are written
         self._order: list[str] = []
@@ -94,24 +102,51 @@ class Supervisor:
         self._logger_factory = logger_factory or (
             lambda mapping: (lambda msg: self.log(f"[{mapping.name}] {msg}"))
         )
-        self._lock = asyncio.Lock()
+        # a mapping's config now, by id (AppState: config.get_mapping); None: as passed
+        self._lookup = lookup
+        # each mapping's turn: id -> [lock, operations holding or waiting for it]
+        self._turns: dict[str, list] = {}
+
+    @contextlib.asynccontextmanager
+    async def _turn(self, mapping_id: str):
+        """Wait for the mapping's turn and hold it (see the module docstring). Not
+        re-entrant: the public methods take it, the _-helpers they share don't."""
+        entry = self._turns.get(mapping_id)
+        if entry is None:
+            entry = self._turns[mapping_id] = [asyncio.Lock(), 0]
+        entry[1] += 1
+        try:
+            async with entry[0]:
+                yield
+        finally:
+            entry[1] -= 1
+            if not entry[1]:  # nobody holds or waits for it
+                del self._turns[mapping_id]
+
+    def _current(self, mapping: MappingConfig) -> Optional[MappingConfig]:
+        """The mapping's config when its turn has come: None once it was deleted."""
+        return mapping if self._lookup is None else self._lookup(mapping.id)
 
     # ---------------- bulk ----------------
     async def start_all(self, config: AppConfig) -> None:
         self._order = [m.id for m in config.mappings]
-        for m in config.mappings:
-            if m.enabled:
-                await self.apply_mapping(m)
-            else:
-                self._ensure_stopped_placeholder(m)
+        for m in list(config.mappings):
+            async with self._turn(m.id):
+                current = self._current(m)
+                if current is None:
+                    continue  # deleted meanwhile
+                if current.enabled:
+                    await self._apply(current.id, current)
+                else:
+                    self._ensure_stopped_placeholder(current)
 
     async def stop_all(self) -> None:
-        async with self._lock:
-            runners = list(self._runners.values())
-            self._runners.clear()
-        for r in runners:
-            with contextlib.suppress(Exception):
-                await r.stop()
+        while self._runners:  # also one an operation under way adds meanwhile
+            mapping_id = next(iter(self._runners))
+            async with self._turn(mapping_id):
+                runner = self._runners.pop(mapping_id, None)
+                if runner is not None:
+                    await self._stop_runner(runner)
 
     # ---------------- per-mapping ----------------
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:
@@ -123,19 +158,37 @@ class Supervisor:
             if mapping.id not in self._order:
                 self._order.append(mapping.id)
 
+    async def _stop_runner(self, runner: Runner) -> None:
+        """Stop a runner to its end. A failure is logged (that runner may still hold its
+        port or device), not raised: the operation goes on."""
+        try:
+            await runner.stop()
+        except Exception as e:
+            mapping = getattr(runner, "mapping", None)
+            log = self._logger_factory(mapping) if mapping is not None else self.log
+            log(f"stopping failed: {e!r}")
+
     async def apply_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
-        """Create/replace and (if enabled) start the runner for a mapping."""
-        async with self._lock:
-            old = self._runners.pop(mapping.id, None)
+        """Create/replace and (if enabled) start the runner for a mapping, from its config
+        when its turn comes."""
+        async with self._turn(mapping.id):
+            return await self._apply(mapping.id, self._current(mapping))
+
+    async def _apply(self, mapping_id: str, mapping: Optional[MappingConfig]) -> tuple[bool, str]:
+        """apply_mapping in the mapping's turn. None: it was deleted meanwhile, so its
+        runner only goes."""
+        old = self._runners.pop(mapping_id, None)
         if old is not None:
-            with contextlib.suppress(Exception):
-                await old.stop()
+            await self._stop_runner(old)
+        if mapping is None:
+            if mapping_id in self._order:
+                self._order.remove(mapping_id)
+            return False, "the mapping was deleted meanwhile"
 
         runner = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
-        async with self._lock:
-            self._runners[mapping.id] = runner
+        self._runners[mapping.id] = runner
 
         if not mapping.enabled:
             runner.status.state = "stopped"
@@ -156,24 +209,26 @@ class Supervisor:
         return await self.apply_mapping(mapping)
 
     async def stop_mapping(self, mapping_id: str) -> None:
-        async with self._lock:
+        """Stop a mapping's runner (kept, stopped, for its status) — unless its config has
+        it enabled by now: a start saved after this stop takes its own turn."""
+        async with self._turn(mapping_id):
+            current = self._lookup(mapping_id) if self._lookup is not None else None
+            if current is not None and current.enabled:
+                return
             runner = self._runners.get(mapping_id)
-        if runner is not None:
-            with contextlib.suppress(Exception):
-                await runner.stop()
+            if runner is not None:
+                await self._stop_runner(runner)
 
     async def restart_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
-        await self.stop_mapping(mapping.id)
-        return await self.apply_mapping(mapping)
+        return await self.apply_mapping(mapping)  # which stops the old runner first
 
     async def remove_mapping(self, mapping_id: str) -> None:
-        async with self._lock:
+        async with self._turn(mapping_id):
             runner = self._runners.pop(mapping_id, None)
-        if mapping_id in self._order:
-            self._order.remove(mapping_id)
-        if runner is not None:
-            with contextlib.suppress(Exception):
-                await runner.stop()
+            if mapping_id in self._order:
+                self._order.remove(mapping_id)
+            if runner is not None:
+                await self._stop_runner(runner)
 
     # ---------------- status ----------------
     def get_runner(self, mapping_id: str) -> Optional[Runner]:

@@ -149,6 +149,9 @@ class ModbusGatewayRunner:
         except BaseException:
             await self.stop()
             raise
+        if self._stop.is_set():  # stopped while the listener came up: it found none to close,
+            await self.stop()    # and no MQTT client or polling is started
+            return
         self._log_policy()
         log_ignored_settings(self.mapping, self._log)
         # optional edge mode: poll Modbus registers off the bus and publish to MQTT
@@ -432,6 +435,9 @@ class ModbusGatewayRunner:
         self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        if self._stop.is_set():  # accepted while the gateway stops
+            writer.close()
+            return
         peername = writer.get_extra_info("peername") or ("?", 0)
         peer_ip = str(peername[0]) if isinstance(peername, tuple) else str(peername)
         peer = f"{peer_ip}:{peername[1]}" if isinstance(peername, tuple) and len(peername) > 1 else peer_ip
