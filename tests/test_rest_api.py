@@ -171,6 +171,30 @@ def main():
         print("typed values: 'false'/'19200' read as meant, unknown keys in `warnings`, "
               "an unreadable value -> 400 naming it  OK")
 
+        # ---- a protective switch takes true / false only, never text ----
+        def switched(**network):
+            return dict(new, name="api-ro", enabled=False,
+                        network={"mode": "server", "bind_ip": "127.0.0.1",
+                                 "port": free_port(), **network})
+        code, err = api("POST", "/api/v1/mappings", token=token, expect=400,
+                        body=switched(read_only="false"))
+        assert err == {"error": "validation", "detail": "network.read_only: use true or false "
+                                                        "(JSON booleans), not a string."}, err
+        code, made = api("POST", "/api/v1/mappings", token=token, expect=201,
+                         body=switched(read_only=True))
+        assert made["network"]["read_only"] is True and "warnings" not in made, made
+        code, err = api("PUT", f"/api/v1/mappings/{made['id']}", token=token, expect=400,
+                        body=dict(made, network=dict(made["network"], read_only="false")))
+        assert "network.read_only: use true or false" in err["detail"], err
+        code, back = api("GET", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
+        assert back["network"]["read_only"] is True, "a refused PUT changes nothing"
+        code, off = api("PUT", f"/api/v1/mappings/{made['id']}", token=token, expect=200,
+                        body=dict(made, network=dict(made["network"], read_only=False)))
+        assert off["network"]["read_only"] is False, off
+        api("DELETE", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
+        print('protective switch sent as text ("false") -> 400 naming it; JSON true/false '
+              "work  OK")
+
         # ---- settings that do nothing are named too ----
         udp = dict(new, name="api-udp", enabled=False,
                    network={"mode": "udp", "protocol": "telnet", "bind_ip": "127.0.0.1",

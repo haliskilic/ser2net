@@ -862,7 +862,7 @@
   "At start-up, config.json had settings this version doesn’t know: %(keys)s. They are not used here, and they are left out when config.json is saved; the backups below keep the file with them.": "Açılışta config.json'da bu sürümün bilmediği ayarlar vardı: %(keys)s. Bunlar burada kullanılmıyor ve config.json kaydedilirken dışarıda kalıyor; aşağıdaki yedekler dosyayı bu ayarlarla birlikte saklıyor.",
   "in use": "kullanımda",
   "At start-up, config.json had been written by ser2net %(newer)s, a newer version than this one (%(this)s). What only that version knows is not used here, and it is left out when this version saves config.json. The backups below keep the file as that version left it: restore it after upgrading again.": "Açılışta config.json'u bu sürümden (%(this)s) daha yeni olan ser2net %(newer)s yazmıştı. Yalnızca o sürümün bildiği ayarlar burada kullanılmıyor ve bu sürüm config.json'u kaydederken dışarıda kalıyor. Aşağıdaki yedekler dosyayı o sürümün bıraktığı hâliyle saklıyor: yeniden yükselttikten sonra onu geri yükle.",
-  "{0} {1} is text, so it is read as true, as before: this protective switch is turned off only by false (without quotes).": "{0} {1} bir metin, bu yüzden eskisi gibi true okunuyor: bu koruyucu ayar yalnızca false (tırnaksız) ile kapanır.",
   "written by ser2net %(version)s": "yazan: ser2net %(version)s",
-  "written by 2.8.1 or older": "yazan: 2.8.1 ya da daha eski"
+  "written by 2.8.1 or older": "yazan: 2.8.1 ya da daha eski",
+  "{0}: use true or false (JSON booleans), not a string.": "{0}: metin değil, true ya da false kullan (JSON boolean)."
 }

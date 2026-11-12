@@ -210,7 +210,9 @@ class FieldNote:
                   it (`expected`: what it must be, a key of _EXPECTED);
       replaced  - not supported together with the other settings: `used` instead, with a
                   warning (`why` in English for the log, `warning` in the language of the
-                  request that sent it)."""
+                  request that sent it);
+      switch_text - a protective switch (_PROTECTIVE) given as text: loading reads it as
+                  before 2.9.0 (`used`: any text but "" is on), an edit refuses it."""
     path: str
     kind: str
     value: Any = None
@@ -235,6 +237,8 @@ class FieldNote:
 
     def error(self) -> str:
         """An edit's refusal of an invalid value, in the UI's language."""
+        if self.kind == "switch_text":
+            return _("{0}: use true or false (JSON booleans), not a string.").format(self.path)
         return _("{0}: {1} is not {2}.").format(self.path, _shown(self.value),
                                                 _expected(self.expected))
 
@@ -263,8 +267,9 @@ def _shown(value: Any, limit: int = 60) -> str:
 _TRUE_WORDS = ("true", "1", "on", "yes")
 _FALSE_WORDS = ("false", "0", "off", "no", "")
 # Field metadata of a switch that protects something (login, TLS, certificate checks,
-# read-only): text turns it off only when it is empty, as before 2.9.0 — so an upgrade
-# never weakens a hand-edited config whose "false" in quotes kept it on (_read_fields)
+# read-only). Loading reads text in it as before 2.9.0 — on unless empty — so an upgrade
+# never weakens a hand-edited config whose "false" in quotes kept it on; an edit refuses
+# text in it, so a client sending "false" learns it was not taken (_read_fields)
 _PROTECTIVE = {"protective": True}
 
 
@@ -385,17 +390,16 @@ def _read_fields(cls, d: dict[str, Any], notes: list[FieldNote], path: str = "",
         if value is None and hint in (int, float):  # a number left unset
             out[f.name] = _field_default(f)
             continue
-        ok, read = _coerce(value, hint)
-        if ok and read is False and isinstance(value, str) and value and f.metadata.get("protective"):
+        if isinstance(value, str) and f.metadata.get("protective"):
+            used = bool(value)
             notes.append(FieldNote(
-                path + f.name, "replaced", value, True,
-                why=f"{path}{f.name} {_shown(value)} is text, so it is read as true, as before: "
-                    "this protective switch is turned off only by false (without quotes)",
-                warning=_("{0} {1} is text, so it is read as true, as before: this protective "
-                          "switch is turned off only by false (without quotes).").format(
-                    path + f.name, _shown(value))))
-            out[f.name] = True
+                path + f.name, "switch_text", value, used,
+                why=f"{path}{f.name} {_shown(value)} is text, so it is read as "
+                    f"{_shown(used)}, as before: this protective switch takes true or false "
+                    "(without quotes)"))
+            out[f.name] = used
             continue
+        ok, read = _coerce(value, hint)
         if not ok:
             if fallback and f.name in fallback:
                 read = fallback[f.name]
@@ -1058,7 +1062,7 @@ class MappingConfig:
         (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url), or
         normalized when it is loaded (a value of the wrong type: from_dict)."""
         for note in self.input_notes:
-            if note.kind == "invalid":
+            if note.kind in ("invalid", "switch_text"):
                 raise ConfigError(note.error())
         for side in self.serial_sides():
             if url_port(side.port):
