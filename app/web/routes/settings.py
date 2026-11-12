@@ -412,7 +412,8 @@ def routes(ctx: Ctx) -> list:
             state.log(f"admin TLS: HSTS max-age set to {hsts} s"
                       + (" (max-age=0: browsers forget it)" if hsts == 0 else ""))
         ctx.audit(request, "admin_tls_set", cert + ("" if hsts == old_hsts else f" (HSTS {hsts} s)"))
-        return _done(request, "tls", ok=_("Admin TLS saved.") + " " + _tls_applied(request, prepared))
+        applied, switched = _tls_applied(request, prepared)
+        return await _tls_answer(request, "tls", switched, ok=_("Admin TLS saved.") + " " + applied)
 
     async def _admin_tls(admin):
         """The admin UI's TLS context for its settings (in an edit_config block): files
@@ -431,18 +432,31 @@ def routes(ctx: Ctx) -> list:
             raise ConfigError(_("The TLS certificate and key could not be loaded: {0}").format(why))
         return prepared
 
-    def _tls_applied(request, prepared) -> str:
+    def _tls_applied(request, prepared) -> tuple[str, bool]:
         """Hand a saved admin TLS change to the UI's listener, and say so: new connections
-        use it at once (the one this page came over stays as it is)."""
+        use it at once (the one this page came over stays as it is). Also whether they use
+        another scheme now (HTTPS for HTTP, or back)."""
+        was = state.serving_tls
         if not state.use_admin_tls(prepared):
-            return _("Restart to apply.")  # (no listener in this process)
+            return _("Restart to apply."), False  # (no listener in this process)
         _ip, port, tls_on = state.admin_serving()
         host = request.url.hostname or "127.0.0.1"
         host = f"[{host}]" if ":" in host else host
         url = f"{'https' if tls_on else 'http'}://{host}:{port}{proxy.base(request)}/settings"
         if tls_on:
-            return _("New connections to this UI use HTTPS now: continue at {0}").format(url)
-        return _("New connections to this UI use plain HTTP now: continue at {0}").format(url)
+            text = _("New connections to this UI use HTTPS now: continue at {0}").format(url)
+        else:
+            text = _("New connections to this UI use plain HTTP now: continue at {0}").format(url)
+        return text, tls_on != was
+
+    async def _tls_answer(request, section: str, switched: bool, **flash) -> Response:
+        """The answer to a form that changed the admin UI's TLS: the redirect of every Settings
+        form (_done), unless new connections use another scheme now: the browser would follow
+        the redirect with the old one, which the UI no longer serves, so the page itself is
+        the answer, over the connection the form came on (its message says where to go on)."""
+        if switched:
+            return await settings_get(request, section=section, **flash)
+        return _done(request, section, **flash)
 
     async def settings_tls_generate(request):
         if deny := require_role(request, "admin"):
@@ -473,7 +487,9 @@ def routes(ctx: Ctx) -> list:
                                                    "up: {0}").format(e))
         ctx.audit(request, "admin_tls_generate", "")
         ok = _("Self-signed certificate generated (browsers warn about a self-signed "
-               "certificate until you accept it).") + " " + _tls_applied(request, prepared)
+               "certificate until you accept it).")
+        applied, switched = _tls_applied(request, prepared)
+        ok += " " + applied
         if kept:
             ok += " " + _("The previous certificate and key are kept as {0}.").format(
                 ", ".join(os.path.basename(p) for p in kept))
@@ -484,7 +500,7 @@ def routes(ctx: Ctx) -> list:
                     "whose clock is right may take it for expired or not valid yet. Set the "
                     "clock, then generate the certificate again.").format(
                         clock.utc_text(time.time())) if behind else None
-        return _done(request, "tls", ok=ok, error=warning)
+        return await _tls_answer(request, "tls", switched, ok=ok, error=warning)
 
     # ---------------- web-UI access (login requirement) ----------------
     async def settings_access_post(request):
@@ -1651,8 +1667,10 @@ def routes(ctx: Ctx) -> list:
                _("Restored {0}, but the configuration it replaced could not be backed up (see "
                  "all.log).")).format(name),
               _("Mappings it leaves as they are kept running.")]
+        switched = False
         if prepared is not None:
-            ok.append(_tls_applied(request, prepared))
+            applied, switched = _tls_applied(request, prepared)
+            ok.append(applied)
         ip, port, _tls = state.admin_serving()
         if (cur.admin_ui.bind_ip, cur.admin_ui.port) != (ip, port):
             ok.append(_("Its admin UI address {0} takes effect at the next start.").format(
@@ -1661,7 +1679,7 @@ def routes(ctx: Ctx) -> list:
                   _("User accounts, the REST API token and the cluster key were kept."))
         if changes:
             ok.append(_("Access-related changes: {0}.").format("; ".join(changes)))
-        resp = _done(request, "backups", ok=" ".join(ok + notes))
+        resp = await _tls_answer(request, "backups", switched, ok=" ".join(ok + notes))
         me = current_user(request)
         mine = (cur.get_user(me.username)
                 if with_accounts and me is not None and me.source != "anonymous" else None)
