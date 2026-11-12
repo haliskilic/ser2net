@@ -51,7 +51,7 @@ services:
     #   - "c 188:* rmw"   # ttyUSB* (USB-serial adapters)
     #   - "c 166:* rmw"   # ttyACM* (USB CDC devices)
     # group_add:
-    #   - "${SERIAL_GID:-20}"   # the host's serial group: getent group dialout | cut -d: -f3
+    #   - "${SERIAL_GID:-20}"   # the host's serial GID: stat -L -c %g /dev/ttyUSB0
 
 volumes:
   ser2net-data:
