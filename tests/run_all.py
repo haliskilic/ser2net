@@ -95,6 +95,7 @@ PORTABLE = [
     "test_traffic_counters.py",
     "test_protocol_parsers.py",
     "test_protocol_commands.py",   # telnet / RFC 2217 BREAK, answers and command order
+    "test_console_break.py",       # the web console's BREAK; POSIX PTYs, skips on Windows
     "test_rfc2217_settings.py",
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
     "test_serial_compat.py",      # PTY parts POSIX only; the transport parts run on Windows too

@@ -1,6 +1,7 @@
 """Live traffic in the browser over WebSockets: the interactive console (xterm.js;
 what the device sends, and typing to it) and the read-only traffic feed of the hex
-view (timestamped; what is sent to the device only for operators and admins)."""
+view (timestamped; what is sent to the device only for operators and admins). And the
+console's serial BREAK, an audited POST (not a WebSocket frame: those are typed data)."""
 from __future__ import annotations
 
 import asyncio
@@ -9,11 +10,16 @@ import struct
 import time
 from urllib.parse import urlparse
 
-from starlette.routing import WebSocketRoute
+from starlette.responses import PlainTextResponse, Response
+from starlette.routing import Route, WebSocketRoute
 
 from ...engine.bridge import TO_DEVICE
+from ...i18n import _
 from .. import auth
-from .common import Ctx, client_ip, console_interactive, sees_to_device
+from .common import Ctx, client_ip, console_interactive, current_user, sees_to_device
+
+# the protocols whose runner sends a serial BREAK (not a Modbus gateway: an RTU bus)
+_BREAK_PROTOCOLS = ("raw", "telnet", "rfc2217")
 
 CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
 
@@ -172,9 +178,38 @@ def routes(ctx: Ctx) -> list:
                 await websocket.close()
             state.log(f"[{mapping.name}] hex view closed ({peer})")
 
+    # ---------------- serial BREAK (the console's "Send BREAK") ----------------
+    async def send_break(request):
+        """POST /api/mappings/{mid}/break: a serial BREAK on the mapping's port (as a telnet
+        client's IAC BRK: the line held in the break condition for bridge.BREAK_S). For
+        whoever may type in the console (operators and admins, a network mapping that is
+        not read-only); audited as mapping_break. 204 when sent; 400 read-only or not a
+        serial-to-network mapping, 409 the port is not open (or can't send one)."""
+        if deny := ctx.require_role(request, "operator"):
+            return deny
+        mid = request.path_params["mid"]
+        mapping = state.config.get_mapping(mid)
+        runner = state.supervisor.get_runner(mid)
+        if mapping is None or runner is None:
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
+        if (mapping.kind != "net" or mapping.network.protocol not in _BREAK_PROTOCOLS
+                or not hasattr(runner, "send_break")):
+            return PlainTextResponse(_("A serial BREAK can't be sent on this mapping."),
+                                     status_code=400)
+        if not console_interactive(current_user(request), mapping):
+            return PlainTextResponse(_("The mapping is read-only: no serial BREAK is sent."),
+                                     status_code=400)
+        if not await runner.send_break(f"web console, {ctx.actor(request)}"):
+            return PlainTextResponse(_("No serial BREAK was sent: the serial port is not open, "
+                                       "or it can't send one (see the mapping's log)."),
+                                     status_code=409)
+        ctx.audit(request, "mapping_break", mapping.name)
+        return Response(status_code=204)
+
     return [
         WebSocketRoute("/api/mappings/{mid}/console", console_ws),
         WebSocketRoute("/api/mappings/{mid}/traffic", traffic_ws),
+        Route("/api/mappings/{mid}/break", send_break, methods=["POST"]),
     ]
 
 
