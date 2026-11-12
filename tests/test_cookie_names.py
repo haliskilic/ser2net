@@ -161,7 +161,7 @@ def test_upgrade_in_process() -> None:
 
 def _jar_signed_in(b: Browser) -> bool:
     st, h, _ = b.get("/settings")
-    assert st == 200 or (st == 303 and h.get("Location") == "/login"), st
+    assert st == 200 or (st == 303 and h.get("Location") == "/login?next=%2Fsettings"), st
     return st == 200
 
 

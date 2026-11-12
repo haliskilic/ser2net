@@ -32,7 +32,8 @@ import urllib.parse
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
-from .i18n import _
+from .i18n import LANGUAGES, _
+from .textfold import fold  # how names compare; still importable as app.config.fold
 
 # ---------------------------------------------------------------------------
 # Allowed value sets (mirror pyserial; kept here so config validation has no
@@ -175,6 +176,11 @@ def _service_folder(directory: str) -> bool:
     except Exception:  # best effort, like the rest of lock_down_dir
         return False
     return sec is not None and winservice.service_folder(*sec)
+
+
+def _choices(values) -> str:
+    """Allowed values for a message: "5, 6, 7, 8", not the tuple's "(5, 6, 7, 8)"."""
+    return ", ".join(str(v) for v in values)
 
 
 def _is_int(value: Any) -> bool:
@@ -392,13 +398,13 @@ class SerialSettings:
         if not isinstance(self.baudrate, int) or self.baudrate <= 0:
             raise ConfigError(_("Baud rate must be a positive integer."))
         if self.bytesize not in BYTESIZES:
-            raise ConfigError(_("Data bits must be one of {0}.").format(BYTESIZES))
+            raise ConfigError(_("Data bits must be one of {0}.").format(_choices(BYTESIZES)))
         if self.parity not in PARITIES:
-            raise ConfigError(_("Parity must be one of {0}.").format(PARITIES))
+            raise ConfigError(_("Parity must be one of {0}.").format(_choices(PARITIES)))
         if self.stopbits not in STOPBITS:
-            raise ConfigError(_("Stop bits must be one of {0}.").format(STOPBITS))
+            raise ConfigError(_("Stop bits must be one of {0}.").format(_choices(STOPBITS)))
         if self.flowcontrol not in FLOWCONTROLS:
-            raise ConfigError(_("Flow control must be one of {0}.").format(FLOWCONTROLS))
+            raise ConfigError(_("Flow control must be one of {0}.").format(_choices(FLOWCONTROLS)))
         if self.rts_on_open not in LINE_STATES or self.dtr_on_open not in LINE_STATES:
             raise ConfigError(_("RTS/DTR on open must be on|off|keep."))
         # rtscts (hardware) flow control conflicts with RS-485 RTS direction toggling.
@@ -578,8 +584,9 @@ class NetworkSettings:
     priority_client_ips: list[str] = field(default_factory=list)
     read_only: bool = False
     # Per-client outbound (serial->network) buffer, in chunks. A client slower than
-    # the serial source is dropped once this fills. Worst-case memory per client is
-    # ~client_queue_max * 64KB; raise for bursty high-throughput links.
+    # the serial source is dropped once this fills. A chunk is one serial read, at most
+    # 4 KB (8 KB with telnet / RFC 2217, which double 0xFF bytes), so the worst case per
+    # client is ~client_queue_max * 4 KB (8 KB); raise for bursty high-throughput links.
     client_queue_max: int = 2048
     # Dead-peer detection for TCP (server + client mode): after keepalive_idle_s of
     # silence the OS probes the peer every keepalive_interval_s and drops the link
@@ -637,9 +644,9 @@ class NetworkSettings:
 
     def validate(self) -> None:
         if self.mode not in NET_MODES:
-            raise ConfigError(_("Network mode must be one of {0}.").format(NET_MODES))
+            raise ConfigError(_("Network mode must be one of {0}.").format(_choices(NET_MODES)))
         if self.protocol not in PROTOCOLS:
-            raise ConfigError(_("Protocol must be one of {0}.").format(PROTOCOLS))
+            raise ConfigError(_("Protocol must be one of {0}.").format(_choices(PROTOCOLS)))
 
         if self.listens:
             if problem := bind_ip_problem(self.bind_ip):
@@ -765,6 +772,32 @@ def udp_peer_timeout(net: NetworkSettings) -> float:
 # ---------------------------------------------------------------------------
 RFC2217_SIGNATURE_MAX = 128  # characters (an edit's rule)
 
+# The text encoding of a mapping's web console and hex view (MappingOptions.
+# console_encoding): what the device's bytes are shown as, and what is typed is sent as.
+# The bridge itself passes bytes unchanged. UTF-8, or one of these single-byte code pages.
+CONSOLE_ENCODINGS = ("utf-8", "iso-8859-9", "cp1254", "cp857", "iso-8859-1", "cp1252", "cp437")
+
+
+def console_encoding(options: "MappingOptions") -> str:
+    """A mapping's console encoding: a stored value that is not one of CONSOLE_ENCODINGS
+    (hand-edited, or from a newer version) reads as UTF-8, today's behaviour (edits
+    refuse one: MappingConfig.validate_input)."""
+    value = options.console_encoding
+    return value if value in CONSOLE_ENCODINGS else "utf-8"
+
+
+@functools.lru_cache(maxsize=None)
+def console_charset(encoding: str) -> str:
+    """What the web console shows for the bytes 0x80-0xFF in `encoding` (app.js decodes
+    the device's bytes with it, and encodes what is typed with it, in the browser: it has
+    no CP857 and encodes nothing but UTF-8): 128 characters, "" for UTF-8 (xterm.js decodes
+    that itself). A C1 control code shows as '.', so no byte becomes a terminal command; a
+    byte the code page leaves undefined as U+FFFD."""
+    if encoding not in CONSOLE_ENCODINGS or encoding == "utf-8":
+        return ""
+    chars = (bytes([b]).decode(encoding, "replace") for b in range(0x80, 0x100))
+    return "".join("." if "\x80" <= c <= "\x9f" else c for c in chars)
+
 
 @dataclass
 class MappingOptions:
@@ -784,6 +817,9 @@ class MappingOptions:
     trace_timestamp: bool = True
     trace_max_mb: float = 10.0
     trace_keep: int = 3
+    # the web console's and hex view's text encoding (CONSOLE_ENCODINGS); display and typing
+    # only: what the bridge passes stays the same bytes
+    console_encoding: str = "utf-8"
     # RFC2217 interop knobs for non-compliant peers:
     rfc2217_poll_modem_interval_s: float = 1.0
     rfc2217_net_timeout_s: float = 3.0
@@ -890,7 +926,7 @@ class MqttSettings:
         if self.qos not in (0, 1, 2):
             raise ConfigError(_("MQTT QoS must be 0, 1 or 2."))
         if self.payload_format not in MQTT_FORMATS:
-            raise ConfigError(_("MQTT payload format must be one of {0}.").format(MQTT_FORMATS))
+            raise ConfigError(_("MQTT payload format must be one of {0}.").format(_choices(MQTT_FORMATS)))
         if self.payload_format == "sparkplug_b":
             for label, value in ((_("group ID"), self.sparkplug_group_id),
                                  (_("edge node ID"), self.sparkplug_node_id)):
@@ -959,7 +995,7 @@ class ModbusPoll:
             if not (0 <= p.address <= 65535):
                 raise ConfigError(_("Point {0}: address must be 0-65535.").format(repr(p.name)))
             if p.dtype not in MODBUS_DTYPES:
-                raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), MODBUS_DTYPES))
+                raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), _choices(MODBUS_DTYPES)))
             if (p.fn in (1, 2)) != (p.dtype == "bool"):
                 raise ConfigError(_("Point {0}: coils / discrete inputs (fn 1, 2) use dtype "
                                     "'bool'; registers (fn 3, 4) a numeric dtype.").format(repr(p.name)))
@@ -1021,7 +1057,7 @@ class MappingConfig:
         if not self.name.strip():
             raise ConfigError(_("Mapping name is required."))
         if self.kind not in MAPPING_KINDS:
-            raise ConfigError(_("Mapping kind must be one of {0}.").format(MAPPING_KINDS))
+            raise ConfigError(_("Mapping kind must be one of {0}.").format(_choices(MAPPING_KINDS)))
         self.serial.validate()
         if self.kind == "serialbridge":
             self.serial_b.validate()
@@ -1093,6 +1129,9 @@ class MappingConfig:
                 raise ConfigError(_("TLS server fingerprint: {0} is not a SHA-256 fingerprint "
                                     "(64 hex digits, with or without colons).").format(
                     repr(str(e)))) from None
+        if self.options.console_encoding not in CONSOLE_ENCODINGS:
+            raise ConfigError(_("Unknown console text encoding {0}: use one of {1}.").format(
+                repr(self.options.console_encoding), ", ".join(CONSOLE_ENCODINGS)))
 
     def check_tls_files(self) -> None:
         """An edit's check (mapping form, so also a cluster peer's save on the node it is
@@ -1599,7 +1638,8 @@ def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
                      f"to {HSTS_MAX_AGE_MAX}; using {HSTS_MAX_AGE_DEFAULT} (one year)")
 
 
-UI_LANGUAGES = ("auto", "en", "tr")
+# the languages the UI offers are listed once, in app/i18n.py ("auto": the browser's)
+UI_LANGUAGES = ("auto", *LANGUAGES)
 ROLES = ("admin", "operator", "viewer")
 # higher rank = more privilege; a route requires >= some rank
 ROLE_RANK = {"viewer": 1, "operator": 2, "admin": 3}
@@ -1668,7 +1708,7 @@ class LdapSettings:
             raise ConfigError(_("LDAP needs either a user DN template (direct bind) or a bind "
                                 "DN + user search base (search+bind)."))
         if self.default_role and self.default_role not in ROLES:
-            raise ConfigError(_("LDAP default role must be one of {0} or blank.").format(ROLES))
+            raise ConfigError(_("LDAP default role must be one of {0} or blank.").format(_choices(ROLES)))
 
 
 @dataclass
@@ -1704,7 +1744,7 @@ class OidcSettings:
         if not self.issuer.strip().lower().startswith("https://"):
             raise ConfigError(_("OIDC issuer must be an https:// URL."))
         if self.default_role and self.default_role not in ROLES:
-            raise ConfigError(_("OIDC default role must be one of {0} or blank.").format(ROLES))
+            raise ConfigError(_("OIDC default role must be one of {0} or blank.").format(_choices(ROLES)))
 
 
 _PEER_ZONE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -1885,7 +1925,7 @@ class NotificationSettings:
             if not self.webhook_url.strip().lower().startswith(("https://", "http://")):
                 raise ConfigError(_("The webhook URL must start with https:// (or http://)."))
             if self.webhook_format not in WEBHOOK_FORMATS:
-                raise ConfigError(_("Webhook format must be one of {0}.").format(WEBHOOK_FORMATS))
+                raise ConfigError(_("Webhook format must be one of {0}.").format(_choices(WEBHOOK_FORMATS)))
             if self.webhook_format == "telegram" and not str(self.telegram_chat_id).strip():
                 raise ConfigError(_("Telegram needs a chat ID."))
         if self.recipients:
@@ -1894,22 +1934,11 @@ class NotificationSettings:
             if not _is_int(self.smtp_port) or not (1 <= self.smtp_port <= 65535):
                 raise ConfigError(_("SMTP port must be between 1 and 65535."))
             if self.smtp_security not in SMTP_SECURITY:
-                raise ConfigError(_("SMTP security must be one of {0}.").format(SMTP_SECURITY))
+                raise ConfigError(_("SMTP security must be one of {0}.").format(_choices(SMTP_SECURITY)))
             if any("@" not in a for a in self.recipients):
                 raise ConfigError(_("Each e-mail recipient needs an @."))
         if not _is_int(self.repeat_s) or not (0 <= self.repeat_s <= 86400):
             raise ConfigError(_("The repeat interval must be between 0 and 86400 seconds."))
-
-
-def fold(text) -> str:
-    """How names compare where letter case doesn't count (LDAP and OIDC group names, LDAP
-    user names, an LDAP/OIDC sign-in name or a new account's name against the existing
-    ones): NFC, every run of white space (no-break spaces too) as one space, and letter
-    case folded so that Turkish İ, I, ı and i are one letter — str.lower() turns 'İ'
-    into 'i' + U+0307 and leaves 'ı' as it is, so KALİTE and Kalite, or BAKIM and Bakım,
-    would differ."""
-    s = " ".join(unicodedata.normalize("NFC", str(text)).split())
-    return s.replace("\u0130", "i").replace("\u0131", "i").casefold().replace("i\u0307", "i")
 
 
 class AccountNameError(ValueError):
@@ -2478,9 +2507,9 @@ class AppConfig:
                 raise ConfigError(
                     _("Invalid admin UI bind IP: {0}").format(self.admin_ui.bind_ip)) from None
         if self.admin_ui.language not in UI_LANGUAGES:
-            raise ConfigError(_("The default language must be one of {0}.").format(UI_LANGUAGES))
+            raise ConfigError(_("The default language must be one of {0}.").format(_choices(UI_LANGUAGES)))
         if self.admin_ui.anonymous_role not in ROLES:
-            raise ConfigError(_("Role for visitors without login must be one of {0}.").format(ROLES))
+            raise ConfigError(_("Role for visitors without login must be one of {0}.").format(_choices(ROLES)))
         if not _is_int(self.session_timeout_s) or not (
                 SESSION_TIMEOUT_MIN_S <= self.session_timeout_s <= SESSION_TIMEOUT_MAX_S):
             raise ConfigError(_("Session lifetime must be between {0} minutes and {1} days.").format(SESSION_TIMEOUT_MIN_S // 60, SESSION_TIMEOUT_MAX_S // 86400))
@@ -2715,6 +2744,8 @@ class ConfigStore:
         # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).
         lock_down_dir(directory)
         self.backup_dir = os.path.join(directory, "backups")
+        # what each backup holds, by name: ((size, mtime_ns), _backup_summary()) - see backups()
+        self._backup_summaries: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)
@@ -2811,22 +2842,31 @@ class ConfigStore:
 
     def backups(self) -> list[dict]:
         """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users, accounts:
-        [{username, role, source}]}], newest first."""
-        out = []
+        [{username, role, source}]}], newest first.
+
+        The Settings page lists them at every visit: a file's contents are read once and
+        kept by its name, size and modification time (a backup is written once; one that
+        remove_account rewrites gets a new modification time), so only a new or changed one
+        is parsed again. In memory only: the files and their names stay as they are."""
+        known, kept, out = self._backup_summaries, {}, []
         for name in self.backup_names():
             path = os.path.join(self.backup_dir, name)
             info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
                                     "accounts": [], "time": backup_time(name)}
             try:
-                info["size"] = os.path.getsize(path)
-                with open(path, encoding="utf-8") as fh:
-                    doc = json.load(fh)
-                info["mappings"] = len(doc.get("mappings") or [])
-                info["accounts"] = _backup_accounts(doc)
-                info["users"] = len(info["accounts"])
-            except (OSError, ValueError, AttributeError, TypeError):
-                pass
+                st = os.stat(path)
+            except OSError:
+                out.append(info)
+                continue
+            stamp = (st.st_size, st.st_mtime_ns)
+            hit = known.get(name)
+            summary = hit[1] if hit is not None and hit[0] == stamp else _backup_summary(path)
+            if summary is not None:
+                kept[name] = (stamp, summary)
+                info.update(summary)
+            info["size"] = st.st_size
             out.append(info)
+        self._backup_summaries = kept  # pruned to the files there are
         return out
 
     def _known_backup(self, name: str) -> str:
@@ -2872,6 +2912,25 @@ class ConfigStore:
         (only names this store generated are accepted: no path tricks)."""
         with open(self._known_backup(name), encoding="utf-8") as fh:
             return fh.read()
+
+
+def _backup_summary(path: str) -> dict[str, Any] | None:
+    """What the backups list shows of one backup's contents: mappings, users and accounts
+    (no counts and no accounts for a file that isn't a configuration; None itself when it
+    can't be read now)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except OSError:
+        return None
+    except ValueError:
+        return {"mappings": None, "users": None, "accounts": []}
+    try:
+        accounts = _backup_accounts(doc)
+        return {"mappings": len(doc.get("mappings") or []), "users": len(accounts),
+                "accounts": accounts}
+    except (AttributeError, TypeError):
+        return {"mappings": None, "users": None, "accounts": []}
 
 
 def _backup_accounts(doc: dict) -> list[dict]:

@@ -75,7 +75,7 @@ def signed_in(srv, token: str) -> bool:
         r = e
     st = r.status if hasattr(r, "status") else r.code
     if st == 303:
-        assert r.headers.get("Location") == "/login", r.headers.get("Location")
+        assert r.headers.get("Location") == "/login?next=%2Fsettings", r.headers.get("Location")
         return False
     assert st == 200, st
     return True
@@ -139,7 +139,7 @@ def test_last_directory_admin():
     config = {"users": [directory_user("dir.admin", "admin")], "ldap": LDAP_ON}
     with Server(config) as srv:
         st, _, page = browser_with(srv, session_for(srv, "dir.admin")).post("/settings/ldap", {})
-        assert st == 200 and "no admin could sign in any more" in page, page[page.find("banner"):][:300]
+        assert st == 400 and "no admin could sign in any more" in page, page[page.find("banner"):][:300]
         assert srv.saved_config()["ldap"]["enabled"] is True, "LDAP was switched off anyway"
     print("switching LDAP off is refused while every admin is an LDAP account  OK")
 

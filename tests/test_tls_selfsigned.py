@@ -12,7 +12,8 @@ executables — and the openssl command is only a fallback for source installs.
   2. without cryptography: falls back to the openssl command when one exists, and
      with neither there is a clear error instead of a crash
   3. the real server started with an EMPTY PATH: POST /settings/tls/generate saves
-     the pair and points admin_ui.tls_cert / tls_key at it
+     the pair and points admin_ui.tls_cert / tls_key at it; with a certificate set, the
+     button asks first, and generating again keeps the previous pair as *.bak
   4. what a certificate says (certinfo, with cryptography and with the ssl module's
      decoder): subject, names, validity, self-signed or CA-issued; expired / not valid
      yet / ending soon; files that are no certificate; a relative path read from the data
@@ -30,6 +31,7 @@ import http.cookiejar
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -208,6 +210,22 @@ def test_web_button_with_empty_path():
         assert admin["tls_cert"].endswith("cert.pem") and admin["tls_key"].endswith("key.pem"), admin
         ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(admin["tls_cert"], admin["tls_key"])
         print("server with an empty PATH: Settings -> Generate self-signed certificate works  OK")
+
+        # a certificate is set now: generating another one asks first, and the previous
+        # pair is kept as *.bak (config backups don't cover data/tls)
+        page = op.open(base + "/settings", timeout=10).read().decode()
+        form = page[page.index('action="/settings/tls/generate"'):][:400]
+        assert "data-confirm=" in form and "cert.pem" in form.split(">")[0], form
+        first = open(admin["tls_cert"], encoding="ascii").read()
+        body = post("/settings/tls/generate", {"_csrf": csrf()})
+        assert "kept as cert.pem.bak, key.pem.bak" in body, body[body.find("banner"):][:300]
+        assert open(admin["tls_cert"] + ".bak", encoding="ascii").read() == first
+        assert open(admin["tls_cert"], encoding="ascii").read() != first, "a new certificate"
+        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(admin["tls_cert"] + ".bak",
+                                                                admin["tls_key"] + ".bak")
+        if os.name == "posix":
+            assert stat.S_IMODE(os.stat(admin["tls_key"] + ".bak").st_mode) == 0o600
+        print("generating again: asked first, the previous pair kept as *.bak (key 0600)  OK")
     finally:
         srv.terminate()
         try:
@@ -345,7 +363,7 @@ def test_certificate_info():
 
         line = runtime.tls_certificate_note(cert)
         assert line.startswith("admin UI TLS certificate: ser2net, self-signed, valid ") and \
-            "day(s) left" in line, line
+            re.search(r"\b\d+ days left$", line), line
         line = runtime.tls_certificate_note(paths["old"])
         assert line.startswith("WARNING: admin UI TLS certificate: old, self-signed, valid ") \
             and line.endswith(": EXPIRED"), line
@@ -428,14 +446,18 @@ def test_settings_shows_certificate():
         # with a warning that the certificate is dated from that clock
         form = urllib.parse.urlencode({"_csrf": CSRF}).encode()
         with WallClock.patch(clock, settings_routes, shift=-3 * 86400):
-            status, page = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
-        assert status == 200 and "Self-signed certificate generated" in page, page[:400]
+            status, _ = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
+        assert status == 303, status   # done: the page the redirect leads to says it all
+        page = settings_page()
+        assert "Self-signed certificate generated" in page, page[:400]
         assert "which can’t be right" in page, page[page.find("banner"):][:600]
         assert certinfo.read(cfg.admin_ui.tls_cert).subject == "ser2net"
         page = settings_page()
-        assert "self-signed</span>" in page and "day(s) left" in page, page
-        status, page = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
-        assert "Self-signed certificate generated" in page and "can’t be right" not in page
+        assert "self-signed</span>" in page and re.search(r">\d+ days left<", page), page
+        status, _ = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
+        page = settings_page()
+        assert status == 303 and "Self-signed certificate generated" in page \
+            and "can’t be right" not in page
         print("Settings: generating while the clock reads earlier than it can warns (and "
               "generates); with a right clock it doesn't  OK")
     finally:

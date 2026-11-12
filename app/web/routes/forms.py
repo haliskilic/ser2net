@@ -7,9 +7,10 @@ to defaults (new mapping) or the stored values (edit, see _preserve_unmanaged_fi
 from __future__ import annotations
 
 import json
+import math
 import re
 
-from ...config import REDACTED, LdapSettings, MappingConfig, OidcSettings
+from ...config import REDACTED, ConfigError, LdapSettings, MappingConfig, OidcSettings
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -94,23 +95,54 @@ def _split(s: str) -> list:
     return [x for x in re.split(r"[\s,]+", s or "") if x]
 
 
+def _field_label(name: str) -> str:
+    """The mapping form's label of the number field `name`, for a message that names it."""
+    side_b = name.startswith("serial_b_")
+    key = name[len("serial_b_"):] if side_b else name.removeprefix("serial_")
+    label = {
+        "custom_baud": _("Baud rate"), "baudrate": _("Baud rate"), "bytesize": _("Data bits"),
+        "stopbits": _("Stop bits"),
+        "network_port": _("Listen port"), "network_remote_port": _("Remote port"),
+        "network_connect_timeout_s": _("Connect timeout (s)"),
+        "network_max_connections": _("Max connections"),
+        "network_client_queue_max": _("Client buffer (chunks)"),
+        "network_udp_peer_port": _("Reply to port"), "network_udp_peer_timeout_s": _("Peer timeout (s)"),
+        "network_keepalive_idle_s": _("Keepalive idle (s)"),
+        "network_keepalive_interval_s": _("Probe interval (s)"),
+        "network_keepalive_count": _("Probe count"),
+        "opt_idle_timeout_s": _("Idle timeout (s)"),
+        "opt_max_connection_time_s": _("Max connection time (s)"),
+        "opt_trace_max_mb": _("Trace file size (MB)"), "opt_trace_keep": _("Rotated trace files kept"),
+        "mqtt_port": _("MQTT broker port"), "mqtt_qos": "QoS",
+    }.get(key, key)
+    return _("{0} (serial port B)").format(label) if side_b else label
+
+
 def _num(form, name, default, *, strict, cast=int):
+    """The number in the form field `name` (`default` when the form doesn't have it).
+    strict: one that isn't a number is refused with a message naming the field (not
+    Python's "invalid literal for int() with base 10: ''"); else it reads as `default`."""
     v = form.get(name, default)
-    if strict:
-        return cast(v)
     try:
-        return cast(v)
+        n = cast(v)
+        if isinstance(n, float) and not math.isfinite(n):
+            raise ValueError(v)
+        return n
     except (TypeError, ValueError):
-        return default
+        if not strict:
+            return default
+        raise ConfigError((_("{0}: enter a whole number.") if cast is int else
+                           _("{0}: enter a number.")).format(_field_label(name))) from None
 
 
 def _serial_dict(form, prefix: str, strict: bool) -> dict:
-    baud = form.get(prefix + "baudrate", "9600")
+    baud_field = prefix + "baudrate"
+    baud = form.get(baud_field, "9600")
     if baud == "custom":
-        baud = form.get(prefix + "custom_baud", "").strip()
+        baud_field, baud = prefix + "custom_baud", form.get(prefix + "custom_baud", "").strip()
     return {
         "port": form.get(prefix + "port", "").strip(),
-        "baudrate": (int(baud) if strict else _num({"b": baud}, "b", 9600, strict=False)),
+        "baudrate": _num({baud_field: baud}, baud_field, 9600, strict=strict),
         "bytesize": _num(form, prefix + "bytesize", 8, strict=strict),
         "parity": form.get(prefix + "parity", "N"),
         "stopbits": _num(form, prefix + "stopbits", 1, strict=strict, cast=float),
@@ -150,6 +182,8 @@ _OPTIONAL_FORM_FIELDS = {
     "network_tls_client_ca": ("network", ("tls_client_ca",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
+    # forms before 2.9 don't have it
+    "opt_console_encoding": ("options", ("console_encoding",)),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
@@ -285,6 +319,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_trace_max_mb" in form:
         options["trace_max_mb"] = _num(form, "opt_trace_max_mb", 10.0, strict=strict, cast=float)
         options["trace_keep"] = _num(form, "opt_trace_keep", 3, strict=strict)
+    if "opt_console_encoding" in form:
+        options["console_encoding"] = form.get("opt_console_encoding", "").strip()
     if "opt_rfc2217_restore_on_disconnect_shown" in form:
         options["rfc2217_restore_on_disconnect"] = _checkbox(
             form, "opt_rfc2217_restore_on_disconnect")
@@ -356,12 +392,19 @@ def _mapping_from_form(form) -> dict:
     return _build_mapping_dict(form, strict=True)
 
 
+def in_text_box(value: str) -> str:
+    """`value` as a browser sends it back from <input type=text value=...>: a NUL read as
+    U+FFFD, CR and LF taken out."""
+    return value.replace("\0", "\ufffd").replace("\r", "").replace("\n", "")
+
+
 def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     """Carry over config fields the mapping form does not expose, so editing an
     existing mapping never silently discards them: the stable-id `match` (when the
     form has no USB-identity field), the two
     advanced serial flags the form omits (`hangup_when_done`, `nobreak`), open/close
-    strings, the trace-timestamp flag and the RFC2217 interop knobs. The RS-485 fields
+    strings, the trace-timestamp flag and the RFC2217 interop knobs (and a banner or
+    close-on string the text box could not show as it is). The RS-485 fields
     ARE in the form now, so they're taken from the submission. Given the submitted
     `form`, the not-always-posted fields (_OPTIONAL_FORM_FIELDS) are kept too when
     absent, and the stored MQTT password when the form keeps it (mqtt_password_from_form).
@@ -399,6 +442,13 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     o, prev = new_map.options, existing.options
     o.openstr = prev.openstr
     o.closestr = prev.closestr
+    # the banner and close-on string are one-line text boxes, which hand a value back with
+    # a NUL as U+FFFD and without its CR/LF (HTML): a value that comes back so is the
+    # stored one (an imported close-on string like "ctrl-a\001nil\000" or "\r\n")
+    for key in ("banner", "closeon"):
+        stored = getattr(prev, key)
+        if getattr(o, key) == in_text_box(stored) != stored:
+            setattr(o, key, stored)
     o.trace_timestamp = prev.trace_timestamp
     o.rfc2217_poll_modem_interval_s = prev.rfc2217_poll_modem_interval_s
     o.rfc2217_net_timeout_s = prev.rfc2217_net_timeout_s

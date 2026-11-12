@@ -179,12 +179,12 @@ def test_sign_in_limit() -> None:
         st, _, page = a.call("POST", "/settings/proxy",
                              fields={"_csrf": CSRF, "trusted_proxies": "127.0.0.1 bad.example"},
                              headers=_form("; " + session))
-        assert st == 200 and "“bad.example” is not an IP address or network" in page, st
+        assert st == 400 and "“bad.example” is not an IP address or network" in page, st
         assert a.state.config.admin_ui.trusted_proxies == []
         st, _, page = a.call("POST", "/settings/proxy",
                              fields={"_csrf": CSRF, "trusted_proxies": "127.0.0.1, 127.0.0.1 ::1"},
                              headers=_form("; " + session))
-        assert st == 200 and "Reverse proxy settings saved." in page, st
+        assert st == 303, st   # saved: back to the page (Post/Redirect/Get)
         assert a.state.config.admin_ui.trusted_proxies == ["127.0.0.1", "::1"]
         saved = a.state.store.load().admin_ui.trusted_proxies
         assert saved == ["127.0.0.1", "::1"], saved
@@ -221,7 +221,7 @@ def test_env_setting() -> None:
             # the form has no such field then: the stored list stays
             st, _, page = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},
                                  headers=_form("; " + session))
-            assert st == 200 and a.state.config.admin_ui.trusted_proxies == ["10.0.0.0/8"]
+            assert st == 303 and a.state.config.admin_ui.trusted_proxies == ["10.0.0.0/8"]
     finally:
         del os.environ["SER2NET_TRUSTED_PROXIES"]
     os.environ["FORWARDED_ALLOW_IPS"] = "127.0.0.1"

@@ -23,6 +23,7 @@ import time
 from typing import Any, Callable, Optional
 
 from ..config import canonical_device
+from ..textfold import natural_key
 
 BY_ID_DIR = "/dev/serial/by-id"
 BY_PATH_DIR = "/dev/serial/by-path"
@@ -198,9 +199,11 @@ def snapshot() -> list[dict[str, Any]]:
 
 
 def visible(ports: list[dict[str, Any]], show_all: bool = False) -> list[dict[str, Any]]:
-    """Ports worth offering in the UI: without the kernel's placeholder ttyS ports
-    that have no UART behind them (unless show_all)."""
-    return list(ports) if show_all else [p for p in ports if p.get("hardware") is not False]
+    """Ports worth offering in the UI, in the order people count them (COM2 before COM10,
+    natural_key): without the kernel's placeholder ttyS ports that have no UART behind
+    them (unless show_all). The REST API keeps snapshot()'s order."""
+    shown = list(ports) if show_all else [p for p in ports if p.get("hardware") is not False]
+    return sorted(shown, key=lambda p: natural_key(str(p.get("device") or "")))
 
 
 def names(port: dict[str, Any]) -> list[str]:

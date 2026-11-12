@@ -3,6 +3,9 @@
 Checks:
   * GET /api/status returns X-Content-Hash; asking again with that hash gets 204 (the
     browser keeps its table — no flicker), a change gets the new table;
+  * a connected client's chip carries data-since (the browser counts the time on, by the
+    server clock sent in X-Server-Time), so the table stays 204 while only that time
+    passes; an open log panel's refreshes write no access lines to all.log;
   * POST /api/mappings/bulk applies start/stop/restart to every selected mapping
     (operator+; viewers 403; bad input 400) and audits each;
   * the trace panel lists a mapping's files and downloads only those (no other
@@ -14,6 +17,9 @@ Checks:
 Run: python3 tests/test_dashboard.py
 """
 import os
+import re
+import socket
+import time
 
 from _server import Browser, Server, free_port
 
@@ -48,6 +54,43 @@ def main():
         assert st == 204 and body == "", (st, body[:80])
         print("table refresh: same content -> 204 (no swap), hash in X-Content-Hash  OK")
 
+        # a connected client: its chip counts its time on in the browser (data-since, by
+        # the server clock in X-Server-Time), so the table stays 204 while time passes
+        port = srv.saved_config()["mappings"][1]["network"]["port"]
+        client = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            for _ in range(50):
+                st, h, body = b.get("/api/status")
+                if "data-since=" in body:
+                    break
+                time.sleep(0.1)
+            assert st == 200 and 'class="dur"' in body, body[:300]
+            assert abs(float(h["X-Server-Time"]) - time.time()) < 5, h.get("X-Server-Time")
+            since = float(re.search(r'data-since="([0-9.]+)"', body).group(1))
+            b.op.addheaders = [("X-Content-Hash", h["X-Content-Hash"])]
+            time.sleep(1.5)   # a second later: the duration shown changed, the table did not
+            st, h2, _ = b.get("/api/status")
+            assert st == 204 and h2["X-Content-Hash"] == h["X-Content-Hash"], st
+            assert abs(since - time.time()) < 30
+        finally:
+            client.close()
+        b.op.addheaders = []
+        print("connected clients: data-since + X-Server-Time, 204 while only their time passes  OK")
+
+        # an open log panel refreshes every 5 s: not an access line in all.log each time
+        for _ in range(3):
+            assert b.get("/api/mappings/aaaaaaaaaaa2/log")[0] == 200
+        b.get("/api/mappings/aaaaaaaaaaa2/form")   # (a request that is logged, as the marker)
+        log = os.path.join(srv.data, "all.log")
+        for _ in range(50):
+            text = open(log, encoding="utf-8", errors="replace").read()
+            if "GET /api/mappings/aaaaaaaaaaa2/form" in text:
+                break
+            time.sleep(0.1)
+        assert "GET /api/mappings/aaaaaaaaaaa2/form" in text
+        assert "/api/mappings/aaaaaaaaaaa2/log" not in text, "log refreshes are quiet"
+        print("log panel refreshes: no access lines in all.log  OK")
+
         st, _, _ = b.post("/api/mappings/bulk", {"action": "stop", "ids": ["aaaaaaaaaaa1", "aaaaaaaaaaa3"]}, htmx=True)
         assert st == 200
         en = {x["name"]: x["enabled"] for x in srv.saved_config()["mappings"]}
@@ -63,7 +106,7 @@ def main():
         v.login("view", PW)
         assert v.post("/api/mappings/bulk", {"action": "stop", "ids": ["aaaaaaaaaaa1"]}, htmx=True)[0] == 403
         st, _, page = b.get("/settings/audit?action=mapping_stop")
-        assert "2 record(s)" in page, page[page.find("record(s)") - 30:][:80]
+        assert ">2 records</p>" in page, page[page.find("record") - 30:][:80]
         print("bulk: stop / start on the selection, audited per mapping; viewer 403, bad input 400  OK")
 
         tdir = os.path.join(srv.data, "traces")

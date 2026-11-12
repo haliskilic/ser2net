@@ -23,8 +23,10 @@ from ...config import ConfigError
 from ...i18n import _
 from .. import auth, proxy, totp
 from ..auth import LoginRateLimiter
-from .common import Ctx, csrf_failed
+from .common import Ctx, csrf_failed, local_path
+from .settings import _Flash
 
+PAGE = "/settings/totp"          # Settings → Two-factor sign-in
 PENDING_COOKIE = "ser2net_2fa"   # its name for a request: auth.set_cookie (proxy.cookie_name)
 PENDING_PATH = "/auth/totp"      # also its Path (under the public URL's path)
 PENDING_TTL_S = 300          # from the password to the code
@@ -37,14 +39,18 @@ FORM_LIMITS = {"max_files": 0, "max_fields": 8, "max_part_size": 16 * 1024}
 NO_STORE = {"Cache-Control": "no-store"}  # a page with a key or a code step
 
 
-def challenge(ctx: Ctx, request, user):
+def challenge(ctx: Ctx, request, user, nxt: str = ""):
     """`user`'s password was right and their account takes a code too: no session yet,
-    the pending cookie for the code step instead (/auth/totp)."""
+    the pending cookie for the code step instead (/auth/totp). `nxt`: the page the
+    sign-in goes on to (/login?next=, a path without the base path), carried in the
+    cookie ("x") to the code step."""
     state = ctx.state
     resp = proxy.redirect(request, PENDING_PATH)
+    payload = {"p": "totp", "u": user.username, "v": user.pwd_version}
+    if nxt := local_path(nxt, ""):
+        payload["x"] = nxt
     auth.set_cookie(resp, request, state.config, PENDING_COOKIE,
-                    auth.sign_payload(state.config.secret_key,
-                                      {"p": "totp", "u": user.username, "v": user.pwd_version},
+                    auth.sign_payload(state.config.secret_key, payload,
                                       ttl_seconds=PENDING_TTL_S),
                     max_age=PENDING_TTL_S, path=PENDING_PATH)
     state.log(f"login: password of {user.username} accepted from {ctx.client_ip(request)}; "
@@ -56,6 +62,9 @@ def routes(ctx: Ctx) -> list:
     state, render, client_ip = ctx.state, ctx.render, ctx.client_ip
     current_user, set_session = ctx.current_user, ctx.set_session
     code_limiter = LoginRateLimiter(CODE_ATTEMPTS, CODE_WINDOW_S)   # per account
+    # what turning it on or off said, for the page its redirect leads to (as Settings does:
+    # Post/Redirect/Get), by the browser's CSRF token and the account
+    flash = _Flash()
     last_step: dict[str, int] = {}   # account -> the time step of its last accepted code
 
     def _check(user, code) -> bool:
@@ -68,13 +77,23 @@ def routes(ctx: Ctx) -> list:
         return True
 
     # ---------------- the code step of a sign-in ----------------
+    def _pending(request) -> dict | None:
+        data = auth.read_payload(state.config.secret_key,
+                                 auth.cookie(request, PENDING_COOKIE, PENDING_PATH, legacy=False))
+        return data if data and data.get("p") == "totp" else None
+
+    def _pending_next(request) -> str:
+        """Where the sign-in goes on to once the code is right (challenge's `nxt`); "" for
+        the dashboard (also a cookie from before it was carried)."""
+        data = _pending(request)
+        return local_path(data.get("x"), "") if data else ""
+
     def _pending_user(request):
         """The account whose password the pending cookie vouches for, while it still takes
         a code: same password version (no password change or sign-out since) and two-factor
         sign-in still on. None otherwise."""
-        data = auth.read_payload(state.config.secret_key,
-                                 auth.cookie(request, PENDING_COOKIE, PENDING_PATH, legacy=False))
-        if not data or data.get("p") != "totp" or not isinstance(data.get("u"), str):
+        data = _pending(request)
+        if not data or not isinstance(data.get("u"), str):
             return None
         user = state.config.get_user(data["u"])
         if user is None or not user.totp_on or user.pwd_version != data.get("v"):
@@ -87,7 +106,7 @@ def routes(ctx: Ctx) -> list:
 
     def _start_again(request, status_code, error):
         resp = render(request, "login.html", status_code=status_code, error=error,
-                      oidc_enabled=state.config.oidc.enabled)
+                      oidc_enabled=state.config.oidc.enabled, next=_pending_next(request))
         auth.delete_cookie(resp, request, state.config, PENDING_COOKIE, PENDING_PATH)
         return resp
 
@@ -127,17 +146,33 @@ def routes(ctx: Ctx) -> list:
         code_limiter.reset(user.username)
         state.log(f"login: {user.username} ({user.role}, local, two-factor) from {ip}")
         ctx.audit(request, "login", f"{user.role}, local, two-factor", user=user.username)
-        resp = proxy.redirect(request, "/")
+        resp = proxy.redirect(request, _pending_next(request) or "/")
         set_session(resp, request, user)
         ctx.new_csrf_token(request)
         auth.delete_cookie(resp, request, state.config, PENDING_COOKIE, PENDING_PATH)
         return resp
 
     # ---------------- setting it up / turning it off (Settings) ----------------
+    def _browser(request) -> str:
+        return getattr(request.state, "csrf_token", None) or ""
+
+    def _done(request, me, ok: str):
+        """A form that did its work: back to the page (a reload doesn't post it again, the
+        TR / EN switch has a page to go back to), which says `ok`; the session renewed
+        (it ended the account's other sessions)."""
+        flash.put(_browser(request), me.username, ok=ok)
+        resp = proxy.redirect(request, PAGE)
+        set_session(resp, request, me)
+        return resp
+
     def _page(request, status_code=200, ok=None, error=None, secret=None):
         """Settings → Two-factor sign-in: a new key to set up (or `secret`, the one being
-        set up), or, while it is on, the form to turn it off."""
+        set up), or, while it is on, the form to turn it off. A page answered to a form
+        (refused) names the page's own address (page_url)."""
         me = current_user(request)
+        if request.method == "GET" and me is not None and (
+                done := flash.take(_browser(request), me.username)):
+            ok = done["ok"]
         refusal = None
         if me is None or me.source == "anonymous":
             refusal = _("Sign in to set up two-factor sign-in.")
@@ -155,7 +190,7 @@ def routes(ctx: Ctx) -> list:
                                                     {"p": "totp-enrol", "u": me.username,
                                                      "s": secret}, ttl_seconds=ENROL_TTL_S))
         return render(request, "totp.html", status_code=status_code, headers=NO_STORE,
-                      **ctx_vars)
+                      page_url=None if request.method == "GET" else PAGE, **ctx_vars)
 
     async def settings_page(request):
         return _page(request)
@@ -187,8 +222,10 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         me = current_user(request)
-        if me is None or me.source != "local" or me.totp_on:
-            return _page(request)  # the refusal, or: it is on already
+        if me is None or me.source != "local":
+            return _page(request, 400)  # the refusal
+        if me.totp_on:
+            return proxy.redirect(request, PAGE)  # on already: the page says so
         data = auth.read_payload(state.config.secret_key, form.get("enrol"))
         if (not data or data.get("p") != "totp-enrol" or data.get("u") != me.username
                 or not totp.is_secret(data.get("s"))):
@@ -208,18 +245,18 @@ def routes(ctx: Ctx) -> list:
         state.log(f"two-factor sign-in turned on for {me.username}; their other sessions "
                   "were signed out")
         ctx.audit(request, "totp_enable", me.username)
-        resp = _page(request, ok=_("Two-factor sign-in is on: signing in now takes a code from "
-                                   "your app too. Your other sessions were signed out."))
-        set_session(resp, request, me)
-        return resp
+        return _done(request, me, _("Two-factor sign-in is on: signing in now takes a code from "
+                                    "your app too. Your other sessions were signed out."))
 
     async def disable_post(request):
         form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         me = current_user(request)
-        if me is None or not me.totp_on:
-            return _page(request)  # the refusal, or: it is off already
+        if me is None or me.source != "local":
+            return _page(request, 400)  # the refusal
+        if not me.totp_on:
+            return proxy.redirect(request, PAGE)  # off already: the page says so
         if not await _password_ok(me, form.get("password")):
             return _page(request, 400, error=_("Current password is incorrect."))
         if code_limiter.blocked(me.username):
@@ -234,15 +271,13 @@ def routes(ctx: Ctx) -> list:
         state.log(f"two-factor sign-in turned off for {me.username}; their other sessions "
                   "were signed out")
         ctx.audit(request, "totp_disable", me.username)
-        resp = _page(request, ok=_("Two-factor sign-in is off: your password alone signs you "
-                                   "in. Your other sessions were signed out."))
-        set_session(resp, request, me)
-        return resp
+        return _done(request, me, _("Two-factor sign-in is off: your password alone signs you "
+                                    "in. Your other sessions were signed out."))
 
     return [
         Route(PENDING_PATH, code_get, methods=["GET"]),
         Route(PENDING_PATH, code_post, methods=["POST"], max_body_size=FORM_MAX_BYTES),
-        Route("/settings/totp", settings_page, methods=["GET"]),
+        Route(PAGE, settings_page, methods=["GET"]),
         Route("/settings/totp/enable", enable_post, methods=["POST"],
               max_body_size=FORM_MAX_BYTES),
         Route("/settings/totp/disable", disable_post, methods=["POST"],

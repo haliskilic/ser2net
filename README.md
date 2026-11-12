@@ -205,8 +205,18 @@ düzenlemeye gerek yok.
   bunu bitirir). Seri portu ve MQTT bağlantısı ancak dinleyicisi açıldıktan sonra açılır;
   denemeler cihaza dokunmaz.
 - **Onlarca eşleme:** tek ekrandan ekle/düzenle/sil/başlat/durdur, canlı durum; arama,
-  durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat.
-  Tablo yalnızca değiştiğinde yenilenir (titreme yok, seçimler korunur).
+  durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat
+  (*Gösterilenlerin hepsini seç*; toplu işlem yalnızca filtrenin gösterdiği işaretli
+  satırlara uygulanır ve önce sorar). Arama büyük/küçük harfe ve aksanlara bakmaz, Türkçe
+  İ/ı da buna dahil (`istanbul` *İSTANBUL DEPO*'yu, `corlu` *Çorlu*'yu bulur); adlar,
+  içlerindeki sayılar sayı olarak ele alınarak sıralanır (*Hat 2*, *Hat 10*'dan önce
+  gelir; algılanan portlarda da COM2, COM10'dan önce). Tablo yalnızca gösterdiği şey
+  değiştiğinde yeniden
+  çizilir: yeni bayt sayıları yalnızca kendi hücrelerini günceller, bağlantı süreleri
+  tarayıcıda sayılır, arka plandaki sekme yenilenmez; böylece titreme olmaz, seçim, ipucu
+  ya da tıklama kaybolmaz. Çizim, köprüleri yürüten olay döngüsünün dışında yapılır.
+  Gelen / Giden B / KB / MB / GB olarak gösterilir (kesin sayılar REST API'de ve
+  `/metrics`'te).
 - **Erişim kontrolü (eşleme başına):** izinli IP/CIDR listesi, **yüksek-öncelikli**
   istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at (yeni
   istemci öncelikli olmayan en eskiyi atar, öncelikli bir istemciyi asla: yalnızca
@@ -245,7 +255,10 @@ düzenlemeye gerek yok.
   bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını
   (ya da `(unknown user)`) ve IP adresini gönderir; *Kişisel verileri gönderme* seçeneği
   adresleri yalnızca ağlarıyla (`10.0.5.x`, IPv6 /48) gönderir, hesap adlarını hiç
-  göndermez; e-posta her alıcıya ayrı da gönderilebilir.
+  göndermez; e-posta her alıcıya ayrı da gönderilebilir. Mesajlar *Web arayüzü erişimi*
+  altında seçilen varsayılan dilde yazılır. SMTP kullanıcı adı ve parolasında ya da webhook
+  adresinde Türkçe (ASCII dışı) harfler olabilir: kimlik bilgileri UTF-8 olarak (SMTP AUTH
+  PLAIN / LOGIN / CRAM-MD5), adres IDNA ve yüzde kodlamasıyla gönderilir.
 - **Dışa bağlanma durumu:** dışa bağlanan bir eşlemenin durumu seri tarafı göstermeye devam
   eder; uzak sunucuyla bağlantısı yanında gösterilir ("bağlantı yok" ve nedeni, Sorunlu
   filtresi bunu sayar; "bağlanıyor"), `/api/v1/status`'ta (`link`: `connecting` / `up` /
@@ -304,8 +317,11 @@ düzenlemeye gerek yok.
   aralığında** gönderilir; böylece yalnızca sorguya yanıt veren bir cihaz, TCP bağlantısını
   tutan harici bir poller olmadan MQTT'ye, bir trace'e ya da bir UDP hedefine ulaşır.
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
-  Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
-  olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi, `CA=`
+  Ayarlar → içe aktarma ile önizlemeli olarak alınır; önizleme her eşlemenin içe aktarma
+  sonrası halini (açık ya da kapalı, TLS, her istemci ya da kaç izinli adres, salt okunur)
+  kendi uyarılarıyla birlikte kendi satırında gösterir, uygulandığında uyarılar log'a
+  yazılır. Karşılığı olmayan seçenekler uyarı olarak gösterilir, burada daha açık hale
+  gelecek bir bağlantı (gtlssh girişi, `CA=`
   dosyası bu makinede olmayan TLS istemci sertifikası, sertifikası bu makinede olmayan TLS,
   yalnızca yazılan cihaz) kapalı olarak gelir; CA dosyası burada olan
   `ssl(clientauth,CA=...)` istemci sertifikalarını denetlemeye devam eder (**İstemci CA
@@ -314,12 +330,17 @@ düzenlemeye gerek yok.
   (varsayılan açık; 3.x'te her zaman) **Başka bir programın kilitlediği portu açma** olur;
   bir uyarı da hâlâ farklı olanı söyler (eşleme portunu başladığı andan itibaren açık tutar
   ve kilit dosyası oluşturmaz). Dinleme adresleri ailesini korur (`ipv6,::1` `::1` kalır,
-  adressiz `ipv6`/`ipv6n4` `::` olur). İkisini de belirtmeyen bir accepter (`tcp,2000`)
+  adressiz `ipv6` yalnızca IPv6 için `::` olur; IPv4 istemcilerini de alan bir IPv6 soketi
+  olan `ipv6n4` ise **Tüm arayüzler (IPv4 + IPv6)** olur). İkisini de belirtmeyen bir accepter (`tcp,2000`)
   ser2net'te IPv4 ve IPv6 istemcileri alıyordu; burada `0.0.0.0` olarak, yalnızca IPv4 için
   gelir ve bir uyarı **Tüm arayüzler (IPv4 + IPv6)**'ya geçirilebilecek olanları sayar. Bir
   RFC 2217 bağlantısının imzası (4.x `signature`, 3.x `SIGNATURE`) **RFC 2217 imzası** olur;
   `hangup-when-done` ve `nobreak` saklanır ama burada etkisi yoktur (port bağlantılar
-  arasında açık kalır), içe aktarma da bunu söyler.
+  arasında açık kalır), içe aktarma da bunu söyler. Aynı dosya sonradan yeniden
+  birleştirilirse yalnızca dosyanın söyledikleri alınır, eşlemelerde burada ayarlananlar
+  korunur (TLS, bind IP, izinli istemciler, USB kimliği, RS-485, MQTT, Modbus noktaları;
+  kapalı bir eşleme kapalı kalır); hiçbir eşleme daha açık hale gelmez ve önizleme her
+  güncellemenin neyi değiştirip neyi koruduğunu listeler.
 - **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.
@@ -461,18 +482,34 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 
 - **Eşleme ekle:** Ad, tür (Serial↔Network / Serial↔Serial), seri port + parametreler,
   ağ modu (server/client/udp), protokol, bind/remote IP:port, erişim kuralları.
-- **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda.
+- **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda. Bağlı istemci varken
+  Durdur ve Yeniden başlat önce sorar (istemcilerin bağlantısı kesilir; durdurulan eşleme
+  durdurulmuş kalır); Sil, eşlemenin log ve trace dosyalarını da siler.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
-- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
-  cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
-  gönderdiklerini görür.
+- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); salt okunur olmayan ağ
+  eşlemelerinde operator'ler cihaza yazabilir (Modbus gateway konsolu yalnızca hattı izler
+  ve hex görünümünde açılır); konsoldaki **BREAK gönder** düğmesi, telnet istemcisinin
+  BREAK'i gibi seri hattı 0,25 sn break durumunda tutar (denetim kaydına `mapping_break`
+  olarak yazılır). Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
+  gönderdiklerini görür. Eşleme durunca ya da yeniden başlayınca konsol bunu söyler ve
+  kendiliğinden yeniden bağlanır; yetişemeyen bir tarayıcıya kaç bayt kaçırdığı söylenir.
+  Türkçe (ya da başka) harfleri tek baytlı bir kod sayfasıyla gönderen bir cihaz için
+  eşlemenin *Konsol metin kodlaması* ayarını seç (varsayılan UTF-8; ISO-8859-9,
+  Windows-1254, CP857, ISO-8859-1, Windows-1252, CP437): konsol cihazın metnini bununla
+  gösterir, yazılanı bununla gönderir; hex görünümünün metin sütunu da. Köprü baytları her
+  durumda değiştirmeden iletir.
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
 - **Ayarlar:** parola değiştir, **iki adımlı giriş**, **web arayüzü erişimi** (giriş zorunlu /
-  parolasız rol), admin TLS (yol ver veya self-signed üret), **REST API token'ları** üret/iptal
-  et, mapping **yedek al/yükle** (JSON), durum ve **bu kurulumun adı** (Yönetim arayüzü; ya da
+  parolasız rol), admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak`
+  olarak saklanır), **REST API token'ları** üret/iptal et ya da ilk token'ın yalnızca rolünü
+  değiştir (tek seferlik token'ın Kopyala düğmesi var), mapping **yedek al/yükle** (JSON),
+  durum ve **bu kurulumun adı** (Yönetim arayüzü; ya da
   `SER2NET_NODE_NAME`): bildirimler, tarayıcı sekmesi, üst bar ve LAN cluster'ın filo
   görünümü, aynı makinedeki kurulumların paylaştığı host adı yerine bunu kullanır; genel
-  JSON webhook'u ayrıca `hostname` ve `instance_id` alır.
+  JSON webhook'u ayrıca `hostname` ve `instance_id` alır. Kaydedilen bir form sayfaya,
+  kendi bölümüne döner ve sonucu orada yazar; sayfayı yenilemek ya da Geri formu yeniden
+  göndermez (yeni bir token üretmez, yedeği yeniden yüklemez). Reddedilen bir form,
+  nedeniyle birlikte yazılanları korur (parola ve anahtarlar yeniden yazılır).
 - **/metrics:** Prometheus formatında metrikler (web arayüzü oturumuyla; REST API
   token'ıyla: `/api/v1/metrics`, bkz. REST API): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar
@@ -572,7 +609,8 @@ scrape_configs:
     static_configs:
       - targets: ["HOST:8080"]
 ```
-Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
+Token, üretilirken seçilen rolü taşır (*Yalnızca rolü değiştir* token'ı koruyarak rolü
+değiştirir): `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
 sırları (MQTT parolası, bir eşlemenin TLS anahtar parolası) `********` olarak maskeli görür;
 bu maskeyi geri gönderen bir `PUT` ya da `PATCH` kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
 ve açılış log'u bunu yazar.
@@ -790,7 +828,10 @@ kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bir kullanıcı adı yaz
 dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
 itemez. Bir eşlemenin konsolunu ya da hex görünümünü açmak, hesap (açık erişimde: adres),
 eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 böyle kayıt yazılır,
-fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). Cihaza yazan bir
+fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). Hesap (açık erişimde:
+adres) ve eşleme başına aynı anda en çok 4 konsol ve hex görünümü (birlikte) açık olabilir;
+eşleme başına 16, toplam 64. Trafiği atılırken 30 saniye hiçbir şey almayan biri kapatılır.
+Cihaza yazan bir
 konsolun kapanışı da kaydedilir (`console_close`, bayt sayısıyla; yazılanın kendisi asla).
 Başarısız bir SSO girişi (kimlik sağlayıcı reddetti, yanıtı doğrulanamadı ya da grupları bir rol
 vermiyor) kısa bir nedenle `oidc_login_failed` olarak kaydedilir ve yerel ya da LDAP girişi gibi
@@ -1154,7 +1195,10 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   `audit.log` — girişler ve başarısız girişler, config değişiklikleri, konsol / hex görünümü
   açılışları, cihaza yazan konsollar, trace indirmeleri, eşleme ve denetim kaydı dışa
   aktarmaları ve reddedilen REST API token'ları: kim/nereden/ne (döner). Ayarlar → *Audit
-  log*'da aranabilir, CSV olarak indirilebilir. `all.log`'un her satırı stdout'a da
+  log*'da aranabilir (panodaki gibi büyük/küçük harfe ve aksanlara bakılmaz), CSV (UTF-8,
+  virgüllü, betikler için) ya da *Excel için CSV* (sekmeli UTF-16: bölge ayarları ne olursa
+  olsun Excel'de çift tıklayınca Türkçe harfler ve sütunlar bozulmadan açılır) olarak
+  indirilebilir. `all.log`'un her satırı stdout'a da
   yazılır; systemd'nin journal'ı ya da Docker'ın container log'u bunları kendi saklama
   süreleriyle tutar. `SER2NET_LOG_STDOUT=off` satırları yalnızca `all.log`'da tutar.
   `all.log` her web arayüzü sayfası ve değişikliği için istemcinin IP adresiyle bir satır
@@ -1238,8 +1282,17 @@ kimlik ver* kopyalardan birine yeni bir ID ve oturum anahtarı verir (o düğüm
 herkesin oturumu kapanır).
 
 **Oturum süresi:** Ayarlar → *Web arayüzü erişimi* → *Oturum süresi (dakika)* (varsayılan 8 saat).
+Oturum sona erdiğinde pano eski durumları göstermeye devam etmek yerine bunu söyler (sayfayı
+yeniden yüklemez, açık bir form değişikliklerini korur; kaydedilmemiş değişiklik varken
+bağlantı girişi yeni sekmede açar) ve yeniden giriş yapınca bulunduğunuz sayfaya dönülür.
+Bir işlemin ne yaptığı ya da neden başarısız olduğu (sunucunun verdiği nedenle) pencerenin
+altında görünür; yenilemeleri başarısız olan panel *güncel değil* diye işaretlenir. Eşleme
+formu kaydedilmemiş değişiklikleri atmadan önce sorar. Konsolda **Shift+Tab** klavye odağını
+konsoldan çıkarır (Tab cihaza gider).
 **İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,
-yenileri ekle) ya da *hepsini değiştir* seçilir.
+yenileri ekle) ya da *hepsini değiştir* seçilir. 2.7 betiklerinin tek adımlı içe aktarması
+(`step=preview` olmadan gelen POST) JSON dosyasıyla yine bütün eşlemeleri değiştirir;
+klasik ser2net dosyası yalnızca önizlemeyle alınır.
 
 ---
 

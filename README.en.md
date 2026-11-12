@@ -195,8 +195,16 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   ends that). Its serial port and MQTT connection are opened only once its listener is up,
   so the retries don't touch the device.
 - **Dozens of mappings:** add/edit/delete/start/stop from one screen, with live status;
-  search, state filter, sorting and start/stop/restart of the selected mappings. The
-  table only redraws when it changed (no flicker, selections stay).
+  search, state filter, sorting and start/stop/restart of the selected mappings (*Select
+  all shown*; a bulk action acts on the ticked rows the filter shows and asks first). The
+  search ignores letter case and accents, Turkish İ/ı included (`istanbul` finds
+  *İSTANBUL DEPO*, `corlu` *Çorlu*), and names sort with numbers as numbers (*Hat 2*
+  before *Hat 10*; detected ports COM2 before COM10). The
+  table is redrawn only when what it shows changed: new byte counts update just their
+  cells, connection times count on in the browser, and a background tab doesn't refresh
+  it — so no flicker, and a selection, a tooltip or a click stays. The rendering runs
+  outside the event loop that drives the bridges. In / Out are shown in B / KB / MB / GB
+  (exact counts in the REST API and `/metrics`).
 - **Per-mapping access control:** allowed IP/CIDR list, **high-priority** client IPs
   (a priority client evicts the oldest when the port is full), max connections,
   kick-old-user (a new client evicts the oldest non-priority one, never a priority
@@ -236,7 +244,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   format has a `url` field. The client events send the client's IP address, a failed
   sign-in the account name (or `(unknown user)`) and the IP address; *Leave out personal
   data* sends addresses only as their network (`10.0.5.x`, IPv6 /48) and no account names,
-  and e-mail can go to each recipient separately.
+  and e-mail can go to each recipient separately. Messages are in the default language set
+  under *Web UI access*. SMTP user names and passwords and webhook URLs may contain Turkish
+  (any non-ASCII) letters: the credentials are sent UTF-8 encoded (SMTP AUTH PLAIN / LOGIN /
+  CRAM-MD5), the URL IDNA- and percent-encoded.
 - **Connect-out status:** a connect-out mapping's state stays the serial side's; its link
   to the remote server is shown next to it ("link down" with the reason, which the
   Problems filter counts; "connecting"), in `/api/v1/status` (`link`: `connecting` / `up`
@@ -293,20 +304,27 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   while a TCP client is connected**), so a device that only answers queries reaches MQTT, a
   trace or a UDP target without an external poller holding the TCP connection.
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
-  import through Settings with a preview; options without an equivalent are listed as
-  warnings, and a connection that would be more open here (a gtlssh login, TLS client
-  certificates without their `CA=` file on this host, TLS whose certificate is not on this
-  host, a write-only device) comes in disabled; `ssl(clientauth,CA=...)` with the CA file
+  import through Settings with a preview, which shows each mapping as it will be (enabled
+  or disabled, TLS, any client or how many allowed, read-only) with its own warnings in
+  its row; applying it writes the warnings to the log. Options without an equivalent are
+  listed as warnings, and a connection that would be more open here (a gtlssh login, TLS
+  client certificates without their `CA=` file on this host, TLS whose certificate is not on
+  this host, a write-only device) comes in disabled; `ssl(clientauth,CA=...)` with the CA file
   here keeps checking client certificates (**Client CA certificate file**). ser2net's port locking carries over: 4.x `flock` (on by default) becomes **Lock
   the port** plus **Keep other programs out**, `uucplock` (on by default; 3.x always)
   **Don't open a port another program has locked**; one warning says what still differs
   (a mapping holds its port open from its start, and makes no lock files). Listen
-  addresses keep their family (`ipv6,::1` stays `::1`, `ipv6`/`ipv6n4` without an address
-  is `::`); an accepter with neither (`tcp,2000`), on which ser2net took IPv4 and IPv6
+  addresses keep their family (`ipv6,::1` stays `::1`, `ipv6` without an address is `::`,
+  IPv6 only; `ipv6n4`, an IPv6 socket that takes IPv4 clients too, is **All interfaces
+  (IPv4 + IPv6)**); an accepter with neither (`tcp,2000`), on which ser2net took IPv4 and IPv6
   clients, comes in on `0.0.0.0`, IPv4 only, and a warning names those to switch to **All
   interfaces (IPv4 + IPv6)**. An RFC 2217 connection's signature (4.x `signature`, 3.x
   `SIGNATURE`) becomes its **RFC 2217 signature**; `hangup-when-done` and `nobreak` are kept
   but have no effect here (the port stays open between connections), and the import says so.
+  Merging such a file again later takes only what the file says and keeps what was set on
+  its mappings here (TLS, bind IP, allowed clients, USB identity, RS-485, MQTT, Modbus
+  points, a disabled mapping stays disabled); it never opens a mapping up, and the preview
+  lists what each update changes and keeps.
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
   notifications use as well. Logs, the audit log and the REST API stay English.
@@ -445,19 +463,34 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
 - **Add mapping:** name, type (Serial↔Network / Serial↔Serial), serial port +
   parameters, network mode (server/client/udp), protocol, bind/remote IP:port, access
   rules.
-- **Start/Stop/Restart/Copy/Delete:** per row.
+- **Start/Stop/Restart/Copy/Delete:** per row. Stop and Restart ask first while clients
+  are connected (they are disconnected; a stopped mapping stays stopped); Delete also
+  removes the mapping's log and trace files.
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
-  device on network mappings. The hex view shows both directions; viewers see only what
-  the device sends.
+  device on network mappings that aren't read-only (a Modbus gateway's console only
+  watches its bus, and opens in the hex view); their console's **Send BREAK** puts the
+  serial line in the break condition for 0.25 s, as a telnet client's BREAK does (audited
+  as `mapping_break`). The hex view shows both directions; viewers
+  see only what the device sends. When the mapping stops or restarts, the console says so
+  and connects again by itself; a browser that doesn't keep up is told how many bytes it
+  missed. For a device that sends Turkish (or other) letters in a single-byte code page,
+  set the mapping's *Console text encoding* (UTF-8 by default; ISO-8859-9, Windows-1254,
+  CP857, ISO-8859-1, Windows-1252, CP437): the console shows its text with it and sends
+  what is typed with it, and the hex view's text column too. The bridge passes the bytes
+  unchanged either way.
 - **Trace** (operators): the mapping's trace files, to list and download.
 - **Settings:** change password, **two-factor sign-in**, **web UI access** (login required /
-  open access with a role), admin TLS (provide paths or generate self-signed),
-  generate/revoke **REST API tokens**, mappings **backup/restore** (JSON), status, and the
+  open access with a role), admin TLS (provide paths or generate self-signed; a previous
+  generated pair is kept as `*.bak`), generate/revoke **REST API tokens** or change the first
+  token's role only (a one-time token has a Copy button), mappings **backup/restore** (JSON),
+  status, and the
   **name of this instance** (Admin interface; or `SER2NET_NODE_NAME`): notifications, the
   browser tab, the top bar and the LAN cluster's fleet view use it instead of the host name,
   which instances on one machine share; the generic JSON webhook also gets `hostname` and
-  `instance_id`.
+  `instance_id`. A saved form returns to the page at its own section, which says what was
+  done; a reload or Back does not post it again (no second token, no second restore). A
+  refused form keeps what was typed, with the reason (passwords and keys are typed again).
 - **/metrics:** Prometheus-format metrics (a web UI session; with the REST API token:
   `/api/v1/metrics`, see REST API): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects (of those, failed opens of the serial
@@ -555,7 +588,8 @@ scrape_configs:
     static_configs:
       - targets: ["HOST:8080"]
 ```
-The token has the role chosen when it was generated: a `viewer` token may only read (GET)
+The token has the role chosen when it was generated (*Change the role only* changes it and
+keeps the token): a `viewer` token may only read (GET)
 and gets stored secrets (the MQTT password, a mapping's TLS key password) masked as
 `********`; a `PUT` or `PATCH` that sends that mask back keeps the stored password. An `api_token_role` in `config.json` that is not a
 role counts as `viewer`, and the start-up log says so.
@@ -765,7 +799,10 @@ failed sign-ins in 10 minutes the audit log only counts them and sums them up in
 at the end of those 10 minutes, so a flood of attempts can't push the other records out.
 Opening a mapping's console or hex view is recorded once per account (with open access: per
 address), mapping and kind in 5 minutes, and at most 50 such records in 10 minutes, summed up
-the same way (all.log keeps a line for every one). Closing a console that wrote to the
+the same way (all.log keeps a line for every one). At most 4 consoles and hex views (together)
+are open per account (with open access: per address) and mapping, 16 per mapping and 64 in
+all; one that takes nothing for 30 s while its traffic is being dropped is closed. Closing a
+console that wrote to the
 device is recorded too (`console_close`, with the number of bytes, never what was typed). A
 failed SSO sign-in (the identity provider refused it, its answer didn't check out, or the
 groups give no role) is recorded as `oidc_login_failed` with a short reason and notified like
@@ -1120,7 +1157,10 @@ inside aren't readable by other users:
   token's name; `audit.log` — sign-ins and failed ones, config changes, console / hex view
   opens, consoles that wrote to a device, trace downloads, mapping and audit exports and
   refused REST API tokens: who/from where/what (rotated). Searchable under Settings → *Audit
-  log*, CSV export. Every `all.log` line is also written to stdout,
+  log* (letter case and accents ignored, as on the dashboard), CSV export (UTF-8, commas, for
+  scripts) and *CSV for Excel* (UTF-16 with tabs: opens in Excel by double-click with Turkish
+  letters and columns intact, whatever the regional settings). Every `all.log` line is also
+  written to stdout,
   which systemd's journal or Docker's container log keep under their own retention;
   `SER2NET_LOG_STDOUT=off` keeps the lines in `all.log` only. `all.log` has a line with the
   client's IP address for every web UI page and change: Settings → *Audit log* → *Web UI
@@ -1200,8 +1240,17 @@ the fleet view and Settings → LAN cluster; there, *Give this node a new identi
 them a new id and session key (everyone signed in to it is signed out).
 
 **Session lifetime:** Settings → *Web UI access* → *Session lifetime* (default 8 hours).
+When a session ends, the dashboard says so instead of going on showing old states (it
+doesn't reload, so an open form keeps its changes; with unsaved changes the link signs in
+in a new tab), and signing in again leads back to the page you were on. What an action did,
+or why it failed (with the server's reason), appears at the bottom of the window; a panel
+whose refreshes fail is marked *not up to date*. The mapping form asks before unsaved
+changes are thrown away. In the console, **Shift+Tab** moves the keyboard focus out (Tab
+goes to the device).
 **Import:** shows a preview first; choose *merge* (update mappings with the same name, add
-the new ones) or *replace all*.
+the new ones) or *replace all*. The one-step import of 2.7 scripts (a POST without
+`step=preview`) still replaces all mappings from a JSON file; a classic ser2net file is
+taken only through the preview.
 
 ---
 

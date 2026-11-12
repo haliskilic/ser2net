@@ -5,17 +5,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
+import time
 
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import clock
-from ...config import ConfigError, MappingConfig
+from ...config import ConfigError, MappingConfig, console_charset, console_encoding
 from ...engine import netinfo, portlist
-from ...i18n import _
+from ...i18n import _, ngettext
 from . import ops
-from .common import TRIGGER, Ctx, console_interactive, sees_to_device
+from .common import (
+    TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice, reason,
+    sees_to_device, start_failed,
+)
 from .forms import _form_error, _modbus_points_json, mqtt_password_view
 
 
@@ -25,6 +30,44 @@ def _port_taken(error: str) -> bool:
     text = error.lower()
     return "address already in use" in text or any(f"[errno {n}]" in text
                                                    for n in (98, 48, 10048))
+
+
+def _start_failure(error: str, retrying: bool) -> tuple[str, str]:
+    """Why a mapping that was just saved or started did not start, for its notice:
+    reason() (what it means in the page's language, the error for the tooltip), plus what
+    to do when another program holds its port, and, while the supervisor tries the start
+    again (a listener that could not bind), that it starts once it can listen there."""
+    why, raw = reason(error)
+    if _port_taken(error):
+        why += " " + _("Another program — another ser2net instance? — listens on that port: "
+                       "give the mapping a port of its own.")
+    if retrying:
+        why += " " + _("It is started as soon as it can listen there (its row shows when it "
+                       "is tried again).")
+    return why, raw
+
+
+# what _mappings_body.html shows of a mapping's status (st.*), apart from the counters and
+# the clients (tests/test_live_table.py checks the template uses no other field)
+_SHOWN = ("state", "device", "last_error", "client_count", "dropped_clients", "bytes_dropped",
+          # a connect-out link's state, a serial port's hint and warnings, the bind retry
+          "link", "link_error", "hint", "warnings", "retrying", "next_retry_s")
+
+
+def _steady(st):
+    """What the table shows of a mapping's status, minus what changes all the time: the
+    In / Out counters (patched on their own) and the clients' connection times (the
+    browser counts them on from connected_at). Not what it doesn't show (the reconnect
+    count of a mapping whose device is missing goes up every few seconds)."""
+    if not st:
+        return None
+    return (tuple(st.get(k) for k in _SHOWN),
+            [(c.get("peer"), c.get("priority"), c.get("connected_at")) for c in st.get("clients") or ()])
+
+
+def _in_out(st) -> str:
+    """The text of a row's In / Out cell, as _mappings_body.html renders it."""
+    return f"{bytesize(st.get('bytes_in', 0) if st else 0)} / {bytesize(st.get('bytes_out', 0) if st else 0)}"
 
 
 def routes(ctx: Ctx) -> list:
@@ -67,20 +110,24 @@ def routes(ctx: Ctx) -> list:
                 state.config.mappings.remove(dup)
                 return PlainTextResponse(_("Duplicate failed: {0}").format(e), status_code=400)
         ctx.audit(request, "mapping_duplicate", dup.name)
-        return Response("", headers=TRIGGER)
+        return Response("", headers={**TRIGGER, **notice(
+            _("Copied as “{0}” (disabled: it uses the same serial port).").format(dup.name))})
+
+    table = LiveTable(ctx, "_mappings_body.html")
 
     async def api_status(request):
-        resp = render(request, "_mappings_body.html",
-                      mappings=state.config.mappings,
-                      statuses=state.supervisor.all_status(),
-                      can_edit=can_edit(request))
-        # Polled every 2 s: when nothing changed since the browser's copy, answer 204
-        # (htmx then keeps the table as it is — no flicker, selections and scroll stay).
-        digest = hashlib.sha256(resp.body).hexdigest()[:16]
-        if request.headers.get("x-content-hash") == digest:
-            return Response(status_code=204, headers={"X-Content-Hash": digest})
-        resp.headers["X-Content-Hash"] = digest
-        return resp
+        # polled every 2 s: 204 while unchanged, only the In / Out counters when only they
+        # changed, else the table rendered off the event loop (see LiveTable). On a
+        # snapshot: an edit replaces a mapping object, a delete removes it from the list.
+        mappings, statuses = list(state.config.mappings), state.supervisor.all_status()
+        edit = can_edit(request)
+
+        def snapshot():
+            return ((edit, [(repr(m), _steady(statuses.get(m.id))) for m in mappings]),
+                    {f"m-{m.id}-bytes": _in_out(statuses.get(m.id)) for m in mappings})
+        # the server's clock: the browser counts the clients' connection times on from it
+        return await table.answer(request, snapshot, headers={"X-Server-Time": f"{time.time():.3f}"},
+                                  mappings=mappings, statuses=statuses, can_edit=edit)
 
     async def mapping_bulk(request):
         """Start / stop / restart several mappings at once (the dashboard's selection)."""
@@ -93,7 +140,7 @@ def routes(ctx: Ctx) -> list:
         ids = [i for i in form.getlist("ids") if i]
         if not ids or len(ids) > 500:
             return PlainTextResponse(_("Select one or more mappings."), status_code=400)
-        done = []
+        done, failed = [], []
         for mid in ids:
             try:
                 ok, name = await ops.apply_action(state, mid, action)
@@ -103,8 +150,21 @@ def routes(ctx: Ctx) -> list:
             if ok:
                 done.append(name)
                 ctx.audit(request, f"mapping_{action}", name)
+                if action != "stop" and start_failed(state, mid):
+                    failed.append(name)
         state.log(f"bulk {action}: {len(done)} mapping(s)")
-        return Response("", headers=TRIGGER)
+        n, total = len(done) - len(failed), len(ids)
+        text = (ngettext("Started {0} of {1} selected mapping.", "Started {0} of {1} selected mappings.",
+                         total) if action == "start" else
+                ngettext("Stopped {0} of {1} selected mapping.", "Stopped {0} of {1} selected mappings.",
+                         total) if action == "stop" else
+                ngettext("Restarted {0} of {1} selected mapping.",
+                         "Restarted {0} of {1} selected mappings.", total)).format(n, total)
+        if failed:
+            more = len(failed) - 5
+            text += " " + _("Could not start: {0}.").format(
+                ", ".join(failed[:5]) + (" " + _("(+{0} more)").format(more) if more > 0 else ""))
+        return Response("", headers={**TRIGGER, **notice(text, "warn" if failed else "ok")})
 
     # ---------------- mapping form ----------------
     # The form is for editing (operator+), so viewers get 403 — the UI never offers it to
@@ -136,10 +196,18 @@ def routes(ctx: Ctx) -> list:
         mid = request.path_params["mid"]
         m = state.config.get_mapping(mid)
         if not m:
-            return PlainTextResponse(_("Mapping not found"), status_code=404)
+            # deleted meanwhile: 286 makes htmx stop the panel's 5-second refresh, and the
+            # panel says why (a 404 would be polled - and reported - every 5 seconds)
+            return render(request, "_mapping_log.html", status_code=286, gone=True)
         lines = await asyncio.to_thread(state.read_mapping_log, mid, 1000)
-        return render(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
-                      lines=lines)
+        # refreshed every 5 s: 204 while the browser shows these lines already (the hash
+        # goes into the panel, which each refresh replaces)
+        digest = hashlib.sha256(json.dumps([getattr(request.state, "lang", ""), m.name, lines])
+                                .encode()).hexdigest()[:16]
+        if request.headers.get("x-content-hash") == digest:
+            return Response(status_code=204)
+        return await ctx.arender(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
+                                 lines=lines, content_hash=digest)
 
     def _trace_files(mid):
         out = []
@@ -148,11 +216,8 @@ def routes(ctx: Ctx) -> list:
                 st = os.stat(path)
             except OSError:
                 continue
-            size = st.st_size
-            text = (f"{size / 1048576:.1f} MB" if size >= 1048576 else
-                    f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B")
-            out.append({"name": os.path.basename(path), "path": path, "size_text": text,
-                        "time": clock.stamp(st.st_mtime)})
+            out.append({"name": os.path.basename(path), "path": path,
+                        "size_text": bytesize(st.st_size), "time": clock.stamp(st.st_mtime)})
         return out
 
     # Traces record both directions, what clients type to the device included (see
@@ -190,34 +255,40 @@ def routes(ctx: Ctx) -> list:
         me = current_user(request)  # what the console WebSockets will allow this user
         return render(request, "_console.html", mid=mid, mapping_name=m.name,
                       interactive=console_interactive(me, m), to_device=sees_to_device(me, m),
-                      bridge=m.kind == "serialbridge")
+                      bridge=m.kind == "serialbridge",
+                      # a Modbus gateway's text view is binary noise: its frames in hex
+                      hex_first=m.kind == "net" and m.network.protocol == "modbus",
+                      encoding=console_encoding(m.options),
+                      charset=console_charset(console_encoding(m.options)))
 
     async def mapping_save(request):
         if deny := require_role(request, "operator"):
             return deny
         form = await request.form()
-        started: dict = {}
-        ok, msg = await ops.save_mapping_from_form(state, form, started)
-        if not ok:
+        ok, msg, saved = await ops.save_mapping_from_form(state, form)
+        if not ok or saved is None:
             return _form_error(render, request, state, form, msg)
         state.log(f"mapping saved: {msg}")
         ctx.audit(request, "mapping_save", msg)
-        if started.get("ok") is False:
-            # saved, but it didn't start: say why where the form was (its row shows it too)
-            error = str(started.get("detail") or "")
-            return render(request, "_mapping_start_failed.html", headers=TRIGGER,
-                          mapping_name=msg, error=error, port_taken=_port_taken(error),
-                          retrying=bool(started.get("retrying")))
-        return Response("", headers=TRIGGER)
+        # the focus then: the mapping's Edit button (a new one's, once the table shows it)
+        focus = f"m-{saved.id}-edit"
+        if saved.start_error:  # saved, but it didn't start: say why, and what to do
+            why, raw = _start_failure(saved.start_error, saved.retrying)
+            note = notice(_("“{0}” saved, but it could not start: {1}").format(msg, why),
+                          "warn", focus, raw)
+        else:
+            note = notice(_("“{0}” saved.").format(msg), focus=focus)
+        return Response("", headers={**TRIGGER, **note})
 
     async def mapping_delete(request):
         if deny := require_role(request, "operator"):
             return deny
         removed = await ops.delete_mapping(state, request.path_params["mid"])
-        if removed is not None:
-            state.log(f"mapping deleted: {removed.name}")
-            ctx.audit(request, "mapping_delete", removed.name)
-        return Response("", headers=TRIGGER)
+        if removed is None:
+            return Response("", headers=TRIGGER)
+        state.log(f"mapping deleted: {removed.name}")
+        ctx.audit(request, "mapping_delete", removed.name)
+        return Response("", headers={**TRIGGER, **notice(_("“{0}” deleted.").format(removed.name))})
 
     async def mapping_action(request):
         if deny := require_role(request, "operator"):
@@ -230,11 +301,18 @@ def routes(ctx: Ctx) -> list:
             ok, name = await ops.apply_action(state, mid, action)
         except ConfigError as e:  # it can't be started (a serial port in use, ...)
             return PlainTextResponse(str(e), status_code=400)
-        if not ok:
-            return PlainTextResponse(name, status_code=404)
+        if not ok:   # (ops answers in English: the REST API and the cluster peers use it too)
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
         state.log(f"mapping {action}: {name}")
         ctx.audit(request, f"mapping_{action}", name)
-        return Response("", headers=TRIGGER)
+        if error := (start_failed(state, mid) if action != "stop" else ""):
+            # as for a save: the reason, and the hints for a taken port and the bind retry
+            retrying = bool((state.supervisor.status(mid) or {}).get("retrying"))
+            why, raw = _start_failure(error, retrying)
+            note = notice(_("“{0}” could not start: {1}").format(name, why), "warn", detail=raw)
+        else:
+            note = notice(action_done(action, name))
+        return Response("", headers={**TRIGGER, **note})
 
     return [
         Route("/", dashboard),

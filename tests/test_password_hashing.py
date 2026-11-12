@@ -224,7 +224,7 @@ async def _renewal(d: str, config: dict) -> None:
                                       "Cookie": f"ser2net_csrf=throttle-csrf-token; "
                                                 f"ser2net_session={cookie}"},
                              client="10.0.0.5")
-    assert "Password updated." in text, text[-400:]
+    assert s == 303, (s, text[-400:])   # changed: back to the page (Post/Redirect/Get)
     assert _saved_user(state, "viewer")["password_hash"].startswith("scrypt:16384:8:5$")
     print("sign-in with a 2.8 hash: renewed with today's cost and saved, pwd_version and "
           "sessions kept; a current hash isn't saved again; a failed save is logged and "

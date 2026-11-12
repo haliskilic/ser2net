@@ -38,7 +38,7 @@
     {%- endif %}
   </div>
   {%- if p and p.same_identity %}
-  <p class="warn-small port-hint">⚠ {{ _("%(n)s other connected port(s) have the USB identity of %(port)s (%(id)s), so “Find this device by its USB identity” can't tell them apart.", n=p.same_identity | length, port=p.device, id=p.vid ~ ':' ~ p.pid ~ ((' [' ~ p.serial_number ~ ']') if p.serial_number else '')) }}{% if p.by_path %} {{ _("To keep to this adapter, pick its name under “By USB socket”.") }}{% endif %}</p>
+  <p class="warn-small port-hint">⚠ {{ ngettext("%(num)s other connected port has the USB identity of %(port)s (%(id)s), so “Find this device by its USB identity” can't tell them apart.", "%(num)s other connected ports have the USB identity of %(port)s (%(id)s), so “Find this device by its USB identity” can't tell them apart.", p.same_identity | length, port=p.device, id=p.vid ~ ':' ~ p.pid ~ ((' [' ~ p.serial_number ~ ']') if p.serial_number else '')) }}{% if p.by_path %} {{ _("To keep to this adapter, pick its name under “By USB socket”.") }}{% endif %}</p>
   {%- endif %}
   {%- if p and p.ambiguous and pick.as == 'by_id' %}
   <p class="warn-small port-hint">⚠ {{ _("This by-id name is not unique: an identical adapter can take it at a reboot or a re-plug.") }}{% if p.by_path %} {{ _("Pick the adapter's name under “By USB socket” instead.") }}{% endif %}</p>

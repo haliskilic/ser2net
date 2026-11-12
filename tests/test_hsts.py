@@ -81,7 +81,7 @@ def test_form(srv, b) -> None:
     assert st == 200 and "Admin TLS saved" in page and saved() == 86400, (st, saved())
     for bad in ("-1", "abc", "1.5", "", str(2 * YEAR + 1), "٣"):
         st, _, page = b.post("/settings/tls", dict(tls, hsts_max_age=bad))
-        assert st == 200 and "must be a whole number of seconds from 0 to 63072000" in page, bad
+        assert st == 400 and "must be a whole number of seconds from 0 to 63072000" in page, bad
         assert saved() == 86400, bad
     st, _, page = b.post("/settings/tls", tls)             # an older page: no such field
     assert st == 200 and "Admin TLS saved" in page and saved() == 86400

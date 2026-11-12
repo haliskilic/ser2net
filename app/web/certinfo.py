@@ -47,10 +47,11 @@ class CertInfo:
         """One line for the log: subject, validity in UTC and what that means now."""
         def day(t: float) -> str:
             return time.strftime("%Y-%m-%d %H:%M", time.gmtime(t))
-        state = self.state(now)
+        state, days = self.state(now), self.days_left(now)
+        count = f"{days} day" if days == 1 else f"{days} days"
         what = {"not_yet_valid": "NOT YET VALID (this host's clock is behind its start?)",
-                "expired": "EXPIRED", "expiring": f"ends in {self.days_left(now)} day(s)",
-                "valid": f"{self.days_left(now)} day(s) left"}[state]
+                "expired": "EXPIRED", "expiring": f"ends in {count}",
+                "valid": f"{count} left"}[state]
         kind = ", self-signed" if self.self_signed else ""
         return (f"{self.subject}{kind}, valid {day(self.not_before)} to "
                 f"{day(self.not_after)} UTC: {what}")

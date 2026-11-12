@@ -277,10 +277,15 @@ def build_api_routes(state):
             return JSONResponse({**answer, "error": "validation", "detail": str(e),
                                  "applied": False}, status_code=400)
         count = ops.import_counts(rows)
-        state.log(f"api: mappings imported ({mode}): {count['add']} added, {count['update']} "
-                  f"updated, {count['same']} unchanged, {count['remove']} removed")
-        state.audit(_client_ip(request), f"api_config_import_{mode}",
-                    f"{len(plan.mappings)} mappings ({plan.source})", user=_caller(request))
+        # as the import form logs it (the REST API is English): the warnings stay on record
+        warnings = importer.log_lines(plan)
+        state.log(f"api: mappings imported ({mode}) from {plan.source}: {count['add']} added, "
+                  f"{count['update']} updated, {count['same']} unchanged, {count['remove']} "
+                  f"removed, {len(warnings)} warnings")
+        for w in warnings:
+            state.log(f"api: import warning: {w}")
+        state.audit(_client_ip(request), f"api_config_import_{mode}", importer.audit_detail(plan),
+                    user=_caller(request))
         return JSONResponse({**answer, "rows": rows, "summary": count, "valid": True,
                              "problem": None, "applied": True})
 

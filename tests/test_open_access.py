@@ -185,7 +185,9 @@ def main():
         print("default: no session -> redirected to /login; console WebSocket refused  OK")
 
         # ---- admin switches login off, visitors get 'viewer' ----
-        st, body, _ = admin.post("/settings/access", {"anonymous_role": "viewer", "_csrf": admin.csrf()})
+        st, body, loc = admin.post("/settings/access", {"anonymous_role": "viewer", "_csrf": admin.csrf()})
+        assert st == 303 and loc == "/settings#access", (st, loc)   # to the page, which says it
+        st, body, _ = admin.get("/settings")
         assert st == 200 and "Open access enabled" in body, st
         assert config()["admin_ui"]["require_login"] is False
         st, body, _ = anon.get("/")
@@ -224,7 +226,7 @@ def main():
 
         # ---- operator role for visitors: mapping edits allowed ----
         assert admin.post("/settings/access", {"anonymous_role": "operator",
-                                               "_csrf": admin.csrf()})[0] == 200
+                                               "_csrf": admin.csrf()})[0] == 303
         st, _, _ = anon.post("/api/mappings/save", mapping_form("by-anon", free_port(), "/dev/ttyOPEN2"))
         assert st == 200, f"anonymous operator should save mappings, got {st}"
         assert anon.get(f"/api/mappings/{mid}/form")[0] == 200, "operator may open the edit form"
@@ -236,7 +238,7 @@ def main():
         st, _, _ = admin.post("/settings/cluster", {"enabled": "on", "key": "shared-cluster-key",
                                                     "discovery_port": str(free_port()),
                                                     "_csrf": admin.csrf()})
-        assert st == 200 and config()["cluster"]["enabled"] is True
+        assert st == 303 and config()["cluster"]["enabled"] is True
         st, body, _ = anon.get("/api/cluster/status")
         assert st == 200 and "Sign in</a> to see and manage the other cluster nodes" in body
         st, body, _ = admin.get("/api/cluster/status")
@@ -264,12 +266,12 @@ def main():
         from websockets.sync.client import connect
         ws = connect(f"ws://127.0.0.1:{UI}/api/mappings/{mid}/console", open_timeout=5)
         assert admin.post("/settings/access", {"require_login": "on", "anonymous_role": "viewer",
-                                               "_csrf": admin.csrf()})[0] == 200
+                                               "_csrf": admin.csrf()})[0] == 303
         try:
             ws.recv(timeout=6)  # no serial data flows here: only a close can end this
             raise AssertionError("an open anonymous console survived login being switched on")
-        except ConnectionClosed:
-            pass
+        except ConnectionClosed as e:
+            assert e.rcvd is not None and e.rcvd.code == 4002, e.rcvd  # access changed
         except TimeoutError:
             raise AssertionError("an open anonymous console survived login being switched on") from None
         finally:

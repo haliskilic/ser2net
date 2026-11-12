@@ -11,13 +11,20 @@ dicts plus warnings. Checks:
     clientauth, TLS files missing here, dtls, wronly/rawlp, no-con-to-acc), with every
     reason; TLS is kept when its files are here; a read-only trace is not imported;
   * connectors: serialdev/sdev options (9600n81, rtscts, xonxoff, dtr=, nobreak, ...),
+    the framing as words (19200 EVEN 8DATABITS 1STOPBIT), dtr/rts as true/false,
     Windows //./COMn, network/IPMI connectors skipped; nobreak / hangup-when-done are kept
     with a warning that they have no effect here;
   * an RFC 2217 connection's signature (4.x option, 3.x SIGNATURE) -> rfc2217_signature;
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
     trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
+    an escape for a byte of 0x80 or more (sent as two UTF-8 bytes here) holds an open or
+    close string's mapping and is noted for a close-on string or banner;
   * the default remaddr only for a connection without addresses of its own (4.x / 3.x);
-  * *(name), $(name), =(name) and *alias substitution; defaults; version 2 files;
+  * escapes: \\o, \\s, \\\\ (a backslash, also in the rendered banner), trace modifiers in
+    order;
+  * *(name), =(name) and *alias substitution ($(name) left as written); defaults by
+    position and class
+    (rfc2217, banner/openstr/closeon too), delete_default; version 2 files;
   * YAML subset details: quotes, comments, flow [..]/{..}, block scalars, documents;
   * a 3.x ser2net.conf with BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/DEFAULT/
     CONTROLPORT/LED/SIGNATURE lines, every state and line continuation;
@@ -167,7 +174,7 @@ connection: &v6any
 connection: &v6long
   accepter: tcp,ipv6,[0:0:0:0:0:0:0:1],2008
   connector: serialdev,/dev/ttyUSB8
-connection: &v6only
+connection: &v6n4
   accepter: tcp,ipv6n4,2012
   connector: serialdev,/dev/ttyUSB14
 connection: &udp6
@@ -205,15 +212,20 @@ def test_accepters():
     # the IPv6 loopback stays the IPv6 loopback (any spelling of it), with nothing to say
     assert net["v6"]["bind_ip"] == "::1" and not has(warns, "v6:")
     assert net["v6long"]["bind_ip"] == "::1" and not has(warns, "v6long:")
-    assert net["v6any"]["bind_ip"] == "::" and net["v6only"]["bind_ip"] == "::"
-    assert not any(n.get("dual_stack") for n in net.values()), "never wider: one family each"
-    for name in ("v6only", "udp6"):  # (a UDP one too, where IPv6 sockets take IPv4 by default)
-        assert MappingConfig.from_dict(maps[name]).network.both_families is False, name
+    assert net["v6any"]["bind_ip"] == "::" and net["v6n4"]["bind_ip"] == "::"
+    # ipv6 without an address: IPv6 only; ipv6n4 is an IPv6 socket that takes IPv4
+    # connections too (gensio.5): both families here, on TCP and UDP alike
+    assert MappingConfig.from_dict(maps["v6any"]).network.both_families is False
+    for name in ("v6n4", "udp6"):
+        assert MappingConfig.from_dict(maps[name]).network.both_families is True, name
+    assert not any(n.get("dual_stack") for k, n in net.items() if k not in ("v6n4", "udp6")), \
+        "never wider: one family each"
+
     # ser2net listens on both families without one named: here that is 0.0.0.0, IPv4 only
     assert net["tel"]["bind_ip"] == "0.0.0.0" and not net["tel"].get("dual_stack")
     wide = [w for w in warns if "ser2net listened on IPv4 and IPv6" in w]
     assert len(wide) == 1 and "tel, " in wide[0] and "“All interfaces (IPv4 + IPv6)”" in wide[0]
-    assert "v6any" not in wide[0] and "rfc," not in wide[0] and "v6only" not in wide[0], wide
+    assert "v6any" not in wide[0] and "rfc," not in wide[0] and "v6n4" not in wide[0], wide
     # a host name can't be bound: listening on 0.0.0.0 would be wider, so it comes in disabled
     assert net["hostname"]["bind_ip"] == "0.0.0.0" and maps["hostname"]["enabled"] is False
     assert has(warns, "hostname:", "myhost.example.com", "imported disabled")
@@ -461,6 +473,51 @@ def test_connectors():
           "network and IPMI connectors skipped  OK")
 
 
+# gensio's serialdev (lib/sergensio_serialdev.c, process_defserial_parm) still takes the
+# framing as words: nSTOPBIT(S) / nDATABITS with strcasecmp, the parity words through
+# lookup_parity_str, a strcmp against NONE/EVEN/ODD/MARK/SPACE (capitals only); dtr= and
+# rts= are read with gensio_pparm_bool, so true/false/1/0 work as well as on/off
+SERIAL_WORDS = r"""
+connection: &rtu
+  accepter: tcp,3101
+  connector: serialdev,/dev/ttyUSB0,19200 EVEN 8DATABITS 1STOPBIT
+connection: &plain
+  accepter: tcp,3102
+  connector: serialdev,/dev/ttyUSB1,9600 NONE 1STOPBIT 8DATABITS
+connection: &e72
+  accepter: tcp,3103
+  connector: serialdev,/dev/ttyUSB2,9600,EVEN,7databits,2stopbits,XONXOFF
+connection: &lines
+  accepter: tcp,3104
+  connector: serialdev,/dev/ttyUSB3,9600n81,dtr=false,rts=1
+connection: &lower
+  accepter: tcp,3105
+  connector: serialdev,/dev/ttyUSB4,9600,even,dtr=maybe,-rts
+"""
+
+
+def test_serial_words():
+    maps, warns = parse(SERIAL_WORDS)
+
+    def frame(name):
+        s = maps[name]["serial"]
+        return s["baudrate"], s["parity"], s["bytesize"], s["stopbits"], s["flowcontrol"]
+    assert frame("rtu") == (19200, "E", 8, 1, "none")       # Modbus RTU 8E1, not 8N1
+    assert frame("plain") == (9600, "N", 8, 1, "none")
+    assert frame("e72") == (9600, "E", 7, 2, "xonxoff")
+    for name in ("rtu", "plain", "e72", "lines"):
+        assert not has(warns, f"{name}:"), [w for w in warns if w.startswith(name)]
+    lines = maps["lines"]["serial"]
+    assert (lines["dtr_on_open"], lines["rts_on_open"]) == ("off", "on"), lines
+    low = maps["lower"]["serial"]
+    assert low["parity"] == "N" and has(warns, "lower:", "'even'", "capitals only")
+    assert "dtr_on_open" not in low and has(warns, "lower:", "dtr=maybe", "not on/off")
+    assert low["rts_on_open"] == "off"
+    assert not has(warns, "lower: not imported")
+    print("serial words: 19200 EVEN 8DATABITS 1STOPBIT -> 19200E81 without a warning, "
+          "7databits/2stopbits in any case, dtr/rts true/false/1/0  OK")
+
+
 OPTIONS = r"""
 led: &led1
   driver: sysfs
@@ -508,7 +565,9 @@ def test_options():
     assert (n["kick_old_user"], n["max_connections"], n["read_only"]) == (True, 3, True), n
     assert n["allowed_client_ips"] == ["192.168.33.0/24", "10.0.0.5"], n
     assert o["idle_timeout_s"] == 600
-    assert o["banner"] == "Hi \\I, this is \\N on \\d:\\p\tA at :\\r\\n", repr(o["banner"])
+    # ser2net 4.3+ (ser2net_str.c process_str): \o prints orig_devname, which 4.x never
+    # sets, so the connection's name (port->name): \N here
+    assert o["banner"] == "Hi \\I, this is \\N on \\N:\\p\tA at :\\r\\n", repr(o["banner"])
     assert has(warns, "opts:", "banner:", r"\H \i", "left out")
     assert (o["openstr"], o["closestr"], o["closeon"]) == ("AT\r\n", "ATH\r", "ctrl-a\x01nil\x00")
     assert o["trace_both"] == "/var/log/trace-4001-opts" and o["trace_hexdump"] is True
@@ -527,6 +586,107 @@ def test_options():
           "trace-both, timeout, enable: off, remaddr, read-only; the rest warned once  OK")
 
 
+# ser2net (ser2net_str.c, process_str) sends the byte an escape like \377 or \xff stands
+# for; a string here is sent as UTF-8 (bridge: .encode("utf-8")), so such a byte would go
+# out as two. A YAML "\xff" is a character to libyaml, which hands ser2net its UTF-8 too.
+HIGH_BYTES = r"""
+connection: &init
+  accepter: tcp,5201
+  connector: serialdev,/dev/ttyS1
+  options:
+    openstr: '\377\r'
+connection: &close
+  accepter: tcp,5202
+  connector: serialdev,/dev/ttyS2
+  options:
+    closeon: '\xff\xfeEND'
+    banner: 'caf\xe9 \001'
+connection: &yaml
+  accepter: tcp,5203
+  connector: serialdev,/dev/ttyS3
+  options:
+    closestr: "\xff"
+    closeon: 'ctrl-a\001nil\000'
+"""
+
+
+def test_high_bytes():
+    from app.engine.bridge import _render_banner
+    maps, warns = parse(HIGH_BYTES)
+    init, close, yaml = maps["init"], maps["close"], maps["yaml"]
+    # what the bridge would send: \377 as c3 bf, not ff: the device gets other bytes
+    assert init["options"]["openstr"].encode("utf-8") == b"\xc3\xbf\r"
+    assert init["enabled"] is False
+    assert has(warns, "init:", "openstr", "\\377", "0x80", "imported disabled")
+    assert close["enabled"] is True
+    assert close["options"]["closeon"].encode("utf-8") != b"\xff\xfeEND"
+    assert has(warns, "close:", "closeon", "\\xff \\xfe", "won't match")
+    assert has(warns, "close:", "banner", "\\xe9")
+    assert not has(warns, "close:", "\\001")  # below 0x80: the byte itself
+    banner = _render_banner(close["options"]["banner"], MappingConfig.from_dict(close),
+                            "/dev/ttyS2", "10.0.0.9")
+    assert banner == "caf\xe9 \x01".encode("utf-8"), banner
+    assert yaml["enabled"] is True and not has(warns, "yaml:", "0x80"), warns
+    assert yaml["options"]["closeon"].encode("utf-8") == b"ctrl-a\x01nil\x00"
+    conf = "\n".join(["OPENSTR:o1:ATZ\\r\\x80", "3001:raw:0:/dev/ttyS1:o1"])
+    maps, warns = parse(conf, "ser2net.conf")
+    assert maps["ser2net-3001"]["enabled"] is False and has(warns, "\\x80", "0x80")
+    print("escapes for bytes 0x80-0xFF: an open/close string comes in disabled, a close-on "
+          "string or banner with a note; YAML escapes and bytes below 0x80 as they are  OK")
+
+
+# the escapes as ser2net (ser2net_str.c process_str) prints them: \o is the connection's
+# name in 4.3+ and the DEVICE alias as the port line names it in 3.x; \\ is a backslash
+# (the banner renderer here reads \\ as one, so C:\\data does not turn into C:<device>ata);
+# 4.1+ has no \s (a plain 's'). Trace modifiers apply in the file's order (portconfig.c
+# myconfig: trace-hexdump sets every trace file when it is read, trace-both-hexdump only
+# its own).
+ESCAPES = r"""
+connection: &esc
+  accepter: tcp,5301
+  connector: serialdev,/dev/ttyUSB3
+  options:
+    banner: 'C:\\data \\\\N \o [\s]'
+    openstr: 'at \o'
+    trace-both: /var/log/\o.log
+    trace-both-hexdump: false
+    trace-hexdump: true
+    trace-timestamp: true
+    trace-both-timestamp: false
+"""
+
+
+def test_escapes():
+    from app.engine.bridge import _render_banner
+    maps, warns = parse(ESCAPES)
+    e = maps["esc"]
+    o = e["options"]
+    assert o["banner"] == "C:\\\\data \\\\\\\\N \\N [9600N81]", repr(o["banner"])
+    sent = _render_banner(o["banner"], MappingConfig.from_dict(e), "/dev/ttyUSB3", "")
+    assert sent == b"C:\\data \\\\N esc [9600N81]", sent
+    # what an escape puts in is not read again (a device or name with a backslash in it)
+    m = MappingConfig.from_dict({"name": "a\\N", "serial": {"port": "COM1"}})
+    assert _render_banner("\\d \\N \\x", m, "C:\\New", "") == b"C:\\New a\\N \\x"
+    assert o["openstr"] == "at esc" and o["trace_both"] == "/var/log/esc.log"
+    assert (o["trace_hexdump"], o["trace_timestamp"]) == (True, False), o
+    assert has(warns, "esc:", "banner", "4.1 and later", "plain 's'")
+    conf = "\n".join(["DEVICE:usb:/dev/serial/by-id/usb-FTDI_1-if00",
+                      "BANNER:b1:\\o on \\d [\\s]\\r\\n",
+                      "TRACEFILE:t1:/var/log/t1",
+                      "3001:raw:0:usb:b1 tb=t1 tb-hexdump -hexdump",
+                      "3002:raw:0:/dev/ttyS2:b1"])
+    maps, warns = parse(conf, "ser2net.conf")
+    assert maps["ser2net-3001"]["options"]["banner"] == "usb on \\d [9600N81]\\r\\n"
+    assert maps["ser2net-3001"]["options"]["trace_hexdump"] is False  # the later -hexdump
+    assert maps["ser2net-3002"]["options"]["banner"] == "\\d on \\d [9600N81]\\r\\n"
+    assert not has(warns, "plain 's'")  # 3.x: \s is the serial parameters
+    print("escapes: \\o the name (4.x) / the DEVICE alias (3.x), \\\\ a backslash, \\s noted "
+          "for 4.x, trace modifiers in the file's order  OK")
+
+
+# ser2net 4.x (portconfig.c, portconfig): the default remaddr is added only
+# "if (!new_port->remaddrs)", after the connection's own options; 3.x (dataxfer.c,
+# remaddr_set) uses DEFAULT:remaddr only for a port line without remaddr=
 REMADDR = r"""
 default:
   name: remaddr
@@ -669,12 +829,16 @@ def test_substitution():
     assert c1["serial"]["port"] == "/dev/ttyUSB7" and c1["network"]["bind_ip"] == "192.168.10.1"
     o = c1["options"]
     assert o["banner"] == "Hello from /dev/ttyUSB7", o
-    assert o["openstr"] == "/dev/ttyUSB7 is open" and o["closestr"] == "two *stars and *( paren"
+    # yamlconf.c process_scalar replaces only *( / *{ (version 1) or =( / ={ (version 2):
+    # no ser2net version reads $(name), so it reaches the device as written
+    assert o["openstr"] == "$(dev) is open" and o["closestr"] == "two *stars and *( paren"
     assert o["closeon"] == "x*(nope)yz", o
     assert has(warns, "c1:", "unknown reference *(nope)")
     assert has(warns, "c1:", "*{/etc/ser2net/pw}")
     assert maps["c2"]["options"]["banner"] == "see c1"  # *(connection) is its name, as in ser2net
-    print("version 1: *alias, *(name), $(name), ** and *(* escapes, *{file} left out  OK")
+    assert not has(warns, "$(dev)")
+    print("version 1: *alias, *(name), ** and *(* escapes, $(name) as written, *{file} left "
+          "out  OK")
 
     maps, warns = parse(VERSION2)
     assert list(maps) == ["ttyUSB0", "ttyUSB1", "second"], list(maps)
@@ -687,6 +851,9 @@ def test_substitution():
     print("version 2: defines/=(name), defaults, connections map, two documents, rotator  OK")
 
 
+# ser2net.yaml(5): "The order in the file is important, you must set a default before it
+# is used" - ser2net sets each connection up as it reads it, so a default reaches only the
+# connections after it; delete_default needs the class whose value it deletes
 DEFAULTS = r"""
 connection: &before
   accepter: tcp,5001
@@ -695,6 +862,7 @@ default: { name: speed, value: 115200 }
 default:
   name: kickolduser
   value: true
+  class: ser2net
 default:
   name: mdns
   value: true
@@ -723,8 +891,117 @@ def test_defaults():
     assert maps["last"]["serial"]["baudrate"] == 9600
     assert not maps["last"]["network"].get("kick_old_user")
     assert has(warns, "default mdns", "not imported") and not has(warns, "ipmisol")
+    assert not has(warns, "delete_default")
     print("default: (flow and block form) applies to later connections; delete_default; "
           "unsupported defaults warned  OK")
+
+
+# gensio (lib/gensio.c gensio_get_default): a class's own value comes before the base value
+# whatever the order; gensio_del_default with a class deletes only that class's value
+# (GE_NOTFOUND when there is none, and ser2net's yamlconf.c then refuses the file; it also
+# refuses a delete_default without a class). The telnet gensio reads its rfc2217 default
+# (a built-in default, class telnet) and ser2net its banner/openstr/closestr/closeon
+# defaults (defaults.c, read in portconfig.c init_port_data) as each connection is set up.
+DEFAULT_CLASSES = r"""
+connection: &plain0
+  accepter: telnet,tcp,5101
+  connector: serialdev,/dev/ttyS1
+default:
+  name: rfc2217
+  value: true
+connection: &rfc
+  accepter: telnet,tcp,5102
+  connector: serialdev,/dev/ttyS2
+connection: &explicit
+  accepter: telnet(rfc2217=false),tcp,5103
+  connector: serialdev,/dev/ttyS3
+connection: &rawtcp
+  accepter: tcp,5104
+  connector: serialdev,/dev/ttyS4
+default:
+  name: rfc2217
+  value: false
+  class: telnet
+connection: &classwins
+  accepter: telnet,tcp,5105
+  connector: serialdev,/dev/ttyS5
+default:
+  name: rfc2217
+  value: true
+connection: &stillclass
+  accepter: telnet,tcp,5106
+  connector: serialdev,/dev/ttyS6
+default:
+  name: speed
+  value: 19200
+  class: serialdev
+default:
+  name: speed
+  value: 4800
+connection: &speedclass
+  accepter: tcp,5107
+  connector: serialdev,/dev/ttyS7
+delete_default:
+  name: rfc2217
+  class: telnet
+delete_default:
+  name: speed
+  class: serialdev
+connection: &baseagain
+  accepter: telnet,tcp,5108
+  connector: serialdev,/dev/ttyS8
+default:
+  name: banner
+  value: 'Port \N\r\n'
+  class: ser2net
+default:
+  name: openstr
+  value: 'AT\r'
+default:
+  name: closeon
+  value: "NO CARRIER\r\n"
+default:
+  name: sendon
+  value: "line1\r\nline2"
+default:
+  name: signature
+  value: "Rack 3"
+connection: &strings
+  accepter: tcp,5109
+  connector: serialdev,/dev/ttyS9
+  options:
+    openstr: 'ATZ\r'
+delete_default:
+  name: kickolduser
+  class: ser2net
+delete_default:
+  name: openstr
+"""
+
+
+def test_default_classes():
+    maps, warns = parse(DEFAULT_CLASSES)
+    proto = {n: m["network"]["protocol"] for n, m in maps.items()}
+    assert proto == {"plain0": "telnet", "rfc": "rfc2217", "explicit": "telnet",
+                     "rawtcp": "raw", "classwins": "telnet", "stillclass": "telnet",
+                     "speedclass": "raw", "baseagain": "rfc2217", "strings": "raw"}, proto
+    assert not has(warns, "rfc2217"), warns  # the telnet default is imported, not warned
+    assert maps["speedclass"]["serial"]["baudrate"] == 19200   # the class value wins
+    assert maps["baseagain"]["serial"]["baudrate"] == 4800     # deleted: the base value
+    o = maps["strings"]["options"]
+    assert (o["banner"], o["openstr"], o["closeon"]) == ("Port \\N\\r\\n", "ATZ\r",
+                                                         "NO CARRIER\r\n"), o
+    assert "banner" not in maps["baseagain"]["options"]       # only after the default
+    assert not any(w.startswith(("default banner", "default openstr")) for w in warns)
+    # a default with no equivalent is warned, its value's line breaks escaped; an RFC 2217
+    # signature default is one (for RFC 2217 connections: none here)
+    sig = next(w for w in warns if w.startswith("default sendon"))
+    assert "line1\\r\\nline2" in sig and "\r" not in sig and "\n" not in sig, repr(sig)
+    assert not any(w.startswith("default signature") for w in warns), warns
+    assert has(warns, "delete_default kickolduser", "class ser2net", "refuses")
+    assert has(warns, "delete_default openstr", "no class", "refuses")
+    print("defaults: the telnet rfc2217 default (base and class), class values before base "
+          "values, banner/openstr/closeon defaults, delete_default per class  OK")
 
 
 SYNTAX = r"""%YAML 1.1
@@ -917,6 +1194,25 @@ connection: &udpsame
     assert has(warns, "renamed to 'dup (2)'")
     assert has(warns, "sameport: skipped", "TCP port 7001", "'dup'")
     print("duplicate names get (2); a port already listened on is skipped (UDP may share)  OK")
+    # each warning about an imported connection knows its mapping (the preview's row), also
+    # between two connections of the same name; the file's and a skipped one's know none
+    text += ("connection: &held\n  accepter: telnet,mux,certauth,tcp,7003\n"
+             "  connector: serialdev,/dev/ttyS5\n  enable: off\n")
+    maps_list, warns = parse_ser2net_config(text)
+    names = [m["name"] for m in maps_list]
+
+    def about(w):
+        i = getattr(w, "mapping", None)
+        return None if i is None else names[i]
+    by = {}
+    for w in warns:
+        by.setdefault(about(w), []).append(getattr(w, "detail", "") or w)
+    assert by["dup (2)"] == ["renamed to 'dup (2)' (the name is used twice)"], by
+    assert any(w.startswith("sameport: skipped") for w in by[None]), by[None]
+    held = [w for w in warns if about(w) == "held"]
+    assert [w.security for w in held] == [False, True], [(w, w.security) for w in held]
+    assert held[0].detail.endswith("(enable: off)") and "certauth" in held[1].detail
+    print("warnings: each knows the mapping it is about, the hold reasons are marked  OK")
 
 
 def test_errors():
@@ -1024,10 +1320,14 @@ def main():
     test_accepters()
     test_protections()
     test_connectors()
+    test_serial_words()
     test_options()
     test_remaddr_default()
+    test_high_bytes()
+    test_escapes()
     test_substitution()
     test_defaults()
+    test_default_classes()
     test_yaml_syntax()
     test_v3()
     test_locking()
