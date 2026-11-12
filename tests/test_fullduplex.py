@@ -19,10 +19,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
+from _server import free_port
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 PAYLOAD = int(sys.argv[2]) if len(sys.argv) > 2 else 256 * 1024
-BASE = 47401
 
 
 def cli_pattern(i):
@@ -113,11 +113,12 @@ async def main():
     masters = [m for m, s in ptys]
     names = [os.ttyname(s) for m, s in ptys]
 
+    ports = [free_port() for _ in range(N)]
     sup = Supervisor(logger=lambda m: None)
     maps = [MappingConfig.from_dict({
         "name": f"fd{i}", "enabled": True,
         "serial": {"port": names[i], "baudrate": 115200},
-        "network": {"protocol": "raw", "bind_ip": "127.0.0.1", "port": BASE + i},
+        "network": {"protocol": "raw", "bind_ip": "127.0.0.1", "port": ports[i]},
     }) for i in range(N)]
     await asyncio.gather(*(sup.apply_mapping(m) for m in maps))
     await asyncio.sleep(0.5)
@@ -127,7 +128,6 @@ async def main():
     cli_out = [[] for _ in range(N)]
     dev_out = [[] for _ in range(N)]
     connected, go, done = threading.Event(), threading.Event(), threading.Event()
-    ports = [BASE + i for i in range(N)]
     hthread = threading.Thread(target=harness, args=(ports, masters, cli_out, dev_out, connected, go, done),
                                daemon=True)
     hthread.start()

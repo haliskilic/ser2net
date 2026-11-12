@@ -15,7 +15,6 @@ import http.cookiejar
 import io
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -25,11 +24,16 @@ import time
 import urllib.parse
 import urllib.request
 
+from _server import free_port, server_log, show_log_on_failure
+
+from _socat import pty_pair_sync as start_socat
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
-UI = 8085
+UI = free_port()
+MAP_PORT = free_port()  # the mapping the console is opened on
 
-from _server import ui_cookie  # noqa: E402
+from _server import ui_cookie
 SESSION, CSRF = ui_cookie("ser2net_session", UI), ui_cookie("ser2net_csrf", UI)
 
 
@@ -44,17 +48,6 @@ def wait_port(port, timeout=10):
     return False
 
 
-def start_socat():
-    p = subprocess.Popen(["socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0"],
-                         stderr=subprocess.PIPE)
-    devs = []
-    while len(devs) < 2:
-        m = re.search(rb"PTY is (\S+)", p.stderr.readline())
-        if m:
-            devs.append(m.group(1).decode())
-    return p, devs[0], devs[1]
-
-
 def main():
     import serial
     import websockets  # client (installed in lib)
@@ -64,9 +57,11 @@ def main():
     with open(cfg, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
     socat, dev_a, dev_b = start_socat()
+    out = server_log(tmp)  # the server's output: a file, never an unread pipe
     srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           stdout=out, stderr=subprocess.STDOUT)
+    out.close()  # (the server has its own copy)
     try:
         assert wait_port(UI), "server did not start"
         jar = http.cookiejar.CookieJar()
@@ -90,7 +85,7 @@ def main():
             "serial_port": dev_a, "serial_baudrate": "115200", "serial_bytesize": "8",
             "serial_parity": "N", "serial_stopbits": "1", "serial_flowcontrol": "none",
             "network_mode": "server", "network_protocol": "raw", "network_bind_ip": "127.0.0.1",
-            "network_port": "47350"}, header=True)
+            "network_port": str(MAP_PORT)}, header=True)
         mid = json.load(open(cfg))["mappings"][0]["id"]
         session = next(c.value for c in jar if c.name == SESSION)
         time.sleep(0.5)
@@ -130,7 +125,7 @@ def main():
             import struct
             uri = f"ws://127.0.0.1:{UI}/api/mappings/{mid}/traffic"
             async with websockets.connect(uri, additional_headers={"Cookie": f"{SESSION}={session}"}) as ws:
-                _r, w = await asyncio.open_connection("127.0.0.1", 47350)
+                _r, w = await asyncio.open_connection("127.0.0.1", MAP_PORT)
                 await asyncio.sleep(0.3)
                 w.write(b"from-net"); await w.drain()
                 await asyncio.to_thread(device.write, b"from-dev"); await asyncio.to_thread(device.flush)
@@ -148,8 +143,8 @@ def main():
             print("hex view: both directions over the traffic WS, timestamped  OK")
             # protocol 2 (what app.js asks for): records [dir][time][length][bytes] packed
             async with websockets.connect(uri + "?v=2", additional_headers={
-                    "Cookie": f"ser2net_session={session}"}) as ws:
-                _r, w = await asyncio.open_connection("127.0.0.1", 47350)
+                    "Cookie": f"{SESSION}={session}"}) as ws:
+                _r, w = await asyncio.open_connection("127.0.0.1", MAP_PORT)
                 await asyncio.sleep(0.3)
                 w.write(b"net-v2"); await w.drain()
                 await asyncio.sleep(0.3)
@@ -180,7 +175,7 @@ def main():
             uri = f"ws://127.0.0.1:{UI}/api/mappings/{mid}/console"
             try:
                 async with websockets.connect(uri, origin="http://evil.example", additional_headers={
-                        "Cookie": f"ser2net_session={session}"}) as ws:
+                        "Cookie": f"{SESSION}={session}"}) as ws:
                     await asyncio.wait_for(ws.recv(), timeout=2)
                 return False
             except Exception:
@@ -231,7 +226,7 @@ def main():
                 async with websockets.connect(base + "/console", additional_headers=hdr):
                     pass
             async with websockets.connect(base + "/traffic", additional_headers=hdr) as ws:
-                _r, w = await asyncio.open_connection("127.0.0.1", 47350)
+                _r, w = await asyncio.open_connection("127.0.0.1", MAP_PORT)
                 await asyncio.sleep(0.3)
                 w.write(b"typed-secret"); await w.drain()
                 await asyncio.sleep(0.5)  # reaches the device well before its answer
@@ -285,6 +280,7 @@ def main():
             srv.wait(timeout=5)
         except subprocess.TimeoutExpired:
             srv.kill()
+        show_log_on_failure(tmp)
         shutil.rmtree(tmp, ignore_errors=True)
 
 

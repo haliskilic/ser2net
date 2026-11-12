@@ -7,7 +7,6 @@ Run: python3 tests/test_v2_transports.py
 """
 import asyncio
 import os
-import re
 import socket
 import sys
 import threading
@@ -19,18 +18,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.config import MappingConfig
 from app.engine.bridge import UDP_BACKLOG_MAX
 from app.engine.supervisor import Supervisor
-
-
-async def socat():
-    p = await asyncio.create_subprocess_exec(
-        "socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    devs = []
-    while len(devs) < 2:
-        m = re.search(rb"PTY is (\S+)", await p.stderr.readline())
-        if m:
-            devs.append(m.group(1).decode())
-    return p, devs[0], devs[1]
+from _server import free_udp_port
+from _socat import pty_pair as socat
 
 
 async def test_tcp_client():
@@ -72,18 +61,19 @@ async def test_tcp_client():
 
 
 async def test_udp():
+    udp_port = free_udp_port()
     import serial
     p, dev_a, dev_b = await socat()
     sup = Supervisor(logger=lambda m: None)
     m = MappingConfig.from_dict({
         "name": "udp", "enabled": True, "serial": {"port": dev_a, "baudrate": 115200},
-        "network": {"mode": "udp", "protocol": "raw", "bind_ip": "127.0.0.1", "port": 48020}})
+        "network": {"mode": "udp", "protocol": "raw", "bind_ip": "127.0.0.1", "port": udp_port}})
     await sup.apply_mapping(m)
     await asyncio.sleep(0.4)
     device = serial.Serial(dev_b, 115200, timeout=1)
     us = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     us.bind(("127.0.0.1", 0)); us.settimeout(2)
-    us.sendto(b"udp-in", ("127.0.0.1", 48020))   # client -> bridge -> serial
+    us.sendto(b"udp-in", ("127.0.0.1", udp_port))   # client -> bridge -> serial
     await asyncio.sleep(0.3)
     assert (await asyncio.to_thread(device.read, 16)) == b"udp-in"
     await asyncio.to_thread(device.write, b"udp-out"); await asyncio.to_thread(device.flush)
@@ -100,12 +90,13 @@ async def test_udp_flood():
     """~4 MB of datagrams as fast as loopback carries them, to a device that reads about
     100 KB/s: what waits for the port stays bounded, the rest is dropped and counted, the
     loop keeps running, and the device gets exactly bytes_out."""
+    udp_port = free_udp_port()
     import serial
     p, dev_a, dev_b = await socat()
     sup = Supervisor(logger=lambda m: None)
     m = MappingConfig.from_dict({
         "name": "udp-flood", "enabled": True, "serial": {"port": dev_a, "baudrate": 115200},
-        "network": {"mode": "udp", "protocol": "raw", "bind_ip": "127.0.0.1", "port": 48021}})
+        "network": {"mode": "udp", "protocol": "raw", "bind_ip": "127.0.0.1", "port": udp_port}})
     await sup.apply_mapping(m)
     await asyncio.sleep(0.4)
     runner = sup.get_runner(m.id)
@@ -126,7 +117,7 @@ async def test_udp_flood():
 
     def flood():
         for _ in range(count):
-            us.sendto(payload, ("127.0.0.1", 48021))
+            us.sendto(payload, ("127.0.0.1", udp_port))
 
     loop = asyncio.get_running_loop()
     lag = peak_buffer = peak_queue = 0.0
@@ -164,6 +155,7 @@ async def test_udp_flood():
 
 
 async def test_udp_reply_address():
+    udp_port = free_udp_port()
     import serial
     p, dev_a, dev_b = await socat()
     reply = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -172,7 +164,7 @@ async def test_udp_reply_address():
     sup = Supervisor(logger=lambda m: None)
     m = MappingConfig.from_dict({
         "name": "udp-fixed", "enabled": True, "serial": {"port": dev_a, "baudrate": 115200},
-        "network": {"mode": "udp", "protocol": "raw", "bind_ip": "127.0.0.1", "port": 48022,
+        "network": {"mode": "udp", "protocol": "raw", "bind_ip": "127.0.0.1", "port": udp_port,
                     "udp_peer_host": "127.0.0.1", "udp_peer_port": rport}})
     ok, msg = await sup.apply_mapping(m)
     assert ok, msg
@@ -181,7 +173,7 @@ async def test_udp_reply_address():
     device = serial.Serial(dev_b, 115200, timeout=1)
     other = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     other.bind(("127.0.0.1", 0)); other.settimeout(0.5)
-    other.sendto(b"cmd", ("127.0.0.1", 48022))           # any allowed sender reaches the device
+    other.sendto(b"cmd", ("127.0.0.1", udp_port))           # any allowed sender reaches the device
     await asyncio.sleep(0.3)
     assert (await asyncio.to_thread(device.read, 16)) == b"cmd"
     await asyncio.to_thread(device.write, b"resp"); await asyncio.to_thread(device.flush)

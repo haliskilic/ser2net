@@ -21,8 +21,8 @@ from ...i18n import _, ngettext
 from ...notify import no_data_for
 from . import ops
 from .common import (
-    TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice, reason,
-    sees_to_device, start_failed,
+    TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice, read_form,
+    reason, sees_to_device, start_failed,
 )
 from .forms import _form_error, _parse_modbus_points, form_context
 
@@ -193,7 +193,7 @@ def routes(ctx: Ctx) -> list:
         """Start / stop / restart several mappings at once (the dashboard's selection)."""
         if deny := require_role(request, "operator"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         action = form.get("action", "")
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
@@ -395,7 +395,7 @@ def routes(ctx: Ctx) -> list:
     async def mapping_save(request):
         if deny := require_role(request, "operator"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         ok, msg, saved = await ops.save_mapping_from_form(state, form)
         if not ok or saved is None:
             return _form_error(render, request, state, form, msg)

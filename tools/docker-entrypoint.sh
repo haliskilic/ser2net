@@ -19,6 +19,10 @@
 # The group of each serial device passed in (--device, compose `devices:`) is added
 # too: the node keeps the host's numeric group, which need not be the image's
 # dialout (20) — Fedora/RHEL use 18 — so --group-add dialout alone can miss it.
+# SER2NET_LOW_PORTS=1 keeps the CAP_NET_BIND_SERVICE capability for the server, so it may
+# listen on ports below 1024 where Docker doesn't allow that to everyone: the host network
+# (in its own network Docker allows them anyway). Only when the container has it to give
+# (Docker's default set does; not with --cap-drop ALL or --cap-drop NET_BIND_SERVICE).
 # Started as another user (docker run --user ...), it runs as that user unchanged.
 set -eu
 DATA=/data
@@ -117,5 +121,18 @@ for dev in $SERIAL; do
         || say "warning: uid $uid can't open $dev ($(stat -L -c 'owner %u:%g, mode %a' "$dev"));" \
                "give its group read and write access on the host (e.g. a udev rule, MODE=\"0660\")"
 done
-exec setpriv --reuid="$uid" --regid="$gid" "$groups" \
+caps=""
+if [ "${SER2NET_LOW_PORTS:-}" = 1 ]; then
+    # CAP_NET_BIND_SERVICE is bit 10 of the capability sets
+    prm=$(awk '$1 == "CapPrm:" { print $2 }' /proc/self/status 2>/dev/null) || prm=""
+    if [ -n "$prm" ] && [ $(( 0x$prm >> 10 & 1 )) = 1 ]; then
+        caps="--inh-caps=+net_bind_service --ambient-caps=+net_bind_service"
+        say "SER2NET_LOW_PORTS=1: the server keeps CAP_NET_BIND_SERVICE (ports below 1024)"
+    else
+        say "warning: SER2NET_LOW_PORTS=1, but this container has no CAP_NET_BIND_SERVICE" \
+            "to keep (--cap-drop?): ports below 1024 stay closed"
+    fi
+fi
+# shellcheck disable=SC2086  # $caps: two options or none
+exec setpriv --reuid="$uid" --regid="$gid" "$groups" $caps \
     python /app/ser2net.py --no-bootstrap --data-dir "$DATA" "$@"

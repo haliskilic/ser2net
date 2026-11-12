@@ -389,6 +389,15 @@ _TEXTS: dict[str, Callable[..., str]] = {
         "be using this port (a login prompt on it?)") if n == 1 else _(
         "hung up {0} times while open, and could be reopened at once: another program may "
         "be using this port (a login prompt on it?)")).format(n),
+    # a listener's port the system refused, with the mapping's state "error"
+    # (engine/bindhint.py: hint() names the case, note() makes the status's Note)
+    "privileged_port": lambda _: _(
+        "Ports below 1024 need extra rights on Linux: give ser2net the CAP_NET_BIND_SERVICE "
+        "capability (README: “Ports below 1024”), or use port 1024 or above."),
+    "excluded_port": lambda _: _(
+        "Windows doesn't let ser2net use this port: another program holds it, or Windows "
+        "reserves it (netsh interface ipv4 show excludedportrange protocol=tcp). Pick "
+        "another port."),
 }
 
 

@@ -46,17 +46,17 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-import _form_cases as form_cases                                # noqa: E402
-from _formsubmit import browser_post                           # noqa: E402
+import _form_cases as form_cases
+from _formsubmit import browser_post
 
-from app import __version__                                    # noqa: E402
-from app.config import AppConfig, ClusterSettings              # noqa: E402
-from app.engine import netinfo                                  # noqa: E402
-from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,  # noqa: E402
+from app import __version__
+from app.config import AppConfig, ClusterSettings
+from app.engine import netinfo
+from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,
                                 canonical_target, format_auth, key_header, parse_auth,
                                 reply_mac, request_mac)
-from app.web.auth import hash_password                         # noqa: E402
-from _server import ui_cookie                                   # noqa: E402
+from app.web.auth import hash_password
+from _server import server_log, ui_cookie
 
 
 def free_port():
@@ -426,9 +426,11 @@ def start_node(cfg_obj, env=None):
     with open(cfg, "w") as fh:
         json.dump(cfg_obj, fh)
     child = {k: v for k, v in os.environ.items() if k.lower() != "no_proxy"}
+    out = server_log(tmp)  # the node's output: a file, never an unread pipe
     proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
                             cwd=ROOT, stdin=subprocess.DEVNULL, env=dict(child, **(env or {})),
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            stdout=out, stderr=subprocess.STDOUT)
+    out.close()  # (the node has its own copy)
     return proc, tmp
 
 
@@ -758,6 +760,7 @@ def _old_peer(key, peer_id, seen, posted=None):
     import http.server
     import threading
 
+    # fixed port: the stub only reports this mapping (disabled), nothing listens on it
     mapping = {"id": peer_id, "name": "OLD1", "enabled": False, "kind": "net",
                "serial": {"port": "/dev/ttyOLD", "baudrate": 9600},
                "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
@@ -874,6 +877,7 @@ def test_edit_on_a_peer_with_its_own_id():
         assert "old-peer-broker-pw" not in html, "the peer's MQTT password is in the page"
         assert 'name="mqtt_password_write_only"' in html and 'name="mqtt_password_clear"' in html
 
+        # fixed port: the stub peer's mapping, saved by the stub (nothing listens on it)
         edit = {"_csrf": csrf(), "host": "127.0.0.1", "port": str(stub_port),
                 "id": peer_id, "name": "OLD1", "enabled": "on", "kind": "net",
                 "serial_port": "/dev/ttyEDITED", "serial_baudrate": "19200",

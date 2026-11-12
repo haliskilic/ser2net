@@ -342,7 +342,7 @@ class _Provider(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_GET(self):  # noqa: N802 (http.server API)
+    def do_GET(self):  # http.server API
         iss = self.server.issuer
         if self.path == "/.well-known/openid-configuration":
             return self._json({"issuer": iss, "authorization_endpoint": iss + "/authorize",
@@ -351,7 +351,7 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             return self._json({"keys": [self.server.key.as_dict()]})
         self.send_error(404)
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         from authlib.jose import jwt
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
         self.server.token_requests += 1

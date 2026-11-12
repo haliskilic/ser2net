@@ -1,5 +1,11 @@
 {% extends "_shell.html" %}
 {% block title %}{% if node_name %}{{ node_name }} · {% endif %}{{ _("Mappings") }} — ser2net{% endblock %}
+{# the Monitor console (_console.html) opens only here, in #form-panel #}
+{% block head %}
+  <link rel="stylesheet" href="{{ base }}/static/xterm.css?v={{ asset_version }}">
+  <script src="{{ base }}/static/xterm.js?v={{ asset_version }}" defer></script>
+  <script src="{{ base }}/static/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
+{% endblock %}
 {% block main %}
 <section class="panel">
   <div class="panel-head">

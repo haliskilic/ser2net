@@ -14,11 +14,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _server import free_port, server_log, show_log_on_failure
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-UI = 8086
+UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
-from _server import ui_cookie  # noqa: E402
+from _server import ui_cookie
 
 
 def wait_port(port, timeout=10):
@@ -37,9 +39,11 @@ def main():
     cfg = os.path.join(tmp, "config.json")
     with open(cfg, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
+    out = server_log(tmp)  # the server's output: a file, never an unread pipe
     srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           stdout=out, stderr=subprocess.STDOUT)
+    out.close()  # (the server has its own copy)
     try:
         assert wait_port(UI), "server did not start"
         jar = http.cookiejar.CookieJar()
@@ -68,7 +72,7 @@ def main():
             "serial_port": "/dev/ttyX", "serial_baudrate": "9600", "serial_bytesize": "8",
             "serial_parity": "N", "serial_stopbits": "1", "serial_flowcontrol": "none",
             "network_mode": "server", "network_protocol": "raw", "network_bind_ip": "127.0.0.1",
-            "network_port": "47301", "network_max_connections": "1",
+            "network_port": str(free_port()), "network_max_connections": "1",
             "mqtt_client_id": "s2n-mx"})
         cfgdoc = json.load(open(cfg))
         mid = cfgdoc["mappings"][0]["id"]
@@ -116,7 +120,7 @@ def main():
 
         # 4) import (multipart) — replace with a single different mapping
         new_doc = {"mappings": [{"name": "IMPORTED", "serial": {"port": "/dev/ttyZ"},
-                                 "network": {"mode": "server", "port": 48888}}]}
+                                 "network": {"mode": "server", "port": free_port()}}]}
         boundary = "----ser2nettest"
         parts = [
             f'--{boundary}\r\nContent-Disposition: form-data; name="_csrf"\r\n\r\n{csrf()}\r\n',
@@ -139,6 +143,7 @@ def main():
             srv.wait(timeout=5)
         except subprocess.TimeoutExpired:
             srv.kill()
+        show_log_on_failure(tmp)
         shutil.rmtree(tmp, ignore_errors=True)
 
 

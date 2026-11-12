@@ -73,7 +73,9 @@
               and not (link_down and st.last_error == st.link_error) %}
           {#- what it means in the page's language; the error itself in the tooltip #}
           <div class="err-small" title="{{ st.last_error }}">{{ (st.last_error|explain or st.last_error)|softbreak }}</div>
-          {% if st.hint and state != 'error' %}<div class="warn-small" title="{{ st.hint }}">{{ st.hint|softbreak }}</div>{% endif %}
+          {#- what to do: a serial port's (device-missing / reconnecting), or a refused listener
+              port's (error: the supervisor sets it at each failed start) #}
+          {% if st.hint %}<div class="warn-small" title="{{ st.hint }}">{{ st.hint|softbreak }}</div>{% endif %}
         {% endif %}
         {% if link_down and st.link_error %}
           <div class="err-small" title="{{ st.link_error }}">{{ (st.link_error|explain or st.link_error)|softbreak }}</div>

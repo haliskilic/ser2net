@@ -16,7 +16,8 @@ $PBS_RELEASE = "20261026"
 $PBS_PYTHON = "3.12.16"
 # sha256 of the x86_64-pc-windows-msvc install_only_stripped archive (release SHA256SUMS)
 $PBS_SHA256 = "1f2ab53880fc67ea323398c6388e05af28addc99a8e389209f08a51fdff4b149"
-$PYINSTALLER = "6.22.3"
+# The Python packages, PyInstaller included, come hash-locked from requirements-lock.txt and
+# requirements-build.txt (tools/refresh_locks.py).
 $MIN_OPENSSL = "3.5"
 
 New-Item -ItemType Directory -Force -Path build | Out-Null
@@ -35,8 +36,9 @@ tar.exe -xzf $archive -C $pbs          # bsdtar ships with Windows 10/11 and the
 $PY = Join-Path $pbs "python\python.exe"
 if (-not (Test-Path $PY)) { throw "interpreter not found at $PY after extraction" }
 
+# every file checked against its sha256 in the lock, every dependency locked, wheels only
 & $PY -m pip install --no-cache-dir --disable-pip-version-check -q `
-    -r requirements.txt -r requirements-optional.txt "pyinstaller==$PYINSTALLER"
+    --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
 # license texts of the native libraries PBS links into the interpreter (OpenSSL, libffi,
@@ -53,11 +55,12 @@ foreach ($lic in "bzip2","expat","libffi","liblzma","mpdecimal","openssl-3","sql
 if ($LASTEXITCODE -ne 0) { throw "version resource generation failed" }
 & $PY tools\third_party.py licenses build\THIRD-PARTY-LICENSES.txt --strict --extra $licdir
 if ($LASTEXITCODE -ne 0) { throw "license bundle failed" }
-& $PY tools\third_party.py sbom build\ser2net.cdx.json --strict
-if ($LASTEXITCODE -ne 0) { throw "sbom failed" }
 & $PY tools\release_guard.py interpreter --min-openssl $MIN_OPENSSL
 if ($LASTEXITCODE -ne 0) { throw "release guard failed (OpenSSL below $MIN_OPENSSL)" }
 & $PY -m PyInstaller --clean --noconfirm ser2net.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+# after the build: the spec lists the binaries the exe carries (pyexpat.pyd, _decimal.pyd ...)
+& $PY tools\third_party.py sbom build\ser2net.cdx.json --strict --binaries build\bundled-binaries.txt
+if ($LASTEXITCODE -ne 0) { throw "sbom failed" }
 & dist\ser2net.exe --version
 if ($LASTEXITCODE -ne 0) { throw "the built exe did not run" }

@@ -23,8 +23,20 @@ SupplementaryGroups=dialout
 WorkingDirectory=/opt/ser2net
 # On a headless first boot the console picker is non-interactive and defaults the
 # admin UI to 127.0.0.1:8080 (loopback, never network-exposed without an explicit
-# choice). To expose it on the LAN, run once interactively (or with --reconfigure)
-# to pick the bind IP and set a password, or pre-create /opt/ser2net/data/config.json.
+# choice). To expose it on the LAN, run "systemctl edit ser2net" and add
+#   [Service]
+#   Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+# (README: "Run as a service"). Commands run by hand on this data directory go as the
+# service user, never as root (root would own what they write, and the service could no
+# longer read it): sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir
+# /opt/ser2net/data --set-password admin
+# The directories ser2net writes to (see ReadWritePaths below) are made for the
+# service user on the first start if they are missing ("+": run without the sandbox).
+ExecStartPre=+/bin/sh -c 'test -d /opt/ser2net/data || install -d -o ser2net -g ser2net -m 0700 /opt/ser2net/data'
+ExecStartPre=+/bin/sh -c 'test -d /opt/ser2net/lib || install -d -o ser2net -g ser2net -m 0700 /opt/ser2net/lib'
+# Python 3.10 or newer. Where /usr/bin/python3 is older (RHEL / AlmaLinux / Rocky 8 and 9,
+# Debian 11) put a newer one here (RHEL: dnf install python3.11, then /usr/bin/python3.11),
+# or run the standalone binary with systemd/ser2net-standalone.service instead.
 ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data
 # Every log line goes to data/all.log (rotated) and to stdout, which the journal keeps too
 # (journalctl -u ser2net), readable by the systemd-journal and adm groups and kept as long
@@ -45,11 +57,13 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 # Writable paths (rest of FS is read-only under ProtectSystem=strict):
 #  - /opt/ser2net/data : config.json + logs (adjust to your --data-dir)
-#  - /opt/ser2net/lib  : where the first-run offline bootstrap installs the bundled
-#    wheels. Without it ProtectSystem=strict makes ./lib read-only and the first
-#    start fails to install dependencies. If you instead pre-install deps at deploy
-#    time (python3 bootstrap.py) and add --no-bootstrap to ExecStart, you can drop
-#    /opt/ser2net/lib from this list.
+#  - /opt/ser2net/lib  : where the offline bootstrap installs the bundled wheels, on the
+#    first start and once more on the first start after an upgrade changed the pinned
+#    versions. Without it ProtectSystem=strict makes ./lib read-only and the first
+#    start fails to install dependencies. If you instead install them at deploy time
+#    and after each upgrade (sudo -u ser2net python3 /opt/ser2net/bootstrap.py) and add
+#    --no-bootstrap to ExecStart, you can drop /opt/ser2net/lib from this list.
+# Both must exist when the service starts: the ExecStartPre= lines above make them.
 ReadWritePaths=/opt/ser2net/data /opt/ser2net/lib
 ProtectSystem=strict
 ProtectHome=true
@@ -69,12 +83,24 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
-# Add AF_NETLINK to enable pyudev event-driven hotplug; without it ser2net falls
-# back to polling (which works fine), so it is left out of the default allow-list.
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK: the list of network interfaces and their addresses (the bind-IP pickers,
+# the cluster's directed broadcasts) is read over netlink; pyudev's event-driven hotplug
+# uses it too (without pyudev ser2net polls for serial ports, which works fine).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# A call the filter denies fails with EPERM, which ser2net reports like any other error,
+# instead of killing the process with SIGSYS (no traceback, and a restart every 3 s).
+SystemCallErrorNumber=EPERM
+# Ports below 1024 (Modbus/TCP's 502, the web UI on 80 or 443): an unprivileged user
+# can't listen on them. To allow it, uncomment both lines, or better add them with
+# "systemctl edit ser2net" (README: "Ports below 1024"). It works with
+# NoNewPrivileges=true; whoever may edit mappings can then listen on any free port
+# below 1024. (setcap on python3 does not help: NoNewPrivileges ignores file
+# capabilities, and it would give the right to every Python program on the machine.)
+#AmbientCapabilities=CAP_NET_BIND_SERVICE
+#CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # MemoryDenyWriteExecute=true   # enable only after verifying ctypes/Python startup
 # UMask=0077
 

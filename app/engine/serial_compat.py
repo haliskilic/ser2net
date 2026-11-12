@@ -194,7 +194,7 @@ if os.name == "posix":
         def read(self, size: int = 1) -> bytes:
             if not self.is_open:
                 raise serial.PortNotOpenError()
-            if self._timeout != 0:
+            if self.timeout != 0:
                 raise serial.SerialException("this port reads non-blocking only (timeout=0)")
             try:
                 data = os.read(self.fd, size)
@@ -219,11 +219,11 @@ if os.name == "posix":
             until the port is writable again."""
             if not self.is_open:
                 raise serial.PortNotOpenError()
-            if self._write_timeout != 0:
+            if self.write_timeout != 0:
                 raise serial.SerialException("this port writes non-blocking only "
                                              "(write_timeout=0)")
             try:
-                return os.write(self.fd, serialutil.to_bytes(data))
+                return os.write(self.fd, bytes(data))
             except BlockingIOError:
                 raise
             except OSError as e:

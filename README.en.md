@@ -417,7 +417,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   always contacted directly, never through an HTTP proxy (`HTTP(S)_PROXY` / `ALL_PROXY`
   apply to webhooks and SSO only).
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
-  Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
+  Linux+Windows × Python 3.10–3.14 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
   broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status:
   `<topic>/status` reads `online` after every connect to the broker (a reconnect too),
@@ -521,8 +521,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 
 ## 🧰 Requirements
 
-- **Python 3.10+** installed. Nothing else — dependencies ship in `vendor/wheels/` and
-  install to `./lib` on first run (offline).
+- **Python 3.10+** installed, with pip (Debian / Ubuntu / Raspberry Pi OS ship it apart:
+  `sudo apt install python3-pip`). Nothing else — dependencies ship in `vendor/wheels/` and
+  install to `./lib` on first run (offline), on any OS and CPU. An older `python3` (RHEL /
+  AlmaLinux / Rocky 8 and 9) is refused with a message: install a newer one
+  (`sudo dnf install python3.11`; `./start.sh` picks it up) or use the standalone binary.
 - Linux: membership in the serial devices' group to **open** serial ports (listing ports
   needs no privilege). It is `dialout` on Debian, Ubuntu, Raspberry Pi OS, Fedora, RHEL and
   openSUSE, but `uucp` on Arch, Manjaro and EndeavourOS (which have no `dialout` group); a
@@ -538,7 +541,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 ## 🚀 Install & run
 
 ```bash
-# Linux / macOS
+# Linux / macOS / Raspberry Pi (any CPU)
 python3 ser2net.py            # or: ./start.sh
 
 # Windows
@@ -557,8 +560,15 @@ run; config/logs are written to `data/` next to the binary.
 | `ser2net-linux-x64` | x86_64 Linux with glibc ≥ 2.28: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (not musl/Alpine — use Docker there) |
 | `ser2net-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
 
-Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`) and
-the license texts, and the binaries carry GitHub build provenance:
+Other platforms — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateways), macOS, Windows on ARM:
+run from source (`python3 ser2net.py`), which works offline there too (see *Offline install*),
+or on 32-bit ARM the Docker image (arm/v7).
+Windows 11 on ARM also runs the x64 exe (emulated).
+
+Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`), the
+license texts, `ser2net-standalone.service`, the systemd unit for the Linux binaries, and
+`ser2net-install.sh`, which installs a binary with it (see *Run as a service*), and the
+binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is **not
 code-signed yet** (it will be once a signing service is configured —
@@ -576,11 +586,12 @@ containers, including a serial port at a rate without a termios constant (250000
 Linux notes: `chmod +x ser2net-linux-x64`; serial ports need the devices' group
 (`dialout`; `uucp` on Arch, see Requirements). The binary unpacks itself to `$TMPDIR`
 (default `/tmp`) on start — if `/tmp` is mounted `noexec`, point `TMPDIR` at a directory
-that isn't. While it runs it keeps that copy locked and its access times fresh, so tmp
-cleaners (systemd-tmpfiles, tmpreaper) don't delete it under a long-running instance; a
-copy left behind by a killed process still ages out as usual. For certificate checks (MQTT
-over TLS, OIDC, LDAPS / StartTLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE`
-if set (unless a CA file is set for the MQTT mapping or for LDAP).
+that isn't (`ser2net-install.sh` does that for the service). While it runs it keeps that
+copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
+don't delete it under a long-running instance; a copy left behind by a killed process
+still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS) it
+uses the distribution's CA bundle, or `SSL_CERT_FILE` if set (unless a CA file is set for
+the MQTT mapping or for LDAP).
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) and where each
 component is loaded from, with the known folders shortened (`<python>`, `<ser2net>`,
@@ -589,7 +600,11 @@ reports, and mask IP addresses, user names and the host name in log lines you pa
 `ser2net --licenses` prints the license text of every component inside the
 executable (releases also attach it as `*.THIRD-PARTY-LICENSES.txt`).
 
-Build it yourself — Windows: `pip install -r requirements.txt -r requirements-optional.txt pyinstaller && pyinstaller ser2net.spec`;
+Build it yourself — Windows: `pwsh tools\build_standalone_windows.ps1` (what the release
+runs: the pinned python-build-standalone interpreter, the hash-locked packages, license
+texts and SBOM), or with a Python 3.12 of your own
+`pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`
+(the spec then writes the `--licenses` text itself, from that environment);
 Linux (in an old-glibc container, so the result runs on older distributions too):
 `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`.
 
@@ -612,12 +627,42 @@ python3 ser2net.py --reconfigure
 ### Offline install (no-internet machine)
 Dependencies live in `vendor/wheels/`; `ser2net.py` installs them to `./lib` on first
 launch (`pip install --no-index`). No internet needed. The set covers Python 3.10–3.14 on
-Linux x86_64 and Windows x64; after a `requirements.txt` change, refresh it with
-`python3 tools/refresh_wheels.py` (`tests/test_vendor_wheels.py` checks it).
+every OS and CPU: everything but psutil is pure Python, and psutil (the network interface
+list) is bundled for Linux x86_64 and Windows x64. Elsewhere — ARM Linux (32- and 64-bit
+Raspberry Pi OS), macOS, Alpine/musl, Windows on ARM or a 32-bit Windows Python — the first
+launch installs the set without it and says so; the interface lists then come from Python's
+standard library, which may miss an interface (`--about` shows `psutil not installed`;
+`python3 bootstrap.py --online` adds it from PyPI where it has a wheel for the machine or a
+C compiler is there). CI runs this offline first start on Linux x86_64 and arm64, Windows,
+macOS and 32-bit ARM (armv7, emulated). After a `requirements.txt` change, refresh the set with
+`python3 tools/refresh_wheels.py` (`tests/test_vendor_wheels.py` checks it). Each wheel's
+sha256 is in `vendor/wheels/SHA256SUMS`, and the first launch refuses to install from a set
+where a listed wheel differs (CI compares every wheel with the file PyPI publishes); wheels
+you add yourself aren't listed and install as they are.
 To enable the optional features (MQTT/LDAP/OIDC) on an offline source install, download
 their wheels too: `pip download -r requirements-optional.txt -d vendor/wheels`, then
 `pip install --no-index --find-links vendor/wheels -r requirements-optional.txt`. (The
 standalone binary already bundles them.)
+
+### Upgrading a source install
+Update the files (`git pull`, or unpack the new source over the old one) and restart
+ser2net. When the new version pins other dependency versions, its first start installs
+them into `lib/`, offline and once (a few seconds); packages you added to `lib/` stay, and
+the old versions' metadata is removed. `lib/.ser2net-deps.json` records what `lib/` was
+installed for (the pins, the Python version, the platform), so a new Python is handled the
+same way. Upgrading from 2.8.x or older, this first start replaces what those versions left
+in `lib/` (possibly 2.7's starlette and anyio, which have published advisories).
+When that can't be done — no pip for that Python, `lib/` not writable for the account
+ser2net runs as, or another ser2net still running from the same folder — ser2net starts
+with the old `lib/` and
+says why in its log (`WARNING: … ./lib …`); when this version can't run on the old packages
+at all (2.8.1 and newer on 2.7's), the start stops with one line that says so.
+`python3 bootstrap.py` installs the set by hand (stop ser2net first, and run it as the
+account ser2net runs as, e.g. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); with
+`--no-bootstrap` that is the way after every upgrade, and the start-up log warns while
+`lib/` is out of date. The one-off commands (`--set-password`, `--sign-out-all`, `--about`,
+`--install-service`), which may run beside a running ser2net, leave `lib/` as it is and
+only warn.
 
 ### Docker
 ```bash
@@ -627,8 +672,11 @@ Without compose, use the `docker run` command in
 [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) (the published image,
 `--restart unless-stopped`, `--init`, the mapping ports, a `/dev/serial/by-id` device, log
 limits).
-Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(or `:2.8`, `:2.8.1`); `docker-compose.yml` uses it.
+Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 32-bit
+Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2net:latest`
+(or `:2.8`, `:2.8.1`); `docker-compose.yml` uses it. Between releases `:latest` and `:X.Y`
+are rebuilt on a newer Debian/Python base when it changes (weekly check; `:X.Y.Z` stays as
+released) — see [`docs/DOCKER.md`](docs/DOCKER.md).
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
 `SER2NET_PORT` — the interactive picker can't run headless; `SER2NET_BIND_IP=*` is every
 interface, IPv4 and IPv6). Publish each mapping's port
@@ -1188,7 +1236,7 @@ directory's owner by itself):
 
 | Install | Command |
 |---|---|
-| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
+| source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2net-linux-x64 --set-password admin`) |
 | Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
@@ -1266,19 +1314,83 @@ is no account at all; later starts ignore it.
   `stop_grace_period: 30s` (a stop reaches ser2net, which finishes within that), `/data`
   volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
   that (an existing container: `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives;
-  `systemctl reload ser2net` reads `config.json` again (see Configuration & state files).
-  On Arch, Manjaro and EndeavourOS the serial group is `uucp` and there is no `dialout`
-  group (the unit would fail with `status=216/GROUP`): set it with `systemctl edit ser2net`
-  (`[Service]`, `SupplementaryGroups=`, then `SupplementaryGroups=uucp`; the unit's comment
-  has it).
-  **Do not run as root.** Several instances: the template `systemd/ser2net@.service`
-  (below). Optional: the drop-in `systemd/ser2net.service.d/notify.conf`
-  (`Type=notify`, `WatchdogSec=120`) makes systemd count ser2net as started only once its
-  mappings run and its UI listens (or tries again to), and restart it when its event loop
-  stops answering (remove it before going back to a version before 2.9.0, which never
-  reports ready).
+- **Linux (systemd):** two units. Both run ser2net as a dedicated unprivileged user
+  (`ser2net`, in the `dialout` group for the serial ports), restart it 3 s after a failure
+  and sandbox it (read-only system, own `/tmp`, a system call filter). **Do not run it as
+  root.** `systemctl reload ser2net` reads `config.json` again (see Configuration & state
+  files). On Arch, Manjaro and EndeavourOS the serial group is `uucp` and there is no
+  `dialout` group (the unit would fail with `status=216/GROUP`): set it with
+  `systemctl edit ser2net` (`[Service]`, `SupplementaryGroups=`, then
+  `SupplementaryGroups=uucp`; the unit's comment has it).
+  - *Source checkout* in `/opt/ser2net`: `systemd/ser2net.service`.
+    ```bash
+    sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
+    sudo git clone https://github.com/haliskilic/ser2net.git /opt/ser2net
+    sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    ```
+    The first start makes `data/` and `lib/` for the `ser2net` user and installs the
+    bundled dependencies into `lib/` (offline). It needs Python 3.10 or newer as
+    `/usr/bin/python3`: on RHEL / AlmaLinux / Rocky 8 and 9 and Debian 11 point
+    `ExecStart=` at a newer interpreter (RHEL: `dnf install python3.11`, then
+    `/usr/bin/python3.11`) or use the binary.
+  - *Standalone binary*: `ser2net-standalone.service` (attached to every release, and in
+    `systemd/`), installed as `ser2net.service`; its data is in `/var/lib/ser2net`, which
+    systemd makes. `ser2net-install.sh` (attached to every release too) does it all:
+    download `ser2net-linux-x64` (or `-arm64`), `ser2net-standalone.service`,
+    `ser2net-install.sh` and `SHA256SUMS` into one folder, then
+    ```bash
+    sudo sh ser2net-install.sh                         # the web UI on 127.0.0.1:8080
+    sudo sh ser2net-install.sh --listen 0.0.0.0:8080   # or on the network (use TLS there)
+    ```
+    It checks the files against `SHA256SUMS` and that the binary runs on this machine,
+    creates the `ser2net` user and `/var/lib/ser2net`, installs the binary as
+    `/usr/local/bin/ser2net` and the unit as `/etc/systemd/system/ser2net.service`, enables
+    and starts the service and waits until it answers. Run it again with a newer release to
+    upgrade (the data stays); `--uninstall` removes the service and the binary (the data
+    and the user stay). It won't hide another `ser2net.service` (the classic ser2net
+    daemon's package, a source install in `/opt/ser2net`) unless you stop that one and pass
+    `--replace-unit`; where `/tmp` is mounted `noexec` it has the binary unpack itself in
+    `/var/cache/ser2net` instead (a drop-in). `--root DIR` only stages the files under DIR.
+    The same by hand:
+    ```bash
+    sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
+    sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
+    sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    ```
+  - The web UI listens on `127.0.0.1:8080` until you say otherwise. To reach it from the
+    network, run `sudo systemctl edit ser2net`, add the lines below (use TLS on a network
+    address, see Security) and `sudo systemctl restart ser2net`:
+    ```ini
+    [Service]
+    Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+    ```
+    Set the first password in the browser, or with `--set-password` (the table under
+    Security). Run such commands as the `ser2net` user (`sudo -u ser2net …`), never as
+    plain root, which would leave files the service can't read. Logs:
+    `journalctl -u ser2net` and `all.log` in the data directory.
+  - Several instances: the template `systemd/ser2net@.service` (below). Optional: the
+    drop-in `systemd/ser2net.service.d/notify.conf` (`Type=notify`, `WatchdogSec=120`)
+    makes systemd count ser2net as started only once its mappings run and its UI listens
+    (or tries again to), and restart it when its event loop stops answering (remove it
+    before going back to a version before 2.9.0, which never reports ready).
+- **Ports below 1024** (Modbus/TCP's 502, the web UI on 80 or 443): Linux lets only root,
+  or a process with the `CAP_NET_BIND_SERVICE` capability, listen on them, and both units
+  run ser2net as an unprivileged user. A mapping on such a port then fails with a hint on
+  the dashboard, and an admin UI port below 1024 gets a start-up warning (the web UI can't
+  start). To allow them, give the service that one capability with
+  `sudo systemctl edit ser2net`, then `sudo systemctl restart ser2net`:
+  ```ini
+  [Service]
+  AmbientCapabilities=CAP_NET_BIND_SERVICE
+  CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+  ```
+  It works with the units' `NoNewPrivileges=true`; whoever may edit mappings can then
+  listen on any free port below 1024. `setcap cap_net_bind_service=+ep` on python3 does not
+  help (`NoNewPrivileges` ignores file capabilities) and would give that right to every
+  Python program on the machine. Or use port 1024 or above. Docker on the host network:
+  `SER2NET_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -1379,8 +1491,10 @@ profiles.
 - **Linux (systemd):** the template `systemd/ser2net@.service` runs one instance per name,
   with its data in `/var/lib/ser2net/<name>` and its address in `/etc/ser2net/<name>.env`
   (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); the instance name is its name in
-  notifications. Install the bundled dependencies once (`python3 /opt/ser2net/bootstrap.py`
-  as the `ser2net` user), then `systemctl enable --now ser2net@line1 ser2net@line2`.
+  notifications. Install the bundled dependencies once, and again after each upgrade
+  (`python3 /opt/ser2net/bootstrap.py` as the `ser2net` user: the instances start with
+  `--no-bootstrap`, and their start-up log warns while `lib/` is out of date), then
+  `systemctl enable --now ser2net@line1 ser2net@line2`.
 - **Docker:** one container per instance, each with its own volume, `container_name` and
   published ports (`8081:8080`), and `SER2NET_NODE_NAME` (or `hostname:`) for its name
   ([docs/DOCKER.md](docs/DOCKER.md)).
@@ -1423,9 +1537,14 @@ times, the cluster's peer list) is measured with a clock that no clock step chan
 
 ## 🗂️ Configuration & state files
 
-All state lives in the **data dir** (default `data/`). The data directory is locked to
-owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the files
-inside aren't readable by other users:
+All state lives in the **data dir** (default `data/`; `--data-dir`, or with `--config` the
+config file's folder). The data directory is locked to owner-only (POSIX `0700`; Windows
+`icacls` owner/SYSTEM/Administrators), so the files inside aren't readable by other users,
+and on Linux/macOS the files the server creates are owner-only too. That applies to a folder
+ser2net made or one holding only its own files (the ones below): a folder with other files
+in it (`--config /etc/ser2net.json`, a home directory) keeps its permissions, only the
+config file (and `backups/`, `logs/`, `traces/`) is made private, and the start-up log warns
+when other accounts can use the folder — give ser2net a folder of its own:
 - `config.json` — admin IP, password hashes, all mappings (atomic write), and the secrets
   ser2net has to use itself, in plain text (see *Secrets* below).
 - `backups/` — the `config.json` every change writes, and the one it replaces when that
@@ -1643,7 +1762,8 @@ python3 tests/run_all.py -v         # also show the output of passing tests
 The socat tests use virtual serial ports (Linux); no hardware needed. Individual
 files still run directly, e.g. `python3 tests/test_rest_api.py`. On every pull request
 CI (GitHub Actions) runs ruff, mypy, `pip-audit`, the offline-wheel check, the full
-matrix (ubuntu/windows × Python 3.10–3.13) and coverage (`python3 tests/coverage_run.py`,
+matrix (ubuntu/windows × Python 3.10–3.14, each leg also doing the offline first-run
+install; 3.15 runs without blocking) and coverage (`python3 tests/coverage_run.py`,
 which also measures the servers the tests start). Development setup and rules:
 [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -1,8 +1,9 @@
 # Dependabot: weekly version-update PRs (grouped, one per ecosystem, except the libraries
-# ser2net carries fixes for, below) plus security updates. A requirements.txt bump also
-# needs the offline wheels refreshed — run `python tools/refresh_wheels.py` on the
-# Dependabot branch (CI job "offline wheels match requirements.txt" stays red until
-# then). See CONTRIBUTING.md.
+# ser2net carries fixes for, below) plus security updates. It updates requirements.txt
+# and the hash locks (requirements-lock.txt, requirements-build.txt) itself; the offline
+# wheels follow through .github/workflows/refresh-pins.yml, which pushes them onto the
+# Dependabot branch and re-runs CI (until then only the job "offline wheels match
+# requirements.txt" is red). See CONTRIBUTING.md.
 version: 2
 updates:
   - package-ecosystem: pip
@@ -17,6 +18,21 @@ updates:
         # code (app/engine/serial_compat.py), and ldap3 / pyasn1 bumps need their own look
         # (CONTRIBUTING.md, "Third-party code")
         exclude-patterns: ["pyserial", "pyserial-asyncio-fast", "ldap3", "pyasn1"]
+    commit-message:
+      prefix: "deps"
+  # the browser libraries vendored in app/web/static (vendor/npm/package.json records
+  # them; .github/workflows/refresh-pins.yml copies a bumped release's files in). A major
+  # version (xterm.js 6, htmx 4) changes the console / the pages: done by hand.
+  - package-ecosystem: npm
+    directory: /vendor/npm
+    schedule:
+      interval: weekly
+    groups:
+      browser:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "deps"
   - package-ecosystem: github-actions

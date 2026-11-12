@@ -2,24 +2,51 @@
 # Build:  docker build -t ser2net .
 # Run:    docker compose up -d (docker-compose.yml), or the `docker run` command in
 #         docs/DOCKER.md: restart policy, mapping ports, serial devices, log limits.
-FROM python:3.12-slim
+# The base: CPython 3.12 on Debian 13 "trixie" (what python:3.12-slim points at today). The
+# codename keeps a rebuild on Debian point releases and 3.12.x patches, never a new Debian
+# major under an existing version tag. Releases and the weekly refresh
+# (.github/workflows/image-refresh.yml) build FROM this tag resolved to a digest, and
+# record it in the label org.opencontainers.image.base.digest (docs/DOCKER.md).
+ARG BASE_IMAGE=python:3.12-slim-trixie
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
 # Install dependencies first for better layer caching. We install straight from
 # PyPI (the bundled vendor/wheels offline path is for air-gapped hosts, not the
-# image build), so the app runs with --no-bootstrap. The optional feature deps
-# (MQTT / LDAP / OIDC, requirements-optional.txt) are included so those work in the
-# container out of the box.
-COPY requirements.txt requirements-optional.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-optional.txt
+# image build), so the app runs with --no-bootstrap. requirements-lock.txt holds the
+# pins of requirements.txt and of the optional feature packages (MQTT / LDAP / OIDC,
+# requirements-optional.txt), so those work in the container out of the box, each with
+# the sha256 of its files: pip refuses any other file and any unlocked dependency.
+# linux/arm/v7 (32-bit ARM): PyPI has no wheel of psutil and cffi (cryptography's) for it,
+# so those two are built from their source releases, hash-checked by the same lock, with
+# setuptools from requirements-build.txt (hash-checked too) and a compiler that is removed
+# again in the same layer; every other package is its locked wheel, as on amd64 / arm64.
+ARG TARGETARCH
+COPY requirements-lock.txt requirements-build.txt ./
+RUN set -e; \
+    if [ "$TARGETARCH" = arm ]; then \
+        apt-get update; \
+        apt-get install -y --no-install-recommends gcc libc6-dev libffi-dev pkg-config; \
+        sed -n '/^setuptools==/,/[^\\]$/p' requirements-build.txt > /tmp/setuptools.txt; \
+        pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/setuptools.txt; \
+        pip install --no-cache-dir --require-hashes --only-binary=:all: \
+            --no-binary=cffi,psutil --no-build-isolation -r requirements-lock.txt; \
+        pip uninstall -y setuptools; \
+        apt-get purge -y --auto-remove gcc libc6-dev libffi-dev pkg-config; \
+        rm -rf /var/lib/apt/lists/* /tmp/setuptools.txt; \
+    else \
+        pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-lock.txt; \
+    fi
 
 # ser2net runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
-# it also takes over a /data volume that an older, root-running image wrote).
+# it also takes over a /data volume that an older, root-running image wrote). /data is
+# private from the start, so a new volume is that also with a folder mounted inside it
+# (ser2net locks only a data directory that holds nothing but its own files).
 RUN groupadd --system --gid 10001 ser2net \
  && useradd --system --uid 10001 --gid ser2net --home-dir /data --no-create-home \
       --shell /usr/sbin/nologin ser2net \
- && mkdir -p /data && chown ser2net:ser2net /data
+ && mkdir -p /data && chown ser2net:ser2net /data && chmod 0700 /data
 
 # (.dockerignore lets in only what the image runs, plus the license texts)
 COPY . .

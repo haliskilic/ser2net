@@ -1,19 +1,38 @@
 name: CI
 
 # Pull requests (to any branch, so stacked PRs are tested too) and pushes to main.
-# A branch push without a PR no longer runs the suite a second time.
+# A branch push without a PR no longer runs the suite a second time. release.yml calls
+# this workflow too, so a release tag runs exactly these checks before anything is
+# published (and its standalone build is the one released).
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      publish:
+        description: A release build (standalone.yml signs the Windows exe when configured)
+        type: boolean
+        default: false
+    secrets:  # code signing (docs/SIGNING.md); handed on to standalone.yml for a release build
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_CLIENT_SECRET:
+        required: false
+      SIGNPATH_API_TOKEN:
+        required: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  # a new commit on a PR supersedes the running check; every main commit is tested
+  # A new commit on a PR supersedes the running check. Every other run (each push to main,
+  # a manual run) has a group of its own: GitHub keeps only one waiting run per group, so
+  # a shared main group dropped the middle commits of a quick series of merges.
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -21,8 +40,10 @@ jobs:
     name: ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install ruff==0.17.3
@@ -32,49 +53,118 @@ jobs:
     name: mypy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt mypy==2.4.1
+      # with the optional packages and pyserial's stubs, so the MQTT / OIDC / certificate
+      # and serial code is checked against their real types instead of Any
+      - run: >-
+          pip install -r requirements.txt -r requirements-optional.txt
+          types-pyserial==3.5.0.20261104 mypy==2.4.1
       - run: mypy
+      # the Windows-only code paths, and POSIX-only calls (fcntl, os.getuid, ...) that
+      # reach code Windows runs too
+      - name: mypy --platform win32
+        run: mypy --platform win32
 
-  audit:
-    name: dependency audit py${{ matrix.python-version }}
+  # The workflows themselves: unpinned third-party actions, template injection, credentials
+  # left in the checkout, over-broad permissions (settings: .github/zizmor.yml)
+  workflows:
+    name: workflow lint (zizmor)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.10 resolves the older pins its markers select; 3.12 the current ones
-        python-version: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: pip install pip-audit==2.10.1
-      - name: Known vulnerabilities in the pinned runtime dependencies
-        run: pip-audit --strict -r requirements.txt
-      - name: Known vulnerabilities in the optional packages the binaries / image bundle (3.12)
-        if: matrix.python-version == '3.12'
-        run: pip-audit --strict -r requirements-optional.txt
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install zizmor==1.32.0
+      - run: zizmor --offline --format=github .
 
+  # pip-audit on Python 3.10 and 3.12, Linux and Windows (the same workflow release.yml and
+  # scheduled.yml use)
+  audit:
+    uses: ./.github/workflows/audit.yml
+
+  # Everything derived from the pins: the offline wheels, the build locks and the vendored
+  # browser libraries (vendor/npm/package.json). The test legs skip these checks
+  # (SER2NET_SKIP_PIN_CHECKS), so a Dependabot bump fails here alone while the matrix shows
+  # whether the new versions work. On a failure, the refreshed files are attached (artifact
+  # "refreshed-pins") and the summary says how to apply them; on Dependabot's branches
+  # .github/workflows/refresh-pins.yml pushes them.
   vendor:
     name: offline wheels match requirements.txt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
       - run: python tests/test_vendor_wheels.py
+      - run: python tests/test_build_lock.py
+      # the asset and SBOM checks import the app (and serve a page)
+      - run: pip install -r requirements.txt
+      - run: python tests/test_vendor_assets.py
+      - run: python tests/test_third_party.py   # the license overrides are for the pinned versions
+      # every wheel is the file PyPI publishes (its sha256 from PyPI's JSON API), or the
+      # byte-for-byte rebuild of the pure-Python repack from one
+      - name: The wheels are PyPI's files
+        run: python tools/refresh_wheels.py --verify
+      # the image's and the binaries' hash locks: every hash is a file PyPI publishes for
+      # that release, every target (Linux x86_64/aarch64, Windows x64) has a wheel among
+      # them, and every dependency there is locked
+      - name: The build locks match PyPI
+        run: python tools/refresh_locks.py --verify
+      # the vendored htmx / xterm.js files are byte for byte those of the npm releases
+      # vendor/npm/package.json pins (each tarball checked against the registry's sha512)
+      - name: The browser libraries are the npm releases' files
+        run: python tools/refresh_assets.py --verify
+      - name: The refreshed wheels and locks, as a patch (on failure)
+        if: failure()
+        run: |
+          python tools/refresh_wheels.py || true
+          python tools/refresh_locks.py --verify || python tools/refresh_locks.py || true
+          python tools/refresh_assets.py --check || python tools/refresh_assets.py || true
+          paths=(vendor/wheels requirements-lock.txt requirements-build.txt vendor/npm
+                 app/web/static tools/licenses/npm)
+          git add --intent-to-add "${paths[@]}"
+          git diff --binary -- "${paths[@]}" > refreshed-pins.patch
+          git diff --stat -- "${paths[@]}"
+          {
+            echo "### The offline wheels, build locks or browser libraries don't match the pins"
+            echo
+            echo "Refresh them on the branch and commit the result:"
+            echo
+            echo '```'
+            echo 'python tools/refresh_wheels.py && python tools/refresh_locks.py && python tools/refresh_assets.py'
+            echo "git add ${paths[*]}"
+            echo 'git commit -m "deps: refresh the offline wheels, build locks and browser libraries"'
+            echo '```'
+            echo
+            echo 'or download the artifact **refreshed-pins** of this run and `git apply --binary refreshed-pins.patch`.'
+            echo "Dependabot's pull requests get it pushed by Actions -> Refresh pinned files (which also starts CI)."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: failure()
+        with:
+          name: refreshed-pins
+          path: refreshed-pins.patch
+          retention-days: 14
 
   ui:
     name: ui layout (Chromium)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
       - name: Install dependencies + Playwright Chromium
@@ -86,7 +176,7 @@ jobs:
           SER2NET_UI_TESTS: "1"          # a missing browser fails here instead of skipping
           SER2NET_UI_ARTIFACTS: ui-screenshots
         run: python tests/test_ui_layout.py
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()
         with:
           name: ui-screenshots
@@ -100,7 +190,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         # The py3.12 legs (the binaries' and the image's Python) also install the pinned
         # optional packages, so the LDAP / OIDC / MQTT code paths run with ldap3, authlib
         # and paho-mqtt; the other legs keep testing ser2net without them.
@@ -118,16 +208,79 @@ jobs:
       # tests/_optional.py: where the optional packages are installed, a test that
       # needs a missing one fails instead of skipping
       SER2NET_OPTIONAL_TESTS: ${{ matrix.optional && '1' || '' }}
+      # the wheels / locks against the pins: the vendor job's (one red check on a bump)
+      SER2NET_SKIP_PIN_CHECKS: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
+      # What a source install does on its first run, before anything else is installed:
+      # bootstrap.py puts the pinned dependencies from vendor/wheels into ./lib with
+      # pip --no-index (no network), and the app has to import from there. ./lib is
+      # removed again, so the suite below runs on the packages installed next.
+      - name: Offline first run (bootstrap.py from vendor/wheels, the app imports from ./lib)
+        shell: bash
+        run: |
+          python bootstrap.py
+          python -c "import os, sys; sys.path[:0] = ['lib', '.']
+          import serial, starlette, uvicorn, app.runtime, app.web.server
+          lib = os.path.abspath('lib')
+          assert all(os.path.abspath(m.__file__).startswith(lib) for m in (serial, starlette, uvicorn))"
+          python ser2net.py --about
+          rm -rf lib
       - name: Install dependencies (+ cryptography for the in-process certificate tests)
         run: pip install -r requirements.txt cryptography
       - name: Install the optional packages (MQTT / LDAP / OIDC; py3.12 legs)
         if: matrix.optional
         run: pip install -r requirements-optional.txt
+      - name: Install socat (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y socat
+      - name: Install pydivert (Windows dead-peer test)
+        if: runner.os == 'Windows'
+        run: pip install pydivert==4.0.1
+      - name: Run portable test suite (Windows)
+        if: runner.os == 'Windows'
+        run: python tests/run_all.py -v
+      - name: Run full test suite incl. socat data-path (Linux)
+        if: runner.os == 'Linux'
+        run: python tests/run_all.py --socat -v
+      # 8 serial bridges at once under request/response load, then every device unplugged
+      # and plugged back twice (socat); the full size runs weekly in scheduled.yml
+      - name: Stress, 8 bridges with device loss and return (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: python tests/stress_24.py 8 512 100 --cycles 2
+
+  # The newest Python, before its wheels have all settled: shows what breaks there
+  # without blocking a merge (not in ci-ok's needs, continue-on-error). Move it into the
+  # matrix above once it passes. Not run for a release (github.workflow_ref is then
+  # release.yml's), which it must not hold up.
+  test-next:
+    name: test ${{ matrix.os }} py3.15 (not required)
+    if: ${{ !contains(github.workflow_ref, '/.github/workflows/release.yml@') }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      SER2NET_BLACKHOLE_TESTS: "1"
+      SER2NET_SERVICE_TESTS: "1"
+      SER2NET_SKIP_PIN_CHECKS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.15"
+          allow-prereleases: true
+      - run: pip install -r requirements.txt cryptography
       - name: Install socat (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y socat
@@ -167,9 +320,12 @@ jobs:
     env:
       SER2NET_BLACKHOLE_TESTS: "1"
       SER2NET_OPTIONAL_TESTS: "1"
+      SER2NET_SKIP_PIN_CHECKS: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
       # with the optional packages, so the LDAP / OIDC / MQTT code is measured too
@@ -180,25 +336,131 @@ jobs:
       - name: Report
         run: |
           coverage report --skip-empty --sort=cover > coverage.txt
-          tail -1 coverage.txt
-          { echo '### Coverage'; echo '```'; tail -40 coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          grep '^TOTAL' coverage.txt
+          # the whole table, least-covered modules first
+          { echo '### Coverage'; echo; coverage report --skip-empty --sort=cover --format=markdown; } >> "$GITHUB_STEP_SUMMARY"
           coverage html --skip-empty -d coverage-html
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: coverage
           path: |
             coverage.txt
             coverage-html
           retention-days: 14
+      # Last, so the report above is uploaded also when it fails. Measured on Linux only
+      # (the Windows-only modules count as missed); set with headroom below the 88.8% a
+      # full run measured. Raise it by hand after pull requests that add tests. Not in
+      # .coveragerc, so a local run without socat or the blackhole tests doesn't fail.
+      - name: Coverage floor
+        run: coverage report --format=total --fail-under=87
 
-  # The Docker image on amd64 + arm64 (same workflow the release pushes to GHCR with).
+  # The systemd unit as it ships, on a real systemd (the runner's PID 1): a fresh
+  # /opt/ser2net from git archive, the sandbox seen from inside, data through a mapping,
+  # a lib/ left by an older release, a port below 1024 (tests/systemd_smoke.sh). The
+  # standalone binary's unit runs in standalone.yml, next to the binary it is built with.
+  systemd:
+    name: systemd unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: socat (the PTY a mapping opens), pip for the system Python
+        run: sudo apt-get update && sudo apt-get install -y socat python3-pip
+      - name: Install and run systemd/ser2net.service from a fresh /opt/ser2net
+        timeout-minutes: 10
+        run: tests/systemd_smoke.sh
+
+  # The offline first start of a source checkout where vendor/wheels has no psutil wheel for
+  # the machine (bootstrap.py installs the set without it): bootstrap.py with pip
+  # --no-index, the app from ./lib, --about, a start answering /healthz
+  # (tests/offline_first_start.sh). The test legs above do the same on Linux x86_64 and
+  # Windows, where every wheel is bundled.
+  offline:
+    name: offline first start ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-latest]
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: bootstrap.py from vendor/wheels, then ser2net from ./lib
+        timeout-minutes: 10
+        run: tests/offline_first_start.sh python
+
+  # The same on 32-bit ARM (Raspberry Pi OS 32-bit, armv7 gateways: no binary there), in a
+  # Debian arm32v7 container under QEMU: Debian 12's own python3 (3.11, what Raspberry Pi
+  # OS 12 has) and the oldest supported Python (the python:3.10 image).
+  offline-armv7:
+    name: offline first start linux/arm/v7 (QEMU, ${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:bookworm", "python:3.10-slim-bookworm"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm
+      - name: bootstrap.py from vendor/wheels, then ser2net from ./lib (armv7l, emulated)
+        timeout-minutes: 30
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm --platform linux/arm/v7 -v "$PWD:/src:ro" "$IMAGE" sh -ec '
+            uname -m
+            if ! command -v python3 >/dev/null; then
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends python3 python3-pip >/dev/null
+            fi
+            cp -a /src /work
+            /work/tests/offline_first_start.sh python3'
+
+  # The Docker image on amd64, arm64 and arm/v7 (QEMU) (for a release, release.yml then
+  # smoke-tests the image it pushes to GHCR with the same script).
   docker:
     uses: ./.github/workflows/docker.yml
 
-  # Build the standalone executables and prove they need nothing else installed
-  # (same workflow the release uses). Heavy, so: pull requests and main only.
+  # Build the standalone executables and prove they need nothing else installed. Heavy,
+  # so: pull requests and main only; called from release.yml, these are the released files.
   standalone:
     permissions:
       contents: read
       actions: read   # the reusable workflow requests it (SignPath); the caller must grant it
     uses: ./.github/workflows/standalone.yml
+    with:
+      publish: ${{ inputs.publish == true }}
+    # the signing credentials only for a release build, never for a pull request or main
+    secrets:
+      AZURE_TENANT_ID: ${{ inputs.publish && secrets.AZURE_TENANT_ID || '' }}
+      AZURE_CLIENT_ID: ${{ inputs.publish && secrets.AZURE_CLIENT_ID || '' }}
+      AZURE_CLIENT_SECRET: ${{ inputs.publish && secrets.AZURE_CLIENT_SECRET || '' }}
+      SIGNPATH_API_TOKEN: ${{ inputs.publish && secrets.SIGNPATH_API_TOKEN || '' }}
+
+  # The one check for branch protection to require (with license/cla): it passes only when
+  # every job above passed, so jobs added to or renamed in this workflow need no settings
+  # change. A needed job that failed, was cancelled or was skipped fails it (GitHub would
+  # count a skipped required check as passed, hence if: always() and the explicit check).
+  # test-next is left out on purpose: it may fail.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [lint, typecheck, workflows, audit, vendor, ui, test, coverage, systemd, offline, offline-armv7, docker, standalone]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null
