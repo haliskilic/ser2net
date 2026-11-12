@@ -584,7 +584,7 @@
   </form>
   {% if api_token_set %}
   <form method="post" action="{{ base }}/settings/api-token/revoke" class="inline mt-sm"
-        data-confirm="{{ _('Revoke the REST API token? The REST API is switched off, and everything that uses it gets 401.') }}">
+        data-confirm="{% if api_token_rows %}{{ _('Revoke the REST API token? Everything that uses it gets 401; the other tokens keep working.') }}{% else %}{{ _('Revoke the REST API token? The REST API is switched off, and everything that uses it gets 401.') }}{% endif %}">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <button class="btn" type="submit">{{ _("Revoke") }}</button>
   </form>
@@ -601,7 +601,8 @@
         <td class="mono">{{ t.name }}{% if t.expired %} <span class="tag">{{ _("expired") }}</span>{% endif %}<br><span class="muted">{{ _("created %(date)s", date=t.created) }} · {% if t.expires %}{{ _("expires %(date)s", date=t.expires) }}{% else %}{{ _("never expires") }}{% endif %} · {{ _("last used: %(time)s", time=t.last_used) }}</span></td>
         <td class="mono">{{ t.role }}</td>
         <td>
-          <form method="post" action="{{ base }}/settings/api-tokens/revoke" class="inline">
+          <form method="post" action="{{ base }}/settings/api-tokens/revoke" class="inline"
+                data-confirm="{{ _('Revoke the token “%(name)s”? Everything that uses it gets 401; the other tokens keep working.', name=t.name) }}">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
             <input type="hidden" name="id" value="{{ t.id }}">
             <button class="btn sm danger" type="submit">{{ _("Revoke") }}</button>
@@ -614,16 +615,17 @@
   </div>
   {% endif %}
   {% if api_token_rows|length < api_token_max %}
+  {% set nt = submitted.new_token or {} %}
   <form method="post" action="{{ base }}/settings/api-tokens" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <div class="grid2">
-      <label>{{ _("Name") }} <input type="text" name="name" placeholder="{{ _('e.g. %(example)s', example='prometheus') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="64" pattern="[A-Za-z0-9._\-]{1,64}" title="{{ _("A token name is 1-64 characters: English letters, digits, '.', '_' or '-'.") }}" required></label>
+      <label>{{ _("Name") }} <input type="text" name="name" value="{{ nt.name }}" placeholder="{{ _('e.g. %(example)s', example='prometheus') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="64" pattern="[A-Za-z0-9._\-]{1,64}" title="{{ _("A token name is 1-64 characters: English letters, digits, '.', '_' or '-'.") }}" required></label>
       <label>{{ _("Role") }} <span class="muted">({{ _("viewer = read-only") }})</span>
-        <select name="role"><option value="viewer" selected>viewer</option><option value="operator">operator</option></select>
+        <select name="role"><option value="viewer"{% if nt.role != 'operator' %} selected{% endif %}>viewer</option><option value="operator"{% if nt.role == 'operator' %} selected{% endif %}>operator</option></select>
       </label>
     </div>
     <label>{{ _("Expires after (days)") }} <span class="muted">({{ _("empty or 0 = never · at most %(max)s", max=api_token_days_max) }})</span>
-      <input type="number" name="expires_days" min="0" max="{{ api_token_days_max }}">
+      <input type="number" name="expires_days" min="0" max="{{ api_token_days_max }}" value="{{ nt.expires_days }}">
     </label>
     <button class="btn" type="submit">{{ _("Add token") }}</button>
   </form>

@@ -1311,5 +1311,7 @@
   "{0} configuration backup deleted.": "{0} yapılandırma yedeği silindi.",
   "{0} configuration backup still holds it (made before the deletion; a restore with accounts would bring it back): Configuration backups below can remove it from that backup.": "{0} yapılandırma yedeği hâlâ bu hesabı içeriyor (silmeden önce alınmış; hesaplarıyla birlikte geri yükleme onu geri getirir): aşağıdaki Yapılandırma yedekleri bölümünden o yedekten çıkarabilirsin.",
   "Send BREAK": "BREAK gönder",
-  "A serial BREAK was sent on “{0}”.": "“{0}” eşlemesinde seri BREAK gönderildi."
+  "A serial BREAK was sent on “{0}”.": "“{0}” eşlemesinde seri BREAK gönderildi.",
+  "Revoke the token “%(name)s”? Everything that uses it gets 401; the other tokens keep working.": "“%(name)s” token'ı iptal edilsin mi? Onu kullanan her şey 401 alır; diğer token'lar çalışmaya devam eder.",
+  "Revoke the REST API token? Everything that uses it gets 401; the other tokens keep working.": "REST API token'ı iptal edilsin mi? Onu kullanan her şey 401 alır; diğer token'lar çalışmaya devam eder."
 }
