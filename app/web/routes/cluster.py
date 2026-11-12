@@ -28,8 +28,8 @@ from ...i18n import _
 from .. import auth
 from . import ops
 from .common import Ctx, csrf_failed
-from .forms import (_TEXT_INPUTS, _as_text_input, _build_mapping_dict, form_context,
-                    mapping_for_rerender)
+from .forms import (_TEXT_INPUTS, _as_text_input, _build_mapping_dict, blocks_not_read,
+                    form_context, mapping_for_rerender)
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
@@ -66,6 +66,34 @@ def _peer_older(version, than: tuple[int, int, int]) -> bool:
     """True when a peer's reported version is older than *than*, or unknown."""
     v = _peer_version(version)
     return v is None or v < than
+
+
+# What other nodes may ask this one to do with its mappings: its /api/cluster/local and
+# mapping-data answers list them as "caps" (nodes before 2.9.0 send none, see peer_caps).
+CAPS = ("control", "edit")
+
+
+def peer_caps(payload) -> frozenset[str]:
+    """What a peer can be asked to do, by its /api/cluster/local answer: its "caps" list
+    (2.9.0+), else what its version could do: start/stop/restart ("control") since 2.6.0,
+    edit since 2.6.1; a node before 2.6.0 reports no version and can only be shown."""
+    if not isinstance(payload, dict):
+        return frozenset()
+    caps = payload.get("caps")
+    if isinstance(caps, list):
+        return frozenset(c for c in caps if isinstance(c, str))
+    v = _peer_version(payload.get("version"))
+    if v is None or v < (2, 6, 0):
+        return frozenset()
+    return frozenset({"control"} if v < (2, 6, 1) else {"control", "edit"})
+
+
+def _version_label(version) -> str:
+    """How a peer's version compares to this node's: "older", "newer" or ""."""
+    v, mine = _peer_version(version), _peer_version(__version__)
+    if v is None or mine is None or v == mine:
+        return ""
+    return "older" if v < mine else "newer"
 
 
 def _peer_below_2_8(version: str) -> bool:
@@ -116,17 +144,35 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     return fields, None
 
 
-def _remote(target, peer_id, mapping) -> dict:
+def _remote(target, peer_id, mapping, version="") -> dict:
     """The fleet view's edit form for a peer's mapping: the peer's host + port it posts
     back (resolved again on save), the address it shows, and the id it is saved under.
     That is the id the peer itself keys the mapping by, sent back to it unchanged: a
     v2.7/v2.8 peer may keep an id that this node would not take (``mapping`` carries the
     id derived from it here, which that peer has never heard of). This node uses it only
-    to address the mapping on the peer, never for a file or path of its own."""
+    to address the mapping on the peer, never for a file or path of its own. A peer
+    running another version than this node gets a note saying so."""
     if not isinstance(peer_id, str) or not peer_id:
         peer_id = mapping.id
-    return {"host": target["ip"], "port": target["port"],
-            "addr": peer_addr(target["ip"], target["port"]), "id": peer_id}
+    addr = peer_addr(target["ip"], target["port"])
+    note = ""
+    if (age := _version_label(version)) == "older":
+        note = _("{0} runs version {1}, this node {2}: the settings {1} doesn’t have are left "
+                 "out of this form. Upgrade every node to the same version (README: Upgrading "
+                 "a cluster).").format(addr, version, __version__)
+    elif age == "newer":
+        note = _("{0} runs version {1}, this node {2}: the settings only {1} has are not in "
+                 "this form, and it keeps them as they are. Upgrade this node too (README: "
+                 "Upgrading a cluster).").format(addr, version, __version__)
+    return {"host": target["ip"], "port": target["port"], "addr": addr, "id": peer_id,
+            "version_note": note}
+
+
+def _peer_form(target, mapping, version, peer_id) -> dict:
+    """form_context's arguments for a peer's mapping: its remote settings, and the blocks
+    a peer running *version* doesn't read left out."""
+    return {"remote": _remote(target, peer_id, mapping, version),
+            "hide": blocks_not_read(_peer_version(version))}
 
 
 def _mapping_kind_label(m) -> str:
@@ -186,7 +232,8 @@ def routes(ctx: Ctx) -> list:
             })
         return {"id": cfg.instance_id, "name": socket.gethostname(),
                 "ip": ip, "port": port, "scheme": scheme,
-                "version": __version__, "uptime_s": int(time.time() - state.started_at),
+                "version": __version__, "caps": list(CAPS),
+                "uptime_s": int(time.time() - state.started_at),
                 "mapping_count": len(maps), "running_count": running, "mappings": maps}
 
     async def _peer_auth(request):
@@ -248,17 +295,19 @@ def routes(ctx: Ctx) -> list:
             return {**base, "online": False, "id": target.get("id", ""),
                     "name": target.get("name", base["addr"]),
                     "uptime": "", "version": "", "mapping_count": 0, "running_count": 0,
-                    "mappings": []}
+                    "mappings": [], "caps": frozenset(), "age": ""}
         maps = data.get("mappings")
         maps = [m for m in maps if isinstance(m, dict)] if isinstance(maps, list) else []
         own_ip, own_port = peer_host(data.get("ip", "")), peer_port(data.get("port"))
         if own_ip and own_port and peer_addr(own_ip, own_port) != base["addr"]:
             base["reported"] = peer_addr(own_ip, own_port)
+        version = data.get("version", "")
         return {**base, "online": True, "id": data.get("id", target.get("id", "")),
                 "name": data.get("name", base["addr"]),
-                "uptime": _fmt_uptime(data.get("uptime_s", 0)), "version": data.get("version", ""),
+                "uptime": _fmt_uptime(data.get("uptime_s", 0)), "version": version,
                 "mapping_count": data.get("mapping_count", len(maps)),
-                "running_count": data.get("running_count", 0), "mappings": maps}
+                "running_count": data.get("running_count", 0), "mappings": maps,
+                "caps": peer_caps(data), "age": _version_label(version)}
 
     async def cluster_status(request):
         """Aggregated view for the browser: local node + every discovered/manual peer,
@@ -279,8 +328,11 @@ def routes(ctx: Ctx) -> list:
         for t, data in zip(targets, results, strict=False):
             nodes.append(_node_from(t, data))
         c = state.cluster
+        versions = {n["version"] for n in nodes if n["online"] and isinstance(n["version"], str)}
         notes = {"copies": c.copies(), "shared": c.shared_ids(), "other_key": c.other_key_nodes(),
-                 "legacy": c.legacy_nodes()}
+                 "legacy": c.legacy_nodes(),
+                 "versions": sorted(versions, key=lambda v: _peer_version(v) or (0, 0, 0))
+                 if len(versions) > 1 or "" in versions else []}
         return render(request, "_cluster_body.html", nodes=nodes, can_edit=can_edit(request),
                       discovery_error=state.cluster.discovery_error, notes=notes)
 
@@ -345,8 +397,10 @@ def routes(ctx: Ctx) -> list:
         m = cfg.get_mapping(request.query_params.get("mid", ""))
         if not m:
             return _peer_json(a, {"error": "not_found"}, 404)
+        # (nodes before 2.9.0 read only mapping, ports and ips)
         return _peer_json(a, {"mapping": m.to_dict(), "ports": state.ports.get(),
-                              "ips": netinfo.list_ip_candidates()})
+                              "ips": netinfo.list_ip_candidates(),
+                              "version": __version__, "caps": list(CAPS)})
 
     async def cluster_mapping_save(request):
         """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
@@ -394,10 +448,13 @@ def routes(ctx: Ctx) -> list:
                                             {"mid": request.query_params.get("mid", "")})
         if not data or not isinstance(data.get("mapping"), dict):
             return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
+        # its version: in the answer since 2.9.0, else what the fleet view was told
+        version = data.get("version") or (await state.cluster.fetch_peer(target) or {}).get(
+            "version", "")
         mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", **form_context(
             mapping, data.get("ports", []), data.get("ips", []), is_new=False,
-            remote=_remote(target, data["mapping"].get("id"), mapping)))
+            **_peer_form(target, mapping, version, data["mapping"].get("id"))))
 
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
@@ -418,6 +475,8 @@ def routes(ctx: Ctx) -> list:
                                    {"mid": form.get("id", "")}),
             state.cluster.get_peer(target, "/api/cluster/local"))
 
+        version = (data or {}).get("version") or (local or {}).get("version", "")
+
         def _reload(msg):
             peer = data or {}
             stored = (MappingConfig.from_dict(peer["mapping"])
@@ -426,12 +485,11 @@ def routes(ctx: Ctx) -> list:
             mapping = mapping_for_rerender(form, stored, ports)
             return render(request, "_mapping_form.html", status_code=400, **form_context(
                 mapping, ports, peer.get("ips", []), is_new=False, error=msg,
-                remote=_remote(target, form.get("id", ""), mapping)))
+                **_peer_form(target, mapping, version, form.get("id", ""))))
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))
-        fields, ferr = _peer_save_fields(form, data.get("mapping"),
-                                         (local or {}).get("version", ""))
+        fields, ferr = _peer_save_fields(form, data.get("mapping"), version)
         if ferr:
             return _reload(ferr)
         res = await state.cluster.post_peer(target, "/api/cluster/mapping-save", fields)

@@ -874,5 +874,14 @@
   "The previous configuration could not be kept as a backup (see all.log).": "Önceki yapılandırma yedek olarak saklanamadı (bkz. all.log).",
   "Restored {0}, but the configuration it replaced could not be backed up (see all.log). A changed admin UI address or TLS takes effect after a restart.": "{0} geri yüklendi, ama yerini aldığı yapılandırma yedeklenemedi (bkz. all.log). Yönetim arayüzünün adresi ya da TLS ayarı değiştiyse yeniden başlatmadan sonra geçerli olur.",
   "saved at %(time)s UTC, when the clock was behind the newest backup": "%(time)s UTC'de, saat en yeni yedeğin gerisindeyken kaydedildi",
-  "Client ID": "İstemci kimliği (client ID)"
+  "Client ID": "İstemci kimliği (client ID)",
+  "The cluster nodes run different versions (%(versions)s). Upgrade every node to the same version: a node can’t edit the settings another version doesn’t have (README: Upgrading a cluster).": "Küme düğümleri farklı sürümler çalıştırıyor (%(versions)s). Her düğümü aynı sürüme yükselt: bir düğüm, başka bir sürümde olmayan ayarları düzenleyemez (README: Kümeyi yükseltme).",
+  "older version": "daha eski sürüm",
+  "newer version": "daha yeni sürüm",
+  "This node runs a version before 2.6.0, which can’t be managed from another node. Upgrade it.": "Bu düğüm 2.6.0'dan eski bir sürüm çalıştırıyor; başka bir düğümden yönetilemez. Düğümü yükselt.",
+  "view only": "yalnızca izleme",
+  "This node runs a version that can’t be edited from another node (2.6.0). Upgrade it.": "Bu düğüm, başka bir düğümden düzenlenemeyen bir sürüm çalıştırıyor (2.6.0). Düğümü yükselt.",
+  "no remote edit": "uzaktan düzenleme yok",
+  "{0} runs version {1}, this node {2}: the settings {1} doesn’t have are left out of this form. Upgrade every node to the same version (README: Upgrading a cluster).": "{0} {1} sürümünü, bu düğüm {2} sürümünü çalıştırıyor: {1} sürümünde olmayan ayarlar bu formda gösterilmiyor. Her düğümü aynı sürüme yükselt (README: Kümeyi yükseltme).",
+  "{0} runs version {1}, this node {2}: the settings only {1} has are not in this form, and it keeps them as they are. Upgrade this node too (README: Upgrading a cluster).": "{0} {1} sürümünü, bu düğüm {2} sürümünü çalıştırıyor: yalnızca {1} sürümünde olan ayarlar bu formda yok; o düğüm onları olduğu gibi korur. Bu düğümü de yükselt (README: Kümeyi yükseltme)."
 }

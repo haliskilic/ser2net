@@ -379,12 +379,35 @@ def mapping_for_rerender(form, existing, ports: list) -> MappingConfig:
     return mapping
 
 
+# Blocks of the form a node reads only from this version on: the fleet view leaves them
+# out of the form for a peer running an older version, which would not keep them.
+#   block (as _mapping_form.html names it) -> the first version that reads it
+FORM_BLOCKS_SINCE = {
+    "usb_match": (2, 8, 0),         # "Find this device by its USB identity"
+    "trace_rotation": (2, 8, 0),    # trace file size / rotated files kept
+    "payload_format": (2, 8, 0),    # MQTT payload format (Sparkplug B)
+    "retained_set": (2, 8, 1),      # re-apply a retained /set
+    "rfc2217_restore": (2, 8, 1),   # restore the serial settings after an RFC 2217 client
+    "udp_reply": (2, 8, 1),         # UDP reply address and peer timeout
+}
+
+
+def blocks_not_read(version) -> frozenset[str]:
+    """The FORM_BLOCKS_SINCE blocks a node running *version* (a (major, minor, patch);
+    None: unknown) doesn't read."""
+    if version is None:
+        return frozenset(FORM_BLOCKS_SINCE)
+    return frozenset(b for b, since in FORM_BLOCKS_SINCE.items() if version < since)
+
+
 def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool,
-                 error=None, remote=None) -> dict:
-    """What _mapping_form.html is rendered with (every place that shows the form)."""
+                 error=None, remote=None, hide=frozenset()) -> dict:
+    """What _mapping_form.html is rendered with (every place that shows the form);
+    `hide`: blocks the node that saves it doesn't read (blocks_not_read)."""
     return {"mapping": mapping, "is_new": is_new,
             "modbus_points_json": _modbus_points_json(mapping),
-            "ports": portlist.visible(ports), "ips": ips, "error": error, "remote": remote}
+            "ports": portlist.visible(ports), "ips": ips, "error": error, "remote": remote,
+            "hide": hide}
 
 
 def _part(mapping, path: str):
