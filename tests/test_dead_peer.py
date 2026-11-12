@@ -581,7 +581,7 @@ async def e2e_connect_timeout_on_silent_host(Blackhole):
         runner = MappingRunner(m, logger=logs.append)
         await runner.start()
         try:
-            failures = lambda: [ln for ln in logs if "connect-out failed" in ln]  # noqa: E731
+            failures = lambda: [ln for ln in logs if "connect-out failed" in ln]
             assert await _wait_for(lambda: len(failures()) >= 2, 6), \
                 f"no timed-out connect attempts: {logs}"
             assert all("timed out after 1s" in ln for ln in failures()), failures()
@@ -632,7 +632,7 @@ def _run(fn, *args, loop_factory=None) -> bool:
     except AssertionError as e:
         print(f"FAIL {fn.__name__}: {e}")
         return False
-    except Exception as e:  # noqa: BLE001 - report and keep going
+    except Exception as e:  # report and keep going
         print(f"FAIL {fn.__name__}: {type(e).__name__}: {e}")
         return False
     finally:

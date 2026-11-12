@@ -65,8 +65,8 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app import __version__, standalone  # noqa: E402
-from app.web.auth import hash_password  # noqa: E402
+from app import __version__, standalone
+from app.web.auth import hash_password
 
 BIN = os.path.abspath(os.environ["SER2NET_STANDALONE_BIN"]) if os.environ.get("SER2NET_STANDALONE_BIN") else ""
 IMAGE = os.environ.get("SER2NET_STANDALONE_IMAGE", "")
@@ -411,7 +411,7 @@ class _Provider(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):  # noqa: N802 (http.server API)
+    def do_GET(self):
         iss = self.server.issuer
         if self.path == "/.well-known/openid-configuration":
             return self._json({"issuer": iss, "authorization_endpoint": iss + "/authorize",
@@ -420,7 +420,7 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             return self._json({"keys": [rsa_jwk(self.server.key, "k1")]})
         self.send_error(404)
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         if self.path != "/token":
             return self.send_error(404)
         form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length") or 0))

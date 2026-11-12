@@ -24,11 +24,11 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from markupsafe import Markup  # noqa: E402
+from markupsafe import Markup
 
-from app import __version__  # noqa: E402
-from app.config import MappingConfig  # noqa: E402
-from app.web.server import make_templates, softbreak  # noqa: E402
+from app import __version__
+from app.config import MappingConfig
+from app.web.server import make_templates, softbreak
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
         "source", "track", "wbr"}

@@ -35,7 +35,7 @@ def softbreak(value) -> Markup:
     """Escape *value* and allow a line break after / \\ _ . : @ - so a long device
     path or name wraps at a separator instead of mid-word (<wbr> adds no text,
     so copy/paste is unchanged). Safe: the separators never occur in entities."""
-    return Markup(_SOFT_BREAK_AFTER.sub(r"\1<wbr>", str(escape(value))))
+    return Markup(_SOFT_BREAK_AFTER.sub(r"\1<wbr>", str(escape(value))))  # noqa: S704 - escaped
 
 
 PUBLIC_PREFIXES = ("/static", "/auth/", "/lang/")  # /auth/oidc/*: the SSO flow; /lang/xx: UI language

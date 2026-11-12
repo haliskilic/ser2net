@@ -339,7 +339,7 @@ def request_user(cfg, token: str | None, headers, revoked: RevokedSessions | Non
 # --------------------------------------------------------------------------
 # API bearer token (for the JSON REST API / automation)
 # --------------------------------------------------------------------------
-API_TOKEN_PREFIX = "s2n_"
+API_TOKEN_PREFIX = "s2n_"  # noqa: S105 - the public prefix of every token
 
 
 def new_api_token() -> str:

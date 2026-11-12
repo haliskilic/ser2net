@@ -395,34 +395,34 @@ def _advapi():
     require_windows()
     from ctypes import wintypes as w
 
-    class SERVICE_STATUS(ctypes.Structure):  # noqa: N801 (Win32 names)
+    class SERVICE_STATUS(ctypes.Structure):  # Win32 names
         _fields_ = [("dwServiceType", w.DWORD), ("dwCurrentState", w.DWORD),
                     ("dwControlsAccepted", w.DWORD), ("dwWin32ExitCode", w.DWORD),
                     ("dwServiceSpecificExitCode", w.DWORD), ("dwCheckPoint", w.DWORD),
                     ("dwWaitHint", w.DWORD)]
 
-    class SC_ACTION(ctypes.Structure):  # noqa: N801
+    class SC_ACTION(ctypes.Structure):
         _fields_ = [("Type", w.DWORD), ("Delay", w.DWORD)]
 
-    class SERVICE_FAILURE_ACTIONSW(ctypes.Structure):  # noqa: N801
+    class SERVICE_FAILURE_ACTIONSW(ctypes.Structure):
         _fields_ = [("dwResetPeriod", w.DWORD), ("lpRebootMsg", w.LPWSTR),
                     ("lpCommand", w.LPWSTR), ("cActions", w.DWORD),
                     ("lpsaActions", ctypes.POINTER(SC_ACTION))]
 
-    class SERVICE_FAILURE_ACTIONS_FLAG(ctypes.Structure):  # noqa: N801
+    class SERVICE_FAILURE_ACTIONS_FLAG(ctypes.Structure):
         _fields_ = [("fFailureActionsOnNonCrashFailures", w.BOOL)]
 
-    class SERVICE_DESCRIPTIONW(ctypes.Structure):  # noqa: N801
+    class SERVICE_DESCRIPTIONW(ctypes.Structure):
         _fields_ = [("lpDescription", w.LPWSTR)]
 
-    class QUERY_SERVICE_CONFIGW(ctypes.Structure):  # noqa: N801
+    class QUERY_SERVICE_CONFIGW(ctypes.Structure):
         _fields_ = [("dwServiceType", w.DWORD), ("dwStartType", w.DWORD),
                     ("dwErrorControl", w.DWORD), ("lpBinaryPathName", w.LPWSTR),
                     ("lpLoadOrderGroup", w.LPWSTR), ("dwTagId", w.DWORD),
                     ("lpDependencies", w.LPWSTR), ("lpServiceStartName", w.LPWSTR),
                     ("lpDisplayName", w.LPWSTR)]
 
-    class SERVICE_STATUS_PROCESS(ctypes.Structure):  # noqa: N801
+    class SERVICE_STATUS_PROCESS(ctypes.Structure):
         _fields_ = [("dwServiceType", w.DWORD), ("dwCurrentState", w.DWORD),
                     ("dwControlsAccepted", w.DWORD), ("dwWin32ExitCode", w.DWORD),
                     ("dwServiceSpecificExitCode", w.DWORD), ("dwCheckPoint", w.DWORD),
@@ -432,7 +432,7 @@ def _advapi():
     main_fn = _win.WINFUNCTYPE(None, w.DWORD, ctypes.POINTER(w.LPWSTR))
     handler_fn = _win.WINFUNCTYPE(w.DWORD, w.DWORD, w.DWORD, w.LPVOID, w.LPVOID)
 
-    class SERVICE_TABLE_ENTRYW(ctypes.Structure):  # noqa: N801
+    class SERVICE_TABLE_ENTRYW(ctypes.Structure):
         _fields_ = [("lpServiceName", w.LPWSTR), ("lpServiceProc", main_fn)]
 
     dll = _win.WinDLL("advapi32", use_last_error=True)
@@ -492,18 +492,18 @@ def _secapi():
         return _sec
     from ctypes import wintypes as w
 
-    class ACL_SIZE_INFORMATION(ctypes.Structure):  # noqa: N801
+    class ACL_SIZE_INFORMATION(ctypes.Structure):
         _fields_ = [("AceCount", w.DWORD), ("AclBytesInUse", w.DWORD),
                     ("AclBytesFree", w.DWORD)]
 
-    class ACE_HEADER(ctypes.Structure):  # noqa: N801
+    class ACE_HEADER(ctypes.Structure):
         _fields_ = [("AceType", ctypes.c_ubyte), ("AceFlags", ctypes.c_ubyte),
                     ("AceSize", w.WORD)]
 
-    class ALLOWED_ACE(ctypes.Structure):  # noqa: N801 (ACCESS_ALLOWED/DENIED_ACE share a layout)
+    class ALLOWED_ACE(ctypes.Structure):  # ACCESS_ALLOWED/DENIED_ACE share a layout
         _fields_ = [("Header", ACE_HEADER), ("Mask", w.DWORD), ("SidStart", w.DWORD)]
 
-    class SECURITY_ATTRIBUTES(ctypes.Structure):  # noqa: N801
+    class SECURITY_ATTRIBUTES(ctypes.Structure):
         _fields_ = [("nLength", w.DWORD), ("lpSecurityDescriptor", ctypes.c_void_p),
                     ("bInheritHandle", w.BOOL)]
 

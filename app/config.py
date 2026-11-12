@@ -1180,7 +1180,7 @@ class AppConfig:
     admin_ui: AdminUI = field(default_factory=AdminUI)
     secret_key: str = field(default_factory=lambda: secrets.token_hex(32))
     api_token_hash: str = ""  # sha256 of the REST API bearer token (empty => API disabled)
-    api_token_role: str = "admin"  # role granted by the API token (viewer = read-only)
+    api_token_role: str = "admin"  # noqa: S105 - role granted by the API token (viewer = read-only)
     # lifetime of a web-UI sign-in (cookie + signed token); Settings -> Web UI access
     session_timeout_s: int = SESSION_TIMEOUT_DEFAULT_S
     # LDAP/OIDC accounts not signed in for this many days are removed (0: never, the

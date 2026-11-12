@@ -328,29 +328,29 @@ class FakeSCM:
         self.calls, self.cmd, self.fail_start = calls, existing_cmd, fail_start_once
         self.running = existing_cmd is not None
 
-    def OpenSCManagerW(self, *a):  # noqa: N802 (Win32 names)
+    def OpenSCManagerW(self, *a):  # Win32 names
         return 1
 
-    def OpenServiceW(self, scm, name, access):  # noqa: N802
+    def OpenServiceW(self, scm, name, access):
         return 2 if self.cmd is not None else 0
 
-    def CreateServiceW(self, scm, name, display, access, kind, start, err, cmd, *rest):  # noqa: N802
+    def CreateServiceW(self, scm, name, display, access, kind, start, err, cmd, *rest):
         self.calls.append(("create", cmd))
         self.cmd = cmd
         return 3
 
-    def ChangeServiceConfigW(self, svc, kind, start, err, cmd, *rest):  # noqa: N802
+    def ChangeServiceConfigW(self, svc, kind, start, err, cmd, *rest):
         self.calls.append(("change", cmd))
         self.cmd = cmd
         return 1
 
-    def StartServiceW(self, svc, *a):  # noqa: N802
+    def StartServiceW(self, svc, *a):
         self.calls.append(("start", self.cmd))
         self.running = not self.fail_start  # the new build exits right away
         self.fail_start = False
         return 1
 
-    def CloseServiceHandle(self, h):  # noqa: N802
+    def CloseServiceHandle(self, h):
         return 1
 
 

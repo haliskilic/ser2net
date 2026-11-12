@@ -39,7 +39,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app.web.auth import hash_password  # noqa: E402
+from app.web.auth import hash_password
 
 REQUIRED = os.environ.get("SER2NET_UI_TESTS") == "1"
 ARTIFACTS = os.environ.get("SER2NET_UI_ARTIFACTS", "")

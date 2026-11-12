@@ -302,7 +302,7 @@ class _PortManager(_rfc2217.PortManager):
 
     def _add_to_suboption(self, data: bytes) -> None:
         sub = self.suboption
-        assert sub is not None
+        assert sub is not None  # noqa: S101 - called only during a subnegotiation
         if len(sub) + len(data) > MAX_SUBNEGOTIATION:
             raise subnegotiation_too_long()
         sub += data
