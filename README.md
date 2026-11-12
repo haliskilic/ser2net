@@ -647,6 +647,12 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   onun imzalı beacon'larından ve yanıtlarından öğrenir. Reddedilen istekler adres ve
   değişiklik başına bir kez loga (`cluster: refused …`) ve denetim kaydına
   (`cluster_auth_failed`) yazılır.
+- **İşlemi kim yaptı:** uzaktan başlat/durdur/yeniden başlat ya da düzenleme iki düğümün de
+  denetim kaydına yazılır: tarayıcının giriş yaptığı düğümde kullanıcının adıyla, değişen
+  düğümde `cluster-peer:DÜĞÜM/KULLANICI` olarak — gönderen düğümün host adı ve kullanıcısı,
+  o düğümün imzalı istekte bildirdiği gibi (cluster anahtarına sahip bir düğümün beyanı,
+  değişen düğümün bir hesabı değil). 2.8.1 ya da daha eski bir düğümden gelen istek
+  `cluster-peer` olarak kalır.
 - **Eski düğümler (eski kimlik doğrulama):** 2.8.0 ya da daha eski sürümle çalışan
   düğümler yalnızca ham anahtarı bilir ve onu her istekte gönderir. *Eski kimlik doğrulama*
   işaretliyken (Ayarlar → LAN cluster; kademeli yükseltmede filo bölünmesin diye varsayılan

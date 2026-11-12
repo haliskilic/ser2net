@@ -23,7 +23,8 @@ from starlette.routing import Route
 from ... import __version__
 from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
 from ...engine import netinfo, portlist
-from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_url
+from ...engine.cluster import (ACTOR_FIELD, ACTOR_MAX, ACTOR_NODE_FIELD, AUTH_HEADER, REFUSALS,
+                               peer_addr, peer_port, peer_url)
 from ...i18n import _
 from .. import auth
 from . import ops
@@ -78,6 +79,19 @@ def _peer_save_fields(form, peer_mapping, peer_version):
               and (k in _PEER_FORM_FIELDS or k.startswith(_PEER_FORM_PREFIXES))]
     fields.append(("opt_trace_both", out_trace))
     return fields, None
+
+
+def _peer_actor(a, form) -> str:
+    """The user column of the audit record of a peer's remote action: "cluster-peer", or
+    "cluster-peer:NODE/USER" when the request names who acted on the sending node — what
+    that node says (it signed the request with the cluster key, so no one else could
+    have), never an account of this node. Only a signed request's name is taken: a node
+    running 2.8.0 or older sends the raw key, unsigned, and never a name."""
+    user = str(form.get(ACTOR_FIELD) or "").strip()[:ACTOR_MAX]
+    if a is None or a.legacy or not user:
+        return "cluster-peer"
+    node = re.sub(r"[\s/]+", "", str(form.get(ACTOR_NODE_FIELD) or ""))[:64]
+    return f"cluster-peer:{node or a.sender[:16] or '?'}/{user}"
 
 
 def _remote(target, peer_id, mapping) -> dict:
@@ -263,7 +277,7 @@ def routes(ctx: Ctx) -> list:
             return _peer_json(a, {"error": name}, 404)
         ip = client_ip(request)
         state.log(f"cluster: remote {action} of '{name}' from {ip}")
-        state.audit(ip, f"cluster_remote_{action}", name, user="cluster-peer")
+        state.audit(ip, f"cluster_remote_{action}", name, user=_peer_actor(a, form))
         return _peer_json(a, {"ok": True, "name": name})
 
     async def cluster_control_peer(request):
@@ -279,7 +293,7 @@ def routes(ctx: Ctx) -> list:
         target, err = _peer_target(form.get)
         if err:
             return err
-        res = await state.cluster.control_peer(target, mid, action)
+        res = await state.cluster.control_peer(target, mid, action, actor=ctx.actor(request))
         if not res or not res.get("ok"):
             return PlainTextResponse(_("Peer did not accept the command "
                                        "(unreachable or rejected)."), status_code=502)
@@ -316,7 +330,7 @@ def routes(ctx: Ctx) -> list:
             return _peer_json(a, {"ok": False, "error": msg}, 400)
         ip = client_ip(request)
         state.log(f"cluster: remote edit of '{msg}' from {ip}")
-        state.audit(ip, "cluster_remote_save", msg, user="cluster-peer")
+        state.audit(ip, "cluster_remote_save", msg, user=_peer_actor(a, form))
         return _peer_json(a, {"ok": True, "name": msg})
 
     def _peer_target(getter):
@@ -394,7 +408,8 @@ def routes(ctx: Ctx) -> list:
                                          (local or {}).get("version", ""))
         if ferr:
             return _reload(ferr)
-        res = await state.cluster.post_peer(target, "/api/cluster/mapping-save", fields)
+        res = await state.cluster.post_peer(target, "/api/cluster/mapping-save", fields,
+                                            actor=ctx.actor(request))
         if res and res.get("ok"):
             state.cluster.forget(target)   # the refresh this triggers shows the change
             addr = peer_addr(target["ip"], target["port"])

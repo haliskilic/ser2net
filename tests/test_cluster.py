@@ -9,11 +9,14 @@ Parts:
      signed answer that tells the right id / time), the raw key of a node running
      2.8.0 or older only while legacy authentication is on; refusals are logged and audited once;
      it reflects this node's mappings, and /api/cluster/status (session-authed)
-     renders the unified table with the host.
+     renders the unified table with the host; a remote action's audit record names
+     the user a signed request says acted on the sending node (cluster-peer:NODE/USER),
+     else cluster-peer.
   3) real nodes linked by manual peers: remote control and edit (signed, the key
      never on the wire - checked through a recording relay, whose captured request
-     can't be replayed), an old node that only knows the raw key, legacy
-     authentication switched off, and a node with another key ("key rejected").
+     can't be replayed; both nodes' audit logs name the user), an old node that only
+     knows the raw key, legacy authentication switched off, and a node with another
+     key ("key rejected").
 Also the fleet view's edit of a mapping on a stand-in v2.7/v2.8 peer whose id this
 version would not take (kept as the peer's).
 
@@ -299,6 +302,28 @@ def test_endpoints():
         assert any(m["endpoint"].endswith(str(port)) for m in data["mappings"]), data["mappings"]
         print("cluster/local: created mapping appears with its endpoint  OK")
 
+        # who acted on the sending node: a signed request's name is recorded as that node's
+        # claim; one sent with the raw key (a node running 2.8.0 or older) is not used
+        edge = next(m["id"] for m in data["mappings"] if m["name"] == "EDGE1")
+        for fields in ({"_actor": "Ayşe İlker", "_actor_node": "plc gw/2"},
+                       {"_actor": "op/1"}, {}):
+            body = urllib.parse.urlencode({"mapping_id": edge, "action": "stop", **fields}).encode()
+            st, answer, *_rest = signed_call(ui, key, "/api/cluster/control", "POST", body,
+                                             to=node_id)
+            assert st == 200 and answer["ok"], (st, answer)
+        legacy = urllib.request.Request(
+            f"http://127.0.0.1:{ui}/api/cluster/control", method="POST",
+            data=b"mapping_id=" + edge.encode() + b"&action=stop&_actor=admin&_actor_node=x",
+            headers={"X-Cluster-Key": key, "Content-Type": "application/x-www-form-urlencoded"})
+        assert urllib.request.urlopen(legacy, timeout=10).status == 200
+        users = [ln.split("\t")[4] for ln in open(os.path.join(tmp, "audit.log"),
+                                                   encoding="utf-8").read().splitlines()
+                 if "\tcluster_remote_stop\tEDGE1\t" in ln]
+        assert users == ["cluster-peer:plcgw2/Ayşe İlker", "cluster-peer:tester01/op/1",
+                         "cluster-peer", "cluster-peer"], users
+        print("remote action: the sending node's user is recorded as its claim "
+              "(cluster-peer:NODE/USER); without one, or with the raw key: cluster-peer  OK")
+
         # the aggregated table (session-authed) renders this node + mapping
         html = op.open(f"http://127.0.0.1:{ui}/api/cluster/status", timeout=10).read().decode()
         assert socket.gethostname() in html and "this node" in html, html[:400]
@@ -485,7 +510,14 @@ def test_manual_peer_and_remote_control():
                 break
             time.sleep(0.1)
         assert json.loads(body)["mappings"][0]["enabled"] is True, "remote start did not take effect"
-        print("remote start of a peer's mapping via the unified view  OK")
+        host = re.sub(r"[\s/]+", "", socket.gethostname())[:64]
+        claim = f"cluster-peer:{host}/admin"   # A's host name and user, as A states them
+        audit_b = open(os.path.join(tb, "audit.log"), encoding="utf-8").read()
+        assert f"\tcluster_remote_start\tREMOTE1\t{claim}\n" in audit_b, audit_b
+        audit_a = open(os.path.join(ta, "audit.log"), encoding="utf-8").read()
+        assert f"\tcluster_control_start\t127.0.0.1:{ui_b}/REMOTE1\tadmin\n" in audit_a, audit_a
+        print("remote start of a peer's mapping via the unified view; both nodes' audit logs "
+              "name the user  OK")
 
         # A's view shows the start at once: the answer it shares between dashboards for a
         # few seconds was dropped by the remote action
@@ -547,6 +579,8 @@ def test_manual_peer_and_remote_control():
         html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
         assert "ttyEDITED" in html, "A's fleet view must show the edit at once"
         assert not trapped(trap), "the edit must be saved on the peer itself"
+        assert f"\tcluster_remote_save\tREMOTE1\t{claim}\n" in open(
+            os.path.join(tb, "audit.log"), encoding="utf-8").read()
         trap.close()
         print("remote edit of a peer's mapping took effect on the peer  OK")
 
