@@ -87,6 +87,9 @@ WRITE_QUEUE_MAX = 32
 # A write that waited this long for its turn is not written any more (expired): the bus is
 # too slow for the commands coming in, and whoever sent it has likely given up on it.
 WRITE_EXPIRE_S = 10.0
+# stop(): the write on the bus gets this long at most (and no longer than its reply can
+# take) to finish before it is cancelled; the ones still waiting are answered at once.
+WRITE_STOP_WAIT_S = 2.0
 
 
 def _next_timer(idle_s: float, deadline: Optional[float]) -> Optional[float]:
@@ -121,6 +124,7 @@ class _Write:
     done: Optional[Callable[[Optional[str], Any], None]] = None  # (error, value read back)
     refused: Optional[str] = None   # refused when it came: answered in its turn, not written
     queued: float = field(default_factory=time.monotonic)
+    stage: str = "queued"           # sent: its request is on the line; written: acknowledged
 
 
 class NoReply(ValueError):
@@ -185,6 +189,7 @@ class ModbusGatewayRunner:
         self._sparkplug: Optional[SparkplugNode] = None  # payload format sparkplug_b
         self._writes: deque[_Write] = deque()  # MQTT writes waiting for the bus, in order
         self._writer: Optional[asyncio.Task] = None  # writes them, one at a time
+        self._closing = False  # stop() has begun: no more MQTT writes are taken
         self._poll_task: Optional[asyncio.Task] = None
         # plain MQTT: the command topic of each writable point, matched exactly (a point
         # name is never read back out of a topic)
@@ -248,6 +253,7 @@ class ModbusGatewayRunner:
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
+        self._closing = False
         self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
         net = self.mapping.network
         # the port is read per transaction; the link only watches for it going away
@@ -288,6 +294,7 @@ class ModbusGatewayRunner:
             self.status.state = "running"
 
     async def stop(self) -> None:
+        self._closing = True  # MQTT / Sparkplug writes are refused from now on
         self._stop.set()
         if self._server is not None:
             self._server.close()
@@ -302,11 +309,7 @@ class ModbusGatewayRunner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_task
             self._poll_task = None
-        if self._writer is not None:
-            self._writer.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._writer
-            self._writer = None
+        await self._end_writes()  # (their answers go out before the MQTT connection closes)
         if self._sparkplug is not None:
             sparkplug, self._sparkplug = self._sparkplug, None
             self._mqtt = None
@@ -335,7 +338,9 @@ class ModbusGatewayRunner:
         self._log("modbus gateway stopped")
 
     # ---------------- one RTU transaction on the shared bus ----------------
-    async def _transaction(self, unit: int, pdu: bytes) -> bytes:
+    async def _transaction(self, unit: int, pdu: bytes, job: Optional[_Write] = None) -> bytes:
+        """One request on the RTU bus and its reply (or the exception the gateway answers in
+        its place); ``job``: the MQTT write it is for (marked sent once it is on the line)."""
         function = pdu[0] if pdu else 0
         if self._link.down:  # the port is gone (reconnecting): answer now, don't queue
             return modbus.exception_pdu(function, modbus.GATEWAY_PATH_UNAVAILABLE)
@@ -361,6 +366,8 @@ class ModbusGatewayRunner:
                     self._tracer.write("net>ser", rtu_req)
                 self._feed_traffic(TO_DEVICE, rtu_req)
                 writer.write(rtu_req)
+                if job is not None:
+                    job.stage = "sent"
                 await writer.drain()
                 self.status.bytes_out += len(rtu_req)
                 # drain() returns once the OS has the request, which then still takes
@@ -568,7 +575,7 @@ class ModbusGatewayRunner:
             self._sparkplug.forget(names)
 
     # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug DCMD) ----
-    async def write_point(self, point, value) -> Any:
+    async def write_point(self, point, value, job: Optional[_Write] = None) -> Any:
         """Write one value to one writable point, and nothing beyond it: a coil takes a
         bool (FC5), a holding register a number, encoded as the point's own type (FC6 for
         a 16-bit type, FC16 for the two registers of a 32-bit one). Check the slave's
@@ -593,8 +600,10 @@ class ModbusGatewayRunner:
             regs = modbus.encode_value(value, point.dtype, point.scale or 1.0)
             pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
                    else modbus.write_multiple_registers_pdu(point.address, regs))
-        rpdu = await self._transaction(point.unit, pdu)
+        rpdu = await self._transaction(point.unit, pdu, job)
         modbus.check_write_response(rpdu, pdu)
+        if job is not None:
+            job.stage = "written"
         if self._cycle is not None:  # a poll that read the point before the write is under way
             self._cycle.drop(point.name)
         if point.unit == modbus.BROADCAST:
@@ -602,6 +611,8 @@ class ModbusGatewayRunner:
                       "not read back)")
             return None
         self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]})")
+        if self._closing:  # the mapping is stopping: no read-back
+            return None
         try:
             value = await self._read_point(point)
         except Exception:
@@ -615,6 +626,11 @@ class ModbusGatewayRunner:
         the value read back or None) once it is over; a write ``refused`` when it came (the
         error) is answered in its turn as well, so the answers keep the commands' order."""
         w = _Write(point, value, done, refused)
+        if self._closing:
+            self._note("write stopping", point.unit, f"write to '{point.name}' refused: the "
+                       "mapping is stopping")
+            self._finish(w, "mapping stopped")
+            return
         if len(self._writes) >= WRITE_QUEUE_MAX:
             self._note("write busy", point.unit, f"write to '{point.name}' refused: "
                        f"{WRITE_QUEUE_MAX} writes are waiting for the bus already (busy)")
@@ -626,11 +642,44 @@ class ModbusGatewayRunner:
                                                name=f"modbus-write:{self.mapping.name}")
 
     async def _run_writes(self) -> None:
-        """The mapping's writer: the queued writes, one at a time, in the order they came."""
-        while self._writes:
+        """The mapping's writer: the queued writes, one at a time, in the order they came
+        (until the mapping stops: _end_writes answers the rest)."""
+        while self._writes and not self._closing:
             w = self._writes.popleft()
-            err, value = await self._run_write(w)
+            try:
+                err, value = await self._run_write(w)
+            except asyncio.CancelledError:  # stop() did not wait any longer for it
+                if w.stage == "written":    # (only its read-back was cut short)
+                    self._finish(w, None)
+                    raise
+                outcome = "sent, outcome unknown" if w.stage == "sent" else "not sent"
+                self._log(f"write '{w.point.name}' = {shown(w.value)} cancelled (mapping "
+                          f"stopped): {outcome}")
+                self._finish(w, f"cancelled: mapping stopped ({outcome})")
+                raise
             self._finish(w, err, value)
+
+    async def _end_writes(self) -> None:
+        """stop(): the write on the bus may finish (for as long as its reply can take, at
+        most WRITE_STOP_WAIT_S), else it is cancelled, and its answer says whether its
+        request had gone out; then the writes still waiting are answered "cancelled:
+        mapping stopped" (none of them was sent). In that order, so the answers keep the
+        order of the commands."""
+        task, self._writer = self._writer, None
+        if task is not None and not task.done():
+            await asyncio.wait({task}, timeout=min(self._resp_timeout + GUARD_S,
+                                                   WRITE_STOP_WAIT_S))
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        waiting, self._writes = list(self._writes), deque()
+        for w in waiting:
+            self._finish(w, w.refused or "cancelled: mapping stopped")
+        dropped = [w.point.name for w in waiting if w.refused is None]
+        if dropped:
+            more = f" and {len(dropped) - 5} more" if len(dropped) > 5 else ""
+            self._log(f"{len(dropped)} MQTT write(s) cancelled before they were sent, the "
+                      f"mapping stopped: {_names(dropped[:5])}{more}")
 
     async def _run_write(self, w: _Write) -> tuple[Optional[str], Any]:
         if w.refused is not None:
@@ -642,7 +691,7 @@ class ModbusGatewayRunner:
                        "(expired)")
             return f"expired: waited {waited:.1f} s for the bus", None
         try:
-            return None, await self.write_point(w.point, w.value)
+            return None, await self.write_point(w.point, w.value, w)
         except Exception as e:
             err = str(e) or type(e).__name__
             self._log(f"write '{w.point.name}' = {shown(w.value)} failed: {err}")

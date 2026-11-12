@@ -28,6 +28,10 @@ anywhere without a broker or hardware. Checks:
     command refused on arrival keeps its place), and take turns on the bus with the poll;
     at most 32 wait, a command beyond them is answered error: busy, and one that waited
     too long for the bus error: expired;
+  * stop() answers every write before the MQTT connection closes: the one on the bus may
+    finish (else it is cancelled, and the answer says whether it was sent), the ones still
+    waiting get error: cancelled: mapping stopped, a command that comes meanwhile error:
+    mapping stopped;
   * a write that comes while a poll is reading the unit's points (the slave sends it when
     the poll asks for the setpoint) is not followed by the value the poll read before it:
     plain and Sparkplug B report new, then new again, never new, old, new.
@@ -39,6 +43,7 @@ import contextlib
 import socket
 import struct
 import sys
+import time
 import types
 from contextlib import suppress
 from unittest import mock
@@ -768,6 +773,91 @@ async def test_write_queue(slave_port):
         sw.close()
 
 
+async def test_stop_with_writes(slave_port):
+    """stop() answers every write, in order, before the MQTT connection closes (its
+    "offline"): the write on the bus may finish; if it takes too long it is cancelled, and
+    the answer says whether its request had gone out. The writes still waiting are
+    cancelled (none was sent); a command that comes while the mapping stops is refused."""
+    from app.engine import modbus_gateway
+    result = "plant/a/setpoint/set/result"
+    hold = asyncio.Event()
+    HOLD_WRITES.append(hold)
+    asked = []
+    ON_REQUEST.append(asked.append)
+
+    def answers(fake):
+        return [p for t, p in fake.published if t == result]
+
+    def held():
+        return any(p[0] == 6 for p in asked)
+    try:
+        REGS[10] = 0
+        fake, logs = FakeMqtt(), []
+        r, sw = await gateway("plain", slave_port, fake, logs=logs)
+        r._resp_timeout = 2.0
+        for payload in (b"1", b"abc", b"2", b"3"):
+            r._mqtt.handle_message("plant/a/setpoint/set", payload)
+        assert await wait(held)
+        stopping = asyncio.create_task(r.stop())
+        await asyncio.sleep(0.1)
+        r._mqtt.handle_message("plant/a/pump/set", b"1")   # while it stops
+        assert last(fake, "plant/a/pump/set/result") == b"error: mapping stopped"
+        hold.set()                                         # the write on the bus finishes
+        await asyncio.wait_for(stopping, 10)
+        got = answers(fake)
+        assert got[0] == b"ok" and got[1].startswith(b"error: not a number") \
+            and got[2:] == [b"error: cancelled: mapping stopped"] * 2, got
+        topics = [t for t, _p in fake.published]
+        assert topics[-1] == "plant/a/status" and fake.published[-1][1] == b"offline"
+        assert REGS[10] == 1 and [p for p in asked if p[0] == 6] == [
+            modbus.write_single_register_pdu(10, 1)], asked
+        assert any("2 MQTT write(s) cancelled before they were sent, the mapping stopped: "
+                   "'setpoint', 'setpoint'" in m for m in logs), logs
+        assert any("write to 'pump' refused: the mapping is stopping" in m for m in logs), logs
+        sw.close()
+        print("stop: the write on the bus finishes, the waiting ones are cancelled, all "
+              "answered in order before 'offline'; a command meanwhile is refused  OK")
+
+        # a write that takes too long is cancelled: sent (its outcome unknown) or not sent
+        saved, modbus_gateway.WRITE_STOP_WAIT_S = modbus_gateway.WRITE_STOP_WAIT_S, 0.3
+        try:
+            for sent in (True, False):
+                hold.clear()
+                asked.clear()
+                fake, logs = FakeMqtt(), []
+                r, sw = await gateway("plain", slave_port, fake, logs=logs)
+                r._resp_timeout = 5.0
+                if not sent:  # a master's request has the bus
+                    await r._bus_lock.acquire()
+                r._mqtt.handle_message("plant/a/setpoint/set", b"9")
+                if sent:
+                    assert await wait(held)
+                else:
+                    await asyncio.sleep(0.1)
+                t0 = time.monotonic()
+                await asyncio.wait_for(r.stop(), 10)
+                assert time.monotonic() - t0 < 2.0, "stop() waited for the write too long"
+                outcome = "sent, outcome unknown" if sent else "not sent"
+                assert answers(fake) == [
+                    f"error: cancelled: mapping stopped ({outcome})".encode()], answers(fake)
+                assert any(f"write 'setpoint' = 9 cancelled (mapping stopped): {outcome}" in m
+                           for m in logs), logs
+                assert fake.published[-1] == ("plant/a/status", b"offline")
+                if not sent:
+                    r._bus_lock.release()
+                    assert not held()
+                sw.close()
+        finally:
+            modbus_gateway.WRITE_STOP_WAIT_S = saved
+        print("stop: a write that takes too long is cancelled and answered (sent, outcome "
+              "unknown / not sent)  OK")
+    finally:
+        hold.set()
+        HOLD_WRITES.clear()
+        ON_REQUEST.remove(asked.append)
+        await asyncio.sleep(0.2)  # the slave carries out the write it held (REGS[10] = 9)
+
+
 async def test_no_stale_value_after_write(slave_port):
     """The poll publishes a unit's values once all its points are read. A write that comes
     in between (here: sent when the poll asks for the setpoint, so it lands two reads later)
@@ -833,6 +923,7 @@ async def main():
         await test_broadcast_point(port)
         await test_sparkplug(port)
         await test_write_queue(port)
+        await test_stop_with_writes(port)
         await test_no_stale_value_after_write(port)
     finally:
         srv.close()

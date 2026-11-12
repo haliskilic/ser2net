@@ -8,6 +8,8 @@ the Will, retained messages and reconnects all run as they do in service. Checks
     drops the link: its Will "offline", paho reconnects, "online" again, the subscriptions
     are renewed, the retained /set the broker sends again is not written again, and a live
     one is; stop: "offline";
+  * stop with writes waiting (a silent slave): every one is answered, in order, and the
+    answers reach the broker before the "offline";
   * Sparkplug B: the NDEATH Will (bdSeq 0, QoS 1), NBIRTH (bdSeq 0) and a DBIRTH per unit;
     a DCMD from the broker writes its point and the new value comes back in a DDATA; the
     link dropped: the broker publishes the NDEATH Will, the next session's Will and NBIRTH
@@ -186,6 +188,28 @@ async def plain_checks(broker):
     print("plain: stop -> retained 'offline'  OK")
 
 
+async def stop_checks(broker):
+    result, status = "plant/a/setpoint/set/result", "plant/a/status"
+    async with Slave() as slave:
+        async with gateway(broker, slave):
+            assert await until(lambda: broker.topics(status)
+                               and "plant/a/setpoint/set" in broker.subscriptions)
+            slave.silent = True
+            for n in (1, 2, 3):
+                broker.publish("plant/a/setpoint/set", str(n).encode())
+            assert await until(lambda: any(pdu[0] == 6 for _u, pdu in slave.requests))
+        # stopped meanwhile: the write on the bus got no reply, the other two were waiting
+    assert await until(lambda: broker.topics(status)[-1:] == [(b"offline", 0, True)])
+    with broker._lock:
+        order = [t for t, _p, _q, _r in broker.messages if t in (result, status)]
+    got = broker.payloads(result)
+    assert len(got) == 3 and got[0].startswith(b"error: ") and got[1:] == [
+        b"error: cancelled: mapping stopped"] * 2, got
+    assert order[-4:] == [result] * 3 + [status], order
+    assert len([pdu for _u, pdu in slave.requests if pdu[0] == 6]) == 1
+    print("stop with writes waiting: each answered, in order, before 'offline'  OK")
+
+
 def node_topic(kind, dev=None):
     return sparkplug.topic("ser2net", kind, "edge", dev)
 
@@ -241,6 +265,8 @@ async def sparkplug_checks(broker):
 async def main():
     with MqttBroker() as broker:
         await plain_checks(broker)
+    with MqttBroker() as broker:
+        await stop_checks(broker)
     with MqttBroker() as broker:
         await sparkplug_checks(broker)
 
