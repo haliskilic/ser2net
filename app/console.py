@@ -24,8 +24,9 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
     if not sys.stdin or not sys.stdin.isatty():
         # No terminal to prompt at (service/headless). Default to LOOPBACK so the
         # admin UI is never network-exposed without an explicit choice + password.
+        where = "loopback" if default_ip in ("127.0.0.1", "::1", "localhost") else "as configured"
         print(f"[ser2net] non-interactive console; admin UI bind defaults to "
-              f"{host_port(default_ip, default_port)} (loopback). Run with a terminal or "
+              f"{host_port(default_ip, default_port)} ({where}). Run with a terminal or "
               f"--reconfigure to expose it on the network.", flush=True)
         return default_ip, default_port
 
