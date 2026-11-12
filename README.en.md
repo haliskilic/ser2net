@@ -137,8 +137,14 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   open, or a UDP datagram found the queue full) is counted as dropped (`bytes_dropped`,
   `ser2net_mapping_bytes_dropped_total`), flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
-  e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
-  come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
+  e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, a
+  connect-out mapping loses or regains its remote server, clients come and go, or a
+  sign-in fails; repeats are suppressed, a test message can be sent.
+- **Connect-out status:** a connect-out mapping's state stays the serial side's; its link
+  to the remote server is shown next to it ("link down" with the reason, which the
+  Problems filter counts; "connecting"), in `/api/v1/status` (`link`: `connecting` / `up`
+  / `down`, `link_error`, `link_since`, `connect_failures`) and in the fleet view. A link
+  closed and connected again at once (max connection time, idle timeout) is no outage.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with
@@ -321,7 +327,9 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
-  its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
+  its clients, bytes in / out / dropped, reconnects and dropped slow clients (a connect-out
+  mapping also whether its link is up, `ser2net_mapping_link_up`, and its failed connect
+  attempts, `ser2net_mapping_connect_failures_total`); for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
   the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
   the connections refused right after accept (`ser2net_connections_refused_total`, by

@@ -55,6 +55,15 @@ def routes(ctx: Ctx) -> list:
                 f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
                 f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
             ]
+            if m.kind == "net" and m.network.mode == "client":
+                # the connection out to the remote server (ser2net_mapping_running is the
+                # serial side's)
+                up = 1 if st.get("link") == "up" else 0
+                lines += [
+                    f"ser2net_mapping_link_up{{{lbl}}} {up}",
+                    f"ser2net_mapping_connect_failures_total{{{lbl}}} "
+                    f"{st.get('connect_failures', 0)}",
+                ]
         return PlainTextResponse("\n".join(lines) + "\n",
                                  media_type="text/plain; version=0.0.4")
 

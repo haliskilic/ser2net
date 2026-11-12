@@ -1024,9 +1024,10 @@ class ClusterSettings:
             parse_cluster_peer(entry)  # raises ConfigError on a bad entry
 
 
-NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed",
+NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
                  "client_connected", "client_disconnected", "login_failed")
-NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed")
+# (a saved events list is kept as it is: these are what a config without one gets)
+NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
 SMTP_SECURITY = ("starttls", "ssl", "none")
 

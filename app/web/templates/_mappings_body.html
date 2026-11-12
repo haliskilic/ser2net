@@ -11,7 +11,8 @@
   {% for m in mappings %}
     {% set st = statuses.get(m.id) %}
     {% set state = st.state if st else ('stopped' if not m.enabled else 'stopped') %}
-    {% set problem = state in ('error', 'device-missing', 'reconnecting') %}
+    {% set link_down = st and st.link == 'down' %}
+    {% set problem = state in ('error', 'device-missing', 'reconnecting') or link_down %}
     <tr data-mid="{{ m.id }}" data-name="{{ m.name|lower }}" data-state="{{ 'problem' if problem else state }}"
         data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
         data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}">
@@ -38,8 +39,14 @@
       </td>
       <td data-label="{{ _('State') }}">
         <span class="state state-{{ state }}">{{ state_label(state) }}</span>
-        {% if st and st.last_error and state in ('error','device-missing','reconnecting') %}
+        {%- if link_down %} <span class="tag tag-warn" title="{{ _('the connection to the remote server is down; it is tried again') }}">{{ _("link down") }}</span>
+        {%- elif st and st.link == 'connecting' and state == 'running' %} <span class="tag">{{ _("connecting") }}</span>{% endif %}
+        {% if st and st.last_error and state in ('error','device-missing','reconnecting')
+              and not (link_down and st.last_error == st.link_error) %}
           <div class="err-small" title="{{ st.last_error }}">{{ st.last_error|softbreak }}</div>
+        {% endif %}
+        {% if link_down and st.link_error %}
+          <div class="err-small" title="{{ st.link_error }}">{{ st.link_error|softbreak }}</div>
         {% endif %}
         {% if st and st.retrying and state == 'error' %}
           <div class="sub">{{ _("retrying in %(n)s s", n=st.next_retry_s) if st.next_retry_s else _("retrying now") }}</div>

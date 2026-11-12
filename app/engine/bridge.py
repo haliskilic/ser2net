@@ -319,9 +319,22 @@ class RunnerStatus:
     # again at this time.monotonic() (0: no retry pending); as_dict() shows it as
     # retrying / next_retry_s
     retry_at: float = 0.0
+    # a connect-out mapping's connection to its remote server ("" for any other mapping,
+    # and while stopped): "connecting" (no attempt has failed since the last one that
+    # worked, or the link was just closed), "up", or "down" (the last attempt failed:
+    # link_error says why). `state` keeps reporting the serial side.
+    link: str = ""
+    link_error: str = ""
+    link_since: float = 0.0   # time.time() of the last change of `link`
+    connect_failures: int = 0  # connect-out attempts that failed
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
+
+    def set_link(self, link: str, error: str = "") -> None:
+        if link != self.link:
+            self.link, self.link_since = link, time.time()
+        self.link_error = error
 
     def set_clients(self, clients) -> None:
         """Publish the connected clients (each has peer, connected_at and priority)."""
@@ -354,6 +367,10 @@ class RunnerStatus:
             "retrying": bool(self.retry_at),
             "next_retry_s": (max(0, math.ceil(self.retry_at - time.monotonic()))
                              if self.retry_at else 0),
+            "link": self.link,
+            "link_error": self.link_error,
+            "link_since": int(self.link_since),
+            "connect_failures": self.connect_failures,
         }
 
 
@@ -692,6 +709,7 @@ class MappingRunner:
             self._serial_task = asyncio.create_task(
                 self._link.run(self._serial_session), name=f"serial:{self.mapping.name}")
             if net.mode == "client":
+                self.status.set_link("connecting")
                 self._main_task = asyncio.create_task(
                     self._client_supervisor(), name=f"connectout:{self.mapping.name}")
                 self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol}, "
@@ -739,6 +757,7 @@ class MappingRunner:
             await self._tracer.aclose()
             self._tracer = None
         self.status.state = "stopped"
+        self.status.set_link("")
         self.status.client_count = 0
         self.status.clients = []
         self._log("stopped")
@@ -973,6 +992,7 @@ class MappingRunner:
             # an RFC 2217 session drives the serial port: connect out only while it is open
             if net.protocol == "rfc2217" and not await self._serial_open():
                 break
+            st = self.status
             try:
                 reader, writer = await self._connect_out()
                 self._enable_keepalive(writer, target)
@@ -980,12 +1000,18 @@ class MappingRunner:
                 self._clients.add(client)
                 self._refresh_clients()
                 self._log(f"connected out to {target}")
+                if st.link_error and st.last_error == st.link_error:
+                    st.last_error = ""  # (the link's error, not one of the serial side)
+                st.set_link("up")
                 backoff.reset()
                 try:
                     await client.run()
                 finally:
                     self._clients.discard(client)
                     self._refresh_clients()
+                    # closed (by either end, or a timer): "down" only if the next try fails,
+                    # so a max connection time or idle timeout recycle is no outage
+                    st.set_link("connecting")
                     held = fmt_duration(time.time() - client.connected_at)
                     why = f" — {client.close_reason}" if client.close_reason else ""
                     self._log(f"connect-out link to {target} closed after {held}{why}")
@@ -993,7 +1019,9 @@ class MappingRunner:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.status.last_error = str(e)
+                st.last_error = str(e)
+                st.connect_failures += 1
+                st.set_link("down", str(e))
                 self._log(f"connect-out failed: {e}")
             if self._stop.is_set():
                 break
