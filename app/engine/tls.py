@@ -4,11 +4,14 @@ One place, so they all read their files the same way: an encrypted key is decryp
 the password the configuration gives, and never makes OpenSSL ask for one on the terminal
 (without a terminal that failed with a bare "[Errno 22] Invalid argument"; with one, the
 whole process waited for someone to type it): without a password, loading it is an error
-that says so.
+that says so. A CA file holds PEM certificates (one or more) or one DER certificate (as
+Windows exports it); any certificate in it is trusted as it is: a CA's, an intermediate's,
+or the peer's own (self-signed) one.
 
-A connect-out link checks the server's certificate when the mapping pins it
+A connect-out link checks the server's certificate when the mapping has a CA file
+(``tls_ca``: the certificate must chain to it and name ``remote_host``) or a pin
 (``tls_fingerprint``: its SHA-256 fingerprint, checked after the handshake by
-check_server). Without a pin it only encrypts: anyone on the network path can pose as the
+check_server). Without either it only encrypts: anyone on the network path can pose as the
 server.
 """
 from __future__ import annotations
@@ -27,8 +30,8 @@ class TlsFileError(ValueError):
     """A TLS file can't be used. ``kind``: unreadable (``path`` can't be read), password (the
     key in ``path`` is encrypted and no password is set), unusable (the certificate does not
     load with its key: a wrong password, another certificate's key, not PEM), no_cert (a
-    listener without a certificate and key); ``detail``: what the system said. str(): the
-    text for the log."""
+    listener without a certificate and key), ca_unreadable, ca_empty (the CA file holds no
+    certificate); ``detail``: what the system said. str(): the text for the log."""
 
     def __init__(self, kind: str, text: str, path: str = "", detail: str = ""):
         super().__init__(text)
@@ -76,23 +79,53 @@ def load_cert_chain(ctx: ssl.SSLContext, cert: Any, key: Any = "", password: Any
                            cert_file, why) from None
 
 
-def tls_context(*, server_side: bool, cert: Any = "", key: Any = "",
-                password: Any = "") -> ssl.SSLContext:
+def _load_ca(ctx: ssl.SSLContext, path: str) -> None:
+    """Trust the certificates of the CA file at ``path`` (PEM or DER), and only those."""
+    import ssl
+
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError as e:
+        why = str(e.strerror or e)
+        raise TlsFileError("ca_unreadable", f"the CA file {path!r} can't be read: {why}",
+                           path, why) from None
+    try:  # PEM through OpenSSL's reader (several certificates, comments), else DER
+        if b"-----BEGIN" in data:
+            ctx.load_verify_locations(cafile=path)
+        elif data.strip():  # (empty cadata would be an error of its own)
+            ctx.load_verify_locations(cadata=data)
+    except (ssl.SSLError, ValueError, OSError):
+        pass
+    if not ctx.cert_store_stats()["x509"]:
+        raise TlsFileError("ca_empty", f"the CA file {path!r} holds no certificate (PEM or "
+                           "DER)", path)
+    # any certificate in the file is a trust anchor (an intermediate, a self-signed peer)
+    ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    ctx.verify_mode = ssl.CERT_REQUIRED
+
+
+def tls_context(*, server_side: bool, cert: Any = "", key: Any = "", password: Any = "",
+                ca: Any = "") -> ssl.SSLContext:
     """A TLS context made from files. Raises TlsFileError.
 
     ``server_side``: ser2net presents ``cert`` (with ``key``, decrypted with ``password``),
-    which it must have. Otherwise (a client): nothing is checked in the handshake (the
-    caller may check a pin: check_server); ``cert`` is presented to a server that asks for
-    a client certificate."""
+    which it must have. Otherwise (a client): with ``ca`` the server's certificate must
+    chain to a certificate in that file and name the host given to the handshake
+    (server_hostname); without, nothing is checked in the handshake (the caller may check a
+    pin: check_server). ``cert`` is presented to a server that asks for a client
+    certificate."""
     import ssl
 
-    cert, key = str(cert or ""), str(key or "")
+    cert, key, ca = str(cert or ""), str(key or ""), str(ca or "").strip()
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER if server_side else ssl.PROTOCOL_TLS_CLIENT)
     if not server_side:
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx.check_hostname = bool(ca)
+        ctx.verify_mode = ssl.CERT_REQUIRED if ca else ssl.CERT_NONE
     elif not cert:
         raise TlsFileError("no_cert", "a TLS listener needs a certificate and a key")
+    if ca:
+        _load_ca(ctx, ca)
     if cert:
         load_cert_chain(ctx, cert, key, password)
     return ctx
@@ -107,10 +140,10 @@ def mapping_context(net: NetworkSettings) -> Optional[ssl.SSLContext]:
         return tls_context(server_side=True, cert=net.tls_cert, key=net.tls_key,
                            password=net.tls_key_password)
     return tls_context(server_side=False, cert=net.tls_cert, key=net.tls_key,
-                       password=net.tls_key_password)
+                       password=net.tls_key_password, ca=net.tls_ca)
 
 
-# ---------------- certificate fingerprints ----------------
+# ---------------- certificate fingerprints and subjects ----------------
 _PIN_SPLIT = re.compile(r"[\s,;]+")
 _PIN = re.compile(r"[0-9a-f]{64}")
 
@@ -136,6 +169,19 @@ def parse_pins(text: Any) -> list[str]:
     return pins
 
 
+_NAMES = {"commonName": "CN", "organizationName": "O", "organizationalUnitName": "OU",
+          "countryName": "C", "stateOrProvinceName": "ST", "localityName": "L"}
+
+
+def subject(cert: Any) -> str:
+    """The subject of a checked certificate (ssl getpeercert()) as "CN=..., O=...", "" when
+    there is none (a certificate that was not checked has no details)."""
+    if not isinstance(cert, dict):
+        return ""
+    return ", ".join(f"{_NAMES.get(name, name)}={value}"
+                     for rdn in cert.get("subject") or () for name, value in rdn)
+
+
 def check_server(net: NetworkSettings, writer: Any) -> str:
     """After a connect-out TLS handshake, before the link is used: the server certificate's
     SHA-256 fingerprint and what was checked, for the log ("TLS, server certificate ...").
@@ -152,5 +198,12 @@ def check_server(net: NetworkSettings, writer: Any) -> str:
     if pins and seen.replace(":", "").lower() not in pins:
         raise ConnectionError(f"the server's TLS certificate (SHA-256 {seen or 'none'}) is "
                               "not the pinned one (tls_fingerprint)")
-    how = "pinned" if pins else "not checked (no pin: encryption only)"
+    checks = []
+    if str(net.tls_ca or "").strip():  # (the handshake checked it)
+        name = subject(writer.get_extra_info("peercert"))
+        checks.append(f"{name} checked against the CA file" if name else
+                      "checked against the CA file")
+    if pins:
+        checks.append("pinned")
+    how = ", ".join(checks) or "not checked (no CA file or pin: encryption only)"
     return f"TLS, server certificate SHA-256 {seen or 'none'}, {how}"

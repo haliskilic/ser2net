@@ -171,9 +171,13 @@
         <label>{{ _("TLS key path") }} <input type="text" name="network_tls_key" value="{{ mapping.network.tls_key }}" placeholder="/path/key.pem"></label>
       </div>
       <div data-show-when="network_mode=client">
-        <label>{{ _("Server certificate fingerprint (SHA-256)") }} <span class="muted">({{ _("blank = not checked; several: separate with commas") }})</span>
-          <input type="text" name="network_tls_fingerprint" value="{{ mapping.network.tls_fingerprint }}" placeholder="AB:CD:EF:…" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
-        <p class="sub mb-sm">{{ _("Without a fingerprint the link is encrypted, but the server’s certificate is not checked: anyone on the network path could pose as the server. The mapping’s log shows the fingerprint of the certificate at each connection.") }}</p>
+        <div class="grid2">
+          <label>{{ _("CA certificate file") }} <span class="muted">({{ _("the server’s certificate must come from it and name the remote host") }})</span>
+            <input type="text" name="network_tls_ca" value="{{ mapping.network.tls_ca }}" placeholder="/path/ca.pem" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+          <label>{{ _("Server certificate fingerprint (SHA-256)") }} <span class="muted">({{ _("blank = not checked; several: separate with commas") }})</span>
+            <input type="text" name="network_tls_fingerprint" value="{{ mapping.network.tls_fingerprint }}" placeholder="AB:CD:EF:…" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+        </div>
+        <p class="sub mb-sm">{{ _("Without a CA file or a fingerprint the link is encrypted, but the server’s certificate is not checked: anyone on the network path could pose as the server. The mapping’s log shows the fingerprint of the certificate at each connection.") }}</p>
       </div>
       {% set tls_pw_kept = tls_pw_stored if tls_pw_stored is defined else mapping.network.tls_key_password %}
       <div class="grid2">

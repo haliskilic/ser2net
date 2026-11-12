@@ -8,8 +8,9 @@
     password: a blank field keeps it, the remove box clears it; a viewer API token gets it
     masked, and a PUT that sends the mask back keeps the stored one; a mapping can't be
     saved with the admin UI's own key file (a stored one keeps working);
-  - connect-out: the server certificate's SHA-256 fingerprint is logged at every connect
-    and, with network.tls_fingerprint, must be one it lists (else the link is not used);
+  - connect-out: the server certificate's SHA-256 fingerprint is logged at every connect;
+    with network.tls_ca it must chain to a certificate in that file (PEM or DER) and name
+    remote_host, with network.tls_fingerprint be one it lists (else the link is not used);
     tls_cert/tls_key are optional, and presented to a server that asks for a client
     certificate;
   - the admin UI's key the same way (admin_ui.tls_key_password, Settings → Admin TLS): it
@@ -272,6 +273,29 @@ async def _connect_out(pki: Pki):
         st = await _link(client_mapping(srv.port, tls_fingerprint="ab" * 32), logs)
         assert st["link"] == "down" and "not the pinned one" in st["link_error"], st
         assert seen in st["link_error"], st
+        # the CA file: the chain and the host name are checked
+        from _pki import TestCA
+        os.makedirs(os.path.join(pki.folder, "other"))
+        other = TestCA(os.path.join(pki.folder, "other"), "other CA")
+        for ca in (pki.ca.path, pki.ca.der_path, pki.cert):  # (PEM, DER, the server's own)
+            logs = []
+            st = await _link(client_mapping(srv.port, tls_ca=ca), logs)
+            assert st["link"] == "up", (ca, st)
+            assert any(f"SHA-256 {seen}, CN=srv.test checked against the CA file" in x
+                       for x in logs), logs
+        st = await _link(client_mapping(srv.port, tls_ca=other.path), [])
+        assert st["link"] == "down" and "certificate verify failed" in st["link_error"], st
+        logs = []
+        st = await _link(client_mapping(srv.port, tls_ca=pki.ca.path, tls_fingerprint=seen), logs)
+        assert st["link"] == "up" and any("CA file, pinned" in x for x in logs), (st, logs)
+        empty = os.path.join(pki.folder, "empty.pem")
+        open(empty, "w").close()
+        assert "holds no certificate" in refused(client_mapping(srv.port, tls_ca=empty))
+        assert "The CA file" in refused(client_mapping(srv.port, tls_ca=empty + ".gone"))
+    named_cert, named_key = pki.ca.issue(pki.folder, "named", ["named.test"])
+    async with TlsServer(named_cert, named_key) as srv:  # (a certificate without 127.0.0.1)
+        st = await _link(client_mapping(srv.port, tls_ca=pki.ca.path), [])
+        assert st["link"] == "down" and "mismatch" in st["link_error"], st
     async with TlsServer(pki.cert, pki.key, client_ca=pki.ca.path) as srv:
         st = await _link(client_mapping(srv.port), [])
         assert st["link"] == "down", st  # it asks for a client certificate
@@ -285,9 +309,10 @@ async def _connect_out(pki: Pki):
         assert st["link"] == "up", st
         st = await _link(client_mapping(srv.port, tls_cert=client_cert, tls_key=locked), [])
         assert st["link"] == "down" and "password-protected" in st["link_error"], st
-    print("connect-out: the server certificate's fingerprint is logged; a pin that does not "
-          "match keeps the link down; a client certificate is presented when set (its key "
-          "decrypted with its password)  OK")
+    print("connect-out: the server certificate's fingerprint is logged; a CA file checks its "
+          "chain and host name, a pin its fingerprint, and a failed check keeps the link "
+          "down; a client certificate is presented when set (its key decrypted with its "
+          "password)  OK")
 
 
 def test_connect_out_rules():
@@ -321,13 +346,14 @@ def test_older_forms_keep_the_fields():
     """A form without the new fields (an older cluster node's, or the block hidden for
     another mode) keeps what is stored."""
     from app.web.routes.forms import _mapping_from_form, _preserve_unmanaged_fields
-    stored = client_mapping(1, tls_fingerprint="ab" * 32, tls_key_password="pw")
+    stored = client_mapping(1, tls_fingerprint="ab" * 32, tls_key_password="pw", tls_ca="/ca.pem")
     fields = {"name": "uplink", "kind": "net", "serial_port": MISSING_PORT,
               "network_mode": "client", "network_remote_host": "127.0.0.1",
               "network_remote_port": "1", "network_tls": "on"}
     m = MappingConfig.from_dict(_mapping_from_form(fields))
     _preserve_unmanaged_fields(m, stored, fields)
     assert m.network.tls_fingerprint == "ab" * 32 and m.network.tls_key_password == "pw", m.network
+    assert m.network.tls_ca == "/ca.pem", m.network
     m = MappingConfig.from_dict(_mapping_from_form(dict(fields, network_tls_fingerprint="")))
     _preserve_unmanaged_fields(m, stored, dict(fields, network_tls_fingerprint=""))
     assert m.network.tls_fingerprint == "", m.network
