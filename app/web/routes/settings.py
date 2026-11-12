@@ -19,9 +19,9 @@ from starlette.routing import Route
 
 from ... import i18n, importer, optional
 from ...config import (
-    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
-    WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
-    backup_time, new_pwd_version, parse_cluster_peer,
+    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, NOTIFY_EVENTS, ROLES, SMTP_SECURITY,
+    UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError,
+    NotificationSettings, User, backup_time, new_pwd_version, parse_cluster_peer,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -74,7 +74,7 @@ def routes(ctx: Ctx) -> list:
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups,
-                      admin=state.config.admin_ui,
+                      admin=state.config.admin_ui, hsts_max=HSTS_MAX_AGE_MAX,
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
                       new_api_token=new_api_token, new_cluster_key=new_cluster_key,
@@ -212,16 +212,27 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
+        ui = state.config.admin_ui
+        hsts = ui.hsts_max_age   # kept when the form has no such field (an older page)
+        if "hsts_max_age" in form:
+            raw = str(form.get("hsts_max_age") or "").strip()
+            if not (raw.isascii() and raw.isdigit() and int(raw) <= HSTS_MAX_AGE_MAX):
+                return await settings_get(request, error=_(
+                    "The HSTS max-age must be a whole number of seconds from 0 to {0}.")
+                    .format(HSTS_MAX_AGE_MAX))
+            hsts = int(raw)
         async with state.config_lock:
-            old = (state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key)
-            state.config.admin_ui.tls_cert = cert
-            state.config.admin_ui.tls_key = key
+            old = (ui.tls_cert, ui.tls_key, ui.hsts_max_age)
+            ui.tls_cert, ui.tls_key, ui.hsts_max_age = cert, key, hsts
             try:
                 await state.asave()
             except ConfigError as e:
-                state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key = old
+                ui.tls_cert, ui.tls_key, ui.hsts_max_age = old
                 return await settings_get(request, error=str(e))
-        ctx.audit(request, "admin_tls_set", cert)
+        if hsts != old[2]:
+            state.log(f"admin TLS: HSTS max-age set to {hsts} s"
+                      + (" (max-age=0: browsers forget it)" if hsts == 0 else ""))
+        ctx.audit(request, "admin_tls_set", cert + ("" if hsts == old[2] else f" (HSTS {hsts} s)"))
         return await settings_get(request, ok=_("Admin TLS saved. Restart to apply."))
 
     async def settings_tls_generate(request):
@@ -1192,6 +1203,7 @@ def _setting_changes(old, new) -> list[str]:
     diff(_("Role for visitors without login"), o.anonymous_role, n.anonymous_role)
     diff(_("Admin UI address"), f"{o.bind_ip}:{o.port}", f"{n.bind_ip}:{n.port}")
     diff(_("Admin TLS (HTTPS)"), onoff(o.tls_enabled), onoff(n.tls_enabled))
+    diff(_("HSTS max-age (seconds)"), o.hsts_max_age, n.hsts_max_age)
     for label, a, b in (("LDAP", old.ldap, new.ldap), ("OIDC", old.oidc, new.oidc)):
         diff(label, onoff(a.enabled), onoff(b.enabled))
         diff(f"{label} · {_('Default role')}", role(a.default_role), role(b.default_role))

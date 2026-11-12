@@ -359,6 +359,15 @@ bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mappi
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
 
+**HSTS:** with admin TLS, pages and REST API answers carry `Strict-Transport-Security` with
+a `max-age` of one year. A browser that trusts the certificate and reaches the UI by host
+name (not by IP address, and not after clicking through a certificate warning) then uses
+only https:// for that name, on every port, for that long after each visit: other plain-HTTP
+or self-signed web UIs on the same name stop opening in it, and so does this one once its
+TLS is switched off. **Settings → Admin TLS → HSTS max-age** (`admin_ui.hsts_max_age`, 0 to
+63072000 seconds) changes it at once; 0 sends `max-age=0`, which makes browsers forget it.
+Before switching TLS off, set 0 and let the users open the UI once.
+
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
 address (128 in all). More connections wait up to 15 s for one of those to end (at most 64

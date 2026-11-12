@@ -368,6 +368,15 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
 port olarak kabul edilmez.
 
+**HSTS:** admin TLS açıkken sayfalar ve REST API yanıtları bir yıllık `max-age` ile
+`Strict-Transport-Security` taşır. Sertifikaya güvenen ve arayüze host adıyla (IP adresiyle
+değil, sertifika uyarısı geçilerek de değil) gelen bir tarayıcı, her ziyaretten sonra bu süre
+boyunca o ad için her portta yalnızca https:// kullanır: aynı addaki düz HTTP ya da
+self-signed başka web arayüzleri o tarayıcıda açılmaz, TLS kapatılınca bu arayüz de.
+**Ayarlar → Admin TLS → HSTS max-age** (`admin_ui.hsts_max_age`, 0 ile 63072000 saniye
+arası) bunu hemen değiştirir; 0, tarayıcıların bunu unutmasını sağlayan `max-age=0`
+gönderir. TLS'yi kapatmadan önce 0 yapın ve kullanıcıların arayüzü bir kez açmasını bekleyin.
+
 **Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
 anda en fazla 32 (toplamda 128) el sıkışma yürür. Fazlası, bunlardan birinin bitmesini 15 sn'ye
