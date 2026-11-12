@@ -977,7 +977,7 @@ def routes(ctx: Ctx) -> list:
             errors = await state.notifier.deliver("test", "", "")
             if errors:   # saved: a reload must not send the test again either
                 return _done(request, "notifications", error=_("Saved, but the test failed: {0}").format(
-                    "; ".join(errors)))
+                    "; ".join(f.shown() for f in errors)))
             return _done(request, "notifications", ok=_("Saved; the test notification was sent."))
         return _done(request, "notifications", ok=_("Notification settings saved."))
 

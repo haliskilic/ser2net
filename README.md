@@ -147,6 +147,10 @@ düzenlemeye gerek yok.
 - **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
   bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+  Mesajlar *Web arayüzü erişimi* altında seçilen varsayılan dilde yazılır. SMTP kullanıcı
+  adı ve parolasında ya da webhook adresinde Türkçe (ASCII dışı) harfler olabilir: kimlik
+  bilgileri UTF-8 olarak (SMTP AUTH PLAIN / LOGIN / CRAM-MD5), adres IDNA ve yüzde
+  kodlamasıyla gönderilir.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile

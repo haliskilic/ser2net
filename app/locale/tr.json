@@ -945,5 +945,13 @@
   "it is not a ser2net configuration": "bir ser2net yapılandırması değil",
   "line {0}, column {1}": "satır {0}, sütun {1}",
   "nested too deeply": "çok derin iç içe geçmiş",
-  "this needs the Python package cryptography (pip install cryptography) or the openssl program": "bunun için cryptography Python paketi (pip install cryptography) ya da openssl programı gerekir"
+  "this needs the Python package cryptography (pip install cryptography) or the openssl program": "bunun için cryptography Python paketi (pip install cryptography) ya da openssl programı gerekir",
+  "Webhook ({0}) failed: {1}": "Webhook ({0}) gönderilemedi: {1}",
+  "E-mail via {0} failed: {1}": "{0} üzerinden e-posta gönderilemedi: {1}",
+  "the webhook URL has characters that can't be sent": "webhook adresinde gönderilemeyen karakterler var",
+  "the user name or password has characters that can't be sent": "kullanıcı adında ya da parolada gönderilemeyen karakterler var",
+  "the server did not accept the user name or password (SMTP {0})": "sunucu kullanıcı adını ya da parolayı kabul etmedi (SMTP {0})",
+  "— they have letters outside ASCII, which some servers don't take": "— ASCII dışı harfler içeriyorlar; bazı sunucular bunları kabul etmiyor",
+  "the server offers no sign-in (SMTP AUTH): leave the user name empty": "sunucu oturum açma (SMTP AUTH) sunmuyor: kullanıcı adını boş bırak",
+  "the server does not offer STARTTLS: choose another security setting": "sunucu STARTTLS sunmuyor: başka bir güvenlik ayarı seç"
 }
