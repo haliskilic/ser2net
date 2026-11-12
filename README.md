@@ -1625,7 +1625,8 @@ bir düzenlemeden sonra dosyayı yeniden okutun — yeniden başlatma gerekmez:
 Windows servisi ve konteyner için de) ya da Ayarlar → *Yapılandırma yedekleri* →
 *config.json'u yeniden yükle*. Dosya bir düzenleme gibi denetlenir: okunamıyor ya da
 doğrulanmıyorsa (değişen bir eşlemede yanlış tipte bir değer, aynı portu kullanan iki eşleme,
-hiç kullanıcı hesabı olmaması, yüklenemeyen bir TLS çifti) hiçbir şey değişmez ve nedeni
+hiç kullanıcı hesabı olmaması, yüklenemeyen bir TLS çifti, aynı broker'da etkin başka bir
+eşlemenin kullandığı bir MQTT client ID'si) hiçbir şey değişmez ve nedeni
 `all.log`'a yazılır. Aksi halde parça parça uygulanır: ayarları değişmeyen bir eşleme
 istemcileriyle çalışmayı sürdürür (çalışması gerekip çalışmayan başlatılır), değişen yeniden
 başlar, kaldırılan durur, yeni olan başlar; küme yalnızca ayarları değiştiyse yeniden başlar.

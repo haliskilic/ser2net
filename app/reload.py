@@ -24,7 +24,7 @@ import json
 from typing import Any, Optional
 
 from . import sdnotify, tlsreload
-from .config import AppConfig, ConfigError
+from .config import AppConfig, ConfigError, mqtt_clashes
 from .engine.access import server_ssl
 
 
@@ -162,16 +162,20 @@ def _refusals(cur: AppConfig, new: AppConfig) -> tuple[list[str], dict[str, Any]
         old = cur.get_mapping(m.id)
         if old is None or old.to_dict() != m.to_dict():
             # what an edit of the mapping is held to as well: its own rules, its TLS files
-            # (they must load), and nothing that clashes with ser2net's own ports, a serial
-            # port another mapping uses or the admin UI's TLS key
+            # and MQTT TLS files (they must load), and nothing that clashes with ser2net's
+            # own ports, a serial port another mapping uses, the admin UI's TLS key or what
+            # another enabled mapping uses on its MQTT broker (ops.edit_conflict)
             try:
                 m.validate_input()
                 m.check_tls_files()
+                m.check_mqtt_tls_files()
             except Exception as e:
                 problems.append(f"mapping '{m.name}': {e}")
                 continue
             if clash := (new.own_port_conflict(m) or new.serial_conflict(m)
-                         or new.admin_key_reuse(m)):
+                         or new.admin_key_reuse(m)
+                         or next((c.text() for c in mqtt_clashes(m, new.mappings)
+                                  if c.refused), "")):
                 problems.append(clash)
     return problems, still
 

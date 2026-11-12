@@ -1562,7 +1562,8 @@ Linux/macOS; `docker kill -s HUP ser2net`), `ser2net --reload` with the same `--
 (any platform, also for the Windows service and in a container) or Settings →
 *Configuration backups* → *Reload config.json*. The file is checked as an edit is: when it
 can't be read or doesn't validate (a value of the wrong type in a changed mapping, two
-mappings on one port, no user accounts, a TLS pair that doesn't load) nothing changes and
+mappings on one port, no user accounts, a TLS pair that doesn't load, an MQTT client ID
+another enabled mapping uses on the same broker) nothing changes and
 `all.log` says why. Otherwise it is applied part by part: a mapping whose settings didn't
 change keeps running with its clients (one that should run but doesn't is started), a
 changed one restarts, a removed one stops, a new one starts; the cluster restarts only when

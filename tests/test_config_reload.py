@@ -504,9 +504,11 @@ def test_restore_applies_changes() -> None:
 
 def test_refused_like_an_edit() -> None:
     """A changed or new mapping in the reloaded file is held to what an edit of it is:
-    its TLS files must load, and it may not share a serial port with another enabled
-    mapping, listen on the admin UI's port or use the admin UI's TLS key. A mapping that
-    didn't change is not checked again (a stored clash keeps running)."""
+    its TLS files must load (its MQTT ones too), and it may not share a serial port with
+    another enabled mapping, listen on the admin UI's port, use the admin UI's TLS key or
+    share an MQTT client ID, Sparkplug B edge node or command topic with another enabled
+    mapping on its broker. A mapping that didn't change is not checked again (a stored
+    clash keeps running)."""
     from app import reload as reload_mod
     from app.config import AppConfig
 
@@ -516,7 +518,8 @@ def test_refused_like_an_edit() -> None:
                                                "role": "admin"}],
                                     "mappings": list(mappings)})
     a = {"id": "aaaaaaaaaaaa", "name": "A", "serial": {"port": "/dev/ser2net-a"},
-         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4100}}
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4100},
+         "mqtt": {"enabled": True, "host": "broker.lan", "base_topic": "a", "client_id": "s2n-a"}}
     cur = cfg(a)
     for new_mapping, needle in (
             ({"id": "bbbbbbbbbbbb", "name": "B", "serial": {"port": "/dev/ser2net-a"},
@@ -528,7 +531,17 @@ def test_refused_like_an_edit() -> None:
             ({"id": "bbbbbbbbbbbb", "name": "B", "serial": {"port": "/dev/ser2net-b"},
               "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4101, "tls": True,
                           "tls_cert": "/nonexistent/c.pem", "tls_key": "/nonexistent/k.pem"}},
-             "TLS file not found")):
+             "TLS file not found"),
+            ({"id": "bbbbbbbbbbbb", "name": "B", "serial": {"port": "/dev/ser2net-b"},
+              "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4101},
+              "mqtt": {"enabled": True, "host": "broker.lan", "base_topic": "b",
+                       "client_id": "s2n-a"}},
+             "with the client ID 's2n-a'"),
+            ({"id": "bbbbbbbbbbbb", "name": "B", "serial": {"port": "/dev/ser2net-b"},
+              "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4101},
+              "mqtt": {"enabled": True, "host": "broker.lan", "base_topic": "b", "tls": True,
+                       "ca_file": "/nonexistent/ca.pem"}},
+             "The MQTT CA file /nonexistent/ca.pem can't be read")):
         problems, _still = reload_mod._refusals(cur, cfg(a, new_mapping))
         assert any(needle in p for p in problems), (needle, problems)
     # the clash was there already (start-up accepted it) and nothing changed: not refused
@@ -538,7 +551,7 @@ def test_refused_like_an_edit() -> None:
     problems, _still = reload_mod._refusals(twins, cfg(*[m.to_dict() for m in twins.mappings]))
     assert problems == [], problems
     print("reload: a changed or new mapping is checked as an edit (serial port, the UI's "
-          "port, TLS files); an unchanged stored clash is not refused  OK")
+          "port, TLS files, MQTT); an unchanged stored clash is not refused  OK")
 
 
 def main() -> None:
