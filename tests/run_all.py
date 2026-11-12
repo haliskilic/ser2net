@@ -99,6 +99,7 @@ PORTABLE = [
     "test_protocol_parsers.py",
     "test_rfc2217_settings.py",
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
+    "test_blocked_output.py",   # a device that takes no data stalls nothing (POSIX PTYs)
     "test_fd_limits.py",
     "test_tls_admission.py",
     "test_admin_limits.py",
