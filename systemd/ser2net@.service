@@ -15,8 +15,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Run as a dedicated unprivileged user that is a member of the 'dialout' group
-# so it can open serial devices (NEVER run this as root).
+# Run as a dedicated unprivileged user that may open the serial devices (NEVER run this
+# as root). SupplementaryGroups names the group the devices belong to: dialout on Debian,
+# Ubuntu, Raspberry Pi OS, Fedora, RHEL and openSUSE; uucp on Arch, Manjaro and
+# EndeavourOS, which have no dialout group (the unit then fails with status=216/GROUP).
+# A device says which: stat -L -c %G /dev/ttyUSB0. To set another one for every instance
+# without editing this file, run "systemctl edit ser2net@.service" and add:
+#   [Service]
+#   SupplementaryGroups=
+#   SupplementaryGroups=uucp
 User=ser2net
 SupplementaryGroups=dialout
 WorkingDirectory=/opt/ser2net
@@ -28,6 +35,10 @@ EnvironmentFile=-/etc/ser2net/%i.env
 StateDirectory=ser2net/%i
 StateDirectoryMode=0700
 ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /var/lib/ser2net/%i
+# Every log line goes to the instance's all.log (rotated) and to stdout, which the journal
+# keeps too (journalctl -u ser2net@<name>). To keep the lines only in all.log, uncomment
+# (or set it in /etc/ser2net/<name>.env):
+# Environment=SER2NET_LOG_STDOUT=off
 Restart=on-failure
 RestartSec=3
 # Open files: each running mapping holds about three (serial port, listener, log) plus
@@ -39,6 +50,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# (these two also hide other programs' port locks and flock holders: see ser2net.service)
 ProtectProc=invisible
 ProcSubset=pid
 ProtectControlGroups=true
