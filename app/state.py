@@ -300,7 +300,7 @@ class RetainingFileHandler(RotatingFileHandler):
         self.stream = self._open()
         if not self._failing:
             self._failing = True
-            self.stream.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} WARNING: "
+            self.stream.write(f"{clock.stamp()} WARNING: "
                               f"{os.path.basename(self.baseFilename)} could not be rotated "
                               f"({e.strerror or e}: another program may have it open) — "
                               f"writing on, trying again every {ROLL_RETRY_S:g} s\n")
