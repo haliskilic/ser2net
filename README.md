@@ -714,7 +714,9 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   (ikisini de yalnızca SYSTEM ve Administrators değiştirebilir).
   Servis açılışta başlar, kullanıcı oturumu gerektirmez (LocalSystem), çökerse ya da
   hatayla çıkarsa 5 sn sonra yeniden başlar; arayüz adresi ilk kurulumda konsolda sorulur.
-  Kaldırmak: `--uninstall-service` (veri klasörü kalır); birden fazla örnek için
+  Kaldırmak: `--uninstall-service` (veri klasörü yapılandırma, yedekler, log'lar, denetim
+  kaydı ve trace'lerle birlikte kalır: bunları da kaldırmak için klasörü silin); birden fazla
+  örnek için
   `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net` ya da *Hizmetler*
   (services.msc). Yeni bir exe ile `--install-service`'i yeniden çalıştırmak servisi
   yerinde yükseltir ve servisin kullandığı veri klasörünü korur (2.8.0 servisinde de).
@@ -830,9 +832,18 @@ içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (e
 ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış
 logu ya da içe aktarma önizlemesi bunu belirtir.
 
-`config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
-temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin). Parola
-unutulduysa bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
+**Sıfırdan başlamak:** ser2net'i durdurun, sonra veri dizinini (ya da içindeki her şeyi)
+silin; üretilmiş sertifikayı yeniden kullanmak için `tls/`'i bırakın. Yalnızca `config.json`'u
+silmek hesapları, ayarları ve eşlemeleri sıfırlar, ama `audit.log` (ve `audit.log.1`),
+dönmüş `all.log.1`–`.5`, `backups/` ve `traces/` kalır (`logs/` bir sonraki açılışta
+boşaltılır); ilk kurulumu sonra kim tamamlarsa o denetim kaydını — önceki kullanıcıların
+adlarını, adreslerini ve başarısız girişlerini — ve önceki hesapları ve gizli değerleri
+içeren o yedekleri Ayarlar'da görür. Bunu ser2net çalışırken yapmayın: bir sonraki kayıt,
+bellekteki yapılandırmayı hesaplarla birlikte `config.json`'a geri yazar. Veri dizini
+dışındaki kopyalar da kalır: journal (`journalctl -u ser2net`), Docker'ın container log'u
+(`docker compose down -v` onu `/data` volume'uyla birlikte siler, bkz.
+[docs/DOCKER.md](docs/DOCKER.md)) ve bildirimlerin gönderdiği mesajlar. Parola unutulduysa
+bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
 `admin-requests/` yalnızca komut satırından gelen bir isteği, çalışan örnek alana kadar tutar.
 
 **Bir kurulumu kopyalamak** (disk ya da VM imajı, kopyalanan veri klasörü ya da Docker

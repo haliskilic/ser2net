@@ -6,8 +6,11 @@ atomically before the supervisor is reconciled.
 
 All activity (logins/logouts, serial port open/close, client connect/disconnect,
 mapping start/stop/edit, HTTP requests, errors) is funneled through ``log()`` and
-written to ``all.log`` next to ``config.json``. Deleting config.json + all.log
-fully resets the system — those are the only two state files.
+written to ``all.log`` next to ``config.json`` (and to stdout, unless
+SER2NET_LOG_STDOUT=off). The data directory holds more state: audit.log(.1), the rotated
+all.log.N, backups/, logs/, traces/ and tls/. Deleting config.json alone resets the
+accounts, settings and mappings but leaves those (audit.log and backups/ are shown to the
+next admin); a clean start is ser2net stopped and the data directory deleted.
 """
 from __future__ import annotations
 
@@ -498,9 +501,9 @@ class AppState:
                 os.remove(path)
 
     def prune_mapping_logs(self) -> None:
-        """Delete per-mapping log files whose mapping no longer exists. This keeps
-        the 'delete config.json + all.log to reset' model: a missing/empty config
-        leaves no live mappings, so all per-mapping logs are pruned on next start."""
+        """Delete per-mapping log files whose mapping no longer exists: after config.json
+        was deleted (no mappings), all of them go at the next start. Trace files and the
+        rest of the data directory are left as they are."""
         valid = {m.id for m in self.config.mappings}
         try:
             names = os.listdir(self.logs_dir)

@@ -695,7 +695,8 @@ is no account at all; later starts ignore it.
   `C:\ProgramData\ser2net\` (both writable by SYSTEM and Administrators only). The
   service starts at boot, needs no signed-in user
   (LocalSystem) and restarts 5 s after it crashes or exits with an error; the console asks
-  once for the UI address. Remove it with `--uninstall-service` (the data folder is kept);
+  once for the UI address. Remove it with `--uninstall-service` (the data folder is kept,
+with the configuration, backups, logs, audit log and traces: delete it to remove those);
   run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
   `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
   newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
@@ -808,10 +809,19 @@ new mappings get 12 hex digits. An id in any other form (hand-edited or imported
 replaced when the config is loaded or the file is imported; the start-up log or the import
 preview says so.
 
-Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
-`backups/` is never restored by itself — delete it too if you want it gone). To get back in
-after a lost password, use `--set-password` instead (see Security): it keeps everything else.
-`admin-requests/` only holds a command-line request until the running instance takes it.
+**Starting over:** stop ser2net, then delete the data directory (or everything in it; keep
+`tls/` to reuse a generated certificate). Deleting only `config.json` resets the accounts,
+settings and mappings, but `audit.log` (and `audit.log.1`), the rotated `all.log.1`–`.5`,
+`backups/` and `traces/` stay (`logs/` is emptied at the next start), and whoever completes
+the first-run setup next sees that audit log — the earlier users' names, addresses and
+failed sign-ins — and those backups, with the earlier accounts and secrets, in Settings.
+Don't do it while ser2net runs: its next save writes the configuration it has in memory,
+accounts included, back to `config.json`. Copies outside the data directory stay too: the
+journal (`journalctl -u ser2net`), Docker's container log (`docker compose down -v` removes
+it with the `/data` volume, see [docs/DOCKER.md](docs/DOCKER.md)) and messages
+notifications have sent. To get back in after a lost password, use `--set-password`
+instead (see Security): it keeps everything else. `admin-requests/` only holds a
+command-line request until the running instance takes it.
 
 **Copying an installation** (a disk or VM image, a copied data folder or Docker volume):
 `config.json` holds the node's identity — its cluster id (`instance_id`) and the key that
