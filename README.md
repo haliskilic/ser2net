@@ -497,7 +497,7 @@ kapalıyken o hesapların oturumları geçersizdir. Tarayıcılar çerezleri por
 adına göre tutar; bu yüzden 8080 dışındaki bir portta arayüzün çerez adlarına portun bir
 etiketi eklenir (`ser2net_session_1a2b3c4d`), HTTPS'te de `__Host-` öneki: aynı host adıyla
 farklı portlardan açılan kurulumlar (yan yana servisler, container'lar, `localhost`'a SSH
-tünelleri, küme görünümündeki *Aç* bağlantısıyla aynı adresteki bir eş) birbirinin
+tünelleri, filo görünümündeki *Aç* bağlantısıyla aynı adresteki bir eş) birbirinin
 oturumunu kapatmaz, aynı adın `https://` adresinden sonra `http://` adresi de çalışır.
 2.9'dan önceki girişler geçerli kalır.
 
@@ -687,7 +687,8 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   container için: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
   `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
-  **root ile çalıştırmayın.**
+  **root ile çalıştırmayın.** Birden çok kurulum için: `systemd/ser2net@.service` şablonu
+  (aşağıda).
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -718,6 +719,46 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   değişkeni) böyle bir sınırı olmayan proactor loop'una geçirir; yeni olduğundan,
   güvenmeden önce seri zamanlamayı (ör. Modbus RTU) onunla deneyin. Kullanılan loop açılış
   log'unda yazar.
+
+### Aynı makinede birden çok kurulum
+
+Her kurulumun kendine ait olması gerekenler:
+
+- **veri klasörü** (`--data-dir`): aynı klasördeki ikinci bir ser2net açılışta durur. Yeni
+  bir kurulum için veri klasörünü kopyalamayın — kopyanın cluster kimliği (filo görünümü o
+  zaman "bu kurulumun bir kopyası" uyarısı gösterir) ve oturum anahtarı aynıdır: yeni
+  kurulumu boş başlatıp eşlemeleri içe aktarın (**Ayarlar → Eşlemeleri dışa / içe aktar**).
+- **web arayüzü portu:** konsoldaki seçici (ilk açılış, `--reconfigure`,
+  `--install-service`) önerdiği portu dener; başka bir program (başka bir kurulum) onu
+  kullanıyorsa bunu söyler ve ilk boş portu önerir; elle yazdığınız seçim yine kabul
+  edilir. Terminalsiz bir ilk açılış (servis, container) portunu korur ve uyarıyı log'a
+  yazar. Seçici olmadan: `SER2NET_BIND_IP` + `SER2NET_PORT`.
+- **eşleme portları ve seri cihazlar:** bir TCP/UDP portu ve bir seri cihaz tek bir
+  kuruluma aittir. Portunu ya da cihazını başka bir program tutarken kaydedilen eşleme
+  saklanır ve arayüz neden başlamadığını söyler.
+- **ad:** **Ayarlar → Yönetim arayüzü → Bu kurulumun adı** (ya da `SER2NET_NODE_NAME`) —
+  bildirimler, tarayıcı sekmesi, üst bar ve filo görünümü hangi kurulum olduğunu söyler.
+- içe aktarılan, MQTT'ye yayın yapan eşlemelerin kendi **id**'leri olmalı: ayarlanmış bir
+  client id ve Sparkplug edge node id'si (boşsa eşlemenin adı) — broker, id'sini başka bir
+  istemcinin aldığı istemcinin bağlantısını keser, bir grupta aynı id'li iki Sparkplug
+  düğümü de host uygulamasını şaşırtır.
+
+Tarayıcı, farklı portlardaki kurulumların (`http://host:8080`, `http://host:8081`)
+oturumlarını ayrı tutar; 2.8 ve öncesi bir host adı başına tek oturum paylaşıyordu, onlara
+farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle girin.
+
+- **Windows:** `ser2net-windows-x64.exe --install-service --service-name ser2net-line2
+  --data-dir C:\ProgramData\ser2net-line2` (ve her servis için bir güvenlik duvarı
+  kuralı: [docs/WINDOWS.md](docs/WINDOWS.md)).
+- **Linux (systemd):** `systemd/ser2net@.service` şablonu her ad için bir kurulum çalıştırır;
+  verisi `/var/lib/ser2net/<ad>` altında, adresi `/etc/ser2net/<ad>.env` içinde durur
+  (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); kurulum adı bildirimlerdeki adı olur.
+  Paketlenmiş bağımlılıkları bir kez kurun (`ser2net` kullanıcısıyla
+  `python3 /opt/ser2net/bootstrap.py`), sonra
+  `systemctl enable --now ser2net@line1 ser2net@line2`.
+- **Docker:** her kurulum için ayrı bir container; her birinin kendi volume'ü,
+  `container_name`'i ve yayınlanan portları (`8081:8080`), adı için de `SER2NET_NODE_NAME`
+  (ya da `hostname:`) ([docs/DOCKER.md](docs/DOCKER.md)).
 
 ---
 

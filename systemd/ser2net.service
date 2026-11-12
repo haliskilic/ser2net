@@ -1,4 +1,5 @@
 [Unit]
+# One instance. For several on one machine, use the template ser2net@.service instead.
 Description=ser2net — serial-to-network bridge with web config UI
 After=network-online.target
 Wants=network-online.target
