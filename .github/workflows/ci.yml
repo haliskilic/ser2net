@@ -406,8 +406,8 @@ jobs:
             cp -a /src /work
             /work/tests/offline_first_start.sh python3'
 
-  # The Docker image on amd64 + arm64 (for a release, release.yml then smoke-tests the
-  # image it pushes to GHCR with the same script).
+  # The Docker image on amd64, arm64 and arm/v7 (QEMU) (for a release, release.yml then
+  # smoke-tests the image it pushes to GHCR with the same script).
   docker:
     uses: ./.github/workflows/docker.yml
 

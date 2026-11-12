@@ -4,7 +4,7 @@
 # your mappings. More (plain `docker run`, networking, hot-plug): docs/DOCKER.md
 services:
   ser2net:
-    image: ghcr.io/haliskilic/ser2net:latest   # published for amd64 + arm64 with every release
+    image: ghcr.io/haliskilic/ser2net:latest   # published for amd64, arm64, arm/v7 with every release
     # build: .                                 # or build it from this checkout
     container_name: ser2net
     restart: unless-stopped

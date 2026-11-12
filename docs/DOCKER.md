@@ -1,10 +1,13 @@
 # Running ser2net in Docker
 
 ser2net ships an official `Dockerfile`, an example `docker-compose.yml` and a published
-image for amd64 + arm64 with every release: `ghcr.io/haliskilic/ser2net` (`:latest` or a
-release tag). The published image is the very build the release smoke-tested on both
-architectures (same digest); its tags `:X.Y.Z`, `:X.Y` and `:latest` are added only after
-that. A pre-release (`X.Y.Z-rc.N`) gets only its own tag, never `:X.Y` or `:latest`.
+image for amd64, arm64 and arm/v7 (32-bit ARM: 32-bit Raspberry Pi OS, armv7 gateways;
+since 2.9.0) with every release: `ghcr.io/haliskilic/ser2net` (`:latest` or a release tag).
+The published image is the very build the release smoke-tested on each architecture (same
+digest; arm/v7 under emulation, as no runner has that CPU); its tags `:X.Y.Z`, `:X.Y` and
+`:latest` are added only after that. On arm/v7 the image builds psutil and cffi from their
+hash-locked source releases (PyPI has no wheels of them for that CPU); everything else, and
+every package on amd64 and arm64, is the hash-locked wheel. A pre-release (`X.Y.Z-rc.N`) gets only its own tag, never `:X.Y` or `:latest`.
 
 **Between releases** the image is kept current. Every Monday
 `.github/workflows/image-refresh.yml` scans `:latest` for known vulnerabilities (the HIGH and

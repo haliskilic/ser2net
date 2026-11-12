@@ -223,7 +223,8 @@ run; config/logs are written to `data/` next to the binary.
 | `ser2net-linux-arm64` | 64-bit ARM Linux with glibc ≥ 2.28: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ or Ubuntu), ARM industrial gateways, AWS Graviton, the same distributions |
 
 Other platforms — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateways), macOS, Windows on ARM:
-run from source (`python3 ser2net.py`), which works offline there too (see *Offline install*).
+run from source (`python3 ser2net.py`), which works offline there too (see *Offline install*),
+or on 32-bit ARM the Docker image (arm/v7).
 Windows 11 on ARM also runs the x64 exe (emulated).
 
 Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`), the
@@ -327,7 +328,8 @@ docker compose up -d        # edit `devices:` and `ports:` in docker-compose.yml
 Without compose, use the `docker run` command in
 [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) (the published image,
 `--restart unless-stopped`, the mapping ports, a `/dev/serial/by-id` device, log limits).
-Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
+Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 32-bit
+Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (or `:2.8`, `:2.8.1`); `docker-compose.yml` uses it. Between releases `:latest` and `:X.Y`
 are rebuilt on a newer Debian/Python base when it changes (weekly check; `:X.Y.Z` stays as
 released) — see [`docs/DOCKER.md`](docs/DOCKER.md).

@@ -18,8 +18,26 @@ WORKDIR /app
 # pins of requirements.txt and of the optional feature packages (MQTT / LDAP / OIDC,
 # requirements-optional.txt), so those work in the container out of the box, each with
 # the sha256 of its files: pip refuses any other file and any unlocked dependency.
-COPY requirements-lock.txt ./
-RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-lock.txt
+# linux/arm/v7 (32-bit ARM): PyPI has no wheel of psutil and cffi (cryptography's) for it,
+# so those two are built from their source releases, hash-checked by the same lock, with
+# setuptools from requirements-build.txt (hash-checked too) and a compiler that is removed
+# again in the same layer; every other package is its locked wheel, as on amd64 / arm64.
+ARG TARGETARCH
+COPY requirements-lock.txt requirements-build.txt ./
+RUN set -e; \
+    if [ "$TARGETARCH" = arm ]; then \
+        apt-get update; \
+        apt-get install -y --no-install-recommends gcc libc6-dev libffi-dev pkg-config; \
+        sed -n '/^setuptools==/,/[^\\]$/p' requirements-build.txt > /tmp/setuptools.txt; \
+        pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/setuptools.txt; \
+        pip install --no-cache-dir --require-hashes --only-binary=:all: \
+            --no-binary=cffi,psutil --no-build-isolation -r requirements-lock.txt; \
+        pip uninstall -y setuptools; \
+        apt-get purge -y --auto-remove gcc libc6-dev libffi-dev pkg-config; \
+        rm -rf /var/lib/apt/lists/* /tmp/setuptools.txt; \
+    else \
+        pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-lock.txt; \
+    fi
 
 # ser2net runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
 # it also takes over a /data volume that an older, root-running image wrote). /data is

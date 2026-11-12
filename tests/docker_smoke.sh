@@ -30,8 +30,12 @@
 # 13. ports below 1024 on the host network: the server has no capability (the admin UI on
 #    502 can't start, and the log says why) unless SER2NET_LOW_PORTS=1 keeps
 #    CAP_NET_BIND_SERVICE for it (then 502 answers); --cap-drop NET_BIND_SERVICE wins.
+# An image of another architecture runs emulated (QEMU) when DOCKER_DEFAULT_PLATFORM names it
+# (CI: linux/arm/v7), much slower: DOCKER_SMOKE_WAIT (seconds, default 60) is how long a
+# container may take to get healthy or to stop.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
+WAIT=${DOCKER_SMOKE_WAIT:-60}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PORT=18080
 JAR=$(mktemp)
@@ -49,13 +53,13 @@ trap cleanup EXIT
 cleanup
 
 wait_healthy() {
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 "$WAIT"); do
         s=$(docker inspect -f '{{.State.Health.Status}}' s2n-smoke 2>/dev/null || echo gone)
         [ "$s" = healthy ] && return 0
         [ "$s" = gone ] && fail "container exited"
         sleep 1
     done
-    fail "not healthy after 60 s (status: $s)"
+    fail "not healthy after $WAIT s (status: $s)"
 }
 proc_status() { docker exec s2n-smoke sh -c 'grep -E "^(Uid|Gid|Groups):" /proc/1/status'; }
 # sign in through the form (the session stays in $JAR); prints the HTTP status (303 = signed in)
@@ -167,7 +171,7 @@ echo "rejected setting: logged and kept, healthy, the UI signs in and saves othe
 
 echo "== 5. an unusable SER2NET_BIND_IP"
 docker run -d --name s2n-smoke -e SER2NET_BIND_IP=not-an-ip "$IMAGE" >/dev/null
-code=$(timeout 60 docker wait s2n-smoke) || fail "did not stop"
+code=$(timeout "$WAIT" docker wait s2n-smoke) || fail "did not stop"
 logs=$(docker logs s2n-smoke 2>&1)
 echo "$logs" | tail -3
 [ "$code" = 1 ] || fail "exit code $code"
@@ -189,7 +193,7 @@ sudo touch "$host_dir/left-by-2.8.0" && sudo chown 10001:10001 "$host_dir/left-b
 sudo chown 4321:4321 "$host_dir"  # the folder is the host user's, the files root's (2.7 ran as root)
 docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
     -v "$host_dir:/data:ro" "$IMAGE" >/dev/null
-code=$(timeout 60 docker wait s2n-smoke) || fail "did not stop"
+code=$(timeout "$WAIT" docker wait s2n-smoke) || fail "did not stop"
 logs=$(docker logs s2n-smoke 2>&1)
 echo "$logs" | tail -3
 [ "$code" = 1 ] || fail "read-only: exit code $code"
@@ -367,7 +371,7 @@ caps | grep -q "^CapEff: 0000000000000400$" || fail "more than CAP_NET_BIND_SERV
 curl -fsS "http://127.0.0.1:502/healthz" | grep -q ok || fail "the admin UI on 502 does not answer"
 docker rm -f s2n-smoke >/dev/null
 low
-for _ in $(seq 1 30); do
+for _ in $(seq 1 $((WAIT / 2))); do
     logs=$(docker logs s2n-smoke 2>&1 || true)
     grep -q "admin UI port 502 is below 1024" <<<"$logs" && break
     sleep 1
@@ -376,7 +380,7 @@ grep -q "admin UI port 502 is below 1024" <<<"$logs" || fail "no warning for the
 grep -q "CAP_NET_BIND_SERVICE" <<<"$logs" || fail "the warning doesn't say what is missing"
 docker rm -f s2n-smoke >/dev/null
 low -e SER2NET_LOW_PORTS=1 --cap-drop NET_BIND_SERVICE
-for _ in $(seq 1 30); do
+for _ in $(seq 1 $((WAIT / 2))); do
     logs=$(docker logs s2n-smoke 2>&1 || true)
     grep -q "admin UI port 502 is below 1024" <<<"$logs" && break
     sleep 1
