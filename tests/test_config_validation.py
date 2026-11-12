@@ -464,6 +464,27 @@ def test_form_udp_reply_fields():
     print("form: UDP reply address / peer timeout parsed when shown, kept when absent  OK")
 
 
+def test_form_mqtt_client_id():
+    """The MQTT client id is in the form (blank = automatic). A form without the field
+    (one rendered by a node before 2.9.0: an older cluster peer's) keeps the stored id."""
+    base = {"name": "m", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "raw",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+    existing = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM7"},
+                                        "mqtt": {"client_id": "s2n-plc1"}})
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.mqtt.client_id
+
+    assert parsed(dict(base, id=existing.id)) == "s2n-plc1", "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, mqtt_client_id=" s2n-new ")) == "s2n-new"
+    assert parsed(dict(base, id=existing.id, mqtt_client_id="")) == "", "blank = automatic"
+    assert parsed(base) == "" and parsed(dict(base, mqtt_client_id="x")) == "x"
+    print("form: MQTT client id set when posted, kept when an older form leaves it out  OK")
+
+
 def test_web_access_settings():
     cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1"}})
     assert cfg.admin_ui.require_login is True, "login must be required by default"
@@ -485,6 +506,7 @@ def main():
     test_form_apply_retained_set()
     test_form_rfc2217_restore_on_disconnect()
     test_form_udp_reply_fields()
+    test_form_mqtt_client_id()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

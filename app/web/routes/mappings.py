@@ -53,6 +53,8 @@ def routes(ctx: Ctx) -> list:
                     d.pop("id", None)
                     d["name"] = f"{m.name} (copy)"
                     d["enabled"] = False  # don't auto-start a duplicate (avoids port clash)
+                    # a broker drops one of two connections with the same client id
+                    d["mqtt"]["client_id"] = ""
                     dup = MappingConfig.from_dict(d)
                     # bump a listening port to the next free one
                     if dup.kind == "net" and dup.network.listens:
