@@ -9,7 +9,10 @@ feed the bridges fill to the WebSocket's close (no socat, no serial device).
     dropped is closed (4003), its monitor removed first and a close it takes nothing of
     given up, while a slow viewer that keeps taking stays;
   - consoles and hex views are counted together: VIEWERS_PER_USER per account and
-    mapping, VIEWERS_PER_MAPPING, VIEWERS_TOTAL; one more is closed with 1013 and why.
+    mapping, VIEWERS_PER_MAPPING, VIEWERS_TOTAL; one more is closed with 1013 and why;
+  - what arrives within FLUSH_S goes out in one message; with protocol 2 (?v=2) the hex
+    view packs its records ([dir][time][length][bytes] ...) and a viewer is told how many
+    bytes were dropped (a JSON notice), without it everything is as in 2.8.
 
 The handlers run here against stand-ins for the WebSocket, the runner and the app state.
 
@@ -17,14 +20,16 @@ Run: python3 tests/test_console_feed.py
 """
 import asyncio
 import os
+import struct
 import sys
+import time
 import types
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import AppConfig, MappingConfig  # noqa: E402
-from app.engine.bridge import FROM_DEVICE, MappingRunner  # noqa: E402
+from app.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner  # noqa: E402
 from app.engine.modbus_gateway import ModbusGatewayRunner  # noqa: E402
 from app.engine.supervisor import _Unbuildable  # noqa: E402
 from app.web import auth  # noqa: E402
@@ -41,7 +46,7 @@ def test_end_of_a_full_feed():
                 feed(b"%d" % i)
             mon.close()
             feed(b"late")
-            items, ended = await asyncio.wait_for(mon.take(), 2)
+            items, _dropped, ended = await asyncio.wait_for(mon.take(), 2)
             assert ended, "the end of a full feed was lost"
             assert len(items) == console.FEED_MAX_ITEMS, len(items)   # the oldest went first
             last = items[-1] if isinstance(mon, _Monitor) else items[-1][2]
@@ -64,7 +69,7 @@ def test_runners_end_their_viewers():
                 con.feed(b"x")
             await runner.stop()
             for mon in (con, hexv):
-                _items, ended = await asyncio.wait_for(mon.take(), 2)
+                _items, _dropped, ended = await asyncio.wait_for(mon.take(), 2)
                 assert ended, f"{type(runner).__name__}.stop() left a viewer open"
     asyncio.run(run())
     print("stopping a bridge, a Modbus gateway or an unbuildable mapping's stand-in ends "
@@ -188,12 +193,13 @@ def test_feed_bounds():
         mon.feed_traffic(FROM_DEVICE, b"")  # nothing to show: not queued
         assert len(mon._items) == console.FEED_MAX_ITEMS
         mon.close()
-        items, ended = await mon.take()
+        items, dropped, ended = await mon.take()
         assert ended and len(items) == console.FEED_MAX_ITEMS  # all fit in FRAME_MAX_BYTES
+        assert dropped == 100 and (await mon.take())[1:] == (0, True), "said once"
         mon = _Monitor()
         for _ in range(40):
             mon.feed(b"y" * 4096)
-        items, _ = await mon.take()
+        items, _, _ = await mon.take()
         assert sum(map(len, items)) == console.FRAME_MAX_BYTES, "one take: one frame's worth"
     asyncio.run(run())
     print(f"a feed holds at most {console.FEED_MAX_BYTES // 1024} KiB in "
@@ -304,12 +310,104 @@ def test_stalled_viewer():
           "change closes it  OK")
 
 
+def records(frame):
+    """The records of a protocol 2 hex-view message."""
+    out, off = [], 0
+    while off < len(frame):
+        d, ts, n = struct.unpack_from(">BdI", frame, off)
+        out.append((d, ts, frame[off + 13:off + 13 + n]))
+        off += 13 + n
+    return out
+
+
+def test_batches():
+    async def run():
+        h = Harness()
+        runner = h.runners["m1"]
+        con, hex1, hex2 = h.socket(), h.socket(), h.socket()
+        hex2.query_params = {"v": "2"}
+        tasks = [asyncio.create_task(h.console(con)), asyncio.create_task(h.traffic(hex1)),
+                 asyncio.create_task(h.traffic(hex2))]
+        await settle()
+        t0 = time.time()
+        for i in range(200):  # one burst of small chunks, as a USB adapter delivers them
+            data = b"%03d" % i
+            for mon in runner.monitors:
+                mon.feed(data)
+            for mon in runner.traffic:
+                mon.feed_traffic(FROM_DEVICE if i % 2 else TO_DEVICE, data)
+        await asyncio.sleep(console.FLUSH_S + 0.1)
+        burst = b"".join(b"%03d" % i for i in range(200))
+        assert con.frames == [burst], f"console: {len(con.frames)} messages"
+        assert len(hex1.frames) == 200, "protocol 1: a message per record, as in 2.8"
+        assert [struct.unpack(">Bd", f[:9])[0] for f in hex1.frames][:2] == [TO_DEVICE, FROM_DEVICE]
+        assert len(hex2.frames) == 1, f"protocol 2: {len(hex2.frames)} messages"
+        recs = records(hex2.frames[0])
+        assert [r[2] for r in recs] == [b"%03d" % i for i in range(200)]
+        assert [r[0] for r in recs[:2]] == [TO_DEVICE, FROM_DEVICE]
+        assert all(t0 - 1 < r[1] < time.time() + 1 for r in recs)
+        # what comes within FLUSH_S of the first chunk goes with it; later, a new message
+        for mon in runner.monitors:
+            mon.feed(b"a")
+        await asyncio.sleep(console.FLUSH_S / 4)
+        for mon in runner.monitors:
+            mon.feed(b"b")
+        await asyncio.sleep(console.FLUSH_S + 0.1)
+        for mon in runner.monitors:
+            mon.feed(b"c")
+        await asyncio.sleep(console.FLUSH_S + 0.1)
+        assert con.frames[1:] == [b"ab", b"c"], con.frames[1:]
+        # the end: what was collected goes first
+        for mon in runner.monitors:
+            mon.feed(b"last")
+        runner.stop()
+        await asyncio.wait_for(asyncio.gather(*tasks[:1]), 2)
+        assert con.frames[-1] == b"last" and con.closed, con.frames[-1:]
+        for s in (hex1, hex2):
+            s.leave()
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
+    saved = console.FLUSH_S
+    console.FLUSH_S = 0.2  # a burst is fed at once here; the window only needs to be clear
+    try:
+        asyncio.run(run())
+    finally:
+        console.FLUSH_S = saved
+    print("a burst of chunks goes out as one message (protocol 2: the hex view's records "
+          "packed; protocol 1: as in 2.8), what comes within FLUSH_S goes with it  OK")
+
+
+def test_drop_notices():
+    async def run():
+        h = Harness()
+        runner = h.runners["m1"]
+        new, old = h.socket(), h.socket()
+        new.query_params = {"v": "2"}
+        tasks = [asyncio.create_task(h.console(s)) for s in (new, old)]
+        await settle()
+        over = 100
+        for _ in range(console.FEED_MAX_BYTES // 4096 + over):  # more than a feed holds
+            for mon in runner.monitors:
+                mon.feed(b"d" * 4096)
+        await asyncio.sleep(0.5)
+        assert new.frames[0] == {"dropped": over * 4096}, new.frames[0]
+        got = b"".join(f for f in new.frames[1:])
+        assert len(got) == console.FEED_MAX_BYTES and isinstance(new.frames[1], bytes)
+        assert all(isinstance(f, bytes) for f in old.frames), "protocol 1: no notices"
+        for s in (new, old):
+            s.leave()
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
+    asyncio.run(run())
+    print("protocol 2: a viewer is told how many bytes were dropped, before what follows  OK")
+
+
 def main():
     test_end_of_a_full_feed()
     test_runners_end_their_viewers()
     test_feed_bounds()
     test_viewer_limits()
     test_stalled_viewer()
+    test_batches()
+    test_drop_notices()
     print("\nPASS: console and hex-view feeds")
 
 

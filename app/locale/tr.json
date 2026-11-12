@@ -893,5 +893,6 @@
   "There is no REST API token to give a role: generate one.": "Rol verilecek bir REST API token'ı yok: önce bir tane üret.",
   "The REST API token’s role is now {0}; the token stays the same.": "REST API token'ının rolü artık {0}; token aynı kalıyor.",
   "The previous certificate and key are kept as {0}.": "Önceki sertifika ve anahtar {0} olarak saklandı.",
-  "Passwords and keys you typed are not shown again: type them once more.": "Yazdığın parola ve anahtarlar yeniden gösterilmez: onları bir kez daha yaz."
+  "Passwords and keys you typed are not shown again: type them once more.": "Yazdığın parola ve anahtarlar yeniden gösterilmez: onları bir kez daha yaz.",
+  "{0} bytes left out: this browser did not keep up": "{0} bayt atlandı: bu tarayıcı yetişemedi"
 }

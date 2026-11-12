@@ -1,6 +1,16 @@
 """Live traffic in the browser over WebSockets: the interactive console (xterm.js;
 what the device sends, and typing to it) and the read-only traffic feed of the hex
-view (timestamped; what is sent to the device only for operators and admins)."""
+view (timestamped; what is sent to the device only for operators and admins).
+
+What a viewer has not been sent yet waits in its _Feed, and goes out in batches: what
+arrives within FLUSH_S of a chunk goes in one WebSocket message with it.
+
+The page asks for protocol 2 with ?v=2 (a socket without it gets what 2.8 sent):
+  - text messages from the server are notices, JSON: {"dropped": n} — n bytes of traffic
+    were dropped before what comes next (the viewer did not keep up);
+  - the hex view packs its records, [direction u8][time f64 BE][length u32 BE][bytes]
+    one after the other (version 1: one record per message, without the length).
+"""
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +41,7 @@ VIEWERS_TOTAL = 64
 FEED_MAX_BYTES = 1024 * 1024
 FEED_MAX_ITEMS = 4096
 FRAME_MAX_BYTES = 64 * 1024
+FLUSH_S = 0.016  # about one screen refresh: what comes this soon after a chunk goes with it
 STALL_S = 30.0
 CLOSE_WAIT_S = 5.0  # a close the client takes nothing of is given up after this long
 # close codes after the handshake
@@ -146,12 +157,15 @@ def routes(ctx: Ctx) -> list:
         # viewers get an observe-only console; writing to the device needs operator+
         interactive = console_interactive(v.user, v.mapping)
         mon, (code, reason) = _Monitor(), (1000, "")
+        v2 = websocket.query_params.get("v") == "2"
 
         async def sender():
             while True:
-                chunks, ended = await mon.take()
-                for data in chunks:
-                    await websocket.send_bytes(data)
+                chunks, dropped, ended = await mon.take()
+                if dropped and v2:
+                    await websocket.send_json({"dropped": dropped})
+                if chunks:
+                    await websocket.send_bytes(b"".join(chunks))
                     mon.sent()
                 if ended:  # mapping stopped
                     return
@@ -179,8 +193,9 @@ def routes(ctx: Ctx) -> list:
 
     # ---------------- traffic feed for the hex view (read-only) ----------------
     async def traffic_ws(websocket):
-        """A mapping's traffic, as binary frames
-        [direction: 1 byte (0 = from the device, 1 = to it)][time: float64 BE][bytes].
+        """A mapping's traffic, as records [direction: 1 byte (0 = from the device, 1 = to
+        it)][time: float64 BE][length: uint32 BE][bytes], several to a binary message
+        (protocol 1: one per message, without the length; see the module docstring).
         Read-only for everyone who may open the console; what is sent to the device
         only for those who may see it (sees_to_device), the others never get it queued."""
         v = await _admit(websocket, "hex view")
@@ -188,13 +203,22 @@ def routes(ctx: Ctx) -> list:
             return
         to_device = sees_to_device(v.user, v.mapping)
         mon, (code, reason) = _TrafficMonitor(to_device=to_device), (1000, "")
+        v2 = websocket.query_params.get("v") == "2"
 
         async def sender():
             while True:
-                records, ended = await mon.take()
-                for direction, ts, data in records:
-                    await websocket.send_bytes(struct.pack(">Bd", direction, ts) + data)
+                records, dropped, ended = await mon.take()
+                if dropped and v2:
+                    await websocket.send_json({"dropped": dropped})
+                if v2 and records:
+                    await websocket.send_bytes(b"".join(
+                        struct.pack(">BdI", direction, ts, len(data)) + data
+                        for direction, ts, data in records))
                     mon.sent()
+                elif records:
+                    for direction, ts, data in records:
+                        await websocket.send_bytes(struct.pack(">Bd", direction, ts) + data)
+                        mon.sent()
                 if ended:  # mapping stopped
                     return
 
@@ -281,7 +305,8 @@ class _Feed:
         self._bytes = 0
         self._ready = asyncio.Event()  # something to take, or closed
         self._busy_since: float | None = None  # sending what it took, since (monotonic)
-        self.dropped = 0  # bytes of traffic dropped
+        self._unsaid = 0  # bytes dropped since the last take()
+        self.dropped = 0  # bytes of traffic dropped in all
         self.closed = False
         self.stalled = asyncio.Event()
 
@@ -295,6 +320,7 @@ class _Feed:
             _old, n = items.popleft()
             self._bytes -= n
             self.dropped += n
+            self._unsaid += n
             busy = self._busy_since
             if busy is not None and time.monotonic() - busy > STALL_S:
                 self.stalled.set()
@@ -305,13 +331,17 @@ class _Feed:
         self.closed = True
         self._ready.set()
 
-    async def take(self, max_bytes: int = FRAME_MAX_BYTES) -> tuple[list, bool]:
-        """What to send next, once there is something: (items, ended) — at most `max_bytes`
-        of traffic, at least one item. `ended`: the feed is closed and nothing is left."""
+    async def take(self, max_bytes: int = FRAME_MAX_BYTES) -> tuple[list, int, bool]:
+        """What to send next: (items, bytes dropped before them, ended). Waits for an item,
+        then FLUSH_S for those right behind it (not when `max_bytes` are there already),
+        and takes at most `max_bytes` of traffic, at least one item. `ended`: the feed is
+        closed and nothing is left."""
         self._busy_since = None
         while not self._items and not self.closed:
             self._ready.clear()
             await self._ready.wait()
+        if not self.closed and self._bytes < max_bytes:
+            await asyncio.sleep(FLUSH_S)
         items, n = self._items, 0
         out: list = []
         while items and (not out or n + items[0][1] <= max_bytes):
@@ -319,8 +349,9 @@ class _Feed:
             out.append(item)
             n += size
         self._bytes -= n
+        dropped, self._unsaid = self._unsaid, 0
         self._busy_since = time.monotonic()
-        return out, self.closed and not items
+        return out, dropped, self.closed and not items
 
     def sent(self) -> None:
         """The sender got a message out: it is not stuck."""
