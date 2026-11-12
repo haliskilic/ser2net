@@ -333,7 +333,8 @@ def apply_here(request: dict, config_path: str) -> str:
     except OSError as e:
         raise AccountError(f"cannot write {config_path}: {e}") from None
     write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
-                       change.action, change.detail, ACTOR)
+                       change.action, change.detail, ACTOR,
+                       max_age_s=config.log_max_age_days * 86400)
     if created:
         admin = config.admin_ui
         return (f"{change.message}; {config_path} was created — the web UI will listen on "

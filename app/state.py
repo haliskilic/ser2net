@@ -23,6 +23,7 @@ import secrets
 import shutil
 import stat
 import sys
+import threading
 import time
 from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
@@ -47,10 +48,15 @@ LOG_TRIM_TO = 0.9                      # ... cut to 90% of it then, so the next 
 LOG_MAX_AGE_DAYS = 15                  # drop entries older than 15 days ...
 LOG_VIEW_LINES = 1000                  # ... but never one of the last lines the Log panel shows
 LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at startup)
-# Global log rotation (all.log via RotatingFileHandler; audit.log rotated manually).
+# Global log rotation (all.log via RetainingFileHandler; audit.log rotated manually).
 ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
 ALL_LOG_BACKUPS = 5                    # keep 5 rotations (~60 MB total worst case)
 AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup kept)
+# With log_max_age_days set (Settings -> Retention), all.log and audit.log also begin a new
+# file once their first record is 1/5 of that old, so each file spans at most that; the
+# hourly retention deletes an older file once its first record is past the limit. audit.log
+# then keeps up to AUDIT_FILES_KEPT older files (audit.log.1 ...), so the period fits.
+AUDIT_FILES_KEPT = 5
 # One all.log message is cut after this many characters: a request (a sign-in attempt, a
 # URL) needs no account, and must not write megabytes into the log at a time.
 LOG_MESSAGE_MAX = 2000
@@ -89,30 +95,132 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
-                       user: str = "") -> list[str]:
+                       user: str = "", *, max_age_s: float = 0) -> list[str]:
     """Append one record to the audit log at `path`: one line, tab-separated: time,
     client IP, action, detail, user (the user column was added in v2.8 — older lines
     have four fields). Each field is cut to its AUDIT_FIELD_MAX, and control characters
     in it become spaces, so a crafted mapping name can't forge an extra record. Rotated
-    past AUDIT_LOG_MAX_BYTES (one backup kept). Best effort: never raises. Returns the
-    fields as written."""
+    past AUDIT_LOG_MAX_BYTES (one backup kept); with `max_age_s` (log_max_age_days) also
+    once its first record is a fifth of that old, keeping AUDIT_FILES_KEPT older files.
+    Best effort: never raises. Returns the fields as written."""
     fields = [time.strftime("%Y-%m-%d %H:%M:%S")] + [
         _CONTROL.sub(" ", str(value)[:limit])
         for value, limit in zip((actor_ip, action, detail, user), AUDIT_FIELD_MAX, strict=True)]
     line = "\t".join(fields)
-    try:
-        # size-based rotation (keep one backup) so audit.log can't grow forever
-        if os.path.getsize(path) > AUDIT_LOG_MAX_BYTES:
-            with _suppress(OSError):
-                os.replace(path, path + ".1")
-    except OSError:
-        pass  # file doesn't exist yet
-    try:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except OSError:
-        pass
+    with _AUDIT_LOCK:
+        try:
+            # size-based rotation so audit.log can't grow forever (and by age, see above)
+            if os.path.getsize(path) > AUDIT_LOG_MAX_BYTES or \
+                    _audit_too_old(path, max_age_s, time.time()):
+                with _suppress(OSError):
+                    _rotate_audit(path, AUDIT_FILES_KEPT if max_age_s else 1)
+        except OSError:
+            pass  # file doesn't exist yet
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
     return fields
+
+
+# audit.log is rotated in turn with the records written to it (write_audit_record, the
+# hourly retention)
+_AUDIT_LOCK = threading.Lock()
+
+
+def _audit_too_old(path: str, max_age_s: float, now: float) -> bool:
+    """With `max_age_s` set: whether the audit log at `path` holds a record a fifth of that
+    old (its first one), so it is to begin a new file. Under _AUDIT_LOCK."""
+    if not max_age_s:
+        return False
+    first = _first_stamp(path)
+    return first is not None and now - first >= max_age_s / AUDIT_FILES_KEPT
+
+
+def _rotate_audit(path: str, keep: int) -> None:
+    """audit.log -> audit.log.1, .1 -> .2 ... up to audit.log.<keep>, or as far as older
+    files are there (a period set before left them: the chain keeps its length, up to
+    AUDIT_FILES_KEPT); the oldest beyond goes. Under _AUDIT_LOCK. Raises OSError."""
+    while keep < AUDIT_FILES_KEPT and os.path.exists(f"{path}.{keep + 1}"):
+        keep += 1
+    for i in range(keep - 1, 0, -1):
+        if os.path.exists(f"{path}.{i}"):
+            os.replace(f"{path}.{i}", f"{path}.{i + 1}")
+    os.replace(path, path + ".1")
+
+
+def _first_stamp(path: str) -> float | None:
+    """The time of the first record of a log file (all.log, audit.log): its first line in
+    the first 64 KiB that starts with one. None when there is none (an empty file, none)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(64 * 1024)
+    except OSError:
+        return None
+    for line in head.split(b"\n"):
+        ts = _parse_log_ts(line[:_STAMP_BYTES].decode("utf-8", errors="replace"))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _prune_rotated(path: str, count: int, max_age_s: float, now: float) -> list[str]:
+    """Delete the rotated files path.1 ... path.<count> whose first record (else their
+    modification time) is more than max_age_s before `now`. Returns their names."""
+    gone = []
+    for i in range(1, count + 1):
+        name = f"{path}.{i}"
+        try:
+            first = _first_stamp(name)
+            if first is None:
+                first = os.path.getmtime(name)
+            if first < now - max_age_s:
+                os.remove(name)
+                gone.append(os.path.basename(name))
+        except OSError:  # (not there)
+            continue
+    return gone
+
+
+class RetainingFileHandler(RotatingFileHandler):
+    """all.log: rotated at its size and, with `max_age_s` set (log_max_age_days), also once
+    its first record is a fifth of that old (max_age_s / backupCount): no file then spans
+    more than that, and the hourly retention (_prune_rotated) deletes a rotated file once
+    its first record is max_age_s old. So no record is kept longer, and about 80% of the
+    period at least (size limits allowing). The file names stay all.log.1 ... .5."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.max_age_s = 0.0
+        self.first = _first_stamp(self.baseFilename)  # the live file's first record
+
+    def too_old(self, now: float) -> bool:
+        if not self.max_age_s or self.first is None:
+            return False
+        return now - self.first >= self.max_age_s / max(1, self.backupCount)
+
+    def shouldRollover(self, record) -> bool:  # noqa: N802 (logging API)
+        return bool(super().shouldRollover(record)) or self.too_old(record.created)
+
+    def doRollover(self) -> None:  # noqa: N802 (logging API)
+        super().doRollover()
+        self.first = None
+
+    def emit(self, record) -> None:
+        super().emit(record)
+        if self.first is None:
+            self.first = record.created
+
+    def roll_if_old(self, now: float) -> None:
+        """Rotate now if the live file's first record is too old (a quiet log writes no
+        record that would). Takes the handler's lock."""
+        self.acquire()
+        try:
+            if self.too_old(now) and os.path.getsize(self.baseFilename) > 0:
+                self.doRollover()
+        finally:
+            self.release()
 
 
 class BoundedRecords:
@@ -490,7 +598,7 @@ class AppState:
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             # rotate all.log so the global activity/audit trail can't grow without
             # bound (per-mapping logs are trimmed separately by run_log_maintenance).
-            fileh = RotatingFileHandler(
+            fileh = RetainingFileHandler(
                 log_path, maxBytes=ALL_LOG_MAX_BYTES, backupCount=ALL_LOG_BACKUPS,
                 encoding="utf-8")
             fileh.setFormatter(fmt)
@@ -511,16 +619,18 @@ class AppState:
     def audit(self, actor_ip: str, action: str, detail: str = "", user: str = "") -> None:
         """Append a config-change audit record (write_audit_record), separate from
         all.log, and note it in all.log."""
-        _time, ip, action, detail, user = write_audit_record(self.audit_path, actor_ip, action,
-                                                             detail, user)
+        _time, ip, action, detail, user = write_audit_record(
+            self.audit_path, actor_ip, action, detail, user,
+            max_age_s=self.config.log_max_age_days * 86400)
         who = f" by {user}" if user else ""
         self._logger.info(f"AUDIT {ip} {action} {detail}{who}".rstrip())
 
     def read_audit(self) -> list[dict]:
-        """Every audit record (audit.log.1 + audit.log), newest first. Blocking file
-        I/O: call via asyncio.to_thread."""
+        """Every audit record (audit.log.<AUDIT_FILES_KEPT> ... audit.log.1 + audit.log),
+        newest first. Blocking file I/O: call via asyncio.to_thread."""
         records = []
-        for path in (self.audit_path + ".1", self.audit_path):
+        older = [f"{self.audit_path}.{i}" for i in range(AUDIT_FILES_KEPT, 0, -1)]
+        for path in older + [self.audit_path]:
             try:
                 with open(path, encoding="utf-8", errors="replace") as fh:
                     # only a line feed ends a record (CRLF reads as one): splitlines()
@@ -755,13 +865,18 @@ class AppState:
                     os.remove(os.path.join(self.logs_dir, fn))
 
     async def run_log_maintenance(self) -> None:
-        """Trim every per-mapping log: drop entries older than LOG_MAX_AGE_DAYS, but none
-        of the last LOG_VIEW_LINES (what its Log panel shows: a clock that jumps ahead, or
-        a date corrected after lines were stamped with a wrong one, must not empty it),
-        and cap each file at LOG_MAX_BYTES (keeping the most recent portion), in a worker
-        thread (_trim_log_file). Ages are measured from storage.now(). The mapping's log
-        handler stays attached: what it writes meanwhile is kept."""
-        cutoff = storage.now() - LOG_MAX_AGE_DAYS * 86400
+        """Trim every per-mapping log: drop entries older than LOG_MAX_AGE_DAYS (or the
+        shorter log_max_age_days), and cap each file at LOG_MAX_BYTES (keeping the most
+        recent portion), in a worker thread (_trim_log_file). With the default 15 days the
+        age trim keeps the last LOG_VIEW_LINES (what its Log panel shows: a clock that
+        jumps ahead, or a date corrected after lines were stamped with a wrong one, must
+        not empty it); a retention period set in Settings keeps nothing older. Ages are
+        measured from storage.now(). The mapping's log handler stays attached: what it
+        writes meanwhile is kept."""
+        set_days = self.config.log_max_age_days
+        days = min(LOG_MAX_AGE_DAYS, set_days) if set_days else LOG_MAX_AGE_DAYS
+        keep_lines = 0 if set_days else LOG_VIEW_LINES
+        cutoff = storage.now() - days * 86400
         try:
             files = [f for f in os.listdir(self.logs_dir) if f.endswith(".log")]
         except OSError:
@@ -773,17 +888,66 @@ class AppState:
             try:
                 changed = await asyncio.to_thread(
                     _trim_log_file, os.path.join(self.logs_dir, fn), cutoff, LOG_MAX_BYTES,
-                    keep_lines=LOG_VIEW_LINES, handlers=handlers)
+                    keep_lines=keep_lines, handlers=handlers)
                 if changed:
-                    self.log(f"log maintenance: trimmed {fn} (>{LOG_MAX_AGE_DAYS}d / "
+                    self.log(f"log maintenance: trimmed {fn} (>{days}d / "
                              f">{LOG_MAX_BYTES // 1048576}MB)")
             except Exception as e:  # never let maintenance crash the loop
                 self.log(f"log maintenance error on {fn}: {e}")
+
+    def _all_log_handler(self) -> RetainingFileHandler | None:
+        return next((h for h in self._logger.handlers if isinstance(h, RetainingFileHandler)),
+                    None)
+
+    async def run_retention(self) -> int:
+        """With log_max_age_days set (0, the default: only their size and count limits):
+        all.log and audit.log begin a new file once their first record is a fifth of that
+        old (RetainingFileHandler, write_audit_record; here also when nothing is logged),
+        their older files go once their first record is past it (_prune_rotated), and so
+        do the configuration backups named for an older time, but never the newest
+        BACKUPS_MIN_KEPT (ConfigStore.prune_backups). Ages are measured from
+        storage.now(). Logged when it deleted something; returns how many files went."""
+        days = self.config.log_max_age_days
+        handler = self._all_log_handler()
+        if handler is not None:
+            handler.max_age_s = days * 86400.0
+        if not days:
+            return 0
+        max_age, now = days * 86400.0, storage.now()
+
+        def run() -> tuple[list[str], list[str]]:
+            logs: list[str] = []
+            if handler is not None:  # in turn with what is logged meanwhile
+                handler.acquire()
+                try:
+                    handler.roll_if_old(now)
+                    logs += _prune_rotated(handler.baseFilename, handler.backupCount, max_age,
+                                           now)
+                finally:
+                    handler.release()
+            with _AUDIT_LOCK:
+                with _suppress(OSError):
+                    if _audit_too_old(self.audit_path, max_age, now) and \
+                            os.path.getsize(self.audit_path) > 0:
+                        _rotate_audit(self.audit_path, AUDIT_FILES_KEPT)
+                logs += _prune_rotated(self.audit_path, AUDIT_FILES_KEPT, max_age, now)
+            return logs, self.store.prune_backups(max_age, now)
+
+        logs, backups = await asyncio.to_thread(run)
+        if logs or backups:
+            self.log(f"retention: deleted {len(logs)} log file(s)"
+                     + (f" ({', '.join(logs)})" if logs else "")
+                     + f" and {len(backups)} configuration backup(s) older than {days} days")
+        return len(logs) + len(backups)
 
     async def _log_maintenance_loop(self) -> None:
         await self.load_sign_ins()
         while True:
             await self.run_log_maintenance()
+            try:
+                await self.run_retention()
+            except Exception as e:  # never let maintenance crash the loop
+                self.log(f"retention failed: {e}")
             try:
                 await self.run_trace_maintenance()
             except Exception as e:  # never let maintenance crash the loop

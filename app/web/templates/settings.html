@@ -100,6 +100,10 @@
       <input type="number" name="trace_max_age_days" min="0" max="{{ trace_days_max }}" value="{{ trace_days }}" required>
     </label>
     <p class="muted">{{ _("Off by default: a trace file stays until an operator deletes it in its mapping’s Trace panel. With a number of days, every trace file not written for that long is deleted at once and then every hour, also the one a mapping is writing (the next traffic begins it again), and the log says how many went.") }}</p>
+    <label>{{ _("Delete log and audit records and configuration backups older than (days)") }} <span class="muted">({{ _("0 = only the size limits, the default · up to %(max)s", max=log_days_max) }})</span>
+      <input type="number" name="log_max_age_days" min="0" max="{{ log_days_max }}" value="{{ log_days }}" required>
+    </label>
+    <p class="muted">{{ _("Off by default: all.log (10 MB × 6 files), audit.log (5 MB × 2) and the newest 50 configuration backups are kept within their sizes however old they are, and a mapping’s log keeps 15 days (always its last 1000 lines). With a number of days, all.log and audit.log begin a new file once their first record is a fifth of that old and delete a file once its first record is older (so at least four fifths of the period stay, sizes allowing; audit.log then keeps up to 6 files), a mapping’s log keeps no more days than that, and older backups go, but never the newest %(min)s. Checked at once and then every hour; a clock set ahead while ser2net runs deletes nothing early. The copy of the log on the standard output (Docker, journald) has its own limits.", min=backups_min) }}</p>
     <button class="btn" type="submit">{{ _("Save") }}</button>
   </form>
 </section>

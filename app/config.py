@@ -63,6 +63,10 @@ EXPIRE_DAYS_MAX = 3650
 # trace files not written for this many days are deleted by the hourly maintenance
 # (AppConfig.trace_max_age_days, AppState.run_trace_maintenance); 0 = kept, the default
 TRACE_DAYS_MAX = 3650
+# log and audit records and configuration backups older than this many days are deleted by
+# the hourly maintenance (AppConfig.log_max_age_days, AppState.run_retention); 0 = only
+# their size and count limits, the default
+LOG_DAYS_MAX = 3650
 
 
 class ConfigError(ValueError):
@@ -1585,6 +1589,10 @@ class AppConfig:
     # trace files (data/traces) not written for this many days are deleted every hour (0:
     # kept until deleted by hand, the default); Settings -> Retention
     trace_max_age_days: int = 0
+    # all.log, audit.log and backups/ keep nothing older than this many days, the mapping
+    # logs at most that many of their 15 (0: only their size and count limits, the
+    # default); Settings -> Retention
+    log_max_age_days: int = 0
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
     users: list[User] = field(default_factory=list)
@@ -1673,6 +1681,11 @@ class AppConfig:
             cfg.trace_max_age_days = 0 if days < 0 else TRACE_DAYS_MAX
             cfg.load_notes.append(f"trace_max_age_days {days} is not 0 (keep) or 1..{TRACE_DAYS_MAX} "
                                   f"days: {cfg.trace_max_age_days} is used")
+        days = cfg.log_max_age_days
+        if not 0 <= days <= LOG_DAYS_MAX:  # (likewise)
+            cfg.log_max_age_days = 0 if days < 0 else LOG_DAYS_MAX
+            cfg.load_notes.append(f"log_max_age_days {days} is not 0 (size limits only) or "
+                                  f"1..{LOG_DAYS_MAX} days: {cfg.log_max_age_days} is used")
         raw_days = d.get("external_users_expire_days")
         if raw_days is not None and raw_days != cfg.external_users_expire_days:
             cfg.load_notes.append(
@@ -1756,6 +1769,7 @@ class AppConfig:
             "session_timeout_s": self.session_timeout_s,
             "external_users_expire_days": self.external_users_expire_days,
             "trace_max_age_days": self.trace_max_age_days,
+            "log_max_age_days": self.log_max_age_days,
             "users": [asdict(u) for u in self.users],
             "ldap": asdict(self.ldap),
             "oidc": asdict(self.oidc),
@@ -2098,6 +2112,9 @@ def _ip_overlaps(a: str, b: str) -> bool:
 # Atomic store
 # ---------------------------------------------------------------------------
 BACKUPS_KEPT = 50
+# with log_max_age_days set, backups older than that go (ConfigStore.prune_backups), but
+# never the newest BACKUPS_MIN_KEPT: a clock far ahead must not take every way back
+BACKUPS_MIN_KEPT = 5
 _BACKUP_NAME = re.compile(r"^config-\d{8}T\d{6}Z(-\d+)?\.json$")
 
 
@@ -2264,6 +2281,23 @@ class ConfigStore:
             self.log(f"WARNING: could not keep a backup of config.json in {self.backup_dir}: "
                      f"{e}")
             return False
+
+    def prune_backups(self, max_age_s: float, now: float) -> list[str]:
+        """Delete the backups named for a time more than max_age_s before `now` (UTC, as
+        their names say: a backup taken while the clock was behind is named later, so it
+        stays longer), except the newest BACKUPS_MIN_KEPT; the newest one is what
+        config.json holds. Returns the names deleted. Blocking."""
+        gone = []
+        for name in self.backup_names()[BACKUPS_MIN_KEPT:]:
+            try:
+                named = calendar.timegm(time.strptime(_backup_order(name)[0], "%Y%m%dT%H%M%S"))
+            except ValueError:
+                continue
+            if named < now - max_age_s:
+                with contextlib.suppress(OSError):
+                    os.remove(os.path.join(self.backup_dir, name))
+                    gone.append(name)
+        return gone
 
     def backup_names(self) -> list[str]:
         """Backup file names, newest first."""

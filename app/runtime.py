@@ -189,7 +189,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
                          "own)")
     if admin:
         write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
-                           "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin)
+                           "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin,
+                           max_age_s=config.log_max_age_days * 86400)
     if problems:
         notes.append("WARNING: ser2net starts with the setting(s) above anyway — what they "
                      "affect may not work. Fix them in the web UI (or in config.json); "

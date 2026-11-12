@@ -8,6 +8,8 @@ Checks:
     longer offers Trace;
   * Settings -> Retention (admin): trace files not written for N days are deleted at once
     and then every hour (0, the default, keeps them); a value out of range is refused;
+    log and audit records and backups older than N days likewise (0, the default: their
+    size limits only), with both settings in one form;
   * a replace import and a backup restore that remove a mapping close what the server
     kept open for it at once (its runner with the trace writer, its log file; before,
     the log file stayed open until a restart) and keep its files, so restoring a backup
@@ -230,8 +232,36 @@ def retention_setting():
         with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
             got = [ln.split("\t")[3] for ln in fh if "\ttrace_retention\t" in ln]
         assert got == ["7", "0"], got
+        # log and audit records, backups: the whole form, as a browser sends it
+        st, _, page = admin.get("/settings")
+        assert 'name="log_max_age_days"' in page
+        old_log = os.path.join(srv.data, "all.log.3")
+        with open(old_log, "w", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 60 * 86400))
+                     + " an old line\n")
+        for bad in ("-1", "3651", "a month"):
+            st, _, page = admin.post("/settings/retention", {"trace_max_age_days": "0",
+                                                             "log_max_age_days": bad})
+            assert "Enter 0 (only the size limits) or a number of days" in page, (bad, page[:300])
+        assert srv.saved_config()["log_max_age_days"] == 0 and os.path.isfile(old_log)
+        st, _, page = admin.post("/settings/retention", {"trace_max_age_days": "0",
+                                                         "log_max_age_days": "30"})
+        assert "configuration backups older than 30 days are deleted" in page and \
+            "Deleted now: 1 log file(s) and backup(s)." in page, page[page.find("banner"):][:400]
+        assert srv.saved_config()["log_max_age_days"] == 30 and not os.path.exists(old_log)
+        assert "retention: deleted 1 log file(s) (all.log.3)" in srv.output()
+        st, _, page = admin.get("/settings/audit")
+        assert "records older than 30 days are deleted" in page
+        assert op.post("/settings/retention", {"log_max_age_days": "0"})[0] == 403
+        st, _, page = admin.post("/settings/retention", {"log_max_age_days": "0"})
+        assert "kept within their size and count limits" in page
+        with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
+            got = [ln.split("\t")[3] for ln in fh if "\tlog_retention\t" in ln]
+        assert got == ["30", "0"], got
+        assert srv.saved_config()["trace_max_age_days"] == 0, "not sent: kept"
     print("retention: off by default; an admin sets N days, older traces go at once and "
-          "every hour; out-of-range values refused, operators 403, audited  OK")
+          "every hour; so do old log files and backups with their own setting; "
+          "out-of-range values refused, operators 403, audited  OK")
 
 
 def main():

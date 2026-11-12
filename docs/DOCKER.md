@@ -123,8 +123,11 @@ docker run -d --name ser2net --restart unless-stopped \
   unhealthy; only the restart policy brings back one that exited.
 - **Logs.** Every log line goes to `/data/all.log` (rotated, 10 MB × 5) and to the
   container's output, which Docker keeps without a limit by default: cap it with
-  `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
-  container in `/etc/docker/daemon.json`.
+  `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), use the `local`
+  driver (`--log-driver local`: compressed, capped at 100 MB by default), or set either for
+  every container in `/etc/docker/daemon.json`. How long ser2net keeps its own logs, audit
+  log and backups is set under Settings → *Retention* (off by default; see the README's
+  *Retention*); the container's output is kept by Docker's settings alone.
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to

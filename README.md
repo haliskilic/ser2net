@@ -719,9 +719,26 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
   konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
   *Audit log*'da aranabilir, CSV olarak indirilebilir.
+- **Saklama süresi.** Varsayılan olarak log'lar, kayıtlar ne kadar eski olursa olsun yalnızca
+  boyut sınırlarına göre tutulur (all.log 10 MB × 6 dosya, audit.log 5 MB × 2, en yeni 50
+  yedek; eşleme log'u 15 gün). Log'larda IP adresleri, kullanıcı adları ve ham seri veri
+  bulunduğundan Ayarlar → *Saklama süresi*'nden (adminler) bir süre belirlenebilir: o zaman
+  all.log ve audit.log, ilk kayıtları bu gün sayısının beşte biri kadar eskiyince yeni bir
+  dosyaya geçer ve ilk kaydı daha eski olan dosyayı siler — bundan eski hiçbir kayıt
+  kalmaz, boyutlar izin verdikçe sürenin en az beşte dördü kalır (audit.log o zaman en fazla
+  6 dosya tutar) — eşleme log'ları 15 günlerinin en fazla bu kadarını tutar ve daha eski bir
+  zamanla adlandırılmış yapılandırma yedekleri silinir, en yeni 5 yedek hiçbir zaman.
+  Hemen ve her saat kontrol edilir; ser2net çalışırken ileri alınan bir saat hiçbir şeyi
+  erken sildirmez (yaşlar açılıştaki saatle çalışılan süreden hesaplanır). 2.9 öncesinden
+  bir yedeği geri yüklemek süreyi 0'a (kapalı) döndürür. Her log satırının standart
+  çıktıdaki kopyasını onu toplayan tutar: Docker'da `docker-compose.yml`'deki `logging:`
+  seçenekleri (ya da `local` sürücüsü), systemd günlüğünde `/etc/systemd/journald.conf`
+  içindeki `MaxRetentionSec=` / `SystemMaxUse=` bunu sınırlar.
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: 15 günden eski satırlar silinir,
   ama Log panelinin gösterdiği son 1000 satır hiçbir zaman; böylece ileri atlayan bir saat
-  ya da düzeltilen bir tarih log'u boşaltmaz. 100 MB'ı aşan log 90 MB'a kısaltılır).
+  ya da düzeltilen bir tarih log'u boşaltmaz. Ayarlar → *Saklama süresi*'nde daha kısa bir
+  süre belirlenmişse, kaç satır kalırsa kalsın bundan eskisi tutulmaz. 100 MB'ı aşan log
+  90 MB'a kısaltılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
   yollar dosya adına indirgenir ve açılışta log'a yazılır. Yazılamayan bir trace (klasör
