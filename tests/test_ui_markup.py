@@ -702,6 +702,7 @@ def test_actions_hold_a_second_click():
     cluster = make_templates().env.get_template("_cluster_body.html").render(
         can_edit=True, nodes=[{"name": "peer", "self": False, "source": "auto", "ip": "10.0.0.2",
                                "port": 8080, "addr": "10.0.0.2:8080", "online": True,
+                               "caps": ["control", "edit"],
                                "mappings": [{"id": "x1", "name": "a", "enabled": True},
                                             {"id": "x2", "name": "b", "enabled": False}]}])
     acting = [n for root in (rows, parse(cluster)) for n in root.walk()
@@ -731,6 +732,7 @@ def test_polled_controls_keep_their_ids():
     out = tpl.render(mappings=mappings(), statuses={}, can_edit=True)
     assert out == tpl.render(mappings=mappings(), statuses={}, can_edit=True)
     nodes = [{"name": "peer", "self": False, "source": "auto", "ip": "fd00::2", "port": 8443,
+              "caps": ["control", "edit"],
               "addr": "[fd00::2]:8443", "online": True,
               "mappings": [{"id": "m1", "name": "same id as here", "enabled": True},
                            {"id": "x 2", "name": "odd id", "enabled": False}]}]
@@ -767,6 +769,7 @@ def test_panel_openers_scroll_it_into_view():
     cluster = parse(env.get_template("_cluster_body.html").render(
         can_edit=True, nodes=[{"name": "p", "self": False, "ip": "10.0.0.2", "port": 8080,
                                "addr": "10.0.0.2:8080", "online": True,
+                               "caps": ["control", "edit"],
                                "mappings": [{"id": "x1", "name": "a", "enabled": True}]}]))
     openers = [n for root in (rows, cluster, parse(dashboard())) for n in root.walk()
                if n.attrs.get("hx-target") == "#form-panel"]

@@ -260,7 +260,7 @@
     </div>
     <div class="grid2">
       <label>{{ _("No-data alarm (s)") }} <span class="muted">({{ _("the device sends nothing this long while its port is open: dashboard, log, notification · 0 = off, else 10 to 604800") }})</span>
-        <input type="number" name="opt_no_data_alarm_s" min="0" max="604800" value="{{ mapping.options.no_data_alarm_s }}"></label>
+        <input type="number" required name="opt_no_data_alarm_s" min="0" max="604800" value="{{ mapping.options.no_data_alarm_s }}"></label>
       <label class="chk chk-pad"><input type="checkbox" name="opt_no_data_reply_only" {% if mapping.options.no_data_reply_only %}checked{% endif %}> {{ _("Only while it doesn’t answer what is sent to it") }} <span class="muted">({{ _("a device that speaks only when asked, e.g. Modbus RTU") }})</span></label>
     </div>
     <div class="grid2">

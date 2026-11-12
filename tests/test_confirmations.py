@@ -56,7 +56,7 @@ def test_rows():
     assert "Its log and trace files are deleted too" in confirms(out, "m-idle-delete")
 
     peer = {"name": "peer", "self": False, "source": "auto", "ip": "10.0.0.2", "port": 8080,
-            "addr": "10.0.0.2:8080", "online": True,
+            "addr": "10.0.0.2:8080", "online": True, "caps": ["control", "edit"],
             "mappings": [{"id": "p1", "name": "Remote", "enabled": True, "client_count": 1},
                          {"id": "p2", "name": "Quiet", "enabled": True, "client_count": 0},
                          {"id": "p3", "name": "Odd", "enabled": True, "client_count": "lots"}]}
