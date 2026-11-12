@@ -189,6 +189,14 @@ and session key. README, *Several instances on one machine*, has the whole check
   directory, not `config.json` on its own (it is replaced atomically, which a single-file
   mount doesn't allow). A start rewrites `config.json` only when something changed (the
   `SER2NET_*` address, an upgrade).
+- **Starting over.** `docker compose down -v` removes the container, its log and the
+  `ser2net-data` volume — `config.json`, `backups/`, `all.log*`, `audit.log*`, `logs/`,
+  `traces/` and `tls/` (plain `docker run`: `docker rm -f ser2net` and `docker volume rm`
+  the volume; a bind-mounted folder: stop the container, then empty the folder). Deleting
+  only `/data/config.json` resets the accounts, settings and mappings but keeps the rest,
+  and whoever completes the first-run setup next sees the earlier audit log and backups in
+  Settings. A lost password needs neither: see
+  [First admin and account recovery](#first-admin-and-account-recovery).
 - **A setting the image rejects doesn't stop it.** If `config.json` holds a value this
   version refuses (a mapping's TLS file that isn't mounted, a hand edit), the container
   still starts: the log names each one (`WARNING: config.json: mapping '…': …`), the

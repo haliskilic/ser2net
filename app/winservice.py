@@ -1162,6 +1162,14 @@ def _start_and_wait(api, svc, name: str, data_dir: str, log: Callable[[str], Non
     log(f"service '{name}' is running")
 
 
+def kept_data_note(name: str, data_dir: Optional[str]) -> str:
+    """What --uninstall-service says it leaves: the data directory and what is in it."""
+    where = f" {data_dir}" if data_dir else ""
+    return (f"service '{name}' removed. Its data directory{where} is kept, with config.json "
+            "(the accounts and the stored secrets), backups/, all.log, audit.log, logs/, "
+            "traces/ and tls/: delete that folder to remove them too")
+
+
 def uninstall(name: str, log: Callable[[str], None] = print) -> None:
     api = _advapi()
     name = check_name(name)
@@ -1169,17 +1177,23 @@ def uninstall(name: str, log: Callable[[str], None] = print) -> None:
     if not scm:
         raise _fail("Opening the Service Control Manager")
     try:
-        svc = api.dll.OpenServiceW(scm, name, SERVICE_QUERY_STATUS | SERVICE_STOP | DELETE)
+        svc = api.dll.OpenServiceW(scm, name, SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS
+                                   | SERVICE_STOP | DELETE)
         if not svc:
             if _win.get_last_error() == ERROR_SERVICE_DOES_NOT_EXIST:
                 raise ServiceError(f"There is no service named '{name}'.")
             raise _fail("Opening the service")
         try:
+            try:  # where its data is, for the last message (best effort)
+                registered = parse_service_command(_query_registration(api, svc).binary_path)
+            except ServiceError:
+                registered = None
+            data_dir = registered.get("data_dir") if registered else None
             _stop_and_wait(api, svc, name, log)  # its process gone: the exe is free below
             if not api.dll.DeleteService(svc):
                 if _win.get_last_error() != ERROR_SERVICE_MARKED_FOR_DELETE:
                     raise _fail("Removing the service")
-            log(f"service '{name}' removed (the data directory is kept)")
+            log(kept_data_note(name, data_dir))
         finally:
             api.dll.CloseServiceHandle(svc)
     finally:

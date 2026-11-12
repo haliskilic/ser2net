@@ -525,6 +525,34 @@ def test_install_flow_with_a_fake_scm():
         shutil.rmtree(work, ignore_errors=True)
 
 
+def test_uninstall_says_what_is_kept():
+    """--uninstall-service (against the stand-in SCM, any OS) names the data directory it
+    keeps and what is in it, read from the service's registered command line."""
+    calls, logs = [], []
+    cmd = winservice.service_command("ser2net", r"C:\ProgramData\ser2net", frozen=True,
+                                     executable=r"C:\Program Files\ser2net\ser2net.exe")
+    scm = FakeSCM(calls, existing_cmd=cmd)
+    scm.DeleteService = lambda svc: calls.append(("delete",)) or 1
+    undo = fake_windows(scm, cmd, calls)
+    saved = os.environ.get("ProgramFiles")
+    os.environ["ProgramFiles"] = tempfile.mkdtemp(prefix="s2n_pf_")  # no exe copy to remove
+    try:
+        winservice.uninstall("ser2net", log=logs.append)
+    finally:
+        undo()
+        shutil.rmtree(os.environ["ProgramFiles"], ignore_errors=True)
+        if saved is None:
+            del os.environ["ProgramFiles"]
+        else:
+            os.environ["ProgramFiles"] = saved
+    assert ("delete",) in calls, calls
+    assert logs[-1] == winservice.kept_data_note("ser2net", r"C:\ProgramData\ser2net"), logs
+    assert (r"Its data directory C:\ProgramData\ser2net is kept, with config.json" in logs[-1]
+            and "audit.log" in logs[-1] and "traces/" in logs[-1]), logs[-1]
+    assert "Its data directory is kept" in winservice.kept_data_note("x", None)
+    print("--uninstall-service names the data directory it keeps and what is in it  OK")
+
+
 def test_cli_leaves_the_choice_to_install():
     """ser2net.py no longer refuses before install() (which stops a running service
     first), and tells it whether --data-dir was given at all."""
@@ -750,6 +778,9 @@ def test_real_service():
         print(p.stdout.strip() or p.stderr.strip())
     assert "1060" in sc("query", name).stdout, "service still registered"
     assert os.path.isfile(os.path.join(data, "config.json")), "uninstall must keep the data"
+    said = p.stdout + p.stderr
+    assert "is kept, with config.json" in said and os.path.normcase(os.path.abspath(data)) \
+        in os.path.normcase(said), said
     if exe:
         assert not os.path.exists(winservice.installed_exe_path(name)), "the exe copy was left"
     shutil.rmtree(work, ignore_errors=True)
@@ -764,6 +795,7 @@ def main():
     test_upgrade_paths()
     test_install_locations()
     test_install_flow_with_a_fake_scm()
+    test_uninstall_says_what_is_kept()
     test_cli_leaves_the_choice_to_install()
     test_not_windows()
     test_request_shutdown()
