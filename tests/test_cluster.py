@@ -596,6 +596,39 @@ def test_manual_peer_and_remote_control():
         print(f"remote edit: {len(form_cases.mappings())} kitchen-sink mappings saved "
               "unchanged through the rendered form keep every setting  OK")
 
+        # the form carries the revision B gave; B refuses it once the mapping changed
+        # there (here: stopped from the fleet view), and the form shown again has B's new
+        # revision, so saving it again is a deliberate overwrite
+        def post_page(path, fields):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{ui_a}{path}", method="POST",
+                data=urllib.parse.urlencode(fields).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded",
+                         "X-CSRF-Token": csrf()})
+            try:
+                r = op.open(req, timeout=10)
+            except urllib.error.HTTPError as e:
+                r = e
+            return r.status if hasattr(r, "status") else r.code, r.read().decode()
+
+        _, data = raw_request(ui_b, f"/api/cluster/mapping-data?mid={mid}", hdr)
+        data = json.loads(data)
+        assert data["version"] == __version__ and "edit" in data["caps"] and data["rev"], data
+        code, page = get_a(acts["edit"])
+        opened = browser_post(page)
+        assert dict(opened)["rev"] == data["rev"], "the form carries the peer's revision"
+        stop = dict(acts["stop"]) if "stop" in acts else {**acts["start"], "action": "stop"}
+        assert post_a("/api/cluster/control-peer", stop) == 200
+        code, page = post_page("/api/cluster/peer-save", opened)
+        assert code == 400 and "was changed after this form was opened" in page, (code, page[:600])
+        assert json.loads(raw_request(ui_b, "/api/cluster/local", hdr)[1])["mappings"][0][
+            "enabled"] is False, "the stale form must not be saved"
+        again = browser_post(page)
+        assert dict(again)["rev"] != data["rev"], "shown again with the peer's new revision"
+        assert post_page("/api/cluster/peer-save", again)[0] == 200
+        print("remote edit: the peer refuses a form opened before the mapping changed; the "
+              "form shown again saves  OK")
+
         # the proxy forwards only known, validated fields: a URL serial port is refused
         bad_port = {**edit, "serial_port": "socket://10.0.0.9:1"}
         assert post_a("/api/cluster/peer-save", bad_port) == 400, "a URL serial port must be refused"

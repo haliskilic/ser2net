@@ -4,15 +4,26 @@ from __future__ import annotations
 
 from typing import NamedTuple, Optional
 
-from ...config import ConfigError, MappingConfig, valid_mapping_id
+from ...config import ConfigError, MappingConfig, mapping_revision, valid_mapping_id
 from ...i18n import _
 from .forms import apply_usb_match as apply_usb_match  # where it was before 2.9.0
 from .forms import mapping_from_form
 
 
 def _gone() -> str:
-    return _("This mapping no longer exists (it may have been deleted in the meantime). "
-             "Close the form and add it again.")
+    return _("This mapping no longer exists (it may have been deleted in the meantime). The "
+             "form shows your values as a new mapping: save it to add the mapping again, or "
+             "Cancel.")
+
+
+def _changed() -> str:
+    return _("This mapping was changed after this form was opened (by someone else, in another "
+             "tab, or by a start or stop). The form shows your values: save again to replace "
+             "the changes, or Cancel to keep them.")
+
+
+class StaleRevision(Exception):
+    """The mapping is no longer at the revision the change was made for."""
 
 
 async def save_mapping_from_form(state, form) -> tuple[bool, str]:
@@ -21,8 +32,16 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
     remote-edit save (which runs the same form on the target node).
 
     The server owns mapping ids: a form without an id creates a mapping with a new
-    one, a form with an id edits that mapping and is refused when there is none."""
+    one, a form with an id edits that mapping and is refused when there is none. A form
+    with the revision it was opened at ("rev", see config.mapping_revision; forms of
+    nodes before 2.9.0 have none) is refused when the mapping changed since: checked
+    first, so any other refusal means it hadn't."""
     posted_id = form.get("id") or ""
+    posted_rev = form.get("rev") or ""
+
+    def stale(m) -> bool:
+        return bool(posted_rev) and posted_rev != mapping_revision(state.config.secret_key, m)
+
     try:
         # The form doesn't expose (or always post) every field; when editing, carry
         # those over so a save never silently wipes them (get_mapping is a sync
@@ -30,6 +49,8 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         existing = state.config.get_mapping(posted_id) if valid_mapping_id(posted_id) else None
         if posted_id and existing is None:
             return False, _gone()
+        if existing is not None and stale(existing):
+            return False, _changed()
         mapping = mapping_from_form(form, existing, state.ports.get())
         mapping.validate()
         mapping.validate_input()
@@ -46,6 +67,8 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
                 existing = state.config.get_mapping(mapping.id)
                 if existing is None:  # deleted while this request was being checked
                     raise ConfigError(_gone())
+                if stale(existing):   # ... or changed
+                    raise ConfigError(_changed())
                 state.config.mappings[state.config.mappings.index(existing)] = mapping
             else:
                 state.config.mappings.append(mapping)
@@ -148,13 +171,16 @@ def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
     return refused
 
 
-async def delete_mapping(state, mid):
+async def delete_mapping(state, mid, expected=None):
     """Remove a mapping from the config, stop it and drop its log and traces. Returns the removed
     MappingConfig, or None when no mapping has that id. Raises ConfigError when the deletion
-    can't be saved (then nothing is deleted)."""
+    can't be saved (then nothing is deleted), StaleRevision when `expected` (a test of the
+    mapping, e.g. its revision) fails."""
     removed = None
     async with state.edit_config():
         m = state.config.get_mapping(mid)
+        if m and expected is not None and not expected(m):
+            raise StaleRevision(mid)
         if m:
             state.config.mappings.remove(m)
             removed = m

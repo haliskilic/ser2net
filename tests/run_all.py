@@ -109,6 +109,7 @@ PORTABLE = [
     "test_start_idempotent.py",
     "test_mapping_form_roundtrip.py",  # every setting survives an unchanged form save
     "test_mixed_version_edit.py",   # fleet-view edits with 2.7.1 / 2.8.0 / 2.8.1 nodes
+    "test_edit_conflicts.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

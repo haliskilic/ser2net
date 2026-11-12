@@ -11,7 +11,7 @@ import time
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
-from ...config import ConfigError, MappingConfig
+from ...config import ConfigError, MappingConfig, mapping_revision
 from ...engine import netinfo
 from ...i18n import _
 from . import ops
@@ -125,7 +125,8 @@ def routes(ctx: Ctx) -> list:
         if not m:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
         return render(request, "_mapping_form.html", **form_context(
-            m, state.ports.get(), netinfo.list_ip_candidates(), is_new=False))
+            m, state.ports.get(), netinfo.list_ip_candidates(), is_new=False,
+            rev=mapping_revision(state.config.secret_key, m)))
 
     async def mapping_log(request):
         mid = request.path_params["mid"]

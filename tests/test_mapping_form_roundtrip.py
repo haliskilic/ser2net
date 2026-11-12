@@ -140,10 +140,10 @@ def sinks() -> list[MappingConfig]:
 
 # ---- the form, as the routes render and parse it -------------------------------------
 
-def render(mapping, *, error=None, remote=None, ports=None, hide=frozenset()) -> str:
+def render(mapping, *, error=None, remote=None, ports=None, hide=frozenset(), rev="r3v") -> str:
     return TEMPLATE.render(request=REQUEST, **forms.form_context(
         mapping, cases.PORTS if ports is None else ports, cases.IPS, is_new=False,
-        error=error, remote=remote, hide=hide))
+        error=error, remote=remote, hide=hide, rev=rev))
 
 
 class Recorder(FormData):

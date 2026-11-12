@@ -21,7 +21,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
-from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
+from ...config import ConfigError, MappingConfig, mapping_revision, peer_host, trace_file_name
 from ...engine import netinfo
 from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_url
 from ...i18n import _
@@ -34,7 +34,7 @@ from .forms import (_TEXT_INPUTS, _as_text_input, _build_mapping_dict, blocks_no
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
 # relayed with the shared key.
-_PEER_FORM_FIELDS = {"id", "name", "kind", "enabled"}
+_PEER_FORM_FIELDS = {"id", "name", "kind", "enabled", "rev"}
 _PEER_FORM_PREFIXES = ("serial_", "network_", "opt_", "mqtt_", "modbus_")
 # A peer request's body (at most a mapping form) is far smaller; a larger one is refused
 # (413) before it is read.
@@ -168,11 +168,14 @@ def _remote(target, peer_id, mapping, version="") -> dict:
             "version_note": note}
 
 
-def _peer_form(target, mapping, version, peer_id) -> dict:
-    """form_context's arguments for a peer's mapping: its remote settings, and the blocks
-    a peer running *version* doesn't read left out."""
+def _peer_form(target, mapping, version, peer_id, data) -> dict:
+    """form_context's arguments for a peer's mapping: its remote settings, the blocks a
+    peer running *version* doesn't read left out, and the revision of the mapping its
+    mapping-data answer (*data*) gave (2.9.0+)."""
+    rev = data.get("rev") if isinstance(data, dict) else ""
     return {"remote": _remote(target, peer_id, mapping, version),
-            "hide": blocks_not_read(_peer_version(version))}
+            "hide": blocks_not_read(_peer_version(version)),
+            "rev": rev if isinstance(rev, str) else ""}
 
 
 def _mapping_kind_label(m) -> str:
@@ -397,10 +400,12 @@ def routes(ctx: Ctx) -> list:
         m = cfg.get_mapping(request.query_params.get("mid", ""))
         if not m:
             return _peer_json(a, {"error": "not_found"}, 404)
-        # (nodes before 2.9.0 read only mapping, ports and ips)
+        # (nodes before 2.9.0 read only mapping, ports and ips; "rev" goes back with the
+        # form, so this node can tell whether the mapping changed since)
         return _peer_json(a, {"mapping": m.to_dict(), "ports": state.ports.get(),
                               "ips": netinfo.list_ip_candidates(),
-                              "version": __version__, "caps": list(CAPS)})
+                              "version": __version__, "caps": list(CAPS),
+                              "rev": mapping_revision(cfg.secret_key, m)})
 
     async def cluster_mapping_save(request):
         """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
@@ -454,7 +459,7 @@ def routes(ctx: Ctx) -> list:
         mapping = MappingConfig.from_dict(data["mapping"])
         return render(request, "_mapping_form.html", **form_context(
             mapping, data.get("ports", []), data.get("ips", []), is_new=False,
-            **_peer_form(target, mapping, version, data["mapping"].get("id"))))
+            **_peer_form(target, mapping, version, data["mapping"].get("id"), data)))
 
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
@@ -485,7 +490,7 @@ def routes(ctx: Ctx) -> list:
             mapping = mapping_for_rerender(form, stored, ports)
             return render(request, "_mapping_form.html", status_code=400, **form_context(
                 mapping, ports, peer.get("ips", []), is_new=False, error=msg,
-                **_peer_form(target, mapping, version, form.get("id", ""))))
+                **_peer_form(target, mapping, version, form.get("id", ""), peer)))
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))

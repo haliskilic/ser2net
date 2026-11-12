@@ -13,7 +13,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from .. import __version__
-from ..config import ROLE_RANK, ConfigError, ConfigWriteError, MappingConfig, valid_mapping_id
+from ..config import (ROLE_RANK, ConfigError, ConfigWriteError, MappingConfig, mapping_revision,
+                      valid_mapping_id)
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
@@ -21,7 +22,7 @@ API_PREFIX = "/api/v1"
 # The REST API's own version (OpenAPI info.version, GET /info) and what it offers beyond
 # 1.0.0, so a client can tell what it may use without parsing the software version.
 API_VERSION = "1.1.0"
-API_FEATURES = ("warnings", "changed")
+API_FEATURES = ("warnings", "changed", "if-match")
 
 REDACTED = "********"
 
@@ -56,6 +57,26 @@ def _edit_view(mapping, state) -> dict:
 _BAD_INPUT = (ValueError, TypeError, AttributeError, OverflowError)
 
 
+def _etag(state, mapping) -> str:
+    """A mapping's ETag: its revision (config.mapping_revision), as a strong entity tag."""
+    return f'"{mapping_revision(state.config.secret_key, mapping)}"'
+
+
+def _if_match(request, state, mapping) -> bool:
+    """True unless the request has an If-Match header that names neither the mapping's
+    current ETag nor "*" (RFC 9110: strong comparison, so a weak tag never matches). A
+    client that sends no If-Match changes the mapping whatever its revision, as before."""
+    header = request.headers.get("if-match")
+    if header is None:
+        return True
+    tags = [t.strip() for t in header.split(",")]
+    return "*" in tags or _etag(state, mapping) in tags
+
+
+_STALE = {"error": "precondition_failed",
+          "detail": "the mapping changed since it was read: GET it again (If-Match)"}
+
+
 def _not_saved(e: ConfigError) -> JSONResponse:
     """A change that was refused when saved, and so not made: 400 when the config would
     not validate (it shares a port or a serial device with another mapping, ...), 500 when
@@ -73,7 +94,7 @@ def build_api_routes(state):
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        return JSONResponse(_mapping_view(m, state))
+        return JSONResponse(_mapping_view(m, state), headers={"ETag": _etag(state, m)})
 
     async def create_mapping(request):
         try:
@@ -99,7 +120,8 @@ def build_api_routes(state):
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping created: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_create", mapping.name, user="api-token")
-        return JSONResponse(_edit_view(mapping, state), status_code=201)
+        return JSONResponse(_edit_view(mapping, state), status_code=201,
+                            headers={"ETag": _etag(state, mapping)})
 
     async def update_mapping(request):
         mid = request.path_params["mid"]
@@ -124,11 +146,15 @@ def build_api_routes(state):
         try:
             async with state.edit_config():
                 existing = state.config.get_mapping(mid)
+                if existing and not _if_match(request, state, existing):
+                    raise ops.StaleRevision(mid)
                 # the same settings again: nothing to save, its runner stays as it is
                 if existing and existing.to_dict() != mapping.to_dict():
                     state.config.mappings[state.config.mappings.index(existing)] = mapping
         except ConfigError as e:  # not saved: not changed either
             return _not_saved(e)
+        except ops.StaleRevision:
+            return JSONResponse(_STALE, status_code=412)
         if not existing:
             return JSONResponse({"error": "not_found"}, status_code=404)
         same = existing.to_dict() == mapping.to_dict()
@@ -137,14 +163,17 @@ def build_api_routes(state):
         state.audit(_client_ip(request), "api_mapping_update", mapping.name, user="api-token")
         view = _edit_view(mapping, state)
         view["changed"] = not same or restarted  # False: the same settings, still running
-        return JSONResponse(view)
+        return JSONResponse(view, headers={"ETag": _etag(state, mapping)})
 
     async def delete_mapping(request):
         mid = request.path_params["mid"]
         try:
-            removed = await ops.delete_mapping(state, mid)
+            removed = await ops.delete_mapping(
+                state, mid, expected=lambda m: _if_match(request, state, m))
         except ConfigError as e:  # not deleted
             return _not_saved(e)
+        except ops.StaleRevision:
+            return JSONResponse(_STALE, status_code=412)
         if removed is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping deleted: {removed.name}")
@@ -212,6 +241,10 @@ def openapi_spec(admin) -> dict:
     error_obj = {"type": "object", "properties": {"error": {"type": "string"},
                                                   "detail": {"type": "string"}}}
     bearer: list[dict[str, list[str]]] = [{"bearerAuth": []}]
+    if_match = {"name": "If-Match", "in": "header", "required": False,
+                "schema": {"type": "string"},
+                "description": "The ETag a GET returned (or *): change the mapping only if it "
+                               "is still at that revision, else 412."}
     return {
         "openapi": "3.0.3",
         "info": {
@@ -237,7 +270,7 @@ def openapi_spec(admin) -> dict:
                                   "`version`: ser2net's version; `api`: this API's version "
                                   "(info.version here); `features`: what it offers beyond "
                                   "1.0.0 (`warnings` and `changed` in create / update / "
-                                  "action answers)."),
+                                  "action answers, `if-match` on PUT / DELETE)."),
                               "responses": {"200": {"description": "version, api, features"}}}},
             "/status": {"get": {"summary": "Live status of all mappings", "security": bearer,
                                 "responses": {"200": {"description": "status map"}}}},
@@ -258,21 +291,33 @@ def openapi_spec(admin) -> dict:
                 "parameters": [{"name": "mid", "in": "path", "required": True,
                                 "schema": {"type": "string"}}],
                 "get": {"summary": "Get a mapping", "security": bearer,
-                        "responses": {"200": {"description": "mapping"},
+                        "description": "The `ETag` header is the mapping's revision: send it "
+                                       "back in `If-Match` with a PUT or DELETE to change it "
+                                       "only if nobody changed it since.",
+                        "responses": {"200": {"description": "mapping (ETag header)"},
                                       "404": {"description": "not found"}}},
                 "put": {"summary": "Replace a mapping", "security": bearer,
                         "requestBody": {"required": True, "content": {"application/json": {
                             "schema": {"$ref": "#/components/schemas/Mapping"}}}},
+                        "parameters": [if_match],
                         "description": "The same settings again change nothing: the "
-                                       "mapping keeps running as it is (`changed`: false).",
-                        "responses": {"200": {"description": "updated (see `warnings`)"},
+                                       "mapping keeps running as it is (`changed`: false). "
+                                       "Without `If-Match` the mapping is replaced whatever "
+                                       "its revision.",
+                        "responses": {"200": {"description": "updated (see `warnings`; "
+                                                             "ETag header)"},
                                       "400": {"description": "validation error"},
                                       "404": {"description": "not found"},
+                                      "412": {"description": "If-Match names another "
+                                                             "revision (precondition_failed)"},
                                       "500": {"description": "config.json could not be "
                                                              "written (save_failed)"}}},
                 "delete": {"summary": "Delete a mapping", "security": bearer,
+                           "parameters": [if_match],
                            "responses": {"200": {"description": "deleted"},
                                          "404": {"description": "not found"},
+                                         "412": {"description": "If-Match names another "
+                                                                "revision (precondition_failed)"},
                                          "500": {"description": "config.json could not be "
                                                                 "written (save_failed)"}}},
             },

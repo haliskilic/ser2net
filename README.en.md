@@ -308,6 +308,10 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   parameters, network mode (server/client/udp), protocol, bind/remote IP:port, access
   rules.
 - **Start/Stop/Restart/Copy/Delete:** per row.
+- **Edit:** an edit form opened before the mapping changed (another user or tab, a start or
+  stop, the REST API) is not saved: it comes back with your values and a note, and saving
+  it again replaces the changes. A form whose mapping was deleted meanwhile comes back as a
+  new mapping. A copy (*Copy*) has no MQTT client ID of its own until you give it one.
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
   device on network mappings. The hex view shows both directions; viewers see only what
@@ -347,6 +351,9 @@ Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /info` (ser2net's version, the API's version and its `features`),
 `GET /health` (unauthenticated), `GET /openapi.json`.
+`GET /mappings/{id}` answers the mapping's revision in `ETag`: send it back in `If-Match`
+with a `PUT` or `DELETE` to change the mapping only if nobody changed it since (else `412`,
+`precondition_failed`); without `If-Match` they work as before.
 Start and stop are idempotent: starting a mapping that already runs with its settings, or
 stopping a stopped one, changes nothing (`"changed": false`; its clients, serial port and
 MQTT connection stay) — use `restart` to restart a running mapping, e.g. to send its open
