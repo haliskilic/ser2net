@@ -650,7 +650,6 @@
   "◀ device": "◀ cihaz",
   "⤓ Download": "⤓ İndir",
   "⤓ Export mappings (JSON)": "⤓ Eşlemeleri dışa aktar (JSON)",
-  "This mapping no longer exists (it may have been deleted in the meantime). Close the form and add it again.": "Bu eşleme artık yok (bu arada silinmiş olabilir). Formu kapatıp eşlemeyi yeniden ekle.",
   "Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, digits or _), so it gets a new one.": "Eşleme #{0} ({1}): {2} geçerli bir eşleme ID'si değil (1-64 harf, rakam ya da _), bu yüzden yeni bir ID alıyor.",
   "Serial port {0} is a URL, not a device: ser2net opens serial devices only (URLs such as socket:// or spy:// are not supported).": "Seri port {0} bir URL, cihaz değil: ser2net yalnızca seri cihazları açar (socket:// ya da spy:// gibi URL'ler desteklenmez).",
   "device {0} is a URL, not a local serial port": "cihaz {0} bir URL, yerel bir seri port değil",
@@ -884,5 +883,7 @@
   "no remote edit": "uzaktan düzenleme yok",
   "{0} runs version {1}, this node {2}: the settings {1} doesn’t have are left out of this form. Upgrade every node to the same version (README: Upgrading a cluster).": "{0} {1} sürümünü, bu düğüm {2} sürümünü çalıştırıyor: {1} sürümünde olmayan ayarlar bu formda gösterilmiyor. Her düğümü aynı sürüme yükselt (README: Kümeyi yükseltme).",
   "{0} runs version {1}, this node {2}: the settings only {1} has are not in this form, and it keeps them as they are. Upgrade this node too (README: Upgrading a cluster).": "{0} {1} sürümünü, bu düğüm {2} sürümünü çalıştırıyor: yalnızca {1} sürümünde olan ayarlar bu formda yok; o düğüm onları olduğu gibi korur. Bu düğümü de yükselt (README: Kümeyi yükseltme).",
-  "Mapping #{0} ({1}): the file has no {2} (an export of an older version?). Merged into a mapping of the same name, they keep their current values; otherwise they take the defaults.": "Eşleme #{0} ({1}): dosyada {2} yok (daha eski bir sürümün dışa aktarımı mı?). Aynı adlı bir eşlemeyle birleştirilirse bunlar mevcut değerlerini korur, yoksa varsayılanları alır."
+  "Mapping #{0} ({1}): the file has no {2} (an export of an older version?). Merged into a mapping of the same name, they keep their current values; otherwise they take the defaults.": "Eşleme #{0} ({1}): dosyada {2} yok (daha eski bir sürümün dışa aktarımı mı?). Aynı adlı bir eşlemeyle birleştirilirse bunlar mevcut değerlerini korur, yoksa varsayılanları alır.",
+  "This mapping no longer exists (it may have been deleted in the meantime). The form shows your values as a new mapping: save it to add the mapping again, or Cancel.": "Bu eşleme artık yok (bu arada silinmiş olabilir). Form, girdiğin değerleri yeni bir eşleme olarak gösteriyor: eşlemeyi yeniden eklemek için kaydet ya da İptal'e bas.",
+  "This mapping was changed after this form was opened (by someone else, in another tab, or by a start or stop). The form shows your values: save again to replace the changes, or Cancel to keep them.": "Bu eşleme, bu form açıldıktan sonra değişti (başka biri, başka bir sekme ya da bir başlatma veya durdurma tarafından). Form senin değerlerini gösteriyor: o değişikliklerin yerine bunları yazmak için yeniden kaydet, korumak için İptal'e bas."
 }

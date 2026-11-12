@@ -11,7 +11,7 @@ import dataclasses
 import json
 import re
 
-from ...config import LdapSettings, MappingConfig, OidcSettings, SerialSettings
+from ...config import LdapSettings, MappingConfig, OidcSettings, SerialSettings, mapping_revision
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -401,13 +401,14 @@ def blocks_not_read(version) -> frozenset[str]:
 
 
 def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool,
-                 error=None, remote=None, hide=frozenset()) -> dict:
+                 error=None, remote=None, hide=frozenset(), rev: str = "") -> dict:
     """What _mapping_form.html is rendered with (every place that shows the form);
-    `hide`: blocks the node that saves it doesn't read (blocks_not_read)."""
+    `hide`: blocks the node that saves it doesn't read (blocks_not_read); `rev`: the
+    stored mapping's revision (config.mapping_revision) on the node that saves it."""
     return {"mapping": mapping, "is_new": is_new,
             "modbus_points_json": _modbus_points_json(mapping),
             "ports": portlist.visible(ports), "ips": ips, "error": error, "remote": remote,
-            "hide": hide}
+            "hide": hide, "rev": rev}
 
 
 def _part(mapping, path: str):
@@ -464,9 +465,15 @@ def _keep_point_fields(new_map, existing) -> None:
 
 
 def _form_error(render, request, state, form, message: str):
-    """Re-render the mapping form with the submitted values and an error banner."""
+    """Re-render the mapping form with the submitted values and an error banner. It
+    carries the mapping's current revision: the save checks the revision before anything
+    else, so the error is either that it changed (a second save then replaces the
+    changes, as the banner says) or about the values. A mapping deleted meanwhile is
+    shown as a new one: saving it adds it again."""
     ports = state.ports.get()
-    mapping = mapping_for_rerender(form, state.config.get_mapping(form.get("id") or ""), ports)
+    stored = state.config.get_mapping(form.get("id") or "")
+    mapping = mapping_for_rerender(form, stored, ports)
+    rev = mapping_revision(state.config.secret_key, stored) if stored is not None else ""
     return render(request, "_mapping_form.html", status_code=400,
                   **form_context(mapping, ports, netinfo.list_ip_candidates(),
-                                 is_new=not form.get("id"), error=message))
+                                 is_new=stored is None, error=message, rev=rev))

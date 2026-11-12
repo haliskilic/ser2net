@@ -17,6 +17,7 @@ import contextlib
 import dataclasses
 import functools
 import hashlib
+import hmac
 import ipaddress
 import json
 import math
@@ -1992,6 +1993,16 @@ class AppConfig:
                 raise error
             still[key] = None
         return still
+
+
+def mapping_revision(secret_key: str, m: "MappingConfig") -> str:
+    """An opaque revision of a mapping's settings (never stored): what an edit form or a
+    REST client saw, to tell whether the mapping changed since. An HMAC with this node's
+    secret key, so it tells nothing about the settings (the MQTT password a viewer token
+    doesn't get), and another node's revision is its own."""
+    key = hmac.new(secret_key.encode(), b"ser2net mapping revision", hashlib.sha256).digest()
+    body = json.dumps(m.to_dict(), sort_keys=True, separators=(",", ":"), default=str)
+    return hmac.new(key, body.encode(), hashlib.sha256).hexdigest()[:24]
 
 
 def _mapping_content(m: "MappingConfig") -> dict[str, Any]:

@@ -72,7 +72,7 @@ def test_this_node_edits_an_older_one(fx: dict) -> None:
     version = fx["version"].lstrip("v")
     for mid, own in fx["mapping_data"].items():
         shown = MappingConfig.from_dict(own)
-        page = render(shown, ports=fx["ports"], **_peer_form(PEER, shown, version, own["id"]))
+        page = render(shown, ports=fx["ports"], **_peer_form(PEER, shown, version, own["id"], {}))
         # a note when it runs another version than this node
         assert (f"runs version {version}, this node" in page) == (
             _peer_version(version) != _peer_version(__version__)), (version, __version__)

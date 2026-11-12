@@ -317,6 +317,11 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 - **Eşleme ekle:** Ad, tür (Serial↔Network / Serial↔Serial), seri port + parametreler,
   ağ modu (server/client/udp), protokol, bind/remote IP:port, erişim kuralları.
 - **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda.
+- **Düzenle:** eşleme değişmeden önce açılmış bir düzenleme formu (başka bir kullanıcı ya da
+  sekme, bir başlatma ya da durdurma, REST API) kaydedilmez: girdiğin değerler ve bir notla
+  geri gelir; yeniden kaydetmek o değişikliklerin yerine bunları yazar. Eşlemesi bu arada
+  silinmiş bir form yeni bir eşleme olarak geri gelir. Bir kopyanın (*Kopyala*) siz
+  verene kadar kendi MQTT client ID'si olmaz.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
   cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
@@ -356,6 +361,10 @@ Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /info` (ser2net'in sürümü, API'nin sürümü ve sunduğu `features`),
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+`GET /mappings/{id}` eşlemenin revizyonunu `ETag` olarak verir: bunu bir `PUT` ya da
+`DELETE` ile `If-Match` olarak geri gönderirsen eşleme yalnızca o zamandan beri kimse
+değiştirmediyse değişir (yoksa `412`, `precondition_failed`); `If-Match` olmadan eskisi gibi
+çalışır.
 Başlatma ve durdurma idempotenttir: ayarlarıyla zaten çalışan bir eşlemeyi başlatmak ya da
 durmuş birini durdurmak hiçbir şeyi değiştirmez (`"changed": false`; istemcileri, seri portu
 ve MQTT bağlantısı yerinde kalır). Çalışan bir eşlemeyi yeniden başlatmak için — örneğin
