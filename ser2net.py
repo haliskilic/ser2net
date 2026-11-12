@@ -247,8 +247,10 @@ def main(argv: list[str] | None = None) -> int:
         from app import winservice
 
         return winservice.run(args.service_name,
-                              lambda: runtime.service_main(config_path),
-                              runtime.request_shutdown)
+                              lambda: runtime.service_main(config_path, args.service_name),
+                              runtime.request_shutdown,
+                              log_path=os.path.join(os.path.dirname(os.path.abspath(config_path)),
+                                                    winservice.SERVICE_LOG))
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
 
 

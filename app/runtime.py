@@ -337,10 +337,11 @@ def _log_thread_errors(log) -> None:
 _as_service = False  # set by service_main so _serve can log the service-only warnings
 
 
-def service_main(config_path: str) -> int:
-    """main() for the Windows service, which has no console: a start-up error that stops
-    it (the one-line SystemExit) also goes to all.log next to config.json, where the
-    admin looks for it."""
+def service_main(config_path: str, name: str = "ser2net") -> int:
+    """main() for the Windows service ``name``, which has no console: a start-up error
+    that stops it (the one-line SystemExit) also goes to all.log next to config.json,
+    where the admin looks for it; that and any other error that ends it is also written
+    to the Application event log (service_stopped_event)."""
     global _as_service
     _as_service = True
     try:
@@ -350,7 +351,22 @@ def service_main(config_path: str) -> int:
             log = os.path.join(os.path.dirname(os.path.abspath(config_path)), "all.log")
             with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
                 fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {e.code}\n")
+        if e.code not in (None, 0):
+            service_stopped_event(name, config_path, e.code if isinstance(e.code, str)
+                                  else f"exit code {e.code}")
         raise
+    except Exception as e:
+        service_stopped_event(name, config_path, f"{type(e).__name__}: {e}")
+        raise
+
+
+def service_stopped_event(name: str, config_path: str, why: str) -> bool:
+    """The Application event log entry of a service that stopped on an error."""
+    from . import winservice
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    return winservice.report_event(name, (
+        f"The ser2net service '{name}' stopped: {why}\n\nDetails: "
+        f"{os.path.join(data_dir, 'all.log')} and {os.path.join(data_dir, winservice.SERVICE_LOG)}"))
 
 
 async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
