@@ -384,6 +384,12 @@ class _ClientConn:
         self._closing = False
         self.close_reason = ""  # why the session ended (first cause wins; for the log)
 
+    @property
+    def closing(self) -> bool:
+        """Kicked, dropped or ending: no longer one of the mapping's connections (it stays
+        in the runner's set until its handler is done)."""
+        return self._closing
+
     def _log_unexpected(self, exc: BaseException) -> None:
         self.runner._log(f"client {self.peer} pump error: {type(exc).__name__}: {exc}")
 
@@ -853,7 +859,22 @@ class MappingRunner:
         peer_label = f"{peer_ip}:{peer_port}" if peer_port else peer_ip
         net = self.mapping.network
 
-        # allow-list, then max connections (a priority client / kick_old_user makes room)
+        # An RFC2217 session needs the open serial port: wait briefly for it (an allowed
+        # client) BEFORE admission, so a client waiting here holds no slot and nobody is
+        # kicked for a newcomer that is then turned away.
+        ready = self._link.ready
+        if net.protocol == "rfc2217" and not ready.is_set() and self._access.allowed(peer_ip):
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(ready.wait(),
+                                       timeout=self.mapping.options.rfc2217_net_timeout_s)
+            if not ready.is_set():
+                self._log(f"rejected {peer_label}: serial not ready for RFC2217")
+                writer.close()
+                return
+
+        # allow-list, then max connections (a priority client / kick_old_user makes room);
+        # from here until the client is in self._clients nothing awaits, so connections
+        # accepted together are admitted one after the other, each seeing the one before
         admission = self._access.admit(peer_ip, peer_label, self._clients, self._log)
         if not admission.admitted:
             if admission.at_capacity:
@@ -863,17 +884,6 @@ class MappingRunner:
             writer.close()
             return
         is_priority = admission.priority
-
-        # For RFC2217 we need the live serial instance; wait briefly for it.
-        ready = self._link.ready
-        if net.protocol == "rfc2217" and not ready.is_set():
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(ready.wait(),
-                                       timeout=self.mapping.options.rfc2217_net_timeout_s)
-            if not ready.is_set():
-                self._log(f"rejected {peer_label}: serial not ready for RFC2217")
-                writer.close()
-                return
 
         self._enable_keepalive(writer, peer_label)
         client = _ClientConn(self, reader, writer, peer_ip, peer_port, priority=is_priority)

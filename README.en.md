@@ -110,8 +110,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   table only redraws when it changed (no flicker, selections stay).
 - **Per-mapping access control:** allowed IP/CIDR list, **high-priority** client IPs
   (a priority client evicts the oldest when the port is full), max connections,
-  kick-old-user, read-only, banner, open/close strings, `closeon` (a Modbus gateway uses
-  no banner, open/close strings or `closeon`).
+  kick-old-user (a new client evicts the oldest non-priority one, never a priority
+  client: while only priority clients are connected it is refused), read-only, banner,
+  open/close strings, `closeon` (a Modbus gateway uses no banner, open/close strings or
+  `closeon`).
 - **Connection lifecycle (per mapping, TCP):** **dead-peer detection via TCP keepalive**
   — a client or remote server that vanishes without a FIN/RST (power cut, cable pull,
   Wi-Fi/VPN/NAT drop) no longer stays `ESTABLISHED` forever: with the defaults (on ·

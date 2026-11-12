@@ -3,6 +3,10 @@ allow-list, max connections, kick_old_user and priority clients, plus the reconn
 backoff of serial_link.py. Pure: no sockets, no serial port, so it runs on any OS
 (tests/test_access_priority.py drives the same rules end to end over socat PTYs).
 
+The runners' accept handlers are driven with stand-in streams: connections that arrive
+together (in one pass of the event loop) and RFC2217 clients that wait for the serial
+port must not get past max_connections.
+
 Run: python3 tests/test_access_policy.py
 """
 import asyncio
@@ -12,8 +16,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import NetworkSettings
-from app.engine import access
+from app.config import MappingConfig, NetworkSettings
+from app.engine import access, bridge
+from app.engine.bridge import MappingRunner
+from app.engine.modbus_gateway import ModbusGatewayRunner
 from app.engine.serial_link import Backoff
 
 
@@ -21,9 +27,11 @@ class FakeClient:
     def __init__(self, peer, connected_at, priority=False):
         self.peer, self.connected_at, self.priority = peer, connected_at, priority
         self.kicked = ""
+        self.closing = False
 
     def kick(self, reason="kicked"):
         self.kicked = reason
+        self.closing = True
 
 
 def policy(**network):
@@ -87,6 +95,227 @@ def test_admit():
     print("admit: room / full / not allowed / kick_old_user / priority victim choice  OK")
 
 
+def test_only_live_clients_count():
+    logs = []
+    # a kicked client still listed (its handler has not finished) neither counts nor is
+    # kicked again: two newcomers at once with max 1 leave one client, not two
+    p = policy(kick_old_user=True)
+    old = FakeClient("10.0.0.1:1", 1.0)
+    clients = {old}
+    first = p.admit("10.0.0.2", "10.0.0.2:2", clients, logs.append)
+    assert first.admitted and old.closing
+    new = FakeClient("10.0.0.2:2", 2.0)
+    clients.add(new)
+    second = p.admit("10.0.0.3", "10.0.0.3:3", clients, logs.append)
+    assert second.admitted and new.kicked == "kicked for new client 10.0.0.3:3", logs
+    assert old.kicked == "kicked for new client 10.0.0.2:2", "kicked once, not twice"
+    assert [line for line in logs if line.startswith("kicking 10.0.0.1:1")] == \
+        ["kicking 10.0.0.1:1 for new client 10.0.0.2:2"], logs
+    # ...and a slot freed by a kick is free: no new kick
+    p = policy(max_connections=2)
+    gone = FakeClient("10.0.0.1:1", 1.0)
+    gone.closing = True
+    stays = FakeClient("10.0.0.4:4", 3.0)
+    a = p.admit("10.0.0.5", "10.0.0.5:5", {gone, stays}, logs.append)
+    assert a.admitted and not stays.kicked and not gone.kicked
+    print("admit: kicked clients still being torn down neither count nor get kicked again  OK")
+
+
+def test_normal_newcomer_never_evicts_priority():
+    logs = []
+    p = policy(max_connections=2, kick_old_user=True, priority_client_ips=["10.0.0.9"])
+    vips = {FakeClient("10.0.0.9:1", 1.0, priority=True), FakeClient("10.0.0.9:2", 2.0, priority=True)}
+    a = p.admit("10.0.0.3", "10.0.0.3:3", vips, logs.append)
+    assert (a.admitted, a.at_capacity) == (False, True), a
+    assert not any(c.kicked for c in vips)
+    assert logs[-1] == "rejected 10.0.0.3:3: max connections reached (all priority clients)", logs
+    # a non-priority client among them is still the one that makes room
+    normal = FakeClient("10.0.0.4:4", 0.5)
+    p = policy(max_connections=3, kick_old_user=True, priority_client_ips=["10.0.0.9"])
+    a = p.admit("10.0.0.3", "10.0.0.3:3", vips | {normal}, logs.append)
+    assert a.admitted and normal.kicked and not any(c.kicked for c in vips)
+    assert access.pick_victim(vips, priority=False) is None
+    assert access.pick_victim(vips, priority=True).peer == "10.0.0.9:1"
+    print("admit: a normal newcomer (kick_old_user) never evicts a priority client  OK")
+
+
+# ---- the runners' accept handlers, with stand-in streams ----
+class FakeTransport:
+    def __init__(self):
+        self.cut = asyncio.Event()
+
+    def abort(self):
+        self.cut.set()
+
+    def close(self):
+        self.cut.set()
+
+    def is_closing(self):
+        return self.cut.is_set()
+
+    def get_extra_info(self, name, default=None):
+        return default
+
+
+class FakeWriter:
+    def __init__(self, port):
+        self.transport = FakeTransport()
+        self.peer = ("10.0.0.7", port)
+        self.sent = bytearray()
+
+    def get_extra_info(self, name, default=None):
+        return self.peer if name == "peername" else default
+
+    def write(self, data):
+        self.sent += data
+
+    async def drain(self):
+        pass
+
+    def close(self):
+        self.transport.close()
+
+    def is_closing(self):
+        return self.transport.is_closing()
+
+    async def wait_closed(self):
+        pass
+
+
+async def _held(conn):
+    """_ClientConn.run's stand-in: the client stays connected until it is cut off."""
+    await conn.writer.transport.cut.wait()
+
+
+def _mapping(protocol="raw", **network):
+    return MappingConfig.from_dict({
+        "name": "adm", "serial": {"port": "/dev/null-test"},
+        "network": dict({"mode": "server", "protocol": protocol, "bind_ip": "127.0.0.1",
+                         "port": 4001, "max_connections": 1, "tcp_keepalive": False},
+                        **network)})
+
+
+async def _arrive(runner, ports):
+    """Connections accepted in one pass of the event loop: their handlers start together."""
+    writers = [FakeWriter(p) for p in ports]
+    tasks = [asyncio.ensure_future(runner._on_client(asyncio.StreamReader(), w)) for w in writers]
+    await asyncio.sleep(0.05)
+    return writers, tasks
+
+
+def _live(runner):
+    return sorted(c.peer for c in runner._clients if not c.closing)
+
+
+async def _bridge_bursts():
+    real_run = bridge._ClientConn.run
+    bridge._ClientConn.run = _held
+    tasks = []
+    try:
+        runner = MappingRunner(_mapping(kick_old_user=True), logger=lambda m: None)
+        writers, t = await _arrive(runner, [1])
+        tasks += t
+        assert _live(runner) == ["10.0.0.7:1"]
+        for burst in ([2, 3], [4, 5, 6], [7, 8, 9]):
+            writers, t = await _arrive(runner, burst)
+            tasks += t
+            # the last of the burst holds the one slot; the rest were kicked in turn
+            assert _live(runner) == [f"10.0.0.7:{burst[-1]}"], (burst, _live(runner))
+            assert len(runner._clients) == 1, [c.peer for c in runner._clients]
+        # priority arrivals at once, kick_old_user off: still one
+        runner = MappingRunner(_mapping(priority_client_ips=["10.0.0.7"]), logger=lambda m: None)
+        writers, t = await _arrive(runner, [11, 12])
+        tasks += t
+        assert _live(runner) == ["10.0.0.7:12"], _live(runner)
+        print("bridge: same-tick arrivals (max 1, kick_old_user / priority) leave one client, "
+              "bursts no longer grow 1 -> 3 -> 5  OK")
+    finally:
+        bridge._ClientConn.run = real_run
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _rfc2217_waiters():
+    real_run = bridge._ClientConn.run
+    bridge._ClientConn.run = _held
+    tasks = []
+    try:
+        for kick in (False, True):
+            logs = []
+            runner = MappingRunner(_mapping("rfc2217", kick_old_user=kick), logger=logs.append)
+            writers, t = await _arrive(runner, [21, 22, 23])  # the serial port is not open
+            tasks += t
+            assert not runner._clients and not any(w.transport.cut.is_set() for w in writers)
+            runner._link.ready.set()  # it opens: the waiting clients are decided one by one
+            await asyncio.sleep(0.05)
+            assert len(_live(runner)) == 1, (kick, _live(runner), logs)
+            if kick:
+                assert _live(runner) == ["10.0.0.7:23"], _live(runner)
+            else:
+                assert _live(runner) == ["10.0.0.7:21"], _live(runner)
+                refused = [w for w in writers[1:] if b"Busy" in w.sent]
+                assert len(refused) == 2, logs
+        # a waiter that gives up kicks nobody
+        logs = []
+        runner = MappingRunner(_mapping("rfc2217", kick_old_user=True, port=4002),
+                               logger=logs.append)
+        runner.mapping.options.rfc2217_net_timeout_s = 0.1
+        runner._link.ready.set()
+        writers, t = await _arrive(runner, [31])
+        tasks += t
+        runner._link.ready.clear()  # the port went away
+        writers2, t = await _arrive(runner, [32])
+        tasks += t
+        await asyncio.sleep(0.2)
+        assert _live(runner) == ["10.0.0.7:31"], (_live(runner), logs)
+        assert "rejected 10.0.0.7:32: serial not ready for RFC2217" in logs, logs
+        assert not any(line.startswith("kicking") for line in logs), logs
+        print("bridge RFC2217: clients waiting for the serial port are admitted within "
+              "max_connections; one turned away kicks nobody  OK")
+    finally:
+        bridge._ClientConn.run = real_run
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _gateway_bursts():
+    runner = ModbusGatewayRunner(_mapping("modbus", kick_old_user=True), logger=lambda m: None)
+    tasks = []
+
+    async def arrive(ports):
+        out = []
+        for p in ports:
+            reader = asyncio.StreamReader()
+            w = FakeWriter(p)
+            w.transport.abort = lambda reader=reader, w=w: (w.transport.cut.set(),
+                                                            reader.feed_eof())
+            out.append(asyncio.ensure_future(runner._on_client(reader, w)))
+        await asyncio.sleep(0.05)
+        return out
+
+    try:
+        tasks += await arrive([1])
+        for burst in ([2, 3], [4, 5, 6]):
+            tasks += await arrive(burst)
+            live = sorted(c.peer for c in runner._clients if not c.closing)
+            assert live == [f"10.0.0.7:{burst[-1]}"], (burst, live)
+            assert len(runner._clients) == 1
+        print("Modbus gateway: same-tick masters (max 1, kick_old_user) leave one  OK")
+    finally:
+        runner._stop.set()
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def test_runners_admit_within_the_limit():
+    asyncio.run(_bridge_bursts())
+    asyncio.run(_rfc2217_waiters())
+    asyncio.run(_gateway_bursts())
+
+
 def test_backoff():
     async def run():
         loop = asyncio.get_running_loop()
@@ -110,6 +339,9 @@ def test_backoff():
 def main():
     test_allow_list()
     test_admit()
+    test_only_live_clients_count()
+    test_normal_newcomer_never_evicts_priority()
+    test_runners_admit_within_the_limit()
     test_backoff()
     print("\nPASS: client admission policy + reconnect backoff")
 

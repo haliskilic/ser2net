@@ -62,8 +62,10 @@ class _Master:
     connected_at: float = field(default_factory=time.time)
     close_reason: str = ""          # why the gateway dropped it (first cause wins)
     refused: int = 0                # requests refused because the mapping is read-only
+    closing: bool = False           # kicked: listed until its handler is done
 
     def kick(self, reason: str = "kicked") -> None:
+        self.closing = True
         self.close_reason = self.close_reason or reason
         with contextlib.suppress(Exception):
             self.writer.transport.abort()
