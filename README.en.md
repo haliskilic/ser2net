@@ -186,7 +186,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   import through Settings with a preview; options without an equivalent are listed as
   warnings, and a connection that would be more open here (a gtlssh login or TLS client
   certificates, TLS whose certificate is not on this host, a write-only device) comes in
-  disabled.
+  disabled. Merging such a file again later takes only what the file says and keeps what
+  was set on its mappings here (TLS, bind IP, allowed clients, USB identity, RS-485, MQTT,
+  Modbus points, a disabled mapping stays disabled); it never opens a mapping up, and the
+  preview lists what each update changes and keeps.
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
   notifications use as well. Logs, the audit log and the REST API stay English.

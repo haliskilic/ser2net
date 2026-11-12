@@ -9,7 +9,10 @@ up, so a wrong import or edit could not be undone. Checks:
     update keeping the id, new = add, others untouched — or replaces;
   * a 2.7-style one-step POST still replaces everything (scripts keep working);
   * a classic ser2net.yaml goes through the same preview (named as such) and merge; a
-    file with nothing to import is refused instead of emptying the mappings;
+    file with nothing to import is refused instead of emptying the mappings; merging it
+    again keeps what was set on its mappings since (TLS, bind IP, allowed clients, USB
+    identity, RS-485, MQTT, Modbus, disabled), never opens one up, and the preview lists
+    what an update changes and keeps; the same file again is "unchanged";
   * an admin can download (without the session key) and restore a backup; the restore
     is undoable, keeps the session working, and a backup without users is refused;
   * a restore first shows what changes for sign-in and access. By default it brings back
@@ -157,10 +160,98 @@ def test_planner():
     print("planner: merge by id/name keeps ids, skips identical; replace lists removals  OK")
 
 
+CLASSIC = """connection: &plc
+  accepter: telnet(rfc2217),tcp,4001
+  connector: serialdev,/dev/ttyUSB0,19200n81
+  options:
+    banner: 'hello'
+connection: &gw
+  accepter: tcp,127.0.0.1,4502
+  connector: serialdev,/dev/ttyUSB1,9600e71
+"""
+
+
+def test_classic_merge():
+    """Merging a classic ser2net file again keeps what was set on its mappings since (the
+    file can't say it) and never opens one up; what the file says is taken."""
+    plan = parse_mappings_file(CLASSIC.encode(), "ser2net.yaml")
+    assert plan.classic
+    first, _ = apply_import([], plan.mappings, "merge", plan.classic)
+    plc, gw = (MappingConfig.from_dict(m.to_dict()) for m in first)
+    # set up after the first import, as the import's own warnings ask for
+    plc.enabled = False
+    plc.network.tls, plc.network.tls_cert, plc.network.tls_key = True, "/etc/c.pem", "/etc/k.pem"
+    plc.network.bind_ip, plc.network.allowed_client_ips = "10.9.0.1", ["10.9.0.0/24"]
+    plc.network.priority_client_ips, plc.network.read_only = ["10.9.0.7"], True
+    plc.serial.match = {"vid": "0403", "pid": "6001"}
+    plc.serial.advanced.rs485_enabled = True
+    plc.mqtt.enabled, plc.mqtt.host, plc.mqtt.payload_format = True, "broker", "sparkplug_b"
+    gw = MappingConfig.from_dict(dict(gw.to_dict(), modbus_poll={"points": [
+        {"name": "t", "unit": 1, "fn": 3, "address": 0}]}))
+    gw.network.protocol, gw.options.banner = "modbus", "Welcome"
+    hardened = [plc, gw]
+
+    rows = {r["name"]: r for r in plan_rows(hardened, plan.mappings, "merge", plan.classic)}
+    assert [rows[n]["action"] for n in ("plc", "gw")] == ["same", "same"], rows
+    merged, touched = apply_import(hardened, plan.mappings, "merge", plan.classic)
+    assert touched == [] and [m.to_dict() for m in merged] == [m.to_dict() for m in hardened]
+    kept = {c["what"]: c for c in rows["plc"]["changes"]}
+    assert all(c["kept"] for c in kept.values()), kept
+    for what in ("State", "TLS", "Bind IP", "Allowed client IPs / CIDRs", "Read-only"):
+        assert kept[what]["security"], (what, kept)   # the file would have opened it up
+    assert [(c["what"], c["file"]) for c in rows["gw"]["changes"]] == [
+        ("Protocol", "server/raw"), ("Connect banner", "—")], rows["gw"]
+
+    # the file changes what it can say: that is taken, the rest still kept (a banner the
+    # file no longer has is kept too: it can't tell a removed one from one set here)
+    changed = CLASSIC.replace("19200n81", "38400e71").replace(
+        "    banner: 'hello'", "    remaddr: 10.9.0.5;10.0.0.0/8\n    kickolduser: true")
+    plan2 = parse_mappings_file(changed.encode(), "ser2net.yaml")
+    rows = {r["name"]: r for r in plan_rows(hardened, plan2.mappings, "merge", plan2.classic)}
+    assert rows["plc"]["action"] == "update"
+    merged, touched = apply_import(hardened, plan2.mappings, "merge", plan2.classic)
+    p = merged[0]
+    assert [m.name for m in touched] == ["plc"] and p.id == plc.id
+    assert (p.serial.baudrate, p.serial.parity, p.serial.bytesize) == (38400, "E", 7)
+    assert p.network.kick_old_user is True and p.enabled is False and p.network.tls is True
+    assert p.network.allowed_client_ips == ["10.9.0.0/24"], "a wider allow-list is not taken"
+    assert (p.network.bind_ip, p.network.read_only, p.network.priority_client_ips) == \
+        ("10.9.0.1", True, ["10.9.0.7"])
+    assert p.serial.match and p.serial.advanced.rs485_enabled
+    assert p.mqtt.enabled and p.mqtt.payload_format == "sparkplug_b"
+    assert p.options.banner == "hello", "the file has no banner now: the mapping keeps its own"
+    diff = {c["what"]: c for c in rows["plc"]["changes"]}
+    assert diff["Serial"]["before"] == "19200N81" and diff["Serial"]["after"] == "38400E71"
+    assert diff["Connect banner"]["kept"] and diff["Connect banner"]["file"] == "—"
+    assert diff["Allowed client IPs / CIDRs"]["kept"] and diff["Allowed client IPs / CIDRs"]["security"]
+    narrower = changed.replace("10.9.0.5;10.0.0.0/8", "10.9.0.5")
+    plan3 = parse_mappings_file(narrower.encode(), "ser2net.yaml")
+    merged, _ = apply_import(hardened, plan3.mappings, "merge", plan3.classic)
+    assert merged[0].network.allowed_client_ips == ["10.9.0.5"], "a narrower one is taken"
+    # an enabled mapping stays enabled, with what was set on it
+    running = MappingConfig.from_dict(dict(plc.to_dict(), enabled=True))
+    merged, _ = apply_import([running, gw], plan.mappings, "merge", plan.classic)
+    assert merged[0].enabled is True and merged[0].network.tls is True
+
+    # a ser2net export or config.json still replaces the mapping (as before)
+    export = json.dumps({"mappings": [dict(m.to_dict(), id="ffffffffff09") for m in first]})
+    plan4 = parse_mappings_file(export.encode())
+    assert not plan4.classic
+    merged, _ = apply_import(hardened, plan4.mappings, "merge", plan4.classic)
+    assert merged[0].enabled is True and merged[0].network.tls is False
+    rows = {r["name"]: r for r in plan_rows(hardened, plan4.mappings, "merge", plan4.classic)}
+    diff = {c["what"]: c for c in rows["plc"]["changes"]}
+    assert diff["TLS"]["security"] and diff["State"]["security"] and not diff["TLS"]["kept"]
+    print("classic merge: a re-import keeps TLS, bind IP, allowed clients, read-only, USB "
+          "identity, RS-485, MQTT, Modbus and disabled state, takes what the file changes; "
+          "an export still replaces, with what it opens up marked  OK")
+
+
 def main():
     test_store_backups()
     test_backup_list_cache()
     test_planner()
+    test_classic_merge()
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
              {"username": "op", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
     p1, p2, p3 = free_port(), free_port(), free_port()
@@ -208,12 +299,20 @@ def main():
         plc = next(m for m in srv.saved_config()["mappings"] if m["name"] == "plc")
         assert plc["serial"]["port"] == "/dev/ser2net-test-missing" and plc["serial"]["baudrate"] == 19200
         assert plc["network"]["protocol"] == "rfc2217" and plc["network"]["port"] == port
+        st, _, page = admin.post("/settings/config/import", {"step": "preview", "mode": "merge"},
+                                 files={"file": ("ser2net.yaml", classic)})
+        sec = page[page.index('id="import"'):]
+        row = sec[sec.index("<tbody>"):sec.index("</tbody>")]
+        assert "unchanged" in row and "updates" not in row, row
+        token = page.split('name="token" value="', 1)[1].split('"', 1)[0]
+        st, _, page = admin.post("/settings/config/import/apply", {"token": token, "mode": "merge"})
+        assert "Imported: 0 added, 0 updated, 1 unchanged" in page, page[page.find("banner"):][:300]
         st, _, page = admin.post("/settings/config/import", {"step": "preview", "mode": "replace"},
                                  files={"file": ("ser2net.conf", b"# only comments\n")})
         assert "is not a ser2net configuration" in page and "Import preview" not in page
         assert "plc" in [m["name"] for m in srv.saved_config()["mappings"]], "a refused import changes nothing"
-        print("UI import of a classic ser2net.yaml: the preview names the format, merge adds it; "
-              "a file with nothing to import is refused  OK")
+        print("UI import of a classic ser2net.yaml: the preview names the format, merge adds it, "
+              "the same file again is unchanged; a file with nothing to import is refused  OK")
 
         st, _, page = admin.get("/settings")
         backups = ConfigStore(srv.config_path).backups()

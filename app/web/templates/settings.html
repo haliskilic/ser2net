@@ -503,6 +503,7 @@
           {% elif r.action == 'update' %}<span class="tag">{{ _("updates") }}</span>{% if r.target != r.name %} <span class="muted">“{{ r.target }}”</span>{% endif %}
           {% elif r.action == 'same' %}<span class="muted">{{ _("unchanged") }}</span>
           {% else %}<span class="tag tag-danger">{{ _("removed") }}</span>{% endif %}
+          {%- if r.changes %}<ul class="cell-list">{% for c in r.changes %}<li{% if c.security %} class="security"{% endif %}>{% if c.kept %}{{ _("%(what)s: %(value)s is kept (the file has %(file)s)", what=c.what, value=c.before, file=c.file) }}{% else %}{{ c.what }}: {{ c.before }} → {{ c.after }}{% endif %}</li>{% endfor %}</ul>{% endif %}
         </td>
       </tr>
     {% endfor %}
