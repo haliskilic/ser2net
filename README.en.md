@@ -788,10 +788,10 @@ type is refused with `400` and the setting's path (`serial.baudrate: "fast" is n
 number.`). A protective switch (`read_only`, `tls`) takes only JSON `true` / `false`: text is
 refused (`network.read_only: use true or false (JSON booleans), not a string.`), and so is an
 import of such a file. In a hand-edited `config.json`, text in a protective switch
-(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`) keeps it on unless empty, as
-before 2.9.0, with a start-up note. The switches that turn something on only when set to
+(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`) keeps
+it on unless empty, as before 2.9.0, with a start-up note. The switches that turn something on only when set to
 JSON `true` (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
-the MQTT `tx_enabled`, `proxy_hsts`, `mask_personal_data`, `email_separately`) refuse text as
+the MQTT `tx_enabled`, `proxy_hsts`, `email_separately`) refuse text as
 well; in a hand-edited `config.json` it leaves them off, with a start-up note. Keys that are
 not settings are ignored and named in the response's `warnings` list. An unexpected server error is a JSON `500` too.
 A change that can't be saved changes nothing: `400` (`validation`) when the configuration
