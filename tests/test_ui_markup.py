@@ -410,6 +410,32 @@ def test_mapping_form_modbus_fields():
           "for modbus  OK")
 
 
+def test_mapping_form_requests_disable_themselves():
+    """The mapping form disables its Save button while it is saved (hx-disabled-elt="find
+    button[type=submit]"), which htmx hands down to every request inside the form: one
+    that sets no hx-disabled-elt of its own (the Modbus test read) would look for a submit
+    button inside itself and log an error in the browser at every click."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig.from_dict({"id": "gw1", "name": "gw", "serial": {"port": "COM3"},
+                                 "network": {"protocol": "modbus", "port": 502},
+                                 "modbus_poll": {"points": [{"name": "t", "fn": 3}]}})
+    root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                            ports=[], ips=[], error=None))
+    form = next(n for n in root.walk() if n.tag == "form")
+    inner = [n for n in root.walk()
+             if n is not form and ("hx-post" in n.attrs or "hx-get" in n.attrs)]
+    assert inner, "the test read button is in the form"
+    bad = [n.attrs.get("hx-post") or n.attrs.get("hx-get") for n in inner
+           if "hx-disabled-elt" not in n.attrs]
+    assert not bad, bad
+    print("mapping form: a request inside the form disables what it names, not the form's "
+          "Save  OK")
+
+
 def test_mapping_form_mqtt_tls_fields():
     """The MQTT TLS files sit with the other broker fields (every net mapping that
     publishes: serial lines, plain Modbus, Sparkplug B), under the MQTT fieldset only; the
@@ -1139,6 +1165,7 @@ def main():
     test_mapping_form_modbus_fields()
     test_mapping_form_hidden_characters()
     test_mapping_form_mqtt_tls_fields()
+    test_mapping_form_requests_disable_themselves()
     test_mapping_form_udp_fields()
     test_number_fields_required()
     test_mapping_form_rfc2217_restore()

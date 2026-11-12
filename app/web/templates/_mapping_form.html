@@ -412,7 +412,7 @@
     </div>
     {% if not is_new and not remote %}
     <div class="mb-sm">
-      <button type="button" class="btn sm" hx-post="{{ base }}/api/mappings/{{ mapping.id }}/modbus-read" hx-include="[name='modbus_points']" hx-target="#modbus-read" hx-swap="innerHTML">{{ _("Read these points now") }}</button>
+      <button type="button" class="btn sm" hx-post="{{ base }}/api/mappings/{{ mapping.id }}/modbus-read" hx-disabled-elt="this" hx-include="[name='modbus_points']" hx-target="#modbus-read" hx-swap="innerHTML">{{ _("Read these points now") }}</button>
       <span class="muted">{{ _("through the running gateway, as typed above; nothing is saved or published") }}</span>
       <div id="modbus-read" aria-live="polite"></div>
     </div>
