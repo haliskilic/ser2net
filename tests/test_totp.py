@@ -11,7 +11,8 @@
   * sign-in: the right password of an account with two-factor sign-in gives no session but
     the code step (/auth/totp); a wrong code is refused (and recorded), the right one gives
     the session, the same code twice is refused; too many wrong codes for one account block
-    it for a while, even the right code; accounts without it sign in as before;
+    it for a while, even the right code; accounts without it sign in as before; a wrong
+    code's notification leaves out personal data when Settings -> Notifications says so;
   * Settings: a local account sets it up with a code and its password (its other sessions
     end, this one stays), turns it off with its password and a code; an admin turns it off
     for another account in the Users panel (that account is signed out), not for itself.
@@ -247,10 +248,39 @@ def test_live():
         assert json.dumps(srv.saved_config()).count("totp_secret") == 0
 
 
+def test_wrong_code_notification():
+    from _asgi import App
+
+    secret = totp.new_secret()
+    cfg = {"users": [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
+                      "pwd_version": 1, "totp_secret": secret}],
+           "notifications": {"enabled": True, "events": ["login_failed"],
+                             "mask_personal_data": True}}
+    with App(cfg) as a:
+        sent = []
+        a.state.notifier.emit = lambda event, key, mapping, detail="": sent.append(  # type: ignore[method-assign]
+            (event, detail)) or True
+        jar = "ser2net_csrf=c"
+        st, h, _ = a.call("POST", "/login", headers={"Cookie": jar}, client="10.0.0.9",
+                          fields={"username": "admin", "password": PW, "_csrf": "c"})
+        assert st == 303, st
+        pending = next(v.split(";")[0] for k, v in h if k == "set-cookie"
+                       and v.startswith("ser2net_2fa="))
+        wrong = f"{(int(totp.code_at(secret, time.time())) + 1) % 1000000:06d}"
+        st, _, _ = a.call("POST", "/auth/totp", headers={"Cookie": f"{jar}; {pending}"},
+                          client="10.0.0.9", fields={"code": wrong, "_csrf": "c"})
+        assert st == 401, st
+    assert sent == [("login_failed", "user (name left out) from 10.0.0.x: wrong two-factor "
+                                     "code")], sent
+    print("a wrong code's notification: no account name and the address's network with "
+          "'leave out personal data'  OK")
+
+
 def main():
     test_algorithm()
     test_config_and_recovery()
     test_live()
+    test_wrong_code_notification()
     print("\nPASS: two-factor sign-in (TOTP)")
 
 
