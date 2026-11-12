@@ -666,6 +666,29 @@ Bind IP'yi sonradan değiştirmek:
 python3 ser2net.py --reconfigure
 ```
 
+### Komut satırı seçenekleri
+`python3 ser2net.py [seçenekler]`, `ser2net-linux-x64 [seçenekler]`,
+`ser2net-windows-x64.exe [seçenekler]` (`--help` hepsini listeler):
+
+| Seçenek | Ne yapar |
+|---|---|
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2net.py`'nin ya da binary'nin yanındaki `data/`); ser2net'e kendine ait bir klasör verin |
+| `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
+| `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
+| `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
+| `--no-bootstrap` | bağımlılık kurulumunu atlar (paketler zaten yüklü) |
+| `--version` | sürümü yazıp çıkar |
+| `--about` | Python, OpenSSL ve bileşenlerin sürümlerini ve her birinin nereden yüklendiğini yazar |
+| `--licenses` | ser2net'in ve içindeki her bileşenin lisans metinlerini yazar |
+| `--healthcheck` | bu veri klasörünün çalışan kopyası `/healthz`'e yanıt veriyorsa 0, vermiyorsa 1 ile çıkar |
+| `--set-password KULLANICI` | yerel bir hesabın parolasını belirler (hesap yoksa admin olarak açar), oturumlarını kapatır ve iki adımlı girişini kapatır; ser2net çalışırken de |
+| `--sign-out-all` | web arayüzündeki bütün oturumları kapatır (yeni oturum anahtarı) |
+| `--reload` | bu veri klasörüyle çalışan ser2net'in `config.json`'u yeniden uygulamasını sağlar (SIGHUP ve `systemctl reload` da aynısını yapar) |
+| `--install-service`, `--uninstall-service`, `--service-name AD`, `--allow-unsafe-location` | Windows servisi ([`docs/WINDOWS.md`](docs/WINDOWS.md)) |
+
+`--set-password`, `--sign-out-all`, `--reload`, `--about`, `--licenses`, `--version` ve
+`--healthcheck` işini yapıp çıkar; diğerleri ser2net'i başlatır.
+
 ### Offline kurulum (internetsiz makine)
 Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2net.py` ilk açılışta bunları
 `./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, her işletim
