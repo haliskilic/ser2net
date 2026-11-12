@@ -285,7 +285,18 @@ düzenlemeye gerek yok.
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
   yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla. `paho-mqtt`
-  gerektirir (opsiyonel; yoksa köprü normal çalışır).
+  gerektirir (opsiyonel; yoksa köprü normal çalışır). Bir satır **LF**'de (varsayılan;
+  önündeki CR satıra dahil edilmez), **CR**'de (kayıtlarını CR ile bitiren terazi, analizör
+  gibi cihazlar; yanındaki LF dahil edilmez) ya da **CR ya da LF**'de biter
+  (`mqtt.line_end`); 64 KiB boyunca satır sonu gelmezse en eski baytlar atılır ve log bunu
+  bir kez söyler. **`<topic>/tx` mesajlarını cihaza yaz** (`mqtt.tx_enabled`, varsayılan
+  kapalı) her mesajı olduğu gibi, TCP istemcilerinin gönderdikleri arasında tek parça halinde
+  seri porta yazar ve `<topic>/tx/result`'a yanıt verir (`ok` / `error: …`: salt okunur, çok
+  uzun, 64 KiB beklerken meşgul, port açık değil); retained mesaj hiçbir zaman yazılmaz. Bir
+  **sorgu dizesi** (`options.poll_string`, `\r \n \t \\ \xHH` ile) port açıkken ve bağlı
+  TCP istemcisi yokken (ya da **Bir TCP istemcisi bağlıyken de** ile her zaman) her **sorgu
+  aralığında** gönderilir; böylece yalnızca sorguya yanıt veren bir cihaz, TCP bağlantısını
+  tutan harici bir poller olmadan MQTT'ye, bir trace'e ya da bir UDP hedefine ulaşır.
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
   olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi, `CA=`
@@ -580,6 +591,7 @@ kurallarıdır (ACL): komut topic'lerine yalnızca çıkışları anahtarlaması
 yayın yapabilsin, broker'a TLS ve kullanıcı adı/parola ile bağlanın. **Salt okunur** her
 yazmayı reddeder. MQTT'den yazma alan eşlemeler panoda **CMD**, broker bağlantısında TLS ya
 da kullanıcı adı yoksa **CMD ⚠** etiketiyle gösterilir (ayrıca açılışta loga uyarı düşer).
+`<topic>/tx`'i cihaza yazan bir seri eşleme için de aynısı geçerlidir (o da **CMD**).
 Örneğin `plant/line3` ana topic'i için bir Mosquitto `acl_file`:
 ```
 user ser2net

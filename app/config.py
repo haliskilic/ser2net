@@ -789,6 +789,15 @@ class MappingOptions:
     # Modbus gateway: how long to wait for an RTU slave's reply before returning a
     # Modbus exception (0x0B gateway-target-failed) to the TCP master.
     modbus_response_timeout_s: float = 1.0
+    # Serial-to-network mappings (not a Modbus gateway): send poll_string to the device
+    # every poll_interval_s seconds while its port is open (0 = off), e.g. a scale's or an
+    # analyzer's query, so its answers reach MQTT, a trace or a UDP target without a
+    # program polling it. \r \n \t \\ and \xHH stand for those bytes (poll_bytes).
+    # Skipped while a TCP client is connected (it does the asking then), unless
+    # poll_with_clients.
+    poll_string: str = ""
+    poll_interval_s: float = 0.0
+    poll_with_clients: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingOptions":
@@ -814,6 +823,9 @@ class MappingOptions:
 # Per-mapping MQTT publishing (optional northbound to an IIoT broker)
 # ---------------------------------------------------------------------------
 MQTT_FORMATS = ("plain", "sparkplug_b")
+# what ends a serial line published to MQTT (MqttSettings.line_end)
+MQTT_LINE_ENDS = ("lf", "cr", "any")
+MQTT_TX_MAX_BYTES = 64 * 1024  # an MQTT write (<base_topic>/tx) at most, and all waiting
 
 
 @dataclass
@@ -837,6 +849,15 @@ class MqttSettings:
     # it is published (Sparkplug NCMD / DCMD are never retained, so a retained one is
     # always ignored).
     apply_retained_set: bool = False
+    # Serial lines (not a Modbus gateway): what ends a line. "lf" (default): \n, a \r just
+    # before it is left out (as before); "cr": \r, a \n next to it left out; "any": \r or
+    # \n (\r\n is one line end). A stored value that is none of these reads as "lf".
+    line_end: str = "lf"
+    # Serial lines (not a Modbus gateway): write each message on <base_topic>/tx to the
+    # serial port as it is, and answer on <base_topic>/tx/result ("ok" / "error: ...").
+    # Read-only refuses them; a retained one (the broker's copy, sent again after each
+    # (re)connect) is ignored. Off: MQTT only publishes.
+    tx_enabled: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MqttSettings":
@@ -1019,6 +1040,14 @@ class MappingConfig:
                 and not self.network.read_only
                 and any(p.writable for p in self.modbus_poll.points))
 
+    @property
+    def accepts_mqtt_tx(self) -> bool:
+        """MQTT messages on <base_topic>/tx are written to the serial port: a serial-to-network
+        mapping (not a Modbus gateway) with MQTT and tx_enabled on and Read-only off. Who may
+        send them is up to the broker's access rules."""
+        return (self.kind == "net" and self.network.protocol != "modbus" and self.mqtt.enabled
+                and self.mqtt.tx_enabled is True and not self.network.read_only)
+
     def validate_input(self) -> None:
         """The rules for a mapping that is being created or changed (web form, REST API,
         import, cluster), checked there in addition to validate(). validate() must not
@@ -1041,6 +1070,8 @@ class MappingConfig:
         if not isinstance(sig, str) or len(sig) > RFC2217_SIGNATURE_MAX or _CONTROL_CHARS.search(sig):
             raise ConfigError(_("The RFC 2217 signature must be text of at most {0} characters, "
                                 "without control characters.").format(RFC2217_SIGNATURE_MAX))
+        if self.kind == "net" and self.network.protocol != "modbus":
+            self._validate_lines_and_poll()
         if self.kind == "net" and net.tls and net.mode == "client":
             from .engine.tls import parse_pins
             try:
@@ -1066,6 +1097,31 @@ class MappingConfig:
             mapping_context(net)
         except TlsFileError as e:
             raise ConfigError(tls_file_message(e)) from None
+
+    def _validate_lines_and_poll(self) -> None:
+        """A serial-to-network mapping's MQTT line end and writes, and its poll string (an
+        edit's rules: a stored value they refuse reads as off / "lf")."""
+        mq = self.mqtt
+        if mq.enabled and mq.line_end not in MQTT_LINE_ENDS:
+            raise ConfigError(_("The MQTT line end must be one of {0}.").format(MQTT_LINE_ENDS))
+        if mq.enabled and mq.tx_enabled is True and mqtt_topic_problem(mq.base_topic):
+            raise ConfigError(_("The MQTT base topic can't contain '+', '#' or the null "
+                                "character: no message can be published to such a topic."))
+        o = self.options
+        interval = o.poll_interval_s
+        if not _is_number(interval) or not (interval == 0 or 0.1 <= interval <= 86400):
+            raise ConfigError(_("The poll interval must be 0 (off) or between 0.1 and 86400 "
+                                "seconds."))
+        try:
+            data = poll_bytes(o.poll_string)
+        except ValueError:
+            raise ConfigError(_(r"The poll string can have only \r \n \t \\ or \xHH after a "
+                                "backslash.")) from None
+        if len(data) > POLL_STRING_MAX:
+            raise ConfigError(_("The poll string can be at most {0} bytes.").format(
+                POLL_STRING_MAX))
+        if interval and not data:
+            raise ConfigError(_("A poll interval needs a poll string to send."))
 
     def _validate_udp_peer(self) -> None:
         """A UDP mapping's reply address and peer timeout (an edit's rules: a stored
@@ -1126,6 +1182,50 @@ class MappingConfig:
             if host == "255.255.255.255" and net.udp_broadcast is not True:
                 raise ConfigError(_("UDP target {0} is the broadcast address: tick “Allow "
                                     "broadcast”.").format(entry))
+
+
+POLL_STRING_MAX = 1024  # bytes (an edit's rule)
+_POLL_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{2}|[rnt\\])|\\")
+
+
+def poll_bytes(text: Any) -> bytes:
+    r"""options.poll_string as the bytes sent: UTF-8, with \r \n \t \\ and \xHH for those
+    bytes. Raises ValueError for another backslash sequence (an edit refuses it; a stored
+    one: the poll is off)."""
+    if not isinstance(text, str):
+        raise ValueError("not text")
+    out = bytearray()
+    pos = 0
+    for m in _POLL_ESCAPE.finditer(text):
+        out += text[pos:m.start()].encode("utf-8")
+        esc = m.group(1)
+        if esc is None:
+            raise ValueError(f"unknown escape at character {m.start() + 1} (use \\r \\n "
+                             "\\t \\\\ or \\xHH)")
+        out += (bytes([int(esc[1:], 16)]) if esc[0] == "x"
+                else {"r": b"\r", "n": b"\n", "t": b"\t", "\\": b"\\"}[esc])
+        pos = m.end()
+    out += text[pos:].encode("utf-8")
+    return bytes(out)
+
+
+def mqtt_topic_problem(base_topic: Any) -> bool:
+    """'+' / '#' (wildcards: a message can't be published to them, and a subscription would
+    take every matching topic) or U+0000 in a base topic."""
+    return any(c in str(base_topic) for c in "+#\x00")
+
+
+def mqtt_tx_topics(m: "MappingConfig") -> list[tuple[str, str, Any]]:
+    """The topics a serial-to-network mapping's MQTT writes use, as (topic, use, None): use
+    "tx" (the command topic it takes writes from) and "tx_result" (its answers); none when
+    it takes no writes (tx_enabled off, MQTT off, a Modbus gateway). The plain-format topic
+    rules of the Modbus gateway (no wildcard, the status topic reserved) apply to them."""
+    mq = m.mqtt
+    if not (m.kind == "net" and m.network.protocol != "modbus" and mq.enabled
+            and mq.tx_enabled is True):
+        return []
+    base = str(mq.base_topic).rstrip("/")
+    return [(f"{base}/tx", "tx", None), (f"{base}/tx/result", "tx_result", None)]
 
 
 def tls_file_message(e: Any) -> str:

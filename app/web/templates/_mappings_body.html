@@ -34,7 +34,8 @@
           {%- else -%}{{ m.network.mode }}/{{ m.network.protocol }}
             {%- if m.network.tls %} <span class="tag">TLS</span>{% endif %}
             {%- if m.network.read_only %} <span class="tag" title="{{ _('read-only') }}">RO</span>{% endif %}
-            {%- if m.accepts_mqtt_writes %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ _('writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them') if open_cmd else _('writable points take MQTT commands (/set or Sparkplug DCMD)') }}">CMD{% if open_cmd %} ⚠{% endif %}</span>{% endif %}
+            {%- if m.accepts_mqtt_writes %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ _('writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them') if open_cmd else _('writable points take MQTT commands (/set or Sparkplug DCMD)') }}">CMD{% if open_cmd %} ⚠{% endif %}</span>
+            {%- elif m.accepts_mqtt_tx %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ _('MQTT messages on &lt;topic&gt;/tx are written to the device over a broker connection without TLS or a username: any client the broker lets publish to that topic can write to it') if open_cmd else _('MQTT messages on &lt;topic&gt;/tx are written to the device') }}">CMD{% if open_cmd %} ⚠{% endif %}</span>{% endif %}
           {%- endif -%}
         </div>
       </td>

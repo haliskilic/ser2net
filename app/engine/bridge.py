@@ -33,6 +33,12 @@ act on the port (RFC 2217 SET-* / PURGE-DATA), each after the data before it was
 and, for a BREAK or a setting, has left the port (at most SETTLE_MAX_S). A BREAK holds the
 line in the break condition for BREAK_S without blocking the event loop (pyserial's
 send_break() sleeps in the calling thread); a read-only mapping sends none.
+
+With MQTT, the device's lines are published; with mqtt.tx_enabled each message on
+<base_topic>/tx is written to the port as it is, in one piece between what TCP clients
+send, from a queue of at most MQTT_TX_MAX_BYTES, and answered on <base_topic>/tx/result.
+options.poll_string is sent every poll_interval_s while the port is open (by default not
+while a TCP client is connected).
 """
 from __future__ import annotations
 
@@ -62,8 +68,8 @@ else:  # pragma: no cover - exercised only on Python 3.10
 
 from .. import i18n
 from ..config import (
-    MappingConfig, canonical_ip, host_port, mapping_file, udp_peer_address, udp_peer_timeout,
-    udp_targets,
+    MQTT_TX_MAX_BYTES, MappingConfig, canonical_ip, host_port, mapping_file, mqtt_topic_problem,
+    poll_bytes, udp_peer_address, udp_peer_timeout, udp_targets,
 )
 from . import netguard, portdiag, serial_io, sockopts, tls
 from .netguard import LogEvery as _LogEvery
@@ -688,6 +694,14 @@ class MappingRunner:
         self._break_lock = asyncio.Lock()      # one serial BREAK at a time
         self._break_log = _LogEvery(self._log)
         self._refused_log = _LogEvery(self._log, 10.0)  # clients turned away: no port
+        # MQTT writes (<base_topic>/tx) waiting for the serial port, and their bytes
+        self._tx_topic = ""
+        self._tx_queue: list[bytes] = []
+        self._tx_queued = 0
+        self._tx_wake = asyncio.Event()
+        self._tx_log = _LogEvery(self._log)
+        self._tx_task: Optional[asyncio.Task] = None
+        self._poll_task: Optional[asyncio.Task] = None  # options.poll_string
         co = mapping.options.closeon
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
@@ -786,11 +800,21 @@ class MappingRunner:
         # nothing is left holding the port or the serial device.
         try:
             self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
-            # optional MQTT publisher: serial lines -> broker (net mappings)
+            # optional MQTT publisher: serial lines -> broker (net mappings), and with
+            # tx_enabled writes from <base_topic>/tx -> the serial port
             if self.mapping.mqtt.enabled:
                 from .mqtt_pub import MqttPublisher
-                self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log)
+                subs = self._mqtt_subscriptions()
+                self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log,
+                                           subscriptions=subs)
                 self._mqtt.connect()
+                if subs:
+                    self._tx_task = asyncio.create_task(
+                        self._mqtt_tx_loop(), name=f"mqtt-tx:{self.mapping.name}")
+            poll = self._poll_settings()
+            if poll is not None:
+                self._poll_task = asyncio.create_task(
+                    self._poll_loop(*poll), name=f"poll:{self.mapping.name}")
             # up from here; the serial side reports its own state once it has tried the port
             self.status.state = "running"
             self.status.last_error = ""
@@ -835,12 +859,14 @@ class MappingRunner:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
             self._server = None
-        for task in (self._serial_task, self._main_task):
+        for task in (self._serial_task, self._main_task, self._tx_task, self._poll_task):
             if task:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
-        self._serial_task = self._main_task = None
+        self._serial_task = self._main_task = self._tx_task = self._poll_task = None
+        self._tx_queue.clear()
+        self._tx_queued = 0
         await self._link.close()
         if self._tracer:
             await self._tracer.aclose()
@@ -850,6 +876,107 @@ class MappingRunner:
         self.status.client_count = 0
         self.status.clients = []
         self._log("stopped")
+
+    # ---------------- MQTT writes and the poll string ----------------
+    def _mqtt_subscriptions(self) -> dict:
+        """With mqtt.tx_enabled: {<base_topic>/tx: handler} (nothing with a wildcard in the
+        base topic, which edits refuse: such a subscription would take every topic it
+        matches)."""
+        mq = self.mapping.mqtt
+        if mq.tx_enabled is not True:
+            return {}
+        if mqtt_topic_problem(mq.base_topic):
+            self._log("MQTT writes not taken: the base topic has '+', '#' or a null character")
+            return {}
+        self._tx_topic = str(mq.base_topic).rstrip("/") + "/tx"
+        note = (" (read-only: each is refused)" if self.mapping.network.read_only else "")
+        self._log(f"MQTT: messages on {self._tx_topic} are written to the serial port{note}")
+        missing = [what for what, have in (("TLS", mq.tls), ("a username", mq.username))
+                   if not have]
+        if self.mapping.accepts_mqtt_tx and missing:
+            self._log("warning: MQTT writes to the serial port come over a broker connection "
+                      f"without {' or '.join(missing)}: any client the broker lets publish to "
+                      f"{self._tx_topic} can write to the device; restrict it with the "
+                      "broker's access rules (ACLs)")
+        return {self._tx_topic: self._on_mqtt_tx}
+
+    def _on_mqtt_tx(self, topic: str, payload: bytes) -> None:
+        """A message on <base_topic>/tx (on the event loop; never empty or a retained copy:
+        MqttPublisher). Queued for the serial port, or refused on .../tx/result."""
+        mqtt = self._mqtt
+        if mqtt is None:
+            return
+        why = ""
+        if self.mapping.network.read_only:
+            why = "mapping is read-only"
+        elif len(payload) > MQTT_TX_MAX_BYTES:
+            why = f"message too long ({len(payload)} bytes, at most {MQTT_TX_MAX_BYTES})"
+        elif self._tx_queued + len(payload) > MQTT_TX_MAX_BYTES:
+            why = f"busy ({self._tx_queued} bytes waiting for the serial port)"
+        if why:
+            self._tx_log(f"MQTT write from {topic} refused: {why}")
+            mqtt.publish_raw(topic + "/result", f"error: {why}".encode())
+            return
+        self._tx_queue.append(payload)
+        self._tx_queued += len(payload)
+        self._tx_wake.set()
+
+    async def _mqtt_tx_loop(self) -> None:
+        """Write the MQTT messages to the serial port, oldest first, each in one piece (so
+        never mixed into a TCP client's data), and answer each: "ok" once the port took it,
+        "error: ..." when it was not open."""
+        result = self._tx_topic + "/result"
+        while True:
+            await self._tx_wake.wait()
+            self._tx_wake.clear()
+            while self._tx_queue:
+                payload = self._tx_queue.pop(0)
+                try:
+                    err = None if await self.serial_write(payload) else \
+                        "the serial port is not open"
+                except Exception as e:  # the port went away mid-write: SerialLink reopens it
+                    err = str(e) or type(e).__name__
+                finally:
+                    self._tx_queued -= len(payload)
+                if self._mqtt is not None:
+                    self._mqtt.publish_raw(result, b"ok" if err is None else
+                                           f"error: {err}".encode())
+
+    def _poll_settings(self) -> Optional[tuple[bytes, float]]:
+        """options.poll_string as bytes and poll_interval_s, or None when there is no poll
+        (off, a serial-to-serial bridge; a stored value edits refuse: logged)."""
+        o = self.mapping.options
+        interval = o.poll_interval_s
+        if not isinstance(interval, (int, float)) or isinstance(interval, bool) \
+                or not interval or not o.poll_string:
+            return None
+        try:
+            data = poll_bytes(o.poll_string)
+        except ValueError as e:
+            self._log(f"poll string not sent: {e}")
+            return None
+        if not (0.1 <= interval <= 86400) or not data:
+            self._log(f"poll string not sent: the interval {interval!r} is not between 0.1 "
+                      "and 86400 seconds")
+            return None
+        return data, float(interval)
+
+    async def _poll_loop(self, data: bytes, interval: float) -> None:
+        """Send the poll string every ``interval`` seconds while the port is open, and (unless
+        poll_with_clients) while no TCP client is connected, which does the asking then."""
+        with_clients = self.mapping.options.poll_with_clients is True
+        self._log(f"polling the device every {interval:g} s with {data!r}"
+                  + ("" if with_clients else " while no TCP client is connected"))
+        while True:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=interval)
+                return
+            if not self._link.is_open:
+                continue
+            if not with_clients and any(isinstance(c, _ClientConn) for c in self._clients):
+                continue
+            with contextlib.suppress(Exception):  # the port went away: SerialLink reopens it
+                await self.serial_write(data)
 
     # ssl context for a connect-out TLS data bridge (a listener's: access.server_ssl)
     def _client_ssl(self):

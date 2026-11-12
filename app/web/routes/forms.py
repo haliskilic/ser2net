@@ -153,6 +153,11 @@ _OPTIONAL_FORM_FIELDS = {
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
+    # serial lines (not a Modbus gateway): the line end, and writes from <base_topic>/tx
+    "mqtt_line_end": ("mqtt", ("line_end",)),
+    "mqtt_tx_shown": ("mqtt", ("tx_enabled",)),
+    # not a Modbus gateway: the poll string (its checkbox is absent when unticked)
+    "opt_poll_interval_s": ("options", ("poll_string", "poll_interval_s", "poll_with_clients")),
     # not offered for a Modbus gateway, which has no per-client output buffer and can't
     # send a banner or act on a close-on string (bytes outside Modbus frames)
     "network_client_queue_max": ("network", ("client_queue_max",)),
@@ -257,6 +262,12 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             form, "opt_rfc2217_restore_on_disconnect")
     if "opt_rfc2217_signature" in form:
         options["rfc2217_signature"] = form.get("opt_rfc2217_signature", "").strip()
+    if "opt_poll_interval_s" in form:
+        options.update(
+            poll_string=form.get("opt_poll_string", ""),
+            poll_interval_s=(_num(form, "opt_poll_interval_s", 0.0, strict=strict, cast=float)
+                             if form.get("opt_poll_interval_s") else 0.0),
+            poll_with_clients=_checkbox(form, "opt_poll_with_clients"))
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),
@@ -282,6 +293,9 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                if "mqtt_payload_format" in form else {}),
             **({"apply_retained_set": _checkbox(form, "mqtt_apply_retained_set")}
                if "mqtt_apply_retained_set_shown" in form else {}),
+            **({"line_end": form.get("mqtt_line_end", "lf")} if "mqtt_line_end" in form else {}),
+            **({"tx_enabled": _checkbox(form, "mqtt_tx_enabled")}
+               if "mqtt_tx_shown" in form else {}),
         },
         "modbus_poll": {
             "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),
