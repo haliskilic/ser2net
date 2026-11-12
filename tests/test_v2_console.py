@@ -13,7 +13,6 @@ import http.cookiejar
 import io
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -22,6 +21,8 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+
+from _socat import pty_pair_sync as start_socat
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
@@ -37,17 +38,6 @@ def wait_port(port, timeout=10):
                 return True
         time.sleep(0.2)
     return False
-
-
-def start_socat():
-    p = subprocess.Popen(["socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0"],
-                         stderr=subprocess.PIPE)
-    devs = []
-    while len(devs) < 2:
-        m = re.search(rb"PTY is (\S+)", p.stderr.readline())
-        if m:
-            devs.append(m.group(1).decode())
-    return p, devs[0], devs[1]
 
 
 def main():

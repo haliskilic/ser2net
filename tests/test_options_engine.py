@@ -3,7 +3,6 @@ Run: python3 tests/test_options_engine.py
 """
 import asyncio
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -11,18 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
-
-
-async def socat():
-    p = await asyncio.create_subprocess_exec(
-        "socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    devs = []
-    while len(devs) < 2:
-        m = re.search(rb"PTY is (\S+)", await p.stderr.readline())
-        if m:
-            devs.append(m.group(1).decode())
-    return p, devs[0], devs[1]
+from _socat import pty_pair as socat
 
 
 async def start(dev, port, network=None, options=None, name="m", trace_dir=None):
