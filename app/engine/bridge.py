@@ -35,6 +35,7 @@ import errno
 import ipaddress
 import os
 import queue
+import re
 import socket
 import sys
 import threading
@@ -332,16 +333,16 @@ class RunnerStatus:
         }
 
 
+_BANNER_ESCAPE = re.compile(r"\\([\\dNpIrn])")
+
+
 def _render_banner(template: str, mapping: MappingConfig, device: str, peer: str) -> bytes:
-    s = (
-        template.replace("\\d", device)
-        .replace("\\N", mapping.name)
-        .replace("\\p", str(mapping.network.port))
-        .replace("\\I", peer)
-        .replace("\\r", "\r")
-        .replace("\\n", "\n")
-    )
-    return s.encode("utf-8", "replace")
+    """The connect banner: \\d the device, \\N the mapping's name, \\p its port, \\I the
+    client's IP, \\r \\n a line break, \\\\ a backslash (C:\\\\data stays C:\\data); any other
+    backslash is kept. One pass, so what an escape puts in is not read again."""
+    values = {"d": device, "N": mapping.name, "p": str(mapping.network.port), "I": peer,
+              "r": "\r", "n": "\n", "\\": "\\"}
+    return _BANNER_ESCAPE.sub(lambda m: values[m.group(1)], template).encode("utf-8", "replace")
 
 
 class _ClientConn:

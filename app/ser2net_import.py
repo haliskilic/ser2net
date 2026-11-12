@@ -575,6 +575,7 @@ class _Conn:
     holds: list[str] = field(default_factory=list)  # why it comes in disabled (else more open)
     ssl: Optional[dict[str, Any]] = None             # the accepter's ssl layer (_ssl_layer)
     remctl: bool = False                                         # 3.x RFC2217 flag
+    devname: str = ""                # 3.x: the device as the port line names it (\o)
     dropped: dict[str, None] = field(default_factory=dict)       # options with no equivalent
     notes: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)             # why it is not imported
@@ -978,10 +979,17 @@ def _convert(c: _Conn, text: str, kind: str, what: str,
             return byte(int(e[1:], 16), e)
         if ch in "01234567":
             return byte(int(e, 8) & 0xFF, e)
+        if ch == "\\" and kind == "banner":
+            return "\\\\"  # a backslash, written so the banner renderer keeps it
         if ch in _C_ESCAPES:
             return _C_ESCAPES[ch]
         if ch in "rn":
             return "\\" + ch if kind == "banner" else ("\r" if ch == "r" else "\n")
+        if ch == "o" and not c.v3:  # ser2net 4.3 and later: the connection's name
+            return "\\N" if kind == "banner" else c.name
+        if ch == "o" and c.devname != c.device:  # 3.x: the DEVICE alias as the port names it
+            name = c.devname.rsplit("/", 1)[-1] if kind == "file" else c.devname
+            return name.replace("\\", "\\\\") if kind == "banner" else name
         if ch in "do":
             if kind == "banner":
                 return "\\d"
@@ -1021,6 +1029,9 @@ def _convert(c: _Conn, text: str, kind: str, what: str,
     if fixed:
         c.note(_("{0}: {1} (serial parameters) is written as the fixed text {2}")
                .format(what, "/".join(dict.fromkeys(fixed)), c.serial_text()))
+        if "\\s" in fixed and not c.v3:
+            c.note(_("{0}: \\s stood for the serial parameters in ser2net 3.x and 4.0; ser2net "
+                     "4.1 and later print a plain 's' instead").format(what))
     if dropped:
         parts = " ".join(dict.fromkeys(dropped))
         c.note(_("{0}: {1} in the file name left out (one trace file per mapping here, rotated "
@@ -1064,7 +1075,7 @@ def _option(c: _Conn, key: str, value: str) -> None:
     elif (m := _TRACE_MOD.fullmatch(k)) is not None:
         b = _flag(c, key, value)
         if b is not None:
-            c.trace_mods[(m.group(1) or "all", m.group(2))] = b
+            _trace_mod(c, m.group(1) or "all", m.group(2), b)
     elif k == "remaddr":
         _remaddr(c, value)
     elif k == "no-acc-to-con":  # clients' data is not passed to the device = read-only
@@ -1082,6 +1093,14 @@ def _option(c: _Conn, key: str, value: str) -> None:
         pass  # batching of serial reads; data is forwarded as it arrives here
     else:
         c.drop(key)
+
+
+def _trace_mod(c: _Conn, direction: str, mod: str, on: bool) -> None:
+    """trace-hexdump / trace-timestamp (direction 'all') or one trace file's own, read in
+    the order of the file as ser2net reads them: the general one sets every trace file
+    (over a file's own one before it), a file's own one only that file."""
+    for d in ("both", "read", "write") if direction == "all" else (direction,):
+        c.trace_mods[(d, mod)] = on
 
 
 def _idle_timeout(c: _Conn, value: str) -> None:
@@ -1177,7 +1196,7 @@ def _finish(c: _Conn) -> None:
             if other != kind:
                 c.note(_("{0} is not imported: one trace file per mapping").format(labels[other]))
         for mod in ("hexdump", "timestamp"):
-            b = c.trace_mods.get((kind, mod), c.trace_mods.get(("all", mod)))
+            b = c.trace_mods.get((kind, mod))
             if b is not None:
                 c.options[f"trace_{mod}"] = b
     _tls(c)
@@ -1243,17 +1262,16 @@ def _gensio_class(cls: str) -> str:
     return "serialdev" if c == "sdev" else c
 
 
-_REFERENCE = {act: re.compile("[" + re.escape(act) + "$]") for act in ("*", "=", "*=")}
-_MAX_DOLLAR_REF = 64  # $(name) is looked up only for a name this short
+_REFERENCE = {act: re.compile("[" + re.escape(act) + "]") for act in ("*", "=", "*=")}
 
 
 def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str], None],
                 what: str) -> str:
     """ser2net's references inside strings: *(name) in version 1 files, =(name) in
     version 2 ('**' / '*(*' for the literal characters); *{file} / ={file} (a file on
-    the ser2net host) cannot be read here. $(name) is replaced too for a known name.
-    One pass over s (each bracket is searched for once); a value that grows past
-    _MAX_VALUE refuses the file."""
+    the ser2net host) cannot be read here. Nothing else is replaced ($(name) neither, as
+    in ser2net). One pass over s (each bracket is searched for once); a value that grows
+    past _MAX_VALUE refuses the file."""
     out: list[str] = []
     grown, i = 0, 0
     found = {")": -1, "}": -1}  # where that bracket was found last (len(s): none is left)
@@ -1267,13 +1285,12 @@ def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str],
             out.append(s[i:m.start()])
             i = m.start()
         ch, nxt = s[i], s[i + 1:i + 2]
-        ours = ch in act
-        if ours and nxt == ch:
+        if nxt == ch:
             out.append(ch)
             i += 2
             continue
-        if (ours and nxt in ("(", "{")) or (ch == "$" and nxt == "("):
-            if ours and s[i + 2:i + 3] == ch:
+        if nxt in ("(", "{"):
+            if s[i + 2:i + 3] == ch:
                 out.append(ch + nxt)
                 i += 3
                 continue
@@ -1282,7 +1299,7 @@ def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str],
                 at = s.find(closing, i + 2)
                 found[closing] = len(s) if at < 0 else at
             close = found[closing]
-            if close < len(s) and (ours or close - i - 2 <= _MAX_DOLLAR_REF):
+            if close < len(s):
                 ref = s[i + 2:close]
                 if nxt == "{":
                     note(_("{0}{{{1}}} (a file on the ser2net host) is left out")
@@ -1296,11 +1313,11 @@ def _substitute(s: str, aliases: dict[str, str], act: str, note: Callable[[str],
                     out.append(aliases[ref])
                     i = close + 1
                     continue
-                if ours:  # the name runs to the first ')', as ser2net reads it
-                    note(_("unknown reference {0}({1}) left as it is").format(ch, ref))
-                    out.append(s[i:close + 1])
-                    i = close + 1
-                    continue
+                # the name runs to the first ')', as ser2net reads it
+                note(_("unknown reference {0}({1}) left as it is").format(ch, ref))
+                out.append(s[i:close + 1])
+                i = close + 1
+                continue
         out.append(ch)
         i += 1
     return "".join(out)
@@ -1588,9 +1605,11 @@ class _V3:
         state = m.group(1)
         timeout, _sep, rest = line[m.end():].partition(":")
         device, _sep, options = rest.partition(":")
-        device = self.devices.get(device.strip(), device.strip())
+        written = device.strip()
+        device = self.devices.get(written, written)
         self.budget.spend(len(device))  # a DEVICE: name repeats its path
-        c = _Conn(name="", label=_("line {0}").format(n), budget=self.budget, v3=True)
+        c = _Conn(name="", label=_("line {0}").format(n), budget=self.budget, v3=True,
+                  devname=written)
         fields = []
         for f in line[: m.start()].split(","):
             if f.strip().lower() == "udp":
@@ -1700,7 +1719,7 @@ class _V3:
             elif base == "kickolduser":
                 c.network["kick_old_user"] = on
             elif mod is not None:
-                c.trace_mods[(_V3_TRACE.get(mod.group(1) or "", "all"), mod.group(2))] = on
+                _trace_mod(c, _V3_TRACE.get(mod.group(1) or "", "all"), mod.group(2), on)
             elif base == "telnet_brk_on_sync":
                 if on:
                     _option(c, "telnet-brk-on-sync", "true")
