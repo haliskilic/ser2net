@@ -11,6 +11,7 @@ dicts plus warnings. Checks:
     clientauth, TLS files missing here, dtls, wronly/rawlp, no-con-to-acc), with every
     reason; TLS is kept when its files are here; a read-only trace is not imported;
   * connectors: serialdev/sdev options (9600n81, rtscts, xonxoff, dtr=, nobreak, ...),
+    the framing as words (19200 EVEN 8DATABITS 1STOPBIT), dtr/rts as true/false,
     Windows //./COMn, network/IPMI connectors skipped;
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
     trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
@@ -400,6 +401,51 @@ def test_connectors():
         assert name not in maps and has(warns, f"{name}:", "skipped", "not a local serial port")
     print("connectors: serial parameters, flow control, dtr/rts, nobreak/hangup, COM ports; "
           "network and IPMI connectors skipped  OK")
+
+
+# gensio's serialdev (lib/sergensio_serialdev.c, process_defserial_parm) still takes the
+# framing as words: nSTOPBIT(S) / nDATABITS with strcasecmp, the parity words through
+# lookup_parity_str, a strcmp against NONE/EVEN/ODD/MARK/SPACE (capitals only); dtr= and
+# rts= are read with gensio_pparm_bool, so true/false/1/0 work as well as on/off
+SERIAL_WORDS = r"""
+connection: &rtu
+  accepter: tcp,3101
+  connector: serialdev,/dev/ttyUSB0,19200 EVEN 8DATABITS 1STOPBIT
+connection: &plain
+  accepter: tcp,3102
+  connector: serialdev,/dev/ttyUSB1,9600 NONE 1STOPBIT 8DATABITS
+connection: &e72
+  accepter: tcp,3103
+  connector: serialdev,/dev/ttyUSB2,9600,EVEN,7databits,2stopbits,XONXOFF
+connection: &lines
+  accepter: tcp,3104
+  connector: serialdev,/dev/ttyUSB3,9600n81,dtr=false,rts=1
+connection: &lower
+  accepter: tcp,3105
+  connector: serialdev,/dev/ttyUSB4,9600,even,dtr=maybe,-rts
+"""
+
+
+def test_serial_words():
+    maps, warns = parse(SERIAL_WORDS)
+
+    def frame(name):
+        s = maps[name]["serial"]
+        return s["baudrate"], s["parity"], s["bytesize"], s["stopbits"], s["flowcontrol"]
+    assert frame("rtu") == (19200, "E", 8, 1, "none")       # Modbus RTU 8E1, not 8N1
+    assert frame("plain") == (9600, "N", 8, 1, "none")
+    assert frame("e72") == (9600, "E", 7, 2, "xonxoff")
+    for name in ("rtu", "plain", "e72", "lines"):
+        assert not has(warns, f"{name}:"), [w for w in warns if w.startswith(name)]
+    lines = maps["lines"]["serial"]
+    assert (lines["dtr_on_open"], lines["rts_on_open"]) == ("off", "on"), lines
+    low = maps["lower"]["serial"]
+    assert low["parity"] == "N" and has(warns, "lower:", "'even'", "capitals only")
+    assert "dtr_on_open" not in low and has(warns, "lower:", "dtr=maybe", "not on/off")
+    assert low["rts_on_open"] == "off"
+    assert not has(warns, "lower: not imported")
+    print("serial words: 19200 EVEN 8DATABITS 1STOPBIT -> 19200E81 without a warning, "
+          "7databits/2stopbits in any case, dtr/rts true/false/1/0  OK")
 
 
 OPTIONS = r"""
@@ -916,6 +962,7 @@ def main():
     test_accepters()
     test_protections()
     test_connectors()
+    test_serial_words()
     test_options()
     test_remaddr_default()
     test_substitution()
