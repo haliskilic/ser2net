@@ -17,6 +17,7 @@ import contextlib
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -106,6 +107,7 @@ PORTABLE = [
     "test_cluster_settings.py",
     "test_changelog.py",
     "test_ci_gate.py",          # ci.yml: ci-ok needs every job; required names kept
+    "test_harness.py",          # run_all itself: every test listed, timeouts kill what tests start
     "test_release_pipeline.py",  # release.yml gates, SHA-pinned actions
     "test_release_guard.py",    # release tag = version, CHANGELOG section, image tags
     "test_dependency_snapshot.py",  # the Python 3.10 pins go to the dependency graph
@@ -131,37 +133,69 @@ SOCAT = [
 ]
 
 
-def run_one(name: str, verbose: bool = False, skipped: list | None = None) -> bool:
-    path = os.path.join(HERE, name)
-    if not os.path.exists(path):
-        print(f"SKIP  {name} (missing)")
-        return True
-    t0 = time.time()
-    # Per-test wall-clock cap: a wedged test must fail loudly (with its partial
-    # output) rather than hang the whole CI job until the 6-hour runner limit.
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill a test and everything it started (servers, socat), which a kill of the test
+    alone would leave running, holding their ports, devices and its output pipes."""
+    if os.name == "posix":
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)  # its own process group (start_new_session)
+    else:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def run_test(path: str, timeout: float = TEST_TIMEOUT) -> tuple[int | None, str, str]:
+    """Run one test file: (exit code, stdout, stderr); exit code None when it ran past
+    ``timeout`` seconds and was killed, with everything it started (then the output is
+    what it wrote until then)."""
     # Children write UTF-8 regardless of the console code page (Windows: cp1252),
     # and undecodable bytes never crash the runner.
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    proc = subprocess.Popen([sys.executable, path], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                            encoding="utf-8", errors="replace",
+                            start_new_session=os.name == "posix")
     try:
-        proc = subprocess.run([sys.executable, path], capture_output=True, env=env,
-                              encoding="utf-8", errors="replace", timeout=TEST_TIMEOUT)
-    except subprocess.TimeoutExpired as e:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out, err
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:  # what it wrote until then (the pipes close once the whole tree is gone)
+            out, err = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:  # something it started left the process group
+            out, err = "", "(no output: a process the test started still holds its pipes)"
+        return None, out or "", err or ""
+    except BaseException:  # Ctrl+C: the test runs in a session of its own, take it along
+        _kill_tree(proc)
+        raise
+
+
+def run_one(name: str, verbose: bool = False, skipped: list | None = None) -> bool:
+    path = os.path.join(HERE, name)
+    if not os.path.exists(path):  # listed above but gone: a test that never runs
+        print(f"FAIL  {name}  (missing: remove it from tests/run_all.py or restore it)")
+        return False
+    t0 = time.time()
+    # Per-test wall-clock cap: a wedged test must fail loudly (with its partial
+    # output) rather than hang the whole CI job until the 6-hour runner limit.
+    code, stdout, stderr = run_test(path)
+    if code is None:
         dt = time.time() - t0
         print(f"FAIL  {name}  ({dt:.1f}s, TIMED OUT after {TEST_TIMEOUT}s)")
-        out = (e.stdout or "") if isinstance(e.stdout, str) else (e.stdout or b"").decode("utf-8", "replace")
-        err = (e.stderr or "") if isinstance(e.stderr, str) else (e.stderr or b"").decode("utf-8", "replace")
-        sys.stdout.write(out[-2000:])
-        sys.stderr.write(err[-2000:])
+        sys.stdout.write(stdout[-2000:])
+        sys.stderr.write(stderr[-2000:])
         return False
     dt = time.time() - t0
-    ok = proc.returncode == 0
+    ok = code == 0
     print(f"{'PASS' if ok else 'FAIL'}  {name}  ({dt:.1f}s)")
     if not ok:
-        sys.stdout.write(proc.stdout[-2000:])
-        sys.stderr.write(proc.stderr[-2000:])
+        sys.stdout.write(stdout[-2000:])
+        sys.stderr.write(stderr[-2000:])
         return ok
-    tail = proc.stdout[-4000:] if verbose else ""
-    skips = [ln.strip() for ln in proc.stdout.splitlines() if _SKIP_LINE.match(ln)]
+    tail = stdout[-4000:] if verbose else ""
+    skips = [ln.strip() for ln in stdout.splitlines() if _SKIP_LINE.match(ln)]
     shown = tail.splitlines() + [ln for ln in skips if ln not in tail]
     sys.stdout.write("".join(f"      {ln}\n" for ln in shown))
     if skips and skipped is not None:

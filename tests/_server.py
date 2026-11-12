@@ -158,7 +158,14 @@ class Server:
         self.proc = None
 
     def __enter__(self) -> "Server":
-        return self.start()
+        try:
+            self.start()
+            if self.proc.poll() is not None:  # its port answered, but not this server
+                raise AssertionError("server exited at start:\n" + self.output()[-2000:])
+        except BaseException:
+            self.__exit__()  # (a with block runs __exit__ only once __enter__ returned)
+            raise
+        return self
 
     def __exit__(self, *exc) -> None:
         self.stop()
