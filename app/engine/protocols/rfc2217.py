@@ -42,7 +42,7 @@ and baud/parity/databits/stopbits changes work.
 from __future__ import annotations
 
 import contextlib
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from serial import rfc2217 as _rfc2217
 
@@ -228,7 +228,18 @@ def _show(value: bytes) -> str:
     return value[:8].hex(" ") + (" ..." if len(value) > 8 else "")
 
 
-class _PortManager(_rfc2217.PortManager):
+if TYPE_CHECKING:
+    class _PortManagerBase(_rfc2217.PortManager):
+        # PortManager's private telnet handlers, which _PortManager calls and overrides;
+        # pyserial's type stubs (types-pyserial) leave them out
+        def _telnet_negotiate_option(self, command: bytes, option: bytes) -> None: ...
+        def _telnet_process_command(self, command: bytes) -> None: ...
+        def _telnet_process_subnegotiation(self, suboption: bytes) -> None: ...
+else:
+    _PortManagerBase = _rfc2217.PortManager
+
+
+class _PortManager(_PortManagerBase):
     """pyserial's RFC 2217 server engine with a parser of our own in front of it (feed).
     It keeps PortManager's parser state (mode, suboption, telnet_command), so the command
     handlers and anything that looks at that state work as before. Commands go to
@@ -236,7 +247,9 @@ class _PortManager(_rfc2217.PortManager):
 
     # PortManager's parser state (set in its __init__)
     mode: int
-    suboption: Optional[bytearray]  # the subnegotiation under way (None: none)
+    # the subnegotiation under way (None: none); pyserial keeps a bytearray here, its
+    # stubs say bytes (the ignore is unused where they aren't installed)
+    suboption: Optional[bytearray]  # type: ignore[assignment, unused-ignore]
     telnet_command: bytes
 
     def __init__(self, serial_port, connection, log: Optional[Callable[[str], None]] = None):
