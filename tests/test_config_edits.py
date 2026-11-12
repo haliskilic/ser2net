@@ -288,16 +288,16 @@ def test_server():
             assert st == 200 and text.startswith("Stopped, but config.json could not be saved"), text
             wait_state(srv, "A", ("stopped",))
             assert mapping_of(srv, "A")["enabled"] is False
-            code, err = api(srv, "POST", f"/mappings/{a_id}/start")
+            code, err = api(srv, "POST", f"/mappings/{other['id']}/start")
             assert code == 500 and err["error"] == "save_failed", err
-            assert mapping_of(srv, "A")["enabled"] is False
+            assert mapping_of(srv, "U")["enabled"] is False
             assert srv.saved_config() == saved, "nothing may have been written"
         finally:
             os.chmod(srv.data, 0o700)
         code, _ = api(srv, "POST", f"/mappings/{other['id']}/start")  # a save that works ...
         assert code == 200
         assert srv.saved_config()["mappings"][0]["enabled"] is False  # ... keeps A's stop
-        assert "stopped, but config.json could not be saved" in srv.output()
+        assert "WARNING: stopped 'A', but config.json could not be saved" in srv.output()
         print("config.json unwritable: password, token, deletions unchanged with the reason "
               "(REST 500 save_failed); a stop still stops, kept by the next save  OK")
 

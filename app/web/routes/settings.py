@@ -729,7 +729,7 @@ def routes(ctx: Ctx) -> list:
     async def _apply_import(request, plan, mode):
         rows = importer.plan_rows(state.config.mappings, plan.mappings, mode)
         try:
-            async with state.edit_config():
+            async with state.edit_config() as edit:
                 new_maps, touched = importer.apply_import(state.config.mappings, plan.mappings,
                                                           mode)
                 state.config.mappings = new_maps
@@ -751,8 +751,9 @@ def routes(ctx: Ctx) -> list:
         else:
             ok = _("Imported: {0} added, {1} updated, {2} unchanged.").format(
                 count["add"], count["update"], count["same"])
-        return await settings_get(request, ok=ok + " " + _("The previous configuration was kept "
-                                                         "as a backup."))
+        kept = (_("The previous configuration was kept as a backup.") if edit.backed_up else
+                _("The previous configuration could not be kept as a backup (see all.log)."))
+        return await settings_get(request, ok=ok + " " + kept)
 
     # ---------------- event notifications (admin) ----------------
     def _notify_from_form(form, old: NotificationSettings) -> NotificationSettings:
@@ -900,7 +901,7 @@ def routes(ctx: Ctx) -> list:
         notes: list[str] = []
         cur = state.config
         try:
-            async with state.edit_config():
+            async with state.edit_config() as edit:
                 previous = {f.name: getattr(cur, f.name) for f in dataclasses.fields(AppConfig)}
                 usable_before = cur.usable_admin_count()
                 for f in dataclasses.fields(AppConfig):
@@ -942,8 +943,11 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "config_backup_restore",
                   "; ".join([name, "accounts restored" if with_accounts else "accounts kept",
                              *audit_changes]))
-        ok = [_("Restored {0}; the configuration it replaced was backed up too. A changed admin "
-                "UI address or TLS takes effect after a restart.").format(name)]
+        ok = [(_("Restored {0}; the configuration it replaced was backed up too. A changed admin "
+                 "UI address or TLS takes effect after a restart.") if edit.backed_up else
+               _("Restored {0}, but the configuration it replaced could not be backed up (see "
+                 "all.log). A changed admin UI address or TLS takes effect after a "
+                 "restart.")).format(name)]
         ok.append(_("Everyone else was signed out.") if with_accounts else
                   _("User accounts, the REST API token and the cluster key were kept."))
         if changes:
