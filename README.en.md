@@ -63,7 +63,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges (client
   certificates, server checks by CA file or fingerprint: see Security). UDP sends the
   device's output to the sender of the last datagram from an allowed IP, or always to a
-  fixed **reply address** (IP + port); a **peer timeout** forgets a sender that went quiet.
+  fixed reply address (**Reply to IP** and **Reply to port**); a **peer timeout** forgets a sender that went quiet.
   **Also send the device's output to** lists more destinations (`udp_targets`, `IP:port`)
   that always get it, whoever sends and before anyone has: an NMEA 0183 feed to UDP 10110
   on a LAN's broadcast address (with **Allow broadcast**, `udp_broadcast`), a multicast
@@ -137,8 +137,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   it doesn't have) is an answer; such a point is logged with its unit when it starts
   failing (at most once a minute) and when it reads again. Requests from Modbus/TCP
   masters are not affected. Each unit's state is in the status (REST API) and `/metrics`,
-  the dashboard names the units that stopped answering, the **Modbus unit not answering /
-  answering again** notifications (off until ticked) report them, and plain MQTT can
+  the dashboard names the units that stopped answering, the **Modbus unit stopped
+  answering** notifications (and answering again; off until ticked) report them, and plain MQTT can
   publish it, retained, to `<topic>/unit<N>/status` (`online` / `offline`; **Publish each
   unit's state** in the mapping form; it keeps the last state while the mapping is
   stopped, so read it together with `<topic>/status`). Optionally as a **Sparkplug B**
@@ -166,7 +166,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   time, in the order they came, and take turns on the bus with the poll and the Modbus/TCP
   masters; the answers on `.../set/result` keep that order. At most 32 wait for the bus: a
   command beyond them gets `error: busy`, and one that waited more than 10 s for its turn
-  is not written (`error: expired`). A `/set` over 64 KiB gets `error: too large: …`; a
+  is not written (`error: expired: …`). A `/set` over 64 KiB gets `error: too large: …`; a
   Sparkplug NCMD/DCMD over 256 KiB, a DCMD with more metrics than its device has points and
   an NCMD with more than 64 are ignored, and what a command leaves out (metrics that are not
   writable points of the device, nulls) is logged in one line, at most once a minute. A
@@ -180,8 +180,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `error: …`. A unit that doesn't answer a write gives `error: no reply from unit N within
   T s`. Sparkplug B: after every DCMD to a writable point the point is read back and sent
   in a DDATA, changed or not (also when the write was refused, or the slave answered with
-  an exception), so the host sees how it went; a unit that did not answer goes offline
-  instead (DDEATH). A point can limit what MQTT may write to it (optional, in the points
+  an exception), so the host sees how it went (not for a point on unit 0 or a write-only
+  one, which are never read back); a unit that did not answer gets no DDATA, and once it
+  gives no reply to 3 polls in a row it goes offline (DDEATH). A point can limit what MQTT may write to it (optional, in the points
   JSON): `"min"` and `"max"` (in the point's own units, as published) and `"allowed": [0,
   1, 2]` (`[true]` for a coil that may only be switched on); a value outside them is
   refused before it reaches the bus (`error: 3000 is outside the range 0..1500 of
@@ -189,7 +190,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   one) or a downgrade drops them. `"poll": false` makes a writable point write-only, for a
   command register that can't be read: never polled, a write not read back. An integer
   type rounds a fraction (ties to even: `12.5` → 12) and the answer is still `ok`; the log
-  line of the write names the raw value written (`raw value 13`). **Fail-safe outputs:**
+  line of the write names the raw value written (`raw value 12`). **Fail-safe outputs:**
   ser2net writes no safe value by itself when the broker or the host goes away. Use a
   heartbeat: the host writes a counter to a holding register through `/set` (or a DCMD)
   every few seconds, and the PLC's own logic (a watchdog timer) puts its outputs in a safe
@@ -217,7 +218,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   fleet edit): `"unit": "1"` and `"scale": "0.1"` count as numbers, `"writable": "false"`
   as false, and what can't be used (a scale that is not a number, a misspelt key such as
   `"adress"` in the form) is refused with a message naming the point; the form says where
-  invalid JSON breaks (line and column) and keeps what was typed. **Read neighbouring
+  invalid JSON breaks (line and column) and keeps what was typed. The keys added in 2.9
+  (`word_order`, `bit`, `length`, `min`, `max`, `allowed`, `poll`) are taken only with the
+  right type; a stored value the gateway can't use (a hand edit) is ignored, the default
+  used, with a warning in the mapping's log at start. **Read neighbouring
   points with one request** (off by default) reads a unit's points of one function that
   lie close together with one request (at most 125 registers or 2000 coils, with up to the
   given number of unused registers in between): 100 points at 9600 baud then take a
@@ -318,7 +322,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   pyserial's text): for "Permission denied" the group the device belongs to, read from the
   device itself (`dialout`, `uucp` on Arch, …), and what is missing (the user is not in
   it, was added after ser2net started, the container lacks it: `--group-add <gid>`); for a
-  port in use, which mapping has it open, or what kind of lock another program holds.
+  port in use, which mapping has it open, or what kind of lock another program holds. The
+  same `hint` names why the system refused a listener's port (below 1024 without
+  `CAP_NET_BIND_SERVICE`, a port Windows keeps), in English in the REST API and in the
+  page's language on the dashboard, where it replaces the general sentence.
 - **Listeners come up on their own:** a mapping whose address can't be used when it
   starts (its IP is not assigned yet at boot, or the port is still taken) shows `error`
   with "retrying in N s" and is started again, at most 30 s apart, until it works (a Stop
@@ -367,11 +374,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   open, or a UDP datagram found the queue full) is counted as dropped (`bytes_dropped`,
   `ser2net_mapping_bytes_dropped_total`), flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
-  e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, a
-  connect-out mapping loses or regains its remote server, clients come and go, a sign-in
-  fails, or the data disk is almost full (below the free space at which traces pause;
-  all.log warns in any case); repeats are suppressed, a test message can be sent. Off until
-  chosen in Settings: **no data from a device** (a mapping's *No-data alarm* in its
+  e-mail (SMTP). On by default: a device is lost or comes back, a mapping fails to start, a
+  connect-out mapping loses or regains its remote server. Ticked in Settings when wanted:
+  clients come and go, a sign-in fails, the data disk is almost full (below the free space
+  at which traces pause; all.log warns in any case), **no data from a device** (a mapping's *No-data alarm* in its
   options: the port is open but the device has sent nothing for that many seconds, or, for
   a device that speaks only when asked, what was sent to it got no answer; also shown on
   the dashboard, in the mapping's log and in `/metrics`, with the time of the device's last
@@ -380,13 +386,15 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   peer that misses two answers a minute apart) and back, and **ser2net started** (15 s
   after a start: which mappings run, and whether the previous run was ended by the event
   loop watchdog), and a **Modbus unit** that a gateway polls **stops answering** (no reply
-  to any of its points in 3 polls in a row) or answers again. The same events are logged in all.log whether or not they are sent.
+  to any of its points in 3 polls in a row) or answers again. Repeats are suppressed, and a
+  test message can be sent. The same events are logged in all.log whether or not they are
+  sent.
   With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
   format has a `url` field. The client events send the client's IP address, a failed
   sign-in the account name (or `(unknown user)`) and the IP address; *Leave out personal
   data* sends addresses only as their network (`10.0.5.x`, IPv6 /48) and no account names,
   and e-mail can go to each recipient separately. Messages are in the default language set
-  under *Web UI access*. SMTP user names and passwords and webhook URLs may contain Turkish
+  under *Web UI access* (English while that is the browser's language). SMTP user names and passwords and webhook URLs may contain Turkish
   (any non-ASCII) letters: the credentials are sent UTF-8 encoded (SMTP AUTH PLAIN / LOGIN /
   CRAM-MD5), the URL IDNA- and percent-encoded.
 - **Connect-out status:** a connect-out mapping's state stays the serial side's; its link
@@ -464,7 +472,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   the broker's certificate must chain to a CA the system trusts — or, with a **CA
   certificate file** (PEM, or DER), to one in that file only — and name the broker host
   (a DNS name or an IP address); **Check the broker's host name** off accepts a
-  certificate that doesn't (it must still come from a trusted CA). A **client
+  certificate that doesn't (it must still come from a trusted CA). Every certificate in
+  the CA file is trusted as it is: an intermediate CA, or a self-signed broker's own
+  certificate, is enough. A **client
   certificate** (PEM; its key in its own file or in the same one, an encrypted key with
   its **password**) is presented to a broker that asks for one (mutual TLS, such as AWS
   IoT Core); the form never shows a stored key password (a blank field keeps it, *Remove
@@ -522,8 +532,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `SIGNATURE`) becomes its **RFC 2217 signature**; `hangup-when-done` and `nobreak` are kept
   but have no effect here (the port stays open between connections), and the import says so.
   Merging such a file again later takes only what the file says and keeps what was set on
-  its mappings here (TLS, bind IP, allowed clients, USB identity, RS-485, MQTT, Modbus
-  points, a disabled mapping stays disabled); it never opens a mapping up, and the preview
+  its mappings here (USB identity, RS-485, MQTT, Modbus points, a disabled mapping stays
+  disabled; the RFC 2217 signature comes only with the first import); the bind IP, the
+  allowed clients and read-only are taken from the file only when that is no more open than
+  the mapping is, and TLS is never turned off: it never opens a mapping up, and the preview
   lists what each update changes and keeps.
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
@@ -606,9 +618,9 @@ Linux notes: `chmod +x ser2net-linux-x64`; serial ports need the devices' group
 that isn't (`ser2net-install.sh` does that for the service). While it runs it keeps that
 copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
 don't delete it under a long-running instance; a copy left behind by a killed process
-still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS) it
-uses the distribution's CA bundle, or `SSL_CERT_FILE` if set (unless a CA file is set for
-the MQTT mapping or for LDAP).
+still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS,
+HTTPS webhooks, SMTP over TLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE` /
+`SSL_CERT_DIR` if set (unless a CA file is set for the MQTT mapping or for LDAP).
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) and where each
 component is loaded from, with the known folders shortened (`<python>`, `<ser2net>`,
@@ -700,8 +712,8 @@ at all (2.8.1 and newer on 2.7's), the start stops with one line that says so.
 `python3 bootstrap.py` installs the set by hand (stop ser2net first, and run it as the
 account ser2net runs as, e.g. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); with
 `--no-bootstrap` that is the way after every upgrade, and the start-up log warns while
-`lib/` is out of date. The one-off commands (`--set-password`, `--sign-out-all`, `--about`,
-`--install-service`), which may run beside a running ser2net, leave `lib/` as it is and
+`lib/` is out of date. The one-off commands (`--set-password`, `--sign-out-all`, `--reload`,
+`--about`, `--install-service`), which may run beside a running ser2net, leave `lib/` as it is and
 only warn.
 
 ### Docker
@@ -722,10 +734,12 @@ Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
 interface, IPv4 and IPv6). Publish each mapping's port
 too (a new mapping gets 4001), or use the host network. A serial device's group is taken
 from the device itself, so `--group-add` isn't needed for the usual device names. The
-process runs as the
-`ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
+process never runs as root: as the `ser2net` user (uid 10001), or as the owner of a
+bind-mounted `/data` folder (or the `--user` given); a `/data` volume written by an older (root-running)
 image is taken over on the first start, and in a bind-mounted folder the files an older
-image wrote as root are handed to the folder's owner, so upgrading needs no manual step.
+image wrote as root are handed to the folder's owner, so upgrading needs no manual step
+(but on the host network with a mapping port below 1024: `SER2NET_LOW_PORTS=1`, see
+[`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
 `SER2NET_PUBLIC_URL` and `SER2NET_TRUSTED_PROXIES` set what Settings → Reverse proxy does
 ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Details:
@@ -761,6 +775,9 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   not one of ser2net's own; searched downwards past 65535), with no MQTT client ID, the
   base topic `<topic>-copy` (`-copy-2`, …) and a Sparkplug B edge node ID made from its
   new name, so it can run next to the original once its serial port is changed.
+  A save, Start or Restart whose mapping doesn't start says why in one notice (with what
+  to do when another program listens on its port, and, while a listener is retried, that
+  it starts as soon as it can listen there).
 - **Edit:** an edit form opened before the mapping changed (another user or tab, a start or
   stop, the REST API) is not saved: it comes back with your values and a note, and saving
   it again replaces the changes. A form whose mapping was deleted meanwhile comes back as a
@@ -785,7 +802,8 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   open access with a role), admin TLS (provide paths or generate self-signed; a previous
   generated pair is kept as `*.bak`; new connections get it at once, no restart),
   generate/revoke **REST API tokens** or change the first token's role only (a one-time
-  token has a Copy button), mappings **backup/restore** (JSON), status, and the
+  token has a Copy button), **Mappings export / import** (JSON), **Configuration backups**
+  (restore a saved `config.json`; *Reload config.json*), **Retention**, and the
   **name of this instance** (Admin interface; or `SER2NET_NODE_NAME`): notifications, the
   browser tab, the top bar and the LAN cluster's fleet view use it instead of the host name,
   which instances on one machine share; the generic JSON webhook also gets `hostname` and
@@ -793,9 +811,11 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   changed address in `config.json` that waits for the next start, and how this installation
   changes it (Docker: `SER2NET_BIND_IP` / `SER2NET_PORT`; Windows service: reinstall with
   `--reconfigure`; else a start with `--reconfigure`). A saved form returns to the page at
-  its own section, which says what was done; a reload or Back does not post it again (no
-  second token, no second restore). A refused form keeps what was typed, with the reason
-  (passwords and keys are typed again).
+  its own section, which says what was done (`303` to `/settings#<section>`); a reload or
+  Back does not post it again (no second token, no second restore). A refused form (`400`)
+  keeps what was typed, with the reason (passwords and keys are typed again). A TLS change
+  that switches the UI between HTTP and HTTPS answers with the page itself, which names the
+  address to continue at. The two-factor sign-in page works the same way.
 - **/metrics:** Prometheus-format metrics (a web UI session; with the REST API token:
   `/api/v1/metrics`, see REST API): per mapping whether it is enabled
   (`ser2net_mapping_enabled`: 0 for a mapping stopped on purpose, so it is not mistaken for
@@ -814,8 +834,11 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   polled units whether each answers (`ser2net_modbus_unit_up`) and its failed reads
   (`ser2net_modbus_unit_poll_errors_total`); for a mapping that publishes to MQTT whether
   it is connected to its broker (`ser2net_mqtt_connected`) and the messages it could not
-  hand to it (`ser2net_mqtt_messages_dropped_total`). Every series has its
-  `# HELP` and `# TYPE` line. Without a session a scraper gets `401` (a browser is sent to
+  hand to it (`ser2net_mqtt_messages_dropped_total`); also `ser2net_up`, the number of
+  mappings (`ser2net_mappings_total`), whether a mapping is past its no-data alarm
+  (`ser2net_mapping_no_data`) and the event loop's late heartbeats
+  (`ser2net_event_loop_stalls_total`, its lag `ser2net_event_loop_lag_seconds`). Every
+  series has its `# HELP` and `# TYPE` line. Without a session a scraper gets `401` (a browser is sent to
   the sign-in page), and successful scrapes are not written to `all.log`.
 
 ### Serial ports shared with other programs (Linux)
@@ -873,7 +896,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 Endpoints: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
 `GET /metrics`, `GET /info` (ser2net's version, the API's version and its `features`),
-`GET /health` (unauthenticated), `GET /openapi.json`.
+`GET /health` and `GET /openapi.json` (both unauthenticated). The web UI's own endpoints
+(`/api/status`, the dashboard's table, which answers `204` or only the changed counters to a
+page that sends back its `X-Content-Hash`) are for the browser: scripts use `/api/v1`.
 
 **`PUT` replaces the whole mapping.** Every field the body leaves out gets its default, as in
 a new mapping: listen on `0.0.0.0` port 4001, no client allow-list, not read-only, enabled
@@ -906,8 +931,8 @@ the MQTT `tx_enabled`, `proxy_hsts`, `email_separately`) refuse text as
 well; in a hand-edited `config.json` it leaves them off, with a start-up note. Keys that are
 not settings are ignored and named in the response's `warnings` list. An unexpected server error is a JSON `500` too.
 A change that can't be saved changes nothing: `400` (`validation`) when the configuration
-would not validate — a start that would share a serial port with a running mapping, for
-example — and `500` (`save_failed`) when `config.json` can't be written (a full or
+would not validate — a start that would share a serial port, an MQTT client ID, a
+Sparkplug B edge node or a command topic with another enabled mapping, for example — and `500` (`save_failed`) when `config.json` can't be written (a full or
 read-only disk). A stop always stops; when `config.json` can't be written, the response's
 `warning` says that the mapping starts again when ser2net restarts.
 
@@ -985,11 +1010,12 @@ asks for a client certificate. **Without a CA file or a fingerprint, connect-out
 encrypts:** anyone on the network path can pose as the server. A CA file is PEM (one or more
 certificates) or DER, and any certificate in it is trusted, a self-signed server's own one
 too. An encrypted key needs its password (**TLS key password**, `network.tls_key_password`;
-`admin_ui.tls_key_password` for the admin UI, under Settings → Admin TLS): ser2net never
+`admin_ui.tls_key_password` for the admin UI, *Key password* under Settings → Admin TLS):
+ser2net never
 asks for one on the console, and without it the mapping, or the start for the admin UI's
 key, fails with an error that says so. The form and the REST API load a mapping's files when
-it is saved, never show the stored key password (a viewer API token gets it masked) and
-refuse a key that is the admin UI's own. Where certificates can't be managed, a VPN
+it is saved and refuse a key that is the admin UI's own; the form never shows the stored
+key password, and the REST API masks it for a viewer token. Where certificates can't be managed, a VPN
 (WireGuard) or an stunnel in front of an untrusted network is the alternative.
 
 **HSTS:** with admin TLS, pages and REST API answers carry `Strict-Transport-Security` with
@@ -1079,7 +1105,8 @@ audited (`login_notice_set`). None is set by default.
 
 **Requests from other sites:** a change (any POST, PUT, PATCH or DELETE of the web UI) is
 refused with 403 when the browser says a page of another site sent it: `Sec-Fetch-Site`
-other than `same-origin`, or an `Origin` that isn't the address the UI was reached by —
+other than `same-origin` (or `none`: typed into the address bar), or an `Origin` that isn't
+the address the UI was reached by —
 another port of the same host and a sibling subdomain count as other sites. This comes on
 top of the CSRF token, which is new after every sign-in and sign-out and lasts as long as
 the session. Behind a reverse proxy, the proxy must pass the address the browser uses as
@@ -1093,8 +1120,8 @@ browser's handshake is accepted when it says it comes from this UI's own page
 `Host`, `X-Forwarded-Host` or `Forwarded: host=`, port included, or the public URL. So a
 proxy must pass the browser's address on — nginx `proxy_set_header Host $http_host;`,
 Apache `ProxyPreserveHost On`, IIS ARR `preserveHostHeader` (Caddy and Traefik do it by
-default) — and pass WebSocket upgrades through; over plain HTTP browsers send no
-`Sec-Fetch-Site`, so there the address is all that counts. all.log names a refused
+default) — and pass WebSocket upgrades through; over plain HTTP (but to `localhost`)
+browsers send no `Sec-Fetch-Site`, so there the address is all that counts. all.log names a refused
 `Origin` once a minute, with the addresses the UI saw. **Settings → Reverse proxy** has
 the rest: the **public URL** (the address users open; its origin counts as the UI's own,
 a blank SSO redirect URI is made from it, notifications link to it, and a path in it —
@@ -1111,20 +1138,23 @@ Caddy, Traefik and IIS, and what all.log says when something is missing:
 **Passwords** of local accounts are stored as scrypt hashes (N=2^14, r=8, p=5, OWASP's
 minimum; the hash names its cost, so the cost can be raised later). A hash made by 2.8.1 or
 older keeps working and is renewed with today's cost at that account's next sign-in (its
-sessions stay; `config.json` is saved, the previous one goes to `backups/`). Passwords are
+sessions stay; `config.json` is saved and kept in `backups/`, as every save). Passwords are
 compared as Unicode NFKC: a letter with its accent as one character or two (text pasted
 from macOS or a PDF), a no-break space and a space, full-width forms are the same password.
 A directory (LDAP) gets the password exactly as typed. **Going back to 2.8.1 or older:**
-those versions can't read the renewed hashes, so an account that signed in with 2.9 can't
-sign in there: give it a new password with `ser2net --set-password NAME` (2.8.1), or, on
+those versions can't read the hashes 2.9 makes, so an account that signed in, or got a
+password, under 2.9 can't sign in there: give it a new password with `ser2net --set-password NAME` (2.8.1), or, on
 2.8.0 and older, which have no such command, put back a `config.json` from `backups/` made
 before the upgrade.
 
-**Sessions:** logging out ends that session on the server (a copy of the cookie stops
-working too). Under **Settings → Users** an admin can sign a user out everywhere or set a
+**Sessions:** a page opened without a session goes to the sign-in page and, after the
+sign-in, back to that page (`/login?next=<page>`); `/metrics` does that for a browser and
+answers `401` to a scraper. Logging out ends that session on the server (a copy of the
+cookie stops working too). Under **Settings → Users** an admin can sign a user out everywhere or set a
 local user's new password (which signs them out as well); everyone can *Sign out my other
 sessions*. **Settings → Web UI access → Sign out everyone** makes a new session key and
-ends every session at once, the admin's own excepted — use it when a copy of
+ends every session at once (the admin who clicks it is signed in again in that browser) —
+use it when a copy of
 `config.json` or a backup may have leaked (downloaded backups leave the key out). While
 LDAP or OIDC is switched off, its accounts' sessions don't count. Browsers keep cookies per
 host name, not per port, so on a port other than 8080 the UI's cookies carry a tag of the
@@ -1154,22 +1184,28 @@ Opening a mapping's console or hex view is recorded once per account (with open 
 address), mapping and kind in 5 minutes, and at most 50 such records in 10 minutes, summed up
 the same way (all.log keeps a line for every one). At most 4 consoles and hex views (together)
 are open per account (with open access: per address) and mapping, 16 per mapping and 64 in
-all; one that takes nothing for 30 s while its traffic is being dropped is closed. Closing a
-console that wrote to the
+all; one that takes nothing for 30 s while its traffic is being dropped is closed. The
+console's WebSocket says why it closed (the page shows it): `1013` too many open, `4001` the
+mapping stopped or restarted (the page connects again), `4002` signed out or the access
+changed, `4003` took nothing for 30 s, `4004` the mapping was deleted, `1008` refused at
+the start (no session, or a page of another site). Closing a console that wrote to the
 device is recorded too (`console_close`, with the number of bytes, never what was typed). A
 failed SSO sign-in (the identity provider refused it, its answer didn't check out, or the
 groups give no role) is recorded as `oidc_login_failed` with a short reason and notified like
 a failed local or LDAP sign-in, within the same limit. A REST API request refused for its token
 (none, a wrong or an expired one) is recorded as `api_auth_failed` once per address a minute
 (the next record says how many there were), at most 20 in 10 minutes. A request refused before
-it reaches the page (no session, a failed CSRF check, a WebSocket without a session or from
-another site) gets an all.log line once per address and answer a minute, the next one saying
-how many more there were. Line breaks and other control characters in names (a mapping name,
+it reaches the page (no session, a failed CSRF check, a WebSocket without a session) gets an
+all.log line once per address and answer a minute, the next one saying how many more there
+were; a WebSocket from another site one line a minute in all. These records and the
+console limits count an address as it is; the connection, handshake and sign-in limits
+count an IPv6 /64 as one address. Line breaks and other control characters in names (a mapping name,
 a user name from the directory) are written as spaces in all.log, stdout, the mapping logs,
 the audit log and notification titles, so they can't start a line of their own.
-Names over 256 characters aren't tried. Request bodies are limited too: the sign-in, setup
-and sign-out forms to 64 KB, a configuration import to 16 MB and everything else (forms,
-the REST API) to 2 MB; a larger one gets HTTP 413.
+Names over 256 characters aren't tried. Request bodies are limited too: the sign-in,
+two-factor, setup and sign-out forms to 64 KB, a configuration import (form or REST API) to
+16 MB, a cluster node's request to 1 MB and everything else (forms, the REST API) to 2 MB; a
+larger one gets HTTP 413.
 
 **LDAP / OIDC groups → roles:** a group setting (admin / operator / viewer group) names one
 group and matches only its whole name, never a part of it. For LDAP that is the group's
@@ -1251,17 +1287,19 @@ must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: i
 certificate store, where a domain member usually has the AD CA already) and name the host
 in the server URI: use the name the certificate was issued for (`ldaps://dc01.corp.local`;
 an IP address only if the certificate lists it). For your own CA (Active Directory
-Certificate Services) or a self-signed certificate, set **Settings → LDAP → CA certificate
-file** to that CA's certificate, PEM or DER as Windows exports it (Docker: put it in the
-`/data` volume); then only the certificates in that file are trusted. A refused certificate
+Certificate Services) or a self-signed certificate, set **Settings → LDAP / Active
+Directory → CA certificate file** to that CA's certificate, PEM or DER as Windows exports
+it, by its full path (Docker: put it in the `/data` volume and enter `/data/corp-ca.pem`;
+unlike the TLS files of a mapping, a relative path is not looked up in the data folder);
+then only the certificates in that file are trusted. A refused certificate
 is logged in all.log with the reason and what to set, and Settings shows it; nothing is
 sent over that connection. *Don't check the server certificate* turns the check off, which
 is insecure — anyone on the network between ser2net and the directory could read the
 passwords and sign in as anyone; Settings and the start-up log warn while it is off, and
 while passwords go unencrypted (`ldap://` without StartTLS). Over TLS ser2net doesn't
 follow a referral to another server (that server's certificate would go unchecked): point
-the URI at a server that holds the users and their groups. **After upgrading from 2.8 or
-older**, LDAP sign-in stops if the certificate isn't trusted: set the CA certificate file
+the URI at a server that holds the users and their groups. **After upgrading from 2.8.0
+or older**, LDAP sign-in stops if the certificate isn't trusted: set the CA certificate file
 (local accounts keep working; without a local admin, create one with
 `ser2net --set-password NAME`).
 
@@ -1300,10 +1338,12 @@ directory's owner by itself):
 |---|---|
 | source / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary with `ser2net-standalone.service`: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; started by hand: `./ser2net-linux-x64 --set-password admin`) |
 | Windows (elevated prompt, also while the service runs) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (the service's data directory: `sc qc ser2net` shows it) |
+| an instance of `ser2net@.service` | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /var/lib/ser2net/<name> --set-password admin` |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
 **First admin without the browser:** run `ser2net --set-password admin` before the first
-start (it creates `config.json`; the UI then listens on `127.0.0.1:8080` unless
+start (a source install under systemd: after the service's first start, which makes its
+`data/`; it creates `config.json`; the UI then listens on `127.0.0.1:8080` unless
 `--reconfigure` or `SER2NET_BIND_IP` says otherwise), or — Docker — point
 `SER2NET_ADMIN_PASSWORD_FILE` at a file (a Docker secret) holding the password, with
 `SER2NET_ADMIN_USER` for the name (default `admin`). The variable is used only while there
@@ -1321,7 +1361,7 @@ is no account at all; later starts ignore it.
 - **Who acted:** a remote start/stop/restart or edit is recorded in the audit log of both
   nodes: on the node the browser is signed in to under the user's name, and on the node it
   changed as `cluster-peer:NODE/USER` — the sending node's name (its instance name, else its
-  host name; without spaces) and its user, as that node states it in the signed request (a claim of a node with the cluster key, not an
+  host name; without spaces or `/`) and its user, as that node states it in the signed request (a claim of a node with the cluster key, not an
   account of the changed node). A request from a node running 2.8.1 or older stays
   `cluster-peer`.
 - **Older nodes (legacy authentication):** nodes running 2.8.0 or older only know the raw
@@ -1341,10 +1381,11 @@ is no account at all; later starts ignore it.
 - **Changing the key:** *planned* — on each node enter the new key (or generate it on one and
   copy it) with *keep accepting the current one for 7 days* ticked; nodes not changed yet keep
   working, and the fleet view tags them **previous key**. When every node has it, tick *Stop
-  accepting the previous key* on each. *Leaked* — untick *keep accepting*, so the old key is
+  accepting the previous key now* on each. *Leaked* — untick *keep accepting*, so the old key is
   refused at once, and change it on every node; until then the fleet view shows **cluster key
   rejected** for the nodes not changed yet, and a banner lists the nodes that broadcast with a
-  different key. *Auto-discovery* can be switched off where only manual peers are used.
+  different key. *Find other nodes automatically (UDP broadcast)* can be switched off where
+  only manual peers are used.
 
 ### Upgrading a cluster
 
@@ -1354,9 +1395,10 @@ is no account at all; later starts ignore it.
   version**, a banner lists the versions while they differ, the edit form of such a peer says
   so and leaves out the settings an older peer doesn't keep, and a peer is offered only what
   its version can do (before 2.6.0: view only; 2.6.0: start, stop and restart, no edit).
-- **Edits from older nodes:** a 2.9.0 node keeps what an older node's form can't send: the
-  MQTT client ID (no field before 2.9.0), the USB identity and the Modbus points' `writable`
-  (before 2.8.0), RS-485 (2.6.1 / 2.6.2). Editing an older node, it sends that node's own
+- **Edits from older nodes:** a 2.9.0 node keeps every setting an older node's form can't
+  send, for example the MQTT client ID (no field before 2.9.0), the USB identity and the
+  Modbus points' `writable` (before 2.8.0), RS-485 (2.6.1 / 2.6.2), and this release's
+  settings (the no-data alarm, MQTT TLS, the points' options, the unit map …). Editing an older node, it sends that node's own
   trace path back unchanged and the settings its form leaves out for a Modbus gateway
   (banner, close-on string, client buffer).
 - **Released versions don't change:** an edit **from** a node before 2.9.0 **to** another
@@ -1376,14 +1418,18 @@ is no account at all; later starts ignore it.
   `stop_grace_period: 30s` (a stop reaches ser2net, which finishes within that), `/data`
   volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
   that (an existing container: `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** two units. Both run ser2net as a dedicated unprivileged user
-  (`ser2net`, in the `dialout` group for the serial ports), restart it 3 s after a failure
-  and sandbox it (read-only system, own `/tmp`, a system call filter). **Do not run it as
-  root.** `systemctl reload ser2net` reads `config.json` again (see Configuration & state
-  files). On Arch, Manjaro and EndeavourOS the serial group is `uucp` and there is no
-  `dialout` group (the unit would fail with `status=216/GROUP`): set it with
+- **Linux (systemd):** three units — `ser2net.service` (a source checkout),
+  `ser2net-standalone.service` (the Linux binary) and the template `ser2net@.service`
+  (several instances). All run ser2net as a dedicated unprivileged user (`ser2net`, in the
+  `dialout` group for the serial ports), restart it 3 s after a failure and sandbox it
+  (read-only system, own `/tmp`, a system call filter). **Do not run it as root.**
+  `systemctl reload ser2net` (or `ser2net@<name>`) reads `config.json` again (see
+  Configuration & state files). On Arch, Manjaro and EndeavourOS the serial group is `uucp`
+  and there is no `dialout` group (the unit would fail with `status=216/GROUP`): set it with
   `systemctl edit ser2net` (`[Service]`, `SupplementaryGroups=`, then
-  `SupplementaryGroups=uucp`; the unit's comment has it).
+  `SupplementaryGroups=uucp`; `ser2net.service`'s comment has it). `ser2net-install.sh`
+  stops on such a system (it needs a `dialout` group): install the binary by hand there.
+  When a port doesn't open: [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md).
   - *Source checkout* in `/opt/ser2net`: `systemd/ser2net.service`.
     ```bash
     sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
@@ -1429,14 +1475,24 @@ is no account at all; later starts ignore it.
     Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
     ```
     Set the first password in the browser, or with `--set-password` (the table under
-    Security). Run such commands as the `ser2net` user (`sudo -u ser2net …`), never as
-    plain root, which would leave files the service can't read. Logs:
+    Security). Run such commands as the `ser2net` user (`sudo -u ser2net …`): the account
+    commands (`--set-password`, `--sign-out-all`, `--reload`) switch to the data
+    directory's owner by themselves when run as root, but a start or `--reconfigure` as
+    root would leave files the service can't read. Logs:
     `journalctl -u ser2net` and `all.log` in the data directory.
-  - Several instances: the template `systemd/ser2net@.service` (below). Optional: the
-    drop-in `systemd/ser2net.service.d/notify.conf` (`Type=notify`, `WatchdogSec=120`)
-    makes systemd count ser2net as started only once its mappings run and its UI listens
-    (or tries again to), and restart it when its event loop stops answering (remove it
-    before going back to a version before 2.9.0, which never reports ready).
+  - Several instances: the template `systemd/ser2net@.service` (below).
+  - Optional: the drop-in `systemd/ser2net.service.d/notify.conf` (`Type=notify`,
+    `WatchdogSec=120`) makes systemd count ser2net as started only once its mappings run
+    and its UI listens (or tries again to), and restart it when its event loop stops
+    answering. Neither unit nor `ser2net-install.sh` installs it, and it is not a release
+    file (take it from the source tree):
+    ```bash
+    sudo mkdir -p /etc/systemd/system/ser2net.service.d
+    sudo cp systemd/ser2net.service.d/notify.conf /etc/systemd/system/ser2net.service.d/
+    sudo systemctl daemon-reload && sudo systemctl restart ser2net
+    ```
+    (an instance: `ser2net@.service.d`). Remove it before going back to a version before
+    2.9.0, which never reports ready.
 - **Ports below 1024** (Modbus/TCP's 502, the web UI on 80 or 443): Linux lets only root,
   or a process with the `CAP_NET_BIND_SERVICE` capability, listen on them, and both units
   run ser2net as an unprivileged user. A mapping on such a port then fails with a hint on
@@ -1553,10 +1609,15 @@ profiles.
 - **Linux (systemd):** the template `systemd/ser2net@.service` runs one instance per name,
   with its data in `/var/lib/ser2net/<name>` and its address in `/etc/ser2net/<name>.env`
   (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); the instance name is its name in
-  notifications. Install the bundled dependencies once, and again after each upgrade
-  (`python3 /opt/ser2net/bootstrap.py` as the `ser2net` user: the instances start with
-  `--no-bootstrap`, and their start-up log warns while `lib/` is out of date), then
-  `systemctl enable --now ser2net@line1 ser2net@line2`.
+  notifications. Install the unit and the bundled dependencies once, and the dependencies
+  again after each upgrade (the instances start with `--no-bootstrap`, and their start-up
+  log warns while `lib/` is out of date):
+  ```bash
+  sudo cp /opt/ser2net/systemd/ser2net@.service /etc/systemd/system/ && sudo systemctl daemon-reload
+  sudo install -d -o ser2net -g ser2net /opt/ser2net/lib
+  sudo -u ser2net python3 /opt/ser2net/bootstrap.py        # again after each upgrade
+  sudo systemctl enable --now ser2net@line1 ser2net@line2
+  ```
 - **Docker:** one container per instance, each with its own volume, `container_name` and
   published ports (`8081:8080`), and `SER2NET_NODE_NAME` (or `hostname:`) for its name
   ([docs/DOCKER.md](docs/DOCKER.md)).
@@ -1565,8 +1626,9 @@ profiles.
 
 ser2net takes every date from the system clock and never sets it (the systemd unit
 forbids it: `ProtectClock=true`). A wrong clock puts wrong times in `all.log`, `audit.log`,
-traces and backup names, can make the 15-day log trim and the newest-50 backup pruning
-keep or drop the wrong ones, and makes date checks fail: sign-in sessions, two-factor
+traces and backup names, can make the 15-day log trim and, with a retention period, the
+deletion of old logs and backups keep or drop the wrong ones (the newest 50 backups are
+chosen by name, which a clock that went back doesn't change), and makes date checks fail: sign-in sessions, two-factor
 codes, SSO, and TLS certificates (MQTT, SMTP, webhooks, SSO, and a self-signed certificate
 made while the clock was wrong). How long something has been running (uptime, connection
 times, the cluster's peer list) is measured with a clock that no clock step changes.
@@ -1657,7 +1719,8 @@ when other accounts can use the folder — give ser2net a folder of its own:
   record is older — nothing older is kept, and at least four fifths of the period stay as
   far as the sizes allow (audit.log then keeps up to 6 files) — the mapping logs keep at
   most that many of their 15 days, and configuration backups named for an older time go,
-  never the newest 5. Checked at once and every hour; a clock set ahead while ser2net
+  never the newest 5. Checked at once when the period is saved (the mapping logs at the next
+  hourly check) and then every hour; a clock set ahead while ser2net
   runs deletes nothing early (ages count from the clock at start-up plus the time it has
   run). Restoring a backup from before 2.9 resets the period to 0 (off). The copy of every
   log line on the standard output is kept by whatever collects it: Docker caps it with the
@@ -1681,13 +1744,16 @@ when other accounts can use the folder — give ser2net a folder of its own:
   directions, personal data and passwords typed to a device included:
   delete them in the Trace panel once they are no longer needed (the file being written
   begins again with the next traffic), or have them deleted after a number of days without
-  writes under Settings → *Retention* (off by default; checked every hour; a file a mapping
+  writes under Settings → *Retention* (off by default; checked every hour; the same panel
+  shows the disk's free space and when traces are paused, `/metrics` has
+  `ser2net_data_free_bytes`, and the *data disk almost full* notification can say so; a file a mapping
   keeps writing into begins anew once it holds traffic from that many days ago, so it goes
   too, that many days after its last write). Deleting a
   mapping deletes its traces; those of mappings a replace import or a restore removed stay until
   the next start (an undone restore finds them), which deletes them and logs how many.
-- `tls/` — certificate/key if self-signed is generated. A relative TLS path (admin UI or a
-  mapping: certificate, key, CA files) is a file in the data directory, e.g. `tls/cert.pem`,
+- `tls/` — certificate/key if self-signed is generated. A relative TLS path (admin UI, a
+  mapping or its MQTT connection: certificate, key, CA files; not the LDAP CA file) is a file
+  in the data directory, e.g. `tls/cert.pem`,
   so it keeps working when the data directory moves. An absolute path that is no longer
   there after a move or a restore on another machine (native to Docker `/data`, another
   `--data-dir`, a backup from another host) and pointed into a `tls` folder is taken from
@@ -1698,6 +1764,12 @@ when other accounts can use the folder — give ser2net a folder of its own:
 - `sparkplug-bdseq.json` — the `bdSeq` of each Sparkplug B edge node's (group/node) last
   session; after a restart the numbering goes on from there. Deleted, the next start begins
   at 0.
+- `hang.log` (and `hang.log.1`) — every thread's stack when the event loop watchdog ended
+  ser2net (see Run as a service); `service.log` (and `.1`) — the Windows service's own
+  log (above, with `all.log`).
+- `ser2net.lock` — held while ser2net runs, so a second ser2net can't use the same data
+  directory; `admin-requests/` — where `--set-password`, `--sign-out-all` and `--reload` hand
+  their request to the running ser2net (see below).
 
 **Secrets:** `config.json` holds, in plain text, the LDAP bind password, the OIDC client
 secret, the SMTP password, the webhook URL (which often carries a token), each mapping's
@@ -1732,21 +1804,26 @@ browser's time zone and says which. A log shipper that matches the old format wi
 the optional offset (`[+-]HH:MM`) after the seconds. In Docker the zone is UTC unless `TZ`
 is set ([`docs/DOCKER.md`](docs/DOCKER.md)).
 
-Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
-new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
+Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`,
+and not a Windows device name (`con`, `nul`, `com1`, `lpt1` …); new mappings get 12 hex
+digits. An id in any other form (hand-edited or imported) is
 replaced when the config is loaded or the file is imported; the start-up log or the import
 preview says so.
 
 **Changing `config.json` while ser2net runs:** ser2net reads it at start-up and then works
 from its copy in memory. After an edit by hand or by a tool (Ansible, a copied file), have it
-read the file again — no restart: `systemctl reload ser2net` or `kill -HUP <pid>` (SIGHUP,
-Linux/macOS; `docker kill -s HUP ser2net`), `ser2net --reload` with the same `--data-dir`
-(any platform, also for the Windows service and in a container) or Settings →
+read the file again — no restart: `systemctl reload ser2net` (an instance:
+`systemctl reload ser2net@<name>`; all three units have `ExecReload`) or `kill -HUP <pid>`
+(SIGHUP, Linux/macOS; `docker kill -s HUP ser2net`), `ser2net --reload` with the same
+`--data-dir` (`/var/lib/ser2net` for the binary's unit, `/var/lib/ser2net/<name>` for an
+instance; any platform, also for the Windows service and in a container) or Settings →
 *Configuration backups* → *Reload config.json*. The file is checked as an edit is: when it
 can't be read or doesn't validate (a value of the wrong type in a changed mapping, two
-mappings on one port, no user accounts, a TLS pair that doesn't load, an MQTT client ID
-another enabled mapping uses on the same broker) nothing changes and
-`all.log` says why. Otherwise it is applied part by part: a mapping whose settings didn't
+mappings on one port, no user accounts, a TLS pair that doesn't load, MQTT TLS files that
+can't be used, an MQTT client ID, command topic or Sparkplug B node another enabled mapping
+uses on the same broker) nothing changes and `all.log` says why. Other values are read as
+at start-up: text in a number's place is converted, an unusable value takes its default,
+with a load note in `all.log` (see REST API: *A value may be sent as text*). Otherwise it is applied part by part: a mapping whose settings didn't
 change keeps running with its clients (one that should run but doesn't is started), a
 changed one restarts, a removed one stops, a new one starts; the cluster restarts only when
 its settings changed. The admin UI's certificate files and those of unchanged TLS mappings
@@ -1763,7 +1840,7 @@ link to restore it. So reload before saving anything else.
 
 **Starting over:** stop ser2net, then delete the data directory (or everything in it; keep
 `tls/` to reuse a generated certificate). Deleting only `config.json` resets the accounts,
-settings and mappings, but `audit.log` (and `audit.log.1`), the rotated `all.log.1`–`.5` and
+settings and mappings, but `audit.log` (and its rotated copies), the rotated `all.log.1`–`.5` and
 `backups/` stay (the logs and traces of mappings that no longer exist are deleted at the
 next start), and whoever completes
 the first-run setup next sees that audit log — the earlier users' names, addresses and
@@ -1784,7 +1861,10 @@ Since 2.9.0 the newest backup is always the current `config.json`, so the newer 
 in `backups/` after an older release replaced it: after upgrading again, restore it under
 Settings → *Configuration backups*. A `config.json` written by a newer release (its
 `written_by`), or with settings this release doesn't know, is reported at start-up and on
-that page.
+that page. With this release's systemd units, a release before 2.9.0 ends on
+`systemctl reload` (it took SIGHUP as stop) and systemd leaves it stopped: put the older
+release's unit back, and remove the `notify.conf` drop-in, which such a release never
+answers.
 
 **Copying an installation** (a disk or VM image, a copied data folder or Docker volume):
 `config.json` holds the node's identity — its cluster id (`instance_id`) and the key that
@@ -1803,9 +1883,9 @@ whose refreshes fail is marked *not up to date*. The mapping form asks before un
 changes are thrown away. In the console, **Shift+Tab** moves the keyboard focus out (Tab
 goes to the device).
 **Import:** shows a preview first; choose *merge* (update mappings with the same name, add
-the new ones) or *replace all*. Settings an export of an older version doesn't have (2.7's
+the new ones) or *Replace*. Settings an export of an older version doesn't have (2.7's
 Modbus points have no `writable`, no trace rotation, no Sparkplug B, ...) are named in the
-preview; a merge keeps their current values, *replace all* gives them the defaults. The
+preview; a merge keeps their current values, *Replace* gives them the defaults. The
 one-step import of 2.7 scripts (a POST without `step=preview`) still replaces all mappings
 from a JSON file; a classic ser2net file is taken only through the preview.
 **Export** writes the mappings as a UTF-8 JSON file (non-ASCII names and topics as they are,
@@ -1821,26 +1901,10 @@ python3 tests/run_all.py            # portable suite (Windows + Linux)
 python3 tests/run_all.py --socat    # + socat-based data-path tests (Linux)
 python3 tests/run_all.py -v         # also show the output of passing tests
 ```
-The socat tests use virtual serial ports (Linux); no hardware needed. Individual
-files still run directly, e.g. `python3 tests/test_rest_api.py`. On every pull request
-CI (GitHub Actions) runs ruff, mypy, `pip-audit`, the offline-wheel check, the full
-matrix (ubuntu/windows × Python 3.10–3.14, each leg also doing the offline first-run
-install; 3.15 runs without blocking) and coverage (`python3 tests/coverage_run.py`,
-which also measures the servers the tests start). Development setup and rules:
+The socat tests use virtual serial ports (Linux); no hardware needed, and single files run
+directly (`python3 tests/test_rest_api.py`). The browser layout test, the half-open TCP test,
+the standalone-executable test, what CI runs and the development setup:
 [CONTRIBUTING.md](CONTRIBUTING.md).
-
-`tests/test_dead_peer.py` also exercises dead-peer detection against **real half-open
-TCP connections**: with `SER2NET_BLACKHOLE_TESTS=1` it drops the packets of a loopback
-flow (Linux: root/passwordless sudo + `iptables`; Windows: Administrator +
-`pip install pydivert`). Since that edits the firewall it is opt-in locally (on Linux,
-best run inside a throwaway network namespace); CI always runs it on both OSes.
-
-`tests/test_ui_layout.py` opens the web UI in a real browser (Playwright + Chromium)
-with very long mapping names / device paths at desktop-to-phone widths and fails if
-anything sticks out of its panel (`pip install playwright && python -m playwright
-install chromium`; CI job `ui`). `tests/test_standalone.py` checks a built executable
-(`SER2NET_STANDALONE_BIN=dist/ser2net`; CI workflow `standalone.yml`, also used by
-every release).
 
 ---
 
