@@ -151,6 +151,9 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         raise SystemExit(f"ser2net: {store.path} is not a valid configuration ({e}) — fix "
                          f"it{restore}") from None
     notes = config.load_notes
+    # before anything below writes config.json: its time is one the clock can't be before
+    if clock_note := clock.warning(store):
+        notes.append(clock_note)
 
     try:
         env_set = _env_bind_override(config.admin_ui, notes)

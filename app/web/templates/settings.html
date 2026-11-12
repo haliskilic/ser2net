@@ -52,6 +52,9 @@
   <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=admin.bind_ip ~ ':' ~ admin.port) }}
      {% if admin.tls_enabled %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
   <p class="muted">{{ _('To change the admin bind address, restart with <span class="mono">python3 ser2net.py --reconfigure</span>.') }}</p>
+  <p>{{ _('Server time: <span class="mono">%(utc)s UTC</span> · local <span class="mono">%(local)s</span> (%(zone)s)', utc=server_utc, local=server_local[:19], zone=server_zone()) }}</p>
+  {% if clock_behind %}<div class="banner warn">{% if clock_behind.what == 'backup' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the newest configuration backup (%(when)s UTC): it is probably wrong, or it was ahead when that backup was made.", now=server_utc, when=clock_behind.when) }}{% elif clock_behind.what == 'config' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the last change to config.json (%(when)s UTC): it is probably wrong.", now=server_utc, when=clock_behind.when) }}{% else %}{{ _("The server’s clock reads %(now)s UTC, before this version of ser2net was made (%(when)s): it is wrong.", now=server_utc, when=clock_behind.when[:10]) }}{% endif %} {{ _("Logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. ser2net never sets the clock: set it on the server, or let its time sync (NTP) do it.") }}</div>{% endif %}
+  <div class="banner warn" data-clock-skew hidden></div>
 </section>
 
 {% if is_admin %}

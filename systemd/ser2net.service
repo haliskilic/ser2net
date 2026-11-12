@@ -2,6 +2,9 @@
 Description=ser2net — serial-to-network bridge with web config UI
 After=network-online.target
 Wants=network-online.target
+# Not After=time-sync.target: on a network without an NTP server the start would wait for
+# good. To wait for the clock, enable systemd-time-wait-sync.service and add
+# After=/Wants=time-sync.target with `systemctl edit ser2net` (README: Time synchronisation).
 
 [Service]
 Type=simple

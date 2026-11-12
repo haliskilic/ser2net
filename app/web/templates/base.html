@@ -13,7 +13,7 @@
   <script src="/static/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
 </head>
-<body data-i18n="{{ {
+<body data-server-time="{{ server_now() }}" data-i18n="{{ {
   'disconnected': _('console disconnected'),
   'selected': _('{0} selected'),
   'shown': _('{0} of {1} shown'),
@@ -23,6 +23,11 @@
   'to_device': _('▶ device'),
   'hex_view': _('Hex view'),
   'text_view': _('Text view'),
+  'clock_ahead': _('This browser’s clock is {0} ahead of the server’s. If this browser’s clock is right, the server’s is wrong: logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. Check the server’s time sync.'),
+  'clock_behind': _('This browser’s clock is {0} behind the server’s. If this browser’s clock is right, the server’s is wrong: logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. Check the server’s time sync.'),
+  'minutes': _('{0} min'),
+  'hours': _('{0} h'),
+  'days': _('{0} days'),
 } | tojson | forceescape }}">
   {% block body %}{% endblock %}
 </body>

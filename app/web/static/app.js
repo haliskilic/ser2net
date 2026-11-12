@@ -373,3 +373,29 @@ document.addEventListener("visibilitychange", function () {
   if (!document.hidden && document.getElementById("cluster") && window.htmx)
     htmx.trigger(document.body, "refreshCluster");
 });
+
+// 7) Clock check: the server's clock when it rendered this page (<body data-server-time>)
+//    against this browser's. A difference of more than 2 minutes is shown where the page
+//    has a [data-clock-skew] element (Settings -> Admin interface).
+(function () {
+  function check() {
+    var el = document.querySelector("[data-clock-skew]");
+    var server = +(document.body && document.body.getAttribute("data-server-time"));
+    if (!el || !server) return;
+    try {   // a page from the history (back / forward) was rendered earlier
+      var nav = performance.getEntriesByType("navigation")[0];
+      if (nav && nav.type === "back_forward") return;
+    } catch (e) {}
+    var diff = Date.now() / 1000 - server, s = Math.abs(diff);
+    if (s <= 120) return;
+    var amount = s < 7200 ? tr("minutes", "{0} min", Math.round(s / 60))
+               : s < 172800 ? tr("hours", "{0} h", Math.round(s / 3600))
+               : tr("days", "{0} days", Math.round(s / 86400));
+    el.textContent = diff > 0
+      ? tr("clock_ahead", "This browser's clock is {0} ahead of the server's.", amount)
+      : tr("clock_behind", "This browser's clock is {0} behind the server's.", amount);
+    el.hidden = false;
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", check);
+  else check();
+})();
