@@ -4,9 +4,13 @@ Pure stdlib, cross-platform -- round-trips every supported datatype, checks the
 exact wire bytes of a small payload worked out by hand from the protobuf encoding
 rules, feeds the decoder unknown fields, truncated and random input, and covers
 the topic / id / seq / datatype helpers; and the edge node's handling of NCMD / DCMD
-commands, with the bus write replaced by a recorder. Run:
+commands, with the bus write replaced by a recorder: commands too large or with more
+metrics than their device has points are ignored before they are decoded further, what a
+command leaves out is logged once per command (and at most once a minute), one NCMD gives
+one rebirth at most, and a rebirth asked for again too soon is carried out once, later. Run:
     python3 tests/test_sparkplug.py
 """
+import asyncio
 import math
 import os
 import random
@@ -496,13 +500,18 @@ def test_node_commands():
     """A DCMD writes only a writable point of its own device; an NCMD writes nothing and
     asks for a rebirth only with a Boolean true; log lines quote long names short."""
     _node, command, writes, logs, births = edge_node()
-    command("DCMD", "unit1", Metric("pump", T.Boolean, True), Metric("valve", T.Boolean, True),
+    command("DCMD", "unit1", Metric("valve", T.Boolean, True),
             Metric("level", T.UInt16, 5))           # level is a point of unit2
+    command("DCMD", "unit1", Metric("pump", T.Boolean, True))
     command("DCMD", "unit2", Metric("level", T.UInt16, 7))
     command("DCMD", "unit9", Metric("level", T.UInt16, 9))   # no such device
     command("NCMD", None, Metric("pump", T.Boolean, True))   # points are written with a DCMD
     assert writes == [("pump", True), ("level", 7)], writes
-    assert sum("ignored (not a writable point)" in line for line in logs) == 2, logs
+    assert "Sparkplug DCMD for unit1/'valve', unit1/'level' ignored (not writable points)" \
+        in logs, logs   # one line for the command
+    assert "Sparkplug DCMD for an unknown device 'unit9' ignored" in logs, logs
+    assert "Sparkplug NCMD for 'pump' ignored (points are written with a DCMD to their " \
+        "device)" in logs, logs
     for value, datatype in ((1, T.Int32), ("true", T.String), (False, T.Boolean)):
         command("NCMD", None, Metric(sparkplug.REBIRTH, datatype, value))
     assert births == [], "a rebirth needs a Boolean true"
@@ -514,6 +523,100 @@ def test_node_commands():
         max(logs, key=len)[:120]
     print("edge node: DCMD writes only its device's writable points, NCMD never writes, "
           "rebirth only on Boolean true, long names logged short  OK")
+
+
+def test_command_limits():
+    """What bounds a command: a DCMD can't have more metrics than its device has points
+    (decoding stops at the one too many), an NCMD more than NCMD_MAX_METRICS, neither more
+    than CMD_MAX_BYTES; one NCMD rebirths once; the log says what a command leaves out in
+    one line, at most once a minute for one kind and device."""
+    from app.engine import sparkplug_node
+    node, command, writes, logs, births = edge_node()
+    # unit1 has two points: three metrics are refused, the first two not written either
+    command("DCMD", "unit1", Metric("pump", T.Boolean, True), Metric("pump", T.Boolean, False),
+            Metric("pump", T.Boolean, True))
+    assert writes == [] and logs == ["Sparkplug DCMD for unit1 ignored: more than 2 "
+                                     "metric(s)"], logs
+    # a coil switched on and off in one command is switched twice, in that order
+    command("DCMD", "unit1", Metric("pump", T.Boolean, True), Metric("pump", T.Boolean, False))
+    assert writes == [("pump", True), ("pump", False)], writes
+    writes.clear()
+    logs.clear()
+    big = Metric("level", T.String, "x" * sparkplug_node.CMD_MAX_BYTES)
+    topic = sparkplug.topic(node.group, "DCMD", node.node, "unit2")
+    node.on_device_command(topic, sparkplug.encode_payload(Payload(0, [big], None)))
+    assert writes == [] and len(logs) == 1 and logs[0].startswith(
+        "Sparkplug DCMD for unit2 ignored: ") and "more than the 262144 a command may have" \
+        in logs[0], logs
+    logs.clear()
+    many = [Metric(sparkplug.REBIRTH, T.Boolean, True)] * sparkplug_node.NCMD_MAX_METRICS
+    command("NCMD", None, *many)
+    assert births == [1], "one NCMD rebirths once"
+    command("NCMD", None, *(many + many[:1]))
+    assert births == [1] and logs[-1] == ("Sparkplug NCMD for the node ignored: more than "
+                                          f"{sparkplug_node.NCMD_MAX_METRICS} metric(s)"), logs
+    # what a command leaves out: one line, then at most once a minute (counted meanwhile)
+    logs.clear()
+    for _ in range(50):
+        command("DCMD", "unit1", Metric("valve", T.Boolean, True), Metric("pump", T.Boolean,
+                                                                         None, is_null=True))
+    assert logs == ["Sparkplug DCMD for unit1/'valve' ignored (not a writable point)",
+                    "Sparkplug DCMD for unit1/'pump' ignored: null, no value to write"], logs
+    node._notes = {k: (v[0] - sparkplug_node.NOTE_EVERY_S, v[1]) for k, v in node._notes.items()}
+    command("DCMD", "unit1", Metric("valve", T.Boolean, True))
+    assert logs[-1] == ("Sparkplug DCMD for unit1/'valve' ignored (not a writable point) "
+                        "(and 49 more since the last such line)"), logs
+    assert writes == [], writes
+    print("edge node: a DCMD with more metrics than its device's points, an NCMD with more "
+          "than 64, a command over 256 KiB: ignored; one rebirth per NCMD; what a command "
+          "leaves out logged once (a minute)  OK")
+
+
+def test_rebirth_spacing():
+    """A rebirth asked for sooner than REBIRTH_EVERY_S after the last births goes out once,
+    when that time is up, for all the requests that came meanwhile; one asked for later
+    goes out at once. Births for another reason (a reconnect) answer a pending request."""
+    from app.engine import sparkplug_node
+    node, command, _writes, logs, _births = edge_node()
+    del node.birth                            # the real births, to a recording publisher
+    sent = []
+    class Pub:
+        def publish_raw(self, topic, payload, qos=None):
+            sent.append(topic)
+
+        async def aclose(self, final=None):
+            pass
+    node._pub = Pub()
+    nbirth = sparkplug.topic(node.group, "NBIRTH", node.node)
+    rebirth = Metric(sparkplug.REBIRTH, T.Boolean, True)
+    saved, sparkplug_node.REBIRTH_EVERY_S = sparkplug_node.REBIRTH_EVERY_S, 0.3
+
+    async def run():
+        node.birth()                          # the births after a connect
+        for _ in range(5):
+            command("NCMD", None, rebirth)
+        assert sent.count(nbirth) == 1, "a rebirth right after the births went out at once"
+        await asyncio.sleep(0.4)
+        assert sent.count(nbirth) == 2, sent.count(nbirth)
+        await asyncio.sleep(0.4)
+        command("NCMD", None, rebirth)        # long enough after: at once
+        assert sent.count(nbirth) == 3
+        command("NCMD", None, rebirth)        # due later, but a reconnect's births come first
+        node.birth()
+        await asyncio.sleep(0.4)
+        assert sent.count(nbirth) == 4, sent.count(nbirth)
+        node.birth()
+        command("NCMD", None, rebirth)        # due later; the mapping stops first
+        await node.aclose()
+        await asyncio.sleep(0.4)
+        assert sent.count(nbirth) == 5, sent.count(nbirth)
+    try:
+        asyncio.run(run())
+    finally:
+        sparkplug_node.REBIRTH_EVERY_S = saved
+    assert sum("births go out in" in m for m in logs) == 3, logs
+    print("edge node: a rebirth asked for again too soon goes out once, later; other births "
+          "answer it; none after close  OK")
 
 
 def test_node_read_only():
@@ -545,6 +648,8 @@ def main():
     test_datatype_for_modbus_values()
     test_edge_node_message_flow()
     test_node_commands()
+    test_command_limits()
+    test_rebirth_spacing()
     test_node_read_only()
     print("\nPASS: Sparkplug B payload codec + edge node commands")
 

@@ -21,8 +21,13 @@ metrics are that unit's poll points:
   * DCMD: a metric named like a writable point of that device is written to the bus
     (through the gateway's write_point), unless the mapping is read-only (then the
     command is logged and refused); NCMD: "Node Control/Rebirth" = true
-    republishes NBIRTH and the DBIRTHs. Commands are never retained (Sparkplug 3.0), so
-    a retained NCMD / DCMD the broker replays on subscribe is dropped (MqttPublisher);
+    republishes NBIRTH and the DBIRTHs, at most once every REBIRTH_EVERY_S (a request
+    that comes sooner is carried out then). Commands are never retained (Sparkplug 3.0), so
+    a retained NCMD / DCMD the broker replays on subscribe is dropped (MqttPublisher). A
+    command larger than CMD_MAX_BYTES, a DCMD with more metrics than its device has
+    points and an NCMD with more than NCMD_MAX_METRICS are ignored before they are
+    decoded further; what a command leaves out (metrics that are not writable points of
+    the device, nulls) is logged in one line per command, at most once a minute per kind;
   * stopping the mapping publishes NDEATH before disconnecting (a host then takes the
     node's devices offline too);
   * with a primary host (mqtt.sparkplug_primary_host_id), the node also subscribes to
@@ -57,6 +62,19 @@ from .mqtt_pub import MqttPublisher, shown
 
 INT64 = sparkplug.DataType.Int64  # the bdSeq metric's datatype (Sparkplug 3.0)
 BOOLEAN = sparkplug.DataType.Boolean
+
+# Inbound commands: a larger NCMD / DCMD is ignored unread (a generous backstop: what bounds
+# a command is its metric count, see on_device_command), and so is an NCMD with more
+# metrics than this (the node has only its Node Control metrics).
+CMD_MAX_BYTES = 256 * 1024
+NCMD_MAX_METRICS = 64
+# A rebirth request that comes sooner than this after the last births is carried out then
+# (once, for all such requests), not at once: a host asking again and again can't make the
+# node publish its births back to back.
+REBIRTH_EVERY_S = 2.0
+# Log lines about the commands that come in: at most one per this many seconds per kind and
+# device; the ones in between are counted into the next.
+NOTE_EVERY_S = 60.0
 
 
 # {"<group>/<node>": the bdSeq of that edge node's last session}, in the data folder
@@ -158,6 +176,9 @@ class SparkplugNode:
         self._host_stamp: Optional[int] = None  # timestamp of the newest 3.0 STATE taken
         self._waiting_said = False   # "waiting for the primary host" logged this session
         self._restart: Optional[asyncio.Task] = None  # NDEATH + a new session, under way
+        self._last_birth = 0.0       # time.monotonic() of the last births
+        self._rebirth: Optional[asyncio.TimerHandle] = None  # a rebirth due (REBIRTH_EVERY_S)
+        self._notes: dict[str, tuple[float, int]] = {}  # see _note
 
     def topic(self, kind: str, device: str | None = None) -> str:
         return sparkplug.topic(self.group, kind, self.node, device)
@@ -262,6 +283,10 @@ class SparkplugNode:
                 self._log(f"Sparkplug: waiting for primary host {self.primary_host!r} to be "
                           f"online ({sparkplug.state_topic(self.primary_host)}) before NBIRTH")
             return
+        if self._rebirth is not None:  # these births answer it
+            self._rebirth.cancel()
+            self._rebirth = None
+        self._last_birth = time.monotonic()
         self.seq = 0
         self._publish(self.topic("NBIRTH"), [
             sparkplug.Metric(name=sparkplug.BDSEQ, datatype=INT64, value=self.bdseq),
@@ -333,26 +358,61 @@ class SparkplugNode:
                 self.seq = sparkplug.next_seq(self.seq)
                 self._publish(self.topic("DDATA", dev), metrics)
 
-    def _decode(self, kind: str, payload: bytes):
+    def _note(self, key: str, message: str) -> None:
+        """Log a line about an inbound command at most once per NOTE_EVERY_S for one
+        ``key`` (kind and device): a host that keeps sending such commands, or a flood of
+        them, must not flood the log."""
+        now = time.monotonic()
+        last, held = self._notes.get(key, (None, 0))
+        if last is not None and now - last < NOTE_EVERY_S:
+            self._notes[key] = (last, held + 1)
+            return
+        self._notes[key] = (now, 0)
+        self._log(message + (f" (and {held} more since the last such line)" if held else ""))
+
+    def _decode(self, kind: str, where: str, payload: bytes, max_metrics: int):
+        """A command's payload, or None (logged) if it is too large or can't be used."""
+        if len(payload) > CMD_MAX_BYTES:
+            self._note(f"{kind} size {where}", f"Sparkplug {kind} for {where} ignored: "
+                       f"{len(payload)} bytes, more than the {CMD_MAX_BYTES} a command may "
+                       "have")
+            return None
         try:
-            return sparkplug.decode_payload(payload)
+            return sparkplug.decode_payload(payload, max_metrics=max_metrics)
         except ValueError as e:
-            self._log(f"Sparkplug {kind} ignored: {e}")
+            self._note(f"{kind} bad {where}", f"Sparkplug {kind} for {where} ignored: {e}")
             return None
 
     def on_node_command(self, topic: str, payload: bytes) -> None:
         """NCMD: "Node Control/Rebirth" is the node's only metric; points are written
-        with a DCMD to their device."""
-        cmd = self._decode("NCMD", payload)
+        with a DCMD to their device. One NCMD gives one rebirth at most."""
+        cmd = self._decode("NCMD", "the node", payload, NCMD_MAX_METRICS)
         if cmd is None:
             return
-        for m in cmd.metrics:
-            if m.name != sparkplug.REBIRTH:
-                self._log(f"Sparkplug NCMD for {shown(m.name)} ignored (points are written with "
-                          "a DCMD to their device)")
-            elif m.value is True:  # a Boolean true, not just any truthy value
-                self._log("Sparkplug rebirth requested")
-                self.birth()
+        others = [m.name for m in cmd.metrics if m.name != sparkplug.REBIRTH]
+        if others:
+            self._note("NCMD ignored", f"Sparkplug NCMD for {_listed(None, others)} ignored "
+                       "(points are written with a DCMD to their device)")
+        # a Boolean true, not just any truthy value
+        if any(m.name == sparkplug.REBIRTH and m.value is True for m in cmd.metrics):
+            self._rebirth_requested()
+
+    def _rebirth_requested(self) -> None:
+        """A host asks for the births: now, or REBIRTH_EVERY_S after the last ones (once
+        for all the requests that come until then)."""
+        wait = self._last_birth + REBIRTH_EVERY_S - time.monotonic()
+        if wait <= 0:
+            self._log("Sparkplug rebirth requested")
+            self.birth()
+        elif self._rebirth is None:
+            self._log(f"Sparkplug rebirth requested; the births go out in {wait:.1f} s (at "
+                      f"most one rebirth every {REBIRTH_EVERY_S:g} s)")
+            self._rebirth = asyncio.get_running_loop().call_later(wait, self._rebirth_due)
+
+    def _rebirth_due(self) -> None:
+        self._rebirth = None
+        if self._pub is not None:
+            self.birth()
 
     def on_host_state(self, topic: str, payload: bytes) -> None:
         """The primary host's STATE: online -> births (if not born yet in this session);
@@ -409,25 +469,29 @@ class SparkplugNode:
         return online
 
     def on_device_command(self, topic: str, payload: bytes) -> None:
+        """DCMD: each metric that is a writable point of the device is written, in the
+        order they come (a coil switched on and off again is switched twice); a DCMD can't
+        have more metrics than its device has points."""
         dev = topic.rsplit("/", 1)[-1]
         names = self.devices.get(dev)
         if names is None:
-            self._log(f"Sparkplug DCMD for an unknown device {dev!r} ignored")
+            self._note("DCMD unknown", f"Sparkplug DCMD for an unknown device {shown(dev)} "
+                       "ignored")
             return
-        cmd = self._decode("DCMD", payload)
+        cmd = self._decode("DCMD", dev, payload, len(names))
         if cmd is None:
             return
+        ignored, nulls, refused = [], [], []
         for m in cmd.metrics:
             point = self.points.get(m.name) if m.name in names else None
             if point is None or not point.writable:
-                self._log(f"Sparkplug DCMD for {dev}/{shown(m.name)} ignored (not a writable "
-                          "point)")
+                ignored.append(m.name)
                 continue
             if m.is_null:
+                nulls.append(m.name)
                 continue
             if self.mapping.network.read_only:  # checked per command, not at subscribe time
-                self._log(f"Sparkplug DCMD for {dev}/{shown(m.name)} refused: the mapping is "
-                          "read-only")
+                refused.append(m.name)
                 continue
             value = m.value
             # Sparkplug 3.0 lets a host leave the datatype off a command; the value then
@@ -436,8 +500,18 @@ class SparkplugNode:
                     and point.dtype in ("int16", "int32") and value > 0x7FFFFFFF):
                 value -= 1 << 32
             self._write(point, value)
+        if ignored:
+            self._note(f"DCMD ignored {dev}", f"Sparkplug DCMD for {_listed(dev, ignored)} "
+                       f"ignored (not {'a writable point' if len(ignored) == 1 else 'writable points'})")
+        if nulls:
+            self._note(f"DCMD null {dev}", f"Sparkplug DCMD for {_listed(dev, nulls)} "
+                       "ignored: null, no value to write")
+        if refused:
+            self._note(f"DCMD read-only {dev}", f"Sparkplug DCMD for {_listed(dev, refused)} "
+                       "refused: the mapping is read-only")
 
     def close(self) -> None:
+        self._cancel_rebirth()
         if self._restart is not None:  # its new session must not outlive the mapping
             self._restart.cancel()
         if self._pub is not None:
@@ -446,8 +520,22 @@ class SparkplugNode:
 
     async def aclose(self) -> None:
         """close() without holding up the event loop (MqttPublisher.aclose)."""
+        self._cancel_rebirth()
         if self._restart is not None:  # its new session must not outlive the mapping
             self._restart.cancel()
         pub, self._pub = self._pub, None
         if pub is not None:
             await pub.aclose(final=self._ndeath())
+
+    def _cancel_rebirth(self) -> None:
+        if self._rebirth is not None:
+            self._rebirth.cancel()
+            self._rebirth = None
+
+
+def _listed(dev: Optional[str], names: list) -> str:
+    """Metric names (as they came, cut short) for a log line: the first three, then how
+    many more."""
+    shown_ = [f"{dev}/{shown(n)}" if dev else shown(n) for n in names[:3]]
+    more = f" and {len(names) - 3} more" if len(names) > 3 else ""
+    return ", ".join(shown_) + more

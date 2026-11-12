@@ -140,7 +140,13 @@ düzenlemeye gerek yok.
   tek tek yapılır ve hatta poll ile Modbus/TCP master'larıyla sırayla erişir;
   `.../set/result` cevapları da bu sırayı korur. Hat için en çok 32 yazma bekler: fazlası
   `error: busy` alır, sırası gelene kadar 10 sn'den uzun bekleyen bir yazma yapılmaz
-  (`error: expired`). Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
+  (`error: expired`). 64 KiB'tan büyük bir `/set` `error: too large: …` alır; 256 KiB'tan
+  büyük bir Sparkplug NCMD/DCMD, cihazının nokta sayısından çok metrik taşıyan bir DCMD ve
+  64'ten çok metrikli bir NCMD yok sayılır; bir komutun dışarıda bıraktıkları (cihazın
+  yazılabilir noktası olmayan metrikler, null'lar) tek satırda, en çok dakikada bir
+  loglanır. Son birth'lerden sonraki 2 sn içinde istenen bir rebirth bu süre dolunca
+  gönderilir. Broker'ın kendi sınırları (Mosquitto `message_size_limit`) ve ACL'ler ilk
+  savunma olmaya devam eder. Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
   içe aktarma da) MQTT bağlantısı kapanmadan önce her yazmayı cevaplar: hattaki yazma
   bitebilir (en çok 2 sn; bitmezse `error: cancelled: mapping stopped (sent, outcome
   unknown)` ya da `(not sent)`), bekleyenler `error: cancelled: mapping stopped`, bu

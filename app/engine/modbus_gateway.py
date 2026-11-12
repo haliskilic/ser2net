@@ -87,6 +87,8 @@ WRITE_QUEUE_MAX = 32
 # A write that waited this long for its turn is not written any more (expired): the bus is
 # too slow for the commands coming in, and whoever sent it has likely given up on it.
 WRITE_EXPIRE_S = 10.0
+# A plain /set larger than this is refused unread (a backstop: a value is a few bytes).
+SET_MAX_BYTES = 64 * 1024
 # stop(): the write on the bus gets this long at most (and no longer than its reply can
 # take) to finish before it is cancelled; the ones still waiting are answered at once.
 WRITE_STOP_WAIT_S = 2.0
@@ -718,6 +720,12 @@ class ModbusGatewayRunner:
             self._note("write read-only", point.unit,
                        f"write '{point.name}' from MQTT refused: the mapping is read-only")
             self._write_soon(point, None, answer, refused="mapping is read-only")
+            return
+        if len(payload) > SET_MAX_BYTES:
+            too_large = f"too large: {len(payload)} bytes (at most {SET_MAX_BYTES})"
+            self._note("write too large", point.unit, f"write '{point.name}' from MQTT "
+                       f"refused: {too_large}")
+            self._write_soon(point, None, answer, refused=too_large)
             return
         try:
             value = parse_write_payload(payload, point)

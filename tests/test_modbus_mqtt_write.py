@@ -362,10 +362,13 @@ async def test_plain_one_point(slave_port):
         print("plain: a point is found by its exact topic; a read-only point is never written  OK")
 
         # a register takes one number of its own type, nothing else
-        for bad in (b"[1, 2]", b"1_000", b"nan", b"inf", b"0b11", b"1 2", b"true", b"9" * 100000):
+        for bad in (b"[1, 2]", b"1_000", b"nan", b"inf", b"0b11", b"1 2", b"true", b"9" * 1000):
             res = await answer_of("setpoint", bad)
             assert res.startswith(b"error: not a number"), (bad[:20], res)
             assert len(res) < 120, len(res)
+        # larger than SET_MAX_BYTES: refused before it is read
+        assert await answer_of("setpoint", b"9" * (64 * 1024 + 1)) == \
+            b"error: too large: 65537 bytes (at most 65536)"
         assert (await answer_of("setpoint", b"1e400")).startswith(b"error: value must be a finite")
         for text, raw in ((b"0x10", 16), (b"010", 10), (b"+7", 7), (b"-0x2", 0xFFFE), (b"12.6", 13)):
             assert await answer_of("setpoint", text) == b"ok", text
@@ -656,8 +659,13 @@ async def test_sparkplug(slave_port):
         assert again == births, "a rebirth needs a Boolean true"
         writes(t("NCMD"), sparkplug.Metric(name="Node Control/Rebirth",
                                            datatype=sparkplug.DataType.Boolean, value=True))
-        again = len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")), len(decoded("DBIRTH", "unit2"))
-        assert again == tuple(n + 1 for n in births), (births, again)
+
+        def counts():
+            return (len(decoded("NBIRTH")), len(decoded("DBIRTH", "unit1")),
+                    len(decoded("DBIRTH", "unit2")))
+        # (at once, or REBIRTH_EVERY_S after the connect's births)
+        assert await wait(lambda: counts() == tuple(n + 1 for n in births), t=5), \
+            (births, counts())
         assert {m.name: m.value for m in decoded("DBIRTH", "unit2")[-1].metrics} == {"level": 42}
         print("sparkplug: DDATA by exception per device (seq on), DCMD write -> FC6 only to its "
               "device, rebirth -> NBIRTH + DBIRTHs with the last values  OK")
