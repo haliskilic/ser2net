@@ -413,6 +413,16 @@ the login page. Behind a reverse proxy, the proxy must pass the original name in
 and managed after signing in, and open consoles are closed when access is revoked or the
 role changes. While it is on, the UI shows a warning and startup logs it.
 
+**Requests from other sites:** a change (any POST, PUT, PATCH or DELETE of the web UI) is
+refused with 403 when the browser says a page of another site sent it: `Sec-Fetch-Site`
+other than `same-origin`, or an `Origin` that isn't the address the UI was reached by —
+another port of the same host and a sibling subdomain count as other sites. This comes on
+top of the CSRF token, which is new after every sign-in and sign-out and lasts as long as
+the session. Behind a reverse proxy, the proxy must pass the address the browser uses as
+`Host` or `X-Forwarded-Host`, port included (all.log names the refused `Origin` and the
+address the UI saw). Scripts that send no `Origin` header, the REST API and cluster peers
+are not affected.
+
 **Passwords** of local accounts are stored as scrypt hashes (N=2^14, r=8, p=5, OWASP's
 minimum; the hash names its cost, so the cost can be raised later). A hash made by 2.8.1 or
 older keeps working and is renewed with today's cost at that account's next sign-in (its

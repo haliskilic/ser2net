@@ -18,6 +18,9 @@ made from another site:
            header  the X-CSRF-Token header, checked by GuardMiddleware for /api/
            origin  a WebSocket: a browser's Origin must be this server
            none    nothing to forge (GET, or authenticated by a key or token)
+         Besides, GuardMiddleware refuses every state-changing request that the browser
+         says a page of another site made (Sec-Fetch-Site / Origin), before the token is
+         looked at; the cluster peer routes and the REST API are not browser routes.
 
 The test fails when
   * the app registers a route ROUTES doesn't classify, or ROUTES names one that is gone
@@ -165,6 +168,9 @@ WRITE_METHODS = ("POST", "PUT", "DELETE", "PATCH")
 
 ROLE_DENIED = "Forbidden: requires the {0} role."
 CSRF_DENIED = "CSRF validation failed. Reload the page."
+CROSS_SITE_DENIED = ("Refused: this request was sent by a page of another web site. If you used "
+                     "ser2net’s own page, its address must reach ser2net unchanged (behind a "
+                     "reverse proxy: as Host or X-Forwarded-Host).")
 PEER_DENIED = "Sign in to manage other cluster nodes."
 DENIALS = {ROLE_DENIED.format("operator"), ROLE_DENIED.format("admin"), CSRF_DENIED, PEER_DENIED}
 
@@ -463,6 +469,20 @@ def _live(srv) -> None:
     assert st == 403 and body.strip() == CSRF_DENIED, "a CSRF header must match the cookie"
     print(f"sessions: {len(routes)} routes x (no session, viewer, operator, admin) answer as the "
           "matrix says; a form a role may post is refused without its CSRF token  OK")
+
+    # ---- a page of another site: every state-changing browser route refuses it ----
+    writes = [(m, p) for (m, p), (a, _c) in ROUTES.items() if m in WRITE_METHODS
+              and a not in (CLUSTER_KEY, TOKEN_PUBLIC, TOKEN_READ, TOKEN_WRITE)]
+    for method, path in writes:
+        for who in (anon, admin):
+            for headers in ({"Origin": "http://attacker.example"},
+                            {"Origin": base.replace(str(srv.port), str(srv.port + 1))},
+                            {"Sec-Fetch-Site": "cross-site", "Origin": base}):
+                st, _, body = who.send(method, probe_path(method, path), headers=headers)
+                assert st == 403 and body.strip() == CROSS_SITE_DENIED, \
+                    f"{who.name}: {method} {path} {headers} -> {st} {body[:120]!r}"
+    print(f"cross-site: all {len(writes)} state-changing browser routes refuse a request a page "
+          "of another site made, with a valid CSRF token too  OK")
 
     # ---- public routes and first-run setup (the gate's side: test_inventory) ----
     for (method, path), (access, csrf) in ROUTES.items():

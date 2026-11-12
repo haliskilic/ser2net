@@ -50,7 +50,10 @@ this goes back to a strict `style-src` once a vendored xterm.js no longer needs 
 runs with `eval`, `<script>` elements in fragments and its injected indicator styles off.
 Every response but the static files is sent with `Cache-Control: no-store`, so pages that
 show a secret (a new API token or cluster key, the mapping form, a backup or the export)
-are kept neither in the browser's cache nor for its Back button.
+are kept neither in the browser's cache nor for its Back button. A change the browser
+says a page of another site sent (`Sec-Fetch-Site`, `Origin`; another port of the same host
+counts) is refused before its CSRF token is looked at, and the token is renewed at every
+sign-in and sign-out.
 
 ## Türkçe
 
@@ -102,4 +105,6 @@ dönülecek. htmx'te `eval`, parçalardaki `<script>` öğeleri ve kendi ekledi�
 stilleri kapalıdır. Statik dosyalar dışındaki her yanıt `Cache-Control: no-store` ile
 gönderilir; böylece gizli bir değer gösteren sayfalar (yeni API token'ı ya da cluster
 anahtarı, eşleme formu, bir yedek ya da dışa aktarma) ne tarayıcının önbelleğinde ne de
-Geri tuşu için saklanır.
+Geri tuşu için saklanır. Tarayıcının başka bir sitenin sayfasından geldiğini söylediği bir
+değişiklik (`Sec-Fetch-Site`, `Origin`; aynı host'un başka bir portu da sayılır) CSRF
+token'ına bakılmadan reddedilir; token her giriş ve çıkışta yenilenir.

@@ -3,7 +3,8 @@
 The admin UI is network-exposed by design, so it is password-protected by default:
   - scrypt password hashing (no extra dependency),
   - a stateless HMAC-signed session cookie (secret from AppConfig.secret_key),
-  - double-submit-cookie CSRF protection on every state-changing request,
+  - double-submit-cookie CSRF protection on every state-changing request, which the
+    browser must not say a page of another site made (cross_site),
   - a simple in-memory per-IP login rate limiter to blunt brute force, and a cap on
     how many password checks (and directory sign-ins) run at once (SlowWork).
 
@@ -385,6 +386,54 @@ def claims_own_host(headers) -> bool:
 def foreign_host(headers) -> str:
     """The first claimed host name that is not this machine ('' if there is none)."""
     return next((h for h in _claimed_hosts(headers) if not is_own_host(h)), "")
+
+
+# --------------------------------------------------------------------------
+# requests that a page of another site makes the browser send
+# --------------------------------------------------------------------------
+SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
+def _host_port(netloc: str, scheme: str) -> tuple[str, str] | None:
+    """('host', 'port') of a Host-style 'host[:port]' (IPv6 in brackets), lower-cased, the
+    port of `scheme` when none is given; None when it is not such a value."""
+    n = netloc.strip().lower()
+    if n.startswith("["):
+        end = n.find("]")
+        host, rest = (n[:end + 1], n[end + 1:]) if end > 0 else ("", "")
+    elif n.count(":") == 1:
+        host, rest = n.split(":")[0], n[n.find(":"):]
+    else:
+        host, rest = ("", "") if ":" in n else (n, "")
+    if not host or (rest and not (rest[0] == ":" and rest[1:].isascii() and rest[1:].isdigit())):
+        return None
+    return host, str(int(rest[1:])) if rest else _DEFAULT_PORTS.get(scheme, "")
+
+
+def cross_site(headers) -> str:
+    """Why the browser says a request was made by a page of another site, or '' when it
+    doesn't. Sec-Fetch-Site (sent to HTTPS and localhost) must be same-origin or none;
+    without it, an Origin must be one of the hosts the request claims (Host, and
+    X-Forwarded-Host / Forwarded host= from a reverse proxy, which a page can't set),
+    port included: another port of the same host or a sibling subdomain is another site,
+    and its pages can put a CSRF cookie of their own into the browser. A request with
+    neither header (a script, a very old browser) is left to the CSRF token. The model of
+    Go's net/http CrossOriginProtection."""
+    site = (headers.get("sec-fetch-site") or "").strip().lower()
+    if site:
+        return "" if site in ("same-origin", "none") else f"Sec-Fetch-Site {site!r}"
+    origin = headers.get("origin")
+    if origin is None:
+        return ""
+    scheme, sep, netloc = origin.strip().partition("://")
+    scheme = scheme.lower()
+    ours = _host_port(netloc, scheme) if sep and scheme in _DEFAULT_PORTS else None
+    claimed = _claimed_hosts(headers)
+    if ours is not None and any(_host_port(h, scheme) == ours for h in claimed):
+        return ""
+    return (f"Origin {origin[:200]!r}; this UI was addressed as "
+            + ", ".join(repr(h[:100]) for h in claimed))
 
 
 def anonymous_user(cfg, headers):
