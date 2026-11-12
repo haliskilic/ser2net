@@ -6,6 +6,22 @@ release tag). The published image is the very build the release smoke-tested on 
 architectures (same digest); its tags `:X.Y.Z`, `:X.Y` and `:latest` are added only after
 that. A pre-release (`X.Y.Z-rc.N`) gets only its own tag, never `:X.Y` or `:latest`.
 
+**Between releases** the image is kept current. Every Monday
+`.github/workflows/image-refresh.yml` scans `:latest` for known vulnerabilities (the HIGH and
+CRITICAL ones with a fix go to the repository's code scanning) and checks whether the base
+image (`python:3.12-slim-trixie`: CPython 3.12 on Debian 13) has moved since `:latest` was
+built. If it has, it rebuilds the latest release from its tag on the new base — the same
+ser2net code and the same hash-locked Python packages — smoke-tests it natively on both
+architectures and moves `:X.Y` and `:latest` to it. `:X.Y.Z` always stays the image its
+release published. So `:latest` / `:X.Y` get Debian, OpenSSL and CPython 3.12.x fixes within
+a week; an auto-updater (Watchtower and the like) restarts the container when that happens.
+Use `:X.Y.Z` (or a digest) to change only when you decide to. The base is a Debian codename
+tag, so a refresh never switches to a new Debian major release; only a ser2net release does.
+Each image records its base:
+`docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' ghcr.io/haliskilic/ser2net:latest`.
+Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest -R haliskilic/ser2net`
+(a release's image is attested by `release.yml`, a refreshed one by `image-refresh.yml`).
+
 ## Quick start (compose)
 
 1. Edit `docker-compose.yml` → `devices:` to list your serial port(s). Prefer a

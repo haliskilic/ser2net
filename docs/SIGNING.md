@@ -93,3 +93,7 @@ setting `WINDOWS_SIGNING` = `azure`, or keep the secret short-lived.
   `gh attestation verify ser2net-windows-x64.exe -R haliskilic/ser2net`; add
   `--signer-workflow haliskilic/ser2net/.github/workflows/release.yml` to also require
   that the release workflow made it (only its tag runs attest anything)
+- The Docker image: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:X.Y.Z -R haliskilic/ser2net`.
+  `:X.Y` and `:latest` may point at a weekly rebuild of the latest release on a newer base
+  image (docs/DOCKER.md), attested by `.github/workflows/image-refresh.yml` instead of
+  `release.yml`

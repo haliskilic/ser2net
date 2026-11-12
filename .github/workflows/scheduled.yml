@@ -2,10 +2,11 @@ name: Scheduled
 
 # Between pull requests: every day the dependency audit (audit.yml), so a new advisory
 # against a pin the binaries and the image ship is reported within a day, not at the next
-# pull request or release; on Mondays the Docker image (docker.yml), built from the
-# current python:3.12-slim and smoke-tested on amd64 and arm64, so a change of the
-# floating base image shows before the next release. A workflow of its own: it never
-# shares (or cancels) ci.yml's concurrency group.
+# pull request or release; on Mondays the Docker image (docker.yml), built from main on the
+# current python:3.12-slim-<codename> and smoke-tested on amd64 and arm64, so a change of
+# the base image shows before the next release (image-refresh.yml rebuilds the published
+# image then). A workflow of its own: it never shares (or cancels) ci.yml's concurrency
+# group.
 # GitHub turns scheduled workflows off after 60 days without activity in the repository;
 # Actions -> Scheduled -> "Enable workflow" turns it back on.
 on:

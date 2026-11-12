@@ -36,7 +36,8 @@ The `ci-ok` job passes only when every other CI job passed (the not-required new
 leg aside); it is the check a merge waits for, so a new job in `ci.yml` goes into its
 `needs` (`tests/test_ci_gate.py` checks that). Between pull requests,
 `.github/workflows/scheduled.yml` re-runs the dependency audit daily and the Docker image
-build weekly. Every action in the workflows is pinned to a full commit SHA with its version
+build weekly, and `.github/workflows/image-refresh.yml` scans the published image weekly and
+rebuilds the latest release on a moved base image (`docs/DOCKER.md`). Every action in the workflows is pinned to a full commit SHA with its version
 in a comment (`uses: actions/checkout@<sha>  # v7.0.1`); Dependabot updates both, and zizmor
 and `tests/test_release_pipeline.py` fail on a tag reference.
 
@@ -156,7 +157,8 @@ workflow denetimi (`zizmor`).
 hariç); birleştirme onu bekler, bu yüzden `ci.yml`'ye eklenen her iş onun `needs` listesine
 de girer (`tests/test_ci_gate.py` bunu denetler). Pull request'ler arasında
 `.github/workflows/scheduled.yml` bağımlılık denetimini her gün, Docker imajını her hafta
-yeniden çalıştırır. Workflow'lardaki her action, sürümü bir yorumda olacak şekilde tam bir
+yeniden çalıştırır; `.github/workflows/image-refresh.yml` yayımlanan imajı her hafta tarar ve
+taban imaj değiştiyse son sürümü yeniden derler (`docs/DOCKER.md`). Workflow'lardaki her action, sürümü bir yorumda olacak şekilde tam bir
 commit SHA'sına sabitlenir (`uses: actions/checkout@<sha>  # v7.0.1`); ikisini de
 Dependabot günceller, tag ile verilen bir referansta zizmor ve
 `tests/test_release_pipeline.py` başarısız olur.

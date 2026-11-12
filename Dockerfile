@@ -2,7 +2,13 @@
 # Build:  docker build -t ser2net .
 # Run:    docker compose up -d (docker-compose.yml), or the `docker run` command in
 #         docs/DOCKER.md: restart policy, mapping ports, serial devices, log limits.
-FROM python:3.12-slim
+# The base: CPython 3.12 on Debian 13 "trixie" (what python:3.12-slim points at today). The
+# codename keeps a rebuild on Debian point releases and 3.12.x patches, never a new Debian
+# major under an existing version tag. Releases and the weekly refresh
+# (.github/workflows/image-refresh.yml) build FROM this tag resolved to a digest, and
+# record it in the label org.opencontainers.image.base.digest (docs/DOCKER.md).
+ARG BASE_IMAGE=python:3.12-slim-trixie
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
