@@ -440,7 +440,7 @@ def test_through_proxy(srv, proxied: Proxy, stripping: Proxy) -> None:
             "Origin": public, "Content-Type": "application/x-www-form-urlencoded"},
         data=urllib.parse.urlencode({"_csrf": csrf, "require_login": "on",
                                      "anonymous_role": "viewer"}).encode()))
-    assert st == 200, st
+    assert st in (200, 303), st   # (done: the page, after its redirect under the path)
     time.sleep(0.2)
     log = srv.output()
     assert f"AUDIT {Proxy.CLIENT} web_access login-required by admin" in log, log[-1500:]

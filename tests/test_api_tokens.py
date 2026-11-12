@@ -155,7 +155,7 @@ def test_tokens():
                              ({"name": "x", "role": "viewer", "expires_days": "9999"}, "Enter 0"),
                              ({"name": "x", "role": "viewer", "expires_days": "1.5"}, "Enter 0")):
             st, _, page = admin.post("/settings/api-tokens", fields)
-            assert st == 200 and want in page and "s2n_" not in page, (fields, want)
+            assert st == 400 and want in page and "s2n_" not in page, (fields, want)
         assert srv.saved_config() == before
         print("settings: a bad or taken name, another role, a bad expiry are refused  OK")
 

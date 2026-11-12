@@ -87,7 +87,7 @@ def main():
             urllib.request.build_opener(NoRedirect).open(req, timeout=10)
             raise AssertionError("/metrics answered without a session")
         except urllib.error.HTTPError as e:
-            assert e.code == 303 and e.headers["Location"] == "/login", e.code
+            assert e.code == 303 and e.headers["Location"] == "/login?next=%2Fmetrics", e.code
         print("metrics: /api/v1/metrics with the API token; no token -> 401; /metrics still "
               "needs a session  OK")
 

@@ -158,7 +158,7 @@ def test_settings_and_live_server():
         assert ("GET", "/api/status", "401") in lines, lines
         assert ("GET", "/settings", "200") not in lines, lines
         assert ("GET", "/settings/backups/config-20000101T000000Z.json", "404") in lines, lines
-        assert ("POST", "/settings/node-name", "200") in lines, lines
+        assert ("POST", "/settings/node-name", "303") in lines, lines
         b.post("/settings/request-log", {"request_log": "off"})
         mark = len(_all_log(srv))
         b.post("/settings/node-name", {"node_name": "line-2"})
