@@ -338,6 +338,7 @@
 <section class="panel panel-narrow" id="notifications">
   <div class="panel-head"><h2>{{ _("Notifications") }}</h2></div>
   <p class="muted mb-sm">{{ _("Get a message when something needs attention — to a chat (Slack, Microsoft Teams, Discord, Telegram, or any service that accepts a JSON webhook) and/or by e-mail. The same event for the same mapping is sent at most once per repeat interval.") }}</p>
+  <p class="muted mb-sm">{{ _("Messages go to the service you set here, which may be run in another country; the host name and the instance name are in every one.") }}</p>
   <form method="post" action="{{ base }}/settings/notifications" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label class="chk"><input type="checkbox" name="notify_enabled" {% if notify.enabled %}checked{% endif %}> {{ _("Send notifications") }}</label>
@@ -351,9 +352,16 @@
         'client_disconnected': _("Client disconnected"),
         'login_failed': _("Failed sign-in to this UI"),
       } %}
+      {% set event_hints = {
+        'client_connected': _("sends the client’s IP address"),
+        'client_disconnected': _("sends the client’s IP address"),
+        'login_failed': _("sends the account name, or “(unknown user)”, and the IP address"),
+      } %}
       {% for e in notify_events %}
-      <label class="chk"><input type="checkbox" name="notify_event_{{ e }}" {% if e in notify.events %}checked{% endif %}> {{ event_labels[e] }}</label>
+      <label class="chk"><input type="checkbox" name="notify_event_{{ e }}" {% if e in notify.events %}checked{% endif %}> {{ event_labels[e] }}{% if e in event_hints %} <span class="muted">({{ event_hints[e] }})</span>{% endif %}</label>
       {% endfor %}
+      <input type="hidden" name="notify_privacy_fields" value="1">
+      <label class="chk"><input type="checkbox" name="notify_mask_personal_data" {% if notify.mask_personal_data %}checked{% endif %}> {{ _("Leave out personal data: IP addresses only as their network (10.0.5.x; IPv6 /48), no account names") }}</label>
       <label>{{ _("Repeat interval (minutes)") }} <span class="muted">({{ _("0 = every time") }})</span>
         <input type="number" name="notify_repeat_min" min="0" max="1440" step="any" value="{{ '%g'|format(notify.repeat_s / 60) }}"></label>
     </fieldset>
@@ -380,6 +388,7 @@
         <label>{{ _("To") }} <span class="muted">({{ _("comma-separated") }})</span><input type="text" name="notify_email_to" value="{{ notify.email_to }}" placeholder="ops@example.com"></label>
         <label>{{ _("From") }} <span class="muted">({{ _("blank = ser2net@&lt;host&gt;") }})</span><input type="text" name="notify_email_from" value="{{ notify.email_from }}"></label>
       </div>
+      <label class="chk"><input type="checkbox" name="notify_email_separately" {% if notify.email_separately %}checked{% endif %}> {{ _("Send each recipient a message of their own (they don’t see each other’s addresses)") }}</label>
       <div class="grid3">
         <label>{{ _("SMTP server") }} <input type="text" name="notify_smtp_host" value="{{ notify.smtp_host }}" placeholder="smtp.example.com"></label>
         <label>{{ _("Port") }} <input type="number" name="notify_smtp_port" min="1" max="65535" value="{{ notify.smtp_port }}"></label>

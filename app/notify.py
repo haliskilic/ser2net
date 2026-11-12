@@ -8,12 +8,16 @@ Teams Workflows, Discord or Telegram) and/or by e-mail (SMTP), from a worker tas
 a slow endpoint never holds anything up. The same event for the same mapping (client
 events: and client address; failed sign-ins: per address) is sent at most once per
 ``repeat_s``, and at most MAX_PER_MINUTE messages go out per minute.
+The client events send the client's IP address, a failed sign-in the account name and the
+IP address; with ``mask_personal_data`` an address goes out only as its network and no
+account name at all (mask_address, sign_in_detail).
 Standard library only (urllib, smtplib).
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import json
 import smtplib
 import socket
@@ -34,6 +38,8 @@ POLL_S = 2.0
 MAX_PER_MINUTE = 20
 TIMEOUT_S = 10.0
 MAX_KEYS = 4096  # events remembered for the repeat interval (the oldest go first)
+# the events whose detail is a client's address (bridge: "ip:port", IPv6 without brackets)
+CLIENT_EVENTS = ("client_connected", "client_disconnected")
 
 def title(event: str) -> str:
     """The event's name in the notification language (see Notifier.deliver)."""
@@ -83,6 +89,38 @@ def _client_host(peer: str) -> str:
     return host if sep and host and port.isdigit() else str(peer)
 
 
+def mask_address(text: str) -> str:
+    """A client's address with personal data left out: only its network, IPv4 as /24
+    ("10.0.5.x"), IPv6 as /48 ("2001:db8:5::/48"), without the port. The whole text is
+    tried as an address before the part before its last ':' (an IPv6 address is written
+    without brackets in "ip:port"). Text that is no IP address (a host name set as a UDP
+    mapping's reply address) is returned as it is."""
+    text = str(text).strip()
+    for candidate in (text, text.rpartition(":")[0]):
+        try:
+            ip = ipaddress.ip_address(candidate.strip("[]"))
+        except ValueError:
+            continue
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        if isinstance(ip, ipaddress.IPv4Address):
+            return ".".join(str(ip).split(".")[:3]) + ".x"
+        return str(ipaddress.IPv6Network((int(ip) >> 80 << 80, 48)))
+    return text
+
+
+def sign_in_detail(settings, user: str, ip: str, source: str = "", reason: str = "") -> str:
+    """The detail of a login_failed notification: "[LDAP |OIDC ]user '<name>' from <ip>"
+    (an account's name, or auth.UNKNOWN_USER), then ": <reason>" when there is one. With
+    settings.mask_personal_data the name is left out and the address is its network."""
+    if settings.mask_personal_data:
+        who, ip = "user (name left out)", mask_address(ip)
+    else:
+        who = f"user {user!r}"
+    text = f"{source} {who} from {ip}" if source else f"{who} from {ip}"
+    return f"{text}: {reason}" if reason else text
+
+
 def snapshot(statuses: dict) -> dict:
     return {mid: (st.get("state"), {c.get("peer") for c in st.get("clients") or []})
             for mid, st in statuses.items()}
@@ -102,8 +140,8 @@ def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str =
     head, text = message(event, mapping, detail, url, name)
     if fmt == "slack":
         return {"text": text}
-    if fmt == "discord":
-        return {"content": text[:2000]}
+    if fmt == "discord":  # shown as written: an @everyone or a mention in it pings no one
+        return {"content": text[:2000], "allowed_mentions": {"parse": []}}
     if fmt == "telegram":
         return {"chat_id": chat_id, "text": text[:4096]}
     if fmt == "teams":  # Teams "Workflows" incoming webhook: an Adaptive Card message
@@ -151,6 +189,9 @@ def sender(settings, name: str = "") -> str:
 
 def send_email(settings, event: str, mapping: str, detail: str, url: str = "",
                name: str = "") -> None:
+    """One message to every recipient (all of them in To:), or with
+    settings.email_separately one message per recipient in the same SMTP session (only that
+    recipient in To:)."""
     head, text = message(event, mapping, detail, url, name)
     host = socket.gethostname()
     msg = EmailMessage()
@@ -173,7 +214,13 @@ def send_email(settings, event: str, mapping: str, detail: str, url: str = "",
             smtp.starttls(context=ctx)
         if settings.smtp_username:
             smtp.login(settings.smtp_username, settings.smtp_password)
-        smtp.send_message(msg)
+        if not getattr(settings, "email_separately", False):  # (settings made before it)
+            smtp.send_message(msg)
+            return
+        for rcpt in settings.recipients:
+            del msg["To"]
+            msg["To"] = rcpt
+            smtp.send_message(msg, to_addrs=[rcpt])
 
 
 class Notifier:
@@ -203,7 +250,9 @@ class Notifier:
         self._tasks = []
 
     def emit(self, event: str, key: str, mapping: str, detail: str = "") -> bool:
-        """Queue an event if it is enabled and not a repeat; True when queued."""
+        """Queue an event if it is enabled and not a repeat; True when queued. A client
+        event's address is masked here (mask_personal_data); its repeat key stays the
+        address itself."""
         s = self.settings
         if not s.enabled or event not in s.events:
             return False
@@ -215,6 +264,8 @@ class Notifier:
         self._last[(event, key)] = now
         while len(self._last) > MAX_KEYS:
             del self._last[next(iter(self._last))]
+        if s.mask_personal_data and event in CLIENT_EVENTS:
+            detail = mask_address(detail)
         try:
             self._queue.put_nowait((event, mapping, detail))
         except asyncio.QueueFull:

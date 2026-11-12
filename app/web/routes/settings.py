@@ -871,6 +871,9 @@ def routes(ctx: Ctx) -> list:
         except ValueError:
             raise ConfigError(_("SMTP port and repeat interval must be numbers.")) from None
         url, pw = form.get("notify_webhook_url", "").strip(), form.get("notify_smtp_password", "")
+        # the personal-data boxes: a form without them (a page opened before the upgrade)
+        # keeps what is stored
+        privacy = "notify_privacy_fields" in form
         return NotificationSettings.from_dict({
             "enabled": _checkbox(form, "notify_enabled"),
             "events": [e for e in NOTIFY_EVENTS if _checkbox(form, f"notify_event_{e}")],
@@ -885,6 +888,10 @@ def routes(ctx: Ctx) -> list:
             "smtp_security": form.get("notify_smtp_security", "starttls"),
             "smtp_username": form.get("notify_smtp_username", "").strip(),
             "smtp_password": pw if pw else old.smtp_password,   # blank => keep the stored one
+            "mask_personal_data": (_checkbox(form, "notify_mask_personal_data") if privacy
+                                   else old.mask_personal_data),
+            "email_separately": (_checkbox(form, "notify_email_separately") if privacy
+                                 else old.email_separately),
         })
 
     async def settings_notifications_post(request):
@@ -902,8 +909,13 @@ def routes(ctx: Ctx) -> list:
                 state.config.notifications = old
                 return await settings_get(request, error=str(e))
         new = state.config.notifications
-        state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)})")
-        ctx.audit(request, "notification_settings", "enabled" if new.enabled else "disabled")
+        state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)}, "
+                  f"personal data {'masked' if new.mask_personal_data else 'sent'}, e-mail "
+                  f"{'to each recipient' if new.email_separately else 'to all recipients at once'})")
+        ctx.audit(request, "notification_settings", "; ".join(
+            ["enabled" if new.enabled else "disabled"]
+            + (["personal data masked"] if new.mask_personal_data else [])
+            + (["e-mail to each recipient"] if new.email_separately else [])))
         if form.get("then") == "test":
             errors = await state.notifier.deliver("test", "", _("If you can read this, "
                                                     "ser2net can reach you."))
