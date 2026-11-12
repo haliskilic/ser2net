@@ -102,7 +102,7 @@ def test_second_server_refuses_to_start():
     try:
         assert wait_port(port), "first server did not start"
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", d],
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", d],
                            cwd=ROOT, capture_output=True, text=True, timeout=60,
                            stdin=subprocess.DEVNULL, env=env)
         assert p.returncode != 0, p.stdout + p.stderr

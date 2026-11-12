@@ -9,7 +9,7 @@ tools/third_party.py (run by the standalone builds) must
   expat / mpdecimal / SQLite when the executable carries their modules), the OpenSSL that
   cryptography links in, and the browser libraries of ser2netweb/web/static;
 * put the browser libraries' license texts into the --licenses file.
-ser2net.spec writes that file itself when a plain `pyinstaller ser2net.spec` runs without it,
+ser2netweb.spec writes that file itself when a plain `pyinstaller ser2netweb.spec` runs without it,
 and an executable without it points at this version's THIRD-PARTY-NOTICES.md online.
 
 Run: python3 tests/test_third_party.py
@@ -169,8 +169,8 @@ def test_spec_writes_what_is_missing():
     import subprocess
     saved = {name: sys.modules.get(name) for name in fakes}
     real_run, cwd = subprocess.run, os.getcwd()
-    with open(os.path.join(ROOT, "ser2net.spec"), encoding="utf-8") as fh:
-        spec = compile(fh.read(), "ser2net.spec", "exec")
+    with open(os.path.join(ROOT, "ser2netweb.spec"), encoding="utf-8") as fh:
+        spec = compile(fh.read(), "ser2netweb.spec", "exec")
     with tempfile.TemporaryDirectory() as tmp:
         try:
             sys.modules.update(fakes)
@@ -192,20 +192,20 @@ def test_spec_writes_what_is_missing():
                                                 os.path.join("build", "THIRD-PARTY-LICENSES.txt")], calls
     assert (os.path.join("build", "THIRD-PARTY-LICENSES.txt"), ".") in seen["datas"], seen["datas"]
     assert listed == ["lib-dynload/pyexpat.so"], listed  # libgcc_s is left to the system
-    print("ser2net.spec writes a missing license file and the list of bundled binaries  OK")
+    print("ser2netweb.spec writes a missing license file and the list of bundled binaries  OK")
 
 
 def test_frozen_fallback_names_the_notices():
-    import ser2net
+    from ser2netweb import cli
 
     buf = io.BytesIO()
     fake_stdout = types.SimpleNamespace(buffer=buf, flush=lambda: None)
-    saved = ser2net.FROZEN, sys.stdout
+    saved = cli.FROZEN, sys.stdout
     try:
-        ser2net.FROZEN, sys.stdout = True, fake_stdout
-        assert ser2net.print_licenses() == 0
+        cli.FROZEN, sys.stdout = True, fake_stdout
+        assert cli.print_licenses() == 0
     finally:
-        ser2net.FROZEN, sys.stdout = saved
+        cli.FROZEN, sys.stdout = saved
     text = buf.getvalue().decode("utf-8")
     from ser2netweb import __version__
     want = f"https://github.com/haliskilic/ser2net/blob/v{__version__}/THIRD-PARTY-NOTICES.md"

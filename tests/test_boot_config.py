@@ -669,14 +669,14 @@ def test_real_process_has_no_traceback():
                               ({}, "cannot read the admin UI TLS certificate")):
             run_env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(free_port()))
             run_env.update(extra)
-            p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data],
+            p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data],
                                cwd=ROOT, env=run_env, stdin=subprocess.DEVNULL,
                                capture_output=True, encoding="utf-8", errors="replace",
                                timeout=60)
             out = p.stdout + p.stderr
             assert p.returncode == 1 and expect in out, (p.returncode, out[-2000:])
             assert "Traceback" not in out and "starting" not in out, out[-2000:]
-        print("ser2net.py itself: exit 1 with the one-line message, no traceback, no bridge "
+        print("ser2netweb.py itself: exit 1 with the one-line message, no traceback, no bridge "
               "started  OK")
     finally:
         shutil.rmtree(data, ignore_errors=True)

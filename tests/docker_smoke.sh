@@ -102,7 +102,7 @@ after=$(docker exec s2n-smoke stat -c '%i %Y' /data/config.json)
 backups_after=$(docker exec s2n-smoke sh -c 'ls -A /data/backups 2>/dev/null || true')
 [ "$backups_before" = "$backups_after" ] \
     || fail "a restart made a backup ($backups_before -> $backups_after)"
-out=$(printf 'smoke-pass-1\n' | docker exec -i s2n-smoke python /app/ser2net.py --no-bootstrap \
+out=$(printf 'smoke-pass-1\n' | docker exec -i s2n-smoke python /app/ser2netweb.py --no-bootstrap \
     --data-dir /data --set-password admin 2>&1) || fail "docker exec --set-password: $out"
 grep -q "done by the running ser2net" <<<"$out" || fail "not handed to the running server: $out"
 docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "files not owned by 10001"
@@ -259,8 +259,8 @@ echo "== 8. image contents"
 docker run --rm --entrypoint python "$IMAGE" -c '
 import glob, os, sys
 os.chdir("/app")
-need = ["ser2net.py", "bootstrap.py", "requirements.txt", "requirements-optional.txt",
-        "requirements-lock.txt",
+need = ["ser2netweb.py", "ser2net.py", "bootstrap.py", "requirements.txt",
+        "requirements-optional.txt", "requirements-lock.txt",
         "LICENSE", "NOTICE", "COMMERCIAL_LICENSE.md", "THIRD-PARTY-NOTICES.md",
         "tools/docker-entrypoint.sh", "tools/licenses/pyserial.txt", "tools/licenses/npm/xterm.txt",
         "ser2netweb/locale/tr.json",

@@ -91,7 +91,7 @@ def main():
     # server output goes to a file, never an unread pipe (a full pipe blocks the server)
     log_path = os.path.join(tmp, "server.log")
     server_log = open(log_path, "wb")
-    srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg_path],
+    srv = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", cfg_path],
                            cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                            stdout=server_log, stderr=subprocess.STDOUT)
     try:

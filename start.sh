@@ -26,4 +26,4 @@ if [ -z "$PY" ]; then
     exit 1
 fi
 
-exec "$PY" ser2net.py "$@"
+exec "$PY" ser2netweb.py "$@"

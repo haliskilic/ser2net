@@ -6,7 +6,7 @@
         b.login("admin", "pw")
         status, headers, body = b.post("/settings/access", {...})
 
-The server runs as a subprocess (`ser2net.py --no-bootstrap`) with SER2NET_BIND_IP set,
+The server runs as a subprocess (`ser2netweb.py --no-bootstrap`) with SER2NET_BIND_IP set,
 like a Docker / headless boot, and logs to a file (never an unread pipe).
 """
 from __future__ import annotations
@@ -153,7 +153,9 @@ def closed_by_server(raw: socket.socket, seconds: float) -> float:
 
 
 class Server:
-    def __init__(self, config: dict | None = None, data_dir: str | None = None, env=None):
+    def __init__(self, config: dict | None = None, data_dir: str | None = None, env=None,
+                 script: str = "ser2netweb.py"):
+        self.script = script  # (ser2net.py: the start script's name up to 2.9.x)
         self.tmp = tempfile.mkdtemp(prefix="s2n_e2e_")
         self.data = data_dir or os.path.join(self.tmp, "data")
         os.makedirs(self.data, exist_ok=True)
@@ -172,7 +174,7 @@ class Server:
         self.log_path = os.path.join(self.tmp, "server.log")
         self._log = open(self.log_path, "wb")
         self.proc = subprocess.Popen(
-            [sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", self.data],
+            [sys.executable, self.script, "--no-bootstrap", "--data-dir", self.data],
             cwd=ROOT, env=self.env, stdin=subprocess.DEVNULL, stdout=self._log,
             stderr=subprocess.STDOUT)
         if not (wait_served(self.port) if served else wait_port(self.port)):

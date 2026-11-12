@@ -157,7 +157,7 @@ def test_admin_ui_port_warning():
     try:
         with open(log_path, "wb") as log:
             proc = subprocess.Popen(
-                [sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", srv.data],
+                [sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", srv.data],
                 cwd=ROOT, env=srv.env, stdin=subprocess.DEVNULL, stdout=log,
                 stderr=subprocess.STDOUT)
             try:

@@ -554,7 +554,7 @@ def test_admin_ui(pki: Pki):
         with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as fh:
             json.dump(cfg, fh)
         env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(free_port()))
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data],
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data],
                            cwd=ROOT, env=env, stdin=subprocess.DEVNULL, capture_output=True,
                            encoding="utf-8", errors="replace", timeout=60)
         with open(os.path.join(data, "all.log"), encoding="utf-8") as fh:

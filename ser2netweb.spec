@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec — build a standalone ser2net executable (no Python install needed).
-#   pip install pyinstaller && pyinstaller ser2net.spec
+#   pip install pyinstaller && pyinstaller ser2netweb.spec
 # Produces dist/ser2net(.exe). Config/logs are written next to the binary (./data).
 # Release builds: tools/build_standalone_linux.sh (old-glibc container) and
 # tools/build_standalone_windows.ps1, from .github/workflows/standalone.yml;
@@ -15,14 +15,14 @@ from PyInstaller.utils.hooks import collect_all
 # (tests/test_standalone.py fails when a data file under ser2netweb/ is left out)
 datas = [(d, d) for d in ("ser2netweb/web/templates", "ser2netweb/web/static", "ser2netweb/locale")]
 # every bundled component's license (tools/third_party.py; `ser2net --licenses` prints it).
-# The build scripts write it first; a plain `pyinstaller ser2net.spec` gets it written here,
+# The build scripts write it first; a plain `pyinstaller ser2netweb.spec` gets it written here,
 # from this environment (the interpreter's native libraries' own texts only come with the
 # build scripts' --extra), instead of an executable without it.
 # (SPECPATH: PyInstaller is building; tests/test_standalone.py reads the spec without it)
 BUILDING = "SPECPATH" in globals()
 LICENSES = os.path.join("build", "THIRD-PARTY-LICENSES.txt")
 if BUILDING and not os.path.isfile(LICENSES):
-    print(f"ser2net.spec: {LICENSES} is missing; writing it with tools/third_party.py")
+    print(f"ser2netweb.spec: {LICENSES} is missing; writing it with tools/third_party.py")
     subprocess.run([sys.executable, os.path.join("tools", "third_party.py"), "licenses", LICENSES],
                    check=True)
 if os.path.isfile(LICENSES):
@@ -45,7 +45,7 @@ for pkg in ["uvicorn", "starlette", "jinja2", "serial", "serial_asyncio_fast",
         pass
 
 a = Analysis(
-    ["ser2net.py"],
+    ["ser2netweb.py"],
     pathex=[],
     binaries=binaries,
     datas=datas,

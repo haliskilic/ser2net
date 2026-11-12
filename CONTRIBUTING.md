@@ -16,7 +16,7 @@ you to sign the one-time [Contributor License Agreement](https://gist.github.com
 git clone https://github.com/haliskilic/ser2net && cd ser2net
 python3 -m venv .venv && . .venv/bin/activate      # Python 3.10 – 3.14
 pip install -r requirements.txt cryptography        # + requirements-optional.txt for MQTT/LDAP/OIDC
-python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
+python ser2netweb.py --no-bootstrap --data-dir /tmp/s2n-dev
 ```
 
 ### Checks (all run in CI on every pull request)
@@ -73,8 +73,10 @@ can still hold it. `tests/test_harness.py` fails on a fixed listening port unles
   parsed).
 
 ### Code layout
-`ser2net.py` parses the command line and starts `ser2netweb/runtime.py`, which owns the event loop
-and runs the web server and the engine side by side; each module's docstring says more.
+`ser2netweb.py` checks the Python version and runs `ser2netweb/cli.py` (`ser2net.py`, its name up
+to 2.9.x, does the same), which parses the command line and starts `ser2netweb/runtime.py`, which
+owns the event loop and runs the web server and the engine side by side; each module's
+docstring says more.
 
 | Where | What |
 |---|---|
@@ -226,7 +228,7 @@ bkz. `NOTICE`).
 git clone https://github.com/haliskilic/ser2net && cd ser2net
 python3 -m venv .venv && . .venv/bin/activate      # Python 3.10 – 3.14
 pip install -r requirements.txt cryptography        # MQTT/LDAP/OIDC için + requirements-optional.txt
-python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
+python ser2netweb.py --no-bootstrap --data-dir /tmp/s2n-dev
 ```
 
 ### Kontroller
@@ -292,8 +294,10 @@ yazılır: `{{ _("Port %(port)s", port=p) }}`. Log'lar, denetim kaydı ve REST A
 çevrilmez.
 
 ### Kod düzeni
-`ser2net.py` komut satırını okur ve olay döngüsüne sahip olan, web sunucusuyla motoru yan
-yana çalıştıran `ser2netweb/runtime.py`'yi başlatır; her modülün docstring'i ayrıntısını anlatır.
+`ser2netweb.py` Python sürümünü denetleyip `ser2netweb/cli.py`'yi çalıştırır (2.9.x'e kadarki adı
+`ser2net.py` de aynısını yapar); o da komut satırını okur ve olay döngüsüne sahip olan, web
+sunucusuyla motoru yan yana çalıştıran `ser2netweb/runtime.py`'yi başlatır; her modülün
+docstring'i ayrıntısını anlatır.
 
 | Nerede | Ne |
 |---|---|

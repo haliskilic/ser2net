@@ -28,7 +28,7 @@ set -eu
 DATA=/data
 MOUNTINFO=/proc/self/mountinfo
 SERIAL="/dev/tty[A-Z]* /dev/ttymxc* /dev/rfcomm* /dev/serial/by-id/* /dev/serial/by-path/*"
-run() { exec python /app/ser2net.py --no-bootstrap --data-dir "$DATA" "$@"; }
+run() { exec python /app/ser2netweb.py --no-bootstrap --data-dir "$DATA" "$@"; }
 say() { echo "[ser2net] $*"; }
 # in_data <find expression>: find in $DATA, but not below a mount point inside it
 # ($mounts, read once below; mountinfo writes " " as \040)
@@ -135,4 +135,4 @@ if [ "${SER2NET_LOW_PORTS:-}" = 1 ]; then
 fi
 # shellcheck disable=SC2086  # $caps: two options or none
 exec setpriv --reuid="$uid" --regid="$gid" "$groups" $caps \
-    python /app/ser2net.py --no-bootstrap --data-dir "$DATA" "$@"
+    python /app/ser2netweb.py --no-bootstrap --data-dir "$DATA" "$@"

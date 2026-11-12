@@ -42,7 +42,7 @@ body:
         - Windows servisi / Windows service (--install-service)
         - Linux binary (elle / by hand)
         - Linux binary, systemd (ser2net-install.sh)
-        - Kaynak / source (python ser2net.py)
+        - Kaynak / source (python ser2netweb.py)
         - Kaynak, systemd / source, systemd (ser2net.service, ser2net@.service)
         - Docker
         - Diğer / Other

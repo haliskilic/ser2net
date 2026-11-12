@@ -177,7 +177,7 @@ def test_start_after_a_move():
         os.remove(key)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump({"users": USERS, "admin_ui": old}, fh)
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data],
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data],
                            cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True,
                            env=dict(os.environ, SER2NET_BIND_IP="127.0.0.1",
                                     SER2NET_PORT=str(free_port())),

@@ -1,7 +1,7 @@
 """Offline dependency bootstrapper for ser2net.
 
 On first run this installs the bundled wheels from ``vendor/wheels/`` into a
-local ``lib/`` directory (added to ``sys.path`` by ``ser2net.py``), so the app
+local ``lib/`` directory (added to ``sys.path`` by ``ser2netweb.py``), so the app
 runs on any machine that merely has a Python 3.10+ interpreter — no internet,
 no virtualenv, no system-wide installs required.
 
@@ -25,7 +25,7 @@ vendor/wheels has it for Linux x86_64 and Windows x64 only. Elsewhere (ARM Linux
 Raspberry Pi OS included, macOS, musl, ARM or 32-bit Windows Python) the set is installed
 without it, and ser2net lists the network interfaces with the standard library instead.
 
-Usage (normally invoked automatically by ser2net.py / start.bat):
+Usage (normally invoked automatically by ser2netweb.py / start.bat):
     python3 bootstrap.py            # (re)install from vendor/wheels -> ./lib, offline
     python3 bootstrap.py --online   # allow falling back to PyPI if a wheel is missing
 """
@@ -45,8 +45,8 @@ import tempfile
 
 MIN_PYTHON = (3, 10)
 if sys.version_info < MIN_PYTHON:
-    sys.exit("ser2net needs Python 3.10 or newer; this is Python {} ({}). Run it with a "
-             "newer one (e.g. python3.11 ser2net.py; RHEL / AlmaLinux / Rocky: sudo dnf "
+    sys.exit("ser2netweb needs Python 3.10 or newer; this is Python {} ({}). Run it with a "
+             "newer one (e.g. python3.11 ser2netweb.py; RHEL / AlmaLinux / Rocky: sudo dnf "
              "install python3.11), or use the standalone binary or the Docker image "
              "(README.md > Install & run).".format(sys.version.split()[0], sys.executable))
 
@@ -56,7 +56,7 @@ WHEELS_DIR = os.path.join(ROOT, "vendor", "wheels")
 REQ_FILE = os.path.join(ROOT, "requirements.txt")
 STAMP = ".ser2net-deps.json"  # in LIB_DIR: what its packages were installed for
 
-# Warnings for the start-up log: ser2net.py hands them to all.log (printed here too).
+# Warnings for the start-up log: ser2netweb.py hands them to all.log (printed here too).
 notes: list[str] = []
 
 # (import name, pip/requirement name) for the modules we must be able to import.

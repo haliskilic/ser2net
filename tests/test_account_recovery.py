@@ -43,7 +43,7 @@ NEW = "brand-new-pass-2"
 
 
 def cli(data_dir, *args, password=None, env=None):
-    p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data_dir,
+    p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data_dir,
                         *args], cwd=ROOT, capture_output=True, text=True, timeout=120,
                        input="" if password is None else password + "\n",
                        env=dict(os.environ, **(env or {})))

@@ -274,7 +274,7 @@ def _start(args: list[str], folder: str, port: int):
     log = server_log(folder)
     try:
         return subprocess.Popen(
-            [sys.executable, "ser2net.py", "--no-bootstrap", *args], cwd=ROOT,
+            [sys.executable, "ser2netweb.py", "--no-bootstrap", *args], cwd=ROOT,
             env=dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(port)),
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     finally:
@@ -333,7 +333,7 @@ def test_posix_server_files_private():
 def test_split_layout_named():
     """--data-dir and a --config elsewhere: the state stays next to the config file (as
     always), and ser2net says so; the Windows service texts name that folder."""
-    import ser2net as cli
+    from ser2netweb import cli
 
     base = tempfile.mkdtemp(prefix="s2n_perm_")
     try:
@@ -347,11 +347,11 @@ def test_split_layout_named():
         note = cli.split_layout_note(cli.parse_args(["--data-dir", a, "--config", cfg]))
         assert note == (f"WARNING: --config {cfg} is not in --data-dir {a}: ser2net keeps the "
                         f"backups, logs and traces next to the config file, in {b}"), note
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--about",
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--about",
                             "--data-dir", a, "--config", cfg], cwd=ROOT, capture_output=True,
                            text=True, timeout=120)
         assert p.returncode == 0 and f"ser2net: {note}" in p.stderr, (p.returncode, p.stderr)
-        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--about",
+        p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--about",
                             "--data-dir", b, "--config", cfg], cwd=ROOT, capture_output=True,
                            text=True, timeout=120)
         assert "WARNING" not in p.stderr, p.stderr

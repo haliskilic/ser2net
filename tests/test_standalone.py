@@ -4,7 +4,7 @@ Portable part (always runs): ser2netweb.standalone points a frozen Linux build's
 bundled OpenSSL at the distribution's CA bundle (Debian/Ubuntu, RHEL/Fedora,
 openSUSE, Alpine layouts), leaves an admin's SSL_CERT_FILE / SSL_CERT_DIR alone,
 warns when there is none, and does nothing for source runs or on Windows.
-ser2net.spec bundles every data file the app reads at run time (each non-Python
+ser2netweb.spec bundles every data file the app reads at run time (each non-Python
 file under ser2netweb/: templates, static assets, translations), read without PyInstaller.
 A one-file build keeps its unpacked directory from temp cleaners: access times are
 refreshed (modification times kept) and, on Linux, the directory is locked, so the
@@ -145,7 +145,7 @@ def posix_path(path):
 
 
 def spec_datas():
-    """The data entries ser2net.spec hands PyInstaller, without PyInstaller: the spec
+    """The data entries ser2netweb.spec hands PyInstaller, without PyInstaller: the spec
     runs with stand-ins for collect_all() and the build steps."""
     hooks = types.ModuleType("PyInstaller.utils.hooks")
     hooks.collect_all = lambda package: ([], [], [])
@@ -162,8 +162,8 @@ def spec_datas():
     saved = {name: sys.modules.get(name) for name in fakes}
     sys.modules.update(fakes)
     try:
-        with open(os.path.join(ROOT, "ser2net.spec"), encoding="utf-8") as fh:
-            exec(compile(fh.read(), "ser2net.spec", "exec"),
+        with open(os.path.join(ROOT, "ser2netweb.spec"), encoding="utf-8") as fh:
+            exec(compile(fh.read(), "ser2netweb.spec", "exec"),
                  {"Analysis": analysis, "PYZ": lambda *a, **k: None, "EXE": lambda *a, **k: None})
     finally:
         for name, module in saved.items():
@@ -207,15 +207,15 @@ def test_spec_bundles_app_data():
 
     datas = spec_datas()
     for src, _ in datas:
-        assert glob.glob(os.path.join(ROOT, src)), f"ser2net.spec bundles {src}, which doesn't exist"
+        assert glob.glob(os.path.join(ROOT, src)), f"ser2netweb.spec bundles {src}, which doesn't exist"
     needed = app_data_files()
     for d in (server.TEMPLATES_DIR, server.STATIC_DIR, i18n.LOCALE_DIR):
         rel = posix_path(os.path.relpath(d, ROOT))
         assert any(p.startswith(rel + "/") for p in needed), f"no files found in {rel}"
     missing = sorted(needed - bundled_files(datas))
-    assert not missing, ("the app reads these at run time, but ser2net.spec leaves them out of "
+    assert not missing, ("the app reads these at run time, but ser2netweb.spec leaves them out of "
                          "the executables:\n  " + "\n  ".join(missing))
-    print(f"ser2net.spec bundles all {len(needed)} data files under ser2netweb/ "
+    print(f"ser2netweb.spec bundles all {len(needed)} data files under ser2netweb/ "
           "(templates, static assets, translations)  OK")
 
 
@@ -670,7 +670,7 @@ def bundle_problems_windows(bundle):
 
 
 def check_version_resource(exe):
-    """The Windows exe carries a VS_VERSIONINFO built from ser2netweb.__version__ (ser2net.spec
+    """The Windows exe carries a VS_VERSIONINFO built from ser2netweb.__version__ (ser2netweb.spec
     + tools/win_version_info.py), so Explorer shows a version/publisher instead of nothing
     and the exe no longer uses PyInstaller's default console icon."""
     import pefile

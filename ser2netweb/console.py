@@ -86,7 +86,7 @@ def reconfigure_hint(data_dir: str, service_name: str = "", environ=None) -> tup
         prog = _quoted(sys.executable)
     else:
         script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                              "ser2net.py")
+                              "ser2netweb.py")
         prog = f"{_quoted(sys.executable)} {_quoted(script)}"
     if service_name:
         name = "" if service_name == "ser2net" else f" --service-name {_quoted(service_name)}"

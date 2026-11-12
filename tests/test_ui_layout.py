@@ -253,7 +253,7 @@ def start_node(cfg, backup=False):
                            users=cfg["users"][:1]), fh)
     # output to a file, never an unread pipe (a full pipe blocks the server)
     log = open(os.path.join(tmp, "server.log"), "wb")
-    proc = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", path],
+    proc = subprocess.Popen([sys.executable, "ser2netweb.py", "--no-bootstrap", "--config", path],
                             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     return proc, tmp, log
 

@@ -18,7 +18,7 @@ from ser2netweb import healthcheck
 
 def run_check(data_dir, env=None):
     child = {k: v for k, v in os.environ.items() if k.lower() != "no_proxy"}
-    p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data_dir,
+    p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data_dir,
                         "--healthcheck"], cwd=ROOT, capture_output=True, text=True, timeout=60,
                        env=dict(child, **(env or {})))
     return p.returncode, (p.stdout + p.stderr).strip()
