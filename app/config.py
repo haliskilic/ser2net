@@ -1343,15 +1343,19 @@ class ClusterSettings:
                   path: str = "") -> "ClusterSettings":
         d = dict(d or {})
         notes = [] if notes is None else notes
-        # the fields added after 2.8.0: a hand-edited value that is no true/false (null too)
-        # takes the default, not its truth
-        defaults = {"legacy_auth": True, "discovery": True}
-        for name in defaults:
-            if name in d and d[name] is None:
+        # the fields added after 2.8.0 take their default for a hand-edited value of another
+        # type, as in 2.8.1: no text turns off the link to older nodes or discovery, and the
+        # previous key is never a number's text
+        for name, default in (("legacy_auth", True), ("discovery", True), ("previous_key", "")):
+            value = d.get(name)
+            if name in d and not isinstance(value, type(default)):
+                if value is not None:
+                    notes.append(FieldNote(path + name, "invalid", value, default,
+                                           _kind_of(type(default))))
                 del d[name]
         # a hand-edited key of null or a number reads as "" (cluster off, which start-up
         # reports) or the number as text, instead of failing wherever the key is used
-        c = ClusterSettings(**_read_fields(ClusterSettings, d, notes, path, fallback=defaults))
+        c = ClusterSettings(**_read_fields(ClusterSettings, d, notes, path))
         c.peers = [p.strip() for p in c.peers if p.strip()]
         c.previous_until = _epoch(c.previous_until)
         return c
