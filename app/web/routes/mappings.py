@@ -19,6 +19,14 @@ from .common import TRIGGER, Ctx, console_interactive, sees_to_device
 from .forms import _form_error, _modbus_points_json, mqtt_password_view
 
 
+def _port_taken(error: str) -> bool:
+    """Does a mapping's start error say that its port is in use (EADDRINUSE: errno 98 on
+    Linux, 48 on macOS, 10048 on Windows)?"""
+    text = error.lower()
+    return "address already in use" in text or any(f"[errno {n}]" in text
+                                                   for n in (98, 48, 10048))
+
+
 def routes(ctx: Ctx) -> list:
     state, render = ctx.state, ctx.render
     current_user, require_role, can_edit = ctx.current_user, ctx.require_role, ctx.can_edit
@@ -180,11 +188,17 @@ def routes(ctx: Ctx) -> list:
         if deny := require_role(request, "operator"):
             return deny
         form = await request.form()
-        ok, msg = await ops.save_mapping_from_form(state, form)
+        started: dict = {}
+        ok, msg = await ops.save_mapping_from_form(state, form, started)
         if not ok:
             return _form_error(render, request, state, form, msg)
         state.log(f"mapping saved: {msg}")
         ctx.audit(request, "mapping_save", msg)
+        if started.get("ok") is False:
+            # saved, but it didn't start: say why where the form was (its row shows it too)
+            error = str(started.get("detail") or "")
+            return render(request, "_mapping_start_failed.html", headers=TRIGGER,
+                          mapping_name=msg, error=error, port_taken=_port_taken(error))
         return Response("", headers=TRIGGER)
 
     async def mapping_delete(request):
