@@ -620,6 +620,9 @@ def test_escapes():
           "for 4.x, trace modifiers in the file's order  OK")
 
 
+# ser2net 4.x (portconfig.c, portconfig): the default remaddr is added only
+# "if (!new_port->remaddrs)", after the connection's own options; 3.x (dataxfer.c,
+# remaddr_set) uses DEFAULT:remaddr only for a port line without remaddr=
 REMADDR = r"""
 default:
   name: remaddr
