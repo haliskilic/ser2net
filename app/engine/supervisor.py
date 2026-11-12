@@ -145,6 +145,9 @@ class Supervisor:
         # each mapping's turn: id -> [lock, operations holding or waiting for it]
         self._turns: dict[str, list] = {}
         self._stopping: set[asyncio.Future] = set()  # stop_all()'s stops still under way
+        # the mappings whose stop_all() stop is still under way after its time limit: their
+        # turn is held until it ends (start_all and remove_mapping don't wait for it)
+        self._late: set[str] = set()
         self._retries: dict[str, asyncio.Task] = {}  # mapping id -> its bind retry
         self._ports: Optional[set[str]] = None  # the serial ports last seen (ports_changed)
 
@@ -170,8 +173,19 @@ class Supervisor:
 
     # ---------------- bulk ----------------
     async def start_all(self, config: AppConfig) -> None:
+        """Start every enabled mapping (a placeholder runner for each disabled one), each in
+        its turn. A mapping whose stop_all() stop is still under way (it outlived
+        STOP_ALL_TIMEOUT_S) is started in the background once that stop ends, so it can't
+        hold up the others (an import or a restore stops all, then starts all)."""
         self._order = [m.id for m in config.mappings]
         for m in list(config.mappings):
+            if m.id in self._late:
+                self._logger_factory(m)("start waits for the previous stop to end")
+                task = asyncio.ensure_future(self.apply_mapping(m))
+                self._stopping.add(task)
+                task.add_done_callback(self._stopping.discard)
+                task.add_done_callback(_consume_error)
+                continue
             async with self._turn(m.id):
                 current = self._current(m)
                 if current is None:
@@ -191,7 +205,7 @@ class Supervisor:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + STOP_ALL_TIMEOUT_S
         while self._runners:
-            stops = {asyncio.ensure_future(self._stop_in_turn(mid)): _name(runner)
+            stops = {asyncio.ensure_future(self._stop_in_turn(mid)): (mid, _name(runner))
                      for mid, runner in list(self._runners.items())}
             for task in stops:
                 self._stopping.add(task)  # (a task left running must not be garbage-collected)
@@ -199,9 +213,13 @@ class Supervisor:
                 task.add_done_callback(_consume_error)
             _done, pending = await asyncio.wait(stops, timeout=max(0.0, deadline - loop.time()))
             if pending:
-                names = ", ".join(sorted(stops[t] for t in pending))
+                names = ", ".join(sorted(stops[t][1] for t in pending))
                 self.log(f"stopping: {len(pending)} mapping(s) did not stop within "
                          f"{STOP_ALL_TIMEOUT_S:g} s, left to finish on their own: {names}")
+                for task in pending:
+                    mid = stops[task][0]
+                    self._late.add(mid)
+                    task.add_done_callback(lambda _t, mid=mid: self._late.discard(mid))
                 return
 
     async def _stop_in_turn(self, mapping_id: str) -> None:
@@ -381,6 +399,12 @@ class Supervisor:
         return await self.apply_mapping(mapping)  # which stops the old runner first
 
     async def remove_mapping(self, mapping_id: str) -> None:
+        if mapping_id in self._late and mapping_id not in self._runners:
+            # its stop_all() stop holds the turn and has its runner: nothing left to stop
+            # here (an operation waiting for the turn reads the config then: it's gone)
+            if mapping_id in self._order:
+                self._order.remove(mapping_id)
+            return
         async with self._turn(mapping_id):
             await self._cancel_retry(mapping_id)
             runner = self._runners.pop(mapping_id, None)
