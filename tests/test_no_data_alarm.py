@@ -75,7 +75,7 @@ async def main():
     n = notify.Notifier(state)
     sent = []
 
-    async def deliver(event, mapping_name, detail, settings=None):
+    async def deliver(event, mapping_name, detail, settings=None, warnings=None):
         sent.append((event, detail))
         return []
     n.deliver = deliver

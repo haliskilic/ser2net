@@ -168,8 +168,11 @@ def test_server():
                 break
             time.sleep(0.1)
         assert "GET /settings -> 200" in log, log[-1500:]
-        assert "GET /metrics" not in log, "a successful scrape is not logged"
-        print("all.log: successful scrapes left out, other requests logged  OK")
+        assert "GET /metrics -> 200" not in log, "a successful scrape is not logged"
+        # (a refused one is, as every request refused before a handler: once a minute for
+        # an address and status)
+        assert log.count("GET /metrics -> 401") == 1, log[-1500:]
+        print("all.log: successful scrapes left out, refused ones and other requests logged  OK")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
