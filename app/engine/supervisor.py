@@ -127,6 +127,16 @@ def _consume_error(task: asyncio.Future) -> None:
         task.exception()  # a runner that failed to stop: nothing more to do about it
 
 
+async def _retried_start(runner: Runner, log: Callable[[str], None], backoff: Backoff) -> None:
+    """A bind retry's attempt (Supervisor._retry). Once the runner runs, its status stops
+    saying it retries and the start is logged in the same step of the event loop, not in
+    the next one, when the retry sees the attempt done: a status read in between said
+    'running' and 'retrying' at once."""
+    await runner.start()
+    runner.status.retry_at = 0.0
+    log(f"started after {backoff.attempt} retr{'y' if backoff.attempt == 1 else 'ies'}")
+
+
 def _name(runner: Any) -> str:
     mapping = getattr(runner, "mapping", None)
     return getattr(mapping, "name", None) or "?"
@@ -354,7 +364,7 @@ class Supervisor:
                     st.retry_at = time.monotonic()  # trying now
                     # asyncio.wait, which cancels nothing: a cancelled retry (the event loop
                     # ending) waits for an attempt under way to end
-                    attempt = asyncio.ensure_future(runner.start())
+                    attempt = asyncio.ensure_future(_retried_start(runner, log, backoff))
                     attempt.add_done_callback(_consume_error)
                     try:
                         await asyncio.wait((attempt,))
@@ -363,8 +373,6 @@ class Supervisor:
                         raise
                     e = attempt.exception()
                     if e is None:
-                        log(f"started after {backoff.attempt} "
-                            f"retr{'y' if backoff.attempt == 1 else 'ies'}")
                         return
                     st.state, st.last_error = "error", str(e)
                     hint = bindhint.for_mapping(e, mapping)

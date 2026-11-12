@@ -93,11 +93,15 @@ curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" | grep -q 303
 docker exec s2n-smoke sh -c 'stat -c "%u %a" /data /data/config.json'
 docker exec s2n-smoke sh -c '[ "$(stat -c %u /data/config.json)" = 10001 ]' || fail "config.json owner"
 before=$(docker exec s2n-smoke stat -c '%i %Y' /data/config.json)
+# (every save keeps what it wrote as the newest backup: the first start's save made one)
+backups_before=$(docker exec s2n-smoke sh -c 'ls -A /data/backups 2>/dev/null || true')
 docker restart s2n-smoke >/dev/null
 wait_healthy
 after=$(docker exec s2n-smoke stat -c '%i %Y' /data/config.json)
 [ "$before" = "$after" ] || fail "a restart rewrote the unchanged config.json ($before -> $after)"
-docker exec s2n-smoke sh -c '[ -z "$(ls -A /data/backups 2>/dev/null)" ]' || fail "a restart made a backup"
+backups_after=$(docker exec s2n-smoke sh -c 'ls -A /data/backups 2>/dev/null || true')
+[ "$backups_before" = "$backups_after" ] \
+    || fail "a restart made a backup ($backups_before -> $backups_after)"
 out=$(printf 'smoke-pass-1\n' | docker exec -i s2n-smoke python /app/ser2net.py --no-bootstrap \
     --data-dir /data --set-password admin 2>&1) || fail "docker exec --set-password: $out"
 grep -q "done by the running ser2net" <<<"$out" || fail "not handed to the running server: $out"
