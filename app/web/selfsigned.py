@@ -4,6 +4,12 @@ Made in-process with the `cryptography` package — bundled in the standalone
 executables — so no external `openssl` program is needed (Windows has none, and
 minimal Linux installs often lack it). A source install without cryptography
 falls back to the openssl command if one is on PATH.
+
+Its dates come from the system clock. The certificate is valid from a day before now
+(clients whose clock is a little behind this host's accept it at once) for DAYS days in
+all - not DAYS from now: a longer lifetime is refused by Apple's clients. The openssl
+fallback can't back-date (only recent OpenSSL releases let `openssl req` set the start
+date): its certificates start now.
 """
 from __future__ import annotations
 
@@ -15,6 +21,7 @@ import socket
 import subprocess
 
 DAYS = 825  # the longest lifetime browsers accept for a TLS server certificate
+BACKDATE = datetime.timedelta(days=1)   # valid from this long before it is made
 
 
 class CertError(RuntimeError):
@@ -59,15 +66,15 @@ def _with_cryptography(cert_path: str, key_path: str, common_name: str, days: in
     host = socket.gethostname()
     if host and host != "localhost" and host.isascii():
         alt_names.insert(0, x509.DNSName(host))
-    now = datetime.datetime.now(datetime.timezone.utc)
+    start = datetime.datetime.now(datetime.timezone.utc) - BACKDATE
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(minutes=5))
-        .not_valid_after(now + datetime.timedelta(days=days))
+        .not_valid_before(start)
+        .not_valid_after(start + datetime.timedelta(days=days))   # days in all, back-dating included
         .add_extension(x509.SubjectAlternativeName(alt_names), critical=False)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.KeyUsage(digital_signature=True, key_encipherment=True,

@@ -408,6 +408,17 @@
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Admin TLS (HTTPS)") }}</h2></div>
   <p class="muted mb-sm">{{ _("Encrypts this management UI. Changes take effect after a restart.") }}</p>
+  {% set cert = tls_certificate %}
+  {% if cert and cert.problem == 'unreadable' %}<div class="banner warn">{{ _("The certificate file can’t be read (%(error)s): ser2net can’t start with TLS until it can.", error=cert.detail) }}</div>
+  {% elif cert and cert.problem == 'not_pem' %}<div class="banner warn">{{ _("The certificate file holds no PEM certificate: ser2net can’t start with TLS like this.") }}</div>
+  {% elif cert and cert.problem %}<p class="muted mb-sm">{{ _('Install the <span class="mono">cryptography</span> package to see the certificate’s details here.') }}</p>
+  {% elif cert %}
+  <p class="mb-sm">{{ _('Certificate: <span class="mono">%(subject)s</span>', subject=cert.subject|softbreak) }}{% if cert.self_signed %} <span class="tag">{{ _("self-signed") }}</span>{% endif %}
+    {% if cert.state == 'expired' %}<span class="tag tag-danger">{{ _("expired") }}</span>{% elif cert.state == 'not_yet_valid' %}<span class="tag tag-danger">{{ _("not valid yet") }}</span>{% elif cert.state == 'expiring' %}<span class="tag tag-warn">{{ _("ends in %(days)s day(s)", days=cert.days) }}</span>{% else %}<span class="tag">{{ _("%(days)s day(s) left", days=cert.days) }}</span>{% endif %}<br>
+    <span class="muted">{{ _("Valid from %(start)s to %(end)s UTC", start=cert.start, end=cert.end) }}{% if cert.names %} · {{ _("names: %(names)s", names=cert.names|softbreak) }}{% endif %}</span></p>
+  {% if cert.state == 'expired' %}<div class="banner warn">{{ _("By this server’s clock the certificate ended at %(end)s UTC: browsers and clients that check it refuse the connection. Renew it, or generate a new self-signed one.", end=cert.end) }}</div>
+  {% elif cert.state == 'not_yet_valid' %}<div class="banner warn">{{ _("The certificate starts at %(start)s UTC, later than this server’s clock reads: the clock is behind (see Admin interface), or the certificate was made while a clock was ahead. Clients whose clock reads earlier refuse it.", start=cert.start) }}</div>{% endif %}
+  {% endif %}
   <form method="post" action="/settings/tls" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label>{{ _("Certificate path") }} <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>

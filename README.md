@@ -421,6 +421,18 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
 port olarak kabul edilmez.
 
+**Yönetim arayüzünün sertifikası:** Ayarlar → *Yönetim arayüzü için TLS (HTTPS)* ayarlı
+sertifikanın adını, diğer adlarını ve geçerlilik aralığını (UTC) gösterir; süresi dolmuşsa,
+henüz geçerli değilse ya da 30 gün içinde bitecekse işaretler. Açılış log'u da aynı satırı
+yazar (bu durumlarda WARNING olarak); self-signed ve bir CA'nın verdiği sertifika için aynı
+şekilde. *Self-signed sertifika üret* toplam 825 gün geçerli, şu andan bir gün öncesinden
+başlayan bir sertifika üretir; böylece saati biraz geride olan istemciler onu hemen kabul
+eder (`cryptography` paketi olmayan bir kaynak kurulumu `openssl` komutunu kullanır, onun
+sertifikası şu andan başlar). Tarihleri sunucunun saatinden alınır: saat yanlışken üretilen
+bir sertifika, saati doğru olan istemcilere süresi dolmuş ya da henüz geçerli değil görünür;
+bu yüzden saat olabileceğinden erkeni gösteriyorsa sayfa uyarır (bkz. *Saat
+senkronizasyonu*).
+
 **Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
 anda en fazla 32 (toplamda 128) el sıkışma yürür. Fazlası, bunlardan birinin bitmesini 15 sn'ye

@@ -26,7 +26,7 @@ from ...config import (
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
-from .. import auth, ldap_auth, selfsigned
+from .. import auth, certinfo, ldap_auth, selfsigned
 from . import ops
 from .common import Ctx, csrf_failed
 from .forms import (
@@ -75,12 +75,32 @@ def routes(ctx: Ctx) -> list:
                 "clock_behind": {"what": behind[0], "when": clock.utc_text(behind[1])}
                 if behind else None}
 
+    def _tls_certificate() -> dict | None:
+        """What the admin UI's certificate file says (certinfo), for Settings → Admin TLS:
+        None without one, {"problem", "detail"} when it can't be read."""
+        path = state.config.admin_ui.tls_cert
+        if not path:
+            return None
+        try:
+            info = certinfo.read(path)
+        except certinfo.CertReadError as e:
+            return {"problem": e.code, "detail": str(e)}
+        now = time.time()
+        return {"subject": info.subject, "names": ", ".join(info.names),
+                "self_signed": info.self_signed, "state": info.state(now),
+                "days": info.days_left(now), "start": clock.utc_text(info.not_before)[:16],
+                "end": clock.utc_text(info.not_after)[:16]}
+
+    def _clock_and_certificate(admin: bool) -> dict:
+        return {**_server_clock(admin), "tls_certificate": _tls_certificate() if admin else None}
+
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
-        backups = state.store.backups() if me is not None and me.role == "admin" else []
+        admin = me is not None and me.role == "admin"
+        backups = state.store.backups() if admin else []
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
-        server_clock = await asyncio.to_thread(_server_clock, me is not None and me.role == "admin")
+        server_clock = await asyncio.to_thread(_clock_and_certificate, admin)
         return render(request, "settings.html", ok=ok, error=error, **server_clock,
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups,
@@ -238,8 +258,15 @@ def routes(ctx: Ctx) -> list:
             state.config.admin_ui.tls_key = key
             await state.asave()
         ctx.audit(request, "admin_tls_generate", "")
+        # not refused: the clock may be right after all (a backup made while it was ahead)
+        behind = await asyncio.to_thread(clock.behind, state.store)
+        warning = _("The server’s clock reads {0} UTC, which can’t be right (Settings → "
+                    "Admin interface says why), and the certificate is dated from it: clients "
+                    "whose clock is right may take it for expired or not valid yet. Set the "
+                    "clock, then generate the certificate again.").format(
+                        clock.utc_text(time.time())) if behind else None
         return await settings_get(request, ok=_("Self-signed certificate generated. Restart to "
-                                                "apply TLS."))
+                                                "apply TLS."), error=warning)
 
     # ---------------- web-UI access (login requirement) ----------------
     async def settings_access_post(request):
