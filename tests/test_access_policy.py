@@ -50,6 +50,28 @@ def test_allow_list():
     print("allow-list: blank = any, CIDR/host match, IPv4-mapped IPv6, junk ignored  OK")
 
 
+def test_allow_list_families():
+    v4, v6, mapped, link = "203.0.113.9", "2001:db8::7", "::ffff:198.51.100.4", "fe80::1%eth0"
+    # a bare wildcard is "any client" (README), whichever family it is written in
+    for bare in ("0.0.0.0", "::", " :: ", "0:0:0:0:0:0:0:0"):
+        p = policy(allowed_client_ips=[bare], priority_client_ips=[bare])
+        assert all(p.allowed(ip) and p.is_priority(ip) for ip in (v4, v6, mapped, link)), bare
+    # a network is the family it is written in
+    p = policy(allowed_client_ips=["0.0.0.0/0"])
+    assert p.allowed(v4) and p.allowed(mapped) and not p.allowed(v6)
+    p = policy(allowed_client_ips=["::/0"])
+    assert p.allowed(v6) and p.allowed(link) and not p.allowed(v4) and not p.allowed(mapped)
+    # an IPv4-mapped entry is the IPv4 addresses it maps (a client is compared as IPv4)
+    p = policy(allowed_client_ips=["::ffff:10.0.0.0/120", "::FFFF:192.168.1.5"])
+    assert p.allowed("10.0.0.9") and p.allowed("::ffff:10.0.0.9") and p.allowed("192.168.1.5")
+    assert not p.allowed("10.0.1.9") and not p.allowed("192.168.1.6") and not p.allowed(v6)
+    assert policy(allowed_client_ips=["::ffff:0:0/96"]).allowed(v4)
+    p = policy(allowed_client_ips=["2001:db8::/64", "fe80::/10"])
+    assert p.allowed(v6) and p.allowed(link) and not p.allowed("2001:db8:0:1::7")
+    print("allow-list: bare 0.0.0.0 / :: = every client of both families, ::ffff: entries match, "
+          "networks keep their family  OK")
+
+
 def test_admit():
     logs = []
 
@@ -338,6 +360,7 @@ def test_backoff():
 
 def main():
     test_allow_list()
+    test_allow_list_families()
     test_admit()
     test_only_live_clients_count()
     test_normal_newcomer_never_evicts_priority()
