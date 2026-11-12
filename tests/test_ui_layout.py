@@ -16,7 +16,10 @@ longer:
     and never overlap; no cell's content overflows the cell;
   * the browser reports no errors (e.g. a Content-Security-Policy violation);
   * the cluster panel isn't refreshed while the tab is hidden (each refresh makes the
-    node ask every peer) and is refreshed as soon as the tab is shown again.
+    node ask every peer) and is refreshed as soon as the tab is shown again;
+  * the mapping form of every kitchen-sink mapping (tests/_form_cases.py), on this node
+    and on the peer, posts what tests/_formsubmit.py says a browser posts, and saving
+    it unchanged keeps every setting of the mapping.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -34,10 +37,14 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
+
+import _form_cases as form_cases  # noqa: E402
+from _formsubmit import browser_post  # noqa: E402
 
 from app.web.auth import hash_password  # noqa: E402
 
@@ -143,6 +150,11 @@ def demo_mappings(prefix, raw_port):
     ]
 
 
+def kitchen_sinks():
+    """Mappings with every setting other than its default (stopped: they bind nothing)."""
+    return [dict(m, enabled=False) for m in form_cases.mappings()]
+
+
 def start_node(cfg, backup=False):
     tmp = tempfile.mkdtemp(prefix="ser2net_ui_")
     path = os.path.join(tmp, "config.json")
@@ -181,14 +193,14 @@ def main():
     node_b = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_b}, "users": users,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "advertise_ip": "127.0.0.1"},
-              "mappings": demo_mappings("B-", free_port())}
+              "mappings": demo_mappings("B-", free_port()) + kitchen_sinks()}
     # a second (long-named) account: the Users table's row buttons + the set-password form
     others = [{"username": "night-shift.operator.building-b.east", "role": "operator",
                "password_hash": hash_password(PASSWORD), "pwd_version": 1}]
     node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a}, "users": users + others,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "peers": [f"127.0.0.1:{ui_b}"]},
-              "mappings": demo_mappings("", raw_a)}
+              "mappings": demo_mappings("", raw_a) + kitchen_sinks()}
     nodes = [start_node(node_a, backup=True), start_node(node_b)]
     clients, problems, browser_errors = [], [], []
     base = f"http://127.0.0.1:{ui_a}"
@@ -291,6 +303,50 @@ def main():
             if page.evaluate(protocols) != ["raw", []]:
                 problems.append(f"server mode: protocol select is {page.evaluate(protocols)}")
             print("mapping form: UDP leaves only raw to pick, TCP all protocols")
+
+            # the form data the browser posts for each kitchen-sink mapping is what
+            # tests/_formsubmit.py computes from the same page, and saving the form
+            # unchanged keeps every setting — on this node and on the peer
+            page.goto(f"{base}/lang/en?next=/")
+            dashboard()
+            token = page.evaluate("() => document.querySelector('meta[name=csrf-token]').content")
+            form_data = "() => [...new FormData(document.querySelector('#form-panel form'))]"
+            for where, tmp, url_of in (
+                    ("this node", nodes[0][1], lambda mid: f"/api/mappings/{mid}/form"),
+                    ("the peer", nodes[1][1], lambda mid: "/api/cluster/peer-form?" +
+                     urllib.parse.urlencode({"host": "127.0.0.1", "port": ui_b, "mid": mid}))):
+                with open(os.path.join(tmp, "config.json"), encoding="utf-8") as fh:
+                    before = form_cases.relevant(json.load(fh)["mappings"])
+                for sink in form_cases.mappings():
+                    url = url_of(sink["id"])
+                    sent = page.request.get(base + url, headers={"X-CSRF-Token": token}).text()
+                    page.evaluate("u => htmx.ajax('GET', u, {target: '#form-panel', "
+                                  "swap: 'innerHTML'})", url)
+                    page.wait_for_selector(f"#form-panel input[name=name][value='{sink['name']}']")
+                    page.wait_for_timeout(200)
+                    real = [tuple(x) for x in page.evaluate(form_data)]
+                    if real != browser_post(sent):
+                        problems.append(f"{sink['name']} on {where}: the browser posts {real}, "
+                                        f"tests/_formsubmit.py says {browser_post(sent)}")
+                    refused = page.evaluate(
+                        "() => [...document.querySelectorAll('#form-panel form :invalid')]"
+                        ".filter(e => e.name).map(e => e.name)")
+                    if refused:  # htmx would not submit it
+                        problems.append(f"{sink['name']} on {where}: the browser refuses "
+                                        f"{refused}")
+                        continue
+                    with page.expect_response(lambda r: r.request.method == "POST"
+                                              and "save" in r.url) as saved:
+                        page.click("#form-panel button[type=submit]")
+                    if saved.value.status != 200:
+                        problems.append(f"{sink['name']} on {where}: saving it unchanged "
+                                        f"answered {saved.value.status}")
+                with open(os.path.join(tmp, "config.json"), encoding="utf-8") as fh:
+                    after = form_cases.relevant(json.load(fh)["mappings"])
+                problems.extend(f"{a['name']} on {where} changed by an unchanged save: {a} -> {b}"
+                                for a, b in zip(before, after, strict=True) if a != b)
+            print("mapping form: the browser posts what tests/_formsubmit.py computes; an "
+                  "unchanged save keeps every setting, on this node and on the peer")
             browser.close()
 
         assert not problems, "layout problems:\n  " + "\n  ".join(problems)

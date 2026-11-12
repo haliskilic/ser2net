@@ -135,3 +135,14 @@ IRRELEVANT = {
                      "mqtt.enabled", "mqtt.host", "mqtt.port", "mqtt.base_topic", "mqtt.qos",
                      "mqtt.tls", "mqtt.username", "mqtt.password"),
 }
+
+
+def relevant(mappings: list[dict]) -> list[dict]:
+    """Stored mappings (dicts) without the settings an edit may reset (IRRELEVANT)."""
+    out = []
+    for m in copy.deepcopy(mappings):
+        for path in IRRELEVANT.get(m.get("kind", "net"), ()):
+            section, _dot, key = path.partition(".")
+            m.get(section, {}).pop(key, None)
+        out.append(m)
+    return out
