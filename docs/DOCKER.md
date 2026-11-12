@@ -128,7 +128,9 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   `docker ps` shows `healthy` once the UI answers — also before the first-run setup. The
   probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
   webhooks or SSO) don't affect it. Docker doesn't restart a container because it is
-  unhealthy; only the restart policy brings back one that exited.
+  unhealthy; only the restart policy brings back one that exited. If the UI's port can't
+  be bound at start (with the host network: another program has it), the container stays
+  up and `unhealthy` while the mappings run, and the UI comes up once the port is free.
 - **Logs.** Every log line goes to `/data/all.log` (rotated, 10 MB × 5) and to the
   container's output, which Docker keeps without a limit by default: cap it with
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
