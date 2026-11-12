@@ -5,7 +5,10 @@ operator/admin tokens may also create/modify. Spawns the real server. Also:
   * api_token_role in config.json: no key -> admin (tokens from before roles), a role
     in other case / with spaces -> that role, anything else -> viewer (never more
     access) with a start-up log note; the config stays valid;
-  * Settings refuses a role that isn't one instead of making the token admin.
+  * Settings refuses a role that isn't one instead of making the token admin;
+  * the new token is shown once, in a box one click selects, with a Copy button;
+  * "Change the role only" gives the token another role and keeps it (audited); there
+    is nothing to change without a token; Regenerate (with a token) and Revoke ask first.
 Run:
     python3 tests/test_api_token_role.py
 """
@@ -130,12 +133,14 @@ def test_unknown_role_in_config():
         admin.login("admin", "tokenpass1")
         for bad in ("superuser", "", "read-only"):
             st, _, page = admin.post("/settings/api-token", {"api_token_role": bad})
-            assert st == 200 and "Invalid role." in page and "s2n_" not in page, (bad, st)
+            assert st == 400 and "Invalid role." in page and "s2n_" not in page, (bad, st)
         saved = srv.saved_config()
         assert (saved["api_token_hash"], saved["api_token_role"]) == (hash_token(secret), "viewer")
         assert call("GET", "/api/v1/status", secret)[0] == 200, "a refused form must keep the token"
         st, _, page = admin.post("/settings/api-token", {"api_token_role": "Operator"})
         new = re.search(r"s2n_[A-Za-z0-9_\-]+", page).group(0)
+        # shown once: in a box a click selects whole (.token-box), with a Copy button for it
+        assert f'<div class="mono token-box">{new}</div>\n    <button type="button" class="btn sm mt-sm" data-copy>' in page
         assert srv.saved_config()["api_token_role"] == "operator" and new != secret
         assert call("GET", "/api/v1/status", secret)[0] == 401, "the old token must stop working"
         assert call("GET", "/api/v1/mappings", new)[1]["mappings"][0]["mqtt"]["password"] == "broker-secret"
@@ -143,6 +148,35 @@ def test_unknown_role_in_config():
         st, _, page = admin.post("/settings/api-token", {})
         assert st == 200 and srv.saved_config()["api_token_role"] == "admin"
         print("settings: a role that isn't one is refused (token kept); 'Operator' -> operator  OK")
+
+        # the role alone can change: the same token goes on working, with the new role
+        new = re.search(r"s2n_[A-Za-z0-9_\-]+", page).group(0)
+        assert 'formaction="/settings/api-token/role"' in page, "a 'Change the role only' button"
+        before = srv.saved_config()["api_token_hash"]
+        st, _, page = admin.post("/settings/api-token/role", {"api_token_role": "viewer"})
+        assert st == 200 and "the token stays the same" in page and "s2n_" not in page, page[:200]
+        saved = srv.saved_config()
+        assert (saved["api_token_hash"], saved["api_token_role"]) == (before, "viewer")
+        assert call("GET", "/api/v1/status", new)[0] == 200, "the token still works"
+        assert call("POST", "/api/v1/mappings", new, mapping(free_port(), "/dev/ttyNOPE"))[0] == 403
+        assert admin.post("/settings/api-token/role", {"api_token_role": "root"})[2].count("Invalid role.")
+        st, _, page = admin.get("/settings/audit?action=api_token_role")
+        assert ">1 record</p>" in page and "&gt; viewer</td>" in page, "audited: from - to"
+        # the questions: replacing and revoking the token ask first, changing its role not
+        st, _, page = admin.get("/settings")
+        regen = page[page.index('action="/settings/api-token"'):page.index('action="/settings/api-token/revoke"')]
+        assert regen.count("data-confirm=") == 1 and "gets 401 until it is given the new one" in regen
+        revoke = page[page.index('action="/settings/api-token/revoke"'):][:300]
+        assert "data-confirm=" in revoke, revoke
+        st, _, page = admin.post("/settings/api-token/revoke", {})
+        assert call("GET", "/api/v1/status", new)[0] == 401
+        st, _, page = admin.post("/settings/api-token/role", {"api_token_role": "admin"})
+        assert "There is no REST API token to give a role" in page and \
+            srv.saved_config()["api_token_role"] == "viewer", "no token: nothing to change"
+        st, _, page = admin.get("/settings")
+        form = page[page.index('action="/settings/api-token"'):][:900]
+        assert "data-confirm=" not in form.split("</form>")[0], "generating a first token asks nothing"
+        print("settings: the role alone changes (same token); replace / revoke ask first  OK")
 
 
 def main():

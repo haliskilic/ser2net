@@ -166,7 +166,9 @@ and session key. README, *Several instances on one machine*, has the whole check
 ## Notes
 
 - **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`):
-  `docker ps` shows `healthy` once the UI answers — also before the first-run setup. The
+  `docker ps` shows `healthy` once the UI answers — also before the first-run setup. A
+  certificate set or generated under Settings → Admin TLS is used from the next restart;
+  until then the probe finds the UI on plain http and still reports it healthy. The
   probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
   webhooks or SSO) don't affect it. Docker doesn't restart a container because it is
   unhealthy; only the restart policy brings back one that exited. If the UI's port can't

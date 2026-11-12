@@ -53,6 +53,7 @@ PORTABLE = [
     "test_modbus_gateway.py",
     "test_rbac.py",
     "test_route_access.py",   # every route and WebSocket against the access matrix
+    "test_console_feed.py",   # console / hex-view feeds: bounds, batches, close, limits
     "test_mqtt_pub.py",
     "test_modbus_poll.py",
     "test_ldap.py",
@@ -64,6 +65,11 @@ PORTABLE = [
     "test_cluster.py",
     "test_ui_markup.py",
     "test_ui_layout.py",      # browser layout check; skips without Playwright (CI 'ui' job runs it)
+    "test_ui_feedback.py",    # what the dashboard's htmx requests answer (notices, 286, next=)
+    "test_ui_contrast.py",    # status colours readable in both themes (WCAG AA)
+    "test_live_table.py",     # polled tables: 204 / counters only / whole table, off the loop
+    "test_confirmations.py",  # disruptive actions ask first (only those)
+    "test_settings_prg.py",   # Settings forms: redirect after a change, a refused one refilled
     "test_tls_selfsigned.py",
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",
@@ -142,6 +148,8 @@ PORTABLE = [
     "test_clock_ages.py",     # ages and client order by the monotonic clock (no wall clock)
     "test_time_stamps.py",    # log/audit times with their UTC offset; old lines still read
     "test_clock_check.py",    # a clock that reads earlier than it can: start-up log, Settings
+    "test_text_fold.py",      # Turkish / Unicode search and sort (app.js part with node)
+    "test_explain.py",        # OS / network errors explained in the page's language
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

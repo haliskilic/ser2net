@@ -8,10 +8,14 @@
   {%- else -%}{{ s }}{%- endif -%}
 {%- endmacro %}
 
-{% macro lang_switch(request, lang) -%}
+{% macro lang_switch(request, lang, here=none) -%}
+{#- back to this page: its path (without the base path) and query (the sign-in page's
+    ?next=, the audit log's filters) - or `here`, the address that a page sent as the
+    answer to a form names (the form's own URL may answer only POST) #}
+{%- set back = here or (route_path(request) ~ ('?' ~ request.url.query if request.url.query else '')) %}
 <span class="lang-switch" role="group" aria-label="{{ _('Language') }}">
   {%- for code, label in languages.items() -%}
-  <a href="{{ base_path(request) }}/lang/{{ code }}?next={{ route_path(request)|urlencode }}" hreflang="{{ code }}" lang="{{ code }}" title="{{ label }}"{% if code == lang %} aria-current="true" class="on"{% endif %}>{{ code|upper }}</a>
+  <a href="{{ base_path(request) }}/lang/{{ code }}?next={{ back|urlencode }}" hreflang="{{ code }}" lang="{{ code }}" title="{{ label }}"{% if code == lang %} aria-current="true" class="on"{% endif %}>{{ code|upper }}</a>
   {%- endfor -%}
 </span>
 {%- endmacro %}

@@ -4,7 +4,7 @@
 <section class="panel">
   <div class="panel-head">
     <h2>{{ _("Serial → Network mappings") }}</h2>
-    {% if can_edit %}<button class="btn primary" hx-get="{{ base }}/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML">{{ _("+ Add mapping") }}</button>{% endif %}
+    {% if can_edit %}<button class="btn primary" id="add-mapping" hx-get="{{ base }}/api/mappings/form" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ _("+ Add mapping") }}</button>{% endif %}
   </div>
   <div id="form-panel"></div>
   <div class="toolbar" data-mapping-tools>
@@ -22,15 +22,17 @@
       <option value="port">{{ _("Network port") }}</option>
     </select>
     {% if can_edit %}
+    {# ticks / unticks every row the search and the state filter show (only those) #}
+    <label class="chk select-shown"><input type="checkbox" id="select-shown" data-select-shown> {{ _("Select all shown") }}</label>
     <span class="bulk" data-bulk hidden>
-      <span class="muted" data-bulk-count></span>
-      <button class="btn sm" type="button" data-bulk-action="start">{{ _("Start") }}</button>
-      <button class="btn sm" type="button" data-bulk-action="stop">{{ _("Stop") }}</button>
-      <button class="btn sm" type="button" data-bulk-action="restart">{{ _("Restart") }}</button>
+      <span class="muted" data-bulk-count aria-live="polite"></span>
+      <button class="btn sm" type="button" data-bulk-action="start" hx-disabled-elt="this">{{ _("Start") }}</button>
+      <button class="btn sm" type="button" data-bulk-action="stop" hx-disabled-elt="this">{{ _("Stop") }}</button>
+      <button class="btn sm" type="button" data-bulk-action="restart" hx-disabled-elt="this">{{ _("Restart") }}</button>
       <button class="link" type="button" data-bulk-clear>{{ _("clear") }}</button>
     </span>
     {% endif %}
-    <span class="muted" data-filter-count></span>
+    <span class="muted" data-filter-count role="status"></span>
   </div>
   <div id="mappings"
        hx-get="{{ base }}/api/status"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+from typing import NamedTuple
 
 from ... import importer
 from ...config import ConfigError, MappingConfig, serial_conflict, valid_mapping_id
@@ -44,13 +45,21 @@ def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) ->
                                "this device by its USB identity”.").format(settings.port or _("This port")))
 
 
-async def save_mapping_from_form(state, form, started: dict | None = None) -> tuple[bool, str]:
-    """Parse a mapping form, validate, persist and (re)apply. Returns (ok, name)
-    on success or (False, error). Shared by the local UI save and the cluster
-    remote-edit save (which runs the same form on the target node). A saved mapping that
-    doesn't start (its port taken by another program, ...) is still saved; `started`, when
-    given, gets what applying it said: {"ok": bool, "detail": "started" / the error,
-    "retrying": whether the supervisor tries the start again (a listener that can't bind)}.
+class Saved(NamedTuple):
+    """A mapping a form saved: its id, why it did not start ("" when it runs or is
+    disabled) and whether the supervisor tries the start again (a listener that could not
+    bind: it starts once the address can be used)."""
+    id: str
+    start_error: str
+    retrying: bool = False
+
+
+async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
+    """Parse a mapping form, validate, persist and (re)apply. Returns (True, name,
+    Saved) on success or (False, error, None). Shared by the local UI save and the
+    cluster remote-edit save (which runs the same form on the target node). A saved
+    mapping that doesn't start (its port taken by another program, ...) is still saved:
+    Saved says why.
 
     The server owns mapping ids: a form without an id creates a mapping with a new
     one, a form with an id edits that mapping and is refused when there is none."""
@@ -62,18 +71,18 @@ async def save_mapping_from_form(state, form, started: dict | None = None) -> tu
         # read — safe outside the config lock).
         existing = state.config.get_mapping(posted_id) if valid_mapping_id(posted_id) else None
         if posted_id and existing is None:
-            return False, _gone()
+            return False, _gone(), None
         _preserve_unmanaged_fields(mapping, existing, form)
         apply_usb_match(mapping, form, await state.ports.current(), existing)
         mapping.validate()
         mapping.validate_input()
         await asyncio.to_thread(mapping.check_tls_files)  # (reads the files)
     except (ValueError, ConfigError) as e:
-        return False, str(e)
+        return False, str(e), None
     if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
                     or state.config.serial_conflict(mapping)  # a port another one uses
                     or state.config.admin_key_reuse(mapping)):
-        return False, conflict
+        return False, conflict, None
     # Hold the lock only to mutate + persist config; release it BEFORE the
     # (potentially slow) supervisor call so other admin requests aren't blocked
     # while a serial port is being (re)opened.
@@ -82,7 +91,7 @@ async def save_mapping_from_form(state, form, started: dict | None = None) -> tu
         if posted_id:
             existing = state.config.get_mapping(mapping.id)
             if existing is None:  # deleted while this request was being checked
-                return False, _gone()
+                return False, _gone(), None
             state.config.mappings[state.config.mappings.index(existing)] = mapping
         else:
             state.config.mappings.append(mapping)
@@ -90,12 +99,10 @@ async def save_mapping_from_form(state, form, started: dict | None = None) -> tu
             await state.asave()
         except ConfigError as e:
             state.config.mappings = backup
-            return False, str(e)
-    ok, detail = await state.supervisor.apply_mapping(mapping)
-    if started is not None:
-        retrying = bool((state.supervisor.status(mapping.id) or {}).get("retrying"))
-        started.update(ok=ok, detail=detail, retrying=retrying)
-    return True, mapping.name
+            return False, str(e), None
+    started, why = await state.supervisor.apply_mapping(mapping)
+    retrying = not started and bool((state.supervisor.status(mapping.id) or {}).get("retrying"))
+    return True, mapping.name, Saved(mapping.id, "" if started else why, retrying)
 
 
 async def apply_action(state, mid, action) -> tuple[bool, str]:

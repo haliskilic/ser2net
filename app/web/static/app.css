@@ -10,7 +10,22 @@
   --green: #2ea043;
   --red: #f85149;
   --amber: #d29922;
+  /* text in a status colour (badges, client chips, banners, short errors) and links:
+     per theme, each at least 4.5:1 on the panels and on its own tint (the WCAG AA
+     level for small text; tests/test_ui_contrast.py checks it) */
+  --ok: #4dd069;
+  --warn: #e3b341;
+  --err: #ff7b72;
+  --info: #6cb0ff;
+  --stopped: #a5b1bd;
+  --link: #4493f8;
+  --btn-primary: #1f6feb;
+  --btn-primary-hover: #2672e6;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* the browser draws its own controls (checkboxes, radio buttons, file pickers, number
+     spinners, scrollbars) in the theme's colours */
+  color-scheme: dark;
+  accent-color: var(--accent);
 }
 :root[data-theme="light"] {
   --bg: #f6f8fa;
@@ -24,6 +39,15 @@
   --green: #1a7f37;
   --red: #cf222e;
   --amber: #9a6700;
+  --ok: #116329;
+  --warn: #7d4e00;
+  --err: #a40e26;
+  --info: #0550ae;
+  --stopped: var(--muted);
+  --link: var(--accent);
+  --btn-primary: var(--accent);
+  --btn-primary-hover: var(--accent-hover);
+  color-scheme: light;
 }
 * { box-sizing: border-box; }
 body {
@@ -33,7 +57,7 @@ body {
   color: var(--text);
   font-size: 14px;
 }
-a { color: var(--accent); text-decoration: none; }
+a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 /* mono text is mostly device paths, hosts and IDs: let an unbroken one wrap
    rather than push its box (and the buttons next to it) out of the layout */
@@ -71,11 +95,11 @@ h3 { margin: 0 0 4px; font-size: 14px; }
   border-radius: 7px; padding: 7px 12px; font-size: 13px; cursor: pointer; white-space: nowrap;
 }
 .btn:hover { border-color: var(--accent); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover { background: var(--accent-hover); }
+.btn.primary { background: var(--btn-primary); border-color: var(--btn-primary); color: #fff; }
+.btn.primary:hover { background: var(--btn-primary-hover); }
 .btn.sm { padding: 4px 9px; font-size: 12px; }
-.btn.danger:hover { border-color: var(--red); color: var(--red); }
-button.link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 14px; }
+.btn.danger:hover { border-color: var(--red); color: var(--err); }
+button.link { background: none; border: none; color: var(--link); cursor: pointer; padding: 0; font-size: 14px; }
 form.inline { display: inline; margin: 0; }
 
 /* tables: long names, device paths and errors wrap inside their cell, and the row
@@ -91,6 +115,12 @@ table.list { min-width: 52rem; }     /* mappings + cluster: narrower than this, 
 table.grid.th-wrap th { white-space: normal; }  /* small tables: long (Turkish) headers wrap */
 table.ports { min-width: 40rem; }
 .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+/* a short list in a table cell (an import preview row's changes and notes) */
+.cell-list { margin: 4px 0 0; padding-left: 1.1em; font-size: 12px; color: var(--muted); }
+.cell-list .security { color: var(--warn); }
+/* a preview row's warnings: a full-width line under it */
+table.grid tr.has-notes td { border-bottom: 0; }
+table.grid tr.notes-row td { padding-top: 0; }
 /* row buttons come in two groups (run controls | log, monitor, copy, delete): one
    line when the row has room, otherwise group under group — never a lone button */
 .row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
@@ -100,17 +130,17 @@ table.ports { min-width: 40rem; }
 
 /* state badges */
 .state { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-.state-running { background: rgba(46,160,67,.18); color: #4dd069; }
-.state-stopped { background: rgba(139,152,165,.18); color: var(--muted); }
-.state-reconnecting { background: rgba(210,153,34,.18); color: #e3b341; }
-.state-device-missing { background: rgba(210,153,34,.18); color: #e3b341; }
-.state-error { background: rgba(248,81,73,.18); color: #ff6b64; }
+.state-running { background: rgba(46,160,67,.18); color: var(--ok); }
+.state-stopped { background: rgba(139,152,165,.18); color: var(--stopped); }
+.state-reconnecting { background: rgba(210,153,34,.18); color: var(--warn); }
+.state-device-missing { background: rgba(210,153,34,.18); color: var(--warn); }
+.state-error { background: rgba(248,81,73,.18); color: var(--err); }
 .tag { font-size: 10.5px; background: var(--panel2); color: var(--muted); padding: 1px 6px; border-radius: 10px; white-space: nowrap; }
-.tag-danger { color: var(--red); }
-.tag-warn { color: var(--amber); }
+.tag-danger { color: var(--err); }
+.tag-warn { color: var(--warn); }
 /* at most 3 lines; the full message is in the title tooltip and the mapping log */
 .err-small {
-  color: var(--red); font-size: 11px; margin-top: 3px; max-width: 16rem;
+  color: var(--err); font-size: 11px; margin-top: 3px; max-width: 16rem;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
 /* the same, for what to know about a port that works (a setting it did not take) */
@@ -119,13 +149,13 @@ table.ports { min-width: 40rem; }
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
 .clients { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
-.peer { background: rgba(46,160,67,.14); color: #4dd069; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
-.peer-prio { background: rgba(47,129,247,.18); color: #6cb0ff; }
+.peer { background: rgba(46,160,67,.14); color: var(--ok); border-radius: 4px; padding: 1px 6px; font-size: 11px; }
+.peer-prio { background: rgba(47,129,247,.18); color: var(--info); }
 .logbox {
   background: #0b0f14; border: 1px solid var(--border); border-radius: 7px;
   padding: 12px 14px; margin: 0; max-height: 460px; overflow: auto;
   font-family: var(--mono); font-size: 12px; line-height: 1.5; color: #cdd9e5;
-  white-space: pre-wrap; word-break: break-word;
+  white-space: pre-wrap; word-break: break-word; color-scheme: dark;
 }
 .dot { display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px; }
 .dot.on { background: var(--green); }
@@ -135,11 +165,17 @@ table.ports { min-width: 40rem; }
 .mform, .authform { display: block; }
 label { display: block; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); }
 label.chk { display: flex; align-items: center; gap: 7px; color: var(--text); }
-input[type=text], input[type=password], input[type=url], input[type=number], select, textarea {
+input[type=text], input[type=password], input[type=url], input[type=number], input[type=search], select, textarea {
   width: 100%; margin-top: 4px; padding: 8px 10px; background: var(--bg);
   color: var(--text); border: 1px solid var(--border); border-radius: 7px; font-size: 13px;
 }
+/* WebKit/Blink draw a search box their own way unless told it is a text field */
+input[type=search] { -webkit-appearance: textfield; appearance: textfield; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+/* a checkbox, radio button or file picker shows no border colour: it gets an outline */
+input[type=checkbox]:focus-visible, input[type=radio]:focus-visible, input[type=file]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 input[type=checkbox] { width: auto; margin: 0; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
 .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 18px; }
@@ -162,14 +198,34 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 
 /* banners */
 .banner { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; overflow-wrap: anywhere; }
-.banner.error { background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.4); color: #ff8580; }
-.banner.ok { background: rgba(46,160,67,.14); border: 1px solid rgba(46,160,67,.4); color: #56d364; }
-.banner.warn { background: rgba(210,153,34,.14); border: 1px solid rgba(210,153,34,.4); color: #e3b341; }
+.banner.error { background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.4); color: var(--err); }
+.banner.ok { background: rgba(46,160,67,.14); border: 1px solid rgba(46,160,67,.4); color: var(--ok); }
+.banner.warn { background: rgba(210,153,34,.14); border: 1px solid rgba(210,153,34,.4); color: var(--warn); }
 /* the sign-in notice an admin wrote: plain text, its line breaks kept */
 .banner.notice { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
 .banner.notice p { margin: 0; }
 .banner.notice p + p { margin-top: 8px; }
 .notice-text { white-space: pre-line; }
+
+/* feedback area (app.js): what an action did, why a request failed. It floats at the
+   bottom of the window, so it is seen however far the page is scrolled; the opaque
+   .notice under the tinted banner keeps the page from showing through. */
+.feedback {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 20;
+  width: min(42rem, calc(100vw - 24px)); pointer-events: none;
+}
+.feedback .notice { background: var(--panel); border-radius: 8px; margin-top: 8px;
+                    box-shadow: 0 6px 20px rgba(0,0,0,.35); pointer-events: auto; }
+.feedback .banner { margin: 0; display: flex; align-items: flex-start; gap: 10px; }
+.feedback .banner > span { flex: 1 1 auto; min-width: 0; }
+.feedback .dismiss { color: inherit; font-size: 16px; line-height: 1; padding: 0 2px; }
+/* a self-refreshing panel whose refreshes fail: dimmed, with a note, until one works */
+.stale > * { opacity: .45; }
+.stale::before {
+  content: attr(data-stale); display: inline-block; margin-bottom: 6px; padding: 1px 8px;
+  border-radius: 10px; font-size: 11.5px; font-weight: 600; color: var(--warn);
+  background: rgba(210,153,34,.14);
+}
 
 /* auth pages */
 .auth-wrap { max-width: 380px; margin: 8vh auto; }
@@ -185,7 +241,7 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 /* the element xterm.open()s into must have a size and NO padding (padding offsets
    xterm's absolutely-positioned layers and breaks cell alignment) */
 .term { height: 380px; width: 100%; background: #0b0f14; border: 1px solid var(--border);
-        border-radius: 7px; overflow: hidden; padding: 0; }
+        border-radius: 7px; overflow: hidden; padding: 0; color-scheme: dark; }
 .term .xterm { height: 100%; }
 .term .xterm-viewport { background-color: transparent !important; }
 
@@ -218,11 +274,18 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
     font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
   }
   table.stackable .row-actions { justify-content: flex-start; margin-top: 4px; }
+  table.stackable tr.has-notes { border-bottom: 0; padding-bottom: 0; }
+  table.stackable tr.notes-row td { padding-top: 0; }
 }
 
 /* audit log page */
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .filters input[type=search] { flex: 1 1 16rem; min-width: 0; }
+/* in the filter rows (audit log, dashboard toolbar) a field is as wide as its content and
+   sits on the row's line: the form fields' full width and top margin would put each
+   select on a line of its own */
+.filters select, .toolbar select { width: auto; max-width: 100%; }
+.filters > *, .toolbar > *, .filters > input, .toolbar > input { margin-top: 0; }
 .pager { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
 
 /* dashboard toolbar: search / filter / sort / bulk actions */
@@ -230,6 +293,7 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .toolbar input[type=search] { flex: 1 1 14rem; min-width: 0; max-width: 24rem; }
 .toolbar .bulk { display: inline-flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .toolbar .bulk[hidden] { display: none; }
+.toolbar label.chk { margin: 0; white-space: nowrap; }
 .row-select { vertical-align: middle; margin: 0 4px 0 0; }
 .row-actions.start { justify-content: flex-start; }
 /* TR / EN switch in the top bar and on the sign-in pages */
@@ -238,4 +302,5 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .lang-switch a.on { background: var(--panel2); color: var(--text); font-weight: 600; }
 .auth-wrap .lang-switch { position: absolute; top: 12px; right: 16px; }
 .or-line { text-align: center; margin: .8rem 0; }
-.token-box { word-break: break-all; margin-top: .4rem; }
+/* a one-time token or key: one click selects all of it (a double click stops at a "-") */
+.token-box { word-break: break-all; margin-top: .4rem; -webkit-user-select: all; user-select: all; }

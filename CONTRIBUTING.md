@@ -58,9 +58,14 @@ WebSocket has an access class (who may use it, how CSRF is checked) in
 The web UI is English with a Turkish translation. Wrap every user-facing string:
 `{{ _("Save changes") }}` in templates (values as `%(name)s`:
 `{{ _("Port %(port)s", port=p) }}`), `_("Port {0} is in use.").format(port)` in Python.
-Add the Turkish text to `app/locale/tr.json`; `tests/test_i18n.py` fails on a missing or
-unused entry and on a translation that loses a placeholder or an HTML tag. Logs, the audit log
-and REST API messages are not translated.
+A text with a count has both English forms, never "record(s)":
+`{{ ngettext("%(num)s record", "%(num)s records", n) }}`,
+`ngettext("Imported {0} mapping.", "Imported {0} mappings.", n).format(n)`, and for app.js
+a `[_("..."), _("...")]` pair in `base.html`; each form is an entry of its own (Turkish:
+the same text twice). Add the Turkish text to `app/locale/tr.json` (new entries at the end);
+`tests/test_i18n.py` fails on a missing or unused entry, on a translation that loses a
+placeholder or an HTML tag, and on a "(s)" count. The languages are listed once, in
+`app/i18n.py` (`LANGUAGES`). Logs, the audit log and REST API messages are not translated.
 
 ### Dependencies
 Runtime pins live in `requirements.txt` (with the Python 3.10 line kept by markers),
@@ -136,9 +141,15 @@ silinebilir bir ağ ad alanında (network namespace) ya da sanal makinede çalı
 
 ### Çeviriler
 Web arayüzü İngilizce, Türkçe çevirisiyle. Kullanıcıya görünen her metni sarın: şablonlarda
-`{{ _("Save changes") }}`, Python'da `_("Port {0} is in use.").format(port)`. Türkçesini
-`app/locale/tr.json`'a ekleyin; `tests/test_i18n.py` eksik ya da kullanılmayan girdide ve yer
-tutucusunu ya da HTML etiketini kaybeden çeviride başarısız olur.
+`{{ _("Save changes") }}`, Python'da `_("Port {0} is in use.").format(port)`. Sayı içeren
+bir metin iki İngilizce biçimle yazılır, asla "record(s)" diye değil: şablonlarda
+`{{ ngettext("%(num)s record", "%(num)s records", n) }}`, Python'da
+`ngettext("Imported {0} mapping.", "Imported {0} mappings.", n).format(n)`, app.js için
+`base.html`'de bir `[_("..."), _("...")]` çifti; her biçim ayrı bir girdidir (Türkçede aynı
+metin iki kez). Türkçesini `app/locale/tr.json`'a ekleyin (yeni girdiler sona);
+`tests/test_i18n.py` eksik ya da kullanılmayan girdide, yer tutucusunu ya da HTML etiketini
+kaybeden çeviride ve "(s)" ile yazılmış bir sayıda başarısız olur. Diller tek bir yerde,
+`app/i18n.py`'deki `LANGUAGES` içinde listelenir.
 
 ### Route'lar
 Her web route'unun ve WebSocket'in bir erişim sınıfı vardır (kim kullanabilir, CSRF nasıl

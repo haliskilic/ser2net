@@ -7,15 +7,27 @@ one of two modes:
               others are added; mappings not in the file stay as they are;
   * replace — the file's mappings replace all current ones (the pre-v2.8 behaviour).
 Either way the previous config.json is kept in data/backups/ by ConfigStore.save.
+
+A mapping from a ser2net export or config.json replaces the one it updates. One from a
+classic ser2net file says only part of what a mapping has here, so a merge takes only
+that part from it and keeps the rest (_overlay): TLS, the bind IP or the allowed clients
+set after the first import, its USB identity, RS-485, MQTT, Modbus points. The preview
+lists what an update changes and what it keeps, and how each mapping will be after the
+import (enabled, TLS, which clients, read-only) with its own warnings.
 """
 from __future__ import annotations
 
+import contextvars
+import ipaddress
 import json
+import re
 from dataclasses import dataclass, field
+from typing import Optional
 
-from .config import AppConfig, ConfigError, MappingConfig, _new_id, host_port
+from . import i18n
+from .config import AppConfig, ConfigError, MappingConfig, _new_id, host_port, normalize_cidr
 from .i18n import _
-from .ser2net_import import looks_yaml, parse_ser2net_config
+from .ser2net_import import Note, looks_yaml, parse_ser2net_config
 
 MODES = ("merge", "replace")
 # An import file is read whole and its mappings are previewed and validated at once:
@@ -29,6 +41,40 @@ class ImportPlan:
     source: str                         # what the file was, for the preview
     mappings: list[MappingConfig]
     warnings: list[str] = field(default_factory=list)
+    classic: bool = False               # a classic ser2net file: a merge overlays (_overlay)
+    # the source and the warnings in English, for the log and the audit log (which stay
+    # English: parse_for_preview); empty: as `source` / `warnings`
+    log_source: str = ""
+    log_warnings: list[str] = field(default_factory=list)
+
+    def split_warnings(self) -> tuple[list[str], list[list[str]]]:
+        """The warnings about the file as a whole, and those about each mapping (by its
+        position in `mappings`; a classic file's ser2net_import.Note knows its mapping),
+        which the preview shows in the mapping's row."""
+        general: list[str] = []
+        per: list[list[str]] = [[] for _m in self.mappings]
+        for w in self.warnings:
+            i = getattr(w, "mapping", None)
+            (per[i] if i is not None and 0 <= i < len(per) else general).append(w)
+        return general, per
+
+
+def parse_for_preview(raw: bytes, filename: str = "") -> ImportPlan:
+    """parse_mappings_file, with the source and the warnings in English as well (log_*):
+    applying the import logs them, and the log and the audit log stay English whatever
+    the language of the page."""
+    plan = parse_mappings_file(raw, filename)
+    if i18n.current() == i18n.DEFAULT:
+        plan.log_source, plan.log_warnings = plan.source, list(plan.warnings)
+    else:
+        english = contextvars.copy_context().run(_in_english, raw, filename)
+        plan.log_source, plan.log_warnings = english.source, english.warnings
+    return plan
+
+
+def _in_english(raw: bytes, filename: str) -> ImportPlan:
+    i18n.set_language(i18n.DEFAULT)  # (in a copy of the context: for this call only)
+    return parse_mappings_file(raw, filename)
 
 
 def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
@@ -45,8 +91,12 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
         return _classic_ser2net(text, filename)
     try:
         doc = json.loads(text)
-    except (ValueError, RecursionError) as e:  # RecursionError: nested too deeply
-        raise ConfigError(_("The file is not valid JSON ({0}).").format(e)) from None
+    except (ValueError, RecursionError) as e:
+        # where, not the parser's English words ("Expecting ',' delimiter: ...")
+        where = (_("line {0}, column {1}").format(e.lineno, e.colno)
+                 if isinstance(e, json.JSONDecodeError) else
+                 _("nested too deeply") if isinstance(e, RecursionError) else str(e))
+        raise ConfigError(_("The file is not valid JSON ({0}).").format(where)) from None
     if not isinstance(doc, dict) or not isinstance(doc.get("mappings"), list):
         raise ConfigError(_('Expected a ser2net export: a JSON object with a "mappings" list.'))
     if len(doc["mappings"]) > MAX_MAPPINGS:
@@ -89,8 +139,11 @@ def _classic_ser2net(text: str, filename: str) -> ImportPlan:
     mappings = [MappingConfig.from_dict(d) for d in dicts]
     for i, m in enumerate(mappings, 1):
         m.validate_input()  # the converter skips URL devices already; this backs it up
-        warnings.extend(_tls_warning(i, m))
-    return ImportPlan(source=source, mappings=mappings, warnings=warnings)
+        for w in _tls_warning(i, m):
+            note = Note(w)
+            note.mapping = i - 1   # (shown in its row of the preview)
+            warnings.append(note)
+    return ImportPlan(source=source, mappings=mappings, warnings=warnings, classic=True)
 
 
 def _tls_warning(i: int, m: MappingConfig) -> list[str]:
@@ -110,12 +163,89 @@ def _match(existing: list[MappingConfig], m: MappingConfig):
             or next((e for e in existing if e.name == m.name), None))
 
 
+def _bind_reach(ip: str) -> int:
+    """How far a bind IP reaches: 0 the loopback, 1 one address, 2 every interface."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return 1
+    return 0 if a.is_loopback else 2 if a.is_unspecified else 1
+
+
+def _within(inner: list[str], outer: list[str]) -> bool:
+    """The clients `inner` allows are all allowed by `outer` too (an empty list: any)."""
+    if not outer:
+        return True
+    if not inner:
+        return False
+    try:
+        nets_in, nets_out = ([ipaddress.ip_network(normalize_cidr(x), strict=False) for x in xs]
+                             for xs in (inner, outer))
+    except ValueError:
+        return sorted(inner) == sorted(outer)
+    return all(any(n.version == w.version and n.subnet_of(w) for w in nets_out)  # type: ignore[arg-type]
+               for n in nets_in)
+
+
+def _overlay(old: MappingConfig, new: MappingConfig) -> MappingConfig:
+    """`new`, from a classic ser2net file, merged into `old`, the mapping it updates. The
+    file says only part of what a mapping has here (what ser2net_import writes), so only
+    that is taken from it, and never so that the mapping gets more open: a disabled
+    mapping stays disabled, the bind IP, the allowed clients and read-only are not
+    widened, TLS is not turned off, a Modbus gateway stays one. What the file leaves at
+    ser2net's default (no banner, no timeout, ...) keeps the mapping's own value; the
+    serial framing is always the file's (ser2net ran with it, 9600N81 by default)."""
+    r = MappingConfig.from_dict(old.to_dict())
+    plain = MappingConfig()
+
+    def given(dst, src, default, *attrs):  # the values the file sets (not the default)
+        for a in attrs:
+            if getattr(src, a) != getattr(default, a):
+                setattr(dst, a, getattr(src, a))
+    r.name, r.kind = new.name, new.kind
+    r.enabled = old.enabled and new.enabled
+    s, ns = r.serial, new.serial
+    s.port, s.baudrate, s.bytesize, s.parity, s.stopbits, s.flowcontrol = (
+        ns.port, ns.baudrate, ns.bytesize, ns.parity, ns.stopbits, ns.flowcontrol)
+    given(s, ns, plain.serial, "rts_on_open", "dtr_on_open")
+    given(s.advanced, ns.advanced, plain.serial.advanced, "hangup_when_done", "nobreak")
+    n, nn = r.network, new.network
+    n.mode, n.port = nn.mode, nn.port
+    if old.network.protocol != "modbus" or nn.mode != "server":  # (a gateway is a TCP server)
+        n.protocol = nn.protocol
+    if _bind_reach(nn.bind_ip) <= _bind_reach(n.bind_ip):
+        n.bind_ip = nn.bind_ip
+    if nn.allowed_client_ips and _within(nn.allowed_client_ips, n.allowed_client_ips):
+        n.allowed_client_ips = list(nn.allowed_client_ips)
+    n.read_only = n.read_only or nn.read_only
+    if nn.tls:
+        n.tls, n.tls_cert, n.tls_key = True, nn.tls_cert, nn.tls_key
+    given(n, nn, plain.network, "kick_old_user", "max_connections")
+    if n.protocol == "rfc2217":
+        n.max_connections = 1  # (RFC 2217 takes a single client here: the file's is 1 too)
+    o, no = r.options, new.options
+    given(o, no, plain.options, "idle_timeout_s", "banner", "openstr", "closestr", "closeon")
+    if no.trace_both:
+        o.trace_both, o.trace_hexdump, o.trace_timestamp = (
+            no.trace_both, no.trace_hexdump, no.trace_timestamp)
+    return r
+
+
+def _merged(target: MappingConfig, m: MappingConfig, classic: bool) -> MappingConfig:
+    """What `m` makes of the mapping `target` it updates (a copy; `m.id` is not used)."""
+    if classic:
+        return _overlay(target, m)
+    return MappingConfig.from_dict({**m.to_dict(), "id": target.id})
+
+
 def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
-                 mode: str) -> tuple[list[MappingConfig], list[MappingConfig]]:
+                 mode: str, classic: bool = False) -> tuple[list[MappingConfig],
+                                                            list[MappingConfig]]:
     """(new mapping list, mappings that were added or changed). Pure: the inputs
-    are not modified."""
+    are not modified. `classic`: the mappings come from a classic ser2net file, so an
+    update in merge mode keeps what the file can't say (_overlay)."""
     if mode not in MODES:
-        raise ConfigError(_("Import mode must be one of {0}.").format(MODES))
+        raise ConfigError(_("Import mode must be one of {0}.").format(", ".join(MODES)))
     if mode == "replace":
         seen: set[str] = set()
         out = []
@@ -132,7 +262,7 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
         m = MappingConfig.from_dict(m.to_dict())
         target = _match(result, m)
         if target is not None:
-            m.id = target.id
+            m = _merged(target, m, classic)
             if m.to_dict() == target.to_dict():
                 continue  # identical: nothing to restart
             result[result.index(target)] = m
@@ -145,22 +275,142 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
 
 
 def plan_rows(current: list[MappingConfig], incoming: list[MappingConfig],
-              mode: str) -> list[dict]:
-    """Preview rows: {name, kind, action: add|update|same|remove, target}."""
+              mode: str, classic: bool = False,
+              notes: Optional[list[list[str]]] = None) -> list[dict]:
+    """Preview rows: {name, kind, action: add|update|same|remove, target, changes, after,
+    notes}. For an update, `changes` lists what it changes and what it keeps of the
+    mapping (_diff); `after` is how the mapping will be (_after); `notes` are its
+    warnings (ImportPlan.split_warnings, in the order of `incoming`), those about its
+    protection first."""
     rows = []
-    for m in incoming:
+    for i, m in enumerate(incoming):
         target = _match(current, m) if mode == "merge" else None
+        changes: list[dict] = []
+        result = m
         if target is None:
             action = "add"
         else:
-            probe = MappingConfig.from_dict({**m.to_dict(), "id": target.id})
-            action = "same" if probe.to_dict() == target.to_dict() else "update"
+            result = _merged(target, m, classic)
+            action = "same" if result.to_dict() == target.to_dict() else "update"
+            changes = _diff(target, m, result)
+        own = [{"text": getattr(n, "detail", "") or n, "security": getattr(n, "security", False)}
+               for n in (notes[i] if notes and i < len(notes) else [])]
         rows.append({"name": m.name, "kind": _kind(m), "action": action,
-                     "target": target.name if target is not None else ""})
+                     "target": target.name if target is not None else "", "changes": changes,
+                     "after": _after(result),
+                     "notes": sorted(own, key=lambda n: not n["security"])})
     if mode == "replace":
         for e in current:
-            rows.append({"name": e.name, "kind": _kind(e), "action": "remove", "target": ""})
+            rows.append({"name": e.name, "kind": _kind(e), "action": "remove", "target": "",
+                         "changes": [], "after": None, "notes": []})
     return rows
+
+
+def _after(m: MappingConfig) -> dict:
+    """How a mapping will be after the import, for the preview (as the dashboard tags it):
+    enabled, TLS, read-only, `clients` (entries of its allow-list; None: it doesn't
+    listen) and `open` (enabled and taking any client beyond the loopback)."""
+    n = m.network
+    listens = m.kind == "net" and n.mode != "client"
+    return {"enabled": m.enabled, "tls": listens and n.tls, "read_only": n.read_only,
+            "clients": len(n.allowed_client_ips) if listens else None,
+            "open": listens and m.enabled and not n.allowed_client_ips
+            and _bind_reach(n.bind_ip) > 0}
+
+
+_CONTROL = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]")
+
+
+def log_lines(plan: ImportPlan) -> list[str]:
+    """The import's warnings for all.log, in English, one line each: a line break or other
+    control character from the file is written as its escape (it would start a log line
+    of its own)."""
+    warnings = plan.log_warnings if plan.log_source else plan.warnings
+    return [_CONTROL.sub(lambda m: m.group().encode("unicode_escape").decode(), w)
+            for w in warnings]
+
+
+def audit_detail(plan: ImportPlan, most: int = 500) -> str:
+    """The audit record of an import: how many mappings from what, and its warnings (in
+    English), cut to `most` characters."""
+    source, warnings = ((plan.log_source, plan.log_warnings) if plan.log_source else
+                        (plan.source, plan.warnings))
+    text = f"{len(plan.mappings)} mappings ({source})"
+    if warnings:
+        text += f"; {len(warnings)} warnings: " + "; ".join(warnings)
+    return text if len(text) <= most else text[:most - 1] + "…"
+
+
+def _shown(value: str, most: int = 60) -> str:
+    """A string option in the preview: control characters escaped, cut at `most`, — for
+    none."""
+    v = value.encode("unicode_escape").decode("ascii") if not value.isprintable() else value
+    return "—" if not v else v if len(v) <= most else v[:most - 1] + "…"
+
+
+def _fields(m: MappingConfig) -> list[tuple[str, str]]:
+    """What the preview compares of a mapping: (label, value as shown), in the order of
+    the mapping form."""
+    s, n, o = m.serial, m.network, m.options
+    on, off = _("on"), _("off")
+    framing = s.compact() + (f" · {s.flowcontrol}" if s.flowcontrol != "none" else "")
+    return [
+        (_("State"), _("enabled") if m.enabled else _("disabled")),
+        (_("Serial port"), s.port),
+        (_("Serial"), framing),
+        (_("RTS on open"), s.rts_on_open),
+        (_("DTR on open"), s.dtr_on_open),
+        (_("Protocol"), f"{n.mode}/{n.protocol}"),
+        (_("Bind IP"), n.bind_ip),
+        (_("Listen port"), str(n.port)),
+        ("TLS", on if n.tls else off),
+        (_("Allowed client IPs / CIDRs"), " ".join(n.allowed_client_ips) or _("any client")),
+        (_("Read-only"), on if n.read_only else off),
+        (_("Max connections"), str(n.max_connections)),
+        (_("Kick old client"), on if n.kick_old_user else off),
+        (_("Idle timeout (s)"), str(o.idle_timeout_s)),
+        (_("Connect banner"), _shown(o.banner)),
+        ("openstr", _shown(o.openstr)),
+        ("closestr", _shown(o.closestr)),
+        (_("Close-on string"), _shown(o.closeon)),
+        (_("Trace file name"), _shown(o.trace_both)),
+    ]
+
+
+def _looser(old: MappingConfig, new: MappingConfig) -> set[str]:
+    """The fields (labels of _fields) in which `new` is more open than `old`: started,
+    TLS off, a wider bind IP or allow-list, writable."""
+    a, b = old.network, new.network
+    out = set()
+    if new.enabled and not old.enabled:
+        out.add(_("State"))
+    if a.tls and not b.tls:
+        out.add("TLS")
+    if _bind_reach(b.bind_ip) > _bind_reach(a.bind_ip):
+        out.add(_("Bind IP"))
+    if not _within(b.allowed_client_ips, a.allowed_client_ips):
+        out.add(_("Allowed client IPs / CIDRs"))
+    if a.read_only and not b.read_only:
+        out.add(_("Read-only"))
+    return out
+
+
+def _diff(old: MappingConfig, file: MappingConfig, result: MappingConfig) -> list[dict]:
+    """What an update does to the mapping `old`: each field it changes ({what, before,
+    after}) and, for a classic file, each one the file has otherwise that the mapping
+    keeps ({what, before, file, kept: True}). `security`: the change opens the mapping
+    up, or the file would have."""
+    before, given, after = _fields(old), _fields(file), _fields(result)
+    looser, would = _looser(old, result), _looser(old, file)
+    out = []
+    for (what, b), (_l, f), (_m, a) in zip(before, given, after, strict=True):
+        if b != a:
+            out.append({"what": what, "before": b, "after": a, "kept": False,
+                        "security": what in looser})
+        elif f != a:
+            out.append({"what": what, "before": b, "file": f, "kept": True,
+                        "security": what in would})
+    return out
 
 
 def _kind(m: MappingConfig) -> str:

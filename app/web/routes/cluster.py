@@ -27,7 +27,7 @@ from ...engine.cluster import (ACTOR_FIELD, ACTOR_MAX, ACTOR_NODE_FIELD, AUTH_HE
 from ...i18n import _
 from .. import auth
 from . import ops
-from .common import Ctx, csrf_failed
+from .common import Ctx, LiveTable, bytesize, csrf_failed, domid, notice, reason, start_failed
 from .forms import (
     MQTT_PASSWORD_CLEAR, MQTT_PASSWORD_WRITE_ONLY, _build_mapping_dict, _modbus_points_json,
     _preserve_unmanaged_fields, mqtt_password_from_form, mqtt_password_view, tls_password_view,
@@ -146,12 +146,41 @@ def _fmt_uptime(seconds) -> str:
     d, s = divmod(s, 86400)
     h, s = divmod(s, 3600)
     m, _sec = divmod(s, 60)
+    # in the page's language
     if d:
-        return f"{d}d {h}h"
+        return _("{0}d {1}h").format(d, h)
     if h:
-        return f"{h}h {m}m"
-    return f"{m}m"
+        return _("{0}h {1}m").format(h, m)
+    return _("{0}m").format(m)
 
+
+
+def _peer_done(action: str, name: str, addr: str) -> str:
+    """What a start / stop / restart of the mapping `name` on the peer `addr` did."""
+    if action == "start":
+        return _("“{0}” started on {1}.").format(name, addr)
+    if action == "stop":
+        return _("“{0}” stopped on {1}.").format(name, addr)
+    return _("“{0}” restarted on {1}.").format(name, addr)
+
+
+def _fleet_snapshot(view: dict):
+    """(shape, counter spans) of the fleet view for LiveTable: the spans by the ids
+    _cluster_body.html gives them. Without them (two rows with one id: a peer's odd
+    mapping ids), the counters stay part of the shape."""
+    spans: dict[str, str] | None = {}
+    for n in view["nodes"]:
+        for m in n.get("mappings") or ():
+            key = "c-" + domid(f"{n.get('addr', '')}-{m.get('id', '')}") + "-bytes"
+            if spans is None or key in spans:
+                spans = None
+                continue
+            spans[key] = f"{bytesize(m.get('bytes_in', ''))} / {bytesize(m.get('bytes_out', ''))}"
+    counters = ("bytes_in", "bytes_out") if spans is not None else ()
+    nodes = [({k: v for k, v in n.items() if k not in ("uptime_s", "mappings")},   # (shown: uptime)
+              [{k: v for k, v in m.items() if k not in counters} for m in n.get("mappings") or ()])
+             for n in view["nodes"]]
+    return (nodes, {k: v for k, v in view.items() if k != "nodes"}), spans
 
 
 def routes(ctx: Ctx) -> list:
@@ -256,19 +285,23 @@ def routes(ctx: Ctx) -> list:
                 "mapping_count": data.get("mapping_count", len(maps)),
                 "running_count": data.get("running_count", 0), "mappings": maps}
 
+    fleet = LiveTable(ctx, "_cluster_body.html")
+
     async def cluster_status(request):
         """Aggregated view for the browser: local node + every discovered/manual peer,
         fetched server-side with the shared key. Renders the unified table."""
         if not state.config.cluster.active:
-            return render(request, "_cluster_body.html", nodes=[], can_edit=can_edit(request),
-                          discovery_error="")
+            return await ctx.arender(request, "_cluster_body.html", nodes=[],
+                                     can_edit=can_edit(request), discovery_error="")
         local = local_node_payload()
         nodes = [{**local, "self": True, "online": True, "source": "self",
                   "addr": peer_addr(local["ip"], local["port"]),
                   "uptime": _fmt_uptime(local["uptime_s"])}]
+        # refreshed every 5 s: 204 while the fleet view is what the browser shows already,
+        # only the In / Out counters when only they changed (see LiveTable)
         if is_anonymous(request):  # other nodes' data needs a real login here
-            return render(request, "_cluster_body.html", nodes=nodes, can_edit=False,
-                          discovery_error="", peers_hidden=True)
+            view = {"nodes": nodes, "can_edit": False, "discovery_error": "", "peers_hidden": True}
+            return await fleet.answer(request, lambda: _fleet_snapshot(view), **view)
         targets = state.cluster.all_targets()
         results = await asyncio.gather(*[state.cluster.fetch_peer(t) for t in targets]) \
             if targets else []
@@ -277,8 +310,9 @@ def routes(ctx: Ctx) -> list:
         c = state.cluster
         notes = {"copies": c.copies(), "shared": c.shared_ids(), "other_key": c.other_key_nodes(),
                  "legacy": c.legacy_nodes()}
-        return render(request, "_cluster_body.html", nodes=nodes, can_edit=can_edit(request),
-                      discovery_error=state.cluster.discovery_error, notes=notes)
+        view = {"nodes": nodes, "can_edit": can_edit(request),
+                "discovery_error": state.cluster.discovery_error, "notes": notes}
+        return await fleet.answer(request, lambda: _fleet_snapshot(view), **view)
 
     async def cluster_control(request):
         """Peer-facing remote control: another cluster node (presenting the shared key)
@@ -299,7 +333,9 @@ def routes(ctx: Ctx) -> list:
         ip = client_ip(request)
         state.log(f"cluster: remote {action} of '{name}' from {ip}")
         state.audit(ip, f"cluster_remote_{action}", name, user=_peer_actor(a, form))
-        return _peer_json(a, {"ok": True, "name": name})
+        # start_error: why it did not start (ignored by nodes older than 2.9)
+        why = start_failed(state, mid) if action != "stop" else ""
+        return _peer_json(a, {"ok": True, "name": name, **({"start_error": why} if why else {})})
 
     async def cluster_control_peer(request):
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
@@ -320,9 +356,15 @@ def routes(ctx: Ctx) -> list:
                                        "(unreachable or rejected)."), status_code=502)
         state.cluster.forget(target)   # the refresh this triggers shows the new state
         addr = peer_addr(target["ip"], target["port"])
-        state.log(f"cluster: sent {action} to {addr} for '{res.get('name', mid)}'")
-        ctx.audit(request, f"cluster_control_{action}", f"{addr}/{res.get('name', mid)}")
-        return Response("", headers={"HX-Trigger": "refreshCluster"})
+        name = str(res.get("name", mid))
+        state.log(f"cluster: sent {action} to {addr} for '{name}'")
+        ctx.audit(request, f"cluster_control_{action}", f"{addr}/{name}")
+        why = res.get("start_error")   # from a 2.9+ peer
+        why, raw = reason(why) if isinstance(why, str) else ("", "")
+        note = (notice(_("“{0}” on {1} could not start: {2}").format(name, addr, why), "warn",
+                       detail=raw)
+                if why else notice(_peer_done(action, name, addr)))
+        return Response("", headers={"HX-Trigger": "refreshCluster", **note})
 
     # ---- remote EDIT: peer renders no UI; THIS node renders the form (so the CSRF
     #      token + form action belong to the browser's session) and proxies the save.
@@ -350,13 +392,15 @@ def routes(ctx: Ctx) -> list:
         if deny:
             return deny
         form = await request.form()
-        ok, msg = await ops.save_mapping_from_form(state, form)
-        if not ok:
+        ok, msg, saved = await ops.save_mapping_from_form(state, form)
+        if not ok or saved is None:
             return _peer_json(a, {"ok": False, "error": msg}, 400)
         ip = client_ip(request)
         state.log(f"cluster: remote edit of '{msg}' from {ip}")
         state.audit(ip, "cluster_remote_save", msg, user=_peer_actor(a, form))
-        return _peer_json(a, {"ok": True, "name": msg})
+        # start_error: why it did not start (ignored by nodes older than 2.9)
+        return _peer_json(a, {"ok": True, "name": msg,
+                              **({"start_error": saved.start_error} if saved.start_error else {})})
 
     def _peer_target(getter):
         """The peer a browser request names by host + port (as the fleet view shows them)
@@ -447,9 +491,15 @@ def routes(ctx: Ctx) -> list:
         if res and res.get("ok"):
             state.cluster.forget(target)   # the refresh this triggers shows the change
             addr = peer_addr(target["ip"], target["port"])
-            state.log(f"cluster: edited '{res.get('name', '')}' on {addr}")
-            ctx.audit(request, "cluster_edit", f"{addr}/{res.get('name', '')}")
-            return Response("", headers={"HX-Trigger": "refreshCluster"})
+            name = str(res.get("name", ""))
+            state.log(f"cluster: edited '{name}' on {addr}")
+            ctx.audit(request, "cluster_edit", f"{addr}/{name}")
+            why = res.get("start_error")   # from a 2.9+ peer
+            why, raw = reason(why) if isinstance(why, str) else ("", "")
+            note = (notice(_("“{0}” saved on {1}, but it could not start: {2}").format(
+                        name, addr, why), "warn", detail=raw) if why
+                    else notice(_("“{0}” saved on {1}.").format(name, addr)))
+            return Response("", headers={"HX-Trigger": "refreshCluster", **note})
         return _reload((res or {}).get("error") or _("The peer rejected the change or was "
                                                      "unreachable."))
 

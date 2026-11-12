@@ -3,7 +3,7 @@
 <div class="banner warn">{{ _('Open access: only this node is shown. <a href="%(url)s">Sign in</a> to see and manage the other cluster nodes.', url=base ~ '/login') }}</div>
 {% endif %}
 {% if discovery_error %}
-<div class="banner warn">{{ _("UDP auto-discovery is off: %(error)s. Manually-added peers still work (Settings → LAN cluster).", error=discovery_error) }}</div>
+<div class="banner warn" title="{{ discovery_error }}">{{ _("UDP auto-discovery is off: %(error)s. Manually-added peers still work (Settings → LAN cluster).", error=(discovery_error|explain or discovery_error)|trim('.')) }}</div>
 {% endif %}
 {% if notes %}
 {% for c in notes.copies %}
@@ -59,8 +59,11 @@
       </td>
     </tr>
     {% for m in n.mappings %}
+    {# ids as in _mappings_body.html, by the node's address: this node's own mappings are
+       in this table too #}
+    {% set rid = 'c-' ~ ((n.addr ~ '-' ~ m.id)|domid) %}
     <tr>
-      <td class="indent col-name">{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">{{ _("disabled") }}</span>{% endif %}</td>
+      <td class="indent col-name"><span id="{{ rid }}-name">{{ m.name|softbreak }}</span>{% if not m.enabled %} <span class="tag">{{ _("disabled") }}</span>{% endif %}</td>
       <td class="mono" data-label="{{ _('Serial') }}">{{ m.serial|softbreak }}</td>
       <td data-label="{{ _('Network') }}">
         <div class="mono">{{ m.endpoint|softbreak }}</div>
@@ -68,19 +71,21 @@
       </td>
       <td data-label="{{ _('State') }}"><span class="state state-{{ m.state }}">{{ state_label(m.state) }}</span>{% if m.link == 'down' %} <span class="tag tag-warn">{{ _("link down") }}</span>{% endif %}</td>
       <td data-label="{{ _('Clients') }}">{{ m.client_count }}</td>
-      <td class="mono nowrap" data-label="{{ _('In / Out') }}">{{ m.bytes_in }} / {{ m.bytes_out }}</td>
+      <td class="mono nowrap" data-label="{{ _('In / Out') }}"><span id="{{ rid }}-bytes">{{ m.bytes_in|default('')|bytesize }} / {{ m.bytes_out|default('')|bytesize }}</span></td>
       <td class="col-actions">
         {% if can_edit and not n.self %}
         <div class="row-actions"><div class="btn-group">
           {# the peer by host + port only: the server looks up its address and scheme #}
           {% set peer = {"host": n.ip, "port": n.port, "mid": m.id} %}
           {% if m.enabled %}
-            <button class="btn sm" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="stop")|tojson }}' hx-swap="none">{{ _("Stop") }}</button>
-            <button class="btn sm" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="restart")|tojson }}' hx-swap="none">{{ _("Restart") }}</button>
+            {#- asked only while clients are connected, as on the node itself #}
+            {% set n = m.client_count if m.client_count is number else 0 %}
+            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="stop")|tojson }}'{% if n %} hx-confirm="{{ ngettext('Stop “%(name)s”? %(num)s connected client will be disconnected, and it stays stopped until it is started again.', 'Stop “%(name)s”? %(num)s connected clients will be disconnected, and it stays stopped until it is started again.', n, name=m.name) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ _("Stop") }}</button>
+            <button class="btn sm" id="{{ rid }}-restart" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="restart")|tojson }}'{% if n %} hx-confirm="{{ ngettext('Restart “%(name)s”? %(num)s connected client will be disconnected.', 'Restart “%(name)s”? %(num)s connected clients will be disconnected.', n, name=m.name) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ _("Restart") }}</button>
           {% else %}
-            <button class="btn sm" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="start")|tojson }}' hx-swap="none">{{ _("Start") }}</button>
+            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="start")|tojson }}' hx-swap="none" hx-disabled-elt="this">{{ _("Start") }}</button>
           {% endif %}
-          <button class="btn sm" hx-get="{{ base }}/api/cluster/peer-form?{{ peer|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
+          <button class="btn sm" id="{{ rid }}-edit" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/cluster/peer-form?{{ peer|urlencode }}" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ _("Edit") }}</button>
         </div></div>
         {% endif %}
       </td>

@@ -158,7 +158,7 @@ def main():
         assert admin.post("/settings/users/view1/role", {"role": "operator", "_csrf": admin.csrf()}) == 200
         assert admin.post("/settings/users/op1/delete", {"_csrf": admin.csrf()}) == 200
         # last-admin protection: admin cannot delete itself as the only admin
-        assert admin.post("/settings/users/admin/delete", {"_csrf": admin.csrf()}) == 200  # returns settings page w/ error
+        assert admin.post("/settings/users/admin/delete", {"_csrf": admin.csrf()}) == 400  # the settings page w/ error
         assert admin.get("/") == 200, "admin should still be signed in (self-delete blocked)"
         print("admin: role change + delete work; last-admin self-delete is blocked  OK")
 

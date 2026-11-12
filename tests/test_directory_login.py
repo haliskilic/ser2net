@@ -77,7 +77,7 @@ def signed_in(srv, token) -> bool:
         0, ui_cookie("ser2net_session", srv.port), token, None, False, "127.0.0.1", False, False,
         "/", True, False, None, False, None, None, {}))
     st, headers, _ = b.get("/settings")
-    assert st == 200 or (st == 303 and headers.get("Location") == "/login"), st
+    assert st == 200 or (st == 303 and headers.get("Location") == "/login?next=%2Fsettings"), st
     return st == 200
 
 
@@ -363,10 +363,10 @@ def start_provider(pki):
     return srv
 
 
-def oidc_start(srv, provider):
+def oidc_start(srv, provider, query=""):
     """/auth/oidc/login in a new browser: (browser, the state and nonce it sends)."""
     b = Browser(srv.base)
-    st, headers, _ = b.get("/auth/oidc/login")
+    st, headers, _ = b.get("/auth/oidc/login" + query)
     location = headers.get("Location", "")
     assert st == 303 and location.startswith(provider.issuer), (st, all_log(srv)[-1500:])
     query = urllib.parse.parse_qs(urllib.parse.urlparse(location).query)
@@ -395,8 +395,9 @@ def oidc_provider_answers(srv, provider):
         False, False, "/auth/oidc", True, False, None, False, None, None, {}))
     provider.claims = {"preferred_username": "pkce.user", "groups": ["ser2net-viewers"],
                        "nonce": nonce}
-    st, _, _ = b.get("/auth/oidc/callback?" + urllib.parse.urlencode({"code": "C", "state": state}))
+    st, h, _ = b.get("/auth/oidc/callback?" + urllib.parse.urlencode({"code": "C", "state": state}))
     assert st == 303 and "code_verifier" not in provider.token_bodies[-1], st
+    assert h.get("Location") == "/", "no page to go back to in an older cookie: the dashboard"
 
     b, state, _nonce = oidc_start(srv, provider)
     requests = provider.token_requests
@@ -430,6 +431,20 @@ def oidc_provider_answers(srv, provider):
     assert not [u for u in srv.saved_config()["users"] if u["username"] in ("eve@example.com", "s-1")]
     assert "\toidc_login_failed\tno user name in the ID token (all.log says why)\t\n" \
         in audit_log(srv), audit_log(srv)[-800:]
+
+
+def oidc_next(srv, provider):
+    """A sign-in started from the sign-in page of a page whose session ended goes back to
+    that page (?next=, carried in the signed state cookie); one that is not a page here
+    goes to the dashboard."""
+    claims = {"preferred_username": "pkce.user", "groups": ["ser2net-viewers"]}
+    for nxt, want in (("/settings/audit?q=x", "/settings/audit?q=x"),
+                      ("//evil.example/", "/"), ("https://evil.example/", "/")):
+        b, state, nonce = oidc_start(srv, provider, "?" + urllib.parse.urlencode({"next": nxt}))
+        provider.claims = dict(claims, nonce=nonce)
+        st, h, _ = b.get("/auth/oidc/callback?" + urllib.parse.urlencode(
+            {"code": "CODE", "state": state}))
+        assert st == 303 and h.get("Location") == want, (nxt, st, h.get("Location"))
 
 
 def oidc_sign_in(srv, provider, claims):
@@ -493,6 +508,8 @@ def test_oidc():
             oidc_provider_answers(srv, provider)
             print("OIDC: PKCE S256 (an older state cookie still works); the provider's errors "
                   "logged and shown by code; an unverified e-mail names nobody  OK")
+            oidc_next(srv, provider)
+            print("OIDC: the sign-in goes back to the page it was started for (a local one)  OK")
 
             # the provider's "admin" (or "Admin") is not the local admin
             before = user_of(srv, "admin")

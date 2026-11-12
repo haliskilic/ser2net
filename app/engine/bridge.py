@@ -49,6 +49,7 @@ import ipaddress
 import math
 import os
 import queue
+import re
 import socket
 import sys
 import threading
@@ -371,10 +372,15 @@ class RunnerStatus:
 
     def as_dict(self) -> dict:
         now = time.monotonic()
+        # connected_at (Unix time, whole seconds): the dashboard counts the duration on from
+        # it. Worked out from the monotonic time each time, so it stays the same from one
+        # refresh to the next, and a clock step moves it along with the server's clock
+        wall = time.time() - now
         clients = [
             {"peer": c["peer"], "duration": fmt_duration(now - c["connected_at"]),
              "connected_s": max(0, int(now - c["connected_at"])),  # the same, as a number
-             "priority": c.get("priority", False)}
+             "priority": c.get("priority", False),
+             "connected_at": float(round(wall + c["connected_at"]))}
             for c in self.clients
         ]
         return {
@@ -405,16 +411,16 @@ class RunnerStatus:
         }
 
 
+_BANNER_ESCAPE = re.compile(r"\\([\\dNpIrn])")
+
+
 def _render_banner(template: str, mapping: MappingConfig, device: str, peer: str) -> bytes:
-    s = (
-        template.replace("\\d", device)
-        .replace("\\N", mapping.name)
-        .replace("\\p", str(mapping.network.port))
-        .replace("\\I", peer)
-        .replace("\\r", "\r")
-        .replace("\\n", "\n")
-    )
-    return s.encode("utf-8", "replace")
+    """The connect banner: \\d the device, \\N the mapping's name, \\p its port, \\I the
+    client's IP, \\r \\n a line break, \\\\ a backslash (C:\\\\data stays C:\\data); any other
+    backslash is kept. One pass, so what an escape puts in is not read again."""
+    values = {"d": device, "N": mapping.name, "p": str(mapping.network.port), "I": peer,
+              "r": "\r", "n": "\n", "\\": "\\"}
+    return _BANNER_ESCAPE.sub(lambda m: values[m.group(1)], template).encode("utf-8", "replace")
 
 
 class _ClientConn:

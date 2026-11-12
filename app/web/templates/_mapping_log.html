@@ -1,9 +1,20 @@
-<div hx-get="{{ base }}/api/mappings/{{ mid }}/log" hx-trigger="every 5s" hx-target="#form-panel" hx-swap="innerHTML">
+{% if gone %}
+<div class="form-head">
+  <h3 id="panel-title" tabindex="-1">{{ _("Log") }}</h3>
+  <div class="actions">
+    <button type="button" class="btn sm" id="log-close" data-cancel>{{ _("Close") }}</button>
+  </div>
+</div>
+<p class="muted">{{ _("This mapping no longer exists: it was deleted.") }}</p>
+{% else %}
+{# data-hash: the 5-second refresh answers 204 while the log is unchanged (no swap: the
+   scroll position and a text selection stay); the button ids keep the keyboard focus #}
+<div hx-get="{{ base }}/api/mappings/{{ mid }}/log" hx-trigger="every 5s" hx-target="#form-panel" hx-swap="innerHTML" data-hash="{{ content_hash }}">
   <div class="form-head">
-    <h3>{{ _("Log — %(name)s", name=mapping_name|softbreak) }}</h3>
+    <h3 id="panel-title" tabindex="-1">{{ _("Log — %(name)s", name=mapping_name|softbreak) }}</h3>
     <div class="actions">
-      <button class="btn sm" hx-get="{{ base }}/api/mappings/{{ mid }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
-      <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
+      <button class="btn sm" id="log-refresh" hx-get="{{ base }}/api/mappings/{{ mid }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("↻ Refresh") }}</button>
+      <button type="button" class="btn sm" id="log-close" data-cancel>{{ _("Close") }}</button>
     </div>
   </div>
   <p class="muted mb-sm">{{ _("Newest first · auto-refreshes every 5s · persists across restarts.") }} {{ _("Times are the server’s local time (now %(zone)s).", zone=server_zone()) }}</p>
@@ -14,3 +25,4 @@
   <p class="muted">{{ _("No log entries yet for this mapping.") }}</p>
   {% endif %}
 </div>
+{% endif %}
