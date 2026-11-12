@@ -188,7 +188,10 @@ def main():
     # a second (long-named) account: the Users table's row buttons + the set-password form
     others = [{"username": "night-shift.operator.building-b.east", "role": "operator",
                "password_hash": hash_password(PASSWORD), "pwd_version": 1}]
-    node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a}, "users": users + others,
+    # a long instance name: the top bar, the tab title and the fleet view's row
+    node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a,
+                           "node_name": "Production line 1 · Hall B · east wing · cabinet 4"},
+              "users": users + others,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "peers": [f"127.0.0.1:{ui_b}"]},
               "mappings": demo_mappings("", raw_a)}
