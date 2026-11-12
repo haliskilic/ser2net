@@ -267,7 +267,21 @@ düzenlemeye gerek yok.
   loglanır. Eşlemenin durumu (REST API'de `mqtt`: durum, broker, ne zamandan beri, hata,
   teslim edilemeyen mesajlar) ve `/metrics` bunu taşır; pano nedeniyle birlikte
   **⚠ MQTT: … ile bağlantı yok** gösterir. `+` ya da `#` içeren bir base topic (hiçbir mesaj
-  ona yayınlanamaz) eşlemenin MQTT'sini kapalı tutar ve loglanır. **TLS**'te broker'ın
+  ona yayınlanamaz) eşlemenin MQTT'sini kapalı tutar ve loglanır. Düzenlemeler (eşleme
+  formu, REST API, içe aktarma, bir küme düğümünün kaydı) böyle bir base topic'i, düz
+  biçimde `+`, `#` ya da null karakter içeren bir nokta adını (`/` sorun değil) ve topic'i
+  eşlemede zaten kullanılan bir noktayı reddeder: `status`, unit durumları açıkken
+  `unit<N>/status` ya da başka bir noktanın `<nokta>/set` veya `/set/result` topic'i. Aynı
+  broker'daki (host:port) iki etkin eşleme açık bir client ID'yi (broker her ID için tek
+  bağlantı tutar), bir Sparkplug B grup ve edge düğüm ID'sini ya da bir komut topic'ini —
+  ikisinin de alacağı bir `/set`'i ya da birinin verisini yayınladığı, diğerinin komut
+  aldığı bir topic'i — paylaşamaz. Yalnızca aynı topic'lere yayın yapan eşlemelere (ortak
+  bir base topic; `<topic>/status` o zaman en son bağlananı gösterir) izin verilir, eşleme
+  başlarken log'una bir uyarı yazılır. Böyle bir çakışması zaten olan bir config.json
+  yüklenmeye ve çalışmaya devam eder: açılış ve eşlemenin her başlatılışı bunu loglar,
+  iki eşlemeden birinin düzenlemesi ise çakışmayı gidermeli (ya da birini kapatmalı). İki
+  ayrı ser2net kurulumu birbirinin eşlemelerini göremez: her birine kendi topic'lerini ve
+  client ID'lerini ver. **TLS**'te broker'ın
   sertifikası sistemin güvendiği bir CA'ya — **CA sertifika dosyası** (PEM ya da DER)
   verilmişse yalnızca o dosyadaki bir CA'ya — bağlanmalı ve broker'ın host adını (DNS adı
   ya da IP adresi) taşımalı; **Broker'ın host adını doğrula** kapalıyken host adını
@@ -431,7 +445,11 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 
 - **Eşleme ekle:** Ad, tür (Serial↔Network / Serial↔Serial), seri port + parametreler,
   ağ modu (server/client/udp), protokol, bind/remote IP:port, erişim kuralları.
-- **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda.
+- **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda. **Kopyala**, `<ad> (copy)`
+  (`(copy 2)`, …) adlı kapalı bir kopya oluşturur: bir sonraki boş port (taşıma protokolü
+  ve adresine göre; 65535'ten sonra aşağı doğru aranır), MQTT client ID'si yok, base topic
+  `<topic>-copy` (`-copy-2`, …) ve yeni adından türeyen bir Sparkplug B edge düğüm ID'si;
+  böylece seri portu değiştirilince orijinalin yanında çalışabilir.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
   cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın

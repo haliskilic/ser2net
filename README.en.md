@@ -262,7 +262,20 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   failed publish to a topic. The mapping's status (`mqtt` in the REST API: state, broker,
   since, error, dropped messages) and `/metrics` carry it, and the dashboard shows
   **⚠ MQTT: no connection to …** with the reason. A base topic with `+` or `#` (no message
-  can be published to it) keeps MQTT off for the mapping, with a log line. Over **TLS**
+  can be published to it) keeps MQTT off for the mapping, with a log line. Edits (the
+  mapping form, the REST API, an import, a cluster node's save) refuse such a base topic,
+  a plain-format point name with `+`, `#` or the null character (`/` is fine), and a
+  point whose topic the mapping already uses: `status`, `unit<N>/status` with the unit
+  states on, or another point's `<point>/set` or `/set/result`. Two enabled mappings on
+  the same broker (host:port) can't share an explicit client ID (the broker keeps one
+  connection per ID), a Sparkplug B group and edge node ID, or a command topic — a `/set`
+  both would take, or one that the other publishes its data to. Mappings that only
+  publish to the same topics (a shared base topic, whose `<topic>/status` then shows
+  whichever connected last) are allowed, with a warning in the mapping's log when it
+  starts. A config.json that already has such a clash keeps loading and running: start-up
+  and each start of the mapping log it, and an edit of either mapping has to resolve it
+  (or disable one of them). Two ser2net installations can't see each other's mappings:
+  give each its own topics and client IDs. Over **TLS**
   the broker's certificate must chain to a CA the system trusts — or, with a **CA
   certificate file** (PEM, or DER), to one in that file only — and name the broker host
   (a DNS name or an IP address); **Check the broker's host name** off accepts a
@@ -425,7 +438,11 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **Add mapping:** name, type (Serial↔Network / Serial↔Serial), serial port +
   parameters, network mode (server/client/udp), protocol, bind/remote IP:port, access
   rules.
-- **Start/Stop/Restart/Copy/Delete:** per row.
+- **Start/Stop/Restart/Copy/Delete:** per row. **Copy** makes a disabled copy named
+  `<name> (copy)` (`(copy 2)`, …) on the next free port (for its transport and address;
+  searched downwards past 65535), with no MQTT client ID, the base topic `<topic>-copy`
+  (`-copy-2`, …) and a Sparkplug B edge node ID made from its new name, so it can run next
+  to the original once its serial port is changed.
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
   device on network mappings. The hex view shows both directions; viewers see only what
