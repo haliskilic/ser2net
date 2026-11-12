@@ -51,7 +51,7 @@ import types
 import urllib.parse
 import urllib.request
 
-from _server import Browser, Server, _NoRedirect, free_port
+from _server import Browser, Server, _NoRedirect, free_port, ui_cookie
 
 from app.web import server as web_server
 from app.web.auth import hash_password, hash_token
@@ -400,7 +400,8 @@ def ws_status(base: str, path: str, cookie: str | None = None, origin: str | Non
     from websockets.exceptions import InvalidStatus
     from websockets.sync.client import connect
 
-    headers = {"Cookie": f"ser2net_session={cookie}"} if cookie else {}
+    name = ui_cookie("ser2net_session", urllib.parse.urlsplit(base).port)
+    headers = {"Cookie": f"{name}={cookie}"} if cookie else {}
     try:
         with connect("ws" + base[len("http"):] + path, additional_headers=headers,
                      origin=origin, open_timeout=10):
@@ -461,8 +462,8 @@ def _live(srv) -> None:
             check_session_route(who, *route)
     forged = Client(base, "a forged session cookie")
     forged.jar.set_cookie(http.cookiejar.Cookie(
-        0, "ser2net_session", "eyJ1IjoiYWRtaW4ifQ.forged", None, False, "127.0.0.1", False, False,
-        "/", True, False, None, False, None, None, {}))
+        0, ui_cookie("ser2net_session", srv.port), "eyJ1IjoiYWRtaW4ifQ.forged", None, False,
+        "127.0.0.1", False, False, "/", True, False, None, False, None, None, {}))
     assert gated("/", *forged.send("GET", "/"))
     assert gated("/api/status", *forged.send("GET", "/api/status"))
     st, _, body = admin.send("POST", "/api/mappings/save", headers={"X-CSRF-Token": "not-the-cookie"},

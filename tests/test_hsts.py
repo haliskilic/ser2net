@@ -24,7 +24,7 @@ import urllib.request
 from types import SimpleNamespace
 
 from _optional import need
-from _server import Browser, Server, _NoRedirect
+from _server import Browser, Server, _NoRedirect, ui_cookie
 
 from app.config import HSTS_MAX_AGE_DEFAULT, HSTS_MAX_AGE_MAX, AdminUI, AppConfig
 from app.web.auth import hash_password
@@ -133,9 +133,12 @@ def main():
         b = tls_browser(f"https://127.0.0.1:{srv.port}")
         b.login("admin", PW)
         b.get("/lang/en?next=/settings")
-        # the cookies of a TLS listener are Secure: the browser never sends them over http://
+        # the cookies of a TLS listener are Secure (the browser never sends them over
+        # http://), named __Host-…: an http:// address of the same name can't set those
         made = {c.name: c.secure for c in b.jar}
-        assert made == {"ser2net_csrf": True, "ser2net_session": True, "ser2net_lang": True}, made
+        assert made == {ui_cookie(n, srv.port, "https"): True
+                        for n in ("ser2net_csrf", "ser2net_session", "ser2net_lang")}, made
+        assert all(n.startswith("__Host-ser2net_") for n in made), made
         for path in ("/login", "/settings"):
             st, h, _ = b.get(path)
             assert st == 200 and h.get("Strict-Transport-Security") == f"max-age={YEAR}", path

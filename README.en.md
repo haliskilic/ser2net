@@ -476,7 +476,13 @@ local user's new password (which signs them out as well); everyone can *Sign out
 sessions*. **Settings → Web UI access → Sign out everyone** makes a new session key and
 ends every session at once, the admin's own excepted — use it when a copy of
 `config.json` or a backup may have leaked (downloaded backups leave the key out). While
-LDAP or OIDC is switched off, its accounts' sessions don't count.
+LDAP or OIDC is switched off, its accounts' sessions don't count. Browsers keep cookies per
+host name, not per port, so on a port other than 8080 the UI's cookies carry a tag of the
+port (`ser2net_session_1a2b3c4d`), and over HTTPS the `__Host-` prefix: instances reached
+under one host name on different ports (side by side, containers, SSH tunnels to
+`localhost`, the fleet view's *Open* link to a peer on the same address) keep their own
+sign-ins, and an `http://` address still works after an `https://` one of the same name.
+Sign-ins from before 2.9 carry over.
 
 **Failed sign-ins** are limited to 8 per address in 5 minutes (an IPv6 address counts by
 its /64; behind a reverse proxy, each client's own address once the proxy is a trusted

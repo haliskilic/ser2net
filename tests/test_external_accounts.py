@@ -35,7 +35,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from _server import Browser, Server
+from _server import Browser, Server, ui_cookie
 
 from app.config import EXTERNAL_NAME_MAX, AppConfig, User, external_name, external_name_problem
 from app.signins import SignIns, sign_in_of
@@ -64,8 +64,8 @@ def browser_as(srv, name, version) -> Browser:
     b = Browser(srv.base)
     token = auth.issue_session(srv.saved_config()["secret_key"], 600, name, version)
     b.jar.set_cookie(http.cookiejar.Cookie(
-        0, "ser2net_session", token, None, False, "127.0.0.1", False, False, "/", True,
-        False, None, False, None, None, {}))
+        0, ui_cookie("ser2net_session", srv.port), token, None, False, "127.0.0.1", False, False,
+        "/", True, False, None, False, None, None, {}))
     return b
 
 

@@ -109,6 +109,7 @@ PORTABLE = [
     "test_trusted_proxies.py",  # X-Forwarded-For / -Proto from trusted proxies only
     "test_secure_cookies.py",  # Secure cookies and HSTS behind a TLS reverse proxy
     "test_public_url.py",      # admin_ui.public_url and the path the UI is served under
+    "test_cookie_names.py",    # cookie names per port, path and scheme; 2.8 names moved
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

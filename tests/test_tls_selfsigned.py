@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
 from _optional import need  # noqa: E402
+from _server import ui_cookie  # noqa: E402
 
 from app.web import selfsigned  # noqa: E402
 from app.web.auth import hash_password  # noqa: E402
@@ -175,7 +176,7 @@ def test_web_button_with_empty_path():
         base = f"http://127.0.0.1:{ui}"
 
         def csrf():
-            return next(c.value for c in jar if c.name == "ser2net_csrf")
+            return next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui))
 
         def post(path, fields):
             req = urllib.request.Request(base + path, method="POST",

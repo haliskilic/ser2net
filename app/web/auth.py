@@ -512,9 +512,6 @@ def bearer_token(request) -> str:
 # --------------------------------------------------------------------------
 # cookies
 # --------------------------------------------------------------------------
-_FORWARDED_PROTO = re.compile(r'(?:^|[;\s])proto="?([a-z]+)', re.IGNORECASE)
-
-
 def is_https(request, cfg) -> bool:
     """Did the browser use HTTPS for this request? With admin TLS; when the request's
     scheme is https (uvicorn's TLS, or X-Forwarded-Proto from a trusted proxy:
@@ -522,33 +519,61 @@ def is_https(request, cfg) -> bool:
     whoever sent it: it only makes cookies stricter (Secure) and adds HSTS, which browsers
     take only over HTTPS, and a page can't add those headers to the browser's requests -
     so a TLS proxy needs no trusted-proxy setting for the cookies to be Secure."""
-    if cfg.admin_ui.tls_enabled or request.url.scheme in ("https", "wss"):
-        return True
-    if (request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower() \
-            == "https":
-        return True
-    m = _FORWARDED_PROTO.search((request.headers.get("forwarded") or "").split(",", 1)[0])
-    return bool(m and m.group(1).lower() == "https")
+    return cfg.admin_ui.tls_enabled or proxy.browser_https(request)
 
 
 def set_cookie(response, request, cfg, name: str, value: str, max_age: int,
                path: str = "/") -> None:
     """One of the UI's cookies: HttpOnly, SameSite=Lax, Secure whenever the browser used
-    HTTPS (is_https), under the request's path prefix and with its name for it
-    (proxy.cookie_name / cookie_path: '/' and the name itself without one)."""
-    response.set_cookie(proxy.cookie_name(request, name), value, max_age=max_age,
+    HTTPS (is_https), under the request's path prefix and with its name for the request
+    (proxy.cookie_name / cookie_path: by port, path and scheme)."""
+    response.set_cookie(proxy.cookie_name(request, name, path), value, max_age=max_age,
                         path=proxy.cookie_path(request, path), httponly=True, samesite="lax",
                         secure=is_https(request, cfg))
 
 
 def delete_cookie(response, request, cfg, name: str, path: str = "/") -> None:
-    response.delete_cookie(proxy.cookie_name(request, name), path=proxy.cookie_path(request, path),
+    response.delete_cookie(proxy.cookie_name(request, name, path),
+                           path=proxy.cookie_path(request, path),
                            httponly=True, samesite="lax", secure=is_https(request, cfg))
 
 
-def cookie(request, name: str) -> str | None:
-    """The value of one of the UI's cookies (its name for this request: set_cookie)."""
-    return request.cookies.get(proxy.cookie_name(request, name))
+def cookie(request, name: str, path: str = "/", legacy: bool = True) -> str | None:
+    """The value of one of the UI's cookies (its name for this request: set_cookie); when
+    the request has none under that name, the one under the name 2.8 and older gave it
+    (proxy.legacy_cookie_name), unless `legacy` is False. Such a session cookie is moved to
+    its new name by GuardMiddleware (legacy_session / move_session)."""
+    value = request.cookies.get(proxy.cookie_name(request, name, path))
+    if value is None and legacy and (old := proxy.legacy_cookie_name(request, name, path)):
+        value = request.cookies.get(old)
+    return value
+
+
+def legacy_session(request, cfg, revoked: RevokedSessions | None = None) -> str | None:
+    """A session cookie of this UI under the name of 2.8 and older (a sign-in from before
+    the upgrade), when the request has none under its name now: the token, only when it
+    is a valid session here. Another instance on this host name may still use that name
+    (one of 2.8, or one on port 8080, whose name it is): its cookie doesn't verify with
+    this UI's key and is left alone."""
+    old = proxy.legacy_cookie_name(request, SESSION_COOKIE)
+    if old is None or proxy.cookie_name(request, SESSION_COOKIE) in request.cookies:
+        return None
+    token = request.cookies.get(old)
+    return token if session_user(cfg, token, revoked) is not None else None
+
+
+def move_session(response, request, cfg, token: str) -> None:
+    """Move a legacy_session to the session cookie's name now (the same token, until it
+    expires anyway) - unless the response sets or deletes that cookie itself (a sign-in, a
+    sign-out) - and delete it under the old name."""
+    name = proxy.cookie_name(request, SESSION_COOKIE)
+    if not any(c.startswith(name + "=") for c in response.headers.getlist("set-cookie")):
+        data = decode_session(cfg.secret_key, token)
+        if data is not None:
+            set_cookie(response, request, cfg, SESSION_COOKIE, token,
+                       max_age=max(1, data["exp"] - int(time.time())))
+    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="lax",
+                           secure=is_https(request, cfg))
 
 
 # --------------------------------------------------------------------------
@@ -556,10 +581,6 @@ def cookie(request, name: str) -> str | None:
 # --------------------------------------------------------------------------
 def new_csrf_token() -> str:
     return secrets.token_urlsafe(32)
-
-
-def csrf_from_request(request) -> str:
-    return request.cookies.get(proxy.cookie_name(request, CSRF_COOKIE), "")
 
 
 def csrf_token_matches(request, token) -> bool:
@@ -571,12 +592,12 @@ def csrf_token_matches(request, token) -> bool:
     (checked in middleware); plain HTML form posts pass _csrf in the body and are
     validated by their handlers, which read the form exactly once.
     """
-    cookie = request.cookies.get(proxy.cookie_name(request, CSRF_COOKIE))
-    if not cookie or not token:
+    stored = cookie(request, CSRF_COOKIE)  # a 2.8 one too, until GuardMiddleware moves it
+    if not stored or not token:
         return False
     token = str(token)
     # tokens are ASCII; compare_digest raises on other text, which is just a mismatch
-    return token.isascii() and cookie.isascii() and hmac.compare_digest(token, cookie)
+    return token.isascii() and stored.isascii() and hmac.compare_digest(token, stored)
 
 
 # --------------------------------------------------------------------------

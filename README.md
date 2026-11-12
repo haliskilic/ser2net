@@ -490,7 +490,13 @@ ya da yerel bir kullanıcıya yeni parola verebilir (bu da oturumlarını kapat�
 erişimi → Herkesin oturumunu kapat** yeni bir oturum anahtarı üretip admin'in kendi oturumu
 dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yedeğin kopyası sızmış
 olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
-kapalıyken o hesapların oturumları geçersizdir.
+kapalıyken o hesapların oturumları geçersizdir. Tarayıcılar çerezleri porta göre değil host
+adına göre tutar; bu yüzden 8080 dışındaki bir portta arayüzün çerez adlarına portun bir
+etiketi eklenir (`ser2net_session_1a2b3c4d`), HTTPS'te de `__Host-` öneki: aynı host adıyla
+farklı portlardan açılan kurulumlar (yan yana servisler, container'lar, `localhost`'a SSH
+tünelleri, küme görünümündeki *Aç* bağlantısıyla aynı adresteki bir eş) birbirinin
+oturumunu kapatmaz, aynı adın `https://` adresinden sonra `http://` adresi de çalışır.
+2.9'dan önceki girişler geçerli kalır.
 
 **Başarısız girişler** adres başına 5 dakikada 8 (bir IPv6 adresi /64'üyle sayılır; reverse
 proxy arkasında proxy güvenilen bir proxy ise her istemcinin kendi adresiyle, değilse tüm

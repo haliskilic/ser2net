@@ -27,6 +27,9 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 UI = 8085
 
+from _server import ui_cookie  # noqa: E402
+SESSION, CSRF = ui_cookie("ser2net_session", UI), ui_cookie("ser2net_csrf", UI)
+
 
 def wait_port(port, timeout=10):
     end = time.time() + timeout
@@ -68,7 +71,7 @@ def main():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next(c.value for c in jar if c.name == "ser2net_csrf")
+            return next(c.value for c in jar if c.name == CSRF)
 
         def post(path, data, header=False):
             req = urllib.request.Request("http://127.0.0.1:%d%s" % (UI, path),
@@ -87,14 +90,14 @@ def main():
             "network_mode": "server", "network_protocol": "raw", "network_bind_ip": "127.0.0.1",
             "network_port": "47350"}, header=True)
         mid = json.load(open(cfg))["mappings"][0]["id"]
-        session = next(c.value for c in jar if c.name == "ser2net_session")
+        session = next(c.value for c in jar if c.name == SESSION)
         time.sleep(0.5)
         device = serial.Serial(dev_b, 115200, timeout=1)
 
         # WS auth via the session cookie (BaseHTTPMiddleware doesn't cover WS)
         async def ws_test():
             uri = f"ws://127.0.0.1:{UI}/api/mappings/{mid}/console"
-            async with websockets.connect(uri, additional_headers={"Cookie": f"ser2net_session={session}"}) as ws:
+            async with websockets.connect(uri, additional_headers={"Cookie": f"{SESSION}={session}"}) as ws:
                 # device -> monitor (browser receives serial traffic)
                 await asyncio.to_thread(device.write, b"hello-mon"); await asyncio.to_thread(device.flush)
                 # generous timeout: under CI load the serial->monitor->WS hop can be
@@ -124,7 +127,7 @@ def main():
         async def traffic_test():
             import struct
             uri = f"ws://127.0.0.1:{UI}/api/mappings/{mid}/traffic"
-            async with websockets.connect(uri, additional_headers={"Cookie": f"ser2net_session={session}"}) as ws:
+            async with websockets.connect(uri, additional_headers={"Cookie": f"{SESSION}={session}"}) as ws:
                 _r, w = await asyncio.open_connection("127.0.0.1", 47350)
                 await asyncio.sleep(0.3)
                 w.write(b"from-net"); await w.drain()
@@ -164,8 +167,8 @@ def main():
         vop.open(urllib.request.Request(
             "http://127.0.0.1:%d/login" % UI, method="POST", data=urllib.parse.urlencode({
                 "username": "view1", "password": "viewerpass1",
-                "_csrf": next(c.value for c in vjar if c.name == "ser2net_csrf")}).encode()))
-        vsession = next(c.value for c in vjar if c.name == "ser2net_session")
+                "_csrf": next(c.value for c in vjar if c.name == CSRF)}).encode()))
+        vsession = next(c.value for c in vjar if c.name == SESSION)
 
         def console_view(opener):
             return opener.open("http://127.0.0.1:%d/api/mappings/%s/console-view" % (UI, mid),
@@ -179,7 +182,7 @@ def main():
 
         async def viewer_test():
             import struct
-            hdr = {"Cookie": f"ser2net_session={vsession}"}
+            hdr = {"Cookie": f"{SESSION}={vsession}"}
             base = f"ws://127.0.0.1:{UI}/api/mappings/{mid}"
             async with websockets.connect(base + "/console", additional_headers=hdr) as ws:
                 await ws.send(b"viewer-typed")  # a viewer's console is read-only: dropped

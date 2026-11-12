@@ -49,6 +49,7 @@ from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign, 
                                 canonical_target, format_auth, key_header, parse_auth,
                                 reply_mac, request_mac)
 from app.web.auth import hash_password                         # noqa: E402
+from _server import ui_cookie                                   # noqa: E402
 
 
 def free_port():
@@ -209,7 +210,7 @@ def test_endpoints():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next(c.value for c in jar if c.name == "ser2net_csrf")
+            return next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui))
 
         def post(path, fields, header=False):
             req = urllib.request.Request(f"http://127.0.0.1:{ui}{path}",
@@ -423,7 +424,7 @@ def test_manual_peer_and_remote_control():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next(c.value for c in jar if c.name == "ser2net_csrf")
+            return next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui_a))
 
         def post_a(path, fields):
             req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}",
@@ -690,7 +691,7 @@ def test_edit_on_a_peer_with_its_own_id():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next(c.value for c in jar if c.name == "ser2net_csrf")
+            return next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui_a))
 
         def post_a(path, fields):
             req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}",
@@ -882,12 +883,12 @@ def test_signed_legacy_and_mismatch():
         jar = http.cookiejar.CookieJar()
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         op.open(f"http://127.0.0.1:{ui_a}/login", timeout=10)
-        csrf = next(c.value for c in jar if c.name == "ser2net_csrf")
+        csrf = next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui_a))
         op.open(urllib.request.Request(
             f"http://127.0.0.1:{ui_a}/login", method="POST",
             data=urllib.parse.urlencode({"username": "admin", "password": "clusteradmin1",
                                          "_csrf": csrf}).encode()), timeout=10)
-        csrf = next(c.value for c in jar if c.name == "ser2net_csrf")  # new after signing in
+        csrf = next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui_a))  # new after signing in
 
         def status_html():
             return op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=15).read().decode()
