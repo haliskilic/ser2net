@@ -102,6 +102,7 @@ PORTABLE = [
     "test_cluster_settings.py",
     "test_changelog.py",
     "test_shutdown.py",         # SIGTERM-during-start part: POSIX
+    "test_listener_retry.py",
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

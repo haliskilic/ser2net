@@ -46,7 +46,8 @@ _LOST = ("reconnecting", "device-missing")
 
 def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, str, str, str]]:
     """Events between two status snapshots: [(event, key, mapping name, detail)].
-    A mapping seen for the first time produces none (start-up)."""
+    A mapping seen for the first time produces none, unless it is in "error": one that
+    failed at start-up (see baseline) or a new one that failed to start says so once."""
     events = []
     for mid, st in statuses.items():
         name = names.get(mid)
@@ -55,6 +56,8 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
         old = prev.get(mid)
         state, peers = st.get("state"), {c.get("peer") for c in st.get("clients") or []}
         if old is None:
+            if state == "error":
+                events.append(("start_failed", mid, name, st.get("last_error") or ""))
             continue
         old_state, old_peers = old
         device = st.get("device") or ""
@@ -74,6 +77,12 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
 def snapshot(statuses: dict) -> dict:
     return {mid: (st.get("state"), {c.get("peer") for c in st.get("clients") or []})
             for mid, st in statuses.items()}
+
+
+def baseline(statuses: dict) -> dict:
+    """The snapshot the watcher starts from (right after the mappings started): one that
+    failed to start is left out, so that its failure is reported (once) like a later one."""
+    return {mid: snap for mid, snap in snapshot(statuses).items() if snap[0] != "error"}
 
 
 def message(event: str, mapping: str, detail: str) -> tuple[str, str]:
@@ -152,7 +161,7 @@ class Notifier:
         return self.state.config.notifications
 
     async def start(self) -> None:
-        self._prev = snapshot(self.state.supervisor.all_status())
+        self._prev = baseline(self.state.supervisor.all_status())
         self._tasks = [asyncio.create_task(self._watch(), name="notify-watch"),
                        asyncio.create_task(self._worker(), name="notify-send")]
 

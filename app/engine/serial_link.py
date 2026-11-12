@@ -40,28 +40,32 @@ _SENT_POLL_S = 0.05  # how often a close looks whether the port has sent everyth
 
 
 class Backoff:
-    """The pause between reconnect attempts: 0.5 s doubling up to 10 s, plus up to 0.4 s
-    of jitter derived from the attempt number (not an RNG). ``attempt`` counts the attempts
-    since the last success; reset() after one."""
+    """The pause between reconnect attempts: 0.5 s doubling up to ``cap`` (10 s), plus up
+    to 0.4 s of jitter derived from the attempt number (not an RNG). ``attempt`` counts the
+    attempts since the last success; reset() after one."""
 
-    def __init__(self) -> None:
+    def __init__(self, cap: float = 10.0) -> None:
+        self.cap = cap
         self.attempt = 0
         self._delay = 0.5
 
     def reset(self) -> None:
         self.attempt, self._delay = 0, 0.5
 
+    def pause(self) -> float:
+        """The pause before the next attempt (what wait() sleeps), counting that attempt."""
+        self.attempt += 1
+        pause = min(self._delay, self.cap) + (self.attempt % 5) * 0.1
+        self._delay = min(self._delay * 2, self.cap)
+        return pause
+
     async def wait(self, stop: asyncio.Event) -> bool:
         """Sleep before the next attempt; False when ``stop`` was set meanwhile."""
-        self.attempt += 1
         try:
-            await asyncio.wait_for(stop.wait(),
-                                   timeout=min(self._delay, 10.0) + (self.attempt % 5) * 0.1)
+            await asyncio.wait_for(stop.wait(), timeout=self.pause())
             return False
         except asyncio.TimeoutError:
-            pass
-        self._delay = min(self._delay * 2, 10.0)
-        return True
+            return True
 
 
 class SerialLink:

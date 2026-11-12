@@ -32,6 +32,7 @@ listener they reach, before they cost anything more:
 a TLS listener it also applies the mapping's allow-list before the handshake (a refused
 host never gets one) and does the handshake itself (``start_tls``): the mapping sees the
 connection only once it is done, and decides about capacity, kicking and "Busy" then.
+When the listener can't take its address it raises ``BindError``.
 """
 from __future__ import annotations
 
@@ -67,6 +68,20 @@ TLS_WAITING_PER_IP = 64
 # of them, which stay for listeners, connections out and UDP sockets
 SELECT_LIMIT = 512
 SELECT_HEADROOM = 64
+
+
+class BindError(OSError):
+    """A listener could not take its address and port: another socket holds it, or the
+    address is not on this machine (yet: DHCP, a NIC or a tentative IPv6 address that comes
+    up later). Worth another try later (the supervisor makes them), whatever form the error
+    came in: asyncio on Python 3.11+ reports a missing address as "could not bind on any
+    address", with no errno."""
+
+    @classmethod
+    def of(cls, e: OSError) -> BindError:
+        err = cls(str(e))
+        err.errno = e.errno
+        return err
 
 
 class LogEvery:
@@ -568,8 +583,12 @@ async def start_server(client_connected_cb: Callable, host: str, port: int, *, s
     connection right after accept: the process's budget, then (TLS) ``allowed`` (the
     mapping's allow-list) and the handshakes in progress, before the handshake.
     ``client_connected_cb(reader, writer)`` gets TLS connections once their handshake is
-    done. ``log``: where refusals and failed handshakes are reported (the mapping's log)."""
+    done. ``log``: where refusals and failed handshakes are reported (the mapping's log).
+    Raises BindError when the address and port can't be taken."""
     listener = Listener(client_connected_cb, ssl, allowed, log or (lambda _m: None), limit)
-    listener.server = await asyncio.get_running_loop().create_server(
-        lambda: _Gate(listener), host, port)
+    try:
+        listener.server = await asyncio.get_running_loop().create_server(
+            lambda: _Gate(listener), host, port)
+    except OSError as e:
+        raise BindError.of(e) from e
     return listener

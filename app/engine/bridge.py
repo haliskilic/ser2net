@@ -33,6 +33,7 @@ import asyncio
 import contextlib
 import errno
 import ipaddress
+import math
 import os
 import queue
 import socket
@@ -314,6 +315,10 @@ class RunnerStatus:
     dropped_clients: int = 0   # clients dropped because their output queue overflowed
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
     last_error: str = ""
+    # state "error" because the listener could not take its address: the supervisor tries
+    # again at this time.monotonic() (0: no retry pending); as_dict() shows it as
+    # retrying / next_retry_s
+    retry_at: float = 0.0
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
@@ -346,6 +351,9 @@ class RunnerStatus:
             "dropped_clients": self.dropped_clients,
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
+            "retrying": bool(self.retry_at),
+            "next_retry_s": (max(0, math.ceil(self.retry_at - time.monotonic()))
+                             if self.retry_at else 0),
         }
 
 
@@ -633,56 +641,66 @@ class MappingRunner:
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
-        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
 
         if self.mapping.kind == "serialbridge":
+            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
             self._main_task = asyncio.create_task(
                 self._serialbridge_supervisor(), name=f"serbridge:{self.mapping.name}")
             self.status.state = "running"
             self._log("serial-to-serial bridge starting")
             return
 
-        # optional MQTT publisher: serial lines -> broker (net mappings)
-        if self.mapping.mqtt.enabled:
-            from .mqtt_pub import MqttPublisher
-            self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log)
-            self._mqtt.connect()
-
         net = self.mapping.network
-        # serial side is shared by server/client/udp
-        self._serial_task = asyncio.create_task(
-            self._link.run(self._serial_session), name=f"serial:{self.mapping.name}")
+        # The listener comes first (its TLS context, then the bind): a start that fails
+        # there has opened nothing yet (no serial port, whose open pulses DTR/RTS, no
+        # broker connection, no trace file), so the supervisor can simply try it again
+        # later when the address can't be taken (BindError). Data for the device that
+        # arrives before the port is open is dropped, as while it reconnects.
+        udp: Optional[_UdpBridge] = None
+        if net.mode == "server":
+            # admission right after accept; a TLS client's allow-list check comes
+            # before its handshake (netguard.start_server)
+            self._server = await netguard.start_server(
+                self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
+                allowed=self._access.allowed, log=self._log)
+            self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
+                      f"{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
+        elif net.mode == "udp":
+            udp = _UdpBridge(self)  # a malformed stored reply address fails the start
+            bound = udp
+            loop = asyncio.get_running_loop()
+            try:
+                self._udp_transport, _ = await loop.create_datagram_endpoint(
+                    lambda: bound, local_addr=(net.bind_ip, net.port))
+            except OSError as e:
+                raise netguard.BindError.of(e) from e
+            self._log(f"UDP on {net.bind_ip}:{net.port}, {udp.describe()}")
 
-        # If the network side fails to come up (address-in-use, bad TLS cert, ...),
-        # tear everything down — otherwise the serial supervisor task is orphaned and
-        # keeps the serial device open forever, so no other mapping can use that port.
+        # If the rest fails to come up, tear everything down (the listener too), so that
+        # nothing is left holding the port or the serial device.
         try:
-            if net.mode == "server":
-                # admission right after accept; a TLS client's allow-list check comes
-                # before its handshake (netguard.start_server)
-                self._server = await netguard.start_server(
-                    self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
-                    allowed=self._access.allowed, log=self._log)
-                self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
-                          f"{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
-            elif net.mode == "client":
+            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+            # optional MQTT publisher: serial lines -> broker (net mappings)
+            if self.mapping.mqtt.enabled:
+                from .mqtt_pub import MqttPublisher
+                self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log)
+                self._mqtt.connect()
+            # up from here; the serial side reports its own state once it has tried the port
+            self.status.state = "running"
+            self.status.last_error = ""
+            # serial side is shared by server/client/udp
+            self._serial_task = asyncio.create_task(
+                self._link.run(self._serial_session), name=f"serial:{self.mapping.name}")
+            if net.mode == "client":
                 self._main_task = asyncio.create_task(
                     self._client_supervisor(), name=f"connectout:{self.mapping.name}")
                 self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol}, "
                           f"{sockopts.describe(net)})")
-            elif net.mode == "udp":
-                udp = _UdpBridge(self)  # a malformed stored reply address fails the start
-                loop = asyncio.get_running_loop()
-                self._udp_transport, _ = await loop.create_datagram_endpoint(
-                    lambda: udp, local_addr=(net.bind_ip, net.port))
+            elif udp is not None:
                 self._main_task = asyncio.create_task(udp.run(), name=f"udp:{self.mapping.name}")
-                self._log(f"UDP on {net.bind_ip}:{net.port}, {udp.describe()}")
         except BaseException:
             await self.stop()
             raise
-        # the serial port may already have failed to open while the listener came up
-        if self.status.state == "stopped":  # the serial side has not reported yet
-            self.status.state = "running"
 
     async def stop(self) -> None:
         self._stop.set()

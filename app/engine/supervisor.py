@@ -4,20 +4,33 @@ The web layer mutates + persists the AppConfig, then calls this to reconcile the
 running bridges. Editing a mapping at runtime stops the old runner (awaiting full
 teardown so the listening socket is released) before starting the new one, which
 avoids address-in-use / port races.
+
+A mapping whose listener can't take its address (netguard.BindError: the port is in use,
+or the address is not on this machine yet, as at boot before DHCP) stays in state "error"
+and is started again after a backoff (up to BIND_RETRY_MAX_S between tries), for as long
+as it is meant to run: until it starts, or it is applied, stopped or removed again. Such a
+start opens nothing before its bind (bridge.MappingRunner.start), so a retry neither
+pulses the serial lines nor reconnects to a broker.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import Any, Callable, Optional, Protocol
 
 from ..config import AppConfig, MappingConfig
 from . import serial_io
 from .bridge import MappingRunner, RunnerStatus
+from .netguard import BindError
+from .serial_link import Backoff
 
 # stop_all(): the runners stop side by side, for at most this long together; one that
 # takes longer is left to finish on its own (and logged), so it can't hold up the rest
 STOP_ALL_TIMEOUT_S = 15.0
+# a listener that could not bind is tried again after the serial reconnect's backoff
+# (0.5 s doubling), at most this many seconds apart
+BIND_RETRY_MAX_S = 30.0
 
 
 class Runner(Protocol):
@@ -110,6 +123,7 @@ class Supervisor:
         )
         self._lock = asyncio.Lock()
         self._stopping: set[asyncio.Future] = set()  # stop_all()'s runners still stopping
+        self._retries: dict[str, asyncio.Task] = {}  # mapping id -> its bind retry
 
     # ---------------- bulk ----------------
     async def start_all(self, config: AppConfig) -> None:
@@ -125,6 +139,9 @@ class Supervisor:
         still stopping then (a device or broker that doesn't answer) is logged and left to
         finish in the background, instead of keeping the others running (an import or a
         restore stops all, then starts the new set) or the process from exiting."""
+        retries = [asyncio.ensure_future(self._cancel_retry(mid)) for mid in list(self._retries)]
+        if retries:  # (an attempt under way ends first: a bind, nothing that can hang)
+            await asyncio.wait(retries, timeout=STOP_ALL_TIMEOUT_S)
         async with self._lock:
             runners = list(self._runners.values())
             self._runners.clear()
@@ -152,7 +169,9 @@ class Supervisor:
                 self._order.append(mapping.id)
 
     async def apply_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
-        """Create/replace and (if enabled) start the runner for a mapping."""
+        """Create/replace and (if enabled) start the runner for a mapping. A start that
+        fails because the listener can't bind is tried again later (_retry)."""
+        await self._cancel_retry(mapping.id)
         async with self._lock:
             old = self._runners.pop(mapping.id, None)
         if old is not None:
@@ -177,13 +196,73 @@ class Supervisor:
         except Exception as e:
             runner.status.state = "error"
             runner.status.last_error = str(e)
-            self.log(f"[{mapping.name}] start failed: {e}")
+            if isinstance(e, BindError):
+                self.log(f"[{mapping.name}] start failed: {e} — trying again until the "
+                         f"address can be used (every {BIND_RETRY_MAX_S:g} s at most)")
+                self._retry_later(mapping, runner, str(e))
+            else:
+                self.log(f"[{mapping.name}] start failed: {e}")
             return False, str(e)
+
+    def _retry_later(self, mapping: MappingConfig, runner: Runner, error: str) -> None:
+        backoff = Backoff(cap=BIND_RETRY_MAX_S)
+        pause = backoff.pause()
+        runner.status.retry_at = time.monotonic() + pause  # (the status says so at once)
+        self._retries[mapping.id] = asyncio.create_task(
+            self._retry(mapping, runner, error, backoff, pause),
+            name=f"bind-retry:{mapping.name}")
+
+    async def _retry(self, mapping: MappingConfig, runner: Runner, error: str,
+                     backoff: Backoff, pause: float) -> None:
+        """Start ``runner`` again, with a backoff, while its listener can't bind. Logs a
+        changed error and the start that worked; any other error ends the retries."""
+        st = runner.status
+        try:
+            while True:
+                st.retry_at = time.monotonic() + pause
+                await asyncio.sleep(pause)
+                st.retry_at = time.monotonic()  # trying now
+                # asyncio.wait, which cancels nothing: a stop or a new apply that cancels
+                # the retry waits for an attempt under way to end, then stops what it started
+                attempt = asyncio.ensure_future(runner.start())
+                attempt.add_done_callback(_consume_error)
+                try:
+                    await asyncio.wait((attempt,))
+                except asyncio.CancelledError:
+                    await asyncio.wait((attempt,))
+                    raise
+                e = attempt.exception()
+                if e is None:
+                    self.log(f"[{mapping.name}] started after {backoff.attempt} "
+                             f"retr{'y' if backoff.attempt == 1 else 'ies'}")
+                    return
+                st.state, st.last_error = "error", str(e)
+                if not isinstance(e, BindError):
+                    self.log(f"[{mapping.name}] start failed: {e}")
+                    return
+                if str(e) != error:
+                    error = str(e)
+                    self.log(f"[{mapping.name}] start failed again: {e}")
+                pause = backoff.pause()
+        finally:
+            st.retry_at = 0.0
+            if self._retries.get(mapping.id) is asyncio.current_task():
+                del self._retries[mapping.id]
+
+    async def _cancel_retry(self, mapping_id: str) -> None:
+        """End a mapping's bind retry (and an attempt under way) before it is applied,
+        stopped or removed: a retry left running would undo a Stop."""
+        task = self._retries.pop(mapping_id, None)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     async def start_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
         return await self.apply_mapping(mapping)
 
     async def stop_mapping(self, mapping_id: str) -> None:
+        await self._cancel_retry(mapping_id)
         async with self._lock:
             runner = self._runners.get(mapping_id)
         if runner is not None:
@@ -195,6 +274,7 @@ class Supervisor:
         return await self.apply_mapping(mapping)
 
     async def remove_mapping(self, mapping_id: str) -> None:
+        await self._cancel_retry(mapping_id)
         async with self._lock:
             runner = self._runners.pop(mapping_id, None)
         if mapping_id in self._order:
