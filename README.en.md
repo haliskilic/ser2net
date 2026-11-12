@@ -229,6 +229,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   messages per mapping wait and go out after the reconnect — beyond that the newest are
   dropped (counted, logged once per outage) — and polled Modbus values keep only the
   latest value of each point instead (no burst of stale readings after an outage).
+  Stopping or restarting a mapping waits at most 3 s for the broker to take its last
+  message (`offline`, or a Sparkplug NDEATH; beyond that the Last-Will says the same),
+  without holding up the other mappings or the UI.
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as

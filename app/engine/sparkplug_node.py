@@ -443,3 +443,11 @@ class SparkplugNode:
         if self._pub is not None:
             self._pub.close(final=self._ndeath())
             self._pub = None
+
+    async def aclose(self) -> None:
+        """close() without holding up the event loop (MqttPublisher.aclose)."""
+        if self._restart is not None:  # its new session must not outlive the mapping
+            self._restart.cancel()
+        pub, self._pub = self._pub, None
+        if pub is not None:
+            await pub.aclose(final=self._ndeath())
