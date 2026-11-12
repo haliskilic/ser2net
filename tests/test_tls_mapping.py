@@ -6,7 +6,8 @@
   - edits (the mapping form, the REST API) load the files and refuse what does not load;
     an import takes such a mapping with a warning; the form never shows the stored
     password: a blank field keeps it, the remove box clears it; a viewer API token gets it
-    masked, and a PUT that sends the mask back keeps the stored one;
+    masked, and a PUT that sends the mask back keeps the stored one; a mapping can't be
+    saved with the admin UI's own key file (a stored one keeps working);
   - the admin UI's key the same way (admin_ui.tls_key_password, Settings → Admin TLS): it
     serves HTTPS with its password, and without one the start ends at once (exit 1, the
     reason in all.log), before any mapping starts.
@@ -55,6 +56,7 @@ class Pki:
         self.ca = TestCA(folder)
         self.cert, self.key = self.ca.issue(folder, "srv", ["srv.test", "127.0.0.1"])
         self.locked = self.encrypted(self.key, PASSWORD)
+        self.ui_cert, self.ui_key = self.ca.issue(folder, "ui", ["ui.test", "127.0.0.1"])
 
     def encrypted(self, key_path: str, password: str) -> str:
         """A copy of the key at ``key_path``, encrypted with ``password``."""
@@ -67,6 +69,13 @@ class Pki:
                                        serialization.PrivateFormat.PKCS8,
                                        serialization.BestAvailableEncryption(password.encode())))
         return path
+
+
+def _unverified() -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 def mapping(**network) -> MappingConfig:
@@ -142,10 +151,8 @@ def test_api_masks_the_password():
 
 
 async def _handshake(port: int) -> str:
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    _r, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port, ssl=ctx), 10)
+    _r, w = await asyncio.wait_for(
+        asyncio.open_connection("127.0.0.1", port, ssl=_unverified()), 10)
     version = w.get_extra_info("ssl_object").version()
     w.close()
     return version
@@ -188,24 +195,36 @@ def stored(srv: Server) -> dict:
     return next(m for m in srv.saved_config()["mappings"] if m["name"] == "tls-form")
 
 
+def https_browser(srv: Server) -> Browser:
+    """A Browser for a server whose admin UI has TLS (its test certificate is not checked)."""
+    import urllib.request
+
+    from _server import _NoRedirect
+    b = Browser(f"https://127.0.0.1:{srv.port}")
+    b.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(b.jar), _NoRedirect(),
+                                       urllib.request.HTTPSHandler(context=_unverified()))
+    return b
+
+
 def api(srv: Server, method: str, path: str, body=None):
     import urllib.error
     import urllib.request
-    req = urllib.request.Request(srv.base + "/api/v1" + path, method=method,
+    req = urllib.request.Request(f"https://127.0.0.1:{srv.port}/api/v1" + path, method=method,
                                  data=None if body is None else json.dumps(body).encode(),
                                  headers={"Authorization": f"Bearer {TOKEN}",
                                           "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with urllib.request.urlopen(req, timeout=20, context=_unverified()) as r:
             return r.status, json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read() or b"null")
 
 
 def test_form_and_api(pki: Pki):
-    config = {"users": USERS, "api_token_hash": hash_token(TOKEN), "api_token_role": "operator"}
+    config = {"users": USERS, "api_token_hash": hash_token(TOKEN), "api_token_role": "operator",
+              "admin_ui": {"tls_cert": pki.ui_cert, "tls_key": pki.ui_key}}
     with Server(config) as srv:
-        b = Browser(srv.base)
+        b = https_browser(srv)
         b.login("admin", "admin-pass-1")
         port = free_port()
         st, _h, body = b.post("/api/mappings/save", form(port, pki))
@@ -251,18 +270,26 @@ def test_form_and_api(pki: Pki):
         body["network"]["tls_key_password"] = "********"
         st, updated = api(srv, "PUT", f"/mappings/{created['id']}", body)
         assert st == 200 and updated["network"]["tls_key_password"] == PASSWORD, (st, updated)
+        # the admin UI's own key file (here: a hard link to it) is refused
+        link = os.path.join(srv.tmp, "ui-key-link.pem")
+        os.link(pki.ui_key, link)
+        st, _h, body = b.post("/api/mappings/save", form(
+            port, pki, id=m["id"], network_tls_cert=pki.ui_cert, network_tls_key=link))
+        assert st == 400 and "own key. Give the mapping" in body, (st, body[-800:])
+        body = {"name": "tls-api", "serial": {"port": MISSING_PORT + "-2"},
+                "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": free_port(),
+                            "tls": True, "tls_cert": pki.ui_cert, "tls_key": pki.ui_key}}
+        st, out = api(srv, "PUT", f"/mappings/{created['id']}", body)
+        assert st == 400 and "the admin UI's own key" in out["detail"], (st, out)
         assert "Traceback" not in srv.output()
     print("form and REST API: a key that does not load is refused; the form never shows the "
           "stored password, blank keeps it, the remove box clears it; a PUT with the mask "
-          "keeps it  OK")
+          "keeps it; the admin UI's key file is refused  OK")
 
 
 def _https_healthz(port: int) -> bytes:
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
     with socket.create_connection(("127.0.0.1", port), timeout=10) as raw, \
-            ctx.wrap_socket(raw) as s:
+            _unverified().wrap_socket(raw) as s:
         s.sendall(b"GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
         out = b""
         while chunk := s.recv(4096):

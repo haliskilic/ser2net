@@ -66,7 +66,8 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
     except (ValueError, ConfigError) as e:
         return False, str(e)
     if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
-                    or state.config.serial_conflict(mapping)):  # a port another one uses
+                    or state.config.serial_conflict(mapping)  # a port another one uses
+                    or state.config.admin_key_reuse(mapping)):
         return False, conflict
     # Hold the lock only to mutate + persist config; release it BEFORE the
     # (potentially slow) supervisor call so other admin requests aren't blocked

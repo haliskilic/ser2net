@@ -72,7 +72,8 @@ def build_api_routes(state):
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
-                        or state.config.serial_conflict(mapping)):  # a port another one uses
+                        or state.config.serial_conflict(mapping)  # a port another one uses
+                        or state.config.admin_key_reuse(mapping)):
             return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
         async with state.config_lock:
             state.config.mappings.append(mapping)
@@ -111,7 +112,8 @@ def build_api_routes(state):
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
-                        or state.config.serial_conflict(mapping)):  # a port another one uses
+                        or state.config.serial_conflict(mapping)  # a port another one uses
+                        or state.config.admin_key_reuse(mapping)):
             return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
         async with state.config_lock:
             existing = state.config.get_mapping(mid)
