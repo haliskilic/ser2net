@@ -48,6 +48,9 @@
         {% if link_down and st.link_error %}
           <div class="err-small" title="{{ st.link_error }}">{{ st.link_error|softbreak }}</div>
         {% endif %}
+        {% if st and st.warnings and state == 'running' %}
+          {% for w in st.warnings %}<div class="warn-small" title="{{ w }}">⚠ {{ w|softbreak }}</div>{% endfor %}
+        {% endif %}
         {% if st and st.retrying and state == 'error' %}
           <div class="sub">{{ _("retrying in %(n)s s", n=st.next_retry_s) if st.next_retry_s else _("retrying now") }}</div>
         {% endif %}

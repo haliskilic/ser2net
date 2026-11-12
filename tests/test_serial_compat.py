@@ -553,6 +553,13 @@ def digest(source):
 # code: look at serial_compat's matching override (and whether upstream fixed what it
 # works around), then put the new hash here.
 PINS = {
+    # open_stream sets RTS / DTR before open(), serial_io takes a refused RS-485 mode back:
+    # these setters keep the value, then apply it to a port that is open
+    "serial.serialutil": {
+        "SerialBase.rts": "9f3a188b4b33271c",
+        "SerialBase.dtr": "c48d7fc73ab93a12",
+        "SerialBase.rs485_mode": "8a1451338376f8b9",
+    },
     "serial.serialposix": {             # PosixSerial
         "Serial.open": "4981135238de1222",
         "Serial.close": "af4f4e008d2ab69e",

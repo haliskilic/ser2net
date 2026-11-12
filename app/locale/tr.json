@@ -850,5 +850,9 @@
   "Connect-out mapping reaches its remote server again": "Dışa bağlanan eşleme uzak sunucusuna yeniden ulaşıyor",
   "link down": "bağlantı yok",
   "connecting": "bağlanıyor",
-  "the connection to the remote server is down; it is tried again": "uzak sunucuyla bağlantı yok; yeniden deneniyor"
+  "the connection to the remote server is down; it is tried again": "uzak sunucuyla bağlantı yok; yeniden deneniyor",
+  "{0} could not be switched on: {1}": "{0} açık konuma alınamadı: {1}",
+  "{0} could not be switched off: {1}": "{0} kapalı konuma alınamadı: {1}",
+  "RS-485 mode is off: the port did not take it ({0})": "RS-485 modu kapalı: port bunu kabul etmedi ({0})",
+  "port {0}: {1}": "port {0}: {1}"
 }

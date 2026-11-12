@@ -486,11 +486,19 @@ def unverified_note() -> str:
     return note
 
 
-def _open_port(device: str, **kwargs: Any) -> Any:
+def _open_port(device: str, rts: bool | None = None, dtr: bool | None = None,
+               **kwargs: Any) -> Any:
     """Open ``device`` the way serial.serial_for_url opens a device path (blocking: runs in
-    an executor)."""
+    an executor). ``rts`` / ``dtr``: the line's state from the moment the port opens
+    (None: pyserial's default, on). pyserial switches both on inside open() unless told
+    otherwise before it: on Windows a line set to off then never pulses; on Linux the tty
+    layer itself raises both at open(2), so the pulse is only shorter there."""
     port = serial_class()(None, **kwargs)
     port.port = device
+    if rts is not None:
+        port.rts = rts
+    if dtr is not None:
+        port.dtr = dtr
     port.open()
     return port
 
@@ -501,13 +509,16 @@ def _close_opened(fut: asyncio.Future) -> None:
             fut.result().close()
 
 
-async def open_stream(device: str, limit: int,
+async def open_stream(device: str, limit: int, *, rts: bool | None = None,
+                      dtr: bool | None = None,
                       **kwargs: Any) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     """Open ``device`` with ``kwargs`` (pyserial settings) and return its (reader, writer);
     ``writer.transport`` is a ``Transport`` and ``writer.transport.serial`` the port.
-    Raises serial.SerialException / OSError when it can't be opened."""
+    ``rts`` / ``dtr``: see _open_port. Raises serial.SerialException / OSError when it
+    can't be opened."""
     loop = asyncio.get_running_loop()
-    opening = loop.run_in_executor(None, functools.partial(_open_port, device, **kwargs))
+    opening = loop.run_in_executor(None, functools.partial(_open_port, device, rts, dtr,
+                                                           **kwargs))
     try:
         ser = await asyncio.shield(opening)
     except asyncio.CancelledError:

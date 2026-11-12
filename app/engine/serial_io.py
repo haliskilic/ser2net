@@ -9,10 +9,13 @@ pyserial-asyncio-fast).
 """
 from __future__ import annotations
 
+import contextlib
 import sys
+import weakref
 from typing import Any
 
 from ..config import SerialSettings, url_port
+from . import portdiag
 
 # StreamReader high-water for the serial side. The default (64 KB) makes the reader
 # pause/resume frequently under load; we read promptly in the bridge and apply our
@@ -73,13 +76,22 @@ def port_settings(settings: SerialSettings) -> dict[str, Any]:
     )
 
 
+_LINE_STATES = {"on": True, "off": False}  # rts_on_open / dtr_on_open; "keep": pyserial's
+
+
 async def open_serial(settings: SerialSettings):
     """Open the serial port asynchronously.
 
     Returns (reader, writer, serial_instance, device_path). Raises
     serial.SerialException / OSError if the device can't be opened, ValueError for a
     URL port (refuse_url).
-    """
+
+    RTS / DTR set to on or off are in that state from the moment the port opens, and are
+    set again once it is open (pyserial skips them quietly when the port has no modem
+    lines, a PTY for one). A setting the port did not take (that, or RS-485 mode) does not
+    fail the open: open_notes(serial_instance) has it (portdiag.Note) for the caller to
+    report. A refused RS-485 mode is also taken back, as pyserial keeps it and would fail
+    every later change of the port's settings with it (an RFC 2217 client's baud rate)."""
     device = resolve_device(settings)
     refuse_url(device)  # the one place every serial port is opened
     kwargs: dict[str, Any] = port_settings(settings)
@@ -91,22 +103,21 @@ async def open_serial(settings: SerialSettings):
 
     from . import serial_compat
 
-    reader, writer = await serial_compat.open_stream(device, SERIAL_STREAM_LIMIT, **kwargs)
+    rts, dtr = _LINE_STATES.get(settings.rts_on_open), _LINE_STATES.get(settings.dtr_on_open)
+    reader, writer = await serial_compat.open_stream(device, SERIAL_STREAM_LIMIT, rts=rts,
+                                                     dtr=dtr, **kwargs)
     transport: Any = writer.transport  # serial_compat.Transport
     ser = transport.serial
 
-    # apply RTS/DTR start state (only when explicitly on/off). Some backends/adapters
-    # don't support explicit line control (ENOTTY etc.) — that's expected; anything
-    # else is surfaced to the caller (logged by the supervisor).
-    try:
-        if settings.rts_on_open in ("on", "off"):
-            ser.rts = settings.rts_on_open == "on"
-        if settings.dtr_on_open in ("on", "off"):
-            ser.dtr = settings.dtr_on_open == "on"
-    except (OSError, ValueError, AttributeError, _serial_exc()):
-        pass
+    found: list[portdiag.Note] = []
+    for line, want in (("RTS", rts), ("DTR", dtr)):
+        if want is not None:
+            try:
+                setattr(ser, line.lower(), want)
+            except Exception as e:  # ENOTTY / EINVAL: no modem lines; Windows: refused
+                found.append(portdiag.Note("line", (line, want, portdiag.reason(e))))
 
-    # RS-485 (best-effort; hardware/OS dependent)
+    # RS-485 (hardware/OS dependent): never fatal, so a port without it still opens
     adv = settings.advanced
     if adv.rs485_enabled:
         try:
@@ -116,13 +127,24 @@ async def open_serial(settings: SerialSettings):
                 delay_before_tx=(adv.rs485_delay_before_tx_ms / 1000.0) or None,
                 delay_before_rx=(adv.rs485_delay_after_tx_ms / 1000.0) or None,
             )
-        except (OSError, ValueError, AttributeError, NotImplementedError, _serial_exc()):
-            pass
+        except Exception as e:  # Linux: ENOTTY on most USB adapters; Windows: delays
+            with contextlib.suppress(Exception):
+                ser.rs485_mode = None
+            found.append(portdiag.Note("rs485", (portdiag.reason(e),)))
 
+    if found:
+        _NOTES[ser] = found
     return reader, writer, ser, device
 
 
-def _serial_exc():
-    """serial.SerialException, resolved lazily so this module imports without pyserial."""
-    import serial
-    return serial.SerialException
+# what open_serial found about a port it opened (a setting it did not take), by port
+_NOTES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def open_notes(ser: Any) -> list[portdiag.Note]:
+    """What open_serial found about the open port ``ser`` (portdiag.Note), [] if nothing
+    (or for a port it did not open)."""
+    try:
+        return list(_NOTES.get(ser, ()))
+    except TypeError:  # (a stand-in that can't be weakly referenced)
+        return []

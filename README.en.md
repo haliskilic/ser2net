@@ -96,7 +96,15 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control
   (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open, and RS-485 hardware
-  auto-RTS (Linux `TIOCSRS485`: enable + pre/post-TX delays + RTS-during-TX level).
+  auto-RTS (Linux `TIOCSRS485`: enable + pre/post-TX delays + RTS-during-TX level). RTS or
+  DTR set to `on` / `off` is in that state from the moment the port opens (`keep` leaves
+  the driver's default, on). On Windows a line set to `off` therefore never pulses; on
+  Linux the kernel itself raises DTR and RTS when a port is opened, so `off` only shortens
+  that pulse and can't keep a board that resets on DTR (an Arduino) from resetting at each
+  open. A setting the port doesn't take (RS-485 on most USB adapters, RTS/DTR on a port
+  without modem lines) doesn't stop the port from opening: the dashboard shows it under the
+  mapping's state and the mapping's log says it once, and a refused RS-485 mode is switched
+  off again so later changes of the port's settings (an RFC 2217 client's baud rate) work.
 - **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
   Windows WM_DEVICECHANGE), falling back to polling. On Linux the kernel's placeholder
   `ttyS` ports without hardware are hidden and the stable `/dev/serial/by-id` names are
