@@ -235,6 +235,13 @@ class SerialAdvanced:
     rs485_rts_level_for_tx: bool = True
     hangup_when_done: bool = False
     nobreak: bool = False
+    # keeping other programs off the port (POSIX; Windows opens a port for one program
+    # only anyway). `exclusive` (flock) keeps out only programs that flock the port too:
+    #   tiocexcl: while the port is open, other programs' opens fail (TIOCEXCL; not root's)
+    #   respect_uucp_locks: don't open a port another program has a UUCP lock file on
+    #     (minicom, cu: LCK..<tty> in /run/lock or /var/lock; read only, none is made)
+    tiocexcl: bool = False
+    respect_uucp_locks: bool = False
 
 
 @dataclass

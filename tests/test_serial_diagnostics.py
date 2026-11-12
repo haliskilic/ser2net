@@ -19,6 +19,12 @@ port did not take.
   - a port that went away and opened again on the very next try with the same device
     number was hung up (a login prompt's vhangup), not unplugged: counted (`hangups`),
     logged and shown; a real unplug (the next open fails) is not;
+  - keeping other programs off the port (opt-in, POSIX): with tiocexcl another program's
+    open of the PTY fails with EBUSY while the mapping has it open, and works again once
+    it is closed; with respect_uucp_locks a port a running program holds a UUCP lock file
+    on (HDB or binary, under any of its names) is not opened, and the error and the hint
+    name the program; a lock whose process is gone is ignored and left in place; both off
+    (the default, and on Windows) change nothing;
 
   - RTS / DTR set to on or off are given to pyserial before the port opens (so pyserial
     opens the port with them, instead of switching both on first), and set again once it is
@@ -610,6 +616,115 @@ def test_hangup_told_from_an_unplug():
           "(counted, logged, shown); a real unplug is not  OK")
 
 
+# ------------------------------------------------------------------ keeping programs off
+async def _tiocexcl(path):
+    settings = SerialSettings.from_dict({"port": path, "advanced": {"tiocexcl": True}})
+    _r, writer, ser, _d = await serial_io.open_serial(settings)
+    try:
+        assert ser._excl
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        except OSError as e:
+            assert e.errno == errno.EBUSY, e
+        else:
+            os.close(fd)
+            raise AssertionError("another program's open must fail while it is open")
+    finally:
+        writer.transport.abort()
+        await asyncio.sleep(0.05)
+    os.close(os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK))  # closed: free again
+    plain = SerialSettings.from_dict({"port": path})
+    _r, writer, ser, _d = await serial_io.open_serial(plain)
+    try:
+        assert not ser._excl
+        os.close(os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK))  # off: shared
+    finally:
+        writer.transport.abort()
+        await asyncio.sleep(0.05)
+
+
+def test_tiocexcl():
+    if os.name != "posix":
+        print("SKIP (part): TIOCEXCL is POSIX only (Windows ports are exclusive anyway)")
+        return
+    if os.geteuid() == 0:
+        print("SKIP (part): root opens a TIOCEXCL port anyway")
+        return
+    pty = Pty()
+    try:
+        asyncio.run(_tiocexcl(pty.path))
+    finally:
+        pty.close()
+    print("TIOCEXCL: another program's open is refused (EBUSY) while the mapping has the "
+          "port, and works once it is closed; off by default  OK")
+
+
+async def _uucp(pty, folder):
+    import subprocess
+    locks = os.path.join(folder, "lock")
+    os.makedirs(locks)
+    alias = os.path.join(folder, "by-id-name")
+    os.symlink(pty.path, alias)
+    name = os.path.basename(pty.path)  # /dev/pts/N: LCK..N
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        lock = os.path.join(locks, f"LCK..{name}")
+        with open(lock, "w") as fh:
+            fh.write(f"{holder.pid:10d}\n")  # HDB, as minicom writes it
+        settings = SerialSettings.from_dict({"port": alias,
+                                             "advanced": {"respect_uucp_locks": True}})
+        with mock.patch.object(portdiag, "LOCK_DIRS", (locks, locks)):
+            try:
+                await serial_io.open_serial(settings)
+            except serial.SerialException as e:
+                refused = e
+            else:
+                raise AssertionError("a port locked by a running program must not open")
+            assert refused.errno == errno.EBUSY, refused
+            assert f"PID {holder.pid}" in str(refused) and lock in str(refused), str(refused)
+            if sys.platform.startswith("linux"):  # named from /proc/<pid>/comm
+                assert f"python3.{sys.version_info.minor} (PID" in str(refused) or \
+                    "python3 (PID" in str(refused) or "python (PID" in str(refused), refused
+            note = portdiag.explain(refused, alias)
+            assert note is not None and note.kind == "uucp" and note.args[1] == holder.pid, note
+            assert f"(PID {holder.pid}) is using this port" in note.text(), note.text()
+            # the same lock read through the default: off, the port opens
+            _r, writer, _s, _d = await serial_io.open_serial(SerialSettings(port=alias))
+            writer.transport.abort()
+            await asyncio.sleep(0.05)
+            # binary (old style) lock file
+            with open(lock, "wb") as fh:
+                fh.write(holder.pid.to_bytes(4, sys.byteorder))
+            assert portdiag.uucp_lock(alias).pid == holder.pid
+            holder.kill()
+            holder.wait()
+            # its process is gone: the port opens, the lock stays where it is
+            _r, writer, _s, _d = await serial_io.open_serial(settings)
+            writer.transport.abort()
+            await asyncio.sleep(0.05)
+            assert os.path.exists(lock), "never removed"
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait()
+
+
+def test_uucp_locks():
+    if os.name != "posix":
+        print("SKIP (part): UUCP lock files are POSIX only")
+        return
+    pty = Pty()
+    folder = tempfile.mkdtemp(prefix="s2n_diag_")
+    try:
+        asyncio.run(_uucp(pty, folder))
+    finally:
+        pty.close()
+        shutil.rmtree(folder, ignore_errors=True)
+    print("UUCP lock files: a port a running program has locked (HDB or binary, under any of "
+          "its names) is not opened and the program is named; a stale lock is ignored and "
+          "left alone; off by default  OK")
+
+
 if __name__ == "__main__":
     test_lines_set_before_open()
     test_refused_settings_stand_in()
@@ -623,4 +738,6 @@ if __name__ == "__main__":
     test_ports_page()
     test_open_port_says_what_else_uses_it()
     test_hangup_told_from_an_unplug()
+    test_tiocexcl()
+    test_uucp_locks()
     print("\nPASS: what ser2net tells about a mapping's serial port")

@@ -19,7 +19,11 @@ connector, a unix-socket accepter) is skipped with a warning, so every returned 
 passes MappingConfig.validate(). ser2net only opens a serial device while a client is
 connected, so several of its ports may share one device; a mapping here keeps its
 device open, so later connections on the same device are imported disabled, and a
-repeated listening port is skipped: the import can then be applied as a whole.
+repeated listening port is skipped: the import can then be applied as a whole. ser2net's
+locking carries over: 4.x flock (flock plus TIOCEXCL) and uucplock, on by default, become
+exclusive + tiocexcl and respect_uucp_locks (UUCP lock files are honoured, not made), 3.x
+UUCP locking respect_uucp_locks; one warning says what still differs (the port is held
+open, no lock files are made).
 """
 from __future__ import annotations
 
@@ -575,6 +579,8 @@ class _Conn:
     holds: list[str] = field(default_factory=list)  # why it comes in disabled (else more open)
     ssl: Optional[dict[str, Any]] = None             # the accepter's ssl layer (_ssl_layer)
     remctl: bool = False                                         # 3.x RFC2217 flag
+    flock: bool = True       # gensio serialdev flock (flock + TIOCEXCL), on by default
+    uucplock: bool = True    # gensio serialdev uucplock (UUCP lock files), on by default
     dropped: dict[str, None] = field(default_factory=dict)       # options with no equivalent
     notes: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)             # why it is not imported
@@ -865,7 +871,7 @@ def _serial_option(c: _Conn, tok: str) -> None:
             _write_only(c, tok)
         return
     if low not in _SERIAL_FLAGS + ("dtr", "rts", "rs485"):
-        if low not in ("custspeed", "uucplock", "flock", "readbuf"):  # nothing to do here
+        if low not in ("custspeed", "readbuf"):  # nothing to do here
             c.drop(tok)
         return
     if eq and flag and low in _SERIAL_FLAGS:
@@ -873,7 +879,7 @@ def _serial_option(c: _Conn, tok: str) -> None:
         if flag is None:
             c.note(_("serial option '{0}' has no true/false value, ignored").format(tok))
             return
-    if low in ("xonxoff", "rtscts"):
+    if low in ("xonxoff", "rtscts", "flock", "uucplock"):
         setattr(c, low, bool(flag))
     elif low in ("hangup-when-done", "hangup_when_done", "hupcl"):
         c.advanced["hangup_when_done"] = bool(flag)
@@ -897,7 +903,7 @@ def _serial_option(c: _Conn, tok: str) -> None:
 
 
 _SERIAL_FLAGS = ("xonxoff", "rtscts", "hangup-when-done", "hangup_when_done", "hupcl",
-                 "nobreak", "rdonly", "local")
+                 "nobreak", "rdonly", "local", "flock", "uucplock")
 
 
 def _write_only(c: _Conn, what: str) -> None:
@@ -1094,6 +1100,15 @@ def _finish(c: _Conn) -> None:
         c.note(_("both RTS/CTS and XON/XOFF are on: only RTS/CTS is imported (one flow control "
                  "per port here)"))
     c.serial["flowcontrol"] = "rtscts" if c.rtscts else "xonxoff" if c.xonxoff else "none"
+    # keeping other programs off the port, as ser2net did: 4.x (gensio) flock = flock plus
+    # TIOCEXCL, uucplock = UUCP lock files, both on unless turned off; 3.x used UUCP lock
+    # files only (unless started with -u, which the file doesn't say)
+    if c.v3:
+        c.advanced["respect_uucp_locks"] = True
+    else:
+        c.serial["exclusive"] = c.flock
+        c.advanced["tiocexcl"] = c.flock
+        c.advanced["respect_uucp_locks"] = c.uucplock
     if net["mode"] == "udp" and net["protocol"] != "raw":
         c.note(_("{0} over UDP is not supported here: imported as raw UDP").format(net['protocol']))
         net["protocol"] = "raw"
@@ -1720,6 +1735,11 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
     if not mappings:
         warnings.append(_("No connection could be imported.") if conns else
                         _("The file has no ser2net connections to import."))
+    if mappings:
+        warnings.append(_("A mapping here opens its serial port when it starts and keeps it "
+                          "open (ser2net opened it only while a client was connected), and "
+                          "makes no UUCP lock files: programs that look for them, such as "
+                          "minicom, don't see the port as in use"))
     if any(_open_to_all(m) for m in mappings):
         warnings.append(_("ser2net may also have limited its clients with TCP wrappers "
                           "(/etc/hosts.allow, /etc/hosts.deny); those rules are not imported: a "

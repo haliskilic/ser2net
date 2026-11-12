@@ -137,8 +137,11 @@ async def open_serial(settings: SerialSettings):
     from . import serial_compat
 
     rts, dtr = _LINE_STATES.get(settings.rts_on_open), _LINE_STATES.get(settings.dtr_on_open)
+    adv = settings.advanced
+    keep_out = {"tiocexcl": bool(adv.tiocexcl),
+                "respect_uucp_locks": bool(adv.respect_uucp_locks)}
     reader, writer = await serial_compat.open_stream(device, SERIAL_STREAM_LIMIT, rts=rts,
-                                                     dtr=dtr, **kwargs)
+                                                     dtr=dtr, keep_out=keep_out, **kwargs)
     transport: Any = writer.transport  # serial_compat.Transport
     ser = transport.serial
 
@@ -150,7 +153,6 @@ async def open_serial(settings: SerialSettings):
                 found.append(portdiag.Note("line", (line, want, portdiag.reason(e))))
 
     # RS-485 (hardware/OS dependent): never fatal, so a port without it still opens
-    adv = settings.advanced
     if adv.rs485_enabled:
         try:
             ser.rs485_mode = serial.rs485.RS485Settings(

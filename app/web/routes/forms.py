@@ -125,6 +125,9 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
             "rs485_delay_after_tx_ms": _num(form, prefix + "rs485_delay_after_tx_ms",
                                             0.0, strict=False, cast=float),
             "rs485_rts_level_for_tx": _checkbox(form, prefix + "rs485_rts_level_for_tx"),
+            **({"tiocexcl": _checkbox(form, prefix + "tiocexcl"),
+                "respect_uucp_locks": _checkbox(form, prefix + "respect_uucp_locks")}
+               if prefix + "port_lock_shown" in form else {}),
         },
     }
 
@@ -155,7 +158,17 @@ _OPTIONAL_FORM_FIELDS = {
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
+    # checkboxes (absent when unticked) an older node's form doesn't have; a section with a
+    # dot is a section of a section
+    "serial_port_lock_shown": ("serial.advanced", ("tiocexcl", "respect_uucp_locks")),
+    "serial_b_port_lock_shown": ("serial_b.advanced", ("tiocexcl", "respect_uucp_locks")),
 }
+
+
+def _section(mapping, path: str):
+    for name in path.split("."):
+        mapping = getattr(mapping, name)
+    return mapping
 
 
 def _build_mapping_dict(form, strict: bool) -> dict:
@@ -288,8 +301,8 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
         for marker, (section, attrs) in _OPTIONAL_FORM_FIELDS.items():
             if marker not in form:
                 for attr in attrs:
-                    setattr(getattr(new_map, section), attr,
-                            getattr(getattr(existing, section), attr))
+                    setattr(_section(new_map, section), attr,
+                            getattr(_section(existing, section), attr))
     for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
                              ("serial_b_", new_map.serial_b, existing.serial_b)):
         # the USB-identity binding is in the form now (ops.apply_usb_match); a form
