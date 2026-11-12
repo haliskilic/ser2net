@@ -20,7 +20,9 @@ MQTT client is a stand-in that records what is published. Checks:
   * metric timestamps are the read times: a point read after one that timed out is
     stamped that much later;
   * plain MQTT: an offline unit is polled once per cycle, nothing is published for it, and
-    its values are published again when it answers;
+    its values are published again when it answers; with the unit status option, each
+    unit's state goes to <base_topic>/unit<N>/status (retained) on every change and after
+    each reconnect, and without it there is no such topic;
   * Modbus/TCP masters are not affected: a request to an offline unit still goes out;
   * the status lists each unit (state, cause, failed reads) and /metrics has
     ser2net_modbus_unit_up and ser2net_modbus_unit_poll_errors_total per unit (a unit not
@@ -114,13 +116,13 @@ POINTS = [
 ]
 
 
-async def gateway(slave_port, fmt, logs, points=POINTS):
+async def gateway(slave_port, fmt, logs, points=POINTS, **mqtt):
     m = MappingConfig.from_dict({
         "name": "Line 3 PLC", "kind": "net", "serial": {"port": "fake", "baudrate": 9600},
         "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
                     "port": free_port()},
-        "mqtt": {"enabled": True, "host": "broker", "base_topic": "plant/a",
-                 "payload_format": fmt},
+        "mqtt": dict({"enabled": True, "host": "broker", "base_topic": "plant/a",
+                      "payload_format": fmt}, **mqtt),
         "modbus_poll": {"interval_s": 0.05, "points": points}})
     m.validate()
     r = ModbusGatewayRunner(m, logger=logs.append)
@@ -131,9 +133,10 @@ async def gateway(slave_port, fmt, logs, points=POINTS):
     if fmt == "sparkplug_b":
         r._sparkplug = SparkplugNode(m, logs.append, r._write_soon)
         r._mqtt = r._sparkplug.publisher()
-    else:
+    else:  # what start() makes
         from app.engine.mqtt_pub import MqttPublisher
-        r._mqtt = MqttPublisher(m.mqtt, logger=logs.append)
+        r._mqtt = MqttPublisher(m.mqtt, logger=logs.append, on_connect=(
+            r._publish_unit_states if m.mqtt.unit_status else None))
     r._mqtt._client = fake
     r._mqtt.connect()
     r._mqtt.handle_connect()
@@ -355,30 +358,47 @@ async def test_sparkplug_unit_health(slave_port):
 
 
 async def test_plain_unit_health(slave_port):
-    logs = []
     points = [p for p in POINTS if p["unit"] in (1, 2) and p["name"] != "ghost"]
-    r, sw, fake = await gateway(slave_port, "plain", logs, points)
-    poll = asyncio.create_task(r._poll_loop())
+    for unit_status in (False, True):
+        logs = []
+        r, sw, fake = await gateway(slave_port, "plain", logs, points, unit_status=unit_status)
+        poll = asyncio.create_task(r._poll_loop())
 
-    def level():
-        return [p for t, p, _r in fake.published if t == "plant/a/level"]
-    try:
-        assert await wait(lambda: level())
-        SILENT_UNITS.add(2)
-        assert await wait(lambda: r._units[2].state == "offline")
-        published, before = len(level()), len(requests_to(2))
-        await asyncio.sleep(0.8)
-        assert len(level()) == published, "published for an offline unit"
-        probes = len(requests_to(2)) - before
-        assert 1 <= probes <= 8, probes
-        SILENT_UNITS.discard(2)
-        assert await wait(lambda: len(level()) > published)
-        assert sum("unit 2" in m for m in logs) == 2, logs
-        print("plain MQTT: an offline unit is probed once per cycle, nothing published for "
-              "it until it answers  OK")
-    finally:
-        await stop(r, sw, poll)
-        SILENT_UNITS.clear()
+        def level():
+            return [p for t, p, _r in fake.published if t == "plant/a/level"]
+
+        def states(unit):
+            return [(p, retain) for t, p, retain in fake.published
+                    if t == f"plant/a/unit{unit}/status"]
+        try:
+            assert await wait(lambda: level())
+            SILENT_UNITS.add(2)
+            assert await wait(lambda: r._units[2].state == "offline")
+            published, before = len(level()), len(requests_to(2))
+            await asyncio.sleep(0.8)
+            assert len(level()) == published, "published for an offline unit"
+            probes = len(requests_to(2)) - before
+            assert 1 <= probes <= 8, probes
+            SILENT_UNITS.discard(2)
+            assert await wait(lambda: len(level()) > published)
+            assert sum("unit 2" in m for m in logs) == 2, logs
+            if not unit_status:
+                assert not any("/unit" in t for t, _p, _r in fake.published), fake.published
+                print("plain MQTT: an offline unit is probed once per cycle, nothing published "
+                      "for it until it answers; no unit status topic unless asked for  OK")
+                continue
+            assert states(1) == [(b"online", True)], states(1)
+            assert states(2) == [(b"online", True), (b"offline", True), (b"online", True)], \
+                states(2)
+            r._mqtt._paho_on_disconnect(fake, None)
+            r._mqtt.handle_connect()               # reconnected: the states again
+            assert states(1)[-1] == (b"online", True) and len(states(1)) == 2
+            assert len(states(2)) == 4
+            print("plain MQTT + unit status: retained <topic>/unit<N>/status online / offline on "
+                  "each change and after a reconnect  OK")
+        finally:
+            await stop(r, sw, poll)
+            SILENT_UNITS.clear()
 
 
 async def main():
