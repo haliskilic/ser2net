@@ -170,13 +170,20 @@ _OPTIONAL_FORM_FIELDS = {
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
-    # the points' min / max / allowed / poll (2.9), inside the points JSON: a form without
-    # this marker (an older peer's, whose JSON can't carry them) keeps each point's stored
-    # ones, by point name (see _keep_point_options)
+    # the points' min / max / allowed / poll, word_order, bit and length (2.9), inside the
+    # points JSON: a form without this marker (an older peer's, whose JSON can't carry them)
+    # keeps each point's stored ones, by point name (see _keep_point_options)
     "modbus_point_options_shown": ("modbus_poll", ()),
 }
-# the point options an older form drops (see "modbus_point_options_shown")
-_POINT_OPTIONS = ("min", "max", "allowed", "poll")
+# the point options an older form drops (see "modbus_point_options_shown"), and what they
+# apply to: one is kept only for a point it still fits (its type may have been changed)
+_POINT_OPTIONS = {
+    "min": lambda p: True, "max": lambda p: True, "allowed": lambda p: True,
+    "poll": lambda p: True,
+    "word_order": lambda p: p.dtype != "bool",
+    "bit": lambda p: p.dtype == "bool" and p.fn in (3, 4),
+    "length": lambda p: p.dtype == "string",
+}
 
 
 def _build_mapping_dict(form, strict: bool) -> dict:
@@ -294,7 +301,9 @@ def _modbus_points_json(mapping) -> str:
             "dtype": p.dtype, "scale": p.scale, **({"writable": True} if p.writable else {}),
             # the options only when set (their defaults keep a point as before)
             **{k: getattr(p, k) for k in ("min", "max", "allowed") if getattr(p, k) is not None},
-            **({"poll": p.poll} if p.poll is not True else {})}
+            **({"poll": p.poll} if p.poll is not True else {}),
+            **({"word_order": p.word_order} if p.word_order != "ABCD" else {}),
+            **{k: getattr(p, k) for k in ("bit", "length") if getattr(p, k) is not None}}
            for p in mapping.modbus_poll.points]
     return json_text(pts, indent=2) if pts else ""
 
@@ -317,8 +326,9 @@ def _keep_point_options(new_map, existing) -> None:
     stored = {p.name: p for p in existing.modbus_poll.points}
     for p in new_map.modbus_poll.points:
         if (old := stored.get(p.name)) is not None:
-            for key in _POINT_OPTIONS:
-                setattr(p, key, getattr(old, key))
+            for key, fits in _POINT_OPTIONS.items():
+                if fits(p):
+                    setattr(p, key, getattr(old, key))
 
 
 _POINT_KEYS = tuple(f.name for f in dataclasses.fields(ModbusPoint))

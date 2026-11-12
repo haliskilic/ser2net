@@ -428,7 +428,7 @@ def test_datatype_for_modbus_values():
         assert sparkplug.datatype_for(dtype, 0) == datatype, dtype  # 0 = unscaled, as decode_value
         want_scaled = T.Boolean if dtype == "bool" else T.Double
         assert sparkplug.datatype_for(dtype, 0.1) == want_scaled, dtype
-    expect_value_error(sparkplug.datatype_for, "float64", match="unknown dtype")
+    expect_value_error(sparkplug.datatype_for, "float16", match="unknown dtype")
     # every polled value (modbus.decode_value) encodes cleanly under its datatype
     raw = {"uint16": b"\xff\xff", "int16": b"\x80\x00", "uint32": b"\xff\xff\xff\xff",
            "int32": b"\x80\x00\x00\x00", "float32": struct.pack(">f", -23.5)}

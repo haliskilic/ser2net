@@ -351,7 +351,6 @@
   "Peer did not accept the command (unreachable or rejected).": "Eş komutu kabul etmedi (ulaşılamıyor ya da reddetti).",
   "Plain: &lt;topic&gt;/&lt;point&gt;": "Düz: &lt;topic&gt;/&lt;point&gt;",
   "Point {0}: address must be 0-65535.": "{0} noktası: adres 0-65535 arasında olmalı.",
-  "Point {0}: coils / discrete inputs (fn 1, 2) use dtype 'bool'; registers (fn 3, 4) a numeric dtype.": "{0} noktası: coil ve discrete input'lar (fn 1, 2) 'bool' dtype'ını, register'lar (fn 3, 4) sayısal bir dtype'ı kullanır.",
   "Point {0}: dtype must be one of {1}.": "{0} noktası: dtype şunlardan biri olmalı: {1}.",
   "Point {0}: function must be 1 (coils), 2 (discrete inputs), 3 (holding registers) or 4 (input registers).": "{0} noktası: fonksiyon 1 (coil), 2 (discrete input), 3 (holding register) ya da 4 (input register) olmalı.",
   "Point {0}: only coils (fn 1) and holding registers (fn 3) can be written.": "{0} noktası: yalnızca coil'ler (fn 1) ve holding register'lar (fn 3) yazılabilir.",
@@ -907,5 +906,15 @@
   "Modbus poll points: the JSON is not valid at line {0}, column {1}: {2}.": "Modbus okuma noktaları: JSON {0}. satırın {1}. sütununda geçersiz: {2}.",
   "Modbus poll point #{0} ({1}): unknown key {2}. Did you mean {3}?": "Modbus okuma noktası #{0} ({1}): bilinmeyen anahtar {2}. {3} mı demek istedin?",
   "{0} has a character that can't be stored: an unpaired surrogate escape (\\ud800 to \\udfff).": "{0} saklanamayan bir karakter içeriyor: eşi olmayan bir surrogate kaçışı (\\ud800 - \\udfff).",
-  "Modbus poll point #{0} has a character that can't be stored: an unpaired surrogate escape (\\ud800 to \\udfff).": "Modbus okuma noktası #{0} saklanamayan bir karakter içeriyor: eşi olmayan bir surrogate kaçışı (\\ud800 - \\udfff)."
+  "Modbus poll point #{0} has a character that can't be stored: an unpaired surrogate escape (\\ud800 to \\udfff).": "Modbus okuma noktası #{0} saklanamayan bir karakter içeriyor: eşi olmayan bir surrogate kaçışı (\\ud800 - \\udfff).",
+  "Point {0}: coils / discrete inputs (fn 1, 2) use dtype 'bool'; registers (fn 3, 4) a numeric dtype or 'string', or 'bool' with the \"bit\" (0-15) it reads.": "{0} noktası: coil ve discrete input'lar (fn 1, 2) 'bool' dtype'ını, register'lar (fn 3, 4) sayısal bir dtype'ı ya da 'string'i veya okudukları \"bit\" (0-15) ile 'bool'u kullanır.",
+  "Point {0}: a string needs its \"length\": how many registers it takes (1-{1}, two characters each).": "{0} noktası: bir string'in \"length\" değeri gerekir: kaç register kapladığı (1-{1}, her biri iki karakter).",
+  "Point {0}: word_order must be one of {1}.": "{0} noktası: word_order şunlardan biri olmalı: {1}.",
+  "Point {0}: word_order is for register values, not for a bit.": "{0} noktası: word_order register değerleri içindir, bir bit için değil.",
+  "Point {0}: a string's characters are in the high byte first (\"ABCD\") or the low byte first (\"BADC\").": "{0} noktası: bir string'in karakterleri önce yüksek baytta (\"ABCD\") ya da önce düşük baytta (\"BADC\") olur.",
+  "Point {0}: \"bit\" reads one bit of a register: it needs \"dtype\": \"bool\" and fn 3 or 4.": "{0} noktası: \"bit\" bir register'ın tek bir bitini okur: \"dtype\": \"bool\" ve fn 3 ya da 4 gerekir.",
+  "Point {0}: \"length\" is for a \"string\" point.": "{0} noktası: \"length\" yalnızca \"string\" noktası içindir.",
+  "Point {0}: a string can't be scaled.": "{0} noktası: bir string ölçeklenemez.",
+  "Point {0}: MQTT can't write a string or a bit of a register; make it read-only.": "{0} noktası: MQTT bir string'e ya da bir register'ın bitine yazamaz; noktayı salt okunur yap.",
+  "<span class=\"mono\">\"word_order\"</span>: <span class=\"mono\">\"CDAB\"</span> (low register first), <span class=\"mono\">\"BADC\"</span> (bytes swapped) or <span class=\"mono\">\"DCBA\"</span> for a device that does not send ABCD; <span class=\"mono\">\"bit\": 0–15</span> with <span class=\"mono\">\"dtype\": \"bool\"</span> reads one bit of a register; a <span class=\"mono\">\"string\"</span> takes <span class=\"mono\">\"length\"</span> registers": "ABCD göndermeyen bir cihaz için <span class=\"mono\">\"word_order\"</span>: <span class=\"mono\">\"CDAB\"</span> (önce düşük register), <span class=\"mono\">\"BADC\"</span> (baytlar yer değiştirmiş) ya da <span class=\"mono\">\"DCBA\"</span>; <span class=\"mono\">\"dtype\": \"bool\"</span> ile <span class=\"mono\">\"bit\": 0–15</span> bir register'ın tek bitini okur; <span class=\"mono\">\"string\"</span> <span class=\"mono\">\"length\"</span> kadar register kaplar"
 }

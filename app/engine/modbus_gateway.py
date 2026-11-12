@@ -46,7 +46,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from ..config import MappingConfig, ModbusPoint, modbus_response_timeout, point_scale
+from ..config import (MappingConfig, ModbusPoint, modbus_response_timeout, point_order,
+                      point_scale)
 from . import modbus, netguard, sockopts
 from .access import AccessPolicy, server_ssl
 from .bridge import (
@@ -391,17 +392,17 @@ class ModbusGatewayRunner:
             return rpdu
 
     async def _read_point(self, p):
-        """One poll point's current value off the bus (bool for coils / discrete
-        inputs, a number for registers). Raises NoReply if the unit did not answer (or the
-        port is down), ValueError for an answer that is not a value (an exception, ...)."""
+        """One poll point's current value off the bus (bool for coils / discrete inputs and
+        a register's bit, text for a string, a number for the other registers). Raises
+        NoReply if the unit did not answer (or the port is down), ValueError for an answer
+        that is not a value (an exception, ...)."""
         if p.fn in (modbus.READ_COILS, modbus.READ_DISCRETE_INPUTS):
             rpdu = await self._transaction(p.unit, modbus.read_bits_pdu(p.fn, p.address, 1))
             self._check_answered(rpdu, p)
             return modbus.decode_bits(modbus.response_data(rpdu, p.fn), 1)[0]
-        req = modbus.read_pdu(p.fn, p.address, modbus.dtype_registers(p.dtype))
-        rpdu = await self._transaction(p.unit, req)
+        rpdu = await self._transaction(p.unit, modbus.read_pdu(p.fn, p.address, _registers(p)))
         self._check_answered(rpdu, p)
-        return modbus.decode_value(modbus.response_data(rpdu, p.fn), p.dtype, point_scale(p))
+        return decode_point(p, modbus.response_data(rpdu, p.fn))
 
     def _check_answered(self, rpdu: bytes, p) -> None:
         """Raise NoReply for the exceptions the gateway answers itself when no reply came:
@@ -602,10 +603,14 @@ class ModbusGatewayRunner:
             pdu = modbus.write_single_coil_pdu(point.address, value)
             raw = ""
         else:
+            if point.dtype not in modbus.DTYPES:  # (a stored point the edits refuse)
+                what = "a bit of a register" if point.dtype == "bool" else shown(point.dtype)
+                raise ValueError(f"{point.name!r} is {what}: MQTT can't write it")
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ValueError(f"{point.name!r} takes a number, not {shown(value)}")
             check_limits(point, value)
-            regs = modbus.encode_value(value, point.dtype, point_scale(point) or 1.0)
+            regs = modbus.encode_value(value, point.dtype, point_scale(point) or 1.0,
+                                       point_order(point))
             pdu = (modbus.write_single_register_pdu(point.address, regs[0]) if len(regs) == 1
                    else modbus.write_multiple_registers_pdu(point.address, regs))
             raw = _raw_text(value, regs, point)
@@ -962,6 +967,9 @@ class ModbusGatewayRunner:
             if point_scale(p) is not p.scale:
                 self._log(f"warning: point {p.name!r}: scale {shown(p.scale)} ignored (not a "
                           "number): its values are not scaled")
+            if point_order(p) != p.word_order:
+                self._log(f"warning: point {p.name!r}: word_order {shown(p.word_order)} ignored "
+                          "(not ABCD, CDAB, BADC or DCBA): read as ABCD")
         mq = self.mapping.mqtt
         missing = [what for what, have in (("TLS", mq.tls), ("a username", mq.username))
                    if not have]
@@ -1129,12 +1137,37 @@ def check_limits(point, value) -> None:
 def _raw_text(value, regs: list[int], point) -> str:
     """For the log: the raw register value written, when it is not the value itself (an
     integer type rounds a fraction, a scale divides it)."""
-    raw = modbus.decode_value(b"".join(r.to_bytes(2, "big") for r in regs), point.dtype)
+    raw = modbus.decode_value(b"".join(r.to_bytes(2, "big") for r in regs), point.dtype,
+                              order=point_order(point))
     scale = point_scale(point)
     scaled = bool(scale) and scale != 1.0
-    if not scaled and (point.dtype == "float32" or raw == value):
+    if not scaled and (point.dtype in ("float32", "float64") or raw == value):
         return ""
     return f", raw value {_num(raw)}"
+
+
+def _registers(p) -> int:
+    """How many registers a register point (fn 3, 4) reads: its string's length, one for a
+    bit of a register, else its type's. ValueError for a stored type the edits refuse."""
+    if p.dtype == "string":
+        return p.length
+    if p.dtype == "bool":
+        return 1
+    return modbus.dtype_registers(p.dtype)
+
+
+def decode_point(p, data: bytes, offset: int = 0):
+    """A register point's value from read data (response_data), its registers starting at
+    ``offset`` registers in: a bit of a register, a string, or a number as the point's type,
+    word order and scale."""
+    data = data[offset * 2:]
+    if p.dtype == "bool":
+        return modbus.register_bit(data, p.bit)
+    if p.dtype == "string":
+        if len(data) < p.length * 2:
+            raise ValueError("not enough data for the string")
+        return modbus.decode_string(data[:p.length * 2], point_order(p))
+    return modbus.decode_value(data, p.dtype, point_scale(p), point_order(p))
 
 
 def _units_text(units: list[int]) -> str:

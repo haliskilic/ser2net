@@ -501,9 +501,11 @@ class SparkplugNode:
             value = m.value
             # Sparkplug 3.0 lets a host leave the datatype off a command; the value then
             # arrives as the raw unsigned wire field — read it as the point's signed type
-            if (not m.datatype and isinstance(value, int) and not isinstance(value, bool)
-                    and point.dtype in ("int16", "int32") and value > 0x7FFFFFFF):
-                value -= 1 << 32
+            if not m.datatype and isinstance(value, int) and not isinstance(value, bool):
+                if point.dtype in ("int16", "int32") and value > 0x7FFFFFFF:
+                    value -= 1 << 32
+                elif point.dtype == "int64" and value > 0x7FFFFFFFFFFFFFFF:
+                    value -= 1 << 64
             self._write(point, value)
         if ignored:
             what = "a writable point" if len(ignored) == 1 else "writable points"

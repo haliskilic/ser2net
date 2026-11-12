@@ -38,7 +38,8 @@ from app.config import (ConfigError, MappingConfig, ModbusPoint, ModbusPoll, poi
 from app.importer import parse_mappings_file
 from app.web.auth import hash_password, hash_token
 from app.web.routes import cluster as cluster_routes
-from app.web.routes.forms import (_form_error, _modbus_points_json, _parse_modbus_points,
+from app.web.routes.forms import (_build_mapping_dict, _form_error, _modbus_points_json,
+                                  _parse_modbus_points, _preserve_unmanaged_fields,
                                   _reshown_mapping, json_text)
 
 PW = "modbus-points-pass-1"
@@ -250,6 +251,34 @@ def test_non_ascii_text():
           "refused  OK")
 
 
+def test_form_point_keys():
+    """word_order, bit and length are in the points JSON when set; a form that can't carry
+    them (an older peer's: no options marker) keeps each point's stored ones by name, where
+    they still fit the point as posted."""
+    m = gateway([{"name": "a", "fn": 3, "dtype": "float32", "word_order": "CDAB"},
+                 {"name": "s", "fn": 3, "dtype": "string", "length": 4, "word_order": "BADC"},
+                 {"name": "b", "fn": 4, "dtype": "bool", "bit": 2},
+                 {"name": "u", "fn": 3}], id="abcdef012345")
+    shown = json.loads(_modbus_points_json(m))
+    assert shown[0]["word_order"] == "CDAB" and shown[1]["length"] == 4 and shown[2]["bit"] == 2
+    assert not {"word_order", "bit", "length"} & set(shown[3]), "defaults are not shown"
+    older = [{"name": "a", "fn": 3, "dtype": "float32"}, {"name": "s", "fn": 3, "dtype": "string"},
+             {"name": "b", "fn": 4, "dtype": "uint16"}, {"name": "u", "fn": 3}]
+    form = form_of(json.dumps(older))
+    del form["modbus_point_options_shown"]
+    new = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+    _preserve_unmanaged_fields(new, m, form)
+    a, s, b, u = new.modbus_poll.points
+    assert (a.word_order, s.length, s.word_order, b.bit) == ("CDAB", 4, "BADC", None), new
+    new.validate()
+    new.validate_input()
+    form = form_of(json.dumps(older))  # this version's form: its JSON is what counts
+    new = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+    _preserve_unmanaged_fields(new, m, form)
+    assert new.modbus_poll.points[0].word_order == "ABCD"
+    print("form: word_order / bit / length shown when set, kept for an older peer's form  OK")
+
+
 def boot_config(port):
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
@@ -349,6 +378,7 @@ def main():
     test_points_json_parse()
     test_refused_form_shown_again()
     test_non_ascii_text()
+    test_form_point_keys()
     test_server()
     print("\nPASS: Modbus poll points")
 

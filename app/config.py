@@ -609,7 +609,13 @@ class MqttSettings:
 # ---------------------------------------------------------------------------
 # Modbus register polling (gateway edge mode: read registers -> MQTT)
 # ---------------------------------------------------------------------------
-MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32", "bool")
+MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32", "bool",
+                 "int64", "uint64", "float64", "string")
+# how a device lays out a value's bytes in its registers (engine/modbus.WORD_ORDERS): ABCD
+# as Modbus sends a register, high register first; CDAB low register first ("word swap"),
+# BADC each register's bytes swapped, DCBA both
+MODBUS_WORD_ORDERS = ("ABCD", "CDAB", "BADC", "DCBA")
+MODBUS_STRING_MAX_REGS = 125  # a "string" point: at most one read's worth of registers
 # a point's keys whose type was not checked before 2.9, as ModbusPoint.from_dict reads them
 # (and writable; the keys 2.9 added are typed from the start: validate_input)
 _POINT_INTS = ("unit", "fn", "address")
@@ -662,11 +668,14 @@ class ModbusPoint:
     unit: int = 1               # RTU slave id
     fn: int = 3                 # 1 = coils, 2 = discrete inputs, 3 = holding, 4 = input registers
     address: int = 0            # 0-based coil / register address
-    dtype: str = "uint16"       # uint16 | int16 | uint32 | int32 | float32 (registers), bool (bits)
+    # registers: uint16 | int16 (one), uint32 | int32 | float32 (two), int64 | uint64 |
+    # float64 (four), string ("length" registers), bool (one of its bits: "bit");
+    # coils / discrete inputs: bool
+    dtype: str = "uint16"
     scale: float = 1.0          # published value = raw * scale (0 = no scaling, as before)
     # MQTT may write it: <base_topic>/<name>/set, or a Sparkplug B DCMD to its unit's
-    # device (a coil: FC5, a holding register: FC6 / FC16 for its own one or two
-    # registers). Only coils and holding registers.
+    # device (a coil: FC5, a holding register: FC6 / FC16 for its own registers). Only
+    # coils and holding registers; not a string, nor a bit of a register.
     writable: bool = False
     # What MQTT may write to it (optional, writable points; None = no limit, as before):
     # the lowest and highest value, in the point's own units (as published, before the
@@ -678,6 +687,15 @@ class ModbusPoint:
     # False: write-only (a writable point that can't be read, such as a command register):
     # never polled, and a write is not read back
     poll: bool = True
+    # How the device lays out the value's bytes in its registers (MODBUS_WORD_ORDERS), for
+    # reads and writes; ABCD (the default) as before. A string: ABCD (first character in the
+    # high byte) or BADC. Read through point_order().
+    word_order: str = "ABCD"
+    # dtype "bool" on a register (fn 3, 4): which of its bits it is, 0 (least significant)
+    # to 15
+    bit: Optional[int] = None
+    # dtype "string": how many registers it takes (two characters each), 1-125
+    length: Optional[int] = None
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "ModbusPoint":
@@ -701,6 +719,20 @@ def point_scale(p: ModbusPoint) -> Any:
     gateway's log at start."""
     s = p.scale
     return s if _is_number(s) and math.isfinite(s) else 1.0
+
+
+def point_order(p: ModbusPoint) -> str:
+    """The word order a point is read and written with: its own, or ABCD for a stored one
+    the edits refuse (with a warning in the gateway's log at start)."""
+    return p.word_order if p.word_order in MODBUS_WORD_ORDERS else "ABCD"
+
+
+def _register_bit(value: Any) -> bool:
+    return _is_int(value) and 0 <= value <= 15
+
+
+def _string_length(value: Any) -> bool:
+    return _is_int(value) and 1 <= value <= MODBUS_STRING_MAX_REGS
 
 
 @dataclass
@@ -757,17 +789,27 @@ class ModbusPoll:
                 raise ConfigError(_("Point {0}: address must be 0-65535.").format(repr(p.name)))
             if p.dtype not in MODBUS_DTYPES:
                 raise ConfigError(_("Point {0}: dtype must be one of {1}.").format(repr(p.name), MODBUS_DTYPES))
-            if (p.fn in (1, 2)) != (p.dtype == "bool"):
+            # (bool on a register and string are new in 2.9: what was refused stays refused
+            # without the bit / length they need)
+            if (p.fn in (1, 2)) != (p.dtype == "bool") and not (
+                    p.dtype == "bool" and _register_bit(p.bit)):
                 raise ConfigError(_("Point {0}: coils / discrete inputs (fn 1, 2) use dtype "
-                                    "'bool'; registers (fn 3, 4) a numeric dtype.").format(repr(p.name)))
+                                    "'bool'; registers (fn 3, 4) a numeric dtype or 'string', "
+                                    "or 'bool' with the \"bit\" (0-15) it reads.").format(
+                                        repr(p.name)))
+            if p.dtype == "string" and not _string_length(p.length):
+                raise ConfigError(_("Point {0}: a string needs its \"length\": how many "
+                                    "registers it takes (1-{1}, two characters each).").format(
+                                        repr(p.name), MODBUS_STRING_MAX_REGS))
             if p.writable and p.fn not in (1, 3):
                 raise ConfigError(_("Point {0}: only coils (fn 1) and holding registers (fn 3) "
                                     "can be written.").format(repr(p.name)))
 
     def validate_input(self) -> None:
-        """The point options an edit may set: min, max, allowed and poll. validate() leaves
-        them alone (a stored config has to keep loading); one stored that can't be used is
-        ignored, with a warning in the gateway's log at start."""
+        """The point options an edit may set (min, max, allowed, poll, word_order) and the
+        types of the rest. validate() leaves them alone (a stored config has to keep
+        loading); one stored that can't be used is ignored, with a warning in the gateway's
+        log at start."""
         for p in self.points:
             name = repr(p.name)
             # the types validate() leaves alone: a stored point loads as it was
@@ -780,6 +822,28 @@ class ModbusPoll:
                                     "scaled).").format(name))
             if not isinstance(p.writable, bool):
                 raise ConfigError(_("Point {0}: writable must be true or false.").format(name))
+            register = p.fn in (3, 4)
+            if p.word_order not in MODBUS_WORD_ORDERS:
+                raise ConfigError(_("Point {0}: word_order must be one of {1}.").format(
+                    name, ", ".join(MODBUS_WORD_ORDERS)))
+            if p.dtype == "bool" and p.word_order != "ABCD":
+                raise ConfigError(_("Point {0}: word_order is for register values, not for a "
+                                    "bit.").format(name))
+            if p.dtype == "string" and p.word_order not in ("ABCD", "BADC"):
+                raise ConfigError(_("Point {0}: a string's characters are in the high byte "
+                                    "first (\"ABCD\") or the low byte first (\"BADC\").").format(
+                                        name))
+            if p.bit is not None and not (p.dtype == "bool" and register):
+                raise ConfigError(_("Point {0}: \"bit\" reads one bit of a register: it needs "
+                                    "\"dtype\": \"bool\" and fn 3 or 4.").format(name))
+            if p.length is not None and p.dtype != "string":
+                raise ConfigError(_("Point {0}: \"length\" is for a \"string\" point.").format(
+                    name))
+            if p.dtype == "string" and p.scale not in (0, 1):
+                raise ConfigError(_("Point {0}: a string can't be scaled.").format(name))
+            if p.writable and (p.dtype == "string" or (p.dtype == "bool" and register)):
+                raise ConfigError(_("Point {0}: MQTT can't write a string or a bit of a "
+                                    "register; make it read-only.").format(name))
             if not p.writable and any(v is not None for v in (p.min, p.max, p.allowed)):
                 raise ConfigError(_("Point {0}: min, max and allowed limit what MQTT may "
                                     "write, so they need \"writable\": true.").format(name))
