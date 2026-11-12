@@ -246,7 +246,8 @@ def print_about() -> int:
             where = _where(where, roots)
             used.add(where.split(os.sep, 1)[0])
         lines.append(f"  {dist:{width}} {version}  ({where})")
-    if legend := [f"{label} = {text}" for label, text in _ROOT_LABELS.items() if label in used]:
+    legend = [f"{label} = {text}" for label, text in _ROOT_LABELS.items() if label in used]
+    if legend:
         lines.append(f"  ({', '.join(legend)})")
     _write_utf8("\n".join(lines) + "\n")
     return 0
