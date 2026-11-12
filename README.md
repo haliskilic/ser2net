@@ -155,7 +155,22 @@ düzenlemeye gerek yok.
   within T s` verir. Sparkplug B'de yazılabilir bir noktaya gelen her DCMD'den sonra nokta
   geri okunur ve değişmiş olsun olmasın DDATA ile gönderilir (yazma reddedildiğinde ya da
   slave exception ile yanıt verdiğinde de); böylece host sonucu görür. Yanıt vermeyen bir
-  unit ise bunun yerine offline olur (DDEATH). Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
+  unit ise bunun yerine offline olur (DDEATH). Bir nokta MQTT'nin ona yazabileceği
+  değerleri sınırlayabilir (isteğe bağlı, nokta JSON'unda): `"min"` ve `"max"` (noktanın
+  kendi biriminde, yayınlandığı gibi) ve `"allowed": [0, 1, 2]` (yalnızca açılabilen bir
+  coil için `[true]`); bunların dışındaki bir değer hatta ulaşmadan reddedilir (`error:
+  3000 is outside the range 0..1500 of 'setpoint'`). Bu sınırlar Modbus/TCP master'larını
+  kapsamaz; v2.8 bir düğüm (onun yaptığı bir küme düzenlemesi) ya da sürüm düşürme onları
+  atar. `"poll": false` yazılabilir bir noktayı, okunamayan bir komut register'ı için
+  yalnızca yazılan bir nokta yapar: hiç okunmaz, yazıldıktan sonra geri okunmaz. Tamsayı
+  tipleri ondalıklı bir değeri yuvarlar (eşitlikte çifte: `12.5` → 12) ve cevap yine `ok`
+  olur; yazmanın log satırı yazılan ham değeri gösterir (`raw value 13`). **Güvenli
+  çıkışlar:** ser2net, broker ya da host gidince kendiliğinden güvenli bir değer yazmaz.
+  Bunun için heartbeat kullanın: host birkaç saniyede bir `/set` (ya da DCMD) ile bir
+  holding register'a artan bir sayaç yazar, PLC'nin kendi mantığı (bir watchdog
+  zamanlayıcısı) sayaç değişmez olunca çıkışları güvenli duruma alır. Cihazın kendi
+  iletişim kaybı timeout'u tek başına yetmez, çünkü ser2net'in poll'u cihazla konuşmayı
+  sürdürür. Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
   içe aktarma da) MQTT bağlantısı kapanmadan önce her yazmayı cevaplar: hattaki yazma
   bitebilir (en çok 2 sn; bitmezse `error: cancelled: mapping stopped (sent, outcome
   unknown)` ya da `(not sent)`), bekleyenler `error: cancelled: mapping stopped`, bu

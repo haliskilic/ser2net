@@ -167,7 +167,13 @@ _OPTIONAL_FORM_FIELDS = {
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
+    # the points' min / max / allowed / poll (2.9), inside the points JSON: a form without
+    # this marker (an older peer's, whose JSON can't carry them) keeps each point's stored
+    # ones, by point name (see _keep_point_options)
+    "modbus_point_options_shown": ("modbus_poll", ()),
 }
+# the point options an older form drops (see "modbus_point_options_shown")
+_POINT_OPTIONS = ("min", "max", "allowed", "poll")
 
 
 def _build_mapping_dict(form, strict: bool) -> dict:
@@ -282,9 +288,22 @@ def _build_mapping_dict(form, strict: bool) -> dict:
 
 def _modbus_points_json(mapping) -> str:
     pts = [{"name": p.name, "unit": p.unit, "fn": p.fn, "address": p.address,
-            "dtype": p.dtype, "scale": p.scale, **({"writable": True} if p.writable else {})}
+            "dtype": p.dtype, "scale": p.scale, **({"writable": True} if p.writable else {}),
+            # the options only when set (their defaults keep a point as before)
+            **{k: getattr(p, k) for k in ("min", "max", "allowed") if getattr(p, k) is not None},
+            **({"poll": p.poll} if p.poll is not True else {})}
            for p in mapping.modbus_poll.points]
     return json.dumps(pts, indent=2) if pts else ""
+
+
+def _keep_point_options(new_map, existing) -> None:
+    """A form that can't carry the points' options (an older peer's): each point keeps the
+    stored ones of the point with its name."""
+    stored = {p.name: p for p in existing.modbus_poll.points}
+    for p in new_map.modbus_poll.points:
+        if (old := stored.get(p.name)) is not None:
+            for key in _POINT_OPTIONS:
+                setattr(p, key, getattr(old, key))
 
 
 def _parse_modbus_points(raw: str, strict: bool) -> list:
@@ -321,6 +340,8 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
                 for attr in attrs:
                     setattr(getattr(new_map, section), attr,
                             getattr(getattr(existing, section), attr))
+        if "modbus_point_options_shown" not in form and "modbus_points" in form:
+            _keep_point_options(new_map, existing)
     for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
                              ("serial_b_", new_map.serial_b, existing.serial_b)):
         # the USB-identity binding is in the form now (ops.apply_usb_match); a form

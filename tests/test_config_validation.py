@@ -523,6 +523,79 @@ def test_form_mqtt_retain_and_value_format():
           "unknown value format refused at edit time only  OK")
 
 
+def test_modbus_point_options():
+    """A point's min / max / allowed / poll: off by default (a v2.8 point loads as before);
+    an edit refuses ones that can't be used, a stored one still loads and saves. The form's
+    points JSON shows them when set, and a form without the options marker (an older
+    peer's, whose JSON can't carry them) keeps each point's stored ones, by name."""
+    import json
+    from app.web.routes.forms import _modbus_points_json
+    old = {"name": "sp", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "writable": True}
+    p = MappingConfig.from_dict({"modbus_poll": {"points": [old]}}).modbus_poll.points[0]
+    assert (p.min, p.max, p.allowed, p.poll) == (None, None, None, True)
+
+    def gateway(*points):
+        return MappingConfig.from_dict({"name": "gw", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "modbus", "port": 502},
+                                        "mqtt": {"enabled": True, "host": "b",
+                                                 "base_topic": "plant/a"},
+                                        "modbus_poll": {"points": list(points)}})
+    coil = {"name": "pump", "unit": 1, "fn": 1, "address": 0, "dtype": "bool", "writable": True}
+    good = [dict(old, min=0, max=1500), dict(old, min=-5.5), dict(old, allowed=[0, 1, 2.5]),
+            dict(coil, allowed=[True]), dict(old, poll=False), dict(coil, poll=True)]
+    for point in good:
+        m = gateway(point)
+        m.validate()
+        m.validate_input()
+    bad = [(dict(old, writable=False, min=0), "need \"writable\": true"),
+           (dict(coil, min=0), "min and max don't apply"),
+           (dict(old, min="0"), "min must be a number"),
+           (dict(old, max=float("inf")), "max must be a number"),
+           (dict(old, min=True), "min must be a number"),
+           (dict(old, min=10, max=5), "min is greater than max"),
+           (dict(old, allowed=[]), "allowed must be a list"),
+           (dict(old, allowed=5), "allowed must be a list"),
+           (dict(old, allowed=[True]), "allowed must be a list"),
+           (dict(coil, allowed=[1]), "allowed must be a list"),
+           (dict(old, poll="no"), "poll must be true or false"),
+           (dict(old, writable=False, poll=False), "is write-only")]
+    for point, message in bad:
+        m = gateway(point)
+        m.validate()                              # a stored one still loads ...
+        AppConfig.from_dict({"mappings": [m.to_dict()]}).validate()  # ... and saves
+        try:
+            m.validate_input()
+            raise AssertionError(f"an edit took {point}")
+        except ConfigError as e:
+            assert message in str(e), (point, str(e))
+
+    shown = json.loads(_modbus_points_json(gateway(dict(old, min=0, max=1500, allowed=[5]),
+                                                   dict(coil, poll=False), old)))
+    assert shown[0]["min"] == 0 and shown[0]["max"] == 1500 and shown[0]["allowed"] == [5]
+    assert shown[1]["poll"] is False and "min" not in shown[1]
+    assert not {"min", "max", "allowed", "poll"} & set(shown[2]), "defaults are not shown"
+
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502", "mqtt_enabled": "on",
+            "mqtt_host": "b", "mqtt_base_topic": "plant/a"}
+    existing = gateway(dict(old, min=0, max=1500), dict(coil, poll=False))
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing, form)
+        return [(p.name, p.address, p.min, p.max, p.poll) for p in m.modbus_poll.points]
+    older = json.dumps([dict(old, address=11), coil])   # an older form: no options in it
+    assert parsed(dict(base, id=existing.id, modbus_points=older)) == [
+        ("sp", 11, 0, 1500, True), ("pump", 0, None, None, False)], "kept by name"
+    newer = json.dumps([dict(old, max=900), coil])
+    assert parsed(dict(base, id=existing.id, modbus_points=newer,
+                       modbus_point_options_shown="1")) == [
+        ("sp", 10, None, 900, True), ("pump", 0, None, None, True)], "this form's own"
+    print("point options: off by default; an edit refuses unusable ones (stored ones load); "
+          "the form shows them when set and keeps them for an older peer's form  OK")
+
+
 def test_form_modbus_response_timeout():
     """The Modbus response timeout is in the form for Modbus gateways only (before 2.9 it was
     in config.json only): parsed when posted (blank = the default 1 s), kept when a form
@@ -603,6 +676,7 @@ def main():
     test_form_modbus_response_timeout()
     test_form_mqtt_unit_status()
     test_form_mqtt_retain_and_value_format()
+    test_modbus_point_options()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

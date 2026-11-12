@@ -623,6 +623,16 @@ class ModbusPoint:
     # device (a coil: FC5, a holding register: FC6 / FC16 for its own one or two
     # registers). Only coils and holding registers.
     writable: bool = False
+    # What MQTT may write to it (optional, writable points; None = no limit, as before):
+    # the lowest and highest value, in the point's own units (as published, before the
+    # scale is undone), and the values it may take (a list; true / false for a coil). A
+    # write outside them is refused. Modbus/TCP masters are not limited by them.
+    min: Optional[float] = None
+    max: Optional[float] = None
+    allowed: Optional[list] = None
+    # False: write-only (a writable point that can't be read, such as a command register):
+    # never polled, and a write is not read back
+    poll: bool = True
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "ModbusPoint":
@@ -684,6 +694,38 @@ class ModbusPoll:
             if p.writable and p.fn not in (1, 3):
                 raise ConfigError(_("Point {0}: only coils (fn 1) and holding registers (fn 3) "
                                     "can be written.").format(repr(p.name)))
+
+    def validate_input(self) -> None:
+        """The point options an edit may set: min, max, allowed and poll. validate() leaves
+        them alone (a stored config has to keep loading); one stored that can't be used is
+        ignored, with a warning in the gateway's log at start."""
+        for p in self.points:
+            name = repr(p.name)
+            if not p.writable and any(v is not None for v in (p.min, p.max, p.allowed)):
+                raise ConfigError(_("Point {0}: min, max and allowed limit what MQTT may "
+                                    "write, so they need \"writable\": true.").format(name))
+            coil = p.fn in (1, 2)
+            if coil and (p.min is not None or p.max is not None):
+                raise ConfigError(_("Point {0}: a coil is true or false, so min and max don't "
+                                    "apply to it (use allowed).").format(name))
+            for key, value in (("min", p.min), ("max", p.max)):
+                if value is not None and not (_is_number(value) and math.isfinite(value)):
+                    raise ConfigError(_("Point {0}: {1} must be a number.").format(name, key))
+            if p.min is not None and p.max is not None and p.min > p.max:
+                raise ConfigError(_("Point {0}: min is greater than max.").format(name))
+            if p.allowed is not None and not (
+                    isinstance(p.allowed, list) and p.allowed
+                    and all(isinstance(v, bool) if coil else
+                            (_is_number(v) and math.isfinite(v)) for v in p.allowed)):
+                raise ConfigError(_("Point {0}: allowed must be a list of the values MQTT may "
+                                    "write: true / false for a coil, numbers for a "
+                                    "register.").format(name))
+            if not isinstance(p.poll, bool):
+                raise ConfigError(_("Point {0}: poll must be true or false.").format(name))
+            if not p.poll and not p.writable:
+                raise ConfigError(_("Point {0}: a point that is not polled (\"poll\": false) "
+                                    "is write-only, so it needs \"writable\": true.").format(
+                                        name))
 
 
 # ---------------------------------------------------------------------------
@@ -784,6 +826,7 @@ class MappingConfig:
             if self.mqtt.value_format not in MQTT_VALUE_FORMATS:
                 raise ConfigError(_("MQTT value format must be one of {0}.").format(
                     MQTT_VALUE_FORMATS))
+            self.modbus_poll.validate_input()
             host = self.mqtt.sparkplug_primary_host_id
             if self.mqtt.payload_format == "sparkplug_b" and host != "":
                 if not isinstance(host, str) or any(c in host for c in "/+#"):

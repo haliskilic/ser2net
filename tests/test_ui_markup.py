@@ -255,6 +255,9 @@ def test_mapping_form_modbus_fields():
         conditions("mqtt_sparkplug_primary_host_id")
     # the response timeout: Modbus gateways only; the field is its own presence marker
     assert conditions("opt_modbus_response_timeout_s") == ["network_protocol=modbus"]
+    # the points' options marker is posted exactly when the points JSON is
+    assert conditions("modbus_point_options_shown") == conditions("modbus_points") == [
+        "network_protocol=modbus"], conditions("modbus_point_options_shown")
     field = next(n for n in root.walk() if n.attrs.get("name") == "opt_modbus_response_timeout_s")
     assert field.attrs.get("value") == "0.8" and field.attrs.get("type") == "number", field.attrs
     print("mapping form: banner/close-on/client buffer not offered for modbus; the retained "

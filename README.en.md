@@ -153,7 +153,20 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   T s`. Sparkplug B: after every DCMD to a writable point the point is read back and sent
   in a DDATA, changed or not (also when the write was refused, or the slave answered with
   an exception), so the host sees how it went; a unit that did not answer goes offline
-  instead (DDEATH). Stopping the mapping (also a save, a restart or an
+  instead (DDEATH). A point can limit what MQTT may write to it (optional, in the points
+  JSON): `"min"` and `"max"` (in the point's own units, as published) and `"allowed": [0,
+  1, 2]` (`[true]` for a coil that may only be switched on); a value outside them is
+  refused before it reaches the bus (`error: 3000 is outside the range 0..1500 of
+  'setpoint'`). They don't limit Modbus/TCP masters, and a v2.8 node (a fleet edit from
+  one) or a downgrade drops them. `"poll": false` makes a writable point write-only, for a
+  command register that can't be read: never polled, a write not read back. An integer
+  type rounds a fraction (ties to even: `12.5` → 12) and the answer is still `ok`; the log
+  line of the write names the raw value written (`raw value 13`). **Fail-safe outputs:**
+  ser2net writes no safe value by itself when the broker or the host goes away. Use a
+  heartbeat: the host writes a counter to a holding register through `/set` (or a DCMD)
+  every few seconds, and the PLC's own logic (a watchdog timer) puts its outputs in a safe
+  state when the counter stops changing. A device's own communication-loss timeout alone
+  won't do, as ser2net's polling keeps talking to it. Stopping the mapping (also a save, a restart or an
   import that changes it) answers every write before the MQTT connection closes: the one
   on the bus may finish (at most 2 s; else `error: cancelled: mapping stopped (sent,
   outcome unknown)` or `(not sent)`), the ones still waiting get `error: cancelled: mapping
