@@ -330,8 +330,10 @@ def _form_error(render, request, state, form, message: str):
     except Exception:
         mapping = MappingConfig(name=form.get("name", ""))
     is_new = not form.get("id")
+    ports = portlist.visible(state.ports.get())
     return render(request, "_mapping_form.html", status_code=400,
                   mapping=mapping, is_new=is_new,
                   modbus_points_json=_modbus_points_json(mapping),
-                  ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
+                  ports=ports, ips=netinfo.list_ip_candidates(),
+                  links=portlist.links(ports, (mapping.serial.port, mapping.serial_b.port)),
                   error=message)

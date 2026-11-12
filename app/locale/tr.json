@@ -901,5 +901,8 @@
   "This adapter has no by-id name of its own: an identical one (no serial number of its own, or the same one) shares it, and which of them gets it can change at a reboot or a re-plug. Use its by-path name (its USB socket).": "Bu adaptörün kendine ait bir by-id adı yok: özdeş bir adaptör (kendi seri numarası olmayan ya da aynı numarayı taşıyan) onu paylaşıyor ve hangisinin alacağı reboot ya da yeniden takmayla değişebilir. by-path adını (USB soketini) kullanın.",
   "by-id not unique": "by-id benzersiz değil",
   "by serial number: survives re-plugging; not unique for identical adapters": "seri numarasına göre: yeniden takmaya dayanır; özdeş adaptörlerde benzersiz değildir",
-  "by USB socket: right while the adapter stays in this socket": "USB soketine göre: adaptör bu sokette kaldıkça doğrudur"
+  "by USB socket: right while the adapter stays in this socket": "USB soketine göre: adaptör bu sokette kaldıkça doğrudur",
+  "Serial port {0} has a control character in it (a line break?): type the device's path again.": "Seri port {0} bir kontrol karakteri içeriyor (satır sonu mu?): cihazın yolunu yeniden yazın.",
+  "Other device path…": "Başka bir cihaz yolu…",
+  "Device path": "Cihaz yolu"
 }

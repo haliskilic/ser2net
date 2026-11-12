@@ -137,7 +137,11 @@ düzenlemeye gerek yok.
   numarayı taşıyan klonlar) tek bir adı paylaşır, udev onu birine verir ve hangisine
   verdiği reboot ya da yeniden takmayla değişebilir: Portlar sayfası böyle adaptörleri
   işaretler (`aynı USB kimliği`, `by-id benzersiz değil`), form da bunu söyler; bunları USB
-  soketine göre bağlayın.
+  soketine göre bağlayın. Eşleme formunda Cihaz'ın yanındaki ↻ formu kapatmadan portları
+  yeniden listeler, **Başka bir cihaz yolu…** ise listede olmayan bir yolu alır (bir kartın
+  `/dev/ttymxc1` gibi UART'ı, henüz takılmamış bir adaptör, Windows'ta bir `\\.\` adı);
+  `/dev/serial0` gibi ayarlı bir link, gösterdiği cihazla birlikte görünür
+  (`/dev/serial0 → /dev/ttyS0`) ve o portun kullanımda sayılmasını sağlar.
 - **Cihazı USB kimliğiyle bulma:** eşleme formundaki kutu işaretlenince adaptör VID:PID
   (+ seri no) ile bağlanır; çıkarılıp takılınca `ttyUSB0`→`ttyUSB1` ya da COM numarası
   değişse de eşleme doğru cihazı açar. Kendi seri numarası olmayan özdeş adaptörler (CH340,

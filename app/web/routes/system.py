@@ -86,9 +86,10 @@ def routes(ctx: Ctx) -> list:
         prefix = request.query_params.get("prefix", "")
         if prefix not in _PORT_FIELDS:
             return PlainTextResponse(_("Unknown serial port field."), status_code=400)
+        selected = request.query_params.get("selected", "")[:1024]
+        ports = portlist.visible(await state.ports.current())
         return render(request, "_serial_port_select.html", fragment=True, prefix=prefix,
-                      selected=request.query_params.get("selected", "")[:1024],
-                      ports=portlist.visible(await state.ports.current()))
+                      selected=selected, ports=ports, links=portlist.links(ports, (selected,)))
 
     async def api_ports_table(request):
         ports = await state.ports.current()

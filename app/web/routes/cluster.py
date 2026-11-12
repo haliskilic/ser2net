@@ -93,6 +93,14 @@ def _remote(target, peer_id, mapping) -> dict:
             "addr": peer_addr(target["ip"], target["port"]), "id": peer_id}
 
 
+def _peer_links(data) -> dict:
+    """The "links" of a peer's mapping-data (older peers send none), as {name: device}."""
+    raw = (data or {}).get("links")
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
+
+
 def _mapping_kind_label(m) -> str:
     if m.kind == "serialbridge":
         return "serial↔serial"
@@ -297,7 +305,9 @@ def routes(ctx: Ctx) -> list:
     #      token + form action belong to the browser's session) and proxies the save.
     async def cluster_mapping_data(request):
         """Peer-facing: a mapping's full config + this node's serial ports + IP
-        candidates, so the controlling node can render the edit form. Key-guarded."""
+        candidates, so the controlling node can render the edit form, and which listed port
+        the mapping's ports lead to when one is a link elsewhere (/dev/serial0; "links",
+        which only this node can tell). Key-guarded."""
         a, deny = await _peer_auth(request)
         if deny:
             return deny
@@ -305,8 +315,10 @@ def routes(ctx: Ctx) -> list:
         m = cfg.get_mapping(request.query_params.get("mid", ""))
         if not m:
             return _peer_json(a, {"error": "not_found"}, 404)
-        return _peer_json(a, {"mapping": m.to_dict(), "ports": await state.ports.current(),
-                              "ips": netinfo.list_ip_candidates()})
+        ports = await state.ports.current()
+        return _peer_json(a, {"mapping": m.to_dict(), "ports": ports,
+                              "ips": netinfo.list_ip_candidates(),
+                              "links": portlist.links(ports, (m.serial.port, m.serial_b.port))})
 
     async def cluster_mapping_save(request):
         """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
@@ -358,6 +370,7 @@ def routes(ctx: Ctx) -> list:
         return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
                       modbus_points_json=_modbus_points_json(mapping),
                       ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
+                      links=_peer_links(data),
                       remote=_remote(target, data["mapping"].get("id"), mapping), error=None)
 
     async def cluster_peer_save(request):
@@ -389,6 +402,7 @@ def routes(ctx: Ctx) -> list:
             return render(request, "_mapping_form.html", status_code=400, mapping=mapping,
                           is_new=False, modbus_points_json=_modbus_points_json(mapping),
                           ports=portlist.visible((data or {}).get("ports", [])),
+                          links=_peer_links(data),
                           ips=(data or {}).get("ips", []),
                           remote=_remote(target, form.get("id", ""), mapping), error=msg)
 

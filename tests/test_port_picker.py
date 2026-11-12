@@ -13,20 +13,37 @@ Checks:
     groups, a by-id name that is not unique is marked, and a port whose USB identity other
     ports share has a hint (pick its by-path name); a stored port in another spelling or
     under one of these names is shown as chosen, not as "(not connected)"; the Ports page
-    marks such ports and shows both names.
+    marks such ports and shows both names;
+  * "Other device path…" comes with a text box that has no name until app.js gives it the
+    select's ({prefix}port: an older cluster peer saves the typed path as it is); one
+    permissive rule for a port set by an edit (config.port_problem: no URL, no control
+    characters; device paths, Windows names and "auto" pass), never in validate();
+  * a configured link to a listed port (/dev/serial0 -> ttyS0, worked out on the port's own
+    machine: portlist.links, a peer's mapping-data "links") is shown as "link → device",
+    counts as that port in the Ports page's In use and for the USB-identity box.
 
 Run: python3 tests/test_port_picker.py
 """
+import json
 import os
 import re
+import sys
+import tempfile
+import urllib.error
+import urllib.request
 
-from _server import ROOT, Browser, Server
+from _server import ROOT, Browser, Server, free_port
 
-from app.config import MappingConfig
-from app.web.auth import hash_password
+from app.config import ConfigError, MappingConfig, port_problem
+from app.engine import portlist
+from app.web.auth import hash_password, hash_token
+from app.web.routes.cluster import _peer_links
+from app.web.routes.ops import apply_usb_match
 from app.web.server import make_templates
 
 PW = "port-picker-pass-1"
+TOKEN = "s2n_port-picker-token"
+KEY = "port-picker-cluster-key"
 
 
 class _Req:
@@ -89,7 +106,8 @@ def test_fragment_endpoint():
         assert _selected(options) == ["/dev/ttyNOPE7"] and "(not connected)" in options
         assert 'data-port-rescan="serial_b_"' in page
         st, _h, page = b.get("/api/ports/select?prefix=serial_&selected=")
-        assert st == 200 and '<select name="serial_port" required>' in page, page[:300]
+        assert st == 200 and re.search(r'<select name="serial_port"[^>]* required', page), \
+            page[:300]
         st, _h, page = b.get("/api/ports/select?prefix=network_&selected=x")
         assert st == 400, st
         st, _h, _page = b.post("/api/ports/refresh", {}, htmx=True)
@@ -151,10 +169,107 @@ def test_names_and_hints():
           "spelling or link is chosen; the Ports page marks shared identities  OK")
 
 
+def test_typed_path():
+    out = _field("")
+    assert '<option value="" data-port-other>Other device path…</option>' in out
+    typed = re.search(r"<input[^>]*data-port-typed[^>]*>", out).group(0)
+    assert "name=" not in typed and "hidden" in typed and "disabled" in typed, typed
+    assert 'data-port-field="serial_port"' in out and "data-required" in out
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert 'input.setAttribute("name", name)' in js and 'sel.removeAttribute("name")' in js
+    for bad in ("socket://10.0.0.1:502", "/dev/ttyUSB0\n", "/dev/tty\tUSB0", "COM3\x00"):
+        assert port_problem(bad), bad
+        m = MappingConfig.from_dict({"name": "m", "serial": {"port": bad}})
+        m.validate()  # a stored one keeps loading
+        try:
+            m.validate_input()
+        except ConfigError:
+            pass
+        else:
+            raise AssertionError(f"an edit took {bad!r}")
+    for good in ("/dev/ttymxc1", "/dev/serial0", "/dev/serial/by-path/platform-30860000.serial",
+                 "/tmp/ttyV0", "COM5", "\\\\.\\CNCA0", "auto", "ttyUSB0"):
+        assert port_problem(good) == "", good
+    print("typed path: an unnamed text box until chosen; one permissive edit-time port rule "
+          "(no URL, no control characters)  OK")
+
+
+def test_links_to_listed_ports():
+    if sys.platform == "win32":  # (symlinks need a privilege there)
+        print("links: Windows, skipped")
+        return
+    d = tempfile.mkdtemp(prefix="s2n_alias_")
+    dev = os.path.join(d, "ttyS0")
+    open(dev, "w").close()
+    alias = os.path.join(d, "serial0")
+    os.symlink(dev, alias)
+    ports = [{"device": dev, "vid": "0403", "pid": "6001", "serial_number": "A1",
+              "description": "UART"}]
+    links = portlist.links(ports, (alias, dev, "", "COM3", os.path.join(d, "nope")))
+    assert links == {alias: dev}, links
+    out = _field(alias, ports, links=links)
+    options = _select(out, "serial_port")
+    assert _selected(options) == [alias] and f"{alias} → {dev}</option>" in options, options
+    assert "(not connected)" not in out
+    assert "(not connected)" in _field(alias, ports), "without links (an older peer): as before"
+    assert portlist.used(ports, {alias}) == {dev}, "In use: the alias's device"
+    m = MappingConfig.from_dict({"name": "m", "serial": {"port": alias}})
+    apply_usb_match(m, {"serial_usb_match_shown": "1", "serial_usb_match": "on"}, ports)
+    assert m.serial.match == {"vid": "0403", "pid": "6001", "serial_number": "A1"} \
+        and m.serial.port == alias
+    assert _peer_links({"links": {alias: dev, 1: "x", "y": None}}) == {alias: dev}
+    assert _peer_links({}) == {} and _peer_links({"links": ["x"]}) == {}
+    print("links: a configured link to a listed port is shown as 'link → device', is in "
+          "use and binds by USB identity; a peer's links are taken as given  OK")
+
+
+def test_server_paths():
+    cfg = {"users": [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
+                      "pwd_version": 1}],
+           "api_token_hash": hash_token(TOKEN), "api_token_role": "admin",
+           "cluster": {"enabled": True, "key": KEY, "discovery_port": free_port()},
+           "mappings": [{"id": "aaaaaaaaaaa1", "name": "imx", "enabled": False,
+                         "serial": {"port": "/dev/ttymxc1"},
+                         "network": {"mode": "server", "bind_ip": "127.0.0.1",
+                                     "port": free_port()}}]}
+    with Server(cfg) as srv:
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        fields = {"name": "typed", "kind": "net", "serial_port": "/dev/ttyLP2",
+                  "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "raw",
+                  "network_bind_ip": "127.0.0.1", "network_port": str(free_port())}
+        st, _h, _page = b.post("/api/mappings/save", fields)
+        assert st == 200, st
+        assert any(m["serial"]["port"] == "/dev/ttyLP2" for m in srv.saved_config()["mappings"])
+        st, _h, page = b.post("/api/mappings/save", dict(fields, name="bad",
+                                                         serial_port="/dev/tty\tLP3"))
+        assert st == 400 and "control character" in page and "banner error" in page, st
+        st, _h, page = b.get("/api/mappings/aaaaaaaaaaa1/form")
+        assert st == 200 and "/dev/ttymxc1 (not connected)" in page and "Other device path" in page
+        req = urllib.request.Request(
+            srv.base + "/api/v1/mappings", method="POST",
+            data=json.dumps({"name": "r", "serial": {"port": "/dev/ttyUSB0\r\n"}}).encode(),
+            headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("REST took a port with a line break")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400 and "control character" in e.read().decode()
+        req = urllib.request.Request(srv.base + "/api/cluster/mapping-data?mid=aaaaaaaaaaa1",
+                                     headers={"X-Cluster-Key": KEY})
+        data = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        assert data.get("links") == {} and data["mapping"]["serial"]["port"] == "/dev/ttymxc1", data
+    print("server: a typed path saves as it is, one with a control character is refused "
+          "(form, REST); an unlisted stored port can be typed again; mapping-data has links  OK")
+
+
 def main():
     test_shared_field()
     test_names_and_hints()
+    test_typed_path()
+    test_links_to_listed_ports()
     test_fragment_endpoint()
+    test_server_paths()
     print("\nPASS: the mapping form's serial port picker")
 
 
