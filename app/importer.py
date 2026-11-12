@@ -189,7 +189,7 @@ def _overlay(old: MappingConfig, new: MappingConfig) -> MappingConfig:
     given(s.advanced, ns.advanced, plain.serial.advanced, "hangup_when_done", "nobreak")
     n, nn = r.network, new.network
     n.mode, n.port = nn.mode, nn.port
-    if old.network.protocol != "modbus":
+    if old.network.protocol != "modbus" or nn.mode != "server":  # (a gateway is a TCP server)
         n.protocol = nn.protocol
     if _bind_reach(nn.bind_ip) <= _bind_reach(n.bind_ip):
         n.bind_ip = nn.bind_ip
@@ -199,6 +199,8 @@ def _overlay(old: MappingConfig, new: MappingConfig) -> MappingConfig:
     if nn.tls:
         n.tls, n.tls_cert, n.tls_key = True, nn.tls_cert, nn.tls_key
     given(n, nn, plain.network, "kick_old_user", "max_connections")
+    if n.protocol == "rfc2217":
+        n.max_connections = 1  # (RFC 2217 takes a single client here: the file's is 1 too)
     o, no = r.options, new.options
     given(o, no, plain.options, "idle_timeout_s", "banner", "openstr", "closestr", "closeon")
     if no.trace_both:

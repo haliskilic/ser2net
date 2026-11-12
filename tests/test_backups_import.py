@@ -233,6 +233,17 @@ def test_classic_merge():
     merged, _ = apply_import([running, gw], plan.mappings, "merge", plan.classic)
     assert merged[0].enabled is True and merged[0].network.tls is True
 
+    # what the merged mapping must still be: RFC 2217 with one client, a gateway on TCP
+    busy = MappingConfig.from_dict(dict(plc.to_dict(), network=dict(
+        plc.to_dict()["network"], protocol="raw", max_connections=4)))
+    merged, _ = apply_import([busy, gw], plan.mappings, "merge", plan.classic)
+    assert (merged[0].network.protocol, merged[0].network.max_connections) == ("rfc2217", 1)
+    udp = parse_mappings_file(CLASSIC.replace("tcp,127.0.0.1,4502", "udp,127.0.0.1,4502")
+                              .encode(), "ser2net.yaml")
+    merged, _ = apply_import(hardened, udp.mappings, "merge", udp.classic)
+    assert (merged[1].network.mode, merged[1].network.protocol) == ("udp", "raw")
+    merged[1].network.validate()
+
     # a ser2net export or config.json still replaces the mapping (as before)
     export = json.dumps({"mappings": [dict(m.to_dict(), id="ffffffffff09") for m in first]})
     plan4 = parse_mappings_file(export.encode())
