@@ -5,10 +5,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        Güvenlik açığı bildirmek için bu formu **kullanmayın**; bkz. [SECURITY.md](https://github.com/haliskilic/ser2net/blob/main/SECURITY.md).
-        Do **not** use this form for security vulnerabilities — see [SECURITY.md](https://github.com/haliskilic/ser2net/blob/main/SECURITY.md).
+        Güvenlik açığı bildirmek için bu formu **kullanmayın**; bkz. [SECURITY.md](https://github.com/haliskilic/ser2netweb/blob/main/SECURITY.md).
+        Do **not** use this form for security vulnerabilities — see [SECURITY.md](https://github.com/haliskilic/ser2netweb/blob/main/SECURITY.md).
 
-        Linux'ta açılmayan bir seri port için önce / For a serial port that doesn't open on Linux, first see [docs/LINUX-SERIAL.md](https://github.com/haliskilic/ser2net/blob/main/docs/LINUX-SERIAL.md).
+        Linux'ta açılmayan bir seri port için önce / For a serial port that doesn't open on Linux, first see [docs/LINUX-SERIAL.md](https://github.com/haliskilic/ser2netweb/blob/main/docs/LINUX-SERIAL.md).
   - type: textarea
     id: what
     attributes:

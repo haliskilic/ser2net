@@ -613,7 +613,7 @@ license texts, `ser2net-standalone.service`, the systemd unit for the Linux bina
 `ser2net-install.sh`, which installs a binary with it (see *Run as a service*), and the
 binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is **not
+`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2netweb`. The Windows exe is **not
 code-signed yet** (it will be once a signing service is configured —
 [`docs/SIGNING.md`](docs/SIGNING.md)), so SmartScreen may warn on first run; verify it on
 Windows with `Get-FileHash` against `SHA256SUMS` and `gh attestation verify`, then *More
@@ -1471,7 +1471,7 @@ is no account at all; later starts ignore it.
   - *Source checkout* in `/opt/ser2net`: `systemd/ser2net.service`.
     ```bash
     sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
-    sudo git clone https://github.com/haliskilic/ser2net.git /opt/ser2net
+    sudo git clone https://github.com/haliskilic/ser2netweb.git /opt/ser2net
     sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
     sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
     ```

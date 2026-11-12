@@ -5,7 +5,7 @@
 ## English
 
 Thanks for helping! Bug reports and feature requests go to
-[Issues](https://github.com/haliskilic/ser2net/issues) (security problems: see
+[Issues](https://github.com/haliskilic/ser2netweb/issues) (security problems: see
 [SECURITY.md](SECURITY.md)). For code, open an issue first for anything bigger than a
 small fix, then a pull request that links it (`Fixes #123`). Your first pull request asks
 you to sign the one-time [Contributor License Agreement](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823)
@@ -13,7 +13,7 @@ you to sign the one-time [Contributor License Agreement](https://gist.github.com
 
 ### Development setup
 ```bash
-git clone https://github.com/haliskilic/ser2net && cd ser2net
+git clone https://github.com/haliskilic/ser2netweb && cd ser2netweb
 python3 -m venv .venv && . .venv/bin/activate      # Python 3.10 – 3.14
 pip install -r requirements.txt cryptography        # + requirements-optional.txt for MQTT/LDAP/OIDC
 python ser2netweb.py --no-bootstrap --data-dir /tmp/s2n-dev
@@ -216,7 +216,7 @@ reads it.
 ## Türkçe
 
 Katkınız için teşekkürler! Hata bildirimleri ve özellik istekleri
-[Issues](https://github.com/haliskilic/ser2net/issues) sayfasına (güvenlik sorunları için
+[Issues](https://github.com/haliskilic/ser2netweb/issues) sayfasına (güvenlik sorunları için
 [SECURITY.md](SECURITY.md)). Küçük bir düzeltmeden büyük her şey için önce bir issue açın,
 sonra onu bağlayan (`Fixes #123`) bir pull request gönderin. İlk pull request'inizde tek
 seferlik [Katkıcı Lisans Sözleşmesi](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823)
@@ -225,7 +225,7 @@ bkz. `NOTICE`).
 
 ### Geliştirme ortamı
 ```bash
-git clone https://github.com/haliskilic/ser2net && cd ser2net
+git clone https://github.com/haliskilic/ser2netweb && cd ser2netweb
 python3 -m venv .venv && . .venv/bin/activate      # Python 3.10 – 3.14
 pip install -r requirements.txt cryptography        # MQTT/LDAP/OIDC için + requirements-optional.txt
 python ser2netweb.py --no-bootstrap --data-dir /tmp/s2n-dev

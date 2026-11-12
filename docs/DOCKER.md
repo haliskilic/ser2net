@@ -22,7 +22,7 @@ Use `:X.Y.Z` (or a digest) to change only when you decide to. The base is a Debi
 tag, so a refresh never switches to a new Debian major release; only a ser2netweb release does.
 Each image records its base:
 `docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' ghcr.io/haliskilic/ser2net:latest`.
-Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest -R haliskilic/ser2net`
+Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest -R haliskilic/ser2netweb`
 (a release's image is attested by `release.yml`, a refreshed one by `image-refresh.yml`).
 
 ## Quick start (compose)

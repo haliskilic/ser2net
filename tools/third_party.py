@@ -283,7 +283,7 @@ def write_licenses(out_path: str, extra_dirs: list[str], strict: bool = False) -
         f"built with Python {platform.python_version()}\n\n"
         "ser2netweb itself is licensed under the GNU AGPL-3.0-only (full text below) or a\n"
         "separate commercial license (COMMERCIAL_LICENSE.md). The components below keep\n"
-        "their own licenses. Source code: https://github.com/haliskilic/ser2net\n\n",
+        "their own licenses. Source code: https://github.com/haliskilic/ser2netweb\n\n",
     ]
     with open(os.path.join(ROOT, "LICENSE"), encoding="utf-8") as fh:
         parts.append(_section(f"ser2netweb {__version__} — AGPL-3.0-only", fh.read()))
@@ -377,7 +377,7 @@ def write_sbom(out_path: str, strict: bool = False, binaries: list[str] | None =
                            "licenses": [{"expression": pkg["license"]}],
                            "description": "browser library in the admin UI: "
                                           + ", ".join(pkg["files"])})
-    root = f"pkg:github/haliskilic/ser2net@v{__version__}"
+    root = f"pkg:github/haliskilic/ser2netweb@v{__version__}"
     bom = {
         "bomFormat": "CycloneDX", "specVersion": "1.5",
         "serialNumber": f"urn:uuid:{uuid.uuid4()}", "version": 1,
