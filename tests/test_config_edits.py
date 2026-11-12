@@ -35,6 +35,8 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from _optional import need
+from _pki import TestCA
 from _server import Browser, Server, free_port
 
 import app.config as config_module
@@ -241,14 +243,15 @@ def test_server():
         print("a start that would share a serial port: 400 with the reason (UI, REST, bulk), "
               "nothing left enabled, later saves work  OK")
 
-        # a TLS file that goes missing while running blocks no other save
+        # a TLS file that goes missing while running blocks no other save (the edit that
+        # adds it loads the files, even of a disabled mapping)
+        if not need("cryptography", what="a TLS file gone while running"):
+            return
         tls_dir = tempfile.mkdtemp(prefix="s2n_tls_")
-        cert = os.path.join(tls_dir, "cert.pem")
-        with open(cert, "w") as fh:
-            fh.write("not read: the mapping is disabled")
+        cert, key = TestCA(tls_dir).issue(tls_dir, "t", ["127.0.0.1"])
         tls = {"name": "T", "enabled": False, "serial": {"port": "/dev/s2n-tls"},
                "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": free_port(),
-                           "tls": True, "tls_cert": cert, "tls_key": cert}}
+                           "tls": True, "tls_cert": cert, "tls_key": key}}
         code, made = api(srv, "POST", "/mappings", tls)
         assert code == 201, made
         shutil.rmtree(tls_dir)

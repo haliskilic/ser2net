@@ -346,7 +346,11 @@ async def test_poll_loop_survives():
     runner._poll_task = asyncio.create_task(dies())
     await asyncio.sleep(0)
     closed = []
-    runner._mqtt = types.SimpleNamespace(close=lambda: closed.append(True))
+
+    async def aclose():  # (the MQTT side is closed and waited for: MqttBridge.aclose)
+        closed.append(True)
+
+    runner._mqtt = types.SimpleNamespace(aclose=aclose)
     await runner.stop()
     assert closed == [True], "the MQTT side was not closed"
     assert any("polling had stopped: ValueError('boom')" in m for m in log), log

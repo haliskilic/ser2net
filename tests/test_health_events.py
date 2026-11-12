@@ -241,7 +241,7 @@ async def _started_and_drain():
     n = notify.Notifier(state)
     sent = []
 
-    async def deliver(event, mapping_name, detail, settings=None):
+    async def deliver(event, mapping_name, detail, settings=None, warnings=None):
         await asyncio.sleep(0.2)
         sent.append((event, detail))
         return []
