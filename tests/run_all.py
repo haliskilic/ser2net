@@ -111,6 +111,7 @@ PORTABLE = [
     "test_mapping_form_roundtrip.py",  # every setting survives an unchanged form save
     "test_mixed_version_edit.py",   # fleet-view edits with 2.7.1 / 2.8.0 / 2.8.1 nodes
     "test_edit_conflicts.py",
+    "test_storage.py",         # disk space and retention (no real disk filled)
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
