@@ -57,7 +57,8 @@
       <td data-label="{{ t.state }}">
         <span class="state state-{{ state }}">{{ state_label(state) }}</span>
         {% if st and st.last_error and state in ('error','device-missing','reconnecting') %}
-          <div class="err-small" title="{{ st.last_error }}">{{ st.last_error|softbreak }}</div>
+          {#- what it means in the page's language; the error itself in the tooltip #}
+          <div class="err-small" title="{{ st.last_error }}">{{ (st.last_error|explain or st.last_error)|softbreak }}</div>
         {% endif %}
       </td>
       <td data-label="{{ t.clients }}">

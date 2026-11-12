@@ -107,6 +107,7 @@ PORTABLE = [
     "test_cluster_settings.py",
     "test_changelog.py",
     "test_text_fold.py",      # Turkish / Unicode search and sort (app.js part with node)
+    "test_explain.py",        # OS / network errors explained in the page's language
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

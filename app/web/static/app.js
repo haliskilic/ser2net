@@ -750,10 +750,11 @@ var feedback = (function () {
     if (el.parentNode) el.parentNode.removeChild(el);
   }
 
-  // kind "ok" (status), "warn" or "error" (alert); link: {href, text, newTab}. The same
+  // kind "ok" (status), "warn" or "error" (alert); link: {href, text, newTab}; detail:
+  // the message's tooltip (the raw error a translated reason stands for). The same
   // text under the same key again changes nothing, so a refresh that keeps failing is
   // announced once; a message without a key is always a new one. "ok" goes by itself.
-  function show(key, kind, text, link) {
+  function show(key, kind, text, link, detail) {
     var box = document.getElementById(kind === "ok" ? "ui-status" : "ui-alert");
     if (!box || !text) return;
     key = key || "n" + (++seq);
@@ -767,6 +768,7 @@ var feedback = (function () {
     banner.className = "banner " + (kind === "ok" ? "ok" : kind === "warn" ? "warn" : "error");
     var msg = document.createElement("span");
     msg.textContent = text;
+    if (detail) msg.title = detail;
     banner.appendChild(msg);
     if (link) {
       var a = document.createElement("a");
@@ -854,7 +856,8 @@ var feedback = (function () {
       var n = xhr.getResponseHeader("X-Notice");
       if (n) {
         try { n = JSON.parse(decodeURIComponent(n)); } catch (err) { n = null; }
-        if (n && n.text) feedback.show(null, n.kind === "warn" ? "warn" : "ok", String(n.text));
+        if (n && n.text) feedback.show(null, n.kind === "warn" ? "warn" : "ok", String(n.text),
+                                       null, n.detail ? String(n.detail) : "");
         if (n && n.focus) panelFocus.want(String(n.focus));   // when the panel closes (8)
       }
       return;

@@ -14,6 +14,8 @@ import os
 import socket
 import subprocess
 
+from ..i18n import _
+
 DAYS = 825  # the longest lifetime browsers accept for a TLS server certificate
 
 
@@ -36,8 +38,8 @@ def generate(cert_path: str, key_path: str, common_name: str = "ser2net", days: 
                         "-subj", f"/CN={common_name}"],
                        check=True, capture_output=True, timeout=30)
     except FileNotFoundError:
-        raise CertError("this needs the 'cryptography' Python package (pip install "
-                        "cryptography) or the openssl program") from None
+        raise CertError(_("this needs the Python package cryptography (pip install "
+                          "cryptography) or the openssl program")) from None
     except (subprocess.SubprocessError, OSError) as e:
         raise CertError(f"openssl failed: {e}") from e
     return "openssl"

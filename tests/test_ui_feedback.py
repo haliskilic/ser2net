@@ -89,6 +89,11 @@ def note(headers):
     return d["kind"], d["text"]
 
 
+def detail(headers):
+    """The X-Notice's tooltip (the raw error behind a translated reason), or ""."""
+    return json.loads(urllib.parse.unquote(headers.get("X-Notice"))).get("detail", "")
+
+
 def focus(headers):
     """The element the X-Notice gives the focus to when the form panel closes."""
     return json.loads(urllib.parse.unquote(headers.get("X-Notice"))).get("focus")
@@ -129,6 +134,10 @@ def test_notices():
             st, h, _ = b.post("/api/mappings/fb0000000004/start", htmx=True)
             kind, text = note(h)
             assert st == 200 and kind == "warn" and text.startswith("“Delta” could not start: "), text
+            # what the error means, in the page's language; the error itself as its tooltip
+            assert text.endswith("The port is already in use by another program (or another "
+                                 "mapping)."), text
+            assert "already in use" in detail(h).lower() and "Errno" in detail(h), detail(h)
             st, _, log = b.get("/api/mappings/fb0000000004/log")
             assert "start failed: " in log, "the reason belongs in the mapping's own log too"
             st, h, _ = b.post("/api/mappings/save", {**form, "id": "fb0000000004", "name": "Delta",

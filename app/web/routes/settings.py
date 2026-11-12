@@ -25,6 +25,7 @@ from ...config import (
     backup_time, new_pwd_version, parse_cluster_peer,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
+from ...explain import explain
 from ...i18n import _
 from ...textfold import search_key
 from .. import auth, ldap_auth, selfsigned
@@ -190,7 +191,7 @@ def routes(ctx: Ctx) -> list:
                 await asyncio.to_thread(state.store.read_backup, name)))
         except (ConfigError, OSError, ValueError, TypeError, AttributeError) as e:
             return await settings_get(request, section="backups",
-                                      error=_("Could not read the backup: {0}").format(e))
+                                      error=_("Could not read the backup: {0}").format(_unreadable(e)))
         return await settings_get(request, restore_preview=_restore_preview(
             name, state.config, backup, current_user(request)))
 
@@ -313,8 +314,8 @@ def routes(ctx: Ctx) -> list:
             kept = await asyncio.to_thread(_keep_previous, (cert, key))
             await asyncio.to_thread(selfsigned.generate, cert, key)
         except (selfsigned.CertError, OSError) as e:
-            return await _failed(request, "tls",
-                                 _("Could not generate a certificate: {0}").format(e))
+            return await _failed(request, "tls", _("Could not generate a certificate: {0}").format(
+                explain(e, "file") or e))
         async with state.config_lock:
             state.config.admin_ui.tls_cert = cert
             state.config.admin_ui.tls_key = key
@@ -1077,7 +1078,7 @@ def routes(ctx: Ctx) -> list:
         try:
             restored = AppConfig.from_dict(json.loads(await asyncio.to_thread(state.store.read_backup, name)))
         except (ConfigError, OSError, ValueError, TypeError, AttributeError) as e:
-            return await _failed(request, "backups", _("Could not read the backup: {0}").format(e))
+            return await _failed(request, "backups", _("Could not read the backup: {0}").format(_unreadable(e)))
         if with_accounts and not restored.users:
             return await _failed(request, "backups", _("This backup has no user accounts (it "
                                                        "was made before the first-run setup); "
@@ -1171,7 +1172,7 @@ def routes(ctx: Ctx) -> list:
             raw = await asyncio.to_thread(state.store.read_backup, name)
             plan = importer.parse_mappings_file(raw.encode("utf-8"), name)
         except (ConfigError, OSError) as e:
-            return await _failed(request, "backups", _("Could not read the backup: {0}").format(e))
+            return await _failed(request, "backups", _("Could not read the backup: {0}").format(_unreadable(e)))
         plan.source = _("configuration backup ({0} UTC)").format(backup_time(name))
         return await _import_preview(request, plan, "replace")
 
@@ -1466,6 +1467,21 @@ def _without_session_key(text: str) -> str:
         return text
     del doc["secret_key"]
     return json.dumps(doc, indent=2, ensure_ascii=False)
+
+
+def _unreadable(e: BaseException) -> str:
+    """Why a backup could not be read, for the page — in its language for the usual
+    causes, not Python's own text (a JSON parser's "Expecting ',' delimiter: line 3
+    column 5 (char 20)", "'list' object has no attribute 'get'")."""
+    if isinstance(e, ConfigError):
+        return str(e)
+    if isinstance(e, json.JSONDecodeError):
+        return _("it is not valid JSON (line {0}, column {1})").format(e.lineno, e.colno)
+    if isinstance(e, UnicodeDecodeError):
+        return _("it is not UTF-8 text")
+    if isinstance(e, OSError):
+        return explain(e, "file") or str(e)
+    return _("it is not a ser2net configuration")
 
 
 def _csv_cell(value: str) -> str:

@@ -3,7 +3,7 @@
 <div class="banner warn">{{ _('Open access: only this node is shown. <a href="/login">Sign in</a> to see and manage the other cluster nodes.') }}</div>
 {% endif %}
 {% if discovery_error %}
-<div class="banner warn">{{ _("UDP auto-discovery is off: %(error)s. Manually-added peers still work (Settings → LAN cluster).", error=discovery_error) }}</div>
+<div class="banner warn" title="{{ discovery_error }}">{{ _("UDP auto-discovery is off: %(error)s. Manually-added peers still work (Settings → LAN cluster).", error=(discovery_error|explain or discovery_error)|trim('.')) }}</div>
 {% endif %}
 {% if notes %}
 {% for c in notes.copies %}
