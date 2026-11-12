@@ -173,7 +173,7 @@ düzenlemeye gerek yok.
   proxy üzerinden bağlanılmaz (`HTTP(S)_PROXY` / `ALL_PROXY` yalnızca webhook ve SSO için
   geçerlidir).
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
-  Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
+  Linux+Windows × Python 3.10–3.14 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
   yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla. `paho-mqtt`
   gerektirir (opsiyonel; yoksa köprü normal çalışır).
@@ -693,7 +693,8 @@ python3 tests/run_all.py -v         # geçen testlerin çıktısını da göster
 socat (Linux) ile sanal seri portlar kullanılır; donanım gerekmez. Tek tek de
 çalıştırılabilir, örn. `python3 tests/test_rest_api.py`. CI (GitHub Actions) her pull
 request'te ruff, mypy, `pip-audit`, çevrimdışı wheel kontrolü, tam test matrisi
-(ubuntu/windows × Python 3.10–3.13) ve coverage koşar
+(ubuntu/windows × Python 3.10–3.14; her leg çevrimdışı ilk kurulumu da dener, 3.15
+birleştirmeyi engellemeden çalışır) ve coverage koşar
 (`python3 tests/coverage_run.py`: testlerin başlattığı sunucular da ölçülür). Geliştirme
 ortamı ve kurallar için [CONTRIBUTING.md](CONTRIBUTING.md).
 
