@@ -13,6 +13,9 @@
     remote_host, with network.tls_fingerprint be one it lists (else the link is not used);
     tls_cert/tls_key are optional, and presented to a server that asks for a client
     certificate;
+  - listeners (the bridge and the Modbus gateway) with network.tls_client_ca: a client
+    without a certificate from that CA file gets no connection (its handshake fails, which
+    is logged), one with such a certificate does, and the log names its subject;
   - the admin UI's key the same way (admin_ui.tls_key_password, Settings → Admin TLS): it
     serves HTTPS with its password, and without one the start ends at once (exit 1, the
     reason in all.log), before any mapping starts.
@@ -315,6 +318,49 @@ async def _connect_out(pki: Pki):
           "password)  OK")
 
 
+async def _client_certificates(pki: Pki):
+    client_cert, client_key = pki.ca.issue(pki.folder, "master", ["master-3"])
+    stranger_ca = os.path.join(pki.folder, "stranger")
+    os.makedirs(stranger_ca)
+    from _pki import TestCA
+    stranger_cert, stranger_key = TestCA(stranger_ca, "stranger CA").issue(
+        stranger_ca, "stranger", ["stranger"])
+    for protocol, connected in (("raw", "client connected"), ("modbus", "modbus master connected")):
+        port = free_port()
+        logs: list[str] = []
+        runner = make_runner(mapping(port=port, protocol=protocol, tls_cert=pki.cert,
+                                     tls_key=pki.key, tls_client_ca=pki.ca.path), logs.append)
+        await runner.start()
+        try:
+            for cert, key in ((None, None), (stranger_cert, stranger_key)):
+                ctx = _unverified()
+                if cert:
+                    ctx.load_cert_chain(cert, key)
+                try:  # TLS 1.3: the client's handshake ends first, the server's alert after
+                    r, w = await asyncio.wait_for(
+                        asyncio.open_connection("127.0.0.1", port, ssl=ctx), 10)
+                    assert await asyncio.wait_for(r.read(), 10) == b"", "served"
+                    w.close()
+                except (ssl.SSLError, ConnectionError):
+                    pass
+            # (one line a minute: a second failure is counted in the next one)
+            await _until(lambda: any("TLS handshake with" in x for x in logs))
+            await asyncio.sleep(0.3)
+            assert not any(connected in x for x in logs), logs
+            ctx = _unverified()
+            ctx.load_cert_chain(client_cert, client_key)
+            _r, w = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port, ssl=ctx), 10)
+            await _until(lambda: any(connected in x for x in logs))
+            line = next(x for x in logs if connected in x)
+            assert "[certificate CN=master-3]" in line, line
+            w.close()
+        finally:
+            await runner.stop()
+    print("listeners with a client CA file (bridge, Modbus gateway): a client without a "
+          "certificate from it gets no connection, one with gets in and is logged by its "
+          "subject  OK")
+
+
 def test_connect_out_rules():
     client_mapping(1).validate()  # no certificate or key: fine for a connect-out link
     for net in ({"tls_cert": "/c.pem"}, {"tls_key": "/k.pem"}):
@@ -346,14 +392,15 @@ def test_older_forms_keep_the_fields():
     """A form without the new fields (an older cluster node's, or the block hidden for
     another mode) keeps what is stored."""
     from app.web.routes.forms import _mapping_from_form, _preserve_unmanaged_fields
-    stored = client_mapping(1, tls_fingerprint="ab" * 32, tls_key_password="pw", tls_ca="/ca.pem")
+    stored = client_mapping(1, tls_fingerprint="ab" * 32, tls_key_password="pw", tls_ca="/ca.pem",
+                            tls_client_ca="/clients.pem")
     fields = {"name": "uplink", "kind": "net", "serial_port": MISSING_PORT,
               "network_mode": "client", "network_remote_host": "127.0.0.1",
               "network_remote_port": "1", "network_tls": "on"}
     m = MappingConfig.from_dict(_mapping_from_form(fields))
     _preserve_unmanaged_fields(m, stored, fields)
     assert m.network.tls_fingerprint == "ab" * 32 and m.network.tls_key_password == "pw", m.network
-    assert m.network.tls_ca == "/ca.pem", m.network
+    assert m.network.tls_ca == "/ca.pem" and m.network.tls_client_ca == "/clients.pem", m.network
     m = MappingConfig.from_dict(_mapping_from_form(dict(fields, network_tls_fingerprint="")))
     _preserve_unmanaged_fields(m, stored, dict(fields, network_tls_fingerprint=""))
     assert m.network.tls_fingerprint == "", m.network
@@ -536,6 +583,7 @@ def main():
         test_connect_out_rules()
         test_older_forms_keep_the_fields()
         asyncio.run(_connect_out(pki))
+        asyncio.run(_client_certificates(pki))
         test_form_and_api(pki)
         test_admin_ui(pki)
     finally:

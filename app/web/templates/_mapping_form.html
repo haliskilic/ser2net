@@ -170,6 +170,10 @@
           <input type="text" name="network_tls_cert" value="{{ mapping.network.tls_cert }}" placeholder="/path/cert.pem"></label>
         <label>{{ _("TLS key path") }} <input type="text" name="network_tls_key" value="{{ mapping.network.tls_key }}" placeholder="/path/key.pem"></label>
       </div>
+      <div data-show-when="network_mode=server">
+        <label>{{ _("Client CA certificate file") }} <span class="muted">({{ _("blank = no client certificate asked for; set: every client needs a certificate from it") }})</span>
+          <input type="text" name="network_tls_client_ca" value="{{ mapping.network.tls_client_ca }}" placeholder="/path/clients-ca.pem" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      </div>
       <div data-show-when="network_mode=client">
         <div class="grid2">
           <label>{{ _("CA certificate file") }} <span class="muted">({{ _("the server’s certificate must come from it and name the remote host") }})</span>

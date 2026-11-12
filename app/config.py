@@ -530,18 +530,21 @@ class NetworkSettings:
     # Windows, ~2 min on Linux).
     connect_timeout_s: float = 10.0
     # Per-mapping TLS for the data bridge (server/client TCP), see engine/tls.py. A listener
-    # needs tls_cert and tls_key. A connect-out link presents them (when set) to a server
-    # that asks for a client certificate, and checks the server's certificate: it must
-    # chain to a certificate in the CA file tls_ca and name remote_host, and/or be one of
-    # the SHA-256 fingerprints in tls_fingerprint (with neither, the link only encrypts).
-    # tls_key_password decrypts an encrypted key (never asked for on a terminal); edits
-    # load the files with it (MappingConfig.check_tls_files).
+    # needs tls_cert and tls_key; with the CA file tls_client_ca it asks every client for a
+    # certificate that chains to it, and ends the handshake of one without such a
+    # certificate (the allow-list still applies). A connect-out link presents them (when
+    # set) to a server that asks for a client certificate, and checks the server's
+    # certificate: it must chain to a certificate in the CA file tls_ca and name
+    # remote_host, and/or be one of the SHA-256 fingerprints in tls_fingerprint (with
+    # neither, the link only encrypts). tls_key_password decrypts an encrypted key (never
+    # asked for on a terminal); edits load the files with it (MappingConfig.check_tls_files).
     tls: bool = False
     tls_cert: str = ""
     tls_key: str = ""
     tls_key_password: str = ""
     tls_ca: str = ""
     tls_fingerprint: str = ""
+    tls_client_ca: str = ""
 
     @property
     def listens(self) -> bool:

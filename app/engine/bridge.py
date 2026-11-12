@@ -931,7 +931,7 @@ class MappingRunner:
         client = _ClientConn(self, reader, writer, peer_ip, peer_port, priority=is_priority)
         self._clients.add(client)
         self._refresh_clients()
-        tag = " [priority]" if is_priority else ""
+        tag = (" [priority]" if is_priority else "") + tls.client_certificate(writer)
         self._log(f"client connected: {peer_label}{tag} ({len(self._clients)} total)")
         try:
             await client.run()

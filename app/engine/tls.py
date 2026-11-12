@@ -12,7 +12,8 @@ A connect-out link checks the server's certificate when the mapping has a CA fil
 (``tls_ca``: the certificate must chain to it and name ``remote_host``) or a pin
 (``tls_fingerprint``: its SHA-256 fingerprint, checked after the handshake by
 check_server). Without either it only encrypts: anyone on the network path can pose as the
-server.
+server. A listener with ``tls_client_ca`` asks every client for a certificate that chains
+to it and ends the handshake of one without such a certificate.
 """
 from __future__ import annotations
 
@@ -110,11 +111,12 @@ def tls_context(*, server_side: bool, cert: Any = "", key: Any = "", password: A
     """A TLS context made from files. Raises TlsFileError.
 
     ``server_side``: ser2net presents ``cert`` (with ``key``, decrypted with ``password``),
-    which it must have. Otherwise (a client): with ``ca`` the server's certificate must
-    chain to a certificate in that file and name the host given to the handshake
-    (server_hostname); without, nothing is checked in the handshake (the caller may check a
-    pin: check_server). ``cert`` is presented to a server that asks for a client
-    certificate."""
+    which it must have; with ``ca``, a client must present a certificate that chains to a
+    certificate in that file, or its handshake fails.
+    Otherwise (a client): with ``ca`` the server's certificate must chain to a certificate
+    in that file and name the host given to the handshake (server_hostname); without,
+    nothing is checked in the handshake (the caller may check a pin: check_server).
+    ``cert`` is presented to a server that asks for a client certificate."""
     import ssl
 
     cert, key, ca = str(cert or ""), str(key or ""), str(ca or "").strip()
@@ -138,7 +140,7 @@ def mapping_context(net: NetworkSettings) -> Optional[ssl.SSLContext]:
         return None
     if net.listens:
         return tls_context(server_side=True, cert=net.tls_cert, key=net.tls_key,
-                           password=net.tls_key_password)
+                           password=net.tls_key_password, ca=net.tls_client_ca)
     return tls_context(server_side=False, cert=net.tls_cert, key=net.tls_key,
                        password=net.tls_key_password, ca=net.tls_ca)
 
@@ -180,6 +182,13 @@ def subject(cert: Any) -> str:
         return ""
     return ", ".join(f"{_NAMES.get(name, name)}={value}"
                      for rdn in cert.get("subject") or () for name, value in rdn)
+
+
+def client_certificate(writer: Any) -> str:
+    """For the log line of a client of a TLS listener: " [certificate CN=...]" for the
+    certificate it presented (checked against the mapping's tls_client_ca), else ""."""
+    name = subject(writer.get_extra_info("peercert"))
+    return f" [certificate {name}]" if name else ""
 
 
 def check_server(net: NetworkSettings, writer: Any) -> str:

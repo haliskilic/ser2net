@@ -146,6 +146,8 @@ _OPTIONAL_FORM_FIELDS = {
     # connect-out TLS: the server certificate's CA file and pin
     "network_tls_ca": ("network", ("tls_ca",)),
     "network_tls_fingerprint": ("network", ("tls_fingerprint",)),
+    # TLS listener: the CA file the clients' certificates must come from
+    "network_tls_client_ca": ("network", ("tls_client_ca",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
@@ -210,7 +212,7 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         )
     if "network_dual_stack_shown" in form:
         network["dual_stack"] = both
-    for key in ("tls_ca", "tls_fingerprint"):
+    for key in ("tls_ca", "tls_fingerprint", "tls_client_ca"):
         if f"network_{key}" in form:
             network[key] = form.get(f"network_{key}", "").strip()
     if "network_connect_timeout_s" in form:
