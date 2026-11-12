@@ -3,8 +3,9 @@
 Separate from the HTMX endpoints under ``/api`` (which return HTML fragments for
 the browser UI). Authentication is a bearer token enforced in GuardMiddleware
 (``Authorization: Bearer <token>``); these handlers assume the request is already
-authenticated. Every response is JSON. The OpenAPI 3.0 description is served at
-``/api/v1/openapi.json`` and ``/api/v1/health`` is unauthenticated for probes.
+authenticated. Every response is JSON, except ``/api/v1/metrics`` (the Prometheus text
+format). The OpenAPI 3.0 description is served at ``/api/v1/openapi.json`` and
+``/api/v1/health`` is unauthenticated for probes.
 """
 from __future__ import annotations
 
