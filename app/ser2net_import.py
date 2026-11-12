@@ -956,20 +956,28 @@ _ESCAPE = re.compile(r"\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|.)", re.S)
 _GONE = ""  # marks a dropped escape until it is removed
 
 
-def _convert(c: _Conn, text: str, kind: str, what: str) -> str:
+def _convert(c: _Conn, text: str, kind: str, what: str,
+             high: Optional[list[str]] = None) -> str:
     """ser2net escapes -> this program. kind 'banner' keeps the escapes the banner
     renderer knows (\\d \\p \\N \\I \\r \\n); 'bytes' (openstr/closestr/closeon, sent
-    as they are) and 'file' (a trace file name) get plain text."""
+    as they are) and 'file' (a trace file name) get plain text. `high` gets the escapes
+    that stand for a byte of 0x80 or more: ser2net sent that byte, a string here is sent
+    as UTF-8 (two bytes for it)."""
     dropped: list[str] = []
     fixed: list[str] = []
+
+    def byte(n: int, e: str) -> str:
+        if n >= 0x80 and high is not None:
+            high.append("\\" + e)
+        return chr(n)
 
     def escape(m: re.Match[str]) -> str:
         e = m.group(1)
         ch = e[0]
         if ch == "x" and len(e) > 1:
-            return chr(int(e[1:], 16))
+            return byte(int(e[1:], 16), e)
         if ch in "01234567":
-            return chr(int(e, 8) & 0xFF)
+            return byte(int(e, 8) & 0xFF, e)
         if ch in _C_ESCAPES:
             return _C_ESCAPES[ch]
         if ch in "rn":
@@ -1141,8 +1149,11 @@ def _finish(c: _Conn) -> None:
         net["max_connections"] = 1
     for key in ("banner", "openstr", "closestr", "closeon"):
         if key in c.strings:
+            high: list[str] = []
             c.options[key] = _convert(c, c.strings[key], "banner" if key == "banner" else "bytes",
-                                      key)
+                                      key, high)
+            if high:
+                _high_bytes(c, key, " ".join(dict.fromkeys(high)))
     labels = ({"both": "tb", "read": "tr", "write": "tw"} if c.v3 else
               {k: f"trace-{k}" for k in ("both", "read", "write")})
     kind = next((k for k in ("both", "read", "write") if k in c.traces), "")
@@ -1179,6 +1190,25 @@ def _finish(c: _Conn) -> None:
             c.note(why)
     if c.dropped:
         c.note(_("not imported (no equivalent here): {0}").format(", ".join(c.dropped)))
+
+
+def _high_bytes(c: _Conn, key: str, escapes: str) -> None:
+    """An escape for a byte of 0x80 or more: a string here is sent as UTF-8, so that byte
+    goes out as two. The device would get other bytes from an open or close string: the
+    mapping comes in disabled; a close-on string then never matches (or a banner shows
+    otherwise): a note."""
+    if key in ("openstr", "closestr"):
+        c.hold(_("{0}: {1} is a byte of 0x80 or more, which would be sent here as two bytes "
+                 "(strings are sent as UTF-8): the mapping is imported disabled rather than "
+                 "sending the device other bytes; change the string, then enable it")
+               .format(key, escapes))
+    elif key == "closeon":
+        c.note(_("closeon: {0} is a byte of 0x80 or more, which is matched here as two bytes "
+                 "(strings are sent as UTF-8), so this close-on string won't match what the "
+                 "device sends; change it on the mapping").format(escapes))
+    else:
+        c.note(_("banner: {0} is a byte of 0x80 or more, which is sent here as two bytes "
+                 "(strings are sent as UTF-8)").format(escapes))
 
 
 def _notes(c: _Conn, imported: bool) -> list[str]:
