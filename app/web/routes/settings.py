@@ -973,8 +973,8 @@ def routes(ctx: Ctx) -> list:
         state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)})")
         ctx.audit(request, "notification_settings", "enabled" if new.enabled else "disabled")
         if form.get("then") == "test":
-            errors = await state.notifier.deliver("test", "", _("If you can read this, "
-                                                    "ser2net can reach you."))
+            # (the test message in the notification language: deliver() writes it)
+            errors = await state.notifier.deliver("test", "", "")
             if errors:   # saved: a reload must not send the test again either
                 return _done(request, "notifications", error=_("Saved, but the test failed: {0}").format(
                     "; ".join(errors)))
