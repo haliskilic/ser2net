@@ -36,7 +36,7 @@ _SERIAL_A = {
                  "rs485_delay_after_tx_ms": 1.5, "rs485_rts_level_for_tx": False,
                  "hangup_when_done": True, "nobreak": True}}
 _SERIAL_B = {
-    "port": "/dev/ttyS9", "match": {"vid": "1a86", "pid": "7523"}, "baudrate": 19200,
+    "port": "/dev/ttyACM5", "match": {"vid": "1a86", "pid": "7523"}, "baudrate": 19200,
     "bytesize": 6, "parity": "O", "stopbits": 1.5, "flowcontrol": "dsrdtr",
     "rts_on_open": "off", "dtr_on_open": "on", "exclusive": False,
     "advanced": {"rs485_enabled": True, "rs485_delay_before_tx_ms": 0.25,

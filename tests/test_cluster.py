@@ -43,6 +43,10 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
+import _form_cases as form_cases                                # noqa: E402
+from _formsubmit import browser_post                           # noqa: E402
+
+from app import __version__                                    # noqa: E402
 from app.config import AppConfig, ClusterSettings              # noqa: E402
 from app.engine import netinfo                                  # noqa: E402
 from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,  # noqa: E402
@@ -364,6 +368,27 @@ def rendered_actions(html, mid):
     return out
 
 
+def relevant(mappings):
+    """Mappings without the settings an edit may reset because they don't apply to the
+    mapping's kind (tests/_form_cases.IRRELEVANT)."""
+    out = []
+    for m in mappings:
+        m = json.loads(json.dumps(m))
+        for path in form_cases.IRRELEVANT.get(m["kind"], ()):
+            section, _dot, key = path.partition(".")
+            m[section].pop(key, None)
+        out.append(m)
+    return out
+
+
+def node_row(html, tag):
+    """The fleet view's row of the node that has this tag ("manual", "this node")."""
+    rows = re.findall(r'<tr class="node-row[^"]*">(.*?)</tr>', html, re.S)
+    row = [r for r in rows if f'<span class="tag">{tag}</span>' in r]
+    assert len(row) == 1, (tag, rows)
+    return row[0]
+
+
 def trap_listener():
     """A listening socket nothing should ever connect to (the kernel queues a connection
     attempt even if it is never accepted, so trapped() sees it)."""
@@ -420,7 +445,9 @@ def test_manual_peer_and_remote_control():
                            {"name": "REMOTE2", "enabled": False, "kind": "net",
                             "serial": {"port": "/dev/ttyTEST2", "baudrate": 9600},
                             "network": {"mode": "server", "protocol": "raw",
-                                        "bind_ip": "127.0.0.1", "port": map_port2}}]}
+                                        "bind_ip": "127.0.0.1", "port": map_port2}}]
+                           # every setting non-default (stopped: they bind nothing)
+                           + [dict(m, enabled=False) for m in form_cases.mappings()]}
     node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a},
               "cluster": {"enabled": True, "key": key, "discovery_port": dp_a,
                           "peers": [f"127.0.0.1:{ui_b}"]}}
@@ -472,7 +499,8 @@ def test_manual_peer_and_remote_control():
         # A's aggregated view fetches B through the manual peer: shows it + health
         html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
         assert "REMOTE1" in html and "manual" in html, html[:500]
-        assert ("v2.6" in html or "up " in html), "per-node health (version/uptime) missing"
+        peer_row = node_row(html, "manual")   # B's row, not this node's own
+        assert f"v{__version__}" in peer_row and "up " in peer_row, peer_row
         assert "unsigned key" not in html, "two current nodes must sign their requests"
         assert not trapped(proxy), "peer calls must connect directly, never via a proxy"
         print("manual peer aggregated with health (version/uptime) + 'manual' tag, signed  OK")
@@ -564,6 +592,21 @@ def test_manual_peer_and_remote_control():
         assert not trapped(trap), "the edit must be saved on the peer itself"
         trap.close()
         print("remote edit of a peer's mapping took effect on the peer  OK")
+
+        # every setting survives an unchanged edit of the form A renders, posted as a
+        # browser posts it
+        before = json.load(open(os.path.join(tb, "config.json")))["mappings"]
+        for sink in form_cases.mappings():
+            q = urllib.parse.urlencode({"host": "127.0.0.1", "port": ui_b, "mid": sink["id"]})
+            code, page = get_a(f"/api/cluster/peer-form?{q}")
+            assert code == 200, (sink["name"], code, page[:300])
+            assert post_a("/api/cluster/peer-save", browser_post(page)) == 200, sink["name"]
+        after = json.load(open(os.path.join(tb, "config.json")))["mappings"]
+        assert relevant(after) == relevant(before), [
+            (a["name"], a, b_) for a, b_ in zip(relevant(before), relevant(after), strict=True)
+            if a != b_][:1]
+        print(f"remote edit: {len(form_cases.mappings())} kitchen-sink mappings saved "
+              "unchanged through the rendered form keep every setting  OK")
 
         # the proxy forwards only known, validated fields: a URL serial port is refused
         bad_port = {**edit, "serial_port": "socket://10.0.0.9:1"}

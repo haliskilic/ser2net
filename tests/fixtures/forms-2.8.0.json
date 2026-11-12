@@ -321,7 +321,7 @@
    ["serial_rs485_enabled", "on"],
    ["serial_rs485_delay_before_tx_ms", "0.5"],
    ["serial_rs485_delay_after_tx_ms", "1.5"],
-   ["serial_b_port", "/dev/ttyS9"],
+   ["serial_b_port", "/dev/ttyACM5"],
    ["serial_b_usb_match_shown", "1"],
    ["serial_b_usb_match", "on"],
    ["serial_b_baudrate", "19200"],
@@ -384,7 +384,7 @@
     }
    },
    "serial_b": {
-    "port": "/dev/ttyS9",
+    "port": "/dev/ttyACM5",
     "match": {
      "vid": "1a86",
      "pid": "7523"
@@ -491,7 +491,7 @@
     }
    },
    "serial_b": {
-    "port": "/dev/ttyS9",
+    "port": "/dev/ttyACM5",
     "match": {
      "vid": "1a86",
      "pid": "7523"
@@ -598,7 +598,7 @@
     }
    },
    "serial_b": {
-    "port": "/dev/ttyS9",
+    "port": "/dev/ttyACM5",
     "match": {
      "vid": "1a86",
      "pid": "7523"
@@ -707,7 +707,7 @@
     }
    },
    "serial_b": {
-    "port": "/dev/ttyS9",
+    "port": "/dev/ttyACM5",
     "match": {
      "vid": "1a86",
      "pid": "7523"
@@ -814,7 +814,7 @@
     }
    },
    "serial_b": {
-    "port": "/dev/ttyS9",
+    "port": "/dev/ttyACM5",
     "match": {
      "vid": "1a86",
      "pid": "7523"
@@ -958,7 +958,7 @@
     }
    },
    "serial_b": {
-    "port": "/dev/ttyS9",
+    "port": "/dev/ttyACM5",
     "match": {
      "vid": "1a86",
      "pid": "7523"
@@ -1097,7 +1097,7 @@
     }
    },
    "serial_b": {
-    "port": "/dev/ttyS9",
+    "port": "/dev/ttyACM5",
     "match": {
      "vid": "1a86",
      "pid": "7523"
@@ -1499,7 +1499,7 @@
    ["serial_rs485_enabled", "on"],
    ["serial_rs485_delay_before_tx_ms", "0.5"],
    ["serial_rs485_delay_after_tx_ms", "1.5"],
-   ["serial_b_port", "/dev/ttyS9"],
+   ["serial_b_port", "/dev/ttyACM5"],
    ["serial_b_usb_match_shown", "1"],
    ["serial_b_usb_match", "on"],
    ["serial_b_baudrate", "19200"],
