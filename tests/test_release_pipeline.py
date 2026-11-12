@@ -8,8 +8,9 @@
 * it runs the whole CI (ci.yml, the checks ci-ok gates merges on) on the tagged commit,
   and nothing that writes (assets, attestations, the image) starts before all of it
   passed; its standalone job builds the released files. One release runs at a time.
-* the image is pushed by digest only, that digest is smoke-tested natively on amd64 and
-  arm64, and only then (after the release files) does it get its tags, unchanged. The
+* the image is pushed by digest only, that digest is smoke-tested on amd64 and arm64
+  natively and on arm/v7 under QEMU, and only then (after the release files) does it get
+  its tags, unchanged. The
   tags come from the tag check: a pre-release never moves X.Y or latest.
 * the jobs that can mint attestations or write the release run GitHub's own actions only;
   the attest job can't write the release, and the release is created by the runner's gh
@@ -117,6 +118,9 @@ def test_image_published_as_tested():
     assert 'tests/docker_smoke.sh "$REF"' in test, test
     assert "{ arch: amd64, runner: ubuntu-latest }" in test
     assert "{ arch: arm64, runner: ubuntu-24.04-arm }" in test
+    assert "{ arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7 }" in test
+    assert "platforms: linux/amd64,linux/arm64,linux/arm/v7\n" in build, "every tested platform"
+    assert "DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}" in test, "the emulated leg's runs"
     for job, block in release.items():
         if _writes(block) and job != UNTAGGED_PUSH:
             assert "image-test" in transitive_needs(release, job), f"{job} before image-test"
@@ -125,7 +129,7 @@ def test_image_published_as_tested():
     assert "TAGS: ${{ needs.verify.outputs.image-tags }}" in tag, tag
     assert 'docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"' in tag, tag
     assert '[ "$got" = "$DIGEST" ]' in tag, "the tags must point at the tested digest"
-    print("the pushed digest is tested on amd64 + arm64, then tagged unchanged  OK")
+    print("the pushed digest is tested on amd64, arm64 and arm/v7, then tagged unchanged  OK")
 
 
 def test_privileged_jobs_run_only_github_actions():

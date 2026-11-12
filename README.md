@@ -233,7 +233,7 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 
 Diğer platformlar — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateway'ler), macOS, ARM
 üzerinde Windows: kaynaktan çalıştırın (`python3 ser2net.py`); orada da offline çalışır (bkz.
-*Offline kurulum*). ARM üzerindeki Windows 11 x64 exe'yi de (emülasyonla) çalıştırır.
+*Offline kurulum*). 32-bit ARM'da Docker imajı (arm/v7) da kullanılabilir. ARM üzerindeki Windows 11 x64 exe'yi de (emülasyonla) çalıştırır.
 
 Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`), lisans
 metinleri, Linux binary'leri için systemd unit'i `ser2net-standalone.service` ve bir binary'yi
@@ -339,7 +339,8 @@ docker compose up -d        # önce docker-compose.yml'deki `devices:` ve `ports
 Compose olmadan [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) içindeki `docker run`
 komutunu kullanın (hazır imaj, `--restart unless-stopped`, eşleme portları,
 `/dev/serial/by-id` cihaz yolu, log sınırı).
-Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
+Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
+arm/v7): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (ya da `:2.8`, `:2.8.1`); `docker-compose.yml` bunu kullanır. Sürümler arasında Debian/Python
 tabanı değişince `:latest` ve `:X.Y` yeni tabanla yeniden derlenir (haftalık kontrol;
 `:X.Y.Z` yayımlandığı gibi kalır) — bkz. [`docs/DOCKER.md`](docs/DOCKER.md).

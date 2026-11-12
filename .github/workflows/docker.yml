@@ -1,12 +1,14 @@
 name: Docker image
 
-# Builds the image for linux/amd64 and linux/arm64 and smoke-tests each natively
+# Builds the image for linux/amd64, linux/arm64 and linux/arm/v7 and smoke-tests each
 # (tests/docker_smoke.sh: non-root, HEALTHCHECK, upgrades from a root-owned volume and a
-# bind mount, a config.json with a rejected setting, serial device groups, image contents).
+# bind mount, a config.json with a rejected setting, serial device groups, image contents):
+# amd64 and arm64 natively, arm/v7 (32-bit ARM, no runner of its own) under QEMU, where its
+# build also compiles psutil and cffi (no wheels for it) and every start is emulated.
 # Called by ci.yml (also when release.yml runs it on a v* tag) and scheduled.yml. The
 # image a release publishes is built in release.yml's own job (with the write permissions
 # this one doesn't need), pushed to GHCR by digest, and that digest runs the same smoke
-# test on both architectures before it gets a tag.
+# test on every architecture before it gets a tag.
 on:
   workflow_call:
 
@@ -17,15 +19,26 @@ jobs:
   test:
     name: docker ${{ matrix.arch }} (non-root, healthcheck, upgrade)
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
           - { arch: amd64, runner: ubuntu-latest }
           - { arch: arm64, runner: ubuntu-24.04-arm }
+          - { arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7 }
+    env:
+      # the emulated leg: docker run / pull take this platform, and a start may take long
+      DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
+      DOCKER_SMOKE_WAIT: ${{ matrix.platform && '300' || '60' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - run: docker build -t ser2net:test .
+      - if: matrix.platform
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm
+      - name: docker build ${{ matrix.platform && format('--platform {0}', matrix.platform) || '' }}
+        run: docker build ${DOCKER_DEFAULT_PLATFORM:+--platform "$DOCKER_DEFAULT_PLATFORM"} -t ser2net:test .
       - run: tests/docker_smoke.sh ser2net:test

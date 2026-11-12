@@ -137,8 +137,8 @@ pre-release) on the merge commit starts `.github/workflows/release.yml`:
    is on `main`;
 2. the whole CI runs on the tagged commit (`ci.yml`, the checks `ci-ok` gates merges on);
    its standalone build is what gets released;
-3. the image is built for amd64 + arm64, pushed to GHCR by digest only (no tag) and that
-   digest is smoke-tested natively on both architectures;
+3. the image is built for amd64, arm64 and arm/v7, pushed to GHCR by digest only (no tag)
+   and that digest is smoke-tested on each (amd64 and arm64 natively, arm/v7 under QEMU);
 4. only then are the files attested and the GitHub release created with them (by `gh`; the
    jobs that can write releases or attestations run GitHub's own actions only), and the
    tested image gets its tags `X.Y.Z`, `X.Y` and `latest`. A pre-release gets only its own
@@ -277,8 +277,9 @@ yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.
    `main` üzerinde olması;
 2. tag'lenen commit'te CI'ın tamamı çalışır (`ci.yml`, birleştirmede `ci-ok`'un beklediği
    kontroller); yayımlanan, onun standalone derlemesidir;
-3. imaj amd64 + arm64 için derlenir, GHCR'a yalnızca digest ile (tag'siz) gönderilir ve
-   bu digest iki mimaride de emülasyonsuz smoke test'ten geçer;
+3. imaj amd64, arm64 ve arm/v7 için derlenir, GHCR'a yalnızca digest ile (tag'siz)
+   gönderilir ve bu digest her mimaride smoke test'ten geçer (amd64 ve arm64 emülasyonsuz,
+   arm/v7 QEMU altında);
 4. ancak bundan sonra dosyalar attest edilir ve GitHub release'i onlarla oluşturulur
    (`gh` ile; release ya da attestation yazabilen işlerde yalnızca GitHub'ın kendi
    action'ları çalışır), test edilen imaj da `X.Y.Z`, `X.Y` ve `latest` tag'lerini alır.

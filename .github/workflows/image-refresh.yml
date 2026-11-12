@@ -8,10 +8,10 @@ name: Image refresh
 #  * compares the base image :latest was built from (its label
 #    org.opencontainers.image.base.digest, release.yml records it) with what that release's
 #    Dockerfile base tag points at now. Only when the base moved (or "rebuild" is set) it
-#    rebuilds the latest release from its tag (same Dockerfile, same hash-locked pins),
-#    pushes it by digest, smoke-tests that digest natively on amd64 and arm64 with the tag's
-#    tests/docker_smoke.sh, attests it and moves the X.Y and latest tags to it. X.Y.Z stays
-#    the image its release tested and published.
+#    rebuilds the latest release from its tag (same Dockerfile, same hash-locked pins, the
+#    platforms :latest has), pushes it by digest, smoke-tests that digest on each of them
+#    with the tag's tests/docker_smoke.sh (arm/v7 under QEMU), attests it and moves the X.Y
+#    and latest tags to it. X.Y.Z stays the image its release tested and published.
 # Auto-updaters (Watchtower and the like) restart the container after such a refresh.
 # GitHub turns scheduled workflows off after 60 days without repository activity:
 # Actions -> Image refresh -> "Enable workflow".
@@ -86,6 +86,7 @@ jobs:
       base-name: ${{ steps.base.outputs.base-name }}
       base-digest: ${{ steps.base.outputs.base-digest }}
       image-tags: ${{ steps.base.outputs.image-tags }}
+      platforms: ${{ steps.base.outputs.platforms }}
     steps:
       - name: Sign in to GHCR (read)
         env:
@@ -106,18 +107,26 @@ jobs:
           now=$(docker buildx imagetools inspect "$base" --format '{{json .Manifest}}' | jq -r .digest)
           built=$(docker buildx imagetools inspect "$image:latest" --format '{{json .Image}}' \
                   | jq -r '.["linux/amd64"].config.Labels["org.opencontainers.image.base.digest"] // "unknown"')
-          echo "latest release $tag; $name now $now; :latest built from $built"
+          # the platforms :latest was published for (2.9.0 added linux/arm/v7), not the
+          # attestation manifests; arm64's variant v8 is its only one (linux/arm64)
+          platforms=$(docker buildx imagetools inspect "$image:latest" --format '{{json .Manifest}}' \
+                      | jq -r '[.manifests[].platform | select(.os != "unknown")
+                               | .os + "/" + .architecture
+                                 + (if .variant and .architecture != "arm64" then "/" + .variant else "" end)]
+                               | join(",")')
+          [ -n "$platforms" ] || { echo "::error::no platforms in $image:latest"; exit 1; }
+          echo "latest release $tag ($platforms); $name now $now; :latest built from $built"
           rebuild=false
           if [ "$built" != "$now" ] || [ "$FORCE" = true ]; then rebuild=true; fi
           echo "rebuild: $rebuild" >> "$GITHUB_STEP_SUMMARY"
           {
             echo "rebuild=$rebuild"; echo "tag=$tag"; echo "image=$image"; echo "base=$base"
-            echo "base-name=$name"; echo "base-digest=$now"
+            echo "base-name=$name"; echo "base-digest=$now"; echo "platforms=$platforms"
             echo "image-tags=${version%.*} latest"     # X.Y and latest, never X.Y.Z
           } >> "$GITHUB_OUTPUT"
 
-  # The release's image job, again: built once for both architectures from the tag and
-  # pushed by digest only, nothing points at it before it passed its test.
+  # The release's image job, again: built once for its platforms from the tag and pushed by
+  # digest only, nothing points at it before it passed its test.
   build:
     name: rebuild ${{ needs.check.outputs.tag }} on the current base, push it untagged
     needs: check
@@ -155,7 +164,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ needs.check.outputs.platforms }}
           build-args: BASE_IMAGE=${{ needs.check.outputs.base }}@${{ needs.check.outputs.base-digest }}
           outputs: type=image,name=${{ needs.check.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
@@ -170,10 +179,13 @@ jobs:
           got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
           [ "$got" = "$DIGEST" ] || { echo "::error::tagging would push $got, not $DIGEST"; exit 1; }
 
+  # Each platform the rebuild has (a leg for one it doesn't have, linux/arm/v7 before 2.9.0,
+  # skips its steps)
   test:
     name: test the rebuilt image (${{ matrix.arch }})
     needs: [check, build]
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: read         # pull the untagged digest
@@ -181,26 +193,40 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: amd64, runner: ubuntu-latest }
-          - { arch: arm64, runner: ubuntu-24.04-arm }
+          - { arch: amd64, runner: ubuntu-latest, platform: linux/amd64 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, platform: linux/arm64 }
+          - { arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7, qemu: true }
     env:
       REF: ${{ needs.check.outputs.image }}@${{ needs.build.outputs.digest }}
+      DOCKER_DEFAULT_PLATFORM: ${{ matrix.qemu && matrix.platform || '' }}
+      DOCKER_SMOKE_WAIT: ${{ matrix.qemu && '300' || '60' }}
+      BUILT: ${{ contains(format(',{0},', needs.check.outputs.platforms), format(',{0},', matrix.platform)) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: env.BUILT == 'true'
         with:
           ref: ${{ needs.check.outputs.tag }}   # the release's own smoke test
           persist-credentials: false
+      - if: env.BUILT == 'true' && matrix.qemu
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm
       - name: Sign in to GHCR (read)
+        if: env.BUILT == 'true'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Pull the pushed digest, its ${{ matrix.arch }} image
+        if: env.BUILT == 'true'
         env:
           ARCH: ${{ matrix.arch }}
         run: |
           docker pull "$REF"
-          test "$(docker image inspect -f '{{.Architecture}}' "$REF")" = "$ARCH"
-      - run: tests/docker_smoke.sh "$REF"
+          got=$(docker image inspect -f '{{.Architecture}}' "$REF")
+          if [ "$ARCH" = arm/v7 ]; then got="$got/$(docker image inspect -f '{{.Variant}}' "$REF")"; fi
+          test "$got" = "$ARCH"
+      - if: env.BUILT == 'true'
+        run: tests/docker_smoke.sh "$REF"
 
   tag:
     name: move X.Y and latest to the tested image

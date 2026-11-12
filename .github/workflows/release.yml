@@ -6,8 +6,9 @@ name: Release
 # test suites, the dependency audit, the Docker image and the standalone executables for
 # Linux x86_64 + arm64 and Windows x64 with every check on them — bundle contents,
 # empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers, the Windows
-# service) and push the Docker image (amd64 + arm64) to GHCR by digest only, without a
-# tag, and smoke-test that digest natively on both architectures. Only when all of it
+# service) and push the Docker image (amd64, arm64, arm/v7) to GHCR by digest only, without
+# a tag, and smoke-test that digest on each architecture (arm/v7 under QEMU). Only when all
+# of it
 # passed publish: the release assets with SHA256SUMS, SBOMs, license texts and build
 # provenance, then the tags of the tested image (X.Y.Z, X.Y and latest; a pre-release,
 # vX.Y.Z-rc.N, only its own and marked as a pre-release). The write permissions belong
@@ -85,12 +86,12 @@ jobs:
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
-  # The image to publish, built once for both architectures (arm64 under QEMU) and pushed
-  # to GHCR by digest only: no tag points at it until it passed image-test and the
-  # release files are out. A re-run of a later job reuses this digest, never a rebuild
+  # The image to publish, built once for every architecture (arm64 and arm/v7 under QEMU)
+  # and pushed to GHCR by digest only: no tag points at it until it passed image-test and
+  # the release files are out. A re-run of a later job reuses this digest, never a rebuild
   # from a newer base image.
   image-build:
-    name: build the image (amd64 + arm64), push it untagged
+    name: build the image (amd64, arm64, arm/v7), push it untagged
     needs: verify
     runs-on: ubuntu-latest
     permissions:
@@ -137,7 +138,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           build-args: BASE_IMAGE=${{ steps.base.outputs.image }}@${{ steps.base.outputs.digest }}
           outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
@@ -154,12 +155,14 @@ jobs:
           got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
           [ "$got" = "$DIGEST" ] || { echo "::error::tagging would push $got, not $DIGEST"; exit 1; }
 
-  # The image exactly as pushed, natively on each architecture, with the smoke test CI
-  # runs on its local build (non-root, HEALTHCHECK, upgrades, device groups, contents)
+  # The image exactly as pushed, on each architecture (amd64 and arm64 natively, arm/v7
+  # under QEMU), with the smoke test CI runs on its local build (non-root, HEALTHCHECK,
+  # upgrades, device groups, contents)
   image-test:
     name: test the pushed image (${{ matrix.arch }})
     needs: image-build
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: read         # pull the untagged digest
@@ -169,12 +172,19 @@ jobs:
         include:
           - { arch: amd64, runner: ubuntu-latest }
           - { arch: arm64, runner: ubuntu-24.04-arm }
+          - { arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7 }
     env:
       REF: ${{ needs.image-build.outputs.image }}@${{ needs.image-build.outputs.digest }}
+      DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}   # (the emulated leg's pull and runs)
+      DOCKER_SMOKE_WAIT: ${{ matrix.platform && '300' || '60' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - if: matrix.platform
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm
       - name: Sign in to GHCR (read)
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -184,7 +194,9 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           docker pull "$REF"
-          test "$(docker image inspect -f '{{.Architecture}}' "$REF")" = "$ARCH"
+          got=$(docker image inspect -f '{{.Architecture}}' "$REF")
+          if [ "$ARCH" = arm/v7 ]; then got="$got/$(docker image inspect -f '{{.Variant}}' "$REF")"; fi
+          test "$got" = "$ARCH"
       - run: tests/docker_smoke.sh "$REF"
 
   # Names and checks the release files, attests them and hands them on as one artifact.
