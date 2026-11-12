@@ -5,7 +5,8 @@ Modbus-points field. Checked here:
   * a value sent as text is read as the setting's type when that needs no guess
     ("false" -> false, "1" -> 1, "0.1" -> 0.1), so "false" no longer starts a mapping or
     makes a point writable, and a text scale no longer breaks the published values — but
-    a protective switch (login, TLS, read-only) keeps reading text as true, as before;
+    a protective switch (login, TLS, read-only) keeps reading text in config.json as on,
+    as before, and edits refuse text for it;
   * a value that can't be read so is refused by an edit (validate_input, with the
     setting's path) and, in config.json, takes the default with a load note — never a
     refusal of the whole file (validate() gains no rule);
@@ -29,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.config import (AppConfig, ClusterSettings, ConfigError, MappingConfig, ModbusPoint,
                         ModbusPoll)
 from app.engine.modbus_gateway import ModbusGatewayRunner
+from app.importer import parse_mappings_file
 
 POINT = {"name": "coil", "unit": 1, "fn": 1, "address": 0, "dtype": "bool"}
 
@@ -87,27 +89,58 @@ def test_text_values_read_as_meant():
 
 def test_protective_switches_need_false():
     """A switch that protects something (login, TLS, certificate checks, read-only) took any
-    text as true before: "false" in quotes kept it on. An upgrade must not turn it off, so
-    for these only a real false (or "") does; the text reads as true, with a warning."""
-    m = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM1"},
-                                 "network": {"read_only": "false", "tls": "0"},
-                                 "mqtt": {"tls": "off"}})
-    assert (m.network.read_only, m.network.tls, m.mqtt.tls) == (True, True, True)
-    m.validate_input()  # warned about, not refused
-    assert any('network.read_only "false" is text, so it is read as true' in w
-               for w in m.input_warnings()), m.input_warnings()
-    off = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM1"},
-                                   "network": {"read_only": False, "tls": ""}})
-    assert (off.network.read_only, off.network.tls) == (False, False)
+    text as true before: "false" in quotes kept it on. Loading config.json keeps reading
+    text that way (an upgrade never turns one off), with a note; an edit (REST API, import,
+    form, fleet edit) refuses text for one, so a client sending "false" is told instead of
+    finding the switch still on. JSON true / false work as always."""
+    def edit(**sections):
+        return MappingConfig.from_dict({"name": "m", "serial": {"port": "COM1"}, **sections})
+
+    for sections, path in (({"network": {"read_only": "false"}}, "network.read_only"),
+                           ({"network": {"tls": "0"}}, "network.tls"),
+                           ({"mqtt": {"tls": "off"}}, "mqtt.tls"),
+                           ({"network": {"read_only": "true"}}, "network.read_only"),
+                           ({"network": {"read_only": ""}}, "network.read_only")):
+        m = edit(**sections)
+        try:
+            m.validate_input()
+        except ConfigError as e:
+            assert str(e) == f"{path}: use true or false (JSON booleans), not a string.", e
+        else:
+            raise AssertionError(f"an edit took the text in {sections}")
+    m = edit(network={"read_only": "false", "tls": "0"}, mqtt={"tls": "off"})
+    assert (m.network.read_only, m.network.tls, m.mqtt.tls) == (True, True, True), \
+        "read as before 2.9.0 (what a stored config.json gets)"
+    edit(network={"read_only": "false"}).validate()  # loading never refuses it
+    ok = edit(network={"read_only": False, "tls": False}, mqtt={"tls": True})
+    ok.validate_input()
+    assert (ok.network.read_only, ok.network.tls, ok.mqtt.tls) == (False, False, True)
     cfg = AppConfig.from_dict({"admin_ui": {"require_login": "false"},
-                               "ldap": {"tls_verify": "no", "start_tls": "false"}})
+                               "ldap": {"tls_verify": "no", "start_tls": "false"},
+                               "mappings": [{"id": "aaaaaaaaaaa1", "name": "m",
+                                             "serial": {"port": "COM1"},
+                                             "network": {"read_only": "false"}}]})
     assert cfg.admin_ui.require_login is True
     assert (cfg.ldap.tls_verify, cfg.ldap.start_tls) == (True, True)
-    assert ('config.json: admin_ui.require_login "false" is text, so it is read as true, as '
-            "before: this protective switch is turned off only by false (without quotes)"
-            in cfg.load_notes), cfg.load_notes
-    print("protective switches (login, TLS, certificate check, read-only): text keeps "
-          "them on, as before; only false turns them off  OK")
+    assert cfg.mappings[0].network.read_only is True
+    for note in ('config.json: admin_ui.require_login "false" is text, so it is read as true, '
+                 "as before: this protective switch takes true or false (without quotes)",
+                 'config.json: ldap.tls_verify "no" is text, so it is read as true',
+                 "mapping 'm': network.read_only \"false\" is text, so it is read as true"):
+        assert any(note in n for n in cfg.load_notes), (note, cfg.load_notes)
+    cfg.validate()
+    # an import is an edit: the file is refused, naming the mapping and the setting
+    doc = {"mappings": [{"name": "m", "serial": {"port": "COM1"},
+                         "network": {"read_only": "false"}}]}
+    try:
+        parse_mappings_file(json.dumps(doc).encode())
+    except ConfigError as e:
+        assert str(e) == ("Mapping #1 (m): network.read_only: use true or false (JSON "
+                          "booleans), not a string."), e
+    else:
+        raise AssertionError("an import took a protective switch as text")
+    print("protective switches (login, TLS, certificate check, read-only): config.json text "
+          "keeps them on, as before; edits and imports refuse text  OK")
 
 
 def test_nulls():
