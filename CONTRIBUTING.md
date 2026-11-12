@@ -26,7 +26,7 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 | Types | `pip install mypy types-pyserial -r requirements-optional.txt`, then `mypy` and `mypy --platform win32` (settings in `mypy.ini`) |
 | Tests (any OS) | `python tests/run_all.py -v` |
 | + serial data path (Linux, needs `socat`) | `python tests/run_all.py --socat -v` |
-| Coverage | `pip install coverage && python tests/coverage_run.py && coverage report` |
+| Coverage (CI fails below the floor in `ci.yml`, job `coverage`) | `pip install coverage && python tests/coverage_run.py && coverage report` |
 | Browser layout | `pip install playwright && python -m playwright install chromium`, then `SER2NET_UI_TESTS=1 python tests/test_ui_layout.py` |
 | Offline wheels | `python tests/test_vendor_wheels.py` |
 | Known vulnerabilities | `pip install pip-audit && pip-audit -r requirements.txt` |

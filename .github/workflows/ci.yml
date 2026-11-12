@@ -216,8 +216,9 @@ jobs:
       - name: Report
         run: |
           coverage report --skip-empty --sort=cover > coverage.txt
-          tail -1 coverage.txt
-          { echo '### Coverage'; echo '```'; tail -40 coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          grep '^TOTAL' coverage.txt
+          # the whole table, least-covered modules first
+          { echo '### Coverage'; echo; coverage report --skip-empty --sort=cover --format=markdown; } >> "$GITHUB_STEP_SUMMARY"
           coverage html --skip-empty -d coverage-html
       - uses: actions/upload-artifact@v7
         with:
@@ -226,6 +227,12 @@ jobs:
             coverage.txt
             coverage-html
           retention-days: 14
+      # Last, so the report above is uploaded also when it fails. Measured on Linux only
+      # (the Windows-only modules count as missed); set with headroom below the 88.8% a
+      # full run measured. Raise it by hand after pull requests that add tests. Not in
+      # .coveragerc, so a local run without socat or the blackhole tests doesn't fail.
+      - name: Coverage floor
+        run: coverage report --format=total --fail-under=87
 
   # The Docker image on amd64 + arm64 (same workflow the release pushes to GHCR with).
   docker:
