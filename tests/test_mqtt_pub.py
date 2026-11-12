@@ -295,7 +295,9 @@ def test_paho_queue_limit():
                                      base_topic="plant/meter", qos=1), logger=logs.append)
     try:
         assert pub.connect() is True
-        assert pub._client.max_queued_messages == 5
+        client = pub._client  # (paho 1.x keeps the limit in a private attribute)
+        assert getattr(client, "max_queued_messages",
+                       getattr(client, "_max_queued_messages", None)) == 5
         for n in range(8):
             pub.feed(b"%d kWh\n" % n)
         assert len(pub._client._out_messages) == 5, len(pub._client._out_messages)
