@@ -21,6 +21,8 @@ import signal
 import stat
 import sys
 import threading
+import time
+import traceback
 from typing import Callable, Mapping, Optional
 
 # asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
@@ -30,7 +32,10 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, clock, console, datalock, i18n, standalone
+from . import (
+    accounts, clock, console, datalock, i18n, logsetup, reload, sdnotify, standalone,
+    watchdog,
+)
 from .config import (NODE_NAME_ENV, ConfigError, ConfigStore, data_path, host_port, node_name,
                      node_name_problem)
 from .engine import netguard
@@ -122,6 +127,33 @@ def _access_hint(path: str, data_dir: str | None) -> str:
 # sets the event and calls the hook a running _serve() registered.
 _shutdown_requested = threading.Event()
 _shutdown_hooks: list = []
+# Called once the server is ready (when_ready): the Windows service reports RUNNING then.
+_ready_hooks: list[Callable[[], None]] = []
+
+
+# SIGHUP (POSIX) has ser2net read config.json again (app/reload.py). One that comes before
+# the event loop handles it (while config.json is loaded at start-up) is noted here instead
+# of ending the process, its default, and handled once the server runs.
+_hangups: list[float] = []
+
+
+def _defer_hangups() -> None:
+    if hasattr(signal, "SIGHUP"):
+        with contextlib.suppress(ValueError, OSError):  # (not the main thread)
+            signal.signal(signal.SIGHUP, lambda _sig, _frame: _hangups.append(time.time()))
+
+
+def _stdin_is_terminal() -> bool:
+    try:
+        return sys.stdin is not None and os.isatty(sys.stdin.fileno())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def when_ready(hook: Callable[[], None]) -> None:
+    """Call ``hook()`` once the server has started: its mappings were started and its admin
+    UI listens (from the event loop's thread; not at all when the start fails)."""
+    _ready_hooks.append(hook)
 
 
 def request_shutdown() -> None:
@@ -202,7 +234,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
                          "own)")
     if admin:
         write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
-                           "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin)
+                           "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin,
+                           max_age_s=config.log_max_age_days * 86400)
     if problems:
         notes.append("WARNING: ser2net starts with the setting(s) above anyway — what they "
                      "affect may not work. Fix them in the web UI (or in config.json); "
@@ -284,6 +317,18 @@ def tls_certificate_note(path: str) -> str:
     return line if info.state() == "valid" else f"WARNING: {line}"
 
 
+def admin_tls_builder(uconfig) -> Callable:
+    """How the admin UI's TLS context is made from its settings (AdminUI) while ser2net
+    runs (Settings -> Admin TLS, a reload): as at start-up, an encrypted key decrypted
+    with tls_key_password (never asked for on a terminal). Raises tls.TlsFileError."""
+    def build(admin):
+        if not admin.tls_enabled:
+            return None
+        return httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig,
+                                     admin.tls_key_password)
+    return build
+
+
 def hold_data_dir(config_path: str) -> str | None:
     """Take the data directory's single-instance lock (app.datalock) before anything is
     written there: a second ser2net on the same directory stops here with one line; a
@@ -304,6 +349,7 @@ def hold_data_dir(config_path: str) -> str | None:
 
 
 def main(config_path: str, reconfigure: bool = False) -> int:
+    _defer_hangups()
     standalone.prepare()  # standalone Linux binary: find the system CA certificates
     lock_note = hold_data_dir(config_path)
     try:
@@ -382,9 +428,29 @@ def plain_http_warning(admin, published: str = "") -> str:
             "and session cookies travel unencrypted. Configure TLS (admin_ui.tls_cert/"
             "tls_key), or bind to 127.0.0.1 (in Docker: publish the port to this host only) "
             "and put a TLS reverse proxy in front (docs/REVERSE-PROXY.md).")
+def _log_thread_errors(log) -> None:
+    """A thread that ends with an exception (a trace writer, the port list or Windows
+    hot-plug watcher) is named in all.log too, at most once a minute, not only on stderr,
+    which the Windows service doesn't have: such a thread does nothing from then on.
+    Python's own report still follows on stderr."""
+    say = netguard.LogEvery(log)
+    previous = threading.excepthook
+
+    def hook(args) -> None:
+        if args.exc_type is not SystemExit:  # which ends a thread quietly
+            frames = traceback.extract_tb(args.exc_traceback) if args.exc_traceback else []
+            where = (f" (at {os.path.basename(frames[-1].filename)}:{frames[-1].lineno})"
+                     if frames else "")
+            name = args.thread.name if args.thread is not None else "?"
+            say(f"thread {name!r} stopped by an error: {args.exc_type.__name__}: "
+                f"{args.exc_value}{where}")
+        previous(args)
+
+    threading.excepthook = hook
 
 
 _as_service = False  # set by service_main so _serve can log the service-only warnings
+_service_name = ""   # (and the service's name, for the Settings page's hints)
 
 # The most a stop takes (only a device, broker or client that stops answering makes it
 # take long): the admin UI's responses still under way, then everything else. The Docker
@@ -408,12 +474,13 @@ async def stop_engine(state: AppState) -> None:
                   "exiting anyway")
 
 
-def service_main(config_path: str) -> int:
-    """main() for the Windows service, which has no console: a start-up error that stops
-    it (the one-line SystemExit) also goes to all.log next to config.json, where the
-    admin looks for it."""
-    global _as_service
-    _as_service = True
+def service_main(config_path: str, name: str = "ser2net") -> int:
+    """main() for the Windows service ``name``, which has no console: a start-up error
+    that stops it (the one-line SystemExit) also goes to all.log next to config.json,
+    where the admin looks for it; that and any other error that ends it is also written
+    to the Application event log (service_stopped_event)."""
+    global _as_service, _service_name
+    _as_service, _service_name = True, name
     try:
         return main(config_path=config_path)
     except SystemExit as e:
@@ -421,7 +488,22 @@ def service_main(config_path: str) -> int:
             log = os.path.join(os.path.dirname(os.path.abspath(config_path)), "all.log")
             with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
                 fh.write(f"{clock.stamp()} {e.code}\n")
+        if e.code not in (None, 0):
+            service_stopped_event(name, config_path, e.code if isinstance(e.code, str)
+                                  else f"exit code {e.code}")
         raise
+    except Exception as e:
+        service_stopped_event(name, config_path, f"{type(e).__name__}: {e}")
+        raise
+
+
+def service_stopped_event(name: str, config_path: str, why: str) -> bool:
+    """The Application event log entry of a service that stopped on an error."""
+    from . import winservice
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    return winservice.report_event(name, (
+        f"The ser2net service '{name}' stopped: {why}\n\nDetails: "
+        f"{os.path.join(data_dir, 'all.log')} and {os.path.join(data_dir, winservice.SERVICE_LOG)}"))
 
 
 async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
@@ -447,6 +529,15 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
     use_worker_threads(asyncio.get_running_loop())
+    _log_thread_errors(state.log)
+    # a stuck event loop ends the process (to be started again): app/watchdog.py
+    if hang := watchdog.previous_hang(state.data_dir):
+        state.log(hang)
+        state.previous_hang = hang
+    dog = state.loop_watchdog = watchdog.start(state.data_dir, state.log)
+    # uvicorn's warnings and errors (a port it can't use, a TLS error, the traceback of a
+    # request that failed) and other libraries' go to all.log (logsetup.LibraryLogHandler)
+    logsetup.route_library_logs(logging.getLogger("ser2net"))
     for lang in i18n.missing_catalogs():
         state.log(f"WARNING: the '{lang}' UI translation is missing from {i18n.LOCALE_DIR} "
                   "— the web UI shows English to visitors who pick it")
@@ -494,6 +585,30 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         with contextlib.suppress(NotImplementedError, ValueError, RuntimeError, AttributeError):
             loop.add_signal_handler(sig, _request_shutdown)
 
+    # SIGHUP: read config.json again. A terminal that closes sends it too (to a ser2net
+    # started in it): its stdin is a terminal no more then, and ser2net stops cleanly,
+    # as the end of that session asks; `kill -HUP` while the terminal is open reloads.
+    # Taken once the mappings were started (_listen_for_hangups); one that comes before
+    # is kept (_hangups) and handled then.
+    in_terminal = _stdin_is_terminal()
+
+    def _hangup() -> None:
+        if in_terminal and not _stdin_is_terminal():
+            state.log("SIGHUP: the terminal ser2net was started in was closed — shutting down")
+            _request_shutdown()
+            return
+        task = asyncio.create_task(reload.reload_config(state, "SIGHUP"), name="reload")
+        state.reloads.add(task)
+        task.add_done_callback(state.reloads.discard)
+
+    def _listen_for_hangups() -> None:
+        if hasattr(signal, "SIGHUP"):
+            with contextlib.suppress(NotImplementedError, ValueError, RuntimeError):
+                loop.add_signal_handler(signal.SIGHUP, _hangup)
+                if _hangups:  # (one that came while ser2net was starting)
+                    _hangups.clear()
+                    _hangup()
+
     def _from_other_thread() -> None:
         loop.call_soon_threadsafe(_request_shutdown)
 
@@ -503,6 +618,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     guard = None
     started = False
     sockets: list = []
+    ready_task: Optional[asyncio.Task] = None
     try:
         app = build_app(state)
 
@@ -516,6 +632,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
             loop="asyncio",
             log_level="warning",
             access_log=False,
+            log_config=None,  # (its own would write to stderr only: logsetup takes them)
             http=httpguard.protocol_class(guard),
             # at a stop, a response still under way (a large trace download) gets this
             # long; the WebSockets (console, hex view) are closed at once
@@ -539,12 +656,24 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
                           "ser2net stops (no mapping was started); fix admin_ui.tls_cert / "
                           "tls_key (an encrypted key: tls_key_password) in config.json")
                 raise SystemExit(1) from None
+        # how Settings -> Admin TLS and a reload make the context while ser2net runs, and
+        # the address the UI is served on (AppState.admin_serving)
+        state.admin_tls = admin_tls_builder(uconfig)
+        state.admin_served = (admin.bind_ip, admin.port)
+        if _as_service:
+            state.service_name = _service_name
         sockets, ui_error = await _admin_sockets(admin, uconfig.backlog)
         if ui_error:
             state.log(f"admin UI: {ui_error} — the mappings start anyway; the admin UI tries "
                       f"again (every {UI_RETRY_MAX_S:g} s at most)")
         await state.start_engine()
         started = True
+        if not stop_asked:
+            _listen_for_hangups()
+        if not sockets and not stop_asked:
+            # the mappings run: ready for systemd / the Windows service (which can then be
+            # stopped) while the admin UI keeps trying
+            _announce_ready(state, ui_error)
         backoff = Backoff(cap=UI_RETRY_MAX_S)
         while not sockets and not stop_asked:
             with contextlib.suppress(asyncio.TimeoutError):
@@ -562,6 +691,8 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
             state.log("stop requested while starting — the admin UI is not started")
         else:
             serve_task = asyncio.create_task(server.serve(sockets=sockets))
+            ready_task = asyncio.create_task(_when_started(server, serve_task, state),
+                                             name="ready")
             try:
                 await serve_task
             except (KeyboardInterrupt, asyncio.CancelledError):
@@ -569,6 +700,13 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
                 with contextlib.suppress(Exception):
                     await serve_task
     finally:
+        sdnotify.stopping()
+        if ready_task is not None:
+            ready_task.cancel()
+        for task in list(state.reloads):  # (a reload under way ends with the process)
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
         _shutdown_hooks.remove(_from_other_thread)
         for sock in sockets:  # (uvicorn closes them itself when it served them)
             sock.close()
@@ -577,6 +715,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if started:
             state.log("shutting down — stopping all mappings")
             await stop_engine(state)
+        await dog.stop()
     return 0
 
 
@@ -586,3 +725,32 @@ async def _admin_sockets(admin, backlog: int) -> tuple[list, str]:
         return await httpguard.listen(admin.bind_ip, admin.port, backlog), ""
     except OSError as e:
         return [], str(e)
+
+
+async def _when_started(server, serve_task: asyncio.Task, state: AppState) -> None:
+    """Once uvicorn listens (server.started): _announce_ready. Not when it stops first."""
+    while not server.started:
+        if serve_task.done():
+            return
+        await asyncio.sleep(0.05)
+    _announce_ready(state)
+
+
+def _announce_ready(state: AppState, ui_error: str = "") -> None:
+    """The server has started (its mappings were started, its admin UI listens, or tries
+    again: `ui_error` says why it can't yet): tell systemd (READY=1, under the optional
+    Type=notify unit) and the when_ready hooks (the Windows service reports RUNNING only
+    now, so --install-service sees a start that fails). Again when the admin UI listens
+    after it could not at first (READY=1 with the new status; the hooks run once)."""
+    statuses = state.supervisor.all_status()
+    running = sum(1 for st in statuses.values() if st.get("state") == "running")
+    admin = state.config.admin_ui
+    ui = (f"admin UI not listening yet ({ui_error}), trying again" if ui_error
+          else f"admin UI on {host_port(admin.bind_ip, admin.port)}")
+    sdnotify.ready(f"{running} of {len(state.config.mappings)} mapping(s) running, {ui}")
+    hooks, _ready_hooks[:] = list(_ready_hooks), []
+    for hook in hooks:
+        try:
+            hook()
+        except Exception as e:  # (the server runs on; only the report is lost)
+            state.log(f"WARNING: could not report that ser2net is ready: {e}")

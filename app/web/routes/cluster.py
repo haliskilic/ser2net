@@ -16,11 +16,15 @@ import contextlib
 import re
 import time
 
-from starlette.responses import JSONResponse, PlainTextResponse, Response
+from markupsafe import escape
+from starlette.datastructures import FormData
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
-from ...config import ConfigError, MappingConfig, host_port, node_label, peer_host, trace_file_name
+from ...config import (
+    ConfigError, MappingConfig, host_port, mapping_revision, node_label, peer_host, trace_file_name,
+)
 from ...engine import netinfo, portlist
 from ...engine.cluster import (ACTOR_FIELD, ACTOR_MAX, ACTOR_NODE_FIELD, AUTH_HEADER, REFUSALS,
                                peer_addr, peer_port, peer_url)
@@ -29,14 +33,14 @@ from .. import auth
 from . import ops
 from .common import Ctx, LiveTable, bytesize, csrf_failed, domid, notice, reason, start_failed
 from .forms import (
-    MQTT_PASSWORD_CLEAR, MQTT_PASSWORD_WRITE_ONLY, _build_mapping_dict, _modbus_points_json,
-    _preserve_unmanaged_fields, mqtt_password_from_form, mqtt_password_view, tls_password_view,
+    _TEXT_INPUTS, MQTT_PASSWORD_CLEAR, MQTT_PASSWORD_WRITE_ONLY, _build_mapping_dict,
+    blocks_not_read, form_context, in_text_box, mapping_for_rerender, mqtt_password_from_form,
 )
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
 # relayed with the shared key.
-_PEER_FORM_FIELDS = {"id", "name", "kind", "enabled"}
+_PEER_FORM_FIELDS = {"id", "name", "kind", "enabled", "rev"}
 _PEER_FORM_PREFIXES = ("serial_", "network_", "opt_", "mqtt_", "modbus_")
 # Not forwarded as posted: the MQTT password goes as the value to store (_peer_save_fields)
 _PEER_PASSWORD_FIELDS = {"mqtt_password", MQTT_PASSWORD_WRITE_ONLY, MQTT_PASSWORD_CLEAR}
@@ -45,14 +49,91 @@ _PEER_PASSWORD_FIELDS = {"mqtt_password", MQTT_PASSWORD_WRITE_ONLY, MQTT_PASSWOR
 PEER_MAX_BODY = 1024 * 1024
 
 
+# Fields a node before 2.8.1 sets from every form it saves (it has no presence marker
+# for them), which this node's form leaves out for a Modbus gateway (it doesn't use
+# them): forwarded with the peer's stored values, so the edit doesn't reset them there.
+#   form field -> (config section, attribute)
+_READ_BEFORE_2_8_1 = {
+    "opt_banner": ("options", "banner"),
+    "opt_closeon": ("options", "closeon"),
+    "network_client_queue_max": ("network", "client_queue_max"),
+}
+
+
+def _peer_version(version) -> tuple[int, int, int] | None:
+    """(2, 8, 1) for a peer's reported "2.8.1" ("v2.8.1", "2.8.1rc1" ...); None when it
+    reports none (a node before 2.6.0) or something else."""
+    parts = re.findall(r"\d+", version if isinstance(version, str) else "")
+    if len(parts) < 2:
+        return None
+    major, minor, patch = (int(p) for p in (parts + ["0"])[:3])
+    return major, minor, patch
+
+
+def _peer_older(version, than: tuple[int, int, int]) -> bool:
+    """True when a peer's reported version is older than *than*, or unknown."""
+    v = _peer_version(version)
+    return v is None or v < than
+
+
+# What other nodes may ask this one to do with its mappings: its /api/cluster/local and
+# mapping-data answers list them as "caps" (nodes before 2.9.0 send none, see peer_caps).
+CAPS = ("control", "edit")
+
+
+def peer_caps(payload) -> frozenset[str]:
+    """What a peer can be asked to do, by its /api/cluster/local answer: its "caps" list
+    (2.9.0+), else what its version could do: start/stop/restart ("control") since 2.6.0,
+    edit since 2.6.1; a node before 2.6.0 reports no version and can only be shown."""
+    if not isinstance(payload, dict):
+        return frozenset()
+    caps = payload.get("caps")
+    if isinstance(caps, list):
+        return frozenset(c for c in caps if isinstance(c, str))
+    v = _peer_version(payload.get("version"))
+    if v is None or v < (2, 6, 0):
+        return frozenset()
+    return frozenset({"control"} if v < (2, 6, 1) else {"control", "edit"})
+
+
+def _version_label(version) -> str:
+    """How a peer's version compares to this node's: "older", "newer" or ""."""
+    v, mine = _peer_version(version), _peer_version(__version__)
+    if v is None or mine is None or v == mine:
+        return ""
+    return "older" if v < mine else "newer"
+
+
+def _leaves(d: dict, path: str = ""):
+    """(path, value) of every setting in a mapping dict: "serial.advanced.nobreak",
+    "modbus_poll.points[2].fn"; a USB identity (match) is one value."""
+    for k, v in d.items():
+        p = path + k
+        if isinstance(v, dict) and k != "match":
+            yield from _leaves(v, p + ".")
+        elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            for i, x in enumerate(v):
+                yield from _leaves(x, f"{p}[{i}].")
+        else:
+            yield p, v
+
+
+def not_kept(sent: MappingConfig, stored: dict) -> list[str]:
+    """The settings of the mapping a peer stores after a fleet-view save (its mapping-data
+    *stored*, in the peer's own schema) that differ from what this node sent (*sent*: the
+    forwarded fields as this node's save parses them). Only settings the peer has are
+    compared; the trace (stored as the peer's own value) and the id are left out."""
+    mine = dict(_leaves(sent.to_dict()))
+    theirs = dict(_leaves(MappingConfig.from_dict(stored).to_dict()))
+    have = {p for p, _v in _leaves(stored)}
+    return [p for p in sorted(have) if p not in ("id", "options.trace_both")
+            and p in mine and mine[p] != theirs.get(p)]
+
+
 def _peer_below_2_8(version: str) -> bool:
     """True when a peer's reported version is older than 2.8 (or unknown): such a node
     stores a trace file name as a path and opens it, so it must not be handed a new one."""
-    parts = re.findall(r"\d+", version or "")
-    try:
-        return (int(parts[0]), int(parts[1])) < (2, 8)
-    except (IndexError, ValueError):
-        return True
+    return _peer_older(version, (2, 8, 0))
 
 
 def _peer_save_fields(form, peer_mapping, peer_version):
@@ -63,6 +144,9 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     the peer stored it when unchanged, and refused as a new name for a pre-2.8 peer. The
     form never had the peer's MQTT password in it: the password to store is sent, the one
     the peer has when the field was left blank (a peer of any version stores what it gets).
+    A one-line field posted back unchanged keeps the peer's stored value (line breaks
+    the field can't show), and a peer before 2.8.1 gets its stored values for the fields
+    it reads from every form but this form leaves out (_READ_BEFORE_2_8_1).
     Returns (fields, None) or (None, error)."""
     if not peer_mapping:
         return None, _("This mapping no longer exists on the peer; reload the fleet view.")
@@ -80,13 +164,22 @@ def _peer_save_fields(form, peer_mapping, peer_version):
             return None, _("This cluster node is older than 2.8 and would store a trace file "
                            "name as a path. Upgrade it to 2.8 or newer before setting a trace "
                            "file for it here.")
+    def stored(section, attr):
+        return (peer_mapping.get(section) or {}).get(attr)
+
     mqtt = peer_mapping.get("mqtt")
     stored_password = str(mqtt.get("password") or "") if isinstance(mqtt, dict) else ""
-    fields = [(k, v) for k, v in form.multi_items()
+    unchanged = {field: value for field, (section, attr) in _TEXT_INPUTS.items()
+                 if isinstance(value := stored(section, attr), str)
+                 and form.get(field) == in_text_box(value)}
+    fields = [(k, unchanged.get(k, v)) for k, v in form.multi_items()
               if k != "opt_trace_both" and k not in _PEER_PASSWORD_FIELDS
               and (k in _PEER_FORM_FIELDS or k.startswith(_PEER_FORM_PREFIXES))]
     fields.append(("opt_trace_both", out_trace))
     fields.append(("mqtt_password", mqtt_password_from_form(form, stored_password)))
+    if _peer_older(peer_version, (2, 8, 1)):
+        fields += [(field, str(value)) for field, (section, attr) in _READ_BEFORE_2_8_1.items()
+                   if field not in form and (value := stored(section, attr)) is not None]
     return fields, None
 
 
@@ -103,17 +196,38 @@ def _peer_actor(a, form) -> str:
     return f"cluster-peer:{node or a.sender[:16] or '?'}/{user}"
 
 
-def _remote(target, peer_id, mapping) -> dict:
+def _remote(target, peer_id, mapping, version="") -> dict:
     """The fleet view's edit form for a peer's mapping: the peer's host + port it posts
     back (resolved again on save), the address it shows, and the id it is saved under.
     That is the id the peer itself keys the mapping by, sent back to it unchanged: a
     v2.7/v2.8 peer may keep an id that this node would not take (``mapping`` carries the
     id derived from it here, which that peer has never heard of). This node uses it only
-    to address the mapping on the peer, never for a file or path of its own."""
+    to address the mapping on the peer, never for a file or path of its own. A peer
+    running another version than this node gets a note saying so."""
     if not isinstance(peer_id, str) or not peer_id:
         peer_id = mapping.id
-    return {"host": target["ip"], "port": target["port"],
-            "addr": peer_addr(target["ip"], target["port"]), "id": peer_id}
+    addr = peer_addr(target["ip"], target["port"])
+    note = ""
+    if (age := _version_label(version)) == "older":
+        note = _("{0} runs version {1}, this node {2}: the settings {1} doesn’t have are left "
+                 "out of this form. Upgrade every node to the same version (README: Upgrading "
+                 "a cluster).").format(addr, version, __version__)
+    elif age == "newer":
+        note = _("{0} runs version {1}, this node {2}: the settings only {1} has are not in "
+                 "this form, and it keeps them as they are. Upgrade this node too (README: "
+                 "Upgrading a cluster).").format(addr, version, __version__)
+    return {"host": target["ip"], "port": target["port"], "addr": addr, "id": peer_id,
+            "version_note": note}
+
+
+def _peer_form(target, mapping, version, peer_id, data) -> dict:
+    """form_context's arguments for a peer's mapping: its remote settings, the blocks a
+    peer running *version* doesn't read left out, and the revision of the mapping its
+    mapping-data answer (*data*) gave (2.9.0+)."""
+    rev = data.get("rev") if isinstance(data, dict) else ""
+    return {"remote": _remote(target, peer_id, mapping, version),
+            "hide": blocks_not_read(_peer_version(version)),
+            "rev": rev if isinstance(rev, str) else ""}
 
 
 def _peer_links(data) -> dict:
@@ -211,7 +325,8 @@ def routes(ctx: Ctx) -> list:
             })
         return {"id": cfg.instance_id, "name": node_label(cfg.admin_ui),
                 "ip": ip, "port": port, "scheme": scheme,
-                "version": __version__, "uptime_s": int(time.monotonic() - state.started_mono),
+                "version": __version__, "caps": list(CAPS),
+                "uptime_s": int(time.monotonic() - state.started_mono),
                 "mapping_count": len(maps), "running_count": running, "mappings": maps}
 
     async def _peer_auth(request):
@@ -273,17 +388,19 @@ def routes(ctx: Ctx) -> list:
             return {**base, "online": False, "id": target.get("id", ""),
                     "name": target.get("name", base["addr"]),
                     "uptime": "", "version": "", "mapping_count": 0, "running_count": 0,
-                    "mappings": []}
+                    "mappings": [], "caps": frozenset(), "age": ""}
         maps = data.get("mappings")
         maps = [m for m in maps if isinstance(m, dict)] if isinstance(maps, list) else []
         own_ip, own_port = peer_host(data.get("ip", "")), peer_port(data.get("port"))
         if own_ip and own_port and peer_addr(own_ip, own_port) != base["addr"]:
             base["reported"] = peer_addr(own_ip, own_port)
+        version = data.get("version", "")
         return {**base, "online": True, "id": data.get("id", target.get("id", "")),
                 "name": data.get("name", base["addr"]),
-                "uptime": _fmt_uptime(data.get("uptime_s", 0)), "version": data.get("version", ""),
+                "uptime": _fmt_uptime(data.get("uptime_s", 0)), "version": version,
                 "mapping_count": data.get("mapping_count", len(maps)),
-                "running_count": data.get("running_count", 0), "mappings": maps}
+                "running_count": data.get("running_count", 0), "mappings": maps,
+                "caps": peer_caps(data), "age": _version_label(version)}
 
     fleet = LiveTable(ctx, "_cluster_body.html")
 
@@ -308,8 +425,11 @@ def routes(ctx: Ctx) -> list:
         for t, data in zip(targets, results, strict=False):
             nodes.append(_node_from(t, data))
         c = state.cluster
+        versions = {n["version"] for n in nodes if n["online"] and isinstance(n["version"], str)}
         notes = {"copies": c.copies(), "shared": c.shared_ids(), "other_key": c.other_key_nodes(),
-                 "legacy": c.legacy_nodes()}
+                 "legacy": c.legacy_nodes(),
+                 "versions": sorted(versions, key=lambda v: _peer_version(v) or (0, 0, 0))
+                 if len(versions) > 1 or "" in versions else []}
         view = {"nodes": nodes, "can_edit": can_edit(request),
                 "discovery_error": state.cluster.discovery_error, "notes": notes}
         return await fleet.answer(request, lambda: _fleet_snapshot(view), **view)
@@ -324,18 +444,20 @@ def routes(ctx: Ctx) -> list:
         mid, action = form.get("mapping_id", ""), form.get("action", "")
         if action not in ("start", "stop", "restart"):
             return _peer_json(a, {"error": "bad_action"}, 400)
-        try:
-            ok, name = await ops.apply_action(state, mid, action)
-        except ConfigError as e:  # it can't be started (a serial port in use, ...)
-            return _peer_json(a, {"error": str(e)}, 400)
-        if not ok:
-            return _peer_json(a, {"error": name}, 404)
+        res = await ops.apply_action(state, mid, action)
+        if not res.found:
+            return _peer_json(a, {"error": "Mapping not found"}, 404)
+        if res.error is not None:  # not saved, nothing changed: the controlling node says why
+            return _peer_json(a, {"ok": False, "error": str(res.error)}, 400)
+        name = res.name
         ip = client_ip(request)
         state.log(f"cluster: remote {action} of '{name}' from {ip}")
         state.audit(ip, f"cluster_remote_{action}", name, user=_peer_actor(a, form))
-        # start_error: why it did not start (ignored by nodes older than 2.9)
+        # start_error: why it did not start; changed: False when it ran (or was stopped)
+        # already (both ignored by nodes older than 2.9)
         why = start_failed(state, mid) if action != "stop" else ""
-        return _peer_json(a, {"ok": True, "name": name, **({"start_error": why} if why else {})})
+        return _peer_json(a, {"ok": True, "name": name, "changed": res.changed,
+                              **({"start_error": why} if why else {})})
 
     async def cluster_control_peer(request):
         """Browser-facing proxy: an operator on THIS node controls a mapping on a peer.
@@ -352,6 +474,10 @@ def routes(ctx: Ctx) -> list:
             return err
         res = await state.cluster.control_peer(target, mid, action, actor=ctx.actor(request))
         if not res or not res.get("ok"):
+            why = res.get("error") if res and res.get("ok") is False else None
+            if isinstance(why, str) and why:  # a 2.9+ peer that could not save the change
+                return PlainTextResponse(_("The peer did not accept the command: {0}").format(
+                    why[:500]), status_code=502)
             return PlainTextResponse(_("Peer did not accept the command "
                                        "(unreachable or rejected)."), status_code=502)
         state.cluster.forget(target)   # the refresh this triggers shows the new state
@@ -381,9 +507,13 @@ def routes(ctx: Ctx) -> list:
         if not m:
             return _peer_json(a, {"error": "not_found"}, 404)
         ports = await state.ports.current()
+        # (nodes before 2.9.0 read only mapping, ports and ips; "rev" goes back with the
+        # form, so this node can tell whether the mapping changed since)
         return _peer_json(a, {"mapping": m.to_dict(), "ports": ports,
                               "ips": netinfo.list_ip_candidates(),
-                              "links": portlist.links(ports, (m.serial.port, m.serial_b.port))})
+                              "links": portlist.links(ports, (m.serial.port, m.serial_b.port)),
+                              "version": __version__, "caps": list(CAPS),
+                              "rev": mapping_revision(cfg.secret_key, m)})
 
     async def cluster_mapping_save(request):
         """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
@@ -433,13 +563,14 @@ def routes(ctx: Ctx) -> list:
                                             {"mid": request.query_params.get("mid", "")})
         if not data or not isinstance(data.get("mapping"), dict):
             return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
+        # its version: in the answer since 2.9.0, else what the fleet view was told
+        version = data.get("version") or (await state.cluster.fetch_peer(target) or {}).get(
+            "version", "")
         mapping = MappingConfig.from_dict(data["mapping"])
-        return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
-                      modbus_points_json=_modbus_points_json(mapping),
-                      ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
-                      links=_peer_links(data),
-                      remote=_remote(target, data["mapping"].get("id"), mapping), error=None,
-                      **mqtt_password_view(mapping.mqtt.password))
+        return render(request, "_mapping_form.html", **form_context(
+            mapping, data.get("ports", []), data.get("ips", []), is_new=False,
+            links=_peer_links(data), mqtt_stored=mapping.mqtt.password,
+            **_peer_form(target, mapping, version, data["mapping"].get("id"), data)))
 
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
@@ -460,30 +591,23 @@ def routes(ctx: Ctx) -> list:
                                    {"mid": form.get("id", "")}),
             state.cluster.get_peer(target, "/api/cluster/local"))
 
+        version = (data or {}).get("version") or (local or {}).get("version", "")
+
         def _reload(msg):
-            stored_mqtt = stored_tls = ""
-            try:
-                mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
-                if data and data.get("mapping"):
-                    peer_mapping = MappingConfig.from_dict(data["mapping"])
-                    stored_mqtt = peer_mapping.mqtt.password
-                    stored_tls = peer_mapping.network.tls_key_password
-                    _preserve_unmanaged_fields(mapping, peer_mapping, form)
-            except Exception:
-                mapping = MappingConfig(name=form.get("name", ""))
-            return render(request, "_mapping_form.html", status_code=400, mapping=mapping,
-                          is_new=False, modbus_points_json=_modbus_points_json(mapping),
-                          ports=portlist.visible((data or {}).get("ports", [])),
-                          links=_peer_links(data),
-                          ips=(data or {}).get("ips", []),
-                          remote=_remote(target, form.get("id", ""), mapping), error=msg,
-                          **mqtt_password_view(stored_mqtt, form),
-                          **tls_password_view(stored_tls, form))
+            peer = data or {}
+            stored = (MappingConfig.from_dict(peer["mapping"])
+                      if isinstance(peer.get("mapping"), dict) else None)
+            ports = peer.get("ports", [])
+            mapping = mapping_for_rerender(form, stored, ports)
+            return render(request, "_mapping_form.html", status_code=400, **form_context(
+                mapping, ports, peer.get("ips", []), is_new=False, error=msg,
+                links=_peer_links(data), mqtt_stored=stored.mqtt.password if stored else "",
+                tls_stored=stored.network.tls_key_password if stored else "", form=form,
+                **_peer_form(target, mapping, version, form.get("id", ""), peer)))
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))
-        fields, ferr = _peer_save_fields(form, data.get("mapping"),
-                                         (local or {}).get("version", ""))
+        fields, ferr = _peer_save_fields(form, data.get("mapping"), version)
         if ferr:
             return _reload(ferr)
         res = await state.cluster.post_peer(target, "/api/cluster/mapping-save", fields,
@@ -499,7 +623,23 @@ def routes(ctx: Ctx) -> list:
             note = (notice(_("“{0}” saved on {1}, but it could not start: {2}").format(
                         name, addr, why), "warn", detail=raw) if why
                     else notice(_("“{0}” saved on {1}.").format(name, addr)))
-            return Response("", headers={"HX-Trigger": "refreshCluster", **note})
+            # read it back: what the peer didn't keep of what was sent (an older version)
+            after = await state.cluster.get_peer(target, "/api/cluster/mapping-data",
+                                                 {"mid": form.get("id", "")})
+            lost = []
+            if after and isinstance(after.get("mapping"), dict):
+                stored = MappingConfig.from_dict(data["mapping"])
+                lost = not_kept(mapping_for_rerender(FormData(fields), stored,
+                                                     data.get("ports", [])), after["mapping"])
+            if not lost:
+                return Response("", headers={"HX-Trigger": "refreshCluster", **note})
+            state.log(f"cluster: {addr} (version {version or '?'}) did not keep "
+                      f"{', '.join(lost)} of '{name}'")
+            text = _("Saved on {0} (version {1}), but it did not keep: {2}.").format(
+                addr, version or "?", ", ".join(lost[:12]) + (" …" if len(lost) > 12 else ""))
+            return HTMLResponse(f'<div class="banner warn">{escape(text)} <button type="button" '
+                                f'class="btn sm" data-cancel>{escape(_("Close"))}</button></div>',
+                                headers={"HX-Trigger": "refreshCluster", **note})
         return _reload((res or {}).get("error") or _("The peer rejected the change or was "
                                                      "unreachable."))
 

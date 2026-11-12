@@ -4,7 +4,8 @@ proxy that ends TLS; HSTS goes through such a proxy only when asked for.
 Checks:
   * over plain HTTP the session, CSRF, language and SSO state cookies are as before: no
     Secure (and no HSTS);
-  * with admin TLS, a request scheme of https (a trusted proxy's X-Forwarded-Proto), or a
+  * with admin TLS as the UI's listener serves it (not a setting it doesn't serve), a
+    request scheme of https (a trusted proxy's X-Forwarded-Proto), or a
     first X-Forwarded-Proto / Forwarded proto= of https from any client, all four are
     Secure and named __Host-… (the SSO state cookie __Secure-…) - deleting them too
     (sign-out); http, or https only in a
@@ -22,6 +23,7 @@ Run: python3 tests/test_secure_cookies.py
 from __future__ import annotations
 
 import os
+import types
 
 from _asgi import App, cookies, header
 
@@ -115,6 +117,13 @@ def test_cookies() -> None:
         # listener (test_hsts) and not in this process
         with App(_cfg(tls_cert="/c.pem", tls_key="/k.pem")) as a:
             assert made(a) == named(True, https=False)
+        # what the UI's listener serves decides (AppState.serving_tls), not config.json: TLS
+        # that it doesn't serve makes no Secure cookie and no HSTS
+        with App(_cfg(tls_cert="/c.pem", tls_key="/k.pem")) as a:
+            a.state.admin_guard = types.SimpleNamespace(ssl=None)
+            assert made(a) == named(False)
+            st, h, _ = a.call("GET", "/login")
+            assert header(h, "strict-transport-security") is None
     finally:
         oidc_auth.build_authorize_url = real
     print("cookies: Secure (and __Host- / __Secure-) with admin TLS, a https scheme or a first "
@@ -135,9 +144,10 @@ def test_proxy_hsts() -> None:
         st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
         assert st == 200 and 'name="proxy_hsts" >' in page, st
         assert "Send HSTS on HTTPS through the proxy" in page
-        st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},   # (off: saved)
+        st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},   # (off: unchanged)
                           headers={"Cookie": jar})
         assert st == 303 and a.state.config.admin_ui.proxy_hsts is False
+        a.state.store.save(a.state.config)   # (a backup with it off, for the preview below)
         st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF, "proxy_hsts": "on"},
                           headers={"Cookie": jar})
         assert st == 303 and a.state.config.admin_ui.proxy_hsts is True, st
@@ -153,8 +163,8 @@ def test_proxy_hsts() -> None:
             for path in ("/login", "/api/v1/health"):
                 st, h, _ = a.call("GET", path, headers=headers)
                 assert header(h, "strict-transport-security") == want, (path, headers)
-        backups = sorted(os.listdir(os.path.join(a.tmp, "backups")))
-        st, _, page = a.call("GET", f"/settings?restore={backups[-1]}", headers={"Cookie": jar})
+        oldest = a.state.store.backup_names()[-1]   # (the newest is what config.json holds)
+        st, _, page = a.call("GET", f"/settings?restore={oldest}", headers={"Cookie": jar})
         assert st == 200 and "HSTS through the reverse proxy: enabled → disabled" in page
     print("HSTS through a TLS proxy: off by default; when switched on, the Admin TLS max-age "
           "on HTTPS requests only  OK")

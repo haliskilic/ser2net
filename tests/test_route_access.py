@@ -102,6 +102,7 @@ ROUTES = {
     ("POST", "/settings/users/signout"): (ADMIN, FORM),
     ("POST", "/settings/users/expiry"): (ADMIN, FORM),
     ("POST", "/settings/users/totp-reset"): (ADMIN, FORM),
+    ("POST", "/settings/retention"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/role"): (ADMIN, FORM),  # the same, by path
     ("POST", "/settings/users/{username}/delete"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/signout"): (ADMIN, FORM),
@@ -119,6 +120,7 @@ ROUTES = {
     ("POST", "/settings/backups/restore-mappings"): (ADMIN, FORM),
     ("POST", "/settings/backups/delete"): (ADMIN, FORM),
     ("POST", "/settings/backups/remove-account"): (ADMIN, FORM),
+    ("POST", "/settings/config/reload"): (ADMIN, FORM),
     ("GET", "/settings/backups/{name}"): (ADMIN, NONE),
     # ---- api.py: the REST API (bearer token, checked in GuardMiddleware) ----
     ("GET", "/api/v1/health"): (TOKEN_PUBLIC, NONE),
@@ -126,6 +128,7 @@ ROUTES = {
     ("GET", "/api/v1/status"): (TOKEN_READ, NONE),
     ("GET", "/api/v1/metrics"): (TOKEN_READ, NONE),
     ("POST", "/api/v1/import"): (TOKEN_WRITE, NONE),
+    ("GET", "/api/v1/info"): (TOKEN_READ, NONE),
     ("GET", "/api/v1/ports"): (TOKEN_READ, NONE),
     ("GET", "/api/v1/mappings"): (TOKEN_READ, NONE),
     ("POST", "/api/v1/mappings"): (TOKEN_WRITE, NONE),
@@ -145,6 +148,8 @@ ROUTES = {
     ("GET", "/api/mappings/{mid}/console-view"): (VIEWER, NONE),
     ("GET", "/api/mappings/{mid}/traces"): (OPERATOR, NONE),  # traces hold what is sent to the device
     ("GET", "/api/mappings/{mid}/traces/{name}"): (OPERATOR, NONE),
+    ("DELETE", "/api/mappings/{mid}/traces"): (OPERATOR, HEADER),
+    ("DELETE", "/api/mappings/{mid}/traces/{name}"): (OPERATOR, HEADER),
     ("POST", "/api/mappings/save"): (OPERATOR, HEADER),
     ("DELETE", "/api/mappings/{mid}"): (OPERATOR, HEADER),
     ("POST", "/api/mappings/{mid}/{action}"): (OPERATOR, HEADER),
@@ -371,9 +376,13 @@ def to_login(h) -> bool:
 
 
 def gated(path, st, h, body) -> bool:
-    """The session gate: sign in first."""
+    """The session gate: sign in first (a client that is not a browser asking for what
+    monitoring reads gets 401, not the sign-in page)."""
     if path.startswith("/api/"):
         return st == 401 and json.loads(body) == {"error": "unauthorized"}
+    if path in web_server.MONITORING_PATHS:
+        return st == 401 and body.startswith("unauthorized: sign in to the web UI") and \
+            h.get("WWW-Authenticate", "").startswith("Bearer")
     return st == 303 and to_login(h)
 
 

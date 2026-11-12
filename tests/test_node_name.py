@@ -51,8 +51,11 @@ def test_config() -> None:
         cfg.admin_ui))
     cfg = AppConfig.from_dict({"admin_ui": {"node_name": "  Line 1 — Hat B  "}})
     assert cfg.admin_ui.node_name == "Line 1 — Hat B" and not cfg.load_notes
+    # (a number reads as its text, as any text setting: the typed reader)
+    cfg = AppConfig.from_dict({"admin_ui": {"node_name": 42}})
+    assert cfg.admin_ui.node_name == "42" and any("admin_ui.node_name" in n for n in cfg.load_notes)
     for bad in ("x" * 65, "line\r\nBcc: someone@example.com", "tab\there", "a b",
-                "rtl‮evil", 42, ["x"]):
+                "rtl‮evil", ["x"]):
         cfg = AppConfig.from_dict({"admin_ui": {"node_name": bad}})
         assert cfg.admin_ui.node_name == "", bad
         assert any("admin_ui.node_name" in n for n in cfg.load_notes), (bad, cfg.load_notes)
@@ -222,8 +225,10 @@ def test_web() -> None:
                                                                     "node_name": ""},
                              headers={"Cookie": jar})
         assert "instance name cleared: the host name is used" in a.lines
-        backups = sorted(os.listdir(os.path.join(a.tmp, "backups")))
-        st, _, page = a.call("GET", f"/settings?restore={backups[-1]}", headers={"Cookie": jar})
+        # (each save keeps a backup of what it wrote: the newest is the cleared name, the one
+        # before it has the name)
+        before = a.state.store.backup_names()[1]
+        st, _, page = a.call("GET", f"/settings?restore={before}", headers={"Cookie": jar})
         assert st == 200 and "Instance name: — → Line 1 &lt;b&gt;" in page, page[-800:]
     print("web UI: the name in the signed-in pages' title and top bar and the fleet view; "
           "Settings saves / refuses / logs / audits it, the environment's read-only  OK")

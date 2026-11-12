@@ -36,13 +36,14 @@ import sys
 import tempfile
 import time
 import types
+import urllib.request
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _optional import need
-from _server import ROOT, Browser, Server, free_port
+from _server import ROOT, Browser, Server, _NoRedirect, free_port
 
 from app import importer
 from app.config import ConfigError, MappingConfig
@@ -573,6 +574,12 @@ def test_admin_ui(pki: Pki):
         st, _h, page = b.post("/settings/tls", dict(fields, tls_key_password=PASSWORD))
         assert "Admin TLS saved" in page and PASSWORD not in page, page[-1500:]
         assert srv.saved_config()["admin_ui"]["tls_key_password"] == PASSWORD
+        # served at once: on with HTTPS (signed in again: its cookies have names of their own)
+        b = Browser(srv.base.replace("http://", "https://"))
+        b.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(b.jar),
+                                           _NoRedirect(), urllib.request.HTTPSHandler(
+                                               context=ssl._create_unverified_context()))
+        b.login("admin", "admin-pass-1")
         st, _h, page = b.post("/settings/tls", fields)  # blank: kept
         assert "Admin TLS saved" in page, page[-1500:]
         assert srv.saved_config()["admin_ui"]["tls_key_password"] == PASSWORD

@@ -458,6 +458,8 @@ def test_settings_ui(hook_port):
         b.op.addheaders = []
         want = TR["Webhook ({0}) failed: {1}"].format("slack", "HTTP 500 Internal Server Error")
         assert want in page, page[page.find("banner"):][:300]
+        st, _, page = b.post("/settings/notifications", {**form, "notify_repeat_min": "inf"})
+        assert st == 400 and "repeat interval must be numbers" in page, (st, page[:300])
         before = len(RECEIVED)
         Browser(srv.base).post("/login", {"username": "admin", "password": "wrong"})
         for _ in range(50):

@@ -534,13 +534,18 @@ def bearer_token(request) -> str:
 # cookies
 # --------------------------------------------------------------------------
 def is_https(request, cfg) -> bool:
-    """Did the browser use HTTPS for this request? With admin TLS; when the request's
-    scheme is https (uvicorn's TLS, or X-Forwarded-Proto from a trusted proxy:
-    app/web/proxy.py); or when the first X-Forwarded-Proto or Forwarded proto= says so,
-    whoever sent it: it only makes cookies stricter (Secure) and adds HSTS, which browsers
-    take only over HTTPS, and a page can't add those headers to the browser's requests -
-    so a TLS proxy needs no trusted-proxy setting for the cookies to be Secure."""
-    return cfg.admin_ui.tls_enabled or proxy.browser_https(request)
+    """Did the browser use HTTPS for this request? With admin TLS as the UI's listener
+    serves it (AppState.serving_tls: a TLS change applies to new connections at once;
+    without the app's state, as config.json sets it); when the request's scheme is https
+    (uvicorn's TLS, or X-Forwarded-Proto from a trusted proxy: app/web/proxy.py); or when
+    the first X-Forwarded-Proto or Forwarded proto= says so, whoever sent it: it only makes
+    cookies stricter (Secure) and adds HSTS, which browsers take only over HTTPS, and a
+    page can't add those headers to the browser's requests - so a TLS proxy needs no
+    trusted-proxy setting for the cookies to be Secure."""
+    app = (getattr(request, "scope", None) or {}).get("app")
+    state = getattr(getattr(app, "state", None), "appstate", None)
+    served = state.serving_tls if state is not None else cfg.admin_ui.tls_enabled
+    return served or proxy.browser_https(request)
 
 
 def set_cookie(response, request, cfg, name: str, value: str, max_age: int,

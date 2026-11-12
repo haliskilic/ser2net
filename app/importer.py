@@ -3,8 +3,9 @@
 The web UI first shows a preview (plan_rows) and only then applies the import, in
 one of two modes:
   * merge   — a mapping with the same id, else the same name, is updated in place
-              (keeping the existing id, so its log and traces stay attached); the
-              others are added; mappings not in the file stay as they are;
+              (keeping the existing id, so its log and traces stay attached; a setting
+              the file doesn't have — an export of an older version — keeps its current
+              value); the others are added; mappings not in the file stay as they are;
   * replace — the file's mappings replace all current ones (the pre-v2.8 behaviour).
 Either way the previous config.json is kept in data/backups/ by ConfigStore.save.
 
@@ -18,6 +19,8 @@ import (enabled, TLS, which clients, read-only) with its own warnings.
 from __future__ import annotations
 
 import contextvars
+import copy
+import dataclasses
 import ipaddress
 import json
 import re
@@ -25,7 +28,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from . import i18n
-from .config import AppConfig, ConfigError, MappingConfig, _new_id, host_port, normalize_cidr
+from .config import (
+    AppConfig, ConfigError, MappingConfig, ModbusPoint, _new_id, host_port, normalize_cidr,
+)
 from .i18n import _
 from .ser2net_import import Note, looks_yaml, parse_ser2net_config
 
@@ -34,6 +39,10 @@ MODES = ("merge", "replace")
 # limits far above any real export or config.json (and the classic parser has its own).
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_MAPPINGS = 1000
+# An export or config.json nests about 6 deep. Deeper files are refused right after
+# parsing: how deep the parser itself goes depends on the Python version and the stack
+# (3.14 takes far deeper files), and reading a mapping recurses into its values.
+MAX_DEPTH = 64
 
 
 @dataclass
@@ -46,6 +55,9 @@ class ImportPlan:
     # English: parse_for_preview); empty: as `source` / `warnings`
     log_source: str = ""
     log_warnings: list[str] = field(default_factory=list)
+    # per mapping, the settings the file doesn't have (see absent_settings); a merge keeps
+    # their current values. Empty for a classic ser2net configuration.
+    absent: list[list[str]] = field(default_factory=list)
 
     def split_warnings(self) -> tuple[list[str], list[list[str]]]:
         """The warnings about the file as a whole, and those about each mapping (by its
@@ -70,6 +82,22 @@ def parse_for_preview(raw: bytes, filename: str = "") -> ImportPlan:
         english = contextvars.copy_context().run(_in_english, raw, filename)
         plan.log_source, plan.log_warnings = english.source, english.warnings
     return plan
+
+
+def _deeper_than(doc, limit: int) -> bool:
+    """Whether a parsed JSON document nests lists / objects more than ``limit`` deep.
+    Without recursion, in memory for ``limit`` levels: one iterator per open level."""
+    levels = [iter((doc,))]
+    while levels:
+        for value in levels[-1]:
+            if isinstance(value, (dict, list)):
+                if len(levels) > limit:
+                    return True
+                levels.append(iter(value.values() if isinstance(value, dict) else value))
+                break
+        else:
+            levels.pop()
+    return False
 
 
 def _in_english(raw: bytes, filename: str) -> ImportPlan:
@@ -97,36 +125,99 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
                  if isinstance(e, json.JSONDecodeError) else
                  _("nested too deeply") if isinstance(e, RecursionError) else str(e))
         raise ConfigError(_("The file is not valid JSON ({0}).").format(where)) from None
+    if _deeper_than(doc, MAX_DEPTH):
+        raise ConfigError(_("The file is not valid JSON ({0}).").format(
+            _("nested too deeply")))
     if not isinstance(doc, dict) or not isinstance(doc.get("mappings"), list):
         raise ConfigError(_('Expected a ser2net export: a JSON object with a "mappings" list.'))
     if len(doc["mappings"]) > MAX_MAPPINGS:
         raise ConfigError(_("The file has {0} mappings; at most {1} can be imported at once.")
                           .format(len(doc["mappings"]), MAX_MAPPINGS))
-    mappings, warnings = [], []
+    mappings: list[MappingConfig] = []
+    warnings: list[str] = []
+    absent: list[list[str]] = []
     for i, item in enumerate(doc["mappings"], 1):
         if not isinstance(item, dict):
             raise ConfigError(_("Mapping #{0} is not an object.").format(i))
         try:
             m = MappingConfig.from_dict(item)
+            # TLS files of a data directory that moved are this one's (tls folder) before an
+            # edit's rules ask whether they exist
+            moved = AppConfig(mappings=[m]).find_moved_tls_files()
             m.validate_input()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
-        if AppConfig(mappings=[m]).find_moved_tls_files():
+        if moved:
             warnings.append(_("Mapping #{0} ({1}): its TLS files are not where the file says; "
                               "the files of that name in this data directory's tls folder are "
                               "used.").format(i, m.name))
         warnings.extend(_tls_warning(i, m))
+        warnings.extend(_("Mapping #{0} ({1}): {2}").format(i, m.name, w)
+                        for w in m.input_warnings() + m.ignored_settings())
         if item.get("id") and item["id"] != m.id:
             warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "
                               "digits or _), so it gets a new one.").format(
                 i, m.name, repr(item["id"])[:80]))
+        absent.append(absent_settings(item))
+        if absent[-1]:
+            names = list(dict.fromkeys(re.sub(r"\[\d+\]", "[]", p) for p in absent[-1]))
+            warnings.append(_("Mapping #{0} ({1}): the file has no {2} (an export of an older "
+                              "version?). Merged into a mapping of the same name, they keep "
+                              "their current values; otherwise they take the defaults.").format(
+                i, m.name, ", ".join(names[:8]) + (" …" if len(names) > 8 else "")))
         mappings.append(m)
     whole_config = "users" in doc or "admin_ui" in doc
     source = _("ser2net config.json") if whole_config else _("ser2net export")
     if whole_config:
         warnings.append(_("Only the mappings are imported from a config.json; users, "
                           "passwords and settings stay as they are."))
-    return ImportPlan(source=source, mappings=mappings, warnings=warnings)
+    return ImportPlan(source=source, mappings=mappings, warnings=warnings, absent=absent)
+
+
+_FULL_MAPPING = MappingConfig().to_dict()
+_FULL_POINT = dataclasses.asdict(ModbusPoint())
+_POINT = re.compile(r"modbus_poll\.points\[(\d+)\]")
+
+
+def absent_settings(item: dict, full: dict = _FULL_MAPPING, path: str = "") -> list[str]:
+    """The settings (paths like "options.trace_max_mb", "modbus_poll.points[2].writable")
+    a mapping of an import file doesn't have, e.g. because an older version wrote it."""
+    out = []
+    for key, default in full.items():
+        if key == "id":
+            continue
+        if not isinstance(item, dict) or key not in item:
+            out.append(path + key)
+        elif key == "points" and isinstance(item[key], list):
+            for i, point in enumerate(item[key]):
+                if isinstance(point, dict):
+                    out += [f"{path}points[{i}].{k}" for k in _FULL_POINT if k not in point]
+        elif isinstance(default, dict) and key != "match":  # a section (match is a value)
+            out += absent_settings(item[key], default, f"{path}{key}.")
+    return out
+
+
+def _keep_absent(m: MappingConfig, target: MappingConfig, absent: list[str]) -> MappingConfig:
+    """*m* (merged into *target*) with target's values for the settings the file didn't
+    have; a Modbus point's by its name ("writable" only while it is a coil or holding
+    register)."""
+    if not absent:
+        return m
+    d, old = m.to_dict(), target.to_dict()
+    old_points = {p["name"]: p for p in old["modbus_poll"]["points"]}
+    for path in absent:
+        head, _dot, key = path.rpartition(".")
+        if pm := _POINT.fullmatch(head):
+            points, n = d["modbus_poll"]["points"], int(pm.group(1))
+            if n < len(points) and (stored := old_points.get(points[n]["name"])) is not None \
+                    and (key != "writable" or points[n]["fn"] in (1, 3)):
+                points[n][key] = copy.deepcopy(stored[key])
+            continue
+        src, dst = old, d
+        for part in head.split(".") if head else ():
+            src, dst = src[part], dst[part]
+        dst[key] = copy.deepcopy(src[key])
+    return MappingConfig.from_dict(d)
 
 
 def _classic_ser2net(text: str, filename: str) -> ImportPlan:
@@ -242,19 +333,25 @@ def _overlay(old: MappingConfig, new: MappingConfig) -> MappingConfig:
     return r
 
 
-def _merged(target: MappingConfig, m: MappingConfig, classic: bool) -> MappingConfig:
-    """What `m` makes of the mapping `target` it updates (a copy; `m.id` is not used)."""
+def _merged(target: MappingConfig, m: MappingConfig, classic: bool,
+            absent: Optional[list[str]] = None) -> MappingConfig:
+    """What `m` makes of the mapping `target` it updates (a copy; `m.id` is not used): a
+    classic ser2net file's mapping keeps what such a file can't say (_overlay), any other
+    target's values for the settings its file didn't have (`absent`, _keep_absent)."""
     if classic:
         return _overlay(target, m)
-    return MappingConfig.from_dict({**m.to_dict(), "id": target.id})
+    return MappingConfig.from_dict({**_keep_absent(m, target, absent or []).to_dict(),
+                                    "id": target.id})
 
 
 def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
-                 mode: str, classic: bool = False) -> tuple[list[MappingConfig],
-                                                            list[MappingConfig]]:
+                 mode: str, classic: bool = False, absent: list[list[str]] | None = None,
+                 ) -> tuple[list[MappingConfig], list[MappingConfig]]:
     """(new mapping list, mappings that were added or changed). Pure: the inputs
-    are not modified. `classic`: the mappings come from a classic ser2net file, so an
-    update in merge mode keeps what the file can't say (_overlay)."""
+    are not modified. An update in merge mode keeps what the file doesn't say: `classic`
+    (a classic ser2net file) what such a file can't say (_overlay); else `absent`, per
+    incoming mapping the settings its file didn't have (ImportPlan.absent), keep their
+    current values (_keep_absent)."""
     if mode not in MODES:
         raise ConfigError(_("Import mode must be one of {0}.").format(", ".join(MODES)))
     if mode == "replace":
@@ -269,11 +366,11 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
         return out, list(out)
     result = [MappingConfig.from_dict(m.to_dict()) for m in current]
     touched = []
-    for m in incoming:
+    for i, m in enumerate(incoming):
         m = MappingConfig.from_dict(m.to_dict())
         target = _match(result, m)
         if target is not None:
-            m = _merged(target, m, classic)
+            m = _merged(target, m, classic, absent[i] if absent and i < len(absent) else [])
             if m.to_dict() == target.to_dict():
                 continue  # identical: nothing to restart
             result[result.index(target)] = m
@@ -287,12 +384,13 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
 
 def plan_rows(current: list[MappingConfig], incoming: list[MappingConfig],
               mode: str, classic: bool = False,
-              notes: Optional[list[list[str]]] = None) -> list[dict]:
+              notes: Optional[list[list[str]]] = None,
+              absent: list[list[str]] | None = None) -> list[dict]:
     """Preview rows: {name, kind, action: add|update|same|remove, target, changes, after,
     notes}. For an update, `changes` lists what it changes and what it keeps of the
     mapping (_diff); `after` is how the mapping will be (_after); `notes` are its
     warnings (ImportPlan.split_warnings, in the order of `incoming`), those about its
-    protection first."""
+    protection first. `classic` / `absent`: as for apply_import."""
     rows = []
     for i, m in enumerate(incoming):
         target = _match(current, m) if mode == "merge" else None
@@ -301,7 +399,7 @@ def plan_rows(current: list[MappingConfig], incoming: list[MappingConfig],
         if target is None:
             action = "add"
         else:
-            result = _merged(target, m, classic)
+            result = _merged(target, m, classic, absent[i] if absent and i < len(absent) else [])
             action = "same" if result.to_dict() == target.to_dict() else "update"
             changes = _diff(target, m, result)
         own = [{"text": getattr(n, "detail", "") or n, "security": getattr(n, "security", False)}

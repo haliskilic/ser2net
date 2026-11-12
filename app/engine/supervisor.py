@@ -11,20 +11,32 @@ and is started again after a backoff (up to BIND_RETRY_MAX_S between tries), for
 as it is meant to run: until it starts, or it is applied, stopped or removed again. Such a
 start opens nothing before its bind (bridge.MappingRunner.start), so a retry neither
 pulses the serial lines nor reconnects to a broker.
+
+The operations on one mapping (apply, restart, stop, remove, a bind retry's attempt, and
+its part of start_all / stop_all) take turns: each runs to its end before the next one for
+that mapping begins, so two of them can never build two runners, one of which nobody
+tracks any more while it keeps the port and the serial device. Operations on different
+mappings still run side by side. Given a `lookup`, an operation reads the mapping's config
+when its turn comes, so one that waited (or a copy a request read earlier) can't undo a
+later change.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import time
 from typing import Any, Callable, Optional, Protocol
 
+from .. import tlsreload
 from ..config import AppConfig, MappingConfig
 from . import portlist, serial_io
-from .bridge import MappingRunner, RunnerStatus
+from .bridge import MappingRunner, RunnerStatus, remove_files
 from .netguard import BindError
 from .serial_link import Backoff
 
+# a runner in these states runs: the serial side retries a missing device on its own
+ALIVE_STATES = ("running", "reconnecting", "device-missing")
 # stop_all(): the runners stop side by side, for at most this long together; one that
 # takes longer is left to finish on its own (and logged), so it can't hold up the rest
 STOP_ALL_TIMEOUT_S = 15.0
@@ -111,6 +123,16 @@ def _consume_error(task: asyncio.Future) -> None:
         task.exception()  # a runner that failed to stop: nothing more to do about it
 
 
+async def _retried_start(runner: Runner, log: Callable[[str], None], backoff: Backoff) -> None:
+    """A bind retry's attempt (Supervisor._retry). Once the runner runs, its status stops
+    saying it retries and the start is logged in the same step of the event loop, not in
+    the next one, when the retry sees the attempt done: a status read in between said
+    'running' and 'retrying' at once."""
+    await runner.start()
+    runner.status.retry_at = 0.0
+    log(f"started after {backoff.attempt} retr{'y' if backoff.attempt == 1 else 'ies'}")
+
+
 def _name(runner: Any) -> str:
     mapping = getattr(runner, "mapping", None)
     return getattr(mapping, "name", None) or "?"
@@ -119,7 +141,8 @@ def _name(runner: Any) -> str:
 class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
-                 trace_dir: Optional[str] = None):
+                 trace_dir: Optional[str] = None,
+                 lookup: Optional[Callable[[str], Optional[MappingConfig]]] = None):
         self._runners: dict[str, Runner] = {}
         self.trace_dir = trace_dir  # data/traces: the only place traces are written
         self._order: list[str] = []
@@ -128,43 +151,100 @@ class Supervisor:
         self._logger_factory = logger_factory or (
             lambda mapping: (lambda msg: self.log(f"[{mapping.name}] {msg}"))
         )
-        self._lock = asyncio.Lock()
-        self._stopping: set[asyncio.Future] = set()  # stop_all()'s runners still stopping
+        # a mapping's config now, by id (AppState: config.get_mapping); None: as passed
+        self._lookup = lookup
+        # each mapping's turn: id -> [lock, operations holding or waiting for it]
+        self._turns: dict[str, list] = {}
+        self._stopping: set[asyncio.Future] = set()  # stop_all()'s stops still under way
+        # the mappings whose stop_all() stop is still under way after its time limit: their
+        # turn is held until it ends (start_all and remove_mapping don't wait for it)
+        self._late: set[str] = set()
         self._retries: dict[str, asyncio.Task] = {}  # mapping id -> its bind retry
         self._ports: Optional[set[str]] = None  # the serial ports last seen (ports_changed)
 
+    @contextlib.asynccontextmanager
+    async def _turn(self, mapping_id: str):
+        """Wait for the mapping's turn and hold it (see the module docstring). Not
+        re-entrant: the public methods take it, the _-helpers they share don't."""
+        entry = self._turns.get(mapping_id)
+        if entry is None:
+            entry = self._turns[mapping_id] = [asyncio.Lock(), 0]
+        entry[1] += 1
+        try:
+            async with entry[0]:
+                yield
+        finally:
+            entry[1] -= 1
+            if not entry[1]:  # nobody holds or waits for it
+                del self._turns[mapping_id]
+
+    def _current(self, mapping: MappingConfig) -> Optional[MappingConfig]:
+        """The mapping's config when its turn has come: None once it was deleted."""
+        return mapping if self._lookup is None else self._lookup(mapping.id)
+
     # ---------------- bulk ----------------
     async def start_all(self, config: AppConfig) -> None:
+        """Start every enabled mapping (a placeholder runner for each disabled one), each in
+        its turn. A mapping whose stop_all() stop is still under way (it outlived
+        STOP_ALL_TIMEOUT_S) is started in the background once that stop ends, so it can't
+        hold up the others (an import or a restore stops all, then starts all)."""
         self._order = [m.id for m in config.mappings]
-        for m in config.mappings:
-            if m.enabled:
-                await self.apply_mapping(m)
-            else:
-                self._ensure_stopped_placeholder(m)
+        for m in list(config.mappings):
+            if m.id in self._late:
+                self._logger_factory(m)("start waits for the previous stop to end")
+                task = asyncio.ensure_future(self.apply_mapping(m))
+                self._stopping.add(task)
+                task.add_done_callback(self._stopping.discard)
+                task.add_done_callback(_consume_error)
+                continue
+            async with self._turn(m.id):
+                current = self._current(m)
+                if current is None:
+                    continue  # deleted meanwhile
+                if current.enabled:
+                    await self._apply(current.id, current)
+                else:
+                    self._ensure_stopped_placeholder(current)
 
     async def stop_all(self) -> None:
-        """Stop every runner, side by side, waiting at most STOP_ALL_TIMEOUT_S: a runner
-        still stopping then (a device or broker that doesn't answer) is logged and left to
+        """Stop every runner, side by side, each in its mapping's turn, waiting at most
+        STOP_ALL_TIMEOUT_S: a stop still under way then (a device or broker that doesn't
+        answer, or an operation on that mapping that doesn't end) is logged and left to
         finish in the background, instead of keeping the others running (an import or a
-        restore stops all, then starts the new set) or the process from exiting."""
-        retries = [asyncio.ensure_future(self._cancel_retry(mid)) for mid in list(self._retries)]
-        if retries:  # (an attempt under way ends first: a bind, nothing that can hang)
-            await asyncio.wait(retries, timeout=STOP_ALL_TIMEOUT_S)
-        async with self._lock:
-            runners = list(self._runners.values())
-            self._runners.clear()
-        if not runners:
-            return
-        stops = {asyncio.ensure_future(r.stop()): r for r in runners}
-        for task in stops:
-            self._stopping.add(task)  # (a task left running must not be garbage-collected)
-            task.add_done_callback(self._stopping.discard)
-            task.add_done_callback(_consume_error)
-        _done, pending = await asyncio.wait(stops, timeout=STOP_ALL_TIMEOUT_S)
-        if pending:
-            names = ", ".join(sorted(_name(stops[t]) for t in pending))
-            self.log(f"stopping: {len(pending)} mapping(s) did not stop within "
-                     f"{STOP_ALL_TIMEOUT_S:g} s, left to finish on their own: {names}")
+        restore stops all, then starts the new set) or the process from exiting. Loops
+        until no runner is left (also one an operation under way adds meanwhile)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + STOP_ALL_TIMEOUT_S
+        while self._runners:
+            stops = {asyncio.ensure_future(self._stop_in_turn(mid)): (mid, _name(runner))
+                     for mid, runner in list(self._runners.items())}
+            for task in stops:
+                self._stopping.add(task)  # (a task left running must not be garbage-collected)
+                task.add_done_callback(self._stopping.discard)
+                task.add_done_callback(_consume_error)
+            _done, pending = await asyncio.wait(stops, timeout=max(0.0, deadline - loop.time()))
+            if pending:
+                names = ", ".join(sorted(stops[t][1] for t in pending))
+                self.log(f"stopping: {len(pending)} mapping(s) did not stop within "
+                         f"{STOP_ALL_TIMEOUT_S:g} s, left to finish on their own: {names}")
+                for task in pending:
+                    mid = stops[task][0]
+                    self._late.add(mid)
+                    task.add_done_callback(functools.partial(self._stop_ended, mid))
+                return
+
+    def _stop_ended(self, mapping_id: str, _task: asyncio.Future) -> None:
+        """A stop that outlived stop_all's limit has ended: its mapping's turn is free."""
+        self._late.discard(mapping_id)
+
+    async def _stop_in_turn(self, mapping_id: str) -> None:
+        """stop_all's part for one mapping: its bind retry ends (an attempt under way holds
+        the turn, so it ends first) and its runner goes."""
+        async with self._turn(mapping_id):
+            await self._cancel_retry(mapping_id)
+            runner = self._runners.pop(mapping_id, None)
+            if runner is not None:
+                await self._stop_runner(runner)
 
     # ---------------- per-mapping ----------------
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:
@@ -176,22 +256,40 @@ class Supervisor:
             if mapping.id not in self._order:
                 self._order.append(mapping.id)
 
+    async def _stop_runner(self, runner: Runner) -> None:
+        """Stop a runner to its end. A failure is logged (that runner may still hold its
+        port or device), not raised: the operation goes on."""
+        try:
+            await runner.stop()
+        except Exception as e:
+            mapping = getattr(runner, "mapping", None)
+            log = self._logger_factory(mapping) if mapping is not None else self.log
+            log(f"stopping failed: {e!r}")
+
     async def apply_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
-        """Create/replace and (if enabled) start the runner for a mapping. A start that
-        fails because the listener can't bind is tried again later (_retry)."""
-        await self._cancel_retry(mapping.id)
-        async with self._lock:
-            old = self._runners.pop(mapping.id, None)
+        """Create/replace and (if enabled) start the runner for a mapping, from its config
+        when its turn comes. A start that fails because the listener can't bind is tried
+        again later (_retry)."""
+        async with self._turn(mapping.id):
+            return await self._apply(mapping.id, self._current(mapping))
+
+    async def _apply(self, mapping_id: str, mapping: Optional[MappingConfig]) -> tuple[bool, str]:
+        """apply_mapping in the mapping's turn. None: it was deleted meanwhile, so its
+        runner only goes."""
+        await self._cancel_retry(mapping_id)
+        old = self._runners.pop(mapping_id, None)
         if old is not None:
-            with contextlib.suppress(Exception):
-                await old.stop()
+            await self._stop_runner(old)
+        if mapping is None:
+            if mapping_id in self._order:
+                self._order.remove(mapping_id)
+            return False, "the mapping was deleted meanwhile"
 
         log = self._logger_factory(mapping)
         runner = _build_runner(mapping, log, self.trace_dir)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
-        async with self._lock:
-            self._runners[mapping.id] = runner
+        self._runners[mapping.id] = runner
 
         if not mapping.enabled:
             runner.status.state = "stopped"
@@ -224,37 +322,40 @@ class Supervisor:
 
     async def _retry(self, mapping: MappingConfig, runner: Runner, error: str,
                      backoff: Backoff, pause: float) -> None:
-        """Start ``runner`` again, with a backoff, while its listener can't bind. Logs a
-        changed error and the start that worked (all.log and the mapping's own log, as
-        apply_mapping does); any other error ends the retries."""
+        """Start ``runner`` again, with a backoff, while its listener can't bind. Each
+        attempt runs in the mapping's turn, so no apply, stop or removal overlaps it; they
+        end the retry in their turn (_cancel_retry), so the runner a retry starts is
+        always the one tracked. Logs a changed error and the start that worked (all.log and
+        the mapping's own log, as apply_mapping does); any other error ends the retries."""
         st = runner.status
         log = self._logger_factory(mapping)
         try:
             while True:
                 st.retry_at = time.monotonic() + pause
                 await asyncio.sleep(pause)
-                st.retry_at = time.monotonic()  # trying now
-                # asyncio.wait, which cancels nothing: a stop or a new apply that cancels
-                # the retry waits for an attempt under way to end, then stops what it started
-                attempt = asyncio.ensure_future(runner.start())
-                attempt.add_done_callback(_consume_error)
-                try:
-                    await asyncio.wait((attempt,))
-                except asyncio.CancelledError:
-                    await asyncio.wait((attempt,))
-                    raise
-                e = attempt.exception()
-                if e is None:
-                    log(f"started after {backoff.attempt} "
-                        f"retr{'y' if backoff.attempt == 1 else 'ies'}")
-                    return
-                st.state, st.last_error = "error", str(e)
-                if not isinstance(e, BindError):
-                    log(f"start failed: {e}")
-                    return
-                if str(e) != error:
-                    error = str(e)
-                    log(f"start failed again: {e}")
+                async with self._turn(mapping.id):
+                    if self._runners.get(mapping.id) is not runner:
+                        return  # (replaced or removed: that ended this retry too)
+                    st.retry_at = time.monotonic()  # trying now
+                    # asyncio.wait, which cancels nothing: a cancelled retry (the event loop
+                    # ending) waits for an attempt under way to end
+                    attempt = asyncio.ensure_future(_retried_start(runner, log, backoff))
+                    attempt.add_done_callback(_consume_error)
+                    try:
+                        await asyncio.wait((attempt,))
+                    except asyncio.CancelledError:
+                        await asyncio.wait((attempt,))
+                        raise
+                    e = attempt.exception()
+                    if e is None:
+                        return
+                    st.state, st.last_error = "error", str(e)
+                    if not isinstance(e, BindError):
+                        log(f"start failed: {e}")
+                        return
+                    if str(e) != error:
+                        error = str(e)
+                        log(f"start failed again: {e}")
                 pause = backoff.pause()
         finally:
             st.retry_at = 0.0
@@ -262,8 +363,9 @@ class Supervisor:
                 del self._retries[mapping.id]
 
     async def _cancel_retry(self, mapping_id: str) -> None:
-        """End a mapping's bind retry (and an attempt under way) before it is applied,
-        stopped or removed: a retry left running would undo a Stop."""
+        """End a mapping's bind retry before it is applied, stopped or removed: a retry
+        left running would undo a Stop. Called in the mapping's turn, so the retry is
+        waiting (its pause, or for the turn), never in the middle of an attempt."""
         task = self._retries.pop(mapping_id, None)
         if task is not None:
             task.cancel()
@@ -273,27 +375,97 @@ class Supervisor:
     async def start_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
         return await self.apply_mapping(mapping)
 
-    async def stop_mapping(self, mapping_id: str) -> None:
-        await self._cancel_retry(mapping_id)
-        async with self._lock:
+    async def ensure_running(self, mapping: MappingConfig) -> tuple[bool, str, bool]:
+        """apply_mapping, unless the mapping's runner is what its config asks for already:
+        built from the same settings, and running (ALIVE_STATES) when it is enabled or
+        stopped when it is not. So a start of a running mapping keeps its clients, serial
+        port and MQTT connection; one that stopped or failed (also one waiting for its bind
+        retry) is started again. Returns (ok, message, changed): changed is False when
+        nothing was done."""
+        async with self._turn(mapping.id):
+            current = self._current(mapping)
+            runner = self._runners.get(mapping.id)
+            built = getattr(runner, "mapping", None)
+            if (current is not None and runner is not None and built is not None
+                    and runner.status.state in (ALIVE_STATES if current.enabled else ("stopped",))
+                    and built.to_dict() == current.to_dict()):
+                return True, "running" if current.enabled else "disabled", False
+            ok, message = await self._apply(mapping.id, current)
+            return ok, message, True
+
+    async def stop_mapping(self, mapping_id: str) -> bool:
+        """Stop a mapping's runner (kept, stopped, for its status) and its bind retry —
+        unless its config has it enabled by now: a start saved after this stop takes its
+        own turn. Returns whether a runner was stopped (False: none, or stopped already)."""
+        async with self._turn(mapping_id):
+            current = self._lookup(mapping_id) if self._lookup is not None else None
+            if current is not None and current.enabled:
+                return False
+            await self._cancel_retry(mapping_id)
             runner = self._runners.get(mapping_id)
-        if runner is not None:
-            with contextlib.suppress(Exception):
-                await runner.stop()
+            if runner is None or runner.status.state == "stopped":
+                return False
+            await self._stop_runner(runner)
+            return True
 
     async def restart_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
-        await self.stop_mapping(mapping.id)
-        return await self.apply_mapping(mapping)
+        return await self.apply_mapping(mapping)  # which stops the old runner first
 
     async def remove_mapping(self, mapping_id: str) -> None:
-        await self._cancel_retry(mapping_id)
-        async with self._lock:
+        if mapping_id in self._late and mapping_id not in self._runners:
+            # its stop_all() stop holds the turn and has its runner: nothing left to stop
+            # here (an operation waiting for the turn reads the config then: it's gone)
+            if mapping_id in self._order:
+                self._order.remove(mapping_id)
+            return
+        async with self._turn(mapping_id):
+            await self._cancel_retry(mapping_id)
             runner = self._runners.pop(mapping_id, None)
-        if mapping_id in self._order:
-            self._order.remove(mapping_id)
-        if runner is not None:
-            with contextlib.suppress(Exception):
-                await runner.stop()
+            if mapping_id in self._order:
+                self._order.remove(mapping_id)
+            if runner is not None:
+                await self._stop_runner(runner)
+
+    async def remove_trace_files(self, mapping_id: str, paths) -> dict:
+        """Delete some of a mapping's trace files in its turn (so no start or stop swaps
+        its trace writer meanwhile). While the mapping traces, its writer deletes them
+        (bridge.Tracer.remove_files): never in the middle of a rotation, and the file it
+        writes is closed first and begun again with the next traffic. Returns path ->
+        None (gone) or the OSError that kept it."""
+        async with self._turn(mapping_id):
+            tracer = getattr(self._runners.get(mapping_id), "tracer", None)
+            done = tracer.remove_files(paths) if tracer is not None else None
+            if done is not None:
+                return await asyncio.wrap_future(done)
+            return await asyncio.to_thread(remove_files, paths)
+
+    async def renew_tls(self, mapping_id: str, build: Callable[[], Any]) -> Optional[str]:
+        """In the mapping's turn: its running TLS listener gets a context made by build()
+        (tlsreload.prepare) for the connections it accepts from now on; those open keep
+        theirs. Returns None when it has none (not running, no TLS), "" once renewed, else
+        why not (the context in use stays)."""
+        async with self._turn(mapping_id):
+            listener = getattr(self._runners.get(mapping_id), "listener", None)
+            if listener is None or listener.ssl is None:
+                return None
+            prepared = await tlsreload.prepare(build)
+            if not prepared.usable or prepared.context is None:
+                return prepared.error or prepared.later or "no TLS context"
+            listener.ssl = prepared.context
+            return ""
+
+    async def renew_traces(self, begun_before: float) -> int:
+        """Have every running trace whose file holds traffic from before `begun_before`
+        begin a new one (bridge.Tracer.renew_if_older, in its writer thread). Returns how
+        many did."""
+        waits = []
+        for runner in list(self._runners.values()):
+            tracer = getattr(runner, "tracer", None)
+            done = tracer.renew_if_older(begun_before) if tracer is not None else None
+            if done is not None:
+                waits.append(asyncio.wrap_future(done))
+        results = await asyncio.gather(*waits, return_exceptions=True)
+        return sum(r is True for r in results)
 
     # ---------------- status ----------------
     def get_runner(self, mapping_id: str) -> Optional[Runner]:

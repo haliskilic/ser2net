@@ -12,6 +12,7 @@
   'link_down': _('link down'), 'connecting': _('connecting'), 'retrying_now': _('retrying now'),
   'link_down_title': _('the connection to the remote server is down; it is tried again'),
   'dropped': _('data from the network that was not written to the serial device; the mapping’s log says why'),
+  'trace_not_written': _('trace not written'),
   'stop': _('Stop'), 'restart': _('Restart'), 'start': _('Start'), 'edit': _('Edit'), 'log': _('Log'),
   'monitor': _('Monitor'), 'trace': _('Trace'), 'duplicate': _('Copy'), 'delete': _('Delete'),
 } %}
@@ -80,6 +81,8 @@
         {% if st and st.retrying and state == 'error' %}
           <div class="sub">{{ _("retrying in %(n)s s", n=st.next_retry_s) if st.next_retry_s else t.retrying_now }}</div>
         {% endif %}
+        {% set quiet = no_data_for(m, st) %}
+        {% if quiet %}<div class="err-small" title="{{ _('the mapping’s no-data alarm: %(n)s s', n=m.options.no_data_alarm_s) }}">⚠ {{ _("no data from the device for %(n)s s", n=quiet) if not m.options.no_data_reply_only else _("no answer from the device for %(n)s s", n=quiet) }}</div>{% endif %}
       </td>
       <td data-label="{{ t.clients }}">
         {{ st.client_count if st else 0 }}{% if m.network.max_connections > 1 %}/{{ m.network.max_connections }}{% endif %}
@@ -93,7 +96,8 @@
         {% if st and st.dropped_clients %}<div class="err-small">⚠ {{ ngettext("%(num)s slow client dropped", "%(num)s slow clients dropped", st.dropped_clients) }}</div>{% endif %}
       </td>
       <td class="mono nowrap" data-label="{{ t.in_out }}"><span id="{{ rid }}-bytes">{{ (st.bytes_in|default(0) if st else 0)|bytesize }} / {{ (st.bytes_out|default(0) if st else 0)|bytesize }}</span>
-        {% if st and st.bytes_dropped %}<div class="err-small" title="{{ t.dropped }}">⚠ {{ ngettext("%(num)s byte dropped", "%(num)s bytes dropped", st.bytes_dropped) }}</div>{% endif %}</td>
+        {% if st and st.bytes_dropped %}<div class="err-small" title="{{ t.dropped }}">⚠ {{ ngettext("%(num)s byte dropped", "%(num)s bytes dropped", st.bytes_dropped) }}</div>{% endif %}
+        {% if st and st.trace_error %}<div class="err-small" title="{{ st.trace_error }}">⚠ {{ t.trace_not_written }}</div>{% endif %}</td>
       <td class="col-actions">
         <div class="row-actions">
           {% if can_edit %}
@@ -113,7 +117,7 @@
           <div class="btn-group">
             <button class="btn sm" id="{{ rid }}-log" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ t.log }}</button>
             <button class="btn sm" id="{{ rid }}-monitor" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ t.monitor }}</button>
-            {% if can_edit and m.options.trace_both %}<button class="btn sm" id="{{ rid }}-trace" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ t.trace }}</button>{% endif %}
+            {% if can_edit and (m.options.trace_both or m.id in traced) %}<button class="btn sm" id="{{ rid }}-trace" aria-describedby="{{ rid }}-name" hx-get="{{ base }}/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML show:top">{{ t.trace }}</button>{% endif %}
             {% if can_edit %}
             <button class="btn sm" id="{{ rid }}-copy" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/mappings/{{ m.id }}/duplicate" hx-swap="none" hx-disabled-elt="this">{{ t.duplicate }}</button>
             <button class="btn sm danger" id="{{ rid }}-delete" aria-describedby="{{ rid }}-name" hx-delete="{{ base }}/api/mappings/{{ m.id }}"

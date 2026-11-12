@@ -17,8 +17,9 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-from .. import config, importer
-from ..config import REDACTED, ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
+from .. import __version__, config, importer
+from ..config import (REDACTED, ROLE_RANK, ConfigError, ConfigWriteError, MappingConfig,
+                      mapping_revision, valid_mapping_id)
 from . import proxy
 from .routes import ops
 from .routes.common import client_ip as _client_ip
@@ -28,6 +29,10 @@ API_PREFIX = "/api/v1"
 # the values a true/false query parameter may have
 _BOOLEANS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
 
+# The REST API's own version (OpenAPI info.version, GET /info) and what it offers beyond
+# 1.0.0, so a client can tell what it may use without parsing the software version.
+API_VERSION = "1.1.0"
+API_FEATURES = ("warnings", "changed", "if-match")
 
 def _caller(request) -> str:
     """Who calls, for the audit log: the token's name (api-token:<name>), 'api-token' for
@@ -74,6 +79,53 @@ def merge_patch(target, patch):
     return out
 
 
+def _edit_view(mapping, state, request=None) -> dict:
+    """The response to a create / update: the mapping as stored (_mapping_view), and when
+    there are any, the `warnings` about what was sent (keys that are no setting, a setting
+    replaced by a supported one) and about settings it has that do nothing
+    (MappingConfig.ignored_settings)."""
+    view = _mapping_view(mapping, state, request)
+    warnings = mapping.input_warnings() + mapping.ignored_settings()
+    if warnings:
+        view["warnings"] = warnings
+    return view
+
+
+# what a mapping in a request can make from_dict / validate raise besides ConfigError:
+# values of the wrong type are read as the right one (config._read_fields), so these only
+# guard against a check that still trips over one
+_BAD_INPUT = (ValueError, TypeError, AttributeError, OverflowError)
+
+
+def _etag(state, mapping) -> str:
+    """A mapping's ETag: its revision (config.mapping_revision), as a strong entity tag."""
+    return f'"{mapping_revision(state.config.secret_key, mapping)}"'
+
+
+def _if_match(request, state, mapping) -> bool:
+    """True unless the request has an If-Match header that names neither the mapping's
+    current ETag nor "*" (RFC 9110: strong comparison, so a weak tag never matches). A
+    client that sends no If-Match changes the mapping whatever its revision, as before."""
+    header = request.headers.get("if-match")
+    if header is None:
+        return True
+    tags = [t.strip() for t in header.split(",")]
+    return "*" in tags or _etag(state, mapping) in tags
+
+
+_STALE = {"error": "precondition_failed",
+          "detail": "the mapping changed since it was read: GET it again (If-Match)"}
+
+
+def _not_saved(e: ConfigError) -> JSONResponse:
+    """A change that was refused when saved, and so not made: 400 when the config would
+    not validate (it shares a port or a serial device with another mapping, ...), 500 when
+    config.json can't be written."""
+    if isinstance(e, ConfigWriteError):
+        return JSONResponse({"error": "save_failed", "detail": str(e)}, status_code=500)
+    return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+
+
 def build_api_routes(state):
     async def list_mappings(request):
         return JSONResponse({"mappings": [_mapping_view(m, state, request) for m in state.config.mappings]})
@@ -82,7 +134,7 @@ def build_api_routes(state):
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        return JSONResponse(_mapping_view(m, state, request))
+        return JSONResponse(_mapping_view(m, state, request), headers={"ETag": _etag(state, m)})
 
     async def create_mapping(request):
         try:
@@ -94,31 +146,29 @@ def build_api_routes(state):
         if not isinstance(body, dict):
             return JSONResponse({"error": "invalid_json", "detail": "object expected"}, status_code=400)
         body.pop("id", None)         # the server assigns the id
-        body.pop("status", None)     # read-only field
         try:
             mapping = MappingConfig.from_dict(body)
             mapping.validate()
             mapping.validate_input()
             await _check_tls_files(mapping)
-        except (ValueError, ConfigError) as e:
+        except _BAD_INPUT as e:  # ConfigError is a ValueError
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
-                        or state.config.serial_conflict(mapping)  # a port another one uses
-                        or state.config.admin_key_reuse(mapping)):
-            return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
-        async with state.config_lock:
-            state.config.mappings.append(mapping)
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.mappings.remove(mapping)
-                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        try:
+            async with state.edit_config():
+                state.config.mappings.append(mapping)
+                # next to the config as it is saved: ser2net's own ports, a serial port
+                # another mapping uses, the admin UI's TLS key
+                if conflict := ops.edit_conflict(state.config, mapping):
+                    raise ConfigError(conflict)
+        except ConfigError as e:  # not saved: not created either
+            return _not_saved(e)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping created: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_create", mapping.name, user=_caller(request))
-        return JSONResponse(_mapping_view(mapping, state, request), status_code=201,
+        return JSONResponse(_edit_view(mapping, state, request), status_code=201,
                             headers={"Location": proxy.url(request,
-                                                           f"{API_PREFIX}/mappings/{mapping.id}")})
+                                                           f"{API_PREFIX}/mappings/{mapping.id}"),
+                                     "ETag": _etag(state, mapping)})
 
     async def update_mapping(request):
         mid = request.path_params["mid"]
@@ -133,7 +183,6 @@ def build_api_routes(state):
         if not isinstance(body, dict):
             return JSONResponse({"error": "invalid_json", "detail": "object expected"}, status_code=400)
         body["id"] = mid             # PUT replaces the mapping with this id
-        body.pop("status", None)
         try:
             mapping = MappingConfig.from_dict(body)
             stored = state.config.get_mapping(mid)
@@ -142,36 +191,42 @@ def build_api_routes(state):
             mapping.validate()
             mapping.validate_input()
             await _check_tls_files(mapping)
-        except (ValueError, ConfigError) as e:
+        except _BAD_INPUT as e:  # ConfigError is a ValueError
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
-                        or state.config.serial_conflict(mapping)  # a port another one uses
-                        or state.config.admin_key_reuse(mapping)):
-            return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
-        async with state.config_lock:
-            existing = state.config.get_mapping(mid)
-            if not existing:
-                return JSONResponse({"error": "not_found"}, status_code=404)
-            if mapping.mqtt.password == REDACTED:  # what a viewer token reads: keep it
-                mapping.mqtt.password = existing.mqtt.password
-            backup = list(state.config.mappings)
-            state.config.mappings[state.config.mappings.index(existing)] = mapping
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.mappings = backup
-                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        await state.supervisor.apply_mapping(mapping)
+        existing = None
+        try:
+            async with state.edit_config():
+                existing = state.config.get_mapping(mid)
+                if existing and not _if_match(request, state, existing):
+                    raise ops.StaleRevision(mid)
+                if existing and mapping.mqtt.password == REDACTED:  # what a viewer token reads
+                    mapping.mqtt.password = existing.mqtt.password
+                # the same settings again: nothing to save, its runner stays as it is
+                if existing and existing.to_dict() != mapping.to_dict():
+                    state.config.mappings[state.config.mappings.index(existing)] = mapping
+                    if conflict := ops.edit_conflict(state.config, mapping):
+                        raise ConfigError(conflict)
+        except ConfigError as e:  # not saved: not changed either
+            return _not_saved(e)
+        except ops.StaleRevision:
+            return JSONResponse(_STALE, status_code=412)
+        if not existing:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        same = existing.to_dict() == mapping.to_dict()
+        _ok, _msg, restarted = await state.supervisor.ensure_running(existing if same else mapping)
         state.log(f"api: mapping updated: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_update", mapping.name, user=_caller(request))
-        return JSONResponse(_mapping_view(mapping, state, request))
+        view = _edit_view(mapping, state, request)
+        view["changed"] = not same or restarted  # False: the same settings, still running
+        return JSONResponse(view, headers={"ETag": _etag(state, mapping)})
 
     async def patch_mapping(request):
         """PATCH: an RFC 7396 JSON merge patch on the stored mapping. Only what the body
         names changes (an object is merged into the one it replaces, a list or a value
         replaces it, null resets a field to its default), unlike PUT, which replaces the
         whole mapping with the body. Merged and checked under the config lock, so a
-        concurrent change to another field is not lost."""
+        concurrent change to another field is not lost. A patch that changes nothing
+        leaves the mapping running as it is (`changed`: false), as a PUT of its settings."""
         mid = request.path_params["mid"]
         if not valid_mapping_id(mid):  # no mapping can have it (ids are checked on load)
             return JSONResponse({"error": "not_found"}, status_code=404)
@@ -185,43 +240,50 @@ def build_api_routes(state):
             return JSONResponse({"error": "invalid_json", "detail": "object expected"}, status_code=400)
         body.pop("id", None)         # the path names the mapping
         body.pop("status", None)     # read-only field
-        async with state.config_lock:
-            existing = state.config.get_mapping(mid)
-            if not existing:
-                return JSONResponse({"error": "not_found"}, status_code=404)
-            merged = merge_patch(existing.to_dict(), body)
-            merged["id"] = mid
-            try:
-                mapping = MappingConfig.from_dict(merged)
-                # the mask a viewer token reads, sent back: the stored secret stays
-                if mapping.mqtt.password == REDACTED:
-                    mapping.mqtt.password = existing.mqtt.password
-                if mapping.network.tls_key_password == REDACTED:
-                    mapping.network.tls_key_password = existing.network.tls_key_password
-                mapping.validate()
-                mapping.validate_input()
-                await _check_tls_files(mapping)
-            except (ValueError, TypeError, AttributeError) as e:  # ConfigError is a ValueError
-                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-            if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
-                            or state.config.serial_conflict(mapping)  # a port another one uses
-                            or state.config.admin_key_reuse(mapping)):
-                return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
-            backup = list(state.config.mappings)
-            state.config.mappings[state.config.mappings.index(existing)] = mapping
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.mappings = backup
-                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        await state.supervisor.apply_mapping(mapping)
+        try:
+            async with state.edit_config():
+                existing = state.config.get_mapping(mid)
+                if not existing:
+                    return JSONResponse({"error": "not_found"}, status_code=404)
+                merged = merge_patch(existing.to_dict(), body)
+                merged["id"] = mid
+                try:
+                    mapping = MappingConfig.from_dict(merged)
+                    # the mask a viewer token reads, sent back: the stored secret stays
+                    if mapping.mqtt.password == REDACTED:
+                        mapping.mqtt.password = existing.mqtt.password
+                    if mapping.network.tls_key_password == REDACTED:
+                        mapping.network.tls_key_password = existing.network.tls_key_password
+                    mapping.validate()
+                    mapping.validate_input()
+                    await _check_tls_files(mapping)
+                except _BAD_INPUT as e:  # ConfigError is a ValueError
+                    return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+                same = existing.to_dict() == mapping.to_dict()
+                if not same:
+                    state.config.mappings[state.config.mappings.index(existing)] = mapping
+                    # next to the config as it is saved: ser2net's own ports, a serial port
+                    # another mapping uses, the admin UI's TLS key
+                    if conflict := ops.edit_conflict(state.config, mapping):
+                        raise ConfigError(conflict)
+        except ConfigError as e:  # not saved: not changed either
+            return _not_saved(e)
+        _ok, _msg, restarted = await state.supervisor.ensure_running(existing if same else mapping)
         state.log(f"api: mapping patched: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_patch", mapping.name, user=_caller(request))
-        return JSONResponse(_mapping_view(mapping, state, request))
+        view = _edit_view(mapping, state, request)
+        view["changed"] = not same or restarted
+        return JSONResponse(view, headers={"ETag": _etag(state, mapping)})
 
     async def delete_mapping(request):
         mid = request.path_params["mid"]
-        removed = await ops.delete_mapping(state, mid)
+        try:
+            removed = await ops.delete_mapping(
+                state, mid, expected=lambda m: _if_match(request, state, m))
+        except ConfigError as e:  # not deleted
+            return _not_saved(e)
+        except ops.StaleRevision:
+            return JSONResponse(_STALE, status_code=412)
         if removed is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping deleted: {removed.name}")
@@ -233,15 +295,18 @@ def build_api_routes(state):
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
             return JSONResponse({"error": "unknown_action"}, status_code=400)
-        try:
-            ok, name = await ops.apply_action(state, mid, action)
-        except ConfigError as e:  # it can't be started (a serial port in use, ...)
-            return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        if not ok:
+        res = await ops.apply_action(state, mid, action)
+        if not res.found:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        state.log(f"api: mapping {action}: {name}")
-        state.audit(_client_ip(request), f"api_mapping_{action}", name, user=_caller(request))
-        return JSONResponse({"id": mid, "action": action, "status": state.supervisor.status(mid)})
+        if res.error is not None:  # nothing changed
+            return _not_saved(res.error)
+        state.log(f"api: mapping {action}: {res.name}")
+        state.audit(_client_ip(request), f"api_mapping_{action}", res.name, user=_caller(request))
+        out = {"id": mid, "action": action, "status": state.supervisor.status(mid),
+               "changed": res.changed}
+        if res.warning:  # stopped, but config.json could not keep it
+            out["warning"] = res.warning
+        return JSONResponse(out)
 
     async def import_mappings(request):
         """POST /import: many mappings in one change. The body is a mappings export
@@ -272,7 +337,7 @@ def build_api_routes(state):
             return JSONResponse({**answer, "rows": rows, "summary": ops.import_counts(rows),
                                  "valid": problem is None, "problem": problem, "applied": False})
         try:
-            rows, _new = await ops.import_mappings(state, plan, mode)
+            rows, _new, _backed_up = await ops.import_mappings(state, plan, mode)
         except ConfigError as e:
             return JSONResponse({**answer, "error": "validation", "detail": str(e),
                                  "applied": False}, status_code=400)
@@ -290,7 +355,7 @@ def build_api_routes(state):
                              "problem": None, "applied": True})
 
     async def metrics(request):
-        return PlainTextResponse(metrics_text(state), media_type=METRICS_TYPE)
+        return PlainTextResponse(await metrics_text(state), media_type=METRICS_TYPE)
 
     async def status(request):
         return JSONResponse({"mappings": state.supervisor.all_status()})
@@ -301,12 +366,17 @@ def build_api_routes(state):
     async def health(request):
         return JSONResponse({"status": "ok", "mappings": len(state.config.mappings)})
 
+    async def info(request):
+        return JSONResponse({"version": __version__, "api": API_VERSION,
+                             "features": list(API_FEATURES)})
+
     async def openapi(request):
         return JSONResponse(openapi_spec(state.config.admin_ui, proxy.base(request)))
 
     return [
         Route(f"{API_PREFIX}/health", health, methods=["GET"]),
         Route(f"{API_PREFIX}/openapi.json", openapi, methods=["GET"]),
+        Route(f"{API_PREFIX}/info", info, methods=["GET"]),
         Route(f"{API_PREFIX}/status", status, methods=["GET"]),
         Route(f"{API_PREFIX}/metrics", metrics, methods=["GET"]),
         Route(f"{API_PREFIX}/import", import_mappings, methods=["POST"],
@@ -409,11 +479,16 @@ def mapping_schemas() -> dict:
     out = {}
     for name, cls in _MAPPING_CLASSES.items():
         hints = typing.get_type_hints(cls)
+        # id: below; input_notes: what reading it noted, never part of the JSON (to_dict)
         props = {f.name: _field_schema(cls, f, hints[f.name]) for f in dataclasses.fields(cls)
-                 if not (cls is config.MappingConfig and f.name == "id")}  # id: below
+                 if not (cls is config.MappingConfig and f.name in ("id", "input_notes"))}
         if cls is config.MappingConfig:
             props["id"] = {"type": "string", "readOnly": True,
                            "description": _NOTES["MappingConfig", "id"]}
+            props["warnings"] = {"type": "array", "items": {"type": "string"}, "readOnly": True,
+                                 "description": "In the answer to a create / update, when "
+                                                "there are any: keys that are no setting "
+                                                "(ignored) and settings that do nothing."}
             props["status"] = {"allOf": [{"$ref": "#/components/schemas/MappingStatus"}],
                                "readOnly": True, "nullable": True,
                                "description": "Live state (null: the mapping has no runner)."}
@@ -421,7 +496,8 @@ def mapping_schemas() -> dict:
     out["Mapping"]["description"] = (
         "A serial<->network (kind net) or serial<->serial (kind serialbridge) mapping. In a "
         "POST or PUT, every field left out gets the default shown here (PUT replaces the "
-        "whole mapping); PATCH changes only the fields it names.")
+        "whole mapping); PATCH changes only the fields it names. A value may be sent as text "
+        "(\"9600\", \"false\"); one that is not of the setting's type is refused (400).")
     return out
 
 
@@ -453,7 +529,15 @@ def openapi_spec(admin, base: str = "") -> dict:
             "reconnects": {"type": "integer"},
             "dropped_clients": {"type": "integer"},
             "queue_overflows": {"type": "integer"},
-            "last_error": {"type": "string"}}},
+            "last_error": {"type": "string"},
+            "trace_error": {"type": "string",
+                            "description": "why the trace is not written now (\"\": it is)"},
+            "last_rx": {"type": "number", "nullable": True,
+                        "description": "when the device last sent something (Unix time)"},
+            "rx_idle_s": {"type": "number", "nullable": True,
+                          "description": "how long the device has sent nothing"},
+            "reply_wait_s": {"type": "number", "nullable": True,
+                             "description": "how long what was sent to it has had no answer"}}},
         "MappingList": {"type": "object", "properties": {
             "mappings": {"type": "array", "items": {"$ref": "#/components/schemas/Mapping"}}}},
         "StatusMap": {"type": "object", "properties": {"mappings": {
@@ -466,7 +550,16 @@ def openapi_spec(admin, base: str = "") -> dict:
         "ActionResult": {"type": "object", "properties": {
             "id": {"type": "string"}, "action": {"type": "string"},
             "status": {"allOf": [{"$ref": "#/components/schemas/MappingStatus"}],
-                       "nullable": True}}},
+                       "nullable": True},
+            "changed": {"type": "boolean",
+                        "description": "false: it ran (or was stopped) already"},
+            "warning": {"type": "string",
+                        "description": "a stop that config.json could not keep"}}},
+        "Info": {"type": "object", "properties": {
+            "version": {"type": "string", "description": "ser2net's version"},
+            "api": {"type": "string", "description": "this API's version (info.version)"},
+            "features": {"type": "array", "items": {"type": "string"},
+                         "description": "what it offers beyond 1.0.0"}}},
         "Deleted": {"type": "object", "properties": {"deleted": {"type": "string"}}},
         "ImportResult": {"type": "object", "additionalProperties": True, "properties": {
             "mode": {"type": "string", "enum": list(importer.MODES)},
@@ -506,6 +599,10 @@ def openapi_spec(admin, base: str = "") -> dict:
                      "content": {"text/plain": {"schema": {"type": "string"}}}},
         "SetupIncomplete": _json("Error", "The first-run setup is not done yet "
                                           "(setup_incomplete)."),
+        "PreconditionFailed": _json("Error", "If-Match names another revision of the mapping "
+                                             "(precondition_failed): GET it again."),
+        "SaveFailed": _json("Error", "config.json could not be written (save_failed): "
+                                     "nothing changed."),
     }
 
     def ref(name: str) -> dict:
@@ -517,7 +614,8 @@ def openapi_spec(admin, base: str = "") -> dict:
         every authenticated call can (403 for a call that changes something)."""
         resp = {ok[0]: _json(ok[1], ok[2])}
         for name in errors:
-            code = {"BadRequest": "400", "NotFound": "404", "TooLarge": "413"}[name]
+            code = {"BadRequest": "400", "NotFound": "404", "PreconditionFailed": "412",
+                    "TooLarge": "413", "SaveFailed": "500"}[name]
             resp[code] = ref(name)
         resp["401"] = ref("Unauthorized")
         if write:
@@ -538,11 +636,15 @@ def openapi_spec(admin, base: str = "") -> dict:
 
     bearer: list[dict[str, list[str]]] = [{"bearerAuth": []}]
     mid = {"name": "mid", "in": "path", "required": True, "schema": {"type": "string"}}
+    if_match = {"name": "If-Match", "in": "header", "required": False,
+                "schema": {"type": "string"},
+                "description": "The ETag a GET returned (or *): change the mapping only if it "
+                               "is still at that revision, else 412."}
     return {
         "openapi": "3.0.3",
         "info": {
             "title": "ser2net REST API",
-            "version": "1.0.0",
+            "version": API_VERSION,
             "description": "Manage serial<->network mappings, status and ports. "
                            "Authenticate with `Authorization: Bearer <token>` "
                            "(generate the token in Settings). A token with the viewer role "
@@ -566,6 +668,13 @@ def openapi_spec(admin, base: str = "") -> dict:
                                           "description": "the OpenAPI 3.0 document",
                                           "content": {"application/json": {
                                               "schema": {"type": "object"}}}}}}},
+            "/info": {"get": op("Software and API version, API features",
+                                ("200", "Info", "version, api, features"),
+                                description="`version`: ser2net's version; `api`: this API's "
+                                            "version (info.version here); `features`: what it "
+                                            "offers beyond 1.0.0 (`warnings` and `changed` in "
+                                            "create / update / action answers, `if-match` on "
+                                            "PUT / DELETE).")},
             "/status": {"get": op("Live status of all mappings", ("200", "StatusMap", "status map"))},
             "/ports": {"get": op("Detected serial ports", ("200", "PortList", "port list"))},
             "/metrics": {"get": {
@@ -582,7 +691,8 @@ def openapi_spec(admin, base: str = "") -> dict:
                             "GET /mappings answers), a whole config.json (only its mappings) "
                             "or a classic ser2net.yaml / ser2net.conf. One save and one "
                             "backup; refused as a whole (400, nothing changed) when the "
-                            "result is not valid.",
+                            "result is not valid. In merge mode, a mapping updated keeps the "
+                            "settings the body doesn't have.",
                 body={"required": True, "content": {
                     "application/json": {"schema": {"type": "object"}},
                     "text/plain": {"schema": {"type": "string"}}}},
@@ -597,32 +707,41 @@ def openapi_spec(admin, base: str = "") -> dict:
                      "description": "true: answer what it would do; change nothing"}])},
             "/mappings": {
                 "get": op("List mappings (config + status)", ("200", "MappingList", "mappings")),
-                "post": op("Create a mapping", ("201", "Mapping", "created (Location: its URL)"),
-                           "BadRequest",
-                           "TooLarge", write=True, body=mapping_body(),
+                "post": op("Create a mapping", ("201", "Mapping", "created (Location: its URL; "
+                                                                "see `warnings`; ETag header)"),
+                           "BadRequest", "TooLarge", "SaveFailed", write=True, body=mapping_body(),
                            description="Fields left out get their defaults; the server "
                                        "assigns the id."),
             },
             "/mappings/{mid}": {
                 "parameters": [mid],
-                "get": op("Get a mapping", ("200", "Mapping", "mapping"), "NotFound"),
-                "put": op("Replace a mapping", ("200", "Mapping", "updated"), "BadRequest",
-                          "NotFound", "TooLarge", write=True, body=mapping_body(),
+                "get": op("Get a mapping", ("200", "Mapping", "mapping (ETag header)"), "NotFound",
+                          description="The `ETag` header is the mapping's revision: send it "
+                                      "back in `If-Match` with a PUT or DELETE to change it "
+                                      "only if nobody changed it since."),
+                "put": op("Replace a mapping", ("200", "Mapping", "updated (see `warnings`; "
+                                                              "ETag header)"), "BadRequest",
+                          "NotFound", "PreconditionFailed", "TooLarge", "SaveFailed", write=True,
+                          body=mapping_body(), parameters=[if_match],
                           description="Replaces the whole mapping: every field the body "
                                       "leaves out gets its default (listen on 0.0.0.0, no "
                                       "allow-list, not read-only, enabled, TLS/MQTT/trace "
                                       "off, no USB match, kind net). GET it first and send "
-                                      "it all back changed, or use PATCH."),
+                                      "it all back changed, or use PATCH. The same settings "
+                                      "again change nothing: the mapping keeps running as it "
+                                      "is (`changed`: false). Without `If-Match` the mapping "
+                                      "is replaced whatever its revision."),
                 "patch": op("Change some fields of a mapping (JSON merge patch, RFC 7396)",
-                            ("200", "Mapping", "updated"), "BadRequest", "NotFound",
-                            "TooLarge", write=True,
+                            ("200", "Mapping", "updated (see `warnings`; ETag header)"),
+                            "BadRequest", "NotFound", "TooLarge", "SaveFailed", write=True,
                             body=mapping_body("MergePatch", ("application/merge-patch+json",
                                                              "application/json")),
                             description="Only the fields the body names change; null resets "
                                         "one to its default. A patch that makes the mapping "
                                         "invalid changes nothing."),
                 "delete": op("Delete a mapping", ("200", "Deleted", "deleted"), "NotFound",
-                             write=True),
+                             "PreconditionFailed", "SaveFailed", write=True,
+                             parameters=[if_match]),
             },
             "/mappings/{mid}/{action}": {
                 "parameters": [
@@ -631,9 +750,17 @@ def openapi_spec(admin, base: str = "") -> dict:
                      "schema": {"type": "string", "enum": ["start", "stop", "restart"]}},
                 ],
                 "post": op("Start/stop/restart a mapping", ("200", "ActionResult", "action applied"),
-                           "BadRequest", "NotFound", write=True,
-                           description="400 (validation): it can't be started, e.g. its "
-                                       "serial port is in use by another mapping."),
+                           "BadRequest", "NotFound", "SaveFailed", write=True,
+                           description="start and stop are idempotent: a start of a mapping "
+                                       "that runs with its settings, or a stop of a stopped "
+                                       "one, changes nothing (`changed`: false); restart "
+                                       "always restarts. A start or restart that can't be "
+                                       "saved changes nothing (400 validation: e.g. its "
+                                       "serial port is in use by another mapping; 500 "
+                                       "save_failed: config.json can't be written). A stop "
+                                       "always stops; when config.json can't be written, "
+                                       "`warning` says it starts again at the next start of "
+                                       "ser2net."),
             },
         },
     }

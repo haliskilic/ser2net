@@ -43,6 +43,9 @@ ExecStart=/usr/bin/python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /va
 # keeps too (journalctl -u ser2net@<name>). To keep the lines only in all.log, uncomment
 # (or set it in /etc/ser2net/<name>.env):
 # Environment=SER2NET_LOG_STDOUT=off
+# `systemctl reload ser2net@<name>`: read the instance's config.json again without a
+# restart (SIGHUP; see ser2net.service)
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 # Open files: each running mapping holds about three (serial port, listener, log) plus

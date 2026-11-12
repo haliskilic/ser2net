@@ -23,6 +23,9 @@ import urllib.request
 from _server import server_log, show_log_on_failure
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, ROOT)
+from app import __version__  # noqa: E402
+
 UI = 8095
 BASE = f"http://127.0.0.1:{UI}"
 
@@ -126,6 +129,14 @@ def main():
         assert listing == {"mappings": []}, listing
         print("auth: bad token -> 401, valid token -> 200 (empty list)  OK")
 
+        # ---- the versions and what the API offers (token needed) ----
+        api("GET", "/api/v1/info", expect=401)
+        _code, info = api("GET", "/api/v1/info", token=token, expect=200)
+        assert info["version"] == __version__ and info["api"] == spec["info"]["version"], info
+        assert {"warnings", "changed"} <= set(info["features"]), info
+        assert "/info" in spec["paths"], spec["paths"].keys()
+        print("GET /info (token): software + API version, features  OK")
+
         # ---- create ----
         port = free_port()
         new = {"name": "api-made", "kind": "net",
@@ -155,6 +166,86 @@ def main():
         assert mid in st["mappings"], st
         api("GET", "/api/v1/ports", token=token, expect=200)
         print("status + ports endpoints  OK")
+
+        # ---- values of another JSON type, unknown keys ----
+        typed = dict(new, name="api-typed", enabled="false",
+                     serial={"port": "/dev/ttyTEST2", "baudrate": "19200", "baud": 115200},
+                     network={"mode": "server", "bind_ip": "127.0.0.1", "port": str(free_port())})
+        code, made = api("POST", "/api/v1/mappings", token=token, body=typed, expect=201)
+        assert made["enabled"] is False and made["serial"]["baudrate"] == 19200, made
+        assert made["status"]["state"] == "stopped", "'false' must not start the mapping"
+        assert made["warnings"] == ["Not settings of this version, so they are ignored: "
+                                    "serial.baud."], made
+        code, again = api("PUT", f"/api/v1/mappings/{made['id']}", token=token, body=made,
+                          expect=200)  # a GET -> PUT round trip (status, warnings) is clean
+        assert "warnings" not in again, again
+        code, err = api("POST", "/api/v1/mappings", token=token, expect=400,
+                        body=dict(new, name="bad", serial={"port": "/dev/ttyTEST3",
+                                                           "baudrate": "fast"}))
+        assert err == {"error": "validation",
+                       "detail": 'serial.baudrate: "fast" is not a whole number.'}, err
+        api("DELETE", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
+        print("typed values: 'false'/'19200' read as meant, unknown keys in `warnings`, "
+              "an unreadable value -> 400 naming it  OK")
+
+        # ---- a protective switch takes true / false only, never text ----
+        def switched(**network):
+            return dict(new, name="api-ro", enabled=False,
+                        network={"mode": "server", "bind_ip": "127.0.0.1",
+                                 "port": free_port(), **network})
+        code, err = api("POST", "/api/v1/mappings", token=token, expect=400,
+                        body=switched(read_only="false"))
+        assert err == {"error": "validation", "detail": "network.read_only: use true or false "
+                                                        "(JSON booleans), not a string."}, err
+        code, made = api("POST", "/api/v1/mappings", token=token, expect=201,
+                         body=switched(read_only=True))
+        assert made["network"]["read_only"] is True and "warnings" not in made, made
+        code, err = api("PUT", f"/api/v1/mappings/{made['id']}", token=token, expect=400,
+                        body=dict(made, network=dict(made["network"], read_only="false")))
+        assert "network.read_only: use true or false" in err["detail"], err
+        code, back = api("GET", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
+        assert back["network"]["read_only"] is True, "a refused PUT changes nothing"
+        code, off = api("PUT", f"/api/v1/mappings/{made['id']}", token=token, expect=200,
+                        body=dict(made, network=dict(made["network"], read_only=False)))
+        assert off["network"]["read_only"] is False, off
+        api("DELETE", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
+        print('protective switch sent as text ("false") -> 400 naming it; JSON true/false '
+              "work  OK")
+
+        # ---- settings that do nothing are named too ----
+        udp = dict(new, name="api-udp", enabled=False,
+                   network={"mode": "udp", "protocol": "telnet", "bind_ip": "127.0.0.1",
+                            "port": free_port()},
+                   mqtt={"enabled": True, "host": "broker", "base_topic": "t"},
+                   options={"closeon": "BYE"})
+        code, made = api("POST", "/api/v1/mappings", token=token, body=udp, expect=201)
+        assert made["network"]["protocol"] == "raw", made["network"]
+        assert made["warnings"] == [
+            "Telnet is not supported over UDP, so the protocol is raw (as it always was in "
+            "effect).",
+            "A close-on string is set, but a UDP mapping has no connections to close: it is "
+            "not used."], made["warnings"]
+        api("DELETE", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
+        print("telnet over UDP saved as raw, unused close-on named in `warnings`  OK")
+
+        # ---- a save that can't be written: JSON 500 save_failed, nothing left in memory ----
+        if os.name == "posix" and os.geteuid() != 0:
+            os.chmod(tmp, 0o500)  # config.json can't be replaced
+            try:
+                code, err = api("POST", "/api/v1/mappings", token=token,
+                                body=dict(new, name="unsaved",
+                                          network={"mode": "server", "bind_ip": "127.0.0.1",
+                                                   "port": free_port()}))
+            finally:
+                os.chmod(tmp, 0o700)
+            assert code == 500 and err["error"] == "save_failed" and \
+                err["detail"].startswith("Could not save config.json: "), (code, err)
+            code, listing = api("GET", "/api/v1/mappings", token=token, expect=200)
+            assert [x["name"] for x in listing["mappings"]] == ["api-renamed"], listing
+            print("failed save: JSON 500 save_failed with the reason, the mapping is not kept "
+                  "in memory  OK")
+        else:
+            print("SKIP: failed-save check needs a POSIX non-root run")
 
         # ---- delete ----
         api("DELETE", f"/api/v1/mappings/{mid}", token=token, expect=200)

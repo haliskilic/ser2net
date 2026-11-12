@@ -268,7 +268,7 @@ def test_viewers():
         assert status == 200 and STAMP.search(page) and f"(now {here})" in page, page[:600]
         status, page = asyncio.run(_get(app, "/api/mappings/plc1/traces", cookie))
         assert status == 200 and f"local time (now {here})" in page, page[:900]
-        assert re.search(r'<td class="mono nowrap">' + STAMP.pattern + "</td>", page), page[:1500]
+        assert re.search(r'<td class="mono nowrap"[^>]*>' + STAMP.pattern + "</td>", page), page[:1500]
         print("log and trace panels name the server's zone; the trace list's times carry "
               "the offset  OK")
 

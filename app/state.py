@@ -1,8 +1,8 @@
 """Shared runtime state: config + store + supervisor + port watcher + logs.
 
 A single AppState instance is created at startup and shared by the web layer and
-the engine. Config mutations go through ``config_lock`` and are persisted
-atomically before the supervisor is reconciled.
+the engine. Config mutations go through ``edit_config`` (under ``config_lock``): they
+are persisted atomically, or undone, before the supervisor is reconciled.
 
 All activity (logins/logouts, serial port open/close, client connect/disconnect,
 mapping start/stop/edit, HTTP requests, errors) is funneled through ``log()`` and
@@ -10,25 +10,35 @@ written to ``all.log`` next to ``config.json`` (and to stdout, unless
 SER2NET_LOG_STDOUT=off). The data directory holds more state: audit.log(.1), the rotated
 all.log.N, backups/, logs/, traces/ and tls/. Deleting config.json alone resets the
 accounts, settings and mappings but leaves those (audit.log and backups/ are shown to the
-next admin); a clean start is ser2net stopped and the data directory deleted.
+next admin; the next start prunes the per-mapping logs and traces that no mapping owns
+any more); a clean start is ser2net stopped and the data directory deleted.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import dataclasses
 import hmac
 import logging
 import os
+import re
 import secrets
+import shutil
+import stat
 import sys
+import threading
 import time
 from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from . import accounts, clock
+from . import accounts, clock, logsetup, storage, tlsreload
 from .config import (
-    AppConfig, ConfigStore, User, fold, lock_down_dir, mapping_file, valid_mapping_id,
+    AppConfig, ConfigStore, ConfigWriteError, User, fold, lock_down_dir, mapping_file,
+    valid_mapping_id,
 )
+from .i18n import _
+from .engine.bridge import remove_files
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
@@ -39,12 +49,23 @@ from .web.auth import LoginRateLimiter, RevokedSessions, SlowWork
 
 # Per-mapping log retention (automatic maintenance).
 LOG_MAX_BYTES = 100 * 1024 * 1024     # cap each mapping log at 100 MB
-LOG_MAX_AGE_DAYS = 15                  # drop entries older than 15 days
+LOG_TRIM_TO = 0.9                      # ... cut to 90% of it then, so the next passes leave it
+LOG_MAX_AGE_DAYS = 15                  # drop entries older than 15 days ...
+LOG_VIEW_LINES = 1000                  # ... but never one of the last lines the Log panel shows
 LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at startup)
-# Global log rotation (all.log via RotatingFileHandler; audit.log rotated manually).
+CONFIG_CHECK_S = 5.0                   # how often config.json is looked at for outside edits
+# Global log rotation (all.log via RetainingFileHandler; audit.log rotated manually).
 ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
 ALL_LOG_BACKUPS = 5                    # keep 5 rotations (~60 MB total worst case)
 AUDIT_LOG_MAX_BYTES = 5 * 1024 * 1024  # rotate audit.log past 5 MB (one backup kept)
+# With log_max_age_days set (Settings -> Retention), all.log and audit.log also begin a new
+# file once their first record is 1/5 of that old, so each file spans at most that; the
+# hourly retention deletes an older file once its first record is past the limit. audit.log
+# then keeps up to AUDIT_FILES_KEPT older files (audit.log.1 ...), so the period fits.
+AUDIT_FILES_KEPT = 5
+# all.log could not be renamed for its rotation (Windows: another program has it open):
+# written on, and rotated at the first record after this many seconds
+ROLL_RETRY_S = 60.0
 # One all.log message is cut after this many characters: a request (a sign-in attempt, a
 # URL) needs no account, and must not write megabytes into the log at a time.
 LOG_MESSAGE_MAX = 2000
@@ -78,6 +99,16 @@ SETUP_CODE_FILE = "setup-code.txt"
 # SER2NET_LOG_STDOUT=off: the log lines go only to all.log, not to stdout as well (where
 # systemd's journal or Docker's container log keep a copy of their own)
 LOG_STDOUT_ENV = "SER2NET_LOG_STDOUT"
+# the log trim (_trim_log_file): what it copies at a time, what of a line's start it reads
+# for the line's time, and how often it tries to swap the file (Windows: a log view may
+# hold it open for a moment)
+_COPY_CHUNK = 1024 * 1024
+_STAMP_BYTES = 64
+_REPLACE_TRIES = 3
+# a line's time as text ('YYYY-MM-DD HH:MM:SS', the zone's local time): one that sorts more
+# than _SURELY_OLDER_S before the cutoff's is older whatever the zone was, without parsing
+_STAMP = re.compile(rb"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d")
+_SURELY_OLDER_S = 2 * 86400
 
 
 def log_stdout(environ=None) -> tuple[bool, str]:
@@ -112,31 +143,182 @@ class LineFormatter(logging.Formatter):
 
 
 def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
-                       user: str = "") -> list[str]:
+                       user: str = "", *, max_age_s: float = 0) -> list[str]:
     """Append one record to the audit log at `path`: one line, tab-separated: time
     (clock.stamp: local time with its UTC offset; before 2.9 without the offset), client
     IP, action, detail, user (the user column was added in v2.8 — older lines have four
     fields). Each field is cut to its AUDIT_FIELD_MAX, and control characters in it become
     spaces (logtext.one_line), so a crafted mapping name can't forge an extra record or cut
-    one short. Rotated past AUDIT_LOG_MAX_BYTES (one backup kept). Best effort: never
-    raises. Returns the fields as written."""
+    one short. Rotated past AUDIT_LOG_MAX_BYTES (one backup kept); with `max_age_s`
+    (log_max_age_days) also once its first record is a fifth of that old, keeping
+    AUDIT_FILES_KEPT older files. Best effort: never raises. Returns the fields as written."""
     fields = [clock.stamp()] + [
         one_line(str(value)[:limit])
         for value, limit in zip((actor_ip, action, detail, user), AUDIT_FIELD_MAX, strict=True)]
     line = "\t".join(fields)
-    try:
-        # size-based rotation (keep one backup) so audit.log can't grow forever
-        if os.path.getsize(path) > AUDIT_LOG_MAX_BYTES:
-            with _suppress(OSError):
-                os.replace(path, path + ".1")
-    except OSError:
-        pass  # file doesn't exist yet
-    try:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except OSError:
-        pass
+    with _AUDIT_LOCK:
+        try:
+            # size-based rotation so audit.log can't grow forever (and by age, see above)
+            if os.path.getsize(path) > AUDIT_LOG_MAX_BYTES or \
+                    _audit_too_old(path, max_age_s, time.time()):
+                with _suppress(OSError):
+                    _rotate_audit(path, AUDIT_FILES_KEPT if max_age_s else 1)
+        except OSError:
+            pass  # file doesn't exist yet
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
     return fields
+
+
+# audit.log is rotated in turn with the records written to it (write_audit_record, the
+# hourly retention)
+_AUDIT_LOCK = threading.Lock()
+
+
+def _audit_too_old(path: str, max_age_s: float, now: float) -> bool:
+    """With `max_age_s` set: whether the audit log at `path` holds a record a fifth of that
+    old (its first one), so it is to begin a new file. Under _AUDIT_LOCK."""
+    if not max_age_s:
+        return False
+    first = _first_stamp(path)
+    return first is not None and now - first >= max_age_s / AUDIT_FILES_KEPT
+
+
+def _rotate_audit(path: str, keep: int) -> None:
+    """audit.log -> audit.log.1, .1 -> .2 ... up to audit.log.<keep>, or as far as older
+    files are there (a period set before left them: the chain keeps its length, up to
+    AUDIT_FILES_KEPT); the oldest beyond goes. Under _AUDIT_LOCK. Raises OSError."""
+    while keep < AUDIT_FILES_KEPT and os.path.exists(f"{path}.{keep + 1}"):
+        keep += 1
+    for i in range(keep - 1, 0, -1):
+        if os.path.exists(f"{path}.{i}"):
+            os.replace(f"{path}.{i}", f"{path}.{i + 1}")
+    os.replace(path, path + ".1")
+
+
+def _first_stamp(path: str) -> float | None:
+    """The time of the first record of a log file (all.log, audit.log): its first line in
+    the first 64 KiB that starts with one. None when there is none (an empty file, none)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(64 * 1024)
+    except OSError:
+        return None
+    for line in head.split(b"\n"):
+        ts = _parse_log_ts(line[:_STAMP_BYTES].decode("utf-8", errors="replace"))
+        if ts is not None:
+            return ts
+    return None
+
+
+def _prune_rotated(path: str, count: int, max_age_s: float, now: float) -> list[str]:
+    """Delete the rotated files path.1 ... path.<count> whose first record (else their
+    modification time) is more than max_age_s before `now`. Returns their names."""
+    gone = []
+    for i in range(1, count + 1):
+        name = f"{path}.{i}"
+        try:
+            first = _first_stamp(name)
+            if first is None:
+                first = os.path.getmtime(name)
+            if first < now - max_age_s:
+                os.remove(name)
+                gone.append(os.path.basename(name))
+        except OSError:  # (not there)
+            continue
+    return gone
+
+
+class RetainingFileHandler(RotatingFileHandler):
+    """all.log: rotated at its size and, with `max_age_s` set (log_max_age_days), also once
+    its first record is a fifth of that old (max_age_s / backupCount): no file then spans
+    more than that, and the hourly retention (_prune_rotated) deletes a rotated file once
+    its first record is max_age_s old. So no record is kept longer, and about 80% of the
+    period at least (size limits allowing). The file names stay all.log.1 ... .5."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.max_age_s = 0.0
+        self.first = _first_stamp(self.baseFilename)  # the live file's first record
+        self._retry_at = 0.0     # time.monotonic() before which a failed rotation waits
+        self._failing = False    # the last rotation failed (said so in the file once)
+
+    def too_old(self, now: float) -> bool:
+        if not self.max_age_s or self.first is None:
+            return False
+        return now - self.first >= self.max_age_s / max(1, self.backupCount)
+
+    def shouldRollover(self, record) -> bool:  # noqa: N802 (logging API)
+        if self._retry_at and time.monotonic() < self._retry_at:
+            return False
+        return bool(super().shouldRollover(record)) or self.too_old(record.created)
+
+    def doRollover(self) -> None:  # noqa: N802 (logging API)
+        """Rotate: all.log -> all.log.1 -> ... -> all.log.<backupCount> (the oldest gone).
+        all.log is moved aside first: when that fails (Windows: another program has it open
+        without delete sharing) nothing is shifted or deleted, the record is written to
+        all.log as it is and rotating is tried again after ROLL_RETRY_S. (Python's own
+        rotation shifted the backups first, then dropped the record, and did both again for
+        every later record: the history was gone after a few lines.)"""
+        if self.backupCount <= 0:
+            super().doRollover()
+            return
+        if self.stream:
+            self.stream.close()
+            self.stream = None  # (reopened below, or by emit)
+        base = self.baseFilename
+        aside = base + ".rotating"
+        try:
+            os.replace(base, aside)
+        except FileNotFoundError:
+            aside = ""
+        except OSError as e:
+            self._rotation_failed(e)
+            return
+        try:
+            for i in range(self.backupCount - 1, 0, -1):
+                older = f"{base}.{i}"
+                if os.path.exists(older):
+                    os.replace(older, f"{base}.{i + 1}")
+            if aside:
+                os.replace(aside, f"{base}.1")
+        except OSError as e:  # a backup held open: put all.log back, keep what is there
+            with _suppress(OSError):
+                os.replace(aside, base)
+            self._rotation_failed(e)
+            return
+        self._retry_at, self._failing = 0.0, False
+        self.first = None
+        if not self.delay:
+            self.stream = self._open()
+
+    def _rotation_failed(self, e: OSError) -> None:
+        self._retry_at = time.monotonic() + ROLL_RETRY_S
+        self.stream = self._open()
+        if not self._failing:
+            self._failing = True
+            self.stream.write(f"{clock.stamp()} WARNING: "
+                              f"{os.path.basename(self.baseFilename)} could not be rotated "
+                              f"({e.strerror or e}: another program may have it open) — "
+                              f"writing on, trying again every {ROLL_RETRY_S:g} s\n")
+
+    def emit(self, record) -> None:
+        super().emit(record)
+        if self.first is None:
+            self.first = record.created
+
+    def roll_if_old(self, now: float) -> None:
+        """Rotate now if the live file's first record is too old (a quiet log writes no
+        record that would). Takes the handler's lock."""
+        self.acquire()
+        try:
+            if self.too_old(now) and os.path.getsize(self.baseFilename) > 0:
+                self.doRollover()
+        finally:
+            self.release()
 
 
 class BoundedRecords:
@@ -294,61 +476,195 @@ def _parse_log_ts(line: str) -> float | None:
     return clock.parse_stamp(line)
 
 
-def _lines(text: str) -> list[str]:
-    """*text*'s lines, each with its line end. Only a line feed ends a line (a CRLF too):
-    str.splitlines() would also end one at a CR, NEL, U+2028 ... inside a message."""
-    lines = [ln + "\n" for ln in text.split("\n")]
-    lines[-1] = lines[-1][:-1]  # what follows the last line feed ("" if the text ends so)
-    return lines if lines[-1] else lines[:-1]
+def _line_start(fh, offset: int) -> int:
+    """The offset of the first line that begins at or after `offset` in the open binary
+    file `fh` (only a line feed ends a line); its end when no line begins there."""
+    if offset <= 0:
+        return 0
+    fh.seek(offset - 1)
+    if fh.read(1) == b"\n":
+        return offset
+    while True:
+        chunk = fh.readline(_COPY_CHUNK)
+        if not chunk or chunk.endswith(b"\n"):
+            return fh.tell()
 
 
-def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
-    """Rewrite a log file in place keeping only lines newer than cutoff_ts and,
-    if still over max_bytes, only the most recent max_bytes. Returns True if the
-    file changed. Runs in a worker thread (no event-loop blocking)."""
-    # newline="" so CRLF line endings (logging writes "\n" -> "\r\n" on Windows) are
-    # preserved verbatim on both read and write; otherwise the read collapses them to
-    # "\n", the byte-count is undercounted, and the rewritten file blows past max_bytes.
+def _tail_start(fh, size: int, lines: int) -> int:
+    """The offset at which the last `lines` lines of the open binary file `fh` (`size`
+    bytes) begin: 0 when it has no more, `size` for 0 lines. Reads backwards in chunks."""
+    if lines <= 0:
+        return size
+    fh.seek(size - 1)
+    need = lines + (fh.read(1) == b"\n")  # the last line's own line feed ends no other
+    pos, found = size, 0
+    while pos > 0:
+        step = min(64 * 1024, pos)
+        pos -= step
+        fh.seek(pos)
+        chunk = fh.read(step)
+        count = chunk.count(b"\n")
+        if found + count >= need:
+            end = len(chunk)
+            for _i in range(need - found):
+                end = chunk.rindex(b"\n", 0, end)
+            return pos + end + 1
+        found += count
+    return 0
+
+
+@contextlib.contextmanager
+def _holding(handlers):
+    """Hold the locks of these logging handlers: a record logged meanwhile waits."""
+    held = []
     try:
-        with open(path, "r", encoding="utf-8", errors="replace", newline="") as fh:
-            content = fh.read()
+        for h in handlers:
+            h.acquire()
+            held.append(h)
+        yield
+    finally:
+        for h in reversed(held):
+            h.release()
+
+
+def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int, keep_lines: int = 0,
+                   handlers=()) -> bool:
+    """Trim a log file in place: drop the lines older than cutoff_ts (but none of the last
+    `keep_lines`) and, if it is still over max_bytes, keep only its newest LOG_TRIM_TO
+    part, from a line's start. Returns True if the file changed. Runs in a worker thread.
+
+    Only a line feed ends a line (a CR, NEL or U+2028 inside a message doesn't). Lines are
+    in time order, so the age filter keeps the file from its first line with a time at or
+    after cutoff_ts. A line without a time (the rest of a message that had a line break,
+    as older versions wrote it) belongs to the one before it: skipped there, it goes or
+    stays with that one; nothing is dropped for its age from a file in which no line has a
+    time. Lines before the size cut go anyway, so the age filter starts there.
+
+    In constant memory: only the start of each line the trim reaches is read (a file
+    within its limits: its first line), and what is kept is copied in chunks, byte for
+    byte (CRLF, invalid UTF-8), to <path>.tmp, which then replaces the file. `handlers`:
+    the logging FileHandlers that write to it, which stay attached: under their locks the
+    lines they wrote meanwhile are copied too and their files closed for the swap (each
+    opens the new one with its next record). A file deleted meanwhile (its mapping was)
+    is not made again; <path>.tmp never stays."""
+    older = time.strftime("%Y-%m-%d %H:%M:%S",
+                          time.localtime(cutoff_ts - _SURELY_OLDER_S)).encode()
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            size_cut = _line_start(fh, size - int(max_bytes * LOG_TRIM_TO)) \
+                if size > max_bytes else 0
+            start, pos, dated, stop = None, size_cut, False, size
+            fh.seek(pos)
+            while pos < stop:
+                head = fh.readline(_STAMP_BYTES)
+                if not head:
+                    break
+                line_at, rest = pos, head
+                while rest and not rest.endswith(b"\n"):  # the rest of a long line
+                    rest = fh.readline(_COPY_CHUNK)
+                pos = fh.tell()
+                if head[:19] < older and _STAMP.match(head):
+                    ts: float | None = 0.0  # (most of a long scan: strptime is slow)
+                else:
+                    ts = _parse_log_ts(head.decode("utf-8", errors="replace"))
+                if ts is None:
+                    continue
+                if ts >= cutoff_ts:
+                    start = line_at
+                    break
+                if not dated:  # the age filter cuts: never into the last keep_lines
+                    dated = True
+                    stop = max(size_cut, _tail_start(fh, size, keep_lines))
+                    fh.seek(pos)
+            if start is None:
+                start = stop if dated else size_cut
     except OSError:
         return False
-    if not content:
-        return False
-
-    lines = _lines(content)
-    # 1) age filter — lines are chronological, so keep from the first recent one. A line
-    # without a time (the rest of a message that had a line break, as older versions
-    # wrote it) belongs to the one before it: skipped here, it goes or stays with that
-    # one. Nothing is dropped from a file in which no line has a time.
-    start, dated = len(lines), False
-    for i, ln in enumerate(lines):
-        ts = _parse_log_ts(ln)
-        if ts is None:
-            continue
-        dated = True
-        if ts >= cutoff_ts:
-            start = i
-            break
-    data = "".join(lines[start if dated else 0:])
-
-    # 2) size cap — keep only the last max_bytes, trimmed to a line boundary
-    encoded = data.encode("utf-8")
-    if len(encoded) > max_bytes:
-        text = encoded[-max_bytes:].decode("utf-8", errors="ignore")
-        nl = text.find("\n")
-        data = text[nl + 1:] if nl != -1 else text
-
-    if data == content:
+    if start <= 0:
         return False
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as fh:
-        fh.write(data)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
-    return True
+    try:
+        with open(path, "rb") as src, open(tmp, "wb") as out:
+            src.seek(start)
+            shutil.copyfileobj(src, out, _COPY_CHUNK)  # while the handlers write on
+            copied = src.tell()
+            out.flush()
+            os.fsync(out.fileno())
+        for attempt in range(_REPLACE_TRIES):
+            with _holding(handlers):
+                if not os.path.exists(path):
+                    return False
+                with open(path, "rb") as src, open(tmp, "ab") as out:
+                    src.seek(copied)
+                    shutil.copyfileobj(src, out, _COPY_CHUNK)  # what they wrote meanwhile
+                    copied = src.tell()
+                    out.flush()
+                    os.fsync(out.fileno())
+                for h in handlers:
+                    stream = h.setStream(None)
+                    if stream is not None:
+                        stream.close()
+                try:
+                    os.replace(tmp, path)
+                    return True
+                except PermissionError:  # Windows: a log view has it open for a moment
+                    if attempt == _REPLACE_TRIES - 1:
+                        raise
+            time.sleep(0.2)
+        return False
+    finally:
+        with _suppress(OSError):
+            os.remove(tmp)
+
+
+def _snapshot(value: Any) -> tuple:
+    """What _restore needs to put `value` back as it is now, in place: the same objects
+    (dataclasses, lists, dicts) with the same contents, also where a change replaced one."""
+    if (dataclasses.is_dataclass(value) and not isinstance(value, type)
+            and not value.__dataclass_params__.frozen):  # type: ignore[attr-defined]
+        return value, {f.name: _snapshot(getattr(value, f.name))
+                       for f in dataclasses.fields(value)}
+    if isinstance(value, list):
+        return value, [_snapshot(v) for v in value]
+    if isinstance(value, dict):
+        return value, {k: _snapshot(v) for k, v in value.items()}
+    return value, None  # immutable: str, numbers, None, a frozen note
+
+
+def _restore(snapshot: tuple) -> Any:
+    value, inner = snapshot
+    if inner is None:
+        return value
+    if isinstance(value, list):
+        value[:] = [_restore(s) for s in inner]
+    elif isinstance(value, dict):
+        restored = {k: _restore(s) for k, s in inner.items()}
+        value.clear()
+        value.update(restored)
+    else:
+        for name, s in inner.items():
+            setattr(value, name, _restore(s))
+    return value
+
+
+async def _to_its_end(task: asyncio.Future) -> bool:
+    """Wait until `task` is done, also when the waiting task is cancelled meanwhile (it
+    is not passed on). Returns whether it was: the caller raises CancelledError then."""
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.wait((task,))
+        except asyncio.CancelledError:
+            cancelled = True
+    return cancelled
+
+
+@dataclasses.dataclass
+class ConfigEdit:
+    """What AppState.edit_config did, once its block has ended."""
+    saved: bool = False      # config.json was written (False: the block changed nothing)
+    backed_up: bool = True   # what config.json held before is in backups/ (False: failed)
 
 
 class AppState:
@@ -356,6 +672,9 @@ class AppState:
         self.store = store
         self.config = config
         self.data_dir = os.path.dirname(os.path.abspath(store.path))
+        store.log = self.log  # a backup that fails, a clock behind the backups
+        store.on_replaced = self._outside_edit_replaced  # (a save replaced a hand edit)
+        self._outside_edit: tuple[float, float] | None = None  # (checked at, noted mtime)
         # all.log lives next to config.json; per-mapping logs live in data/logs/
         self.log_path = os.path.join(self.data_dir, "all.log")
         self.logs_dir = os.path.join(self.data_dir, "logs")
@@ -366,11 +685,14 @@ class AppState:
         if stdout_problem:
             self._logger.info(stdout_problem)
         self._mapping_loggers: dict[str, logging.Logger] = {}
+        # each supervisor operation acts on the mapping's config when its turn comes
         self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger,
-                                     trace_dir=self.traces_dir)
+                                     trace_dir=self.traces_dir,
+                                     lookup=lambda mid: self.config.get_mapping(mid))
         # a serial port that appears wakes the mappings waiting to reopen theirs
         self.ports = PortWatcher(interval=2.0, on_change=self.supervisor.ports_changed)
         self.cluster = ClusterDiscovery(self.config, self.log)
+        self.cluster.serving = self.admin_serving  # (beacons name what the UI serves)
         self.rate_limiter = LoginRateLimiter()
         # failed sign-ins (and password changes) per user name, letter case aside, from
         # any address: they pause that name only, never for good, and stay below the
@@ -414,8 +736,23 @@ class AppState:
         self.config_lock = asyncio.Lock()
         self.started_at = time.time()        # when this process started (wall clock)
         self.started_mono = time.monotonic()  # the same for how long it runs (uptime)
-        # the admin UI listener's connection guard (runtime.py; None in tests without one)
+        # the admin UI listener's connection guard (runtime.py; None in tests without one),
+        # the address it listens on, and how its TLS context is made from the settings
+        # while ser2net runs (Settings -> Admin TLS); without them a TLS change waits for
+        # the next start
         self.admin_guard: Any = None
+        self.admin_served: tuple[str, int] | None = None
+        self.admin_tls: Any = None
+        # why the admin TLS settings saved last are not served yet ("": they are)
+        self.admin_tls_waiting = ""
+        # the Windows service's name when ser2net runs as one (runtime.service_main)
+        self.service_name = ""
+        # reloads of config.json under way (SIGHUP: app/reload.py)
+        self.reloads: set[asyncio.Task] = set()
+        # the event loop watchdog (runtime.py, app/watchdog.py; None in tests without one),
+        # and the start-up line about a previous run it ended ("" when there was none)
+        self.loop_watchdog: Any = None
+        self.previous_hang = ""
         # first-run setup (see prepare_first_run)
         self.setup_code = ""
         self.setup_locked = False
@@ -428,25 +765,74 @@ class AppState:
                 os.makedirs(d, exist_ok=True)
             lock_down_dir(d)
 
+    # ---------------- the admin UI as it is served ----------------
+    @property
+    def serving_tls(self) -> bool:
+        """Whether the admin UI's new connections get TLS: what the cookies' Secure flag,
+        HSTS and the cluster's beacons go by. A TLS change in Settings or a reload applies
+        at once (a process without a listener: from the next start)."""
+        guard = self.admin_guard
+        return self.config.admin_ui.tls_enabled if guard is None else guard.ssl is not None
+
+    def admin_serving(self) -> tuple[str, int, bool]:
+        """(bind IP, port, TLS) of the admin UI as it serves now. The address in config.json
+        may differ: it is used from the next start."""
+        admin = self.config.admin_ui
+        ip, port = self.admin_served or (admin.bind_ip, admin.port)
+        return ip, port, self.serving_tls
+
+    async def prepare_admin_tls(self, admin) -> tlsreload.Prepared:
+        """The admin UI's TLS context for the settings `admin` (AdminUI), made from its files
+        as they are now (no TLS: a None context), to hand to use_admin_tls."""
+        build = self.admin_tls
+        if build is None or self.admin_guard is None:
+            return tlsreload.Prepared(later="this process has no admin UI listener")
+        return await tlsreload.prepare(lambda: build(admin))
+
+    def use_admin_tls(self, prepared: tlsreload.Prepared) -> bool:
+        """New connections to the admin UI get the prepared TLS context (None: plain HTTP);
+        those open keep theirs. False when it isn't usable (the one in use stays)."""
+        guard = self.admin_guard
+        if guard is None or not prepared.usable:
+            if not prepared.error:  # (files that can't be used: the change was refused)
+                self.admin_tls_waiting = prepared.later or "no admin UI listener"
+            return False
+        self.admin_tls_waiting = ""
+        was, guard.ssl = guard.ssl is not None, prepared.context
+        if guard.ssl is not None:
+            self.log("admin UI: TLS certificate loaded, new connections use it"
+                     + ("" if was else " (TLS is on now)"))
+            from .runtime import tls_certificate_note  # (runtime imports this module)
+            if note := tls_certificate_note(self.config.admin_ui.tls_cert):
+                self.log(note)  # its subject and validity, a WARNING when it ends soon
+        elif was:
+            self.log("admin UI: TLS is off now, new connections use plain HTTP")
+            if self.admin_serving()[0] not in ("127.0.0.1", "::1", "localhost"):
+                self.log("WARNING: admin UI is bound to a network address over plain HTTP — "
+                         "the password and session cookies travel unencrypted.")
+        return True
+
     @staticmethod
     def _setup_logging(log_path: str, stdout: bool = True) -> logging.Logger:
         """The 'ser2net' logger: all.log, and stdout too unless `stdout` is False (also
         then when all.log can't be opened, so the lines still go somewhere)."""
         logger = logging.getLogger("ser2net")
         logger.setLevel(logging.INFO)
+        logsetup.close_console(logger)
         logger.handlers.clear()
         logger.propagate = False
         fmt = LineFormatter()
 
-        console = logging.StreamHandler(sys.stdout)
-        console.setFormatter(fmt)
+        # the console copy is written by a thread of its own, never on the event loop (a
+        # paused console must not hold up the bridges); `fmt` is all.log's format
+        console = logsetup.console_handler(sys.stdout, fmt)
         logger.addHandler(console)
 
         try:
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             # rotate all.log so the global activity/audit trail can't grow without
             # bound (per-mapping logs are trimmed separately by run_log_maintenance).
-            fileh = RotatingFileHandler(
+            fileh = RetainingFileHandler(
                 log_path, maxBytes=ALL_LOG_MAX_BYTES, backupCount=ALL_LOG_BACKUPS,
                 encoding="utf-8")
             fileh.setFormatter(fmt)
@@ -456,6 +842,7 @@ class AppState:
         else:
             if not stdout:
                 logger.removeHandler(console)
+                console.close()  # (its writer thread)
         return logger
 
     def log(self, msg: str) -> None:
@@ -479,16 +866,18 @@ class AppState:
     def audit(self, actor_ip: str, action: str, detail: str = "", user: str = "") -> None:
         """Append a config-change audit record (write_audit_record), separate from
         all.log, and note it in all.log."""
-        _time, ip, action, detail, user = write_audit_record(self.audit_path, actor_ip, action,
-                                                             detail, user)
+        _time, ip, action, detail, user = write_audit_record(
+            self.audit_path, actor_ip, action, detail, user,
+            max_age_s=self.config.log_max_age_days * 86400)
         who = f" by {user}" if user else ""
         self._logger.info(f"AUDIT {ip} {action} {detail}{who}".rstrip())
 
     def read_audit(self) -> list[dict]:
-        """Every audit record (audit.log.1 + audit.log), newest first. Blocking file
-        I/O: call via asyncio.to_thread."""
+        """Every audit record (audit.log.<AUDIT_FILES_KEPT> ... audit.log.1 + audit.log),
+        newest first. Blocking file I/O: call via asyncio.to_thread."""
         records = []
-        for path in (self.audit_path + ".1", self.audit_path):
+        older = [f"{self.audit_path}.{i}" for i in range(AUDIT_FILES_KEPT, 0, -1)]
+        for path in older + [self.audit_path]:
             try:
                 with open(path, encoding="utf-8", errors="replace") as fh:
                     # only a line feed ends a record (CRLF reads as one): splitlines()
@@ -543,7 +932,7 @@ class AppState:
 
         return log
 
-    def read_mapping_log(self, mapping_id: str, limit: int = 1000,
+    def read_mapping_log(self, mapping_id: str, limit: int = LOG_VIEW_LINES,
                          tail_bytes: int = 512 * 1024) -> list[str]:
         """Return the mapping's log lines, newest first (most recent at index 0).
 
@@ -568,21 +957,28 @@ class AppState:
             lines.pop()
         return lines[-limit:][::-1]
 
-    def forget_mappings(self, mapping_ids) -> None:
-        """Close the log files of mappings that are gone (an import replaced them, a
-        backup was restored) and forget their loggers, which would keep each file open
-        until a restart. The files themselves stay until the next start removes them
-        (prune_mapping_logs)."""
-        for mid in mapping_ids:
-            lg = self._mapping_loggers.pop(mid, None)
-            if lg is not None:
-                for h in list(lg.handlers):
-                    with _suppress(Exception):
-                        h.close()
-                    lg.removeHandler(h)
+    def _forget_mapping_logger(self, mapping_id: str) -> None:
+        """Close the mapping's log file and forget its cached logger."""
+        lg = self._mapping_loggers.pop(mapping_id, None)
+        if lg is not None:
+            for h in list(lg.handlers):
+                with _suppress(Exception):
+                    h.close()
+                lg.removeHandler(h)
+
+    async def forget_mappings(self, ids) -> None:
+        """Close what this process keeps open for mappings that are gone without a
+        deletion of their own (a replace import, a backup restore): a runner if one is
+        left (its listener, serial port and trace writer) and the cached logger with its
+        open log file, which stayed open until a restart before. Their files stay, so an
+        undone restore finds them; the next start prunes the ones no mapping owns
+        (prune_mapping_logs, prune_orphan_traces)."""
+        for mid in ids:
+            await self.supervisor.remove_mapping(mid)
+            self._forget_mapping_logger(mid)
 
     def delete_mapping_log(self, mapping_id: str) -> None:
-        self.forget_mappings([mapping_id])
+        self._forget_mapping_logger(mapping_id)
         # the log file may never have been created (FileNotFoundError)
         with _suppress(OSError, ValueError):
             os.remove(self.mapping_log_path(mapping_id))
@@ -599,14 +995,118 @@ class AppState:
             names = [n for n in os.listdir(self.traces_dir) if n.startswith(prefix)]
         except OSError:
             return []
-        paths = [os.path.join(self.traces_dir, n) for n in names]
-        return sorted((p for p in paths if os.path.isfile(p)),
-                      key=lambda p: os.path.getmtime(p), reverse=True)
+        found = []
+        for n in names:  # one may be rotated or deleted meanwhile
+            path = os.path.join(self.traces_dir, n)
+            with _suppress(OSError):
+                st = os.stat(path)
+                if stat.S_ISREG(st.st_mode):
+                    found.append((st.st_mtime, path))
+        return [path for _mtime, path in sorted(found, reverse=True)]
+
+    async def delete_trace_files(self, mapping_id: str, names=None,
+                                 ) -> tuple[list[str], list[tuple[str, str]]]:
+        """Delete those `names` of a mapping's trace files, all of them when None. Only
+        names of its own list (trace_files) are touched; the supervisor has the files a
+        running trace writes deleted by that writer. Returns (the names deleted, [(name,
+        why not)])."""
+        paths = {os.path.basename(p): p
+                 for p in await asyncio.to_thread(self.trace_files, mapping_id)}
+        wanted = list(paths) if names is None else list(dict.fromkeys(names))
+        failed = [(n, _("Trace file not found")) for n in wanted if n not in paths]
+        found = [paths[n] for n in wanted if n in paths]
+        result = (await self.supervisor.remove_trace_files(mapping_id, found)) if found else {}
+        failed += [(os.path.basename(p), e.strerror or str(e))
+                   for p, e in result.items() if e is not None]
+        return [os.path.basename(p) for p, e in result.items() if e is None], failed
+
+    def traced_mapping_ids(self) -> set[str]:
+        """The ids that have at least one file in data/traces: what comes before the first
+        "-" of a file's name (a valid mapping id has none). Blocking: one listdir."""
+        try:
+            names = os.listdir(self.traces_dir)
+        except OSError:
+            return set()
+        return {n.partition("-")[0] for n in names if "-" in n}
 
     def delete_mapping_traces(self, mapping_id: str) -> None:
         for path in self.trace_files(mapping_id):
             with _suppress(OSError):
                 os.remove(path)
+
+    def _traces_older_than(self, cutoff: float) -> dict[str, list[str]]:
+        """The trace files last written before `cutoff`, by the id their name begins with
+        ("" for a name with no "-"). Blocking."""
+        try:
+            names = os.listdir(self.traces_dir)
+        except OSError:
+            return {}
+        old: dict[str, list[str]] = {}
+        for fn in names:
+            with _suppress(OSError):
+                st = os.stat(os.path.join(self.traces_dir, fn))
+                if stat.S_ISREG(st.st_mode) and st.st_mtime < cutoff:
+                    mid, dash, _rest = fn.partition("-")
+                    old.setdefault(mid if dash else "", []).append(fn)
+        return old
+
+    async def run_trace_maintenance(self) -> int:
+        """With trace_max_age_days set (0, the default, keeps every trace): delete the
+        trace files not written for that many days (their modification time, compared with
+        storage.now(): a clock stepped ahead meanwhile deletes nothing early), a running
+        trace's through its writer (delete_trace_files), the file it writes included. A
+        running trace whose file holds traffic from before then begins a new file first
+        (Supervisor.renew_traces), so that a file written into all the time goes too, that
+        many days later. Logged when it did something; returns how many files went."""
+        days = self.config.trace_max_age_days
+        if not days:
+            return 0
+        cutoff = storage.now() - days * 86400
+        renewed = await self.supervisor.renew_traces(cutoff)
+        if renewed:
+            self.log(f"trace maintenance: {renewed} trace(s) begun in a new file, as theirs "
+                     f"held traffic from more than {days:g} days ago")
+        old = await asyncio.to_thread(self._traces_older_than, cutoff)
+        deleted, kept = 0, 0
+        for mid, names in old.items():
+            if self.config.get_mapping(mid) is not None:
+                gone, failed = await self.delete_trace_files(mid, names)
+                deleted, kept = deleted + len(gone), kept + len(failed)
+            else:  # no mapping writes it (the start-up prunes these anyway)
+                result = await asyncio.to_thread(
+                    remove_files, [os.path.join(self.traces_dir, n) for n in names])
+                deleted += sum(e is None for e in result.values())
+                kept += sum(e is not None for e in result.values())
+        if deleted or kept:
+            self.log(f"trace maintenance: deleted {deleted} trace file(s) not written for "
+                     f"{days:g} days" + (f"; {kept} could not be deleted" if kept else ""))
+        return deleted
+
+    def prune_orphan_traces(self) -> None:
+        """Delete the files in data/traces that belong to no configured mapping: left by a
+        replace import, a backup restore or a deleted config.json, and shown in no panel.
+        A file is kept when its name begins with "<id>-" of a mapping (a valid id has no
+        "-"). Logged with how many files and MB went."""
+        valid = {m.id for m in self.config.mappings}
+        try:
+            names = os.listdir(self.traces_dir)
+        except OSError:
+            return
+        count = size = 0
+        for fn in names:
+            mid, dash, _rest = fn.partition("-")
+            path = os.path.join(self.traces_dir, fn)
+            if (dash and mid in valid) or not os.path.isfile(path):
+                continue
+            try:
+                n = os.path.getsize(path)
+                os.remove(path)
+            except OSError:
+                continue
+            count, size = count + 1, size + n
+        if count:
+            self.log(f"removed {count} trace file(s) ({size / 1048576:.1f} MB) of mappings "
+                     "that no longer exist")
 
     def prune_mapping_logs(self) -> None:
         """Delete per-mapping log files whose mapping no longer exists: after config.json
@@ -623,37 +1123,93 @@ class AppState:
                     os.remove(os.path.join(self.logs_dir, fn))
 
     async def run_log_maintenance(self) -> None:
-        """Trim every per-mapping log: drop entries older than LOG_MAX_AGE_DAYS and
-        cap each file at LOG_MAX_BYTES (keeping the most recent portion). The file's
-        logging handler is detached while its file is rewritten, then reattached."""
-        cutoff = time.time() - LOG_MAX_AGE_DAYS * 86400
+        """Trim every per-mapping log: drop entries older than LOG_MAX_AGE_DAYS (or the
+        shorter log_max_age_days), and cap each file at LOG_MAX_BYTES (keeping the most
+        recent portion), in a worker thread (_trim_log_file). With the default 15 days the
+        age trim keeps the last LOG_VIEW_LINES (what its Log panel shows: a clock that
+        jumps ahead, or a date corrected after lines were stamped with a wrong one, must
+        not empty it); a retention period set in Settings keeps nothing older. Ages are
+        measured from storage.now(). The mapping's log handler stays attached: what it
+        writes meanwhile is kept."""
+        set_days = self.config.log_max_age_days
+        days = min(LOG_MAX_AGE_DAYS, set_days) if set_days else LOG_MAX_AGE_DAYS
+        keep_lines = 0 if set_days else LOG_VIEW_LINES
+        cutoff = storage.now() - days * 86400
         try:
             files = [f for f in os.listdir(self.logs_dir) if f.endswith(".log")]
         except OSError:
             return
         for fn in files:
-            mid = fn[:-4]
-            path = os.path.join(self.logs_dir, fn)
-            lg = self._mapping_loggers.get(mid)
-            if lg is not None:  # detach so the open handler doesn't fight the rewrite
-                for h in list(lg.handlers):
-                    with _suppress(Exception):
-                        h.close()
-                    lg.removeHandler(h)
+            lg = self._mapping_loggers.get(fn[:-4])
+            handlers = [h for h in lg.handlers if isinstance(h, logging.FileHandler)] \
+                if lg is not None else []
             try:
-                changed = await asyncio.to_thread(_trim_log_file, path, cutoff, LOG_MAX_BYTES)
+                changed = await asyncio.to_thread(
+                    _trim_log_file, os.path.join(self.logs_dir, fn), cutoff, LOG_MAX_BYTES,
+                    keep_lines=keep_lines, handlers=handlers)
                 if changed:
-                    self.log(f"log maintenance: trimmed {fn} (>15d / >100MB)")
+                    self.log(f"log maintenance: trimmed {fn} (>{days}d / "
+                             f">{LOG_MAX_BYTES // 1048576}MB)")
             except Exception as e:  # never let maintenance crash the loop
                 self.log(f"log maintenance error on {fn}: {e}")
-            finally:
-                if lg is not None:
-                    self._attach_mapping_handler(lg, mid)
+
+    def _all_log_handler(self) -> RetainingFileHandler | None:
+        return next((h for h in self._logger.handlers if isinstance(h, RetainingFileHandler)),
+                    None)
+
+    async def run_retention(self) -> int:
+        """With log_max_age_days set (0, the default: only their size and count limits):
+        all.log and audit.log begin a new file once their first record is a fifth of that
+        old (RetainingFileHandler, write_audit_record; here also when nothing is logged),
+        their older files go once their first record is past it (_prune_rotated), and so
+        do the configuration backups named for an older time, but never the newest
+        BACKUPS_MIN_KEPT (ConfigStore.prune_backups). Ages are measured from
+        storage.now(). Logged when it deleted something; returns how many files went."""
+        days = self.config.log_max_age_days
+        handler = self._all_log_handler()
+        if handler is not None:
+            handler.max_age_s = days * 86400.0
+        if not days:
+            return 0
+        max_age, now = days * 86400.0, storage.now()
+
+        def run() -> tuple[list[str], list[str]]:
+            logs: list[str] = []
+            if handler is not None:  # in turn with what is logged meanwhile
+                handler.acquire()
+                try:
+                    handler.roll_if_old(now)
+                    logs += _prune_rotated(handler.baseFilename, handler.backupCount, max_age,
+                                           now)
+                finally:
+                    handler.release()
+            with _AUDIT_LOCK:
+                with _suppress(OSError):
+                    if _audit_too_old(self.audit_path, max_age, now) and \
+                            os.path.getsize(self.audit_path) > 0:
+                        _rotate_audit(self.audit_path, AUDIT_FILES_KEPT)
+                logs += _prune_rotated(self.audit_path, AUDIT_FILES_KEPT, max_age, now)
+            return logs, self.store.prune_backups(max_age, now)
+
+        logs, backups = await asyncio.to_thread(run)
+        if logs or backups:
+            self.log(f"retention: deleted {len(logs)} log file(s)"
+                     + (f" ({', '.join(logs)})" if logs else "")
+                     + f" and {len(backups)} configuration backup(s) older than {days} days")
+        return len(logs) + len(backups)
 
     async def _log_maintenance_loop(self) -> None:
         await self.load_sign_ins()
         while True:
             await self.run_log_maintenance()
+            try:
+                await self.run_retention()
+            except Exception as e:  # never let maintenance crash the loop
+                self.log(f"retention failed: {e}")
+            try:
+                await self.run_trace_maintenance()
+            except Exception as e:  # never let maintenance crash the loop
+                self.log(f"trace maintenance failed: {e}")
             try:
                 await self.expire_external_accounts()
             except Exception as e:  # never let maintenance crash the loop
@@ -744,12 +1300,42 @@ class AppState:
         with _suppress(OSError):
             os.remove(self.setup_code_path)
 
+    # ---------------- config.json changed outside ser2net ----------------
+    def _outside_edit_replaced(self, info: dict) -> None:
+        """ConfigStore.on_replaced (in the thread that saves): the audit record."""
+        self.audit("local", "config_outside_edit_replaced",
+                   f"kept as backups/{info['backup']}" if info["backup"] else "no backup")
+
+    async def check_config_file(self, now: float | None = None) -> None:
+        """Say once (all.log) when config.json was changed outside ser2net and is not in
+        use: it takes a reload, or the next save replaces it. Looked at every
+        CONFIG_CHECK_S."""
+        now = time.monotonic() if now is None else now
+        checked, noted = self._outside_edit or (0.0, -1.0)
+        if now - checked < CONFIG_CHECK_S:
+            return
+        changed = await asyncio.to_thread(self.store.changed_on_disk)
+        if changed is None or changed == noted:
+            self._outside_edit = (now, noted if changed is not None else -1.0)
+            return
+        self._outside_edit = (now, changed)
+        if changed == 0.0:
+            self.log("WARNING: config.json is gone from the data directory; ser2net goes on "
+                     "with the configuration in use and writes it again at the next change")
+            return
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(changed))
+        self.log(f"WARNING: config.json was changed outside ser2net ({when}) and is not in "
+                 "use: reload it (systemctl reload ser2net, kill -HUP, ser2net --reload or "
+                 "Settings → Configuration backups). A change saved here before that "
+                 "replaces it (the edited file is then kept in backups/)")
+
     # ---------------- `ser2net --set-password` / `--sign-out-all` while running ----------------
     async def _account_requests_loop(self) -> None:
         while True:
             await asyncio.sleep(accounts.POLL_S)
             try:
                 await self.handle_account_requests()
+                await self.check_config_file()
             except Exception as e:  # never let a bad request end the loop
                 self.log(f"command-line request failed: {e}")
 
@@ -762,6 +1348,9 @@ class AppState:
     async def _apply_account_request(self, request) -> tuple[bool, str]:
         if request is None:
             return False, "the request was unreadable or too old; run the command again"
+        if request.get("action") == "reload":  # `ser2net --reload`
+            from .reload import reload_config
+            return await reload_config(self, "command line", user=accounts.ACTOR)
         async with self.config_lock:
             try:
                 change = accounts.apply(self.config, request)
@@ -784,14 +1373,62 @@ class AppState:
         """Persist config atomically (validates first; raises ConfigError on bad config)."""
         self.store.save(self.config)
 
-    async def asave(self) -> None:
+    async def asave(self, *, backup: bool = True) -> bool:
         """Async wrapper around save(): the atomic write does blocking file I/O plus
         two fsyncs, so run it off the event loop to avoid stalling every bridge while
-        config is persisted. Raises ConfigError on invalid config, same as save()."""
-        await asyncio.to_thread(self.store.save, self.config)
+        config is persisted. Raises ConfigError on invalid config, same as save(), and
+        ConfigWriteError (a ConfigError) when config.json can't be written. Changes go
+        through edit_config, which undoes them when this fails. backup and the result:
+        ConfigStore.save."""
+        try:
+            return await asyncio.to_thread(self.store.save, self.config, backup=backup)
+        except OSError as e:
+            raise ConfigWriteError(_("Could not save config.json: {0}").format(
+                e.strerror or e)) from e
+
+    @contextlib.asynccontextmanager
+    async def edit_config(self, *, keep_on_failure: bool = False, backup: bool = True):
+        """Change the configuration and save it, all or nothing:
+
+            async with state.edit_config():
+                state.config.<...> = ...   # in place, under config_lock
+
+        The block changes self.config in place (the objects the cluster, the runners and
+        the requests hold stay the ones in use); raising ConfigError there refuses the
+        change. When the block ends, the change is saved — not when it changed nothing
+        config.json keeps — and the save runs to its end even when the request is
+        cancelled meanwhile. When the block raises or the save fails, every field is put
+        back as it was (the same objects, with their contents) and the error is raised:
+        ConfigError (a ConfigWriteError for a failed write) for the caller to show.
+        keep_on_failure: a change that is used even when it can't be saved (a sign-in's
+        account, a sign-out) stays in memory, until a restart; the error is raised too.
+        backup=False: only mappings start or stop (ConfigStore.save). Yields a ConfigEdit."""
+        async with self.config_lock:
+            snapshot = _snapshot(self.config)
+            before = self.config.to_dict()
+            edit = ConfigEdit()
+            try:
+                yield edit
+            except BaseException:
+                _restore(snapshot)
+                raise
+            if self.config.to_dict() == before:
+                return
+            save = asyncio.ensure_future(self.asave(backup=backup))
+            cancelled = await _to_its_end(save)
+            error = asyncio.CancelledError() if save.cancelled() else save.exception()
+            if error is not None:
+                if not keep_on_failure:
+                    _restore(snapshot)
+                raise error
+            edit.saved, edit.backed_up = True, save.result()
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def start_engine(self) -> None:
-        self.prune_mapping_logs()  # drop logs for mappings that no longer exist
+        # drop the logs and traces of mappings that no longer exist
+        self.prune_mapping_logs()
+        self.prune_orphan_traces()
         await self.ports.start()
         await self.supervisor.start_all(self.config)
         await self.cluster.start()  # no-op unless the LAN cluster is enabled + keyed

@@ -29,11 +29,21 @@ sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
 
+_GIVEN: set = set()  # the ports free_port() handed out in this process
+
+
 def free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
+    # never one handed out before in this process: a port a test only writes into a config
+    # (a mapping whose device is missing never binds it) is still free for the OS, which may
+    # give it again, and two mappings of the test then clash
+    for _ in range(100):
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        if port not in _GIVEN:
+            break
+    _GIVEN.add(port)
     return port
 
 
