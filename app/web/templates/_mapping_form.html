@@ -35,16 +35,16 @@
       <select name="{{ prefix }}stopbits">{% for st in stopbits %}<option value="{{ st }}" {% if st == s.stopbits %}selected{% endif %}>{{ st }}</option>{% endfor %}</select>
     </label>
     <label>{{ _("Flow control") }}
-      <select name="{{ prefix }}flowcontrol">{% for f in flowcontrols %}<option value="{{ f }}" {% if f == s.flowcontrol %}selected{% endif %}>{{ f }}</option>{% endfor %}</select>
+      <select name="{{ prefix }}flowcontrol">{% for f in flowcontrols %}<option value="{{ f }}" {% if f == s.flowcontrol %}selected{% endif %}>{{ {"none": _("None"), "rtscts": _("RTS/CTS (hardware)"), "xonxoff": _("XON/XOFF (software)"), "dsrdtr": _("DSR/DTR (hardware)")}.get(f, f) }}</option>{% endfor %}</select>
     </label>
     <label class="chk chk-pad"><input type="checkbox" name="{{ prefix }}exclusive" {% if s.exclusive %}checked{% endif %}> {{ _("Exclusive open") }}</label>
   </div>
   <div class="grid2">
     <label>{{ _("RTS on open") }}
-      <select name="{{ prefix }}rts_on_open">{% for x in line_states %}<option value="{{ x }}" {% if x == s.rts_on_open %}selected{% endif %}>{{ x }}</option>{% endfor %}</select>
+      <select name="{{ prefix }}rts_on_open">{% for x in line_states %}<option value="{{ x }}" {% if x == s.rts_on_open %}selected{% endif %}>{{ {"on": _("On"), "off": _("Off"), "keep": _("Leave as is")}.get(x, x) }}</option>{% endfor %}</select>
     </label>
     <label>{{ _("DTR on open") }}
-      <select name="{{ prefix }}dtr_on_open">{% for x in line_states %}<option value="{{ x }}" {% if x == s.dtr_on_open %}selected{% endif %}>{{ x }}</option>{% endfor %}</select>
+      <select name="{{ prefix }}dtr_on_open">{% for x in line_states %}<option value="{{ x }}" {% if x == s.dtr_on_open %}selected{% endif %}>{{ {"on": _("On"), "off": _("Off"), "keep": _("Leave as is")}.get(x, x) }}</option>{% endfor %}</select>
     </label>
   </div>
   <details class="rs485"{% if s.advanced.rs485_enabled %} open{% endif %}>

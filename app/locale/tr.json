@@ -953,5 +953,13 @@
   "the server did not accept the user name or password (SMTP {0})": "sunucu kullanıcı adını ya da parolayı kabul etmedi (SMTP {0})",
   "— they have letters outside ASCII, which some servers don't take": "— ASCII dışı harfler içeriyorlar; bazı sunucular bunları kabul etmiyor",
   "the server offers no sign-in (SMTP AUTH): leave the user name empty": "sunucu oturum açma (SMTP AUTH) sunmuyor: kullanıcı adını boş bırak",
-  "the server does not offer STARTTLS: choose another security setting": "sunucu STARTTLS sunmuyor: başka bir güvenlik ayarı seç"
+  "the server does not offer STARTTLS: choose another security setting": "sunucu STARTTLS sunmuyor: başka bir güvenlik ayarı seç",
+  "everything": "her şey",
+  "manage mappings": "eşlemeleri yönetir",
+  "RTS/CTS (hardware)": "RTS/CTS (donanım)",
+  "XON/XOFF (software)": "XON/XOFF (yazılım)",
+  "DSR/DTR (hardware)": "DSR/DTR (donanım)",
+  "On": "Açık",
+  "Off": "Kapalı",
+  "Leave as is": "Olduğu gibi bırak"
 }

@@ -164,6 +164,21 @@ def test_form_errors(b, tr):
           "no Python or tuple text  OK")
 
 
+def test_option_labels(b, tr):
+    """Options that were shown as their raw ids: flow control, RTS / DTR on open, roles
+    (the role's name stays, as the REST API and the audit log write it; what it may do
+    is added in the page's language)."""
+    st, _, form = b.get("/api/mappings/form")
+    assert st == 200, st
+    for value, label in (("none", tr["None"]), ("rtscts", tr["RTS/CTS (hardware)"]),
+                         ("keep", tr["Leave as is"]), ("on", tr["On"]), ("off", tr["Off"])):
+        assert f'<option value="{value}" ' in form and f">{esc(label)}</option>" in form, (value, label)
+    st, _, page = b.get("/settings")
+    for role, what in (("admin", "everything"), ("operator", "manage mappings"), ("viewer", "read-only")):
+        assert f">{role} ({esc(tr[what])})</option>" in page, role
+    print("options: flow control, RTS/DTR and roles labelled in Turkish  OK")
+
+
 def test_pages():
     tr = json.load(open(CATALOG, encoding="utf-8"))
     users = [{"username": "admin", "password_hash": hash_password("i18n-pass-1"),
@@ -182,6 +197,7 @@ def test_pages():
         st, _, page = b.post("/api/mappings/save", {"name": "x", "kind": "net", "serial_port": ""}, htmx=True)
         assert st == 400 and esc(tr["Serial port is required."]) in page, page[page.find("banner"):][:200]
         test_form_errors(b, tr)
+        test_option_labels(b, tr)
         classic = (b"connection: &plc\n  accepter: tcp,127.0.0.1,4001\n"
                    b"  connector: serialdev,/dev/ttyUSB9,9600n81\n  options:\n    chardelay-scale: 20\n")
         st, _, page = b.post("/settings/config/import", {"step": "preview", "mode": "merge"},
