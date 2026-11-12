@@ -89,6 +89,14 @@ def test_context(pki):
         assert ctx.check_hostname and ctx.verify_mode == ssl.CERT_REQUIRED
     ctx = tls_context(settings(ca_file=pki.ca.path, tls_check_hostname=False))
     assert not ctx.check_hostname and ctx.verify_mode == ssl.CERT_REQUIRED
+    # a relative path names a file in the data directory, as a mapping's TLS files do
+    from app import config
+    config.set_data_dir(os.path.dirname(pki.ca.path))
+    try:
+        ctx = tls_context(settings(ca_file=os.path.basename(pki.ca.path)))
+        assert ctx.cert_store_stats()["x509"] == 1
+    finally:
+        config.set_data_dir(None)
     missing = os.path.join(pki.folder, "missing.pem")
     text = expect("ca_unreadable", ca_file=missing)
     assert text.startswith(f"the CA file {missing!r} can't be read: "), text
