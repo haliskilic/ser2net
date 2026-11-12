@@ -69,6 +69,11 @@ async def test_closeon():
     except asyncio.TimeoutError:
         pass
     assert b"BYE" in got, got
+    # the client sees the close as the runner closes it; the runner forgets it right after
+    for _ in range(100):
+        if (sup.status(m.id) or {})["client_count"] == 0:
+            break
+        await asyncio.sleep(0.05)
     assert (sup.status(m.id) or {})["client_count"] == 0, "client should be kicked by closeon"
     print("closeon: clients closed when device emits the string  OK")
     w.close(); dev.close(); await sup.stop_all(); p.terminate(); await p.wait()
