@@ -96,7 +96,7 @@ async def _disk_watch():
     """Below the floor: one warning and one disk_low; just above it: still low; with 10%
     to spare: room again; low again: another one."""
     free = [10 * GiB]
-    fake = lambda _p: Usage(32 * GiB, 32 * GiB - free[0], free[0])  # noqa: E731
+    fake = lambda _p: Usage(32 * GiB, 32 * GiB - free[0], free[0])
 
     class State:
         data_dir = tempfile.gettempdir()
