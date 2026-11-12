@@ -52,6 +52,10 @@ machine whose firewall matters. The standalone executable checks need a build
 systemd units as the README says and runs them on the runner's systemd: it adds a `ser2net`
 user, `/opt/ser2net` and the service, so run it only on a throwaway VM. A change to a unit in
 `systemd/` goes into every unit there (`tests/test_systemd_units.py` checks them all).
+`systemd/ser2net-install.sh` is tested staged under a scratch folder (`--root`,
+`tests/test_install_script.py`) and for real by `tests/install_smoke.sh <binary>` (CI job
+`install script (binary)`), which installs the binary system-wide and remounts `/tmp`: a
+throwaway VM only, too.
 
 A test that starts a server uses `tests/_server.py` (`Server`, or `server_log` for the
 output: a file, never an unread pipe) and listens on `free_port()` / `free_udp_port()` or
@@ -196,6 +200,10 @@ ya da sanal makinede çalıştırın. `tests/systemd_smoke.sh` (CI'daki `systemd
 systemd'sinde çalıştırır: bir `ser2net` kullanıcısı, `/opt/ser2net` ve servisi ekler; bu
 yüzden yalnızca silinebilir bir sanal makinede çalıştırın. `systemd/` altındaki bir unit'te
 yapılan değişiklik oradaki her unit'e uygulanır (`tests/test_systemd_units.py` hepsini denetler).
+`systemd/ser2net-install.sh` geçici bir klasör altında hazırlanarak (`--root`,
+`tests/test_install_script.py`) ve gerçekten `tests/install_smoke.sh <binary>` ile (CI'daki
+`install script (binary)` işi) test edilir; o, binary'yi sisteme kurar ve `/tmp`'yi yeniden
+bağlar: onu da yalnızca silinebilir bir sanal makinede çalıştırın.
 
 Sunucu başlatan bir test `tests/_server.py`'yi kullanır (`Server` ya da çıktı için
 `server_log`: okunmayan bir pipe değil, bir dosya) ve sabit bir portu değil,
