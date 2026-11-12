@@ -883,5 +883,7 @@
   "for instances that share a host name: notifications, the browser tab, the top bar and the cluster’s fleet view show it · blank: the host name, %(host)s": "aynı host adını paylaşan kurulumlar için: bildirimler, tarayıcı sekmesi, üst bar ve cluster filo görünümü bu adı gösterir · boş: host adı, %(host)s",
   "Save name": "Adı kaydet",
   "Instance name saved.": "Kurulum adı kaydedildi.",
-  "Instance name": "Kurulum adı"
+  "Instance name": "Kurulum adı",
+  "“%(name)s” is saved, but it didn’t start: %(error)s": "“%(name)s” kaydedildi ama başlamadı: %(error)s",
+  "Another program — another ser2net instance? — listens on that port: give the mapping a port of its own.": "O portu başka bir program — başka bir ser2net kurulumu mu? — dinliyor: eşlemeye kendine ait bir port ver."
 }
