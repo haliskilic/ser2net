@@ -3,7 +3,7 @@
 Made in-process with the `cryptography` package — bundled in the standalone
 executables — so no external `openssl` program is needed (Windows has none, and
 minimal Linux installs often lack it). A source install without cryptography
-falls back to the openssl command if one is on PATH.
+falls back to the openssl command if one is on PATH (by full path: find_openssl).
 
 Its dates come from the system clock. The certificate is valid from a day before now
 (clients whose clock is a little behind this host's accept it at once) for DAYS days in
@@ -39,17 +39,37 @@ def generate(cert_path: str, key_path: str, common_name: str = "ser2net", days: 
         return _with_cryptography(cert_path, key_path, common_name, days)
     except ImportError:
         pass
+    missing = CertError(_("this needs the Python package cryptography (pip install "
+                          "cryptography) or the openssl program"))
+    openssl = find_openssl()
+    if openssl is None:
+        raise missing
     try:
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                         "-keyout", key_path, "-out", cert_path, "-days", str(days),
                         "-subj", f"/CN={common_name}"],
                        check=True, capture_output=True, timeout=30)
     except FileNotFoundError:
-        raise CertError(_("this needs the Python package cryptography (pip install "
-                          "cryptography) or the openssl program")) from None
+        raise missing from None
     except (subprocess.SubprocessError, OSError) as e:
         raise CertError(f"openssl failed: {e}") from e
     return "openssl"
+
+
+def find_openssl() -> str | None:
+    """The openssl program by full path, looked up in the absolute PATH entries only.
+    Windows searches an unqualified program name in the current directory (and the
+    program's own folder) before PATH, so an openssl.exe planted in the working
+    directory would otherwise run; a relative PATH entry does the same anywhere."""
+    name = "openssl.exe" if os.name == "nt" else "openssl"
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        entry = entry.strip().strip('"')
+        if not entry or not os.path.isabs(entry):
+            continue
+        path = os.path.join(entry, name)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
 
 
 def _with_cryptography(cert_path: str, key_path: str, common_name: str, days: int) -> str:

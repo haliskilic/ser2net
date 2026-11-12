@@ -678,8 +678,10 @@ class ClusterDiscovery:
             return
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        with contextlib.suppress(AttributeError, OSError):
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        reuse_port = getattr(socket, "SO_REUSEPORT", None)  # not on Windows
+        if reuse_port is not None:
+            with contextlib.suppress(OSError):
+                sock.setsockopt(socket.SOL_SOCKET, reuse_port, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         try:
             sock.bind(("", port))
@@ -1073,7 +1075,8 @@ class ClusterDiscovery:
                 "sig": request_mac(how["key"], method, target, body, me, how["to"], ts, nonce)})
         if body is not None:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
-        req = urllib.request.Request(url, data=body, method=method, headers=headers)
+        req = urllib.request.Request(url, data=body, method=method,  # noqa: S310 - peer_url(): http(s)
+                                     headers=headers)
         try:
             with self._opener.open(req, timeout=timeout) as r:
                 status, reply = r.status, r.headers.get(AUTH_HEADER)

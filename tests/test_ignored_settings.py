@@ -28,6 +28,7 @@ MQTT = {"enabled": True, "host": "broker", "base_topic": "plant"}
 
 
 def mapping(**over):
+    # fixed port: built, never started (the UDP runner below gets its own free port)
     d = {"id": "aaaaaaaaaaa1", "name": "m", "serial": {"port": "/dev/ser2net-test-ign"},
          "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4001}}
     d.update(over)

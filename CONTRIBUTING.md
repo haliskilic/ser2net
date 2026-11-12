@@ -23,18 +23,45 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 | What | Command |
 |---|---|
 | Lint | `ruff check .` |
-| Types | `mypy` (settings in `mypy.ini`) |
+| Types | `pip install mypy types-pyserial -r requirements-optional.txt`, then `mypy` and `mypy --platform win32` (settings in `mypy.ini`) |
 | Tests (any OS) | `python tests/run_all.py -v` |
 | + serial data path (Linux, needs `socat`) | `python tests/run_all.py --socat -v` |
-| Coverage | `pip install coverage && python tests/coverage_run.py && coverage report` |
+| Coverage (CI fails below the floor in `ci.yml`, job `coverage`) | `pip install coverage && python tests/coverage_run.py && coverage report` |
 | Browser layout | `pip install playwright && python -m playwright install chromium`, then `SER2NET_UI_TESTS=1 python tests/test_ui_layout.py` |
-| Offline wheels | `python tests/test_vendor_wheels.py` |
+| Offline wheels | `python tests/test_vendor_wheels.py`; against PyPI (network): `python tools/refresh_wheels.py --verify` |
+| Offline first start (a fresh checkout without `lib/`; CI: Linux arm64, macOS, armv7 under QEMU) | `tests/offline_first_start.sh python3` |
 | Known vulnerabilities | `pip install pip-audit && pip-audit -r requirements.txt` |
+| Workflow lint | `pip install zizmor && zizmor --offline .` (settings in `.github/zizmor.yml`) |
+
+The `ci-ok` job passes only when every other CI job passed (the not-required newest-Python
+leg aside); it is the check a merge waits for, so a new job in `ci.yml` goes into its
+`needs` (`tests/test_ci_gate.py` checks that). Between pull requests,
+`.github/workflows/scheduled.yml` re-runs the dependency audit daily, and weekly the Docker
+image build and a soak of the serial data path (`tests/stress_24.py`: 24 bridges, every
+device unplugged and plugged back 20 times, open files and memory checked; the CI test legs
+run it small), and `.github/workflows/image-refresh.yml` scans the published image weekly and
+rebuilds the latest release on a moved base image (`docs/DOCKER.md`). Every action in the workflows is pinned to a full commit SHA with its version
+in a comment (`uses: actions/checkout@<sha>  # v7.0.1`); Dependabot updates both, and zizmor
+and `tests/test_release_pipeline.py` fail on a tag reference.
 
 `tests/test_dead_peer.py` blackholes a loopback flow with iptables; run it with
 `SER2NET_BLACKHOLE_TESTS=1` only in a throwaway network namespace or VM, never on a
 machine whose firewall matters. The standalone executable checks need a build
 (`SER2NET_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`).
+`tests/systemd_smoke.sh` (CI jobs `systemd unit` and `systemd unit (binary)`) installs the
+systemd units as the README says and runs them on the runner's systemd: it adds a `ser2net`
+user, `/opt/ser2net` and the service, so run it only on a throwaway VM. A change to a unit in
+`systemd/` goes into every unit there (`tests/test_systemd_units.py` checks them all).
+`systemd/ser2net-install.sh` is tested staged under a scratch folder (`--root`,
+`tests/test_install_script.py`) and for real by `tests/install_smoke.sh <binary>` (CI job
+`install script (binary)`), which installs the binary system-wide and remounts `/tmp`: a
+throwaway VM only, too.
+
+A test that starts a server uses `tests/_server.py` (`Server`, or `server_log` for the
+output: a file, never an unread pipe) and listens on `free_port()` / `free_udp_port()` or
+port 0, never on a fixed port: in the ephemeral range an earlier test's closed connection
+can still hold it. `tests/test_harness.py` fails on a fixed listening port unless a
+`# fixed port: <why>` comment explains it, and on a test file `tests/run_all.py` doesn't list.
 
 ### Rules that keep upgrades painless
 - **Old `config.json` files must keep working.** Every new setting has a default; never
@@ -71,8 +98,34 @@ placeholder or an HTML tag, and on a "(s)" count. The languages are listed once,
 Runtime pins live in `requirements.txt` (with the Python 3.10 line kept by markers),
 the optional feature packages bundled into the binaries and the Docker image in
 `requirements-optional.txt`. After changing `requirements.txt`, run
-`python tools/refresh_wheels.py` so `vendor/wheels/` (the offline install set) matches —
-this also applies to Dependabot's pull requests.
+`python tools/refresh_wheels.py` so `vendor/wheels/` (the offline install set) matches.
+On Dependabot's pull requests `.github/workflows/refresh-pins.yml` does that: it pushes the
+refreshed wheels onto the branch and starts CI on the new commit (on another branch, run it
+by hand: Actions → Refresh pinned files → Run workflow). Until the wheels match, only the job
+"offline wheels match requirements.txt" fails — the test legs leave that check to it — and
+it attaches the refreshed files as a patch (artifact `refreshed-pins`). The Docker image and the standalone
+executables install from hash-locked files instead (`pip install --require-hashes`):
+`requirements-lock.txt` (the same pins for Python 3.12, with the sha256 of each release's
+files) and `requirements-build.txt` (PyInstaller and its dependencies); Dependabot updates
+them with `requirements.txt`, and `python tools/refresh_locks.py` regenerates them after a
+hand-made change (`tests/test_build_lock.py` checks that they match). The browser libraries
+in `app/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; change a
+version there and run `python tools/refresh_assets.py`, which copies the files out of the npm
+release and records their sha256 (Dependabot proposes minor updates, `refresh-pins.yml`
+copies them in; test the console by hand before a major one). GitHub's dependency graph (and so the
+Dependabot alerts) reads `requirements.txt` for its newest Python only, without the pins
+only Python 3.10 installs; `.github/workflows/dependency-graph.yml`
+(`tools/dependency_snapshot.py`) submits the whole file from `main` instead, so those get
+alerts too.
+
+### Python versions
+CI tests Python 3.10–3.14 on Linux and Windows; the newest release (3.15) runs too, without
+blocking a merge, until its wheels have settled. Python 3.10 is past its end of life but
+stays supported while distributions people run ser2net on ship it (Ubuntu 22.04): it keeps
+the last dependency releases that support it (the `python_version < "3.11"` pins). It is
+dropped once one of those frozen pins has a known vulnerability that no release supporting
+3.10 fixes (the py3.10 dependency audit reports it), announced in the release notes one
+minor release ahead.
 
 ### Third-party code
 Runtime dependencies are pinned exactly. When one has a bug its maintainers have not
@@ -103,8 +156,35 @@ the CI legs that install `requirements-optional.txt`.
 Short imperative subjects with a prefix: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
 `deps:`, `refactor:` (optionally a scope, e.g. `fix(modbus): …`). Keep a pull request to
 one topic and describe in it what changes for users. Releases are cut by the
-maintainer: version in `app/__init__.py`, `CHANGELOG.md`, an annotated `vX.Y.Z` tag;
-`.github/workflows/release.yml` builds, tests and publishes the executables.
+maintainer (below).
+
+### Releases
+The version goes into `app/__init__.py` and a dated `## [X.Y.Z] — YYYY-MM-DD` section into
+`CHANGELOG.md`; once that is merged, an annotated `vX.Y.Z` tag (`vX.Y.Z-rc.N` for a
+pre-release) on the merge commit starts `.github/workflows/release.yml`:
+1. the tag is checked: its form, equal to `"v"` + `__version__`, the CHANGELOG section
+   (`python tools/release_guard.py tag vX.Y.Z` checks these three locally), and the commit
+   is on `main`;
+2. the whole CI runs on the tagged commit (`ci.yml`, the checks `ci-ok` gates merges on);
+   its standalone build is what gets released;
+3. the image is built for amd64, arm64 and arm/v7, pushed to GHCR by digest only (no tag)
+   and that digest is smoke-tested on each (amd64 and arm64 natively, arm/v7 under QEMU);
+4. only then are the files attested and the GitHub release created with them (by `gh`; the
+   jobs that can write releases or attestations run GitHub's own actions only), and the
+   tested image gets its tags `X.Y.Z`, `X.Y` and `latest`. A pre-release gets only its own
+   image tag, is marked as a pre-release and never becomes "Latest".
+
+One release runs at a time. A job that failed for a passing reason is re-run (*Re-run
+failed jobs* keeps the built files and the pushed image digest); a release that needs a
+code change gets a new patch version instead of a moved tag. **Actions → Release → Run workflow** is a dry run of the same
+pipeline on any branch: it attests, releases and tags nothing (it leaves one untagged image
+version on GHCR).
+
+After a minor release (`vX.Y.0`) is tagged, freeze the `config.json` it writes: add the
+settings it introduced to `FEATURES` in `tests/make_config_fixture.py`, run
+`python tests/make_config_fixture.py vX.Y.0` and commit `tests/fixtures/config-X.Y.0.json`
+with an upgrade test like `tests/test_upgrade_from_2_8.py` (its data folder layout too, and
+a step in `tests/docker_smoke.sh`), before the next release changes the config model.
 
 ## Türkçe
 
@@ -126,10 +206,41 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 
 ### Kontroller
 Yukarıdaki tablodaki komutların hepsi her pull request'te CI'da çalışır: `ruff check .`,
-`mypy`, `python tests/run_all.py -v` (Linux'ta `socat` ile `--socat`), coverage, tarayıcı
-yerleşim testi, çevrimdışı wheel kontrolü ve `pip-audit`. `tests/test_dead_peer.py`
-iptables ile loopback trafiği kestiği için `SER2NET_BLACKHOLE_TESTS=1` ile yalnızca
-silinebilir bir ağ ad alanında (network namespace) ya da sanal makinede çalıştırın.
+`mypy` (ayrıca `--platform win32` ile), `python tests/run_all.py -v` (Linux'ta `socat` ile
+`--socat`), coverage, tarayıcı yerleşim testi, çevrimdışı wheel kontrolü, `pip-audit` ve
+workflow denetimi (`zizmor`). `tests/offline_first_start.sh python3`, `lib/`'i olmayan temiz
+bir checkout'ta çevrimdışı ilk açılışı dener (CI'da Linux arm64, macOS ve QEMU altında armv7).
+
+`ci-ok` işi ancak diğer bütün CI işleri geçince geçer (zorunlu olmayan en yeni Python leg'i
+hariç); birleştirme onu bekler, bu yüzden `ci.yml`'ye eklenen her iş onun `needs` listesine
+de girer (`tests/test_ci_gate.py` bunu denetler). Pull request'ler arasında
+`.github/workflows/scheduled.yml` bağımlılık denetimini her gün; Docker imajını ve seri veri
+yolunun uzun yük testini (`tests/stress_24.py`: 24 köprü, her cihaz 20 kez çıkarılıp geri
+takılır, açık dosyalar ve bellek denetlenir; CI test leg'leri küçük boyutta çalıştırır) her
+hafta yeniden çalıştırır; `.github/workflows/image-refresh.yml` yayımlanan imajı her hafta tarar ve
+taban imaj değiştiyse son sürümü yeniden derler (`docs/DOCKER.md`). Workflow'lardaki her action, sürümü bir yorumda olacak şekilde tam bir
+commit SHA'sına sabitlenir (`uses: actions/checkout@<sha>  # v7.0.1`); ikisini de
+Dependabot günceller, tag ile verilen bir referansta zizmor ve
+`tests/test_release_pipeline.py` başarısız olur.
+
+`tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
+`SER2NET_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
+ya da sanal makinede çalıştırın. `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
+`systemd unit (binary)` işleri) systemd unit'lerini README'deki gibi kurar ve runner'ın
+systemd'sinde çalıştırır: bir `ser2net` kullanıcısı, `/opt/ser2net` ve servisi ekler; bu
+yüzden yalnızca silinebilir bir sanal makinede çalıştırın. `systemd/` altındaki bir unit'te
+yapılan değişiklik oradaki her unit'e uygulanır (`tests/test_systemd_units.py` hepsini denetler).
+`systemd/ser2net-install.sh` geçici bir klasör altında hazırlanarak (`--root`,
+`tests/test_install_script.py`) ve gerçekten `tests/install_smoke.sh <binary>` ile (CI'daki
+`install script (binary)` işi) test edilir; o, binary'yi sisteme kurar ve `/tmp`'yi yeniden
+bağlar: onu da yalnızca silinebilir bir sanal makinede çalıştırın.
+
+Sunucu başlatan bir test `tests/_server.py`'yi kullanır (`Server` ya da çıktı için
+`server_log`: okunmayan bir pipe değil, bir dosya) ve sabit bir portu değil,
+`free_port()` / `free_udp_port()` ya da 0 portunu dinler: geçici port aralığındaki bir port,
+önceki bir testin kapanmış bağlantısında hâlâ tutuluyor olabilir. `tests/test_harness.py`,
+`# fixed port: <neden>` yorumuyla açıklanmayan sabit bir dinleme portunda ve
+`tests/run_all.py`'nin listelemediği bir test dosyasında başarısız olur.
 
 ### Yükseltmeleri sorunsuz tutan kurallar
 - **Eski `config.json` dosyaları çalışmaya devam etmeli.** Her yeni ayarın varsayılanı
@@ -160,8 +271,33 @@ test başarısız olur.
 Çalışma zamanı sürümleri `requirements.txt`'te (Python 3.10 hattı işaretlerle korunur),
 binary'lere ve Docker imajına giren isteğe bağlı paketler `requirements-optional.txt`'te.
 `requirements.txt`'i değiştirdikten sonra `python tools/refresh_wheels.py` çalıştırın;
-`vendor/wheels/` (çevrimdışı kurulum seti) eşleşsin. Bu Dependabot'un PR'ları için de
-geçerli.
+`vendor/wheels/` (çevrimdışı kurulum seti) eşleşsin. Dependabot'un PR'larında bunu
+`.github/workflows/refresh-pins.yml` yapar: yenilenen wheel'leri dala push eder ve yeni
+commit'te CI'ı başlatır (başka bir dalda elle çalıştırın: Actions → Refresh pinned files →
+Run workflow). Wheel'ler eşleşene kadar yalnızca "offline wheels match requirements.txt"
+işi başarısız olur (test işleri bu kontrolü ona bırakır) ve yenilenmiş dosyaları bir patch
+olarak ekler (`refreshed-pins` artifact'i). Docker imajı ve standalone binary'ler bunun yerine hash kilitli dosyalardan
+kurulur (`pip install --require-hashes`): `requirements-lock.txt` (Python 3.12 için aynı
+pin'ler, her sürümün dosyalarının sha256'larıyla) ve `requirements-build.txt` (PyInstaller ve
+bağımlılıkları). Dependabot bunları `requirements.txt` ile birlikte günceller; elle yapılan bir
+değişiklikten sonra `python tools/refresh_locks.py` yeniden üretir
+(`tests/test_build_lock.py` eşleştiklerini denetler). `app/web/static/` içindeki tarayıcı
+kütüphaneleri (htmx, xterm.js) `vendor/npm/package.json`'da sabitlenir; oradaki sürümü
+değiştirip `python tools/refresh_assets.py` çalıştırın: dosyaları npm sürümünden kopyalar ve
+sha256'larını kaydeder (Dependabot minor güncellemeleri önerir, `refresh-pins.yml` onları
+kopyalar; major bir güncellemeden önce konsolu elle deneyin). GitHub'ın bağımlılık grafiği (dolayısıyla Dependabot uyarıları) `requirements.txt`'i
+yalnızca en yeni Python için okur, yalnızca Python 3.10'un kurduğu pin'ler eksik kalır;
+`.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`) bunun yerine dosyanın
+tamamını `main`'den grafiğe gönderir, böylece onlar için de uyarı çıkar.
+
+### Python sürümleri
+CI, Python 3.10–3.14'ü Linux ve Windows'ta test eder; en yeni sürüm (3.15) de çalışır, ama
+wheel'ları oturana kadar birleştirmeyi engellemez. Python 3.10'un ömrü doldu, ama ser2net'in
+kullanıldığı dağıtımlar onu getirdiği sürece (Ubuntu 22.04) desteklenir: onu destekleyen
+son bağımlılık sürümlerinde kalır (`python_version < "3.11"` pin'leri). Bu donmuş
+pin'lerden birinde, 3.10'u destekleyen hiçbir sürümün düzeltmediği bilinen bir güvenlik
+açığı çıkınca (py3.10 bağımlılık denetimi bunu bildirir) bırakılır; bu, bir minor sürüm
+önceden sürüm notlarında duyurulur.
 
 ### Üçüncü taraf kodu
 Çalışma zamanı bağımlılıkları tam sürümle sabitlenir. Birindeki bir hata yayımlanmış bir
@@ -191,4 +327,36 @@ açar (diğerleri gruplu gelir): değişiklik günlüklerini okuyun; ldap3 / pya
 ### Commit ve pull request
 Kısa, emir kipinde ve önekli başlıklar: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
 `deps:`, `refactor:`. Bir pull request tek konu içersin ve kullanıcılar için neyin
-değiştiğini anlatsın. Sürümleri proje sahibi çıkarır.
+değiştiğini anlatsın. Sürümleri proje sahibi çıkarır (aşağıda).
+
+### Sürümler
+Sürüm `app/__init__.py`'ye, tarihli bir `## [X.Y.Z] — YYYY-MM-DD` bölümü `CHANGELOG.md`'ye
+yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.Z` tag'i
+(ön sürüm için `vX.Y.Z-rc.N`) `.github/workflows/release.yml`'yi başlatır:
+1. tag denetlenir: biçimi, `"v"` + `__version__`'a eşitliği, CHANGELOG bölümü (bu
+   üçünü yerelde `python tools/release_guard.py tag vX.Y.Z` denetler) ve commit'in
+   `main` üzerinde olması;
+2. tag'lenen commit'te CI'ın tamamı çalışır (`ci.yml`, birleştirmede `ci-ok`'un beklediği
+   kontroller); yayımlanan, onun standalone derlemesidir;
+3. imaj amd64, arm64 ve arm/v7 için derlenir, GHCR'a yalnızca digest ile (tag'siz)
+   gönderilir ve bu digest her mimaride smoke test'ten geçer (amd64 ve arm64 emülasyonsuz,
+   arm/v7 QEMU altında);
+4. ancak bundan sonra dosyalar attest edilir ve GitHub release'i onlarla oluşturulur
+   (`gh` ile; release ya da attestation yazabilen işlerde yalnızca GitHub'ın kendi
+   action'ları çalışır), test edilen imaj da `X.Y.Z`, `X.Y` ve `latest` tag'lerini alır.
+   Ön sürüm yalnızca kendi imaj tag'ini alır, ön sürüm olarak işaretlenir ve hiçbir zaman
+   "Latest" olmaz.
+
+Aynı anda tek release çalışır. Geçici bir nedenle başarısız olan iş yeniden çalıştırılır
+(*Re-run failed jobs* derlenmiş dosyaları ve gönderilmiş imaj digest'ini korur); kod
+değişikliği gereken bir release tag taşınarak değil, yeni bir yama sürümüyle düzeltilir.
+**Actions → Release → Run workflow** aynı akışı herhangi bir dalda
+deneme olarak çalıştırır: hiçbir şeyi attest etmez, yayımlamaz ya da tag'lemez (GHCR'da
+tag'siz bir imaj sürümü bırakır).
+
+Bir ara sürüm (`vX.Y.0`) tag'lendikten sonra yazdığı `config.json` dondurulur: getirdiği
+ayarlar `tests/make_config_fixture.py` içindeki `FEATURES`'a eklenir,
+`python tests/make_config_fixture.py vX.Y.0` çalıştırılır ve
+`tests/fixtures/config-X.Y.0.json`, `tests/test_upgrade_from_2_8.py` gibi bir yükseltme
+testiyle (data klasörü düzeni ve `tests/docker_smoke.sh`'ta bir adımla birlikte), bir
+sonraki sürüm config modelini değiştirmeden önce commit'lenir.

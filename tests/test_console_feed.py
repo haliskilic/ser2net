@@ -43,19 +43,19 @@ import types
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from _server import Browser, Server, free_port  # noqa: E402
+from _server import Browser, Server, free_port
 
-from app.config import (  # noqa: E402
+from app.config import (
     CONSOLE_ENCODINGS, AppConfig, ConfigError, MappingConfig, console_charset, console_encoding,
 )
-from app.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner  # noqa: E402
-from app.engine.modbus_gateway import ModbusGatewayRunner  # noqa: E402
-from app.engine.supervisor import _Unbuildable  # noqa: E402
-from app.web import auth  # noqa: E402
-from app.web.routes import console  # noqa: E402
-from app.web.routes.common import Ctx  # noqa: E402
-from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields  # noqa: E402
-from app.web.routes.console import _Monitor, _TrafficMonitor  # noqa: E402
+from app.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner
+from app.engine.modbus_gateway import ModbusGatewayRunner
+from app.engine.supervisor import _Unbuildable
+from app.web import auth
+from app.web.routes import console
+from app.web.routes.common import Ctx
+from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields
+from app.web.routes.console import _Monitor, _TrafficMonitor
 
 
 def test_end_of_a_full_feed():

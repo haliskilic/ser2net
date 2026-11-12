@@ -577,7 +577,9 @@ class RunnerStatus:
     link_since: float = 0.0   # time.time() of the last change of `link`
     connect_failures: int = 0  # connect-out attempts that failed
     # why the serial port can't be opened, when that can be told (portdiag.Note: the group
-    # the device needs, the mapping that has it open, ...); last_error keeps the error itself
+    # the device needs, the mapping that has it open, ...), or, with state "error", why the
+    # system refused the listener's port and what to do (engine/bindhint.py); last_error
+    # keeps the error itself
     hint: Optional[portdiag.Note] = None
     # what to know about the serial port(s) open now (portdiag.Note): a setting a port did
     # not take at open (RTS / DTR, RS-485 mode); as_dict() has them (and hint) as text
@@ -873,7 +875,7 @@ class _ClientConn:
         m = self.runner.mapping
         runner = self.runner
         session = self._session
-        assert session is not None  # the pumps start after run() created it
+        assert session is not None  # noqa: S101 - the pumps start after run() created it
         while not self._closing:
             data = await self.reader.read(READ_CHUNK)
             if not data:
@@ -928,7 +930,7 @@ class _ClientConn:
 
     async def _pump_poll(self) -> None:
         session = self._session
-        assert session is not None
+        assert session is not None  # noqa: S101 - as above
         interval = session.poll_interval or 1.0
         while not self._closing:
             await asyncio.sleep(interval)

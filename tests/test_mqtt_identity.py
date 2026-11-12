@@ -46,6 +46,7 @@ TOKEN = "s2n_mqtt-identity-token"
 KEY = "mqtt-identity-cluster-key"
 
 
+# fixed port: the default for configs that are only checked; boot_config() passes free ports
 def gw(name, base="plant/line3", points=None, enabled=True, port=5020, mid=None, **mqtt):
     """A Modbus gateway publishing its points over MQTT."""
     d = {"name": name, "enabled": enabled, "serial": {"port": f"/dev/ser2net-test-{name}"},
@@ -206,6 +207,7 @@ def test_serial_writes_topic():
 
 
 def stored_config():
+    # fixed port: checked in-process only (test_stored_clashes), never started
     return [gw("A", mid="aaaaaaaaaaa1", port=5020),
             gw("B", "plant/line3/", mid="aaaaaaaaaaa2", port=5021),
             gw("C", "plant/line3", [TEMP], mid="aaaaaaaaaaa3", port=5022),

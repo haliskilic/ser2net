@@ -1,0 +1,76 @@
+"""CI's merge gate covers every job, and the required check names stay.
+
+The ci-ok job in .github/workflows/ci.yml is the one check branch protection needs: it
+passes only when every job it needs passed. A job added to ci.yml but not to ci-ok's
+needs would not gate a merge, so this test fails until it is listed there (test-next,
+the newest Python, is the one job left out on purpose; it must be continue-on-error).
+Until branch protection requires ci-ok instead, it also asks for the 14 check names it
+requires today: a renamed or removed one would block every pull request. And every push
+to main gets a run of its own (no shared concurrency group that drops waiting runs).
+
+Run: python3 tests/test_ci_gate.py   (stdlib only)
+"""
+import re
+
+from _workflows import jobs as _jobs
+from _workflows import read as _read
+
+NOT_GATING = {"test-next"}  # may fail (newest Python); not a merge condition
+
+
+def test_ci_ok_needs_every_job():
+    jobs = _jobs(_read("ci.yml"))
+    assert "ci-ok" in jobs, "ci.yml has no ci-ok job"
+    gate = jobs["ci-ok"]
+    m = re.search(r"(?m)^    needs: \[([^\]]*)\]", gate)
+    assert m, "ci-ok must list its needs as [a, b, ...]"
+    needs = {n.strip() for n in m.group(1).split(",") if n.strip()}
+    want = set(jobs) - {"ci-ok"} - NOT_GATING
+    assert needs == want, (f"ci-ok's needs must be every job of ci.yml: missing "
+                           f"{sorted(want - needs)}, unknown {sorted(needs - want)}")
+    assert re.search(r"(?m)^    if: always\(\)$", gate), "ci-ok must run when a job failed"
+    assert "all(.[]; .result == \"success\")" in gate, "ci-ok must fail on any other result"
+    for job in NOT_GATING:
+        assert re.search(r"(?m)^    continue-on-error: true$", jobs[job]), job
+    print(f"ci-ok needs every CI job ({len(needs)}), fails on any other result  OK")
+
+
+def test_required_check_names_kept():
+    ci = _read("ci.yml")
+    jobs = _jobs(ci)
+    for job, name in (("lint", "ruff"), ("typecheck", "mypy"),
+                      ("vendor", "offline wheels match requirements.txt"),
+                      ("ui", "ui layout (Chromium)")):
+        assert f"\n    name: {name}\n" in "\n" + jobs[job], (job, name)
+    test = jobs["test"]
+    assert "\n    name: test ${{ matrix.os }} py${{ matrix.python-version }}\n" in "\n" + test
+    assert re.search(r"os: \[ubuntu-latest, windows-latest\]", test)
+    versions = re.search(r"python-version: \[([^\]]*)\]", test).group(1)
+    for v in ("3.10", "3.11", "3.12", "3.13"):
+        assert f'"{v}"' in versions, v
+    # "standalone / build linux (glibc 2.28 baseline)" and "standalone / build windows"
+    assert "uses: ./.github/workflows/standalone.yml" in jobs["standalone"]
+    standalone = _read("standalone.yml")
+    assert "'build linux (glibc 2.28 baseline)'" in standalone
+    assert "\n    name: build windows\n" in standalone
+    print("the 14 check names main requires today still exist  OK")
+
+
+def test_every_main_push_gets_a_run():
+    # GitHub keeps one waiting run per concurrency group and cancels the one before it, so
+    # a group shared by all main pushes (ci-refs/heads/main) skipped commits of a quick
+    # series of merges. Only a pull request's runs share a group (and cancel each other).
+    ci = _read("ci.yml")
+    block = ci.split("\nconcurrency:\n", 1)[1].split("\n\n", 1)[0]
+    group = re.search(r"(?m)^  group: (.*)$", block).group(1)
+    assert group == "ci-${{ github.event.pull_request.number || github.run_id }}", group
+    assert re.search(r"(?m)^  cancel-in-progress: \$\{\{ github.event_name == "
+                     r"'pull_request' \}\}$", block), block
+    print("pull requests share a concurrency group; every other run has its own  OK")
+
+
+if __name__ == "__main__":
+    test_ci_ok_needs_every_job()
+    test_required_check_names_kept()
+    test_every_main_push_gets_a_run()
+    print("\nPASS: CI merge gate")

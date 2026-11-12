@@ -31,16 +31,16 @@ import types
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from _clock import WallClock                                     # noqa: E402
+from _clock import WallClock
 
-from app.config import AppConfig, ClusterSettings, ConfigStore   # noqa: E402
-from app.engine import access, bridge, cluster, serial_link      # noqa: E402
-from app.engine.cluster import (LEGACY_SEEN_S, NOTE_TTL, PEER_TTL,  # noqa: E402
+from app.config import AppConfig, ClusterSettings, ConfigStore
+from app.engine import access, bridge, cluster, serial_link
+from app.engine.cluster import (LEGACY_SEEN_S, NOTE_TTL, PEER_TTL,
                                 ClusterDiscovery, _sign, key_header)
-from app.state import AppState                                   # noqa: E402
-from app.web import auth, oidc_auth                              # noqa: E402
-from app.web.routes import cluster as cluster_routes             # noqa: E402
-from app.web.server import build_app                             # noqa: E402
+from app.state import AppState
+from app.web import auth, oidc_auth
+from app.web.routes import cluster as cluster_routes
+from app.web.server import build_app
 
 KEY = "clock-ages-key"
 DAY = 86400.0
@@ -79,7 +79,7 @@ def test_cluster_ages():
         me.check_request("GET", "/api/cluster/local", "", b"",
                          {"X-Cluster-Key": key_header(KEY)}, "10.0.0.8")   # a 2.8.0 node
         assert [p["id"] for p in me.peers()] == ["peer1111"], me.peers()
-        notes = lambda: (me.other_key_nodes(), [c["addr"] for c in me.copies()],  # noqa: E731
+        notes = lambda: (me.other_key_nodes(), [c["addr"] for c in me.copies()],
                          "10.0.0.8" in me.legacy_nodes())
         assert notes() == (["10.0.0.6"], ["10.0.0.7:8080"], True), notes()
 

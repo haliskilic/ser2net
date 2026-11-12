@@ -7,7 +7,6 @@ per client). Run: python3 tests/test_bridge_raw.py
 """
 import asyncio
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -15,25 +14,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
+from _server import free_port
+from _socat import pty_pair as start_socat
 
-PORT = 45011
-
-
-async def start_socat():
-    proc = await asyncio.create_subprocess_exec(
-        "socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
-    devs = []
-    # socat prints "PTY is /dev/pts/N" twice on stderr
-    while len(devs) < 2:
-        line = await proc.stderr.readline()
-        if not line:
-            raise RuntimeError("socat did not report PTYs")
-        m = re.search(rb"PTY is (\S+)", line)
-        if m:
-            devs.append(m.group(1).decode())
-    return proc, devs[0], devs[1]
+PORT = free_port()
 
 
 async def main():

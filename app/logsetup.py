@@ -85,7 +85,7 @@ class ConsoleQueueHandler(QueueHandler):
         if done is not None and not done.wait(self.wait):
             self.behind = True
 
-    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 (logging API)
+    def handleError(self, record: logging.LogRecord) -> None:  # logging API
         self._drop()
 
     def _drop(self) -> None:
@@ -211,7 +211,7 @@ class LibraryLogHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 (logging API)
+    def handleError(self, record: logging.LogRecord) -> None:  # logging API
         pass  # (stderr may be the console that blocks; the record is lost, nothing else)
 
     def _line(self, record: logging.LogRecord) -> Optional[str]:

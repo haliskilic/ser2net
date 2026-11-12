@@ -420,7 +420,7 @@ def routes(ctx: Ctx) -> list:
         state.name_limiter.record_failure(username)
         authed = None
         # local account: verify the scrypt hash off the event loop (it's slow on purpose)
-        if local:
+        if local and user is not None:
             if await work.run(auth.verify_password, password, user.password_hash):
                 authed = user
         # LDAP/AD: for unknown users (or LDAP shadow accounts) when LDAP is enabled
@@ -553,7 +553,8 @@ def routes(ctx: Ctx) -> list:
             state.log(f"first-run setup from {ip} ignored: the admin account exists already")
             return proxy.redirect(request, "/login")
         state.first_run_done()
-        user = state.config.get_user(username)
+        if (user := state.config.get_user(username)) is None:  # (created just above)
+            return proxy.redirect(request, "/login")
         state.log(f"first-run setup complete; admin user '{username}' created")
         ctx.audit(request, "first_run_setup", username, user=username)
         resp = proxy.redirect(request, "/")

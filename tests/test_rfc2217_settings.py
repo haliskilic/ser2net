@@ -56,11 +56,11 @@ def answer(code: int, value: bytes) -> bytes:
     return bytes([IAC, SB]) + body + bytes([IAC, SE])
 
 
-BAUD = lambda b: answer(101, struct.pack("!I", b))  # noqa: E731
-DATASIZE = lambda n: answer(102, bytes([n]))  # noqa: E731
-PARITY = lambda n: answer(103, bytes([n]))  # noqa: E731
-STOPSIZE = lambda n: answer(104, bytes([n]))  # noqa: E731
-CONTROL = lambda n: answer(105, bytes([n]))  # noqa: E731
+BAUD = lambda b: answer(101, struct.pack("!I", b))
+DATASIZE = lambda n: answer(102, bytes([n]))
+PARITY = lambda n: answer(103, bytes([n]))
+STOPSIZE = lambda n: answer(104, bytes([n]))
+CONTROL = lambda n: answer(105, bytes([n]))
 
 
 class FakeSerial:
@@ -314,7 +314,7 @@ def test_bridge_logs_refusals_once_a_minute():
 # ---- the serial port reopened under a connected client ----------------------------
 
 WILL_COM_PORT = bytes([IAC, 251, COM_PORT_OPTION])
-MODEMSTATE = lambda n: answer(107, bytes([n]))  # noqa: E731
+MODEMSTATE = lambda n: answer(107, bytes([n]))
 
 
 def test_session_follows_a_reopened_port():

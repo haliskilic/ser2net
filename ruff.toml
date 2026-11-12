@@ -1,16 +1,30 @@
 # ruff configuration for ser2net.
 # Focused on correctness over style: pyflakes (F), bugbear (B), async pitfalls
-# (ASYNC) and syntax errors (E9). Pure-style nits (line length, quotes, import
-# order) are intentionally not enforced.
+# (ASYNC), syntax errors (E9) and the bandit security checks (S). Pure-style nits
+# (line length, quotes, import order) are intentionally not enforced. RUF100 reports a
+# `# noqa` that suppresses nothing, so every suppression stays one that is needed.
 target-version = "py310"
 line-length = 100
 extend-exclude = ["vendor", "lib"]
 
 [lint]
-select = ["E9", "F", "B", "ASYNC"]
-# B008: Starlette/dataclass patterns use callables in defaults intentionally.
-ignore = ["B008"]
+select = ["E9", "F", "B", "ASYNC", "S", "RUF100"]
+ignore = [
+    # B008: Starlette/dataclass patterns use callables in defaults intentionally.
+    "B008",
+    # S104: "0.0.0.0" is a listen address users choose (and the code compares against it).
+    "S104",
+    # S110 / S112: try-except-pass/continue is used on purpose for best-effort cleanup and
+    # probing (closing a socket, reading an optional /sys file), where there is nothing to log.
+    "S110", "S112",
+    # S603: every subprocess call passes an argument list (no shell); S602/S604-S607 still
+    # catch shell=True and programs started by a bare name.
+    "S603",
+]
 
 [lint.per-file-ignores]
-# Test code legitimately opens files and sleeps inside async test helpers.
-"tests/**" = ["ASYNC", "B"]
+# Test code legitimately opens files and sleeps inside async test helpers; it also binds
+# 0.0.0.0, runs programs, uses fixed passwords and asserts by design (bandit S).
+"tests/**" = ["ASYNC", "B", "S"]
+# a developer script that drives the UI like a test
+"tools/_capture_screenshots.py" = ["S101"]

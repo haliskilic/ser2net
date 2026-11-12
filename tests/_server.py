@@ -33,9 +33,12 @@ _GIVEN: set = set()  # the ports free_port() handed out in this process
 
 
 def free_port() -> int:
-    # never one handed out before in this process: a port a test only writes into a config
-    # (a mapping whose device is missing never binds it) is still free for the OS, which may
-    # give it again, and two mappings of the test then clash
+    """A TCP port free on 127.0.0.1 right now, for a test's listener (never a fixed one: a
+    port in the ephemeral range can be held by an earlier test's closed connection, in
+    TIME_WAIT, and then refuses the bind). Never one handed out before in this process: a
+    port a test only writes into a config (a mapping whose device is missing never binds
+    it) is still free for the OS, which may give it again, and two mappings of the test
+    then clash."""
     for _ in range(100):
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
@@ -44,6 +47,17 @@ def free_port() -> int:
         if port not in _GIVEN:
             break
     _GIVEN.add(port)
+    return port
+
+
+def free_udp_port(host: str = "127.0.0.1") -> int:
+    """A UDP port free on ``host`` right now ("" for every address, as the cluster's
+    discovery listens). A port free_port() found free for TCP may still be in use for UDP
+    (by another program on Windows, where the server's SO_REUSEADDR then shares it)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind((host, 0))
+    port = s.getsockname()[1]
+    s.close()
     return port
 
 
@@ -187,7 +201,14 @@ class Server:
         self.proc = None
 
     def __enter__(self) -> "Server":
-        return self.start()
+        try:
+            self.start()
+            if self.proc.poll() is not None:  # its port answered, but not this server
+                raise AssertionError("server exited at start:\n" + self.output()[-2000:])
+        except BaseException:
+            self.__exit__()  # (a with block runs __exit__ only once __enter__ returned)
+            raise
+        return self
 
     def __exit__(self, *exc) -> None:
         self.stop()

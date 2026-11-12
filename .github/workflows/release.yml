@@ -1,45 +1,233 @@
 name: Release
 
-# On a v* tag (git tag -a v2.8.0 -m "..." && git push origin v2.8.0): build the
-# standalone executables (Linux x86_64 + arm64, Windows x64; no Python or anything else
-# needed) and the Docker image (amd64 + arm64), run every check on them — bundle
-# contents, empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers,
-# the Windows service, the image's non-root / upgrade smoke test — and only then
-# publish: the release assets with SHA256SUMS, SBOMs, license texts and build
-# provenance, and the image on GHCR. The write permissions belong to the two publish
-# jobs alone.
+# On a v* tag (git tag -a v2.8.0 -m "..." && git push origin v2.8.0): check the tag (vX.Y.Z
+# or vX.Y.Z-rc.N, equal to "v" + app.__version__, with a dated CHANGELOG section, on a
+# commit of main), then run the whole CI on the tagged commit (ci.yml: lint, types, the
+# test suites, the dependency audit, the Docker image and the standalone executables for
+# Linux x86_64 + arm64 and Windows x64 with every check on them — bundle contents,
+# empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers, the Windows
+# service) and push the Docker image (amd64, arm64, arm/v7) to GHCR by digest only, without
+# a tag, and smoke-test that digest on each architecture (arm/v7 under QEMU). Only when all
+# of it
+# passed publish: the release assets with SHA256SUMS, SBOMs, license texts and build
+# provenance, then the tags of the tested image (X.Y.Z, X.Y and latest; a pre-release,
+# vX.Y.Z-rc.N, only its own and marked as a pre-release). The write permissions belong
+# to the publish jobs alone (and the untagged push).
+#
+# Actions -> Release -> Run workflow is a dry run on any branch: the same jobs check the
+# tag the current version gets, run CI, build, push and test the image, and assemble the
+# release files (artifact "release-files"), but nothing is attested, released or tagged.
+# It leaves one untagged image version in the GHCR package.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# One release at a time, never cancelled: a second tag waits for the first. A group of
+# its own (ci.yml's runs, also the one this workflow calls, use ci-<run>); a dry run
+# neither waits for a release nor holds one up.
+concurrency:
+  group: ${{ github.event_name == 'push' && 'release' || format('release-dry-run-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
-  standalone:
+  # Before anything is built, so a mis-versioned tag fails in seconds instead of shipping
+  # binaries, SBOMs and an image that carry another version
+  verify:
+    name: check the tag (version, CHANGELOG, on main)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+      image-tags: ${{ steps.tag.outputs.image-tags }}
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0          # main's history, for the ancestry check
+          persist-credentials: false
+      - id: tag
+        name: The tag is "v" + app.__version__, with a dated CHANGELOG.md section
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            python3 tools/release_guard.py tag "$GITHUB_REF_NAME"
+          else  # a dry run: the tag the current version gets
+            python3 tools/release_guard.py tag
+          fi
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ser2net" >> "$GITHUB_OUTPUT"
+      - name: The tagged commit is on main
+        run: |
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "$GITHUB_SHA is a commit of main"
+          elif [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not a commit of main"; exit 1
+          else
+            echo "::warning::dry run: $GITHUB_SHA is not on main yet; a release tag has to be"
+          fi
+
+  # Every check a pull request gets (what ci-ok gates merges on), on the tagged commit:
+  # the checks that don't block a merge (Docker, arm64, the distributions, the audit)
+  # can't fail for the first time after half the release is out. Its standalone job
+  # builds the released executables (publish: signed when configured, docs/SIGNING.md).
+  ci:
+    needs: verify
     permissions:
       contents: read
-      actions: read       # the reusable workflow requests it (SignPath); the caller must grant it
-    uses: ./.github/workflows/standalone.yml
+      actions: read       # standalone.yml requests it (SignPath); the caller must grant it
+    uses: ./.github/workflows/ci.yml
     with:
-      publish: true
-    secrets: inherit      # optional code-signing credentials (docs/SIGNING.md)
+      publish: ${{ github.event_name == 'push' }}   # a dry run doesn't sign
+    secrets:              # the optional code-signing credentials (docs/SIGNING.md), no others
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
-  docker-test:
-    uses: ./.github/workflows/docker.yml
-
-  publish:
-    name: attach to the release
-    needs: standalone
+  # The image to publish, built once for every architecture (arm64 and arm/v7 under QEMU)
+  # and pushed to GHCR by digest only: no tag points at it until it passed image-test and
+  # the release files are out. A re-run of a later job reuses this digest, never a rebuild
+  # from a newer base image.
+  image-build:
+    name: build the image (amd64, arm64, arm/v7), push it untagged
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
-      contents: write        # the release assets
-      id-token: write        # build provenance / SBOM attestations
-      attestations: write
+      contents: read
+      packages: write        # the untagged push
+    outputs:
+      image: ${{ needs.verify.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@v7   # first, so the clean checkout doesn't wipe the artifacts below
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The Dockerfile's base tag (ARG BASE_IMAGE) as of now, by digest: the image is built
+      # FROM exactly that and records it, so .github/workflows/image-refresh.yml can tell
+      # when the base has moved on since the release.
+      - id: base
+        name: The base image's digest
+        run: |
+          base=$(sed -n 's/^ARG BASE_IMAGE=//p' Dockerfile)
+          case "$base" in */*) name=$base ;; *) name=docker.io/library/$base ;; esac
+          digest=$(docker buildx imagetools inspect "$base" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "$name -> $digest"
+          { echo "image=$base"; echo "name=$name"; echo "digest=$digest"; } >> "$GITHUB_OUTPUT"
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        with:
+          images: ${{ needs.verify.outputs.image }}
+          # for the version label only: the tags are added once the digest passed its tests
+          tags: type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.title=ser2net
+            org.opencontainers.image.description=Serial-to-network bridge with a web UI
+            org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.base.name=${{ steps.base.outputs.name }}
+            org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          build-args: BASE_IMAGE=${{ steps.base.outputs.image }}@${{ steps.base.outputs.digest }}
+          outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+      # What the tag job will push, worked out now, before anything is published: with one
+      # image index as its source, imagetools copies it byte for byte (the same digest).
+      - name: Tagging keeps this digest (imagetools create --dry-run)
+        env:
+          IMAGE: ${{ needs.verify.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker buildx imagetools create --dry-run "$IMAGE@$DIGEST" > index.json
+          got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
+          [ "$got" = "$DIGEST" ] || { echo "::error::tagging would push $got, not $DIGEST"; exit 1; }
+
+  # The image exactly as pushed, on each architecture (amd64 and arm64 natively, arm/v7
+  # under QEMU), with the smoke test CI runs on its local build (non-root, HEALTHCHECK,
+  # upgrades, device groups, contents)
+  image-test:
+    name: test the pushed image (${{ matrix.arch }})
+    needs: image-build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read         # pull the untagged digest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+          - { arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7 }
+    env:
+      REF: ${{ needs.image-build.outputs.image }}@${{ needs.image-build.outputs.digest }}
+      DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}   # (the emulated leg's pull and runs)
+      DOCKER_SMOKE_WAIT: ${{ matrix.platform && '300' || '60' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - if: matrix.platform
+        # (not under DOCKER_DEFAULT_PLATFORM: the image that installs QEMU must be the
+        # runner's own, an arm/v7 one can't run before QEMU is there)
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm
+        env:
+          DOCKER_DEFAULT_PLATFORM: ""
+      - name: Sign in to GHCR (read)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Pull the pushed digest, its ${{ matrix.arch }} image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker pull "$REF"
+          got=$(docker image inspect -f '{{.Architecture}}' "$REF")
+          if [ "$ARCH" = arm/v7 ]; then got="$got/$(docker image inspect -f '{{.Variant}}' "$REF")"; fi
+          test "$got" = "$ARCH"
+      - run: tests/docker_smoke.sh "$REF"
+
+  # Names and checks the release files, attests them and hands them on as one artifact.
+  # It can mint attestations, so only GitHub's own actions run here, and it can't write
+  # the release: what publish uploads is what was attested here, or `gh attestation
+  # verify` fails. A dry run attests nothing: its build would verify like a release's.
+  attest:
+    name: attest the release files
+    needs: [verify, ci, image-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # build provenance / SBOM attestations
+      attestations: write    # (both)
+    steps:
+      # first, so the clean checkout doesn't wipe the artifacts below
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # the executables and their license texts / SBOMs (not CI's reports)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: ser2net-*
+          path: artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: meta-*
           path: artifacts
       - name: Name the release assets, SHA256SUMS
         run: |
@@ -54,82 +242,113 @@ jobs:
           cp artifacts/ser2net-windows-x64/ser2net.exe out/ser2net-windows-x64.exe
           cp artifacts/meta-windows-x64/THIRD-PARTY-LICENSES.txt out/ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
           cp artifacts/meta-windows-x64/ser2net.cdx.json out/ser2net-windows-x64.cdx.json
+          # the systemd unit for the Linux binaries and the script that installs one with it
+          # (README: Run as a service)
+          cp systemd/ser2net-standalone.service out/ser2net-standalone.service
+          cp systemd/ser2net-install.sh out/ser2net-install.sh
           cd out
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
       - name: Every platform ships the same supported CPython/OpenSSL
         run: python3 tools/release_guard.py sboms out/*.cdx.json --min-openssl 3.5
       - name: Build provenance attestation (gh attestation verify <file> -R ${{ github.repository }})
-        uses: actions/attest-build-provenance@v4
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: |
             out/ser2net-linux-x64
             out/ser2net-linux-arm64
             out/ser2net-windows-x64.exe
       - name: SBOM attestation (Linux x64)
-        uses: actions/attest-sbom@v4
+        if: github.event_name == 'push'
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-linux-x64
           sbom-path: out/ser2net-linux-x64.cdx.json
       - name: SBOM attestation (Linux arm64)
-        uses: actions/attest-sbom@v4
+        if: github.event_name == 'push'
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-linux-arm64
           sbom-path: out/ser2net-linux-arm64.cdx.json
       - name: SBOM attestation (Windows x64)
-        uses: actions/attest-sbom@v4
+        if: github.event_name == 'push'
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-windows-x64.exe
           sbom-path: out/ser2net-windows-x64.cdx.json
-      - uses: softprops/action-gh-release@v3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          files: out/*
-          fail_on_unmatched_files: true
+          name: release-files
+          path: out/
+          if-no-files-found: error
 
-  image:
-    name: push the image to GHCR (amd64 + arm64)
-    # also needs the standalone build (incl. Windows signing) to pass, so a failed exe
-    # release doesn't still push the image and leave a split release
-    needs: [docker-test, standalone]
+  # Creates the release with exactly the attested files, using the runner's gh CLI: no
+  # checkout and no action besides GitHub's download-artifact in the one job that can
+  # write releases (and tags). gh creates the release as a draft, uploads the files and
+  # then publishes it, deleting the draft if an upload fails (so a re-run starts clean);
+  # that also works with immutable releases. Notes are added afterwards (gh release edit).
+  publish:
+    name: publish the release
+    needs: [verify, attest]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write        # the release and its files
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: release-files
+          path: out
+      - name: Create the release with its files (a pre-release for vX.Y.Z-rc.N)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          ls -l out
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" out/* --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "" "${flags[@]}"
+
+  # Last, once the release files are out: the tested digest gets its tags, unchanged (no
+  # rebuild, no new manifest), and its build provenance. Only GitHub's own action and the
+  # runner's docker CLI run here.
+  image:
+    name: tag the tested image on GHCR
+    needs: [verify, image-build, publish]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
+      packages: write        # the tags, and the attestation pushed next to the image
+      id-token: write        # build provenance attestation
+      attestations: write    # (both)
+    env:
+      IMAGE: ${{ needs.image-build.outputs.image }}
+      DIGEST: ${{ needs.image-build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - name: Sign in to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/ser2net
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-          labels: |
-            org.opencontainers.image.title=ser2net
-            org.opencontainers.image.description=Serial-to-network bridge with a web UI
-            org.opencontainers.image.licenses=AGPL-3.0-only
-      - id: push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: mode=max
-          sbom: true
-      - uses: actions/attest-build-provenance@v4
-        with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/ser2net
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-name: ${{ needs.image-build.outputs.image }}
+          subject-digest: ${{ needs.image-build.outputs.digest }}
           push-to-registry: true
+      - name: Tag it ${{ needs.verify.outputs.image-tags }}
+        env:
+          TAGS: ${{ needs.verify.outputs.image-tags }}
+        run: |
+          refs=()
+          for tag in $TAGS; do refs+=(--tag "$IMAGE:$tag"); done
+          docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"
+          for tag in $TAGS; do
+            got=$(docker buildx imagetools inspect "$IMAGE:$tag" | awk '$1 == "Digest:" {print $2; exit}')
+            echo "$IMAGE:$tag -> $got"
+            [ "$got" = "$DIGEST" ] || { echo "::error::$IMAGE:$tag is $got, not the tested $DIGEST"; exit 1; }
+          done

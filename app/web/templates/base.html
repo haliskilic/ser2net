@@ -8,15 +8,14 @@
   <title>{% block title %}ser2net{% endblock %}</title>
   {# not deferred: the saved theme is set before the first paint (no dark flash) #}
   <script src="{{ base }}/static/theme.js?v={{ asset_version }}"></script>
-  <link rel="stylesheet" href="{{ base }}/static/xterm.css?v={{ asset_version }}">
+  {#- a page's own assets (the dashboard's console: xterm.js), before app.css so it wins #}
+  {% block head %}{% endblock %}
   <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version }}">
   <link rel="icon" href="data:,">
   {# htmx features the UI doesn't use stay off: no eval (hx-on, js: values, trigger
      filters), no <script> run from a fragment, no injected indicator <style> #}
   <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false}'>
   <script src="{{ base }}/static/htmx.min.js?v={{ asset_version }}" defer></script>
-  <script src="{{ base }}/static/xterm.js?v={{ asset_version }}" defer></script>
-  <script src="{{ base }}/static/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
   <script src="{{ base }}/static/app.js?v={{ asset_version }}" defer></script>
   <script src="{{ base }}/static/points.js?v={{ asset_version }}" defer></script>
 </head>

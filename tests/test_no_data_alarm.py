@@ -14,11 +14,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from _server import free_port  # noqa: E402
+from _server import free_port
 
-from app import notify  # noqa: E402
-from app.config import AppConfig, MappingConfig, NotificationSettings  # noqa: E402
-from app.engine.supervisor import Supervisor  # noqa: E402
+from app import notify
+from app.config import AppConfig, MappingConfig, NotificationSettings
+from app.engine.supervisor import Supervisor
 
 
 async def start_socat():

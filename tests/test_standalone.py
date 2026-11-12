@@ -68,9 +68,9 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app import __version__, standalone  # noqa: E402
-from app.web.auth import hash_password  # noqa: E402
-from _server import ui_cookie  # noqa: E402
+from app import __version__, standalone
+from app.web.auth import hash_password
+from _server import ui_cookie
 
 BIN = os.path.abspath(os.environ["SER2NET_STANDALONE_BIN"]) if os.environ.get("SER2NET_STANDALONE_BIN") else ""
 IMAGE = os.environ.get("SER2NET_STANDALONE_IMAGE", "")
@@ -419,7 +419,7 @@ class _Provider(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):  # noqa: N802 (http.server API)
+    def do_GET(self):
         iss = self.server.issuer
         if self.path == "/.well-known/openid-configuration":
             return self._json({"issuer": iss, "authorization_endpoint": iss + "/authorize",
@@ -428,7 +428,7 @@ class _Provider(http.server.BaseHTTPRequestHandler):
             return self._json({"keys": [rsa_jwk(self.server.key, "k1")]})
         self.send_error(404)
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         if self.path != "/token":
             return self.send_error(404)
         form = urllib.parse.parse_qs(self.rfile.read(int(self.headers.get("Content-Length") or 0))
@@ -806,7 +806,8 @@ def test_binary():
 
         licenses = run.output(["--licenses"])
         for needle in ("AGPL-3.0-only", "CPython", "OpenSSL", "ldap3 2.", "LGPL", "paho-mqtt",
-                       "cryptography", "pyinstaller", "starlette", "pyserial"):
+                       "cryptography", "pyinstaller", "starlette", "pyserial",
+                       "htmx.org 2.", "@xterm/xterm 5."):
             assert needle in licenses, f"--licenses does not cover {needle!r}"
         # python-build-standalone's native libraries (the python.org build folded these
         # into its own LICENSE.txt; PBS — now used on Windows too — keeps them apart)
@@ -815,6 +816,19 @@ def test_binary():
         if not WINDOWS:
             assert "LICENSE.mpdecimal " in licenses, "--licenses misses mpdecimal"
         print(f"{where}: --licenses covers ser2net, CPython/OpenSSL and every bundled package  OK")
+
+        # the build's SBOM (next to the executable after a build; not in the distro jobs)
+        sbom = os.path.join(ROOT, "build", "ser2net.cdx.json")
+        if os.path.isfile(sbom) and not IMAGE:
+            with open(sbom, encoding="utf-8") as fh:
+                comps = json.load(fh)["components"]
+            names = {c["name"] for c in comps}
+            assert {"cpython", "openssl", "zlib", "htmx.org", "@xterm/xterm"} <= names, sorted(names)
+            # (an out-of-date license override fails tests/test_third_party.py, the vendor job)
+            unnamed = [c["name"] for c in comps if "expression" not in c["licenses"][0]]
+            print(f"{where}: SBOM lists {len(comps)} components"
+                  + (f"; without an SPDX license: {unnamed}" if unnamed else ", all with SPDX licenses")
+                  + "  OK")
 
         if not IMAGE:  # LGPL: the bundled ldap3 can be replaced without rebuilding
             override = os.path.join(work, "override")

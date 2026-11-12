@@ -26,7 +26,7 @@ import urllib.request
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from _server import ui_cookie  # noqa: E402
+from _server import ui_cookie
 from app.web.auth import hash_password, hash_token
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")

@@ -6,7 +6,6 @@ Run: python3 tests/test_web_e2e.py
 import http.cookiejar
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -17,13 +16,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _server import free_port, server_log, show_log_on_failure
+from _socat import pty_pair_sync
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 
-UI_PORT = 8099
+UI_PORT = free_port()
+MAP_PORT = free_port()
 
-from _server import server_log, show_log_on_failure, ui_cookie  # noqa: E402
-MAP_PORT = 45111
+from _server import ui_cookie
 
 
 def wait_port(host, port, timeout=10):
@@ -107,15 +109,7 @@ def main():
         print(f"ports API OK ({len(ports)} ports)")
 
         # 4) create a mapping pointing at a socat PTY
-        socat = subprocess.Popen(["socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0"],
-                                 stderr=subprocess.PIPE)
-        devs = []
-        while len(devs) < 2:
-            line = socat.stderr.readline()
-            m = re.search(rb"PTY is (\S+)", line)
-            if m:
-                devs.append(m.group(1).decode())
-        dev_a, dev_b = devs
+        socat, dev_a, dev_b = pty_pair_sync()
         print(f"socat PTYs: {dev_a} / {dev_b}")
 
         r = c.post("/api/mappings/save", {

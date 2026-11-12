@@ -194,7 +194,7 @@ async def test_tracer_low_space(tmp):
     usage = namedtuple("usage", "total used free")
     total = 8 * 1024 ** 3
     free = [100 * 1024 ** 2]
-    fake = lambda _path: usage(total, total - free[0], free[0])  # noqa: E731
+    fake = lambda _path: usage(total, total - free[0], free[0])
     floor = storage.floor(total)
     assert floor == int(total * 0.05), floor
     path = os.path.join(tmp, "low.log")

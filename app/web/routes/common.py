@@ -15,8 +15,10 @@ import time
 import urllib.parse
 from collections import OrderedDict
 from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Mapping
 
 from markupsafe import escape
+from starlette.datastructures import ImmutableMultiDict
 from starlette.responses import HTMLResponse, PlainTextResponse, Response
 
 from ...config import ROLE_RANK
@@ -24,11 +26,18 @@ from ...explain import explain
 from ...i18n import _
 from .. import auth, proxy
 
+if TYPE_CHECKING:
+    from starlette.requests import HTTPConnection, Request
+    from starlette.templating import Jinja2Templates
+
+    from ...config import MappingConfig, User
+    from ...state import AppState
+
 # HTMX response header: tells the dashboard to re-fetch the mappings table now
 TRIGGER = {"HX-Trigger": "refreshMappings"}
 
 
-def unchanged_or(request, resp):
+def unchanged_or(request: Request, resp: Response) -> Response:
     """A fragment the dashboard polls: 204 when the browser shows this content already
     (the X-Content-Hash it sent; htmx then keeps the panel as it is — no flicker, the
     focus, a text selection and the scroll position stay), else the fragment with its
@@ -40,7 +49,8 @@ def unchanged_or(request, resp):
     return resp
 
 
-def page_context(templates, request, ctx: dict) -> dict:
+def page_context(templates: Jinja2Templates, request: Request,
+                 ctx: dict[str, Any]) -> dict[str, Any]:
     """What a template rendered straight from its Jinja template (off the event loop:
     LiveTable, Ctx.arender) gets, as a page rendered through the templates does: the
     request, what the context processors give every page (the base path the links go
@@ -74,18 +84,19 @@ class LiveTable:
     settings the browser is not shown. A tab from before an upgrade or a restart sends
     a hash that matches neither and gets the whole table once."""
 
-    def __init__(self, ctx: "Ctx", template: str, size: int = 8) -> None:
+    def __init__(self, ctx: Ctx, template: str, size: int = 8) -> None:
         self.ctx, self.template, self._size = ctx, template, size
         self._key = os.urandom(16)
         self._bodies: OrderedDict[str, str] = OrderedDict()   # tag -> rendered table
         self._lock = threading.Lock()
 
-    def _digest(self, value) -> str:
+    def _digest(self, value: object) -> str:
         return hashlib.blake2b(repr(value).encode("utf-8", "backslashreplace"),
                                key=self._key, digest_size=8).hexdigest()
 
-    async def answer(self, request, snapshot: Callable[[], tuple[object, dict[str, str] | None]],
-                     headers=None, **context) -> Response:
+    async def answer(self, request: Request,
+                     snapshot: Callable[[], tuple[object, dict[str, str] | None]],
+                     headers: Mapping[str, str] | None = None, **context: Any) -> Response:
         """`snapshot()` -> (shape, spans): what the table shows apart from the counters,
         and {element id: text} of the counter spans - None when they can't be patched by
         id, and then the shape has to include them. Called in a worker thread; `context`
@@ -126,14 +137,14 @@ class LiveTable:
 _NOT_ID_CHAR = re.compile(r"[^A-Za-z0-9_-]")
 
 
-def domid(value) -> str:
+def domid(value: object) -> str:
     """*value* as part of an HTML id: other characters than letters, digits, _ and -
     become _. (htmx keeps the keyboard focus on a polled table's buttons across a
     refresh by their ids; a peer's address and mapping id are part of them.)"""
     return _NOT_ID_CHAR.sub("_", str(value))
 
 
-def bytesize(value) -> str:
+def bytesize(value: Any) -> str:
     """A byte count for people: 512 B, 1.5 KB, 12.3 MB, 4.0 GB (units of 1024, one
     decimal) — the dashboard's In / Out and the trace file sizes. Not Jinja's
     filesizeformat, which writes an untranslated "Bytes"; the exact counts stay in the
@@ -148,7 +159,7 @@ def bytesize(value) -> str:
     return f"{n} B"
 
 
-def duration(secs) -> str:
+def duration(secs: Any) -> str:
     """A connection's age for people, in the page's language: 2m 05s, 1h 02m (as
     engine.bridge.fmt_duration writes it in English for the logs and the REST API;
     app.js counts it on in the browser with the same units)."""
@@ -165,7 +176,7 @@ def duration(secs) -> str:
     return _("{0}s").format(s)
 
 
-def since(unix_time) -> str:
+def since(unix_time: Any) -> str:
     """duration() from `unix_time` (a client's connected_at) until now."""
     try:
         return duration(time.time() - float(unix_time))
@@ -201,14 +212,14 @@ def action_done(action: str, name: str) -> str:
     return _("“{0}” restarted.").format(name)
 
 
-def start_failed(state, mid: str) -> str:
+def start_failed(state: AppState, mid: str) -> str:
     """Why the mapping `mid` did not start, when it was just started or restarted and
     its runner stopped with an error; else ""."""
     st = state.supervisor.status(mid) or {}
     return (st.get("last_error") or _("unknown error")) if st.get("state") == "error" else ""
 
 
-def local_path(value, default: str = "/") -> str:
+def local_path(value: object, default: str = "/") -> str:
     """`value` when it is a path on this site — where to go after a sign-in or a language
     switch — else `default`: no scheme or host, no //host or /\\host (other sites), no
     control characters (a browser drops a tab or newline and may read what is left as
@@ -219,7 +230,7 @@ def local_path(value, default: str = "/") -> str:
     return value
 
 
-def client_ip(request) -> str:
+def client_ip(request: HTTPConnection) -> str:
     ip = request.client.host if request.client else "?"
     # normalize IPv4-mapped IPv6 (::ffff:1.2.3.4 -> 1.2.3.4) so the rate-limit
     # key is consistent on dual-stack listeners
@@ -228,7 +239,16 @@ def client_ip(request) -> str:
     return ip
 
 
-def current_user(request):
+async def read_form(request: Request) -> ImmutableMultiDict[str, str]:
+    """The fields of a posted form, all text. None of these forms takes a file: one in
+    the body is refused (400) while it is read, instead of reaching a handler that
+    expects a string where an upload turns up. (The mappings import, which takes one
+    file, reads its form itself.)"""
+    form = await request.form(max_files=0)
+    return ImmutableMultiDict([(k, v) for k, v in form.multi_items() if isinstance(v, str)])
+
+
+def current_user(request: HTTPConnection) -> User | None:
     return getattr(request.state, "user", None)
 
 
@@ -236,12 +256,12 @@ def csrf_failed() -> PlainTextResponse:
     return PlainTextResponse(_("CSRF validation failed. Reload the page."), status_code=403)
 
 
-def has_role(user, role: str) -> bool:
+def has_role(user: User | None, role: str) -> bool:
     """`user` (an account, the open-access pseudo-user or None) has `role` or a higher one."""
     return user is not None and ROLE_RANK.get(user.role, 0) >= ROLE_RANK[role]
 
 
-def console_interactive(user, mapping) -> bool:
+def console_interactive(user: User | None, mapping: MappingConfig) -> bool:
     """Does what `user` types in the console of `mapping` go to the device? Only on a
     network mapping that isn't read-only, and only for operators and admins."""
     return (mapping.kind == "net" and not mapping.network.read_only
@@ -249,7 +269,7 @@ def console_interactive(user, mapping) -> bool:
             and mapping.network.protocol != "modbus" and has_role(user, "operator"))
 
 
-def sees_to_device(user, mapping) -> bool:
+def sees_to_device(user: User | None, mapping: MappingConfig) -> bool:
     """Does `user`'s hex view of `mapping` show what is sent TO the device? On a network
     mapping that is what clients and web-console users type, passwords at a prompt the
     device doesn't echo included (trace files record it too), so a viewer's hex view shows
@@ -264,15 +284,17 @@ class Ctx:
     client_ip = staticmethod(client_ip)
     current_user = staticmethod(current_user)
 
-    def __init__(self, templates, state) -> None:
+    def __init__(self, templates: Jinja2Templates, state: AppState) -> None:
         self.templates = templates
         self.state = state
 
-    def render(self, request, name, status_code=200, headers=None, **ctx):
+    def render(self, request: Request, name: str, status_code: int = 200,
+               headers: Mapping[str, str] | None = None, **ctx: Any) -> Response:
         return self.templates.TemplateResponse(request, name, ctx,
                                                status_code=status_code, headers=headers)
 
-    async def arender(self, request, name, status_code=200, headers=None, **ctx):
+    async def arender(self, request: Request, name: str, status_code: int = 200,
+                      headers: Mapping[str, str] | None = None, **ctx: Any) -> HTMLResponse:
         """render() in a worker thread: for the panels that refresh themselves, whose
         render would hold up every bridge on the event loop for as long as it takes (the
         page's language, a context variable, goes along)."""
@@ -280,7 +302,7 @@ class Ctx:
         body = await asyncio.to_thread(template.render, page_context(self.templates, request, ctx))
         return HTMLResponse(body, status_code=status_code, headers=headers)
 
-    def set_session(self, response, request, user) -> None:
+    def set_session(self, response: Response, request: Request, user: User) -> None:
         cfg = self.state.config
         ttl = cfg.session_timeout_s  # Settings -> Web UI access -> session lifetime
         self.state.signins.note(user.username, user.source)   # its last sign-in
@@ -292,42 +314,43 @@ class Ctx:
         request.state.csrf_renew = True  # the CSRF cookie lasts as long (GuardMiddleware)
 
     @staticmethod
-    def new_csrf_token(request) -> None:
+    def new_csrf_token(request: HTTPConnection) -> None:
         """Give this browser a new CSRF token with this response (GuardMiddleware sets the
         cookie), at a sign-in or a sign-out: a token that got into the browser before is
         not accepted after it. Only for a response that renders no form (a redirect)."""
         request.state.csrf_token = auth.new_csrf_token()
 
     @staticmethod
-    def require_role(request, role):
+    def require_role(request: HTTPConnection, role: str) -> PlainTextResponse | None:
         """Return a 403 response if the session user's role is below `role`, else None."""
         if not has_role(current_user(request), role):
             return PlainTextResponse(_("Forbidden: requires the {0} role.").format(role), status_code=403)
         return None
 
     @staticmethod
-    def can_edit(request) -> bool:
+    def can_edit(request: HTTPConnection) -> bool:
         return has_role(current_user(request), "operator")
 
     @staticmethod
-    def is_anonymous(request) -> bool:
+    def is_anonymous(request: HTTPConnection) -> bool:
         u = current_user(request)
         return u is not None and u.source == "anonymous"
 
     @staticmethod
-    def actor(request) -> str:
+    def actor(request: HTTPConnection) -> str:
         """Who acts, for the audit log: the signed-in user, "(no login)" for an
         open-access visitor."""
         u = current_user(request)
         return (u.username if u.source != "anonymous" else "(no login)") if u is not None else ""
 
-    def audit(self, request, action: str, detail: str = "", user: str | None = None) -> None:
+    def audit(self, request: HTTPConnection, action: str, detail: str = "",
+              user: str | None = None) -> None:
         """An audit record for this request: client IP plus the acting user (the
         signed-in user unless given)."""
         self.state.audit(client_ip(request), action, detail,
                          user=self.actor(request) if user is None else user)
 
-    def require_peer_access(self, request):
+    def require_peer_access(self, request: HTTPConnection) -> PlainTextResponse | None:
         """Cluster peer actions act on OTHER nodes with the shared key, so they need a
         signed-in operator: open access on this node must not open every peer (which
         may well require a login of its own)."""
