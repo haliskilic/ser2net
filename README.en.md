@@ -106,8 +106,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
   COM number still opens the right device.
 - **Dozens of mappings:** add/edit/delete/start/stop from one screen, with live status;
-  search, state filter, sorting and start/stop/restart of the selected mappings. The
-  table only redraws when it changed (no flicker, selections stay).
+  search, state filter, sorting and start/stop/restart of the selected mappings (*Select
+  all shown*; a bulk action acts on the ticked rows the filter shows and asks first). The
+  table is redrawn only when what it shows changed: new byte counts update just their
+  cells, connection times count on in the browser, and a background tab doesn't refresh
+  it — so no flicker, and a selection, a tooltip or a click stays. The rendering runs
+  outside the event loop that drives the bridges. In / Out are shown in B / KB / MB / GB
+  (exact counts in the REST API and `/metrics`).
 - **Per-mapping access control:** allowed IP/CIDR list, **high-priority** client IPs
   (a priority client evicts the oldest when the port is full), max connections,
   kick-old-user, read-only, banner, open/close strings, `closeon` (a Modbus gateway uses
@@ -303,15 +308,18 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **Add mapping:** name, type (Serial↔Network / Serial↔Serial), serial port +
   parameters, network mode (server/client/udp), protocol, bind/remote IP:port, access
   rules.
-- **Start/Stop/Restart/Copy/Delete:** per row.
+- **Start/Stop/Restart/Copy/Delete:** per row. Stop and Restart ask first while clients
+  are connected (they are disconnected; a stopped mapping stays stopped); Delete also
+  removes the mapping's log and trace files.
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
   device on network mappings. The hex view shows both directions; viewers see only what
   the device sends.
 - **Trace** (operators): the mapping's trace files, to list and download.
 - **Settings:** change password, **web UI access** (login required / open access with a
-  role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
-  token**, mappings **backup/restore** (JSON), status.
+  role), admin TLS (provide paths or generate self-signed; a previous generated pair is kept
+  as `*.bak`), generate/revoke the **REST API token** or change its role only (the
+  one-time token has a Copy button), mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
@@ -342,7 +350,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (unauthenticated), `GET /openapi.json`.
-The token has the role chosen when it was generated: a `viewer` token may only read (GET)
+The token has the role chosen when it was generated (*Change the role only* changes it and
+keeps the token): a `viewer` token may only read (GET)
 and gets stored secrets (the MQTT password) masked. An `api_token_role` in `config.json`
 that is not a role counts as `viewer`, and the start-up log says so.
 
