@@ -216,7 +216,12 @@ düzenlemeye gerek yok.
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
-  yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla. `paho-mqtt`
+  yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla:
+  `<topic>/status` broker'a her bağlanışta (yeniden bağlanınca da) `online`, eşleme
+  durunca ya da broker bağlantıyı kaybedince (Last-Will) `offline` olur. Client ID boşsa
+  broker yeni bağlantıyı kopan eskisiyle eşleştiremez ve eskisinin Will'ini yeni
+  `online`'dan sonra yayınlayabilir (30 s'lik keepalive'ın 1,5 katına kadar bekler); bu
+  yüzden `online` her bağlantıdan 50 s sonra bir kez daha gönderilir. `paho-mqtt`
   gerektirir (opsiyonel; yoksa köprü normal çalışır).
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı

@@ -2,8 +2,8 @@
 
 Publishes newline-delimited serial lines to an MQTT topic so meters, sensors and
 other line-oriented serial devices can feed an IIoT broker / Unified Namespace.
-A retained ``<base_topic>/status`` birth/death (online/offline, with an MQTT
-Last-Will) lets subscribers see link state.
+A retained ``<base_topic>/status`` birth/death (online after every connect, offline at
+close and as the MQTT Last-Will) lets subscribers see link state.
 
 paho-mqtt is an OPTIONAL dependency (not in the offline bootstrap): if it isn't
 installed or fails to import, publishing is disabled with a log line saying which
@@ -26,11 +26,18 @@ from typing import Any, Callable, Optional
 from .. import optional
 
 MAX_LINE_BUFFER = 65536  # drop the oldest bytes if a newline never arrives (no unbounded growth)
+KEEPALIVE_S = 30
+# A broker publishes the Will of a connection that went quiet only once 1.5 x its keepalive
+# has passed: that of the previous connection (a link that broke, a power loss) can come
+# after the next connection's birth. With a blank client ID (the broker tells connections
+# apart by nothing else) the birth is sent once more this long after each connect.
+STALE_WILL_S = 1.5 * KEEPALIVE_S + 5
 
 
 class MqttPublisher:
     """``will`` replaces the retained <base>/status "offline" Last-Will and ``birth``
-    the "online" message (Sparkplug B sends NDEATH / NBIRTH instead); a callable
+    the "online" message, sent after every connect (Sparkplug B sends NDEATH / NBIRTH
+    instead); a callable
     ``will`` is asked again after every disconnect (in paho's thread), so the next
     connection carries a fresh one (the Sparkplug bdSeq). ``on_connect``
     runs on the event loop after every (re)connect; ``subscriptions`` maps topics to
@@ -66,6 +73,8 @@ class MqttPublisher:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._closing = False            # close() has begun (a restart then stops short)
         self._renewals = 0               # Wills renewed by the disconnect hook (see restart)
+        self._sessions = 0               # connects (CONNACKs) handled
+        self._rebirth: Optional[asyncio.TimerHandle] = None  # see STALE_WILL_S
 
     def connect(self) -> bool:
         owned = self._client is None  # an injected client (tests) is driven externally
@@ -97,11 +106,11 @@ class MqttPublisher:
             self._client.on_disconnect = self._paho_on_disconnect
         if owned:
             with contextlib.suppress(Exception):
-                self._client.connect_async(self._s.host, self._s.port, keepalive=30)
+                self._client.connect_async(self._s.host, self._s.port, keepalive=KEEPALIVE_S)
                 self._client.loop_start()
+        # the "online" birth goes out once the broker has accepted the connection
+        # (handle_connect): paho drops a QoS 0 message published before it has a socket
         self._connected = True
-        if self._birth:
-            self._publish(self._status_topic, b"online", retain=True)
         self._log(f"MQTT publishing serial lines to {self._s.host}:{self._s.port} "
                   f"topic '{self._data_topic}'")
         return True
@@ -153,7 +162,7 @@ class MqttPublisher:
             if callable(self._will) and self._renewals == renewed:
                 self._set_will()  # no disconnect callback came (it was not connected)
             with contextlib.suppress(Exception):
-                client.connect_async(self._s.host, self._s.port, keepalive=30)
+                client.connect_async(self._s.host, self._s.port, keepalive=KEEPALIVE_S)
                 client.loop_start()
             if self._closing:  # closed meanwhile: leave no connection behind
                 with contextlib.suppress(Exception):
@@ -179,9 +188,18 @@ class MqttPublisher:
                         bool(getattr(msg, "retain", False)))
 
     def handle_connect(self) -> None:
-        """After every (re)connect: subscribe again, then the owner's callback."""
+        """After every (re)connect: the retained "online" birth, the subscriptions again,
+        then the owner's callback."""
         if self._client is None:
             return
+        self._sessions += 1
+        if self._birth:
+            self._publish(self._status_topic, b"online", retain=True)
+            if not self._s.client_id and self._loop is not None:
+                if self._rebirth is not None:
+                    self._rebirth.cancel()
+                self._rebirth = self._loop.call_later(STALE_WILL_S, self._birth_again,
+                                                      self._sessions)
         for topic in self._subs:
             with contextlib.suppress(Exception):
                 self._client.subscribe(topic, qos=1)
@@ -190,6 +208,13 @@ class MqttPublisher:
                 self._on_connect_cb()
             except Exception as e:
                 self._log(f"MQTT on-connect handler failed: {e}")
+
+    def _birth_again(self, session: int) -> None:
+        """STALE_WILL_S after a connect, still in that session: "online" again, over a Will
+        of an earlier connection that the broker may have published after the birth."""
+        self._rebirth = None
+        if self._connected and session == self._sessions:
+            self._publish(self._status_topic, b"online", retain=True)
 
     def handle_message(self, topic: str, payload: bytes, retained: bool = False) -> None:
         """A message on a subscribed topic (on the event loop); ``retained``: the broker
@@ -241,6 +266,9 @@ class MqttPublisher:
             return
         self._closing = True
         self._connected = False
+        if self._rebirth is not None:
+            self._rebirth.cancel()
+            self._rebirth = None
         if final is not None:
             self._publish(final[0], final[1], qos=final[2], retain=final[3])
         elif self._birth:

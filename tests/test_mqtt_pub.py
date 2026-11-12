@@ -3,12 +3,17 @@
 Uses a fake MQTT client injected into MqttPublisher, so this runs cross-platform
 with no broker and without paho-mqtt installed. Verifies that complete
 newline-delimited serial lines are published to the base topic, partial lines are
-buffered, CR is stripped, and online/offline status is published with retain; and that
+buffered, CR is stripped, and online/offline status is published with retain; that the
+"online" birth goes out after every CONNACK (a client that drops QoS 0 messages until it
+is connected, as paho does, gets it at QoS 0 too), and with a blank client ID once more
+after STALE_WILL_S; and that
 a command subscription handles a command when it is published, not the broker's retained
 replay of it (unless accept_retained), and never an empty message. Also that paho's
 network thread waits with poll(), not select() (which refuses descriptors >= 1024), and
 with paho-mqtt installed: a publisher whose broker socket is above 1024 connects and
-publishes (to a minimal broker on 127.0.0.1).
+publishes (to a minimal broker on 127.0.0.1), and at QoS 0 the retained status reads
+"online" after the first connect and again after the broker lost the connection (and
+published the Will).
 
 Run: python3 tests/test_mqtt_pub.py
 """
@@ -24,7 +29,11 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from _mqtt_broker import MqttBroker
+from _optional import need
+
 from app.config import MqttSettings
+from app.engine import mqtt_pub
 from app.engine.mqtt_pub import MqttPublisher, PollSelect, use_poll
 
 
@@ -54,6 +63,19 @@ class FakeClient:
         self.published.append((topic, bytes(payload), qos, retain))
 
 
+class PahoLikeClient(FakeClient):
+    """As paho does: a QoS 0 message published while not connected is dropped (paho has
+    no socket for it yet; QoS 1/2 ones wait in its queue)."""
+
+    def __init__(self):
+        super().__init__()
+        self.up = False
+
+    def publish(self, topic, payload, qos=0, retain=False):
+        if self.up or qos:
+            super().publish(topic, payload, qos, retain)
+
+
 def _pub(fake, topic):
     return [p for (t, p, _q, _r) in fake.published if t == topic]
 
@@ -63,6 +85,7 @@ def test_lines_published_and_buffered():
     pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="ser2net/dev", qos=1),
                         logger=lambda _m: None, client=fake)
     assert pub.connect() is True
+    pub.handle_connect()                      # the broker accepted the connection
     # birth message: online, retained, on <base>/status
     assert ("ser2net/dev/status", b"online", 1, True) in fake.published
 
@@ -90,6 +113,88 @@ def test_disabled_until_connected():
     pub.feed(b"before-connect\n")             # not connected yet -> dropped
     assert _pub(fake, "t") == []
     print("feed() before connect() publishes nothing  OK")
+
+
+def test_birth_after_each_connect():
+    """At the default QoS 0 the birth must wait for the CONNACK (paho drops it before),
+    and every later connect needs it again: the broker may have published the Will, and a
+    clean stop leaves "offline" retained."""
+    fake = PahoLikeClient()
+    pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="t"),
+                        logger=lambda _m: None, client=fake)
+    pub.connect()
+    assert fake.published == [], "nothing is sent before the broker took the connection"
+    fake.up = True
+    pub.handle_connect()                      # CONNACK
+    assert fake.published == [("t/status", b"online", 0, True)], fake.published
+    fake.up = False
+    pub._paho_on_disconnect(fake, None)       # lost: the broker publishes the Will
+    pub.handle_connect()                      # (a CONNACK can't come without a link)
+    fake.up = True
+    pub.handle_connect()                      # reconnected
+    assert _pub(fake, "t/status") == [b"online", b"online"], fake.published
+    pub.close()
+    assert fake.published[-1] == ("t/status", b"offline", 0, True)
+    pub.handle_connect()                      # a late callback after close: nothing
+    assert _pub(fake, "t/status") == [b"online", b"online", b"offline"]
+    print("birth sent after every CONNACK, also at QoS 0; none after close()  OK")
+
+    async def through_paho():
+        fake = PahoLikeClient()
+        pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="t"),
+                            logger=lambda _m: None, client=fake)
+        pub.connect()
+        fake.up = True
+        pub._paho_on_connect(fake, None, {}, 5)   # refused (not authorised): no birth
+        pub._paho_on_connect(fake, None, {}, 0)   # paho's thread: accepted
+        await asyncio.sleep(0.05)
+        assert fake.published == [("t/status", b"online", 0, True)], fake.published
+        pub.close()
+    asyncio.run(through_paho())
+    print("paho's on_connect leads to the birth on the event loop (not on a refusal)  OK")
+
+
+def test_birth_again_after_a_stale_will():
+    """With a blank client ID the broker can't tie a new connection to the old one, whose
+    Will it may publish up to 1.5 x keepalive after the link broke: after the new birth.
+    So the birth goes out once more STALE_WILL_S later (with a client ID the broker ends
+    the old session when the new one connects, before the CONNACK)."""
+    saved = mqtt_pub.STALE_WILL_S
+    mqtt_pub.STALE_WILL_S = 0.1
+    assert saved > 1.5 * mqtt_pub.KEEPALIVE_S, saved
+
+    async def run():
+        def publisher(**kw):
+            fake = PahoLikeClient()
+            fake.up = True
+            pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="t", **kw),
+                                logger=lambda _m: None, client=fake)
+            pub.connect()
+            pub.handle_connect()
+            return fake, pub
+
+        fake, pub = publisher()
+        await asyncio.sleep(0.25)
+        assert _pub(fake, "t/status") == [b"online", b"online"], fake.published
+        pub.handle_connect()                  # a new session: one more, after the delay
+        pub.handle_connect()                  # and another: the earlier timer is dropped
+        await asyncio.sleep(0.25)
+        assert _pub(fake, "t/status") == [b"online"] * 5, fake.published
+
+        fake, pub = publisher(client_id="plc-1")
+        await asyncio.sleep(0.25)
+        assert _pub(fake, "t/status") == [b"online"], fake.published
+
+        fake, pub = publisher()
+        pub.close()                           # stopped before the delay: nothing more
+        await asyncio.sleep(0.25)
+        assert _pub(fake, "t/status") == [b"online", b"offline"], fake.published
+    try:
+        asyncio.run(run())
+    finally:
+        mqtt_pub.STALE_WILL_S = saved
+    print("blank client ID: birth again after STALE_WILL_S, once per session; not with a "
+          "client ID or after close()  OK")
 
 
 def test_will_is_set_for_lwt():
@@ -288,11 +393,50 @@ def test_paho_publisher_above_fd_setsize():
           "publishes  OK")
 
 
+def test_paho_birth_at_qos0():
+    """Real paho against a broker: at QoS 0 the retained status reads "online" after the
+    first connect, and again after the broker lost the connection (and published the
+    Will "offline")."""
+    if not need("paho.mqtt", what="paho-mqtt birth at QoS 0 against a test broker"):
+        return
+    with MqttBroker() as broker:
+        pub = MqttPublisher(MqttSettings(enabled=True, host="127.0.0.1", port=broker.port,
+                                         base_topic="plant/meter", qos=0),
+                            logger=lambda _m: None)
+
+        async def run():
+            assert pub.connect() is True
+            for _ in range(200):
+                if broker.topics("plant/meter/status"):
+                    break
+                await asyncio.sleep(0.05)
+            assert broker.topics("plant/meter/status") == [(b"online", 0, True)], \
+                broker.messages
+            assert broker.connects[0]["will"] == ("plant/meter/status", b"offline", 0, True)
+            broker.drop()                     # the link breaks: the Will goes out
+            for _ in range(200):              # paho reconnects (1 s backoff)
+                if len(broker.topics("plant/meter/status")) >= 3:
+                    break
+                await asyncio.sleep(0.05)
+            assert broker.topics("plant/meter/status") == [
+                (b"online", 0, True), (b"offline", 0, True), (b"online", 0, True)], \
+                broker.messages
+            pub.close()
+        asyncio.run(run())
+        assert broker.wait(lambda: len(broker.topics("plant/meter/status")) == 4)
+        assert broker.topics("plant/meter/status")[-1] == (b"offline", 0, True)
+    print("paho, QoS 0: retained status 'online' after the first connect and after a "
+          "reconnect (over the Will), 'offline' at close  OK")
+
+
 def main():
     test_lines_published_and_buffered()
     test_disabled_until_connected()
+    test_birth_after_each_connect()
+    test_birth_again_after_a_stale_will()
     test_will_is_set_for_lwt()
     test_retained_commands()
+    test_paho_birth_at_qos0()
     if os.name == "posix":
         test_poll_select_answers_like_select()
         test_poll_select_above_fd_setsize()
