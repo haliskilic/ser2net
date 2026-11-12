@@ -248,12 +248,14 @@ async def test_sparkplug_unit_health(slave_port):
             "in a row; polling one point per cycle until it answers"], logs[seen:]
         assert not any(m.startswith("poll 'level") for m in logs), logs
         assert r._units[2].state == "offline" and r._units[2].cause == "no reply"
-        # from then on: one request per cycle, the two points in turn
+        # from then on: one request per cycle, the two points in turn. Counted over 3
+        # cycles, however long they take (a loaded machine runs them slower): each cycle
+        # sends its probe after counting it, so the first and the last may fall either side
         before = len(requests_to(2))
         cycles = r._units[2].probe
-        await asyncio.sleep(1.2)
-        probes = requests_to(2)[before:]
-        assert 2 <= len(probes) <= r._units[2].probe - cycles + 1, probes
+        assert await wait(lambda: r._units[2].probe - cycles >= 3), r._units[2].probe
+        probes, ran = requests_to(2)[before:], r._units[2].probe - cycles
+        assert ran - 1 <= len(probes) <= ran + 1, (ran, probes)
         assert len({p[1:3] for p in probes}) == 2, f"not each point in turn: {probes}"
         assert len(sent(fake, "DDEATH", "unit2")) == 1, "DDEATH once"
         assert sent(fake, "DDATA", "unit2")[-1].seq < death.seq, "no DDATA after the DDEATH"
@@ -380,10 +382,11 @@ async def test_plain_unit_health(slave_port):
             SILENT_UNITS.add(2)
             assert await wait(lambda: r._units[2].state == "offline")
             published, before = len(level()), len(requests_to(2))
-            await asyncio.sleep(0.8)
+            cycles = r._units[2].probe
+            assert await wait(lambda: r._units[2].probe - cycles >= 3)  # (see above)
             assert len(level()) == published, "published for an offline unit"
-            probes = len(requests_to(2)) - before
-            assert 1 <= probes <= 8, probes
+            probes, ran = len(requests_to(2)) - before, r._units[2].probe - cycles
+            assert ran - 1 <= probes <= ran + 1, (ran, probes)
             SILENT_UNITS.discard(2)
             assert await wait(lambda: len(level()) > published)
             assert sum("unit 2" in m for m in logs) == 2, logs
