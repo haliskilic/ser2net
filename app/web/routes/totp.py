@@ -108,7 +108,10 @@ def routes(ctx: Ctx) -> list:
         if user is None:
             return _start_again(request, 401, _("The sign-in took too long or was ended. "
                                                 "Sign in again."))
-        if state.rate_limiter.blocked(ip) or code_limiter.blocked(user.username):
+        if state.rate_limiter.blocked(ip):  # wrong passwords and codes from this address
+            return _start_again(request, 429, _("Too many attempts. Wait a few minutes and "
+                                                "try again."))
+        if code_limiter.blocked(user.username):
             return _start_again(request, 429, _("Too many wrong codes. Wait a few minutes "
                                                 "and sign in again."))
         if not _check(user, form.get("code")):
