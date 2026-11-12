@@ -654,7 +654,7 @@ async def test_reopen_after_port_loss(slave_port):
     runner = ModbusGatewayRunner(mapping, logger=logs.append)
     names = {mapping.id: mapping.name}
     polled = []
-    runner._publish_values = polled.append  # what the poll loop would publish
+    runner._publish_values = lambda values, stamps=None: polled.append(values)  # (what is polled)
     poll = None
 
     def snap():

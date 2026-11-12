@@ -587,6 +587,9 @@ async def test_sparkplug(slave_port):
         assert [(m.name, m.value) for m in d2[0].metrics] == [("level", 42)]
         assert len(d1) == 1 and len(d2) == 1, "no DDATA when nothing changed"
         assert (d1[0].seq, d2[0].seq) == (3, 4), "seq counts on from the births"
+        stamps = [m.timestamp for m in d1[0].metrics]
+        assert stamps == sorted(stamps) and stamps[-1] <= d1[0].timestamp, \
+            "each metric carries its own read time, the payload its send time"
 
         setpoint = sparkplug.Metric(name="setpoint", datatype=sparkplug.DataType.Int16, value=7)
         writes(t("DCMD", "unit2"), setpoint)    # not a point of unit2

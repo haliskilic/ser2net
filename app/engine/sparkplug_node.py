@@ -7,6 +7,8 @@ metrics are that unit's poll points:
     bdSeq; after every (re)connect the node publishes NBIRTH (seq 0) with the same bdSeq
     and the "Node Control/Rebirth" metric, then a DBIRTH per device with every point
     (its datatype, last value or null);
+  * every metric carries the time its value was read off the bus (a DBIRTH lists them
+    oldest first; a null is stamped with the time of the birth);
   * each poll publishes a DDATA per device with the points whose value changed (report
     by exception); seq counts on across NBIRTH, DBIRTH and DDATA: 0…255, 0, …. Data is
     published only once the session's NBIRTH and DBIRTHs are out: a poll that ends
@@ -46,6 +48,10 @@ def _changed(old, new) -> bool:
     return old != new
 
 
+def _stamp(metric: sparkplug.Metric) -> int:
+    return metric.timestamp or 0
+
+
 def device_id(unit: int) -> str:
     """The Sparkplug device of a Modbus unit (slave address)."""
     return f"unit{unit}"
@@ -62,6 +68,7 @@ class SparkplugNode:
         for p in mapping.modbus_poll.points:
             self.devices.setdefault(device_id(p.unit), []).append(p.name)
         self.values: dict = {}       # last value sent per metric
+        self.stamps: dict = {}       # when each of those was read (ms since the epoch)
         self.bdseq = 0
         self.seq = 0
         self._sessions = 0           # connects seen (the first one keeps bdSeq 0)
@@ -99,14 +106,18 @@ class SparkplugNode:
                   f"{len(self.devices)} device(s), {len(self.points)} metrics")
         return self._pub
 
-    def _metric(self, name: str, value) -> sparkplug.Metric:
+    def _metric(self, name: str, now: int) -> sparkplug.Metric:
+        """A point's metric: its last value, stamped with when it was read; a null (never
+        read) stamped ``now``."""
         p = self.points[name]
         dt = sparkplug.datatype_for(p.dtype, p.scale or 1.0)
+        value = self.values.get(name)
         if value is None:
-            return sparkplug.Metric(name=name, datatype=dt, is_null=True, timestamp=_now_ms())
+            return sparkplug.Metric(name=name, datatype=dt, is_null=True, timestamp=now)
         if dt in (sparkplug.DataType.Float, sparkplug.DataType.Double):
             value = float(value)
-        return sparkplug.Metric(name=name, datatype=dt, value=value, timestamp=_now_ms())
+        return sparkplug.Metric(name=name, datatype=dt, value=value,
+                                timestamp=self.stamps.get(name, now))
 
     def _publish(self, topic: str, metrics: list) -> None:
         if self._pub is None:
@@ -122,21 +133,29 @@ class SparkplugNode:
             sparkplug.Metric(name=sparkplug.REBIRTH, datatype=BOOLEAN, value=False)])
         for dev, names in self.devices.items():
             self.seq = sparkplug.next_seq(self.seq)
-            self._publish(self.topic("DBIRTH", dev),
-                          [self._metric(n, self.values.get(n)) for n in names])
+            now = _now_ms()
+            metrics = sorted((self._metric(n, now) for n in names), key=_stamp)
+            self._publish(self.topic("DBIRTH", dev), metrics)
         self._born = True
 
-    def update(self, values: dict) -> None:
-        """A DDATA per device with the metrics whose value changed since the last report.
-        Before the session's births the values are only kept: the births carry them."""
-        changed = {n for n, v in values.items()
-                   if n in self.points and _changed(self.values.get(n), v)}
-        for n in changed:
-            self.values[n] = values[n]
+    def update(self, values: dict, stamps: dict | None = None) -> None:
+        """A DDATA per device with the metrics whose value changed since the last report;
+        ``stamps``: when each value was read (ms since the epoch; now if not given). Before
+        the session's births the values are only kept: the births carry them."""
+        now = _now_ms()
+        changed = set()
+        for n, v in values.items():
+            if n not in self.points:
+                continue
+            if _changed(self.values.get(n), v):
+                changed.add(n)
+                self.values[n] = v
+            # read again, changed or not: a birth reports when the value was last seen
+            self.stamps[n] = (stamps or {}).get(n, now)
         if not self._born:
             return
         for dev, names in self.devices.items():
-            metrics = [self._metric(n, self.values[n]) for n in names if n in changed]
+            metrics = [self._metric(n, now) for n in names if n in changed]
             if metrics:
                 self.seq = sparkplug.next_seq(self.seq)
                 self._publish(self.topic("DDATA", dev), metrics)
