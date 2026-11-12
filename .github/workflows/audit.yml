@@ -2,9 +2,10 @@ name: Dependency audit
 
 # pip-audit over the pinned dependencies: requirements.txt on Python 3.10 (the older pins
 # its markers select there) and 3.12 (the current ones), plus requirements-optional.txt,
-# which the binaries and the image bundle. Called by ci.yml (pull requests, main),
-# release.yml (nothing is published with a known vulnerability in what it ships) and
-# scheduled.yml (daily: an advisory published between pull requests shows up then).
+# which the binaries and the image bundle. Called by ci.yml (pull requests, main, and a
+# release tag through release.yml: nothing is published with a known vulnerability in
+# what it ships) and scheduled.yml (daily: an advisory published between pull requests
+# shows up then).
 on:
   workflow_call:
 

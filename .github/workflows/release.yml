@@ -2,19 +2,25 @@ name: Release
 
 # On a v* tag (git tag -a v2.8.0 -m "..." && git push origin v2.8.0): check the tag (vX.Y.Z
 # or vX.Y.Z-rc.N, equal to "v" + app.__version__, with a dated CHANGELOG section, on a
-# commit of main), build the standalone executables (Linux x86_64 + arm64, Windows x64; no Python or anything else
-# needed) and the Docker image (amd64 + arm64), run every check on them — bundle
-# contents, empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers,
-# the Windows service, the image's non-root / upgrade smoke test — audit the pinned
-# dependencies (audit.yml), and only then publish: the release assets with SHA256SUMS,
+# commit of main), then run the whole CI on the tagged commit (ci.yml: lint, types, the
+# test suites, the dependency audit, the Docker image and the standalone executables for
+# Linux x86_64 + arm64 and Windows x64 with every check on them — bundle contents,
+# empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers, the Windows
+# service), and only when all of it passed publish: the release assets with SHA256SUMS,
 # SBOMs, license texts and build provenance, and the image on GHCR. The write
-# permissions belong to the two publish jobs alone.
+# permissions belong to the publish jobs alone.
 on:
   push:
     tags: ["v*"]
 
 permissions:
   contents: read
+
+# One release at a time, never cancelled: a second tag waits for the first. A group of
+# its own (ci.yml's runs, also the one this workflow calls, use ci-<run>).
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   # Before anything is built, so a mis-versioned tag fails in seconds instead of shipping
@@ -34,12 +40,16 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
             echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not a commit of main"; exit 1; }
 
-  standalone:
+  # Every check a pull request gets (what ci-ok gates merges on), on the tagged commit:
+  # the checks that don't block a merge (Docker, arm64, the distributions, the audit)
+  # can't fail for the first time after half the release is out. Its standalone job
+  # builds the released executables (publish: signed when configured, docs/SIGNING.md).
+  ci:
     needs: verify
     permissions:
       contents: read
-      actions: read       # the reusable workflow requests it (SignPath); the caller must grant it
-    uses: ./.github/workflows/standalone.yml
+      actions: read       # standalone.yml requests it (SignPath); the caller must grant it
+    uses: ./.github/workflows/ci.yml
     with:
       publish: true
     secrets:              # the optional code-signing credentials (docs/SIGNING.md), no others
@@ -48,18 +58,9 @@ jobs:
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
-  docker-test:
-    needs: verify
-    uses: ./.github/workflows/docker.yml
-
-  # no release with a known vulnerability in a pin the binaries or the image ship
-  audit:
-    needs: verify
-    uses: ./.github/workflows/audit.yml
-
   publish:
     name: attach to the release
-    needs: [standalone, audit]
+    needs: [verify, ci]
     runs-on: ubuntu-latest
     permissions:
       contents: write        # the release assets
@@ -70,8 +71,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # the executables and their license texts / SBOMs (not CI's reports)
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
+          pattern: ser2net-*
+          path: artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: meta-*
           path: artifacts
       - name: Name the release assets, SHA256SUMS
         run: |
@@ -120,9 +127,7 @@ jobs:
 
   image:
     name: push the image to GHCR (amd64 + arm64)
-    # also needs the standalone build (incl. Windows signing) to pass, so a failed exe
-    # release doesn't still push the image and leave a split release
-    needs: [docker-test, standalone, audit]
+    needs: [verify, ci]
     runs-on: ubuntu-latest
     permissions:
       contents: read
