@@ -1166,6 +1166,85 @@ class User:
         return u
 
 
+# REST API tokens besides the one of AppConfig.api_token_hash (Settings → REST API token)
+API_TOKENS_MAX = 50
+API_TOKEN_DAYS_MAX = 3650
+API_TOKEN_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
+API_TOKEN_ROLES = ("viewer", "operator")  # what Settings offers ("admin" acts as operator)
+_API_TOKEN_ID = re.compile(r"[0-9a-f]{16}")
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass
+class ApiToken:
+    """A named REST API bearer token, next to the one of AppConfig.api_token_hash: each
+    client can have its own, with its own role and an optional expiry, and is named in the
+    audit log (api-token:<name>). Only the token's SHA-256 is stored. When it was last used
+    is kept in memory only (AppState.api_token_used): every save writes a backup.
+    The token of api_token_hash is handled as an ApiToken without an id (auth.find_api_token)
+    and keeps its audit name 'api-token'."""
+    id: str = ""
+    name: str = ""
+    sha256: str = ""
+    role: str = "viewer"
+    created: float = 0.0
+    expires: float = 0.0   # epoch seconds; 0 = never
+
+    @property
+    def audit_label(self) -> str:
+        return f"api-token:{self.name}" if self.id else "api-token"
+
+    def expired(self, now: Optional[float] = None) -> bool:
+        return bool(self.expires) and (time.time() if now is None else now) >= self.expires
+
+
+def new_api_token_id() -> str:
+    return secrets.token_hex(8)
+
+
+def _api_tokens(raw: Any) -> tuple[list[ApiToken], list[str]]:
+    """api_tokens from a config file, and notes on what had to be changed. An entry without
+    a valid SHA-256 can't match any token and is left out; a role that is not one makes the
+    token read-only (viewer), never more; a missing or doubled id or an unusable name gets
+    a new one (the token itself keeps working)."""
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        return [], ["REST API: api_tokens is not a list, so it was ignored: its tokens no "
+                    "longer work"]
+    tokens: list[ApiToken] = []
+    notes: list[str] = []
+    for i, item in enumerate(raw, 1):
+        digest = item.get("sha256") if isinstance(item, dict) else None
+        if not isinstance(digest, str) or not _SHA256_HEX.fullmatch(digest.strip().lower()):
+            notes.append(f"REST API: api_tokens entry #{i} has no valid sha256, so it was "
+                         "ignored: that token no longer works")
+            continue
+        tid = item.get("id")
+        if not (isinstance(tid, str) and _API_TOKEN_ID.fullmatch(tid)) or any(
+                t.id == tid for t in tokens):
+            tid = new_api_token_id()
+        name = item.get("name")
+        name = name.strip() if isinstance(name, str) else ""
+        if not API_TOKEN_NAME.fullmatch(name) or any(t.name.casefold() == name.casefold()
+                                                     for t in tokens):
+            new_name = f"token-{tid[:6]}"
+            notes.append(f"REST API: api_tokens entry #{i} has the name {name!r}, which is not "
+                         f"1-64 letters, digits, '.', '_' or '-' or is taken: it is now named "
+                         f"{new_name!r}")
+            name = new_name
+        role_raw = item.get("role")
+        role = role_raw.strip().lower() if isinstance(role_raw, str) else ""
+        if role not in ROLES:
+            notes.append(f"REST API: the role {role_raw!r} of the API token {name!r} is not one "
+                         f"of {', '.join(ROLES)}, so the token is read-only (viewer)")
+            role = "viewer"
+        tokens.append(ApiToken(id=tid, name=name, sha256=digest.strip().lower(), role=role,
+                               created=_epoch(item.get("created")),
+                               expires=_epoch(item.get("expires"))))
+    return tokens, notes
+
+
 def new_pwd_version() -> int:
     """The first pwd_version of a new account. A session cookie is checked against the
     user name and this number only, so it is random rather than 1: an account deleted
@@ -1181,6 +1260,8 @@ class AppConfig:
     secret_key: str = field(default_factory=lambda: secrets.token_hex(32))
     api_token_hash: str = ""  # sha256 of the REST API bearer token (empty => API disabled)
     api_token_role: str = "admin"  # role granted by the API token (viewer = read-only)
+    # named API tokens besides that one (optional; written only when there are any)
+    api_tokens: list[ApiToken] = field(default_factory=list)
     # lifetime of a web-UI sign-in (cookie + signed token); Settings -> Web UI access
     session_timeout_s: int = SESSION_TIMEOUT_DEFAULT_S
     # LDAP/OIDC accounts not signed in for this many days are removed (0: never, the
@@ -1218,12 +1299,14 @@ class AppConfig:
             users = [User(username="admin", password_hash=d["password_hash"],
                           role="admin", pwd_version=int(d.get("pwd_version", 0)))]
         token_role, token_note = _api_token_role(d)
+        api_tokens, token_notes = _api_tokens(d.get("api_tokens"))
         cfg = AppConfig(
             version=int(d.get("version", 1)),
             admin_ui=admin_ui,
             secret_key=d.get("secret_key") or secrets.token_hex(32),
             api_token_hash=d.get("api_token_hash", ""),
             api_token_role=token_role,
+            api_tokens=api_tokens,
             session_timeout_s=_session_timeout(d.get("session_timeout_s")),
             external_users_expire_days=_expire_days(d.get("external_users_expire_days")),
             users=users,
@@ -1255,6 +1338,7 @@ class AppConfig:
                 "Settings → Users deletes them all)")
         if token_note:
             cfg.load_notes.append(token_note)
+        cfg.load_notes += token_notes
         if cfg.ldap.enabled and cfg.ldap.uses_tls and "tls_verify" not in (d.get("ldap") or {}):
             cfg.load_notes.append(
                 "LDAP: the directory server's certificate is now checked (LDAPS / StartTLS): "
@@ -1291,6 +1375,8 @@ class AppConfig:
             "secret_key": self.secret_key,
             "api_token_hash": self.api_token_hash,
             "api_token_role": self.api_token_role,
+            # only when there are any: a config.json without named tokens stays as it was
+            **({"api_tokens": [asdict(t) for t in self.api_tokens]} if self.api_tokens else {}),
             "session_timeout_s": self.session_timeout_s,
             "external_users_expire_days": self.external_users_expire_days,
             "users": [asdict(u) for u in self.users],

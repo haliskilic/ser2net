@@ -19,9 +19,10 @@ from starlette.routing import Route
 
 from ... import i18n, importer, optional
 from ...config import (
-    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
-    WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
-    backup_time, new_pwd_version, parse_cluster_peer,
+    API_TOKEN_DAYS_MAX, API_TOKEN_NAME, API_TOKEN_ROLES, API_TOKENS_MAX, EXPIRE_DAYS_MAX,
+    EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS,
+    ApiToken, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User, backup_time,
+    new_api_token_id, new_pwd_version, parse_cluster_peer,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -76,6 +77,8 @@ def routes(ctx: Ctx) -> list:
                       admin=state.config.admin_ui,
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
+                      api_token_last_used=_used(""), api_token_rows=_api_token_rows(),
+                      api_token_max=API_TOKENS_MAX, api_token_days_max=API_TOKEN_DAYS_MAX,
                       new_api_token=new_api_token, new_cluster_key=new_cluster_key,
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       last_sign_in={u.username: _sign_in_time(u) for u in state.config.users},
@@ -335,7 +338,97 @@ def routes(ctx: Ctx) -> list:
             await state.asave()
         state.log("REST API token revoked")
         ctx.audit(request, "api_token_revoke", "")
+        if state.config.api_tokens:
+            return await settings_get(request, ok=_("API token revoked. The other tokens keep "
+                                                    "working."))
         return await settings_get(request, ok=_("API token revoked. The REST API is now disabled."))
+
+    # ---------------- named REST API tokens ----------------
+    def _used(token_id: str) -> str:
+        when = state.api_token_used.get(token_id)
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(when)) if when else "—"
+
+    def _api_token_rows() -> list[dict]:
+        def day(when: float) -> str:
+            return time.strftime("%Y-%m-%d", time.localtime(when)) if when else ""
+
+        return [{"id": t.id, "name": t.name, "role": t.role, "created": day(t.created) or "—",
+                 "expires": day(t.expires), "expired": t.expired(), "last_used": _used(t.id)}
+                for t in state.config.api_tokens]
+
+    async def settings_api_tokens_create(request):
+        """Another REST API token, with its own name, role and optional expiry; the token
+        of api_token_hash stays as it is."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        name = str(form.get("name") or "").strip()
+        role = str(form.get("role") or "viewer").strip().lower()
+        raw_days = str(form.get("expires_days") or "").strip()
+        try:
+            days = int(raw_days) if raw_days else 0
+        except ValueError:
+            days = -1
+        if not API_TOKEN_NAME.fullmatch(name):
+            return await settings_get(request, error=_(
+                "A token name is 1-64 characters: English letters, digits, '.', '_' or '-'."))
+        if role not in API_TOKEN_ROLES:
+            return await settings_get(request, error=_("Invalid role."))
+        if not 0 <= days <= API_TOKEN_DAYS_MAX:
+            return await settings_get(request, error=_(
+                "Enter 0 (never) or a number of days from 1 to {0}.").format(API_TOKEN_DAYS_MAX))
+        token = auth.new_api_token()
+        now = time.time()
+        async with state.config_lock:
+            tokens = state.config.api_tokens
+            if any(t.name.casefold() == name.casefold() for t in tokens):
+                return await settings_get(request, error=_(
+                    "There is a token named '{0}' already.").format(name))
+            if len(tokens) >= API_TOKENS_MAX:
+                return await settings_get(request, error=_(
+                    "There are {0} tokens already, the most there can be: revoke one "
+                    "first.").format(API_TOKENS_MAX))
+            new = ApiToken(id=new_api_token_id(), name=name, sha256=auth.hash_token(token),
+                           role=role, created=now, expires=now + days * 86400 if days else 0.0)
+            tokens.append(new)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                tokens.remove(new)
+                return await settings_get(request, error=str(e))
+        state.log(f"REST API token {name!r} created (role: {role}"
+                  + (f", expires in {days} days)" if days else ")"))
+        ctx.audit(request, "api_token_create", f"{name}:{role}" + (f":{days}d" if days else ""))
+        return await settings_get(request, new_api_token=token, ok=_(
+            "New API token '{0}' (role: {1}). Copy it now — it is not shown again.").format(
+                name, role))
+
+    async def settings_api_tokens_revoke(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        token_id = str(form.get("id") or "")
+        async with state.config_lock:
+            tokens = state.config.api_tokens
+            gone = next((t for t in tokens if t.id == token_id), None)
+            if gone is None:
+                return await settings_get(request, error=_("No such token (it may have been "
+                                                           "revoked already)."))
+            index = tokens.index(gone)
+            tokens.remove(gone)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                tokens.insert(index, gone)
+                return await settings_get(request, error=str(e))
+        state.api_token_used.pop(gone.id, None)
+        state.log(f"REST API token {gone.name!r} revoked")
+        ctx.audit(request, "api_token_revoke", gone.name)
+        return await settings_get(request, ok=_("API token '{0}' revoked.").format(gone.name))
 
     # ---------------- LDAP / AD settings (admin only) ----------------
     def _directory_off_problem(before: int, name: str) -> str | None:
@@ -886,7 +979,7 @@ def routes(ctx: Ctx) -> list:
         # the accounts and credentials
         keep = {"secret_key", "instance_id", "load_notes", "ids_created", "tolerated"}
         if not with_accounts:
-            keep |= {"users", "api_token_hash", "api_token_role"}
+            keep |= {"users", "api_token_hash", "api_token_role", "api_tokens"}
         notes = []
         async with state.config_lock:
             cur = state.config
@@ -1094,6 +1187,8 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/sessions/revoke-all", settings_sessions_revoke_all, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
+        Route("/settings/api-tokens", settings_api_tokens_create, methods=["POST"]),
+        Route("/settings/api-tokens/revoke", settings_api_tokens_revoke, methods=["POST"]),
         Route("/settings/users", settings_users_create, methods=["POST"]),
         Route("/settings/users/password", settings_users_password, methods=["POST"]),
         Route("/settings/users/role", settings_users_role, methods=["POST"]),
@@ -1194,6 +1289,10 @@ def _account_changes(old, new) -> list[str]:
         out.append(_("Accounts with another password or role: {0}").format(", ".join(changed)))
     if (old.api_token_hash, old.api_token_role) != (new.api_token_hash, new.api_token_role):
         out.append(_("The REST API token as it was then (the current one stops working)"))
+    if ({(t.sha256, t.role, t.expires) for t in old.api_tokens}
+            != {(t.sha256, t.role, t.expires) for t in new.api_tokens}):
+        out.append(_("The other REST API tokens as they were then: {0}").format(
+            ", ".join(t.name for t in new.api_tokens) or _("none")))
     if (old.cluster.key, old.cluster.previous_key) != (new.cluster.key, new.cluster.previous_key):
         out.append(_("The cluster key as it was then"))
     return out
