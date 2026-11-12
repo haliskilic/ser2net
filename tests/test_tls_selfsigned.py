@@ -8,7 +8,8 @@ executables — and the openssl command is only a fallback for source installs.
   1. with cryptography and an EMPTY PATH: a TLS server loads the certificate and
      key, and a client that trusts it completes a verified handshake to
      "localhost" and 127.0.0.1 (subject alternative names); key file is 0600 (POSIX)
-  2. without cryptography: falls back to the openssl command when one exists, and
+  2. without cryptography: falls back to the openssl command when one exists (by full
+     path from an absolute PATH entry, never from the working directory), and
      with neither there is a clear error instead of a crash
   3. the real server started with an EMPTY PATH: POST /settings/tls/generate saves
      the pair and points admin_ui.tls_cert / tls_key at it
@@ -202,10 +203,34 @@ def test_web_button_with_empty_path():
         shutil.rmtree(empty, ignore_errors=True)
 
 
+def test_openssl_by_full_path():
+    """The fallback runs openssl by its full path from an absolute PATH entry, never one
+    in the current directory or a relative PATH entry (Windows would run an openssl.exe
+    from the working directory before PATH)."""
+    name = "openssl.exe" if os.name == "nt" else "openssl"
+    saved_path, saved_cwd = os.environ.get("PATH", ""), os.getcwd()
+    with tempfile.TemporaryDirectory() as bin_dir, tempfile.TemporaryDirectory() as empty:
+        fake = os.path.join(bin_dir, name)
+        with open(fake, "w") as fh:
+            fh.write("#!/bin/sh\nexit 1\n")
+        os.chmod(fake, 0o755)
+        try:
+            os.environ["PATH"] = os.pathsep.join([empty, bin_dir])
+            assert selfsigned.find_openssl() == fake, selfsigned.find_openssl()
+            os.chdir(bin_dir)  # in the working directory, and as a relative PATH entry
+            os.environ["PATH"] = os.pathsep.join([empty, os.curdir, ""])
+            assert selfsigned.find_openssl() is None, selfsigned.find_openssl()
+        finally:
+            os.chdir(saved_cwd)
+            os.environ["PATH"] = saved_path
+    print("openssl fallback: full path from an absolute PATH entry only  OK")
+
+
 def main():
     have = need("cryptography", what="certificates made in-process (parts 1 and 3)")
     if have:
         test_cryptography_without_openssl()
+    test_openssl_by_full_path()
     test_fallbacks_without_cryptography()
     if have:
         test_web_button_with_empty_path()
