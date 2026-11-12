@@ -55,7 +55,22 @@ def _start_failure(error: str, retrying: bool) -> tuple[str, str]:
 _SHOWN = ("state", "device", "last_error", "client_count", "dropped_clients", "bytes_dropped",
           # a connect-out link's state, a serial port's hint and warnings, the bind retry
           "link", "link_error", "hint", "warnings", "retrying", "next_retry_s",
-          "trace_error")  # a trace that is not written now
+          "trace_error",  # a trace that is not written now
+          # a Modbus gateway's polled units, its MQTT link (only what the row shows of them:
+          # _shown_status)
+          "units", "mqtt")
+
+
+def _shown_status(st, key):
+    """What the row shows of a status field: of a gateway's units, which ones stopped
+    answering (their read counts change at every poll); of the MQTT link, its state, broker
+    and error (not its count of dropped messages)."""
+    value = st.get(key)
+    if key == "units":
+        return tuple(u.get("unit") for u in value or () if u.get("state") == "offline")
+    if key == "mqtt":
+        return tuple((value or {}).get(k) for k in ("state", "broker", "error"))
+    return value
 
 
 def _steady(st):
@@ -65,7 +80,7 @@ def _steady(st):
     count of a mapping whose device is missing goes up every few seconds)."""
     if not st:
         return None
-    return (tuple(st.get(k) for k in _SHOWN),
+    return (tuple(_shown_status(st, k) for k in _SHOWN),
             [(c.get("peer"), c.get("priority"), c.get("connected_at")) for c in st.get("clients") or ()])
 
 

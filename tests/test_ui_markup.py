@@ -667,6 +667,7 @@ def test_units_not_answering():
                  "since": None, "errors": 0} for n, st in states]
     for state, unit_states, shown in (
             ("running", [(1, "online"), (2, "offline"), (7, "offline"), (9, "unknown")], "2, 7"),
+            ("running", [(1, "online"), (4, "offline")], "4"),
             ("running", [(1, "online"), (2, "unknown")], None),
             ("running", [], None),
             ("reconnecting", [(1, "offline")], None)):
@@ -678,7 +679,8 @@ def test_units_not_answering():
         if shown is None:
             assert not flagged, (state, unit_states, out)
             continue
-        assert len(flagged) == 1 and f"Modbus unit(s) not answering: {shown}" in out, out
+        word = "units" if "," in shown else "unit"   # (ngettext: one unit, or several)
+        assert len(flagged) == 1 and f"Modbus {word} not answering: {shown}" in out, out
         assert "in 3 polls in a row" in flagged[0].attrs["title"], flagged[0].attrs
     out = tpl.render(mappings=[m], statuses={"gw": {"state": "running"}}, can_edit=False)
     assert "data-units-offline" not in out, "a status without units (an older peer's) works"
