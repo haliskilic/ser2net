@@ -79,6 +79,7 @@ ROUTES = {
     ("POST", "/settings/tls/generate"): (ADMIN, FORM),
     ("POST", "/settings/access"): (ADMIN, FORM),
     ("POST", "/settings/proxy"): (ADMIN, FORM),
+    ("POST", "/settings/node-name"): (ADMIN, FORM),
     ("POST", "/settings/sessions/revoke-all"): (ADMIN, FORM),
     ("POST", "/settings/api-token"): (ADMIN, FORM),
     ("POST", "/settings/api-token/revoke"): (ADMIN, FORM),

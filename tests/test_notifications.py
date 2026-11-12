@@ -182,7 +182,8 @@ async def test_delivery(hook_port, smtp_port):
         "webhook_url": f"http://127.0.0.1:{hook_port}/hook", "webhook_format": "json",
         "email_to": "ops@example.com, lead@example.com", "smtp_host": "127.0.0.1",
         "smtp_port": smtp_port, "smtp_security": "none"})
-    st.config = type("C", (), {"notifications": s, "mappings": [], "admin_ui": AdminUI()})()
+    st.config = type("C", (), {"notifications": s, "mappings": [], "admin_ui": AdminUI(),
+                               "instance_id": "0123456789abcdef"})()
     n = notify.Notifier(st)
     assert n.emit("device_lost", "m1", "PLC", "gone") is True
     assert n.emit("device_lost", "m1", "PLC", "gone") is False, "repeat within repeat_s"

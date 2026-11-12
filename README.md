@@ -324,7 +324,10 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
-  **yedek al/yükle** (JSON), durum.
+  **yedek al/yükle** (JSON), durum ve **bu kurulumun adı** (Yönetim arayüzü; ya da
+  `SER2NET_NODE_NAME`): bildirimler, tarayıcı sekmesi, üst bar ve LAN cluster'ın filo
+  görünümü, aynı makinedeki kurulumların paylaştığı host adı yerine bunu kullanır; genel
+  JSON webhook'u ayrıca `hostname` ve `instance_id` alır.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
   düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,

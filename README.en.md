@@ -315,7 +315,10 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
 - **Trace** (operators): the mapping's trace files, to list and download.
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
-  token**, mappings **backup/restore** (JSON), status.
+  token**, mappings **backup/restore** (JSON), status, and the **name of this instance**
+  (Admin interface; or `SER2NET_NODE_NAME`): notifications, the browser tab, the top bar and
+  the LAN cluster's fleet view use it instead of the host name, which instances on one
+  machine share; the generic JSON webhook also gets `hostname` and `instance_id`.
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),

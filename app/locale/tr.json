@@ -874,5 +874,14 @@
   "Published as <a class=\"mono\" href=\"%(url)s\">%(url)s</a> (Settings → Reverse proxy)": "Yayın adresi: <a class=\"mono\" href=\"%(url)s\">%(url)s</a> (Ayarlar → Reverse proxy)",
   "the address users open, such as https://ser2net.example.com, or https://gw.example.com/ser2net to serve the UI under that path too · blank: none": "kullanıcıların açtığı adres, örneğin https://ser2net.example.com; arayüz o yolun altında da sunulsun diye https://gw.example.com/ser2net · boş: yok",
   "Pages at the public URL count as this UI’s own (forms, console), a blank SSO redirect URI becomes the public URL followed by %(path)s, and notifications link to it. With a path, the UI is served under it too (the proxy passes the path on, or strips it and sends it as X-Forwarded-Prefix), and its cookies there are its own: users sign in once more.": "Genel URL'deki sayfalar bu arayüzün kendi sayfası sayılır (formlar, konsol), boş bir SSO redirect URI genel URL'nin sonuna %(path)s eklenerek oluşturulur ve bildirimler bu adrese bağlantı verir. Yol içeriyorsa arayüz o yolun altında da sunulur (proxy yolu olduğu gibi iletir ya da kaldırıp X-Forwarded-Prefix ile gönderir); oradaki cookie'ler ayrıdır, kullanıcılar bir kez daha giriş yapar.",
-  "Redirect URI below is blank, so it is made from the public URL (Settings → Reverse proxy)": "aşağıdaki Redirect URI boş olduğu için genel URL'den oluşturuldu (Ayarlar → Reverse proxy)"
+  "Redirect URI below is blank, so it is made from the public URL (Settings → Reverse proxy)": "aşağıdaki Redirect URI boş olduğu için genel URL'den oluşturuldu (Ayarlar → Reverse proxy)",
+  "The instance name must be text.": "Kurulum adı metin olmalı.",
+  "The instance name can have at most {0} characters.": "Kurulum adı en fazla {0} karakter olabilir.",
+  "The instance name can’t have control characters or line breaks.": "Kurulum adında kontrol karakteri ya da satır sonu olamaz.",
+  "the name of this instance": "bu kurulumun adı",
+  "Name of this instance": "Bu kurulumun adı",
+  "for instances that share a host name: notifications, the browser tab, the top bar and the cluster’s fleet view show it · blank: the host name, %(host)s": "aynı host adını paylaşan kurulumlar için: bildirimler, tarayıcı sekmesi, üst bar ve cluster filo görünümü bu adı gösterir · boş: host adı, %(host)s",
+  "Save name": "Adı kaydet",
+  "Instance name saved.": "Kurulum adı kaydedildi.",
+  "Instance name": "Kurulum adı"
 }

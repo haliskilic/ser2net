@@ -22,9 +22,11 @@ import time
 import urllib.request
 from collections import deque
 from email.message import EmailMessage
+from email.utils import formataddr, parseaddr
 from typing import Optional
 
 from . import __version__, i18n
+from .config import node_name as configured_name
 from .i18n import _
 from .web import proxy
 
@@ -86,16 +88,18 @@ def snapshot(statuses: dict) -> dict:
             for mid, st in statuses.items()}
 
 
-def message(event: str, mapping: str, detail: str, url: str = "") -> tuple[str, str]:
-    """(title, text) of a notification; `url`: the web UI's public URL (a last line)."""
-    host = socket.gethostname()
+def message(event: str, mapping: str, detail: str, url: str = "",
+            name: str = "") -> tuple[str, str]:
+    """(title, text) of a notification; `url`: the web UI's public URL (a last line);
+    `name`: this instance's name (Settings -> Admin interface), else the host name."""
+    host = name or socket.gethostname()
     head = f"ser2net {host}: {mapping + ' — ' if mapping else ''}{title(event)}"
     return head, head + (f"\n{detail}" if detail else "") + (f"\n{url}" if url else "")
 
 
 def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str = "",
-                 url: str = "") -> dict:
-    head, text = message(event, mapping, detail, url)
+                 url: str = "", name: str = "", instance_id: str = "") -> dict:
+    head, text = message(event, mapping, detail, url, name)
     if fmt == "slack":
         return {"text": text}
     if fmt == "discord":
@@ -110,17 +114,23 @@ def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str =
                         "body": [{"type": "TextBlock", "text": head, "weight": "Bolder", "wrap": True},
                                  {"type": "TextBlock", "text": detail or " ", "wrap": True}]
                         + ([{"type": "TextBlock", "text": url, "wrap": True}] if url else [])}}]}
+    # "node": the instance's name or the host name; "hostname" and "instance_id" (the
+    # cluster id) tell instances on one host apart for a program
     body = {"event": event, "mapping": mapping, "detail": detail, "text": text,
-            "node": socket.gethostname(), "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "version": __version__}
+            "node": name or socket.gethostname(), "hostname": socket.gethostname(),
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "version": __version__}
+    if instance_id:
+        body["instance_id"] = instance_id
     if url:  # only with a public URL (Settings -> Reverse proxy)
         body["url"] = url
     return body
 
 
-def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "") -> None:
+def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "",
+                 name: str = "", instance_id: str = "") -> None:
     body = json.dumps(webhook_body(settings.webhook_format, event, mapping, detail,
-                                   str(settings.telegram_chat_id), url)).encode()
+                                   str(settings.telegram_chat_id), url, name,
+                                   instance_id)).encode()
     req = urllib.request.Request(settings.webhook_url.strip(), data=body, method="POST",
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": f"ser2net/{__version__}"})
@@ -129,15 +139,28 @@ def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "")
             raise OSError(f"webhook answered HTTP {r.status}")
 
 
-def send_email(settings, event: str, mapping: str, detail: str, url: str = "") -> None:
-    head, text = message(event, mapping, detail, url)
+def sender(settings, name: str = "") -> str:
+    """The From of a notification e-mail: the address set (ser2net@<host name> without one),
+    with "ser2net <name>" as its display name when the instance has a name and the address
+    set has none (the name is never put into the address itself)."""
+    host = socket.gethostname()
+    address = settings.email_from.strip() or f"ser2net@{host}"
+    shown, _addr = parseaddr(address)
+    return formataddr((f"ser2net {name}", address)) if name and not shown else address
+
+
+def send_email(settings, event: str, mapping: str, detail: str, url: str = "",
+               name: str = "") -> None:
+    head, text = message(event, mapping, detail, url, name)
+    host = socket.gethostname()
     msg = EmailMessage()
     msg["Subject"] = head
-    msg["From"] = settings.email_from.strip() or f"ser2net@{socket.gethostname()}"
+    msg["From"] = sender(settings, name)
     msg["To"] = ", ".join(settings.recipients)
     # quoted-printable keeps the message 7-bit, so Turkish text and non-ASCII mapping names
     # also pass servers without 8BITMIME
-    msg.set_content(text + "\n\n-- \n" + _("ser2net {0} on {1}").format(__version__, socket.gethostname())
+    where = f"{name} ({host})" if name and name != host else host
+    msg.set_content(text + "\n\n-- \n" + _("ser2net {0} on {1}").format(__version__, where)
                     + "\n", cte="quoted-printable")
     ctx = ssl.create_default_context()
     if settings.smtp_security == "ssl":
@@ -240,7 +263,8 @@ class Notifier:
                       settings=None) -> list[str]:
         """Send to every configured channel now; returns the errors (empty = all sent).
         Messages are in the UI's default language (Settings -> Web UI access), or
-        English when that is "the browser's", and end with the UI's public URL when one is
+        English when that is "the browser's", name the instance by its name (Settings ->
+        Admin interface) or else the host name, and end with the UI's public URL when one is
         set (Settings -> Reverse proxy)."""
         s = settings or self.settings
         token = i18n.set_language(self.state.config.admin_ui.language)
@@ -251,15 +275,18 @@ class Notifier:
 
     async def _deliver(self, s, event: str, mapping: str, detail: str) -> list[str]:
         errors = []
-        url = proxy.public_url(self.state.config.admin_ui)
+        cfg = self.state.config
+        url = proxy.public_url(cfg.admin_ui)
+        name = configured_name(cfg.admin_ui)   # '' = the host name
         if s.webhook_url.strip():
             try:
-                await asyncio.to_thread(send_webhook, s, event, mapping, detail, url)
+                await asyncio.to_thread(send_webhook, s, event, mapping, detail, url,
+                                        name=name, instance_id=cfg.instance_id)
             except Exception as e:
                 errors.append(f"webhook ({s.webhook_format}) failed: {_reason(e)}")
         if s.recipients:
             try:
-                await asyncio.to_thread(send_email, s, event, mapping, detail, url)
+                await asyncio.to_thread(send_email, s, event, mapping, detail, url, name=name)
             except Exception as e:
                 errors.append(f"e-mail via {s.smtp_host}:{s.smtp_port} failed: {_reason(e)}")
         return errors
