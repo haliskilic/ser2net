@@ -227,6 +227,15 @@
       <label>{{ _("RFC 2217 signature") }} <span class="muted">({{ _("the answer to a client that asks for the server’s signature · blank = ser2net") }})</span>
         <input type="text" name="opt_rfc2217_signature" maxlength="128" value="{{ mapping.options.rfc2217_signature }}" placeholder="ser2net"></label>
     </div>
+    <div data-show-when="network_protocol=raw,telnet,rfc2217">
+      <div class="grid3">
+        <label>{{ _("Poll string") }} <span class="muted">({{ _("sent to the device on an interval; these stand for bytes:") }} <span class="mono">\r \n \t \\ \xHH</span>)</span>
+          <input type="text" name="opt_poll_string" value="{{ mapping.options.poll_string }}" placeholder="{{ _('e.g. %(example)s', example='P\\r\\n') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+        <label>{{ _("Poll interval (s)") }} <span class="muted">({{ _("0 = off") }})</span>
+          <input type="number" name="opt_poll_interval_s" min="0" max="86400" step="any" value="{{ '%g'|format(mapping.options.poll_interval_s) }}"></label>
+        <label class="chk chk-pad"><input type="checkbox" name="opt_poll_with_clients" {% if mapping.options.poll_with_clients %}checked{% endif %}> {{ _("Also while a TCP client is connected") }}</label>
+      </div>
+    </div>
     <div class="grid2">
       <label>{{ _("Idle timeout (s)") }} <span class="muted">({{ _("TCP; no traffic either way · 0 = off") }})</span>
         <input type="number" name="opt_idle_timeout_s" min="0" value="{{ mapping.options.idle_timeout_s }}"></label>
@@ -264,6 +273,19 @@
       <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       <label>{{ _("Password") }} <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="{{ _('optional') }}"></label>
       <label class="chk chk-pad"><input type="checkbox" name="mqtt_tls" {% if mapping.mqtt.tls %}checked{% endif %}> TLS</label>
+    </div>
+    <div data-show-when="network_protocol=raw,telnet,rfc2217">
+      <div class="grid2">
+        <label>{{ _("Line end") }} <span class="muted">({{ _("what ends a serial line that is published") }})</span>
+          <select name="mqtt_line_end">
+            {% for value, label in (("lf", "LF"), ("cr", "CR"), ("any", _("CR or LF"))) %}<option value="{{ value }}" {% if mapping.mqtt.line_end == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select></label>
+        <div>
+          <input type="hidden" name="mqtt_tx_shown" value="1">
+          <label class="chk chk-pad"><input type="checkbox" name="mqtt_tx_enabled" {% if mapping.mqtt.tx_enabled %}checked{% endif %}> {{ _("Write messages on &lt;topic&gt;/tx to the device") }} <span class="muted">({{ _("as they are; the answer goes to &lt;topic&gt;/tx/result; read-only refuses them, a retained one is ignored") }})</span></label>
+        </div>
+      </div>
+      {% if mapping.accepts_mqtt_tx and not (mapping.mqtt.tls and mapping.mqtt.username) %}<div class="banner warn">{{ _("MQTT messages are written to the device over a broker connection without TLS or a username: any client the broker lets publish to &lt;topic&gt;/tx can write to it. Restrict that topic with the broker’s ACLs, and use TLS and credentials.") }}</div>{% endif %}
     </div>
     <div class="grid3" data-show-when="network_protocol=modbus">
       <label>{{ _("Payload format") }} <span class="muted">({{ _("Modbus points") }})</span>

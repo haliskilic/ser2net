@@ -274,7 +274,18 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
   broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status.
-  Needs `paho-mqtt` (optional; the bridge runs normally without it).
+  Needs `paho-mqtt` (optional; the bridge runs normally without it). A line ends at **LF**
+  (the default; a CR before it is left out), **CR** (scales, analyzers and other devices
+  that end their records with CR; an LF next to it is left out) or **CR or LF**
+  (`mqtt.line_end`); past 64 KiB without a line end the oldest bytes are dropped, and the
+  log says so once. **Write messages on `<topic>/tx` to the device** (`mqtt.tx_enabled`,
+  off by default) writes each message to the serial port as it is, in one piece between
+  what TCP clients send, and answers on `<topic>/tx/result` (`ok` / `error: …`: read-only,
+  too long, busy with 64 KiB waiting, port not open); a retained one is never written. A
+  **poll string** (`options.poll_string`, with `\r \n \t \\ \xHH`) is sent every **poll
+  interval** while the port is open and no TCP client is connected (or always, with **Also
+  while a TCP client is connected**), so a device that only answers queries reaches MQTT, a
+  trace or a UDP target without an external poller holding the TCP connection.
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as
   warnings, and a connection that would be more open here (a gtlssh login, TLS client
@@ -560,7 +571,8 @@ so the broker's access rules (ACLs) are the authorization: let only the clients 
 switch outputs publish to the command topics, and connect to the broker with TLS and a
 username/password. **Read-only** refuses every write. The dashboard marks a mapping that
 takes MQTT writes with **CMD**, and with **CMD ⚠** (plus a warning in its log at start)
-when its broker connection has no TLS or no username. A Mosquitto `acl_file` for the base
+when its broker connection has no TLS or no username. The same holds for a serial mapping
+that writes `<topic>/tx` to the device (**CMD** too). A Mosquitto `acl_file` for the base
 topic `plant/line3`, for example:
 ```
 user ser2net

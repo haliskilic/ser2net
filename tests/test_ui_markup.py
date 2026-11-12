@@ -378,6 +378,44 @@ def test_mqtt_command_tags():
           "read-only is RO only  OK")
 
 
+def test_mqtt_tx_tags():
+    """A serial mapping that writes MQTT messages on <base_topic>/tx to the device is tagged
+    CMD too (CMD ⚠ and a form banner without TLS or a username); read-only or tx off: not."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+
+    def serial(mid, mqtt=None, **network):
+        return MappingConfig.from_dict({
+            "id": mid, "name": mid, "serial": {"port": "COM3"},
+            "network": dict({"protocol": "raw", "port": 4001}, **network),
+            "mqtt": dict({"enabled": True, "host": "b", "base_topic": "lab/scale",
+                          "tx_enabled": True}, **(mqtt or {}))})
+    env = make_templates().env
+    rows, form = env.get_template("_mappings_body.html"), env.get_template("_mapping_form.html")
+
+    def row(m):
+        out = rows.render(mappings=[m], statuses={}, can_edit=False)
+        check_table_contract(out, f"mappings table ({m.id})")
+        return out
+
+    def form_of(m):
+        return form.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                           ports=[], ips=[], error=None)
+
+    out = row(serial("open"))
+    assert ">CMD ⚠</span>" in out and "tag tag-danger" in out, out
+    assert "&lt;topic&gt;/tx are written to the device" in out
+    assert 'class="banner warn"' in form_of(serial("open"))
+    secure = serial("secure", {"tls": True, "username": "u"})
+    assert ">CMD</span>" in row(secure) and "tag-danger" not in row(secure)
+    assert 'class="banner warn"' not in form_of(secure)
+    for m in (serial("ro", read_only=True), serial("off", {"tx_enabled": False})):
+        assert ">CMD" not in row(m) and 'class="banner warn"' not in form_of(m), m.id
+    print("CMD tag and the form warning for MQTT writes to a serial mapping (<topic>/tx)  OK")
+
+
 def test_mapping_form_kick_hint():
     """A server mapping with "Kick old client" on and no allow-list says, in its form, that any
     host reaching the port can take the connection over; with an allow-list, or without
@@ -413,6 +451,7 @@ def main():
     test_mapping_form_port_lock()
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()
+    test_mqtt_tx_tags()
     print("\nPASS: UI markup contract")
 
 

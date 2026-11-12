@@ -97,6 +97,7 @@ PORTABLE = [
     "test_protocol_commands.py",   # telnet / RFC 2217 BREAK, answers and command order
     "test_console_break.py",       # the web console's BREAK; POSIX PTYs, skips on Windows
     "test_device_unavailable.py",  # disconnect_without_device (stand-in port, loopback)
+    "test_serial_mqtt.py",         # MQTT line ends, <topic>/tx writes, the poll string
     "test_rfc2217_settings.py",
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
     "test_serial_compat.py",      # PTY parts POSIX only; the transport parts run on Windows too
