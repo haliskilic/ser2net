@@ -208,9 +208,13 @@ jobs:
           ref: ${{ needs.check.outputs.tag }}   # the release's own smoke test
           persist-credentials: false
       - if: env.BUILT == 'true' && matrix.qemu
+        # (not under DOCKER_DEFAULT_PLATFORM: the image that installs QEMU must be the
+        # runner's own, an arm/v7 one can't run before QEMU is there)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
         with:
           platforms: arm
+        env:
+          DOCKER_DEFAULT_PLATFORM: ""
       - name: Sign in to GHCR (read)
         if: env.BUILT == 'true'
         env:
