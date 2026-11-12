@@ -104,12 +104,17 @@ def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str =
 
 
 def send_webhook(settings, event: str, mapping: str, detail: str) -> None:
+    url = settings.webhook_url.strip()
+    # http(s) only, also when a config.json with another URL was tolerated on load
+    # (NotificationSettings.validate refuses it when settings are saved)
+    if not url.lower().startswith(("https://", "http://")):
+        raise OSError("the webhook URL must start with https:// (or http://)")
     body = json.dumps(webhook_body(settings.webhook_format, event, mapping, detail,
                                    str(settings.telegram_chat_id))).encode()
-    req = urllib.request.Request(settings.webhook_url.strip(), data=body, method="POST",
+    req = urllib.request.Request(url, data=body, method="POST",  # noqa: S310 (http(s) only)
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": f"ser2net/{__version__}"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 (http(s) only)
         if r.status >= 300:
             raise OSError(f"webhook answered HTTP {r.status}")
 
