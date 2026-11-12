@@ -11,6 +11,7 @@ import json
 import os
 import re
 import threading
+import time
 import urllib.parse
 from collections import OrderedDict
 from collections.abc import Callable
@@ -130,6 +131,31 @@ def bytesize(value) -> str:
         if n >= size:
             return f"{n / size:.1f} {unit}"
     return f"{n} B"
+
+
+def duration(secs) -> str:
+    """A connection's age for people, in the page's language: 2m 05s, 1h 02m (as
+    engine.bridge.fmt_duration writes it in English for the logs and the REST API;
+    app.js counts it on in the browser with the same units)."""
+    try:
+        s = max(0, int(secs))
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return _("{0}h {1}m").format(h, f"{m:02d}")
+    if m:
+        return _("{0}m {1}s").format(m, f"{s:02d}")
+    return _("{0}s").format(s)
+
+
+def since(unix_time) -> str:
+    """duration() from `unix_time` (a client's connected_at) until now."""
+    try:
+        return duration(time.time() - float(unix_time))
+    except (TypeError, ValueError):
+        return ""
 
 
 def notice(text: str, kind: str = "ok", focus: str = "") -> dict:

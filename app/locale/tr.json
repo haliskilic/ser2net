@@ -920,5 +920,10 @@
   "{0}: enter a whole number.": "{0}: bir tam sayı gir.",
   "{0}: enter a number.": "{0}: bir sayı gir.",
   "{0} (serial port B)": "{0} (seri port B)",
-  "MQTT broker port": "MQTT broker portu"
+  "MQTT broker port": "MQTT broker portu",
+  "{0}h {1}m": "{0} sa {1} dk",
+  "{0}m {1}s": "{0} dk {1} sn",
+  "{0}s": "{0} sn",
+  "{0}d {1}h": "{0} gün {1} sa",
+  "{0}m": "{0} dk"
 }

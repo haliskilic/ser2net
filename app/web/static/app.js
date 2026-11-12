@@ -131,18 +131,19 @@ document.addEventListener("htmx:beforeSwap", function (e) {
 
 // 1e) Connection times in the mappings table count on in the browser, from when each
 //     client connected (data-since, by the server's clock, which each answer of the table
-//     gives in X-Server-Time): the table is not sent again every second for them. As
-//     fmt_duration in app/engine/bridge.py.
+//     gives in X-Server-Time): the table is not sent again every second for them. As the
+//     duration filter in app/web/routes/common.py.
 var serverSkew = 0;
 document.addEventListener("htmx:afterRequest", function (e) {
   var xhr = e.detail.xhr, t = xhr && xhr.status ? xhr.getResponseHeader("X-Server-Time") : null;
   if (t && isFinite(+t)) serverSkew = +t - Date.now() / 1000;
 });
-function fmtDuration(secs) {
+function fmtDuration(secs) {   // in the page's language, as the server's duration filter
   secs = Math.max(0, Math.floor(secs));
   var h = Math.floor(secs / 3600), m = Math.floor(secs % 3600 / 60), s = secs % 60;
   function two(n) { return (n < 10 ? "0" : "") + n; }
-  return h ? h + "h " + two(m) + "m" : m ? m + "m " + two(s) + "s" : s + "s";
+  return h ? tr("dur_hm", "{0}h {1}m", h, two(m))
+           : m ? tr("dur_ms", "{0}m {1}s", m, two(s)) : tr("dur_s", "{0}s", s);
 }
 function tickDurations() {
   if (document.hidden) return;

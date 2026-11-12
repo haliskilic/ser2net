@@ -161,6 +161,33 @@ def test_mappings_table():
     print("mappings table: wrapper, card labels, buttons in their cell, escaping  OK")
 
 
+def test_durations_translated():
+    """Connection times and a node's uptime are written with the page's units (the REST
+    API's duration stays as the engine writes it); a client without connected_at (an
+    older peer's payload) shows the duration it came with."""
+    import time
+
+    from app import i18n
+    from app.web.routes.cluster import _fmt_uptime
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    clients = [{"peer": "10.0.0.5:5000", "duration": "1h 02m", "connected_at": time.time() - 3725},
+               {"peer": "10.0.0.6:5000", "duration": "7m 01s"}]
+    statuses = {"m1": {"state": "running", "client_count": 2, "clients": clients}}
+    tok = i18n.set_language("tr")
+    try:
+        out = tpl.render(mappings=mappings(), statuses=statuses, can_edit=False)
+        uptime = (_fmt_uptime(90000), _fmt_uptime(3725), _fmt_uptime(59))
+    finally:
+        i18n.reset(tok)
+    assert '<span class="dur">1 sa 02 dk</span>' in out and "1h 02m" not in out, out[out.find("peer mono"):][:300]
+    assert '<span class="dur">7m 01s</span>' in out, "without connected_at: the text it came with"
+    assert uptime == ("1 gün 1 sa", "1 sa 2 dk", "0 dk"), uptime
+    assert _fmt_uptime(90000) == "1d 1h", "English outside a Turkish request"
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert 'tr("dur_hm", "{0}h {1}m"' in js and '"h "' not in js, "app.js counts on with the same units"
+    print("durations: connection times and uptime in the page's units, older payloads as sent  OK")
+
+
 def test_cluster_table():
     tpl = make_templates().env.get_template("_cluster_body.html")
     node_maps = [{"id": "x1", "name": EVIL, "enabled": True, "kind": "server/raw",
@@ -708,6 +735,7 @@ def test_app_js_inserts_no_server_html():
 def main():
     test_softbreak()
     test_mappings_table()
+    test_durations_translated()
     test_cluster_table()
     test_counters_and_empty_state()
     test_ports_table_and_assets()
