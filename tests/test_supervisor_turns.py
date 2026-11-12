@@ -103,12 +103,13 @@ def one_runner(sup, mid, port):
 async def test_same_mapping_takes_turns():
     reset()
     sup = Supervisor()
+    # fixed port: a FakeRunner key (PORTS); nothing listens on it
     m = mapping("aaaaaaaaaaa1", 7001)
     await sup.apply_mapping(m)
     await asyncio.gather(sup.apply_mapping(m), sup.apply_mapping(m))
-    one_runner(sup, m.id, 7001)
+    one_runner(sup, m.id, m.network.port)
     await asyncio.gather(sup.restart_mapping(m), sup.restart_mapping(m), sup.apply_mapping(m))
-    one_runner(sup, m.id, 7001)
+    one_runner(sup, m.id, m.network.port)
     # a delete while a start is under way: nothing keeps running
     start = asyncio.ensure_future(sup.apply_mapping(m))
     await asyncio.sleep(0.005)
@@ -137,6 +138,7 @@ async def test_other_mappings_side_by_side():
     supervisor.make_runner, real = ((lambda m, log, trace_dir=None, state_dir=None: Waits(m)),
                                     supervisor.make_runner)
     try:
+        # fixed port: FakeRunner keys (PORTS); nothing listens on them
         results = await asyncio.gather(sup.apply_mapping(mapping("bbbbbbbbbbb1", 7011)),
                                        sup.apply_mapping(mapping("bbbbbbbbbbb2", 7012)))
     finally:
@@ -149,15 +151,18 @@ async def test_other_mappings_side_by_side():
 
 async def test_current_config_wins():
     reset()
+    # fixed port: a FakeRunner key (PORTS); nothing listens on it
     config = {"m": mapping("ccccccccccc1", 7021)}
     sup = Supervisor(lookup=lambda mid: config["m"] if config["m"] and config["m"].id == mid else None)
     stale = config["m"]
-    config["m"] = mapping("ccccccccccc1", 7022)  # edited meanwhile
+    # fixed port: a FakeRunner key (PORTS), as above; edited meanwhile
+    config["m"] = mapping("ccccccccccc1", 7022)
     await sup.apply_mapping(stale)
     assert sup.get_runner(stale.id).mapping is config["m"] and 7022 in PORTS and 7021 not in PORTS
     # a stop saved before a start that got its turn first: the mapping stays running
     await sup.stop_mapping(stale.id)
-    one_runner(sup, stale.id, 7022)
+    one_runner(sup, stale.id, config["m"].network.port)
+    # fixed port: a FakeRunner key (PORTS); nothing listens on it
     config["m"] = mapping("ccccccccccc1", 7022, enabled=False)
     await sup.stop_mapping(stale.id)
     assert sup.get_runner(stale.id).status.state == "stopped" and not LIVE
@@ -172,6 +177,7 @@ async def test_stop_all_and_stop_errors():
     reset()
     logs = []
     sup = Supervisor(logger=logs.append)
+    # fixed port: FakeRunner keys (PORTS); nothing listens on them
     a, b = mapping("ddddddddddd1", 7031, "A"), mapping("ddddddddddd2", 7032, "B")
     await sup.apply_mapping(a)
     late = asyncio.ensure_future(sup.apply_mapping(b))  # under way while everything stops
@@ -188,6 +194,7 @@ async def test_stop_all_and_stop_errors():
 async def test_ensure_running():
     """A start leaves a runner that runs with the mapping's settings as it is."""
     reset()
+    # fixed port: a FakeRunner key (PORTS); nothing listens on it
     config = {"m": mapping("eeeeeeeeeee1", 7041)}
     sup = Supervisor(lookup=lambda mid: config["m"])
     await sup.apply_mapping(config["m"])
@@ -201,8 +208,10 @@ async def test_ensure_running():
     assert await sup.ensure_running(config["m"]) == (True, "started", True)
     second = sup.get_runner("eeeeeeeeeee1")
     assert second is not first and second.status.state == "running"
-    config["m"] = mapping("eeeeeeeeeee1", 7042)  # other settings: built again
+    # fixed port: a FakeRunner key (PORTS), as above; other settings: built again
+    config["m"] = mapping("eeeeeeeeeee1", 7042)
     assert (await sup.ensure_running(config["m"]))[2] is True and 7042 in PORTS
+    # fixed port: a FakeRunner key (PORTS); nothing listens on it
     config["m"] = mapping("eeeeeeeeeee1", 7042, enabled=False)
     assert await sup.stop_mapping("eeeeeeeeeee1") is True
     assert await sup.stop_mapping("eeeeeeeeeee1") is False, "stopped already"

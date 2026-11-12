@@ -44,6 +44,8 @@ def ipv6_loopback() -> bool:
 
 
 def mapping(**network):
+    # fixed port: the default for configs that are only checked; the runners started below
+    # pass port=0
     return MappingConfig.from_dict({
         "name": network.pop("name", "m"), "serial": {"port": network.pop("port_dev", "/dev/ttyS0")},
         "network": dict({"mode": "server", "bind_ip": "0.0.0.0", "port": 4001}, **network)})

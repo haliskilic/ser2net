@@ -91,6 +91,8 @@ def _unverified() -> ssl.SSLContext:
 
 
 def mapping(**network) -> MappingConfig:
+    # fixed port: the default for configs that are only checked; the runners started below
+    # pass a free port
     net = {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1", "port": 4001,
            "tls": True}
     net.update(network)

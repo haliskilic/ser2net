@@ -250,6 +250,7 @@ def test_retry_ends():
 async def _changed_error_and_cancel_mid_attempt():
     lines = []
     sup = Supervisor(logger=lines.append)
+    # fixed port: Flaky's start below never binds it
     m = mapping(4242)
     calls = []
 
