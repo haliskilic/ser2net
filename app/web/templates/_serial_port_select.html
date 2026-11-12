@@ -1,14 +1,28 @@
-<select name="serial_port" required>
-  {% set devices = ports | map(attribute='device') | list %}
-  {% if selected and selected not in devices %}
-    <option value="{{ selected }}" selected>{{ _("%(port)s (not connected)", port=selected) }}</option>
-  {% endif %}
-  {% for p in ports %}
-    <option value="{{ p.device }}" {% if p.device == selected %}selected{% endif %}>
-      {{ p.device }}{% if p.description %} — {{ p.description }}{% endif %}{% if p.serial_number %} [{{ p.serial_number }}]{% endif %}
-    </option>
-  {% endfor %}
-  {% if not ports and not selected %}
-    <option value="">{{ _("(no serial ports detected)") }}</option>
-  {% endif %}
-</select>
+{#- The Device field of a serial side (prefix serial_ / serial_b_), set to `selected`: the
+    mapping form's, and what GET /api/ports/select answers for its ↻ button (the port list
+    again, while the rest of the form stays as it is). `local`: this node's own form (a
+    cluster peer's form lists the peer's ports and has no ↻). -#}
+{% macro device_field(selected, prefix, ports, local=true) %}
+{%- set devs = ports | map(attribute='device') | list %}
+{%- set stable = ports | selectattr('by_id') | list %}
+<div class="port-pick" id="{{ prefix }}port-pick">
+  <div class="port-row">
+    <label>{{ _("Device") }}
+      <select name="{{ prefix }}port"{% if prefix == 'serial_' %} required{% endif %}>
+        {% if selected and selected not in devs and selected not in (stable | map(attribute='by_id') | list) %}<option value="{{ selected }}" selected>{{ _("%(port)s (not connected)", port=selected) }}</option>{% endif %}
+        {% for p in ports %}<option value="{{ p.device }}" {% if p.device == selected %}selected{% endif %}>{{ p.device }}{% if p.description %} — {{ p.description }}{% endif %}{% if p.serial_number %} [{{ p.serial_number }}]{% endif %}</option>{% endfor %}
+        {% if stable %}<optgroup label="{{ _('Stable names (/dev/serial/by-id — survive re-plugging)') }}">
+          {% for p in stable %}<option value="{{ p.by_id }}" {% if p.by_id == selected %}selected{% endif %}>{{ p.by_id | replace('/dev/serial/by-id/', '') }}</option>{% endfor %}
+        </optgroup>{% endif %}
+        {% if not ports and not selected %}<option value="">{{ _("(no serial ports detected)") }}</option>{% endif %}
+      </select>
+    </label>
+    {%- if local %}
+    <button type="button" class="btn port-rescan" data-port-rescan="{{ prefix }}"
+            title="{{ _('Look for serial ports again (an adapter plugged in after the form was opened)') }}"
+            aria-label="{{ _('Look for serial ports again') }}">↻</button>
+    {%- endif %}
+  </div>
+</div>
+{% endmacro %}
+{%- if fragment %}{{ device_field(selected, prefix, ports) }}{% endif %}

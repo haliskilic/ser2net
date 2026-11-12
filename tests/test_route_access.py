@@ -142,7 +142,7 @@ ROUTES = {
     ("GET", "/healthz"): (PUBLIC, NONE),
     ("GET", "/metrics"): (VIEWER, NONE),
     ("GET", "/api/ports.json"): (VIEWER, NONE),
-    ("POST", "/api/ports/refresh"): (VIEWER, HEADER),
+    ("GET", "/api/ports/select"): (OPERATOR, NONE),
     ("GET", "/api/ports/table"): (VIEWER, NONE),
     ("MOUNT", "/static"): (PUBLIC, NONE),
 }

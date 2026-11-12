@@ -1,16 +1,6 @@
+{% from "_serial_port_select.html" import device_field %}
 {% macro serial_fields(s, prefix, ports) %}
-  <label>{{ _("Device") }}
-    <select name="{{ prefix }}port"{% if prefix == 'serial_' %} required{% endif %}>
-      {% set devs = ports | map(attribute='device') | list %}
-      {% set stable = ports | selectattr('by_id') | list %}
-      {% if s.port and s.port not in devs and s.port not in (stable | map(attribute='by_id') | list) %}<option value="{{ s.port }}" selected>{{ _("%(port)s (not connected)", port=s.port) }}</option>{% endif %}
-      {% for p in ports %}<option value="{{ p.device }}" {% if p.device == s.port %}selected{% endif %}>{{ p.device }}{% if p.description %} — {{ p.description }}{% endif %}{% if p.serial_number %} [{{ p.serial_number }}]{% endif %}</option>{% endfor %}
-      {% if stable %}<optgroup label="{{ _('Stable names (/dev/serial/by-id — survive re-plugging)') }}">
-        {% for p in stable %}<option value="{{ p.by_id }}" {% if p.by_id == s.port %}selected{% endif %}>{{ p.by_id | replace('/dev/serial/by-id/', '') }}</option>{% endfor %}
-      </optgroup>{% endif %}
-      {% if not ports and not s.port %}<option value="">{{ _("(no serial ports detected)") }}</option>{% endif %}
-    </select>
-  </label>
+  {{ device_field(s.port, prefix, ports, not remote) }}
   <input type="hidden" name="{{ prefix }}usb_match_shown" value="1">
   <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.identity %}checked{% endif %}> {{ _("Find this device by its USB identity if its name changes") }} <span class="muted">({{ _("COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number") }}{% if s.identity %} · {{ _("bound to") }} <span class="mono">{{ identity_text(s.match) }}</span>{% endif %})</span></label>
   <div class="grid3">
