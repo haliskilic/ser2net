@@ -5,8 +5,9 @@ name: Scheduled
 # pull request or release; on Mondays the Docker image (docker.yml), built from main on the
 # current python:3.12-slim-<codename> and smoke-tested on amd64 and arm64, so a change of
 # the base image shows before the next release (image-refresh.yml rebuilds the published
-# image then). A workflow of its own: it never shares (or cancels) ci.yml's concurrency
-# group.
+# image then), and a soak of the serial data path (tests/stress_24.py at full size, with
+# every device unplugged and plugged back 20 times and the open files and memory checked).
+# A workflow of its own: it never shares (or cancels) ci.yml's concurrency group.
 # GitHub turns scheduled workflows off after 60 days without activity in the repository;
 # Actions -> Scheduled -> "Enable workflow" turns it back on.
 on:
@@ -26,3 +27,20 @@ jobs:
   docker:
     if: github.event.schedule == '43 5 * * 1' || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/docker.yml
+
+  soak:
+    name: soak (24 serial bridges, 20 unplug/replug cycles)
+    if: github.event.schedule == '43 5 * * 1' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y socat
+      - name: 24 bridges x 300 round trips, then 20 times every device gone and back
+        run: python tests/stress_24.py 24 512 300 --cycles 20
