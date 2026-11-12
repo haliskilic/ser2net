@@ -730,6 +730,7 @@ def routes(ctx: Ctx) -> list:
         rows = importer.plan_rows(state.config.mappings, plan.mappings, mode, plan.absent)
         try:
             async with state.edit_config() as edit:
+                before = {m.id for m in state.config.mappings}
                 new_maps, touched = importer.apply_import(state.config.mappings, plan.mappings,
                                                           mode, plan.absent)
                 state.config.mappings = new_maps
@@ -737,6 +738,7 @@ def routes(ctx: Ctx) -> list:
             return await settings_get(request, error=_("Import rejected: {0}").format(e))
         if mode == "replace":
             await state.supervisor.stop_all()
+            await state.forget_mappings(before - {m.id for m in new_maps})
             await state.supervisor.start_all(state.config)
         else:
             for m in touched:
@@ -926,6 +928,8 @@ def routes(ctx: Ctx) -> list:
         if with_accounts:
             state.revoked_sessions.clear()  # signed with the old key: dead anyway
         await state.supervisor.stop_all()
+        await state.forget_mappings({m.id for m in previous["mappings"]}
+                                    - {m.id for m in cur.mappings})
         await state.supervisor.start_all(state.config)
         await state.cluster.stop()
         await state.cluster.start()

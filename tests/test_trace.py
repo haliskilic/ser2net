@@ -17,7 +17,9 @@ network bytes appended to it. Checks:
   * a download of a trace being written sends it as it was when the download began:
     exactly its Content-Length (a FileResponse sent the lines added meanwhile too, and
     the server broke the download off);
-  * deleting a mapping deletes its traces.
+  * deleting a mapping deletes its traces; the start-up prunes the traces of mappings
+    that no longer exist (a replace import or a restore leaves them), and those removals
+    close the gone mappings' runners and log files at once.
 Cross-platform; no serial hardware (the runner's serial port doesn't exist).
 
 Run: python3 tests/test_trace.py
@@ -421,6 +423,63 @@ def test_state_files(tmp):
     assert os.listdir(st.traces_dir) == ["other9-y.log"]
     print("state: a mapping's trace files are listed and deleted with it  OK")
 
+    st.config.mappings = [MappingConfig.from_dict({"id": "other9", "name": "o",
+                                                   "serial": {"port": "COM9"},
+                                                   "network": {"port": 4999}})]
+    for name in ("other9-y.log.1", "gone77-z.log", "gone77-z.log.3", "nodash"):
+        with open(os.path.join(st.traces_dir, name), "wb") as fh:
+            fh.write(b"t" * 1000)
+    os.makedirs(os.path.join(st.traces_dir, "gone77-dir"))
+    assert st.traced_mapping_ids() == {"other9", "gone77"}, st.traced_mapping_ids()
+    logs = []
+    st.log = logs.append
+    st.prune_orphan_traces()
+    left = sorted(os.listdir(st.traces_dir))
+    assert left == ["gone77-dir", "other9-y.log", "other9-y.log.1"], left
+    assert logs == ["removed 3 trace file(s) (0.0 MB) of mappings that no longer exist"], logs
+    st.prune_orphan_traces()
+    assert len(logs) == 1, "nothing to prune: nothing logged"
+    print("state: start-up prunes the traces no configured mapping owns, logged  OK")
+
+
+async def test_forget_mappings(tmp):
+    """A replace import / restore removes mappings without deleting them one by one: their
+    runner (with its trace writer) and log file are closed at once, their files stay."""
+    import logging
+
+    from app.config import ConfigStore
+    from app.state import AppState
+    data = os.path.join(tmp, "data")
+    st = AppState(ConfigStore(os.path.join(data, "config.json")), AppConfig())
+    st.log = lambda _m: None
+    keep, gone = (MappingConfig.from_dict({
+        "id": mid, "name": mid, "serial": {"port": "/dev/ser2net-no-such-port"
+                                           if os.name != "nt" else "COM250"},
+        "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
+                    "port": free_port()},
+        "options": {"trace_both": "t.log"}}) for mid in ("keep01", "gone01"))
+    st.config.mappings = [keep, gone]
+    for m in (keep, gone):
+        await st.supervisor.apply_mapping(m)
+    tracer = st.supervisor.get_runner("gone01").tracer
+    assert tracer is not None and tracer._thread.is_alive()
+    files = sorted(os.path.basename(p) for p in st.trace_files("gone01"))
+    st.config.mappings = [keep]  # what a replace import does
+    await st.forget_mappings({"gone01"})
+    try:
+        assert st.supervisor.get_runner("gone01") is None and not tracer._thread.is_alive()
+        assert "gone01" not in st._mapping_loggers and \
+            not logging.getLogger("ser2net.map.gone01").handlers
+        assert logging.getLogger("ser2net.map.keep01").handlers, "the kept mapping logs on"
+        assert files == ["gone01-t.log"] and \
+            [os.path.basename(p) for p in st.trace_files("gone01")] == files, "files stay"
+        assert os.path.isfile(os.path.join(st.logs_dir, "gone01.log"))
+    finally:
+        await st.supervisor.stop_all()
+        st.delete_mapping_log("keep01")
+    print("state: forget_mappings stops what is left of removed mappings and closes their "
+          "log files; their files stay  OK")
+
 
 async def main():
     test_names()
@@ -443,6 +502,8 @@ async def main():
         await test_live_download(os.path.join(tmp, "g"))
         await test_runner_confined(os.path.join(tmp, "c"))
         test_state_files(tmp)
+        os.makedirs(os.path.join(tmp, "h"))
+        await test_forget_mappings(os.path.join(tmp, "h"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\nPASS: traces confined to data/traces, off-loop writer, rotation, failures")

@@ -720,7 +720,10 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yollar dosya adına indirgenir ve açılışta log'a yazılır. Yazılamayan bir trace (klasör
   silinmiş, disk dolu, dosya tanıtıcısı kalmamış) durmak yerine bekler: panodaki satır ve
   Trace paneli nedenini gösterir, ser2net birkaç saniyede bir yeniden dener (klasörü de
-  yeniden oluşturur) ve trace sonra kaç baytın eksik olduğunu yazar.
+  yeniden oluşturur) ve trace sonra kaç baytın eksik olduğunu yazar. Bir eşleme silinince
+  trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
+  eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
+  açılış onları siler ve kaç dosya olduğunu log'a yazar.
 - `tls/` — self-signed üretilirse sertifika/anahtar.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
@@ -730,9 +733,10 @@ içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (e
 ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış
 logu ya da içe aktarma önizlemesi bunu belirtir.
 
-`config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
-temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin). Parola
-unutulduysa bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
+`config.json` + `all.log` silinince sistem **sıfırdan** başlar (sonraki açılış artık
+olmayan eşlemelerin log'larını ve trace'lerini siler; `backups/` kendiliğinden geri
+yüklenmez, isterseniz onu da silin). Parola unutulduysa bunun yerine `--set-password`
+kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
 `admin-requests/` yalnızca komut satırından gelen bir isteği, çalışan örnek alana kadar tutar.
 
 **Eski bir sürüme dönmek:** önce servisi durdurup veri klasörünü kopyalayın. Bir sürüm,

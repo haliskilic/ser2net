@@ -7,7 +7,8 @@ are persisted atomically, or undone, before the supervisor is reconciled.
 All activity (logins/logouts, serial port open/close, client connect/disconnect,
 mapping start/stop/edit, HTTP requests, errors) is funneled through ``log()`` and
 written to ``all.log`` next to ``config.json``. Deleting config.json + all.log
-fully resets the system — those are the only two state files.
+resets the system: the next start prunes the per-mapping logs and traces that no
+mapping owns any more.
 """
 from __future__ import annotations
 
@@ -481,13 +482,28 @@ class AppState:
         lines = data.decode("utf-8", errors="replace").splitlines()
         return lines[-limit:][::-1]
 
-    def delete_mapping_log(self, mapping_id: str) -> None:
+    def _forget_mapping_logger(self, mapping_id: str) -> None:
+        """Close the mapping's log file and forget its cached logger."""
         lg = self._mapping_loggers.pop(mapping_id, None)
         if lg is not None:
             for h in list(lg.handlers):
                 with _suppress(Exception):
                     h.close()
                 lg.removeHandler(h)
+
+    async def forget_mappings(self, ids) -> None:
+        """Close what this process keeps open for mappings that are gone without a
+        deletion of their own (a replace import, a backup restore): a runner if one is
+        left (its listener, serial port and trace writer) and the cached logger with its
+        open log file, which stayed open until a restart before. Their files stay, so an
+        undone restore finds them; the next start prunes the ones no mapping owns
+        (prune_mapping_logs, prune_orphan_traces)."""
+        for mid in ids:
+            await self.supervisor.remove_mapping(mid)
+            self._forget_mapping_logger(mid)
+
+    def delete_mapping_log(self, mapping_id: str) -> None:
+        self._forget_mapping_logger(mapping_id)
         # the log file may never have been created (FileNotFoundError)
         with _suppress(OSError, ValueError):
             os.remove(self.mapping_log_path(mapping_id))
@@ -521,6 +537,32 @@ class AppState:
         for path in self.trace_files(mapping_id):
             with _suppress(OSError):
                 os.remove(path)
+
+    def prune_orphan_traces(self) -> None:
+        """Delete the files in data/traces that belong to no configured mapping: left by a
+        replace import, a backup restore or a deleted config.json, and shown in no panel.
+        A file is kept when its name begins with "<id>-" of a mapping (a valid id has no
+        "-"). Logged with how many files and MB went."""
+        valid = {m.id for m in self.config.mappings}
+        try:
+            names = os.listdir(self.traces_dir)
+        except OSError:
+            return
+        count = size = 0
+        for fn in names:
+            mid, dash, _rest = fn.partition("-")
+            path = os.path.join(self.traces_dir, fn)
+            if (dash and mid in valid) or not os.path.isfile(path):
+                continue
+            try:
+                n = os.path.getsize(path)
+                os.remove(path)
+            except OSError:
+                continue
+            count, size = count + 1, size + n
+        if count:
+            self.log(f"removed {count} trace file(s) ({size / 1048576:.1f} MB) of mappings "
+                     "that no longer exist")
 
     def prune_mapping_logs(self) -> None:
         """Delete per-mapping log files whose mapping no longer exists. This keeps
@@ -751,7 +793,9 @@ class AppState:
                 raise asyncio.CancelledError
 
     async def start_engine(self) -> None:
-        self.prune_mapping_logs()  # drop logs for mappings that no longer exist
+        # drop the logs and traces of mappings that no longer exist
+        self.prune_mapping_logs()
+        self.prune_orphan_traces()
         await self.ports.start()
         await self.supervisor.start_all(self.config)
         await self.cluster.start()  # no-op unless the LAN cluster is enabled + keyed
