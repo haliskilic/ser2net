@@ -108,6 +108,8 @@ jobs:
           python-version: "3.12"
       - run: python tests/test_vendor_wheels.py
       - run: python tests/test_build_lock.py
+      # the asset and SBOM checks import the app (and serve a page)
+      - run: pip install -r requirements.txt
       - run: python tests/test_vendor_assets.py
       - run: python tests/test_third_party.py   # the license overrides are for the pinned versions
       # every wheel is the file PyPI publishes (its sha256 from PyPI's JSON API), or the
