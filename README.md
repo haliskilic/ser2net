@@ -142,7 +142,16 @@ düzenlemeye gerek yok.
   bağlanıp düştüğünde, hatalı girişte ya da veri diski neredeyse dolduğunda (trace'lerin
   beklediği boş alanın altına inince; all.log her durumda uyarır) webhook (JSON, Slack,
   Microsoft Teams, Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test
-  mesajı gönderilir.
+  mesajı gönderilir. Ayarlar'da seçilene kadar kapalı olanlar: **cihazdan veri gelmemesi**
+  (eşlemenin seçeneklerindeki *Veri yok alarmı*: port açık ama cihaz o kadar saniyedir
+  hiçbir şey göndermedi ya da yalnızca sorulunca konuşan bir cihaz için kendisine
+  gönderilen yanıtsız kaldı; panoda, eşlemenin log'unda ve `/metrics`'te de görünür,
+  cihazın son baytının zamanı `ser2net_mapping_last_rx_timestamp_seconds` ile birlikte) ve
+  yeniden veri gelmesi, **küme düğümünün çevrimdışı olması** (sesi gelen bir düğümün 20 sn
+  boyunca duyulmaması ya da yapılandırılmış bir eşin bir dakika arayla iki isteğe yanıt
+  vermemesi) ve geri gelmesi, **ser2net'in başlaması** (bir açılıştan 15 sn sonra: hangi
+  eşlemelerin çalıştığı ve önceki çalışmayı event loop watchdog'unun sonlandırıp
+  sonlandırmadığı). Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile

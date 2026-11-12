@@ -167,6 +167,8 @@ _OPTIONAL_FORM_FIELDS = {
                                              "keepalive_interval_s", "keepalive_count")),
     "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
+    # forms before 2.9.0 don't have the no-data alarm
+    "opt_no_data_alarm_s": ("options", ("no_data_alarm_s", "no_data_reply_only")),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
     # every node since 2.3.0 reads it, but forms before 2.9.0 have no input for it
@@ -265,6 +267,9 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_trace_max_mb" in form:
         options["trace_max_mb"] = _num(form, "opt_trace_max_mb", 10.0, strict=strict, cast=float)
         options["trace_keep"] = _num(form, "opt_trace_keep", 3, strict=strict)
+    if "opt_no_data_alarm_s" in form:
+        options["no_data_alarm_s"] = _num(form, "opt_no_data_alarm_s", 0, strict=strict)
+        options["no_data_reply_only"] = _checkbox(form, "opt_no_data_reply_only")
     if "opt_rfc2217_restore_on_disconnect_shown" in form:
         options["rfc2217_restore_on_disconnect"] = _checkbox(
             form, "opt_rfc2217_restore_on_disconnect")

@@ -356,6 +356,11 @@
         'client_disconnected': _("Client disconnected"),
         'login_failed': _("Failed sign-in to this UI"),
         'disk_low': _("Data disk almost full (traces pause)"),
+        'no_data': _("No data from a serial device (a mapping’s no-data alarm, set in its options)"),
+        'data_back': _("Data from that device again"),
+        'peer_offline': _("Cluster node offline (not heard from, or a configured peer that doesn’t answer)"),
+        'peer_back': _("Cluster node back"),
+        'service_started': _("ser2net started (which mappings run)"),
       } %}
       {% for e in notify_events %}
       <label class="chk"><input type="checkbox" name="notify_event_{{ e }}" {% if e in notify.events %}checked{% endif %}> {{ event_labels[e] }}</label>

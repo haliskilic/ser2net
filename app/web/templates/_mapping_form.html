@@ -215,6 +215,11 @@
         <input type="number" name="opt_max_connection_time_s" min="0" value="{{ mapping.options.max_connection_time_s }}"></label>
     </div>
     <div class="grid2">
+      <label>{{ _("No-data alarm (s)") }} <span class="muted">({{ _("the device sends nothing this long while its port is open: dashboard, log, notification · 0 = off, else 10 to 604800") }})</span>
+        <input type="number" name="opt_no_data_alarm_s" min="0" max="604800" value="{{ mapping.options.no_data_alarm_s }}"></label>
+      <label class="chk chk-pad"><input type="checkbox" name="opt_no_data_reply_only" {% if mapping.options.no_data_reply_only %}checked{% endif %}> {{ _("Only while it doesn’t answer what is sent to it") }} <span class="muted">({{ _("a device that speaks only when asked, e.g. Modbus RTU") }})</span></label>
+    </div>
+    <div class="grid2">
       <label>{{ _("Trace file name") }} <span class="muted">({{ _('record the traffic; kept in the data folder’s <span class="mono">traces/</span> · empty = off') }})</span>
         <input type="text" name="opt_trace_both" value="{{ mapping.options.trace_both }}" placeholder="{{ _('optional, e.g. %(example)s', example='plc1.trace') }}">
       </label>
