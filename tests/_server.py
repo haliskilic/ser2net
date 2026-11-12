@@ -29,14 +29,24 @@ sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
 
+_GIVEN: set = set()  # the ports free_port() handed out in this process
+
+
 def free_port() -> int:
     """A TCP port free on 127.0.0.1 right now, for a test's listener (never a fixed one: a
     port in the ephemeral range can be held by an earlier test's closed connection, in
-    TIME_WAIT, and then refuses the bind)."""
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
+    TIME_WAIT, and then refuses the bind). Never one handed out before in this process: a
+    port a test only writes into a config (a mapping whose device is missing never binds
+    it) is still free for the OS, which may give it again, and two mappings of the test
+    then clash."""
+    for _ in range(100):
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        if port not in _GIVEN:
+            break
+    _GIVEN.add(port)
     return port
 
 
