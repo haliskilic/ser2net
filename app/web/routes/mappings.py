@@ -199,8 +199,9 @@ def routes(ctx: Ctx) -> list:
         results = await ops.apply_actions(state, ids, action)  # one save for all
         done, refused, failed = [], [], []
         for mid, res in zip(dict.fromkeys(ids), results, strict=True):
-            if res.error is not None:
+            if res.error is not None:  # (this one can't be started; the others go on)
                 refused.append(res)
+                state.log(f"bulk {action}: {res.error}")
             elif res.found:
                 done.append(res.name)
                 ctx.audit(request, f"mapping_{action}", res.name)
