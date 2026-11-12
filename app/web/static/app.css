@@ -269,6 +269,7 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .toolbar input[type=search] { flex: 1 1 14rem; min-width: 0; max-width: 24rem; }
 .toolbar .bulk { display: inline-flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .toolbar .bulk[hidden] { display: none; }
+.toolbar label.chk { margin: 0; white-space: nowrap; }
 .row-select { vertical-align: middle; margin: 0 4px 0 0; }
 .row-actions.start { justify-content: flex-start; }
 /* TR / EN switch in the top bar and on the sign-in pages */
