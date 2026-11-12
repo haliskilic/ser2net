@@ -23,13 +23,15 @@ REDACTED = "********"
 
 def _mapping_view(mapping, state) -> dict:
     """A mapping's full config plus its live runtime status. A read-only (viewer)
-    token doesn't get stored secrets (the MQTT password) — the same rule as the web
-    UI, where viewers can't open the edit form or the export. Operator/admin tokens
-    see the real value, so a GET -> PUT round trip keeps working for them."""
+    token doesn't get stored secrets (the MQTT password and client key password) — the
+    same rule as the web UI, where viewers can't open the edit form or the export.
+    Operator/admin tokens see the real value, so a GET -> PUT round trip keeps working
+    for them."""
     view = mapping.to_dict()
-    if (ROLE_RANK.get(state.config.api_token_role, 0) < ROLE_RANK["operator"]
-            and view["mqtt"].get("password")):
-        view["mqtt"]["password"] = REDACTED
+    if ROLE_RANK.get(state.config.api_token_role, 0) < ROLE_RANK["operator"]:
+        for secret in ("password", "client_key_password"):
+            if view["mqtt"].get(secret):
+                view["mqtt"][secret] = REDACTED
     view["status"] = state.supervisor.status(mapping.id)
     return view
 
@@ -59,6 +61,7 @@ def build_api_routes(state):
             mapping = MappingConfig.from_dict(body)
             mapping.validate()
             mapping.validate_input()
+            mapping.check_mqtt_tls_files()
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         async with state.config_lock:
@@ -91,6 +94,7 @@ def build_api_routes(state):
             mapping = MappingConfig.from_dict(body)
             mapping.validate()
             mapping.validate_input()
+            mapping.check_mqtt_tls_files()
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         async with state.config_lock:

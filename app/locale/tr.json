@@ -857,5 +857,19 @@
   "the mapping’s connection to its MQTT broker; it keeps trying (see the mapping’s log)": "eşlemenin MQTT broker'ına bağlantısı; denemeyi sürdürüyor (ayrıntı eşlemenin log'unda)",
   "MQTT: no connection to %(broker)s (%(error)s)": "MQTT: %(broker)s ile bağlantı yok (%(error)s)",
   "MQTT publishing could not start (see the mapping’s log)": "MQTT yayını başlatılamadı (ayrıntı eşlemenin log'unda)",
-  "MQTT off: %(error)s": "MQTT kapalı: %(error)s"
+  "MQTT off: %(error)s": "MQTT kapalı: %(error)s",
+  "The MQTT CA file {0} can't be read: {1}": "MQTT CA dosyası {0} okunamıyor: {1}",
+  "The MQTT CA file {0} holds no certificate (PEM or DER).": "MQTT CA dosyası {0} sertifika içermiyor (PEM ya da DER).",
+  "An MQTT client key needs its client certificate.": "MQTT istemci anahtarı, kendi istemci sertifikasıyla birlikte verilmeli.",
+  "The MQTT client certificate or key ({0}) can't be read: {1}": "MQTT istemci sertifikası ya da anahtarı ({0}) okunamıyor: {1}",
+  "The MQTT client certificate {0} can't be used with its key ({1}). Is the key password right, and is it the certificate's key?": "MQTT istemci sertifikası {0} anahtarıyla kullanılamıyor ({1}). Anahtar parolası doğru mu, anahtar bu sertifikanın mı?",
+  "Mapping #{0} ({1}): {2} It runs without MQTT until that is fixed.": "Eşleme #{0} ({1}): {2} Bu düzeltilene kadar MQTT'siz çalışır.",
+  "TLS; blank = the system’s CAs": "TLS; boş = sistemin CA'ları",
+  "Client certificate file": "İstemci sertifika dosyası",
+  "optional: for a broker that asks for one": "isteğe bağlı: sertifika isteyen broker'lar için",
+  "Client key file": "İstemci anahtar dosyası",
+  "blank = in the certificate file": "boş = sertifika dosyasının içinde",
+  "Client key password": "İstemci anahtarı parolası",
+  "off: a certificate that does not name the broker host is accepted too (it must still come from a trusted CA)": "kapalı: broker'ın host adını taşımayan bir sertifika da kabul edilir (yine de güvenilen bir CA'dan gelmeli)",
+  "Check the broker’s host name": "Broker'ın host adını doğrula"
 }

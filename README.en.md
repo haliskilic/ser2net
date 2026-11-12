@@ -224,7 +224,18 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   failed publish to a topic. The mapping's status (`mqtt` in the REST API: state, broker,
   since, error, dropped messages) and `/metrics` carry it, and the dashboard shows
   **⚠ MQTT: no connection to …** with the reason. A base topic with `+` or `#` (no message
-  can be published to it) keeps MQTT off for the mapping, with a log line. While the
+  can be published to it) keeps MQTT off for the mapping, with a log line. Over **TLS**
+  the broker's certificate must chain to a CA the system trusts — or, with a **CA
+  certificate file** (PEM, or DER), to one in that file only — and name the broker host
+  (a DNS name or an IP address); **Check the broker's host name** off accepts a
+  certificate that doesn't (it must still come from a trusted CA). A **client
+  certificate** (PEM; its key in its own file or in the same one, an encrypted key with
+  its **password**) is presented to a broker that asks for one (mutual TLS, such as AWS
+  IoT Core). The mapping form and the REST API refuse files that can't be used; an
+  import takes such a mapping with a warning, and a mapping whose files are gone keeps
+  loading and runs without MQTT (logged, shown on the dashboard) — never in clear text.
+  In Docker put the files under `/data` (for example `/data/certs/`); the Windows service
+  must be able to read them. While the
   broker is away, QoS 0 messages are lost (counted as dropped); at QoS 1/2 up to 10 000
   messages per mapping wait and go out after the reconnect — beyond that the newest are
   dropped (counted, logged once per outage) — and polled Modbus values keep only the
@@ -304,7 +315,8 @@ mounted `noexec`, point `TMPDIR` at a directory that isn't. While it runs it kee
 copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
 don't delete it under a long-running instance; a copy left behind by a killed process
 still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS) it
-uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
+uses the distribution's CA bundle, or `SSL_CERT_FILE` if set (unless a CA file is set for
+the MQTT mapping or for LDAP).
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
 reports. `ser2net --licenses` prints the license text of every component inside the

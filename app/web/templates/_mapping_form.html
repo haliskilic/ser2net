@@ -238,6 +238,18 @@
       <label>{{ _("Password") }} <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="{{ _('optional') }}"></label>
       <label class="chk chk-pad"><input type="checkbox" name="mqtt_tls" {% if mapping.mqtt.tls %}checked{% endif %}> TLS</label>
     </div>
+    <div class="grid3" data-mqtt-tls>
+      <label>{{ _("CA certificate file") }} <span class="muted">({{ _("TLS; blank = the system’s CAs") }})</span>
+        <input type="text" name="mqtt_ca_file" value="{{ mapping.mqtt.ca_file }}" placeholder="{{ _('e.g. %(example)s', example='/data/certs/broker-ca.pem') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>{{ _("Client certificate file") }} <span class="muted">({{ _("optional: for a broker that asks for one") }})</span>
+        <input type="text" name="mqtt_client_cert" value="{{ mapping.mqtt.client_cert }}" placeholder="{{ _('e.g. %(example)s', example='/data/certs/gateway.pem') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>{{ _("Client key file") }} <span class="muted">({{ _("blank = in the certificate file") }})</span>
+        <input type="text" name="mqtt_client_key" value="{{ mapping.mqtt.client_key }}" placeholder="{{ _('e.g. %(example)s', example='/data/certs/gateway.key') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+    </div>
+    <div class="grid3">
+      <label>{{ _("Client key password") }} <input type="password" name="mqtt_client_key_password" value="{{ mapping.mqtt.client_key_password }}" placeholder="{{ _('optional') }}" autocomplete="off"></label>
+      <label class="chk chk-pad" title="{{ _('off: a certificate that does not name the broker host is accepted too (it must still come from a trusted CA)') }}"><input type="checkbox" name="mqtt_tls_check_hostname" {% if mapping.mqtt.tls_check_hostname %}checked{% endif %}> {{ _("Check the broker’s host name") }}</label>
+    </div>
     <div class="grid3" data-show-when="network_protocol=modbus">
       <label>{{ _("Payload format") }} <span class="muted">({{ _("Modbus points") }})</span>
         <select name="mqtt_payload_format">

@@ -148,6 +148,9 @@ _OPTIONAL_FORM_FIELDS = {
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
     "mqtt_unit_status_shown": ("mqtt", ("unit_status",)),
+    # MQTT over TLS: CA file, client certificate (mutual TLS), host name check (2.9)
+    "mqtt_ca_file": ("mqtt", ("ca_file", "client_cert", "client_key", "client_key_password",
+                              "tls_check_hostname")),
     # not offered for a Modbus gateway, which has no per-client output buffer and can't
     # send a banner or act on a close-on string (bytes outside Modbus frames)
     "network_client_queue_max": ("network", ("client_queue_max",)),
@@ -255,6 +258,12 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                if "mqtt_apply_retained_set_shown" in form else {}),
             **({"unit_status": _checkbox(form, "mqtt_unit_status")}
                if "mqtt_unit_status_shown" in form else {}),
+            **({"ca_file": form.get("mqtt_ca_file", "").strip(),
+                "client_cert": form.get("mqtt_client_cert", "").strip(),
+                "client_key": form.get("mqtt_client_key", "").strip(),
+                "client_key_password": form.get("mqtt_client_key_password", ""),
+                "tls_check_hostname": _checkbox(form, "mqtt_tls_check_hostname")}
+               if "mqtt_ca_file" in form else {}),
         },
         "modbus_poll": {
             "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),
