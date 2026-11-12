@@ -15,7 +15,11 @@
     exception 02 is read point by point from then on (logged once); a block without a reply
     is no reply for each of its points, so the unit goes offline as with single reads; a
     write from MQTT takes its turn between two blocks, and the value read before it is not
-    published after its read-back.
+    published after its read-back;
+  * the unit map (off by default): a Modbus/TCP master's request for a mapped unit id goes
+    to the RTU unit it names and is answered with the id the master sent; other ids, and
+    every id without a map, go as sent (unit 0 stays a broadcast); a stored entry the
+    edits refuse is ignored, with a warning.
 Cross-platform (binds 127.0.0.1 only).
 
 Run: python3 tests/test_modbus_point_reads.py
@@ -471,6 +475,68 @@ async def gateway_blocks():
         await close(server, sw)
 
 
+async def tcp_request(reader, writer, txn, unit, pdu):
+    writer.write(modbus.build_tcp_adu(txn, unit, pdu))
+    await writer.drain()
+    head = await asyncio.wait_for(reader.readexactly(modbus.MBAP_LEN), timeout=3)
+    rest = await asyncio.wait_for(reader.readexactly(((head[4] << 8) | head[5]) - 1), timeout=3)
+    return (head[0] << 8) | head[1], head[6], rest
+
+
+async def gateway_unit_map():
+    slave = Slave({(1, 0): 11, (2, 0): 22, (7, 0): 77})
+    server = await asyncio.start_server(slave.serve, "127.0.0.1", 0)
+    m = MappingConfig.from_dict({
+        "name": "map", "kind": "net", "serial": {"port": "fake", "baudrate": 9600},
+        "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
+                    "port": free_port()},
+        "options": {"modbus_unit_map": {"255": 1, "0": 2, "x": 3, "9": 0}}})
+    m.validate()
+    logs = []
+    r = ModbusGatewayRunner(m, logger=logs.append)
+    r._resp_timeout = TIMEOUT
+    sr, sw = await asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1])
+    r._link.attach(sr, sw)
+    gw = await asyncio.start_server(r._on_client, "127.0.0.1", 0)
+    try:
+        r._log_policy()
+        assert "unit map: requests from masters for unit 255 go to unit 1, unit 0 go to unit 2" \
+            in logs, logs
+        assert any(x.startswith("warning: unit map {") and "are ignored" in x for x in logs), logs
+        mr, mw = await asyncio.open_connection("127.0.0.1", gw.sockets[0].getsockname()[1])
+        read = modbus.read_pdu(3, 0, 1)
+        for txn, unit, rtu, value in ((1, 255, 1, 11), (2, 0, 2, 22), (3, 7, 7, 77),
+                                      (4, 9, 9, None)):
+            slave.seen.clear()
+            got = await tcp_request(mr, mw, txn, unit, read)
+            assert got[:2] == (txn, unit), (unit, got)
+            assert slave.seen[0][0] == rtu, (unit, slave.seen)
+            if value is not None:
+                assert got[2] == bytes([3, 2, 0, value]), (unit, got)
+        mw.close()
+        print("unit map: 255 -> 1, 0 -> 2 answered as sent; others (and refused entries) as "
+              "sent  OK")
+    finally:
+        gw.close()
+        await close(server, sw)
+
+    m = MappingConfig.from_dict({"name": "map", "serial": {"port": "fake"},
+                                 "network": {"protocol": "modbus"}})
+    assert m.options.modbus_unit_map == {} and ModbusGatewayRunner(m)._unit_map == {}
+    for umap in ({"255": 1}, {"0": 247, "1": 2, "2": 1}):
+        m.options.modbus_unit_map = umap
+        m.validate_input()
+    for umap in ({"256": 1}, {"1": 0}, {"1": 256}, {"x": 1}, {"1": "2"}, {"1": 2, "01": 3}, [1]):
+        m.options.modbus_unit_map = umap
+        m.validate()  # a stored one loads (and is ignored where it can't be used)
+        try:
+            m.validate_input()
+            raise AssertionError(f"took {umap}")
+        except ConfigError as e:
+            assert "The unit map sends unit ids 0-255 to RTU units 1-255" in str(e), e
+    print("unit map: off by default; an edit refuses entries that can't be used  OK")
+
+
 def main():
     test_word_orders()
     test_strings_and_bits()
@@ -480,6 +546,7 @@ def main():
     test_plan_blocks()
     asyncio.run(gateway_types())
     asyncio.run(gateway_blocks())
+    asyncio.run(gateway_unit_map())
     print("\nPASS: Modbus point reads and writes")
 
 

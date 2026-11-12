@@ -46,8 +46,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from ..config import (MappingConfig, ModbusPoint, modbus_response_timeout, point_order,
-                      point_scale, poll_block_gap)
+from ..config import (MappingConfig, ModbusPoint, modbus_response_timeout, modbus_unit_map,
+                      point_order, point_scale, poll_block_gap)
 from . import modbus, netguard, sockopts
 from .access import AccessPolicy, server_ssl
 from .bridge import (
@@ -217,6 +217,8 @@ class ModbusGatewayRunner:
         self._char_s = 11 / baud
         self._gap = max(SILENCE_S, 3.5 * self._char_s)
         self._resp_timeout = modbus_response_timeout(mapping.options)
+        # the unit ids masters send that go to another RTU unit (their replies keep the id)
+        self._unit_map = modbus_unit_map(mapping.options)
         self._notes: dict[tuple[str, int], tuple[float, int]] = {}  # see _note
         # the line may still carry a reply to an earlier request (see _settle): since when
         # (loop time; None: it does not), and the last request that got none in time, as
@@ -1019,6 +1021,13 @@ class ModbusGatewayRunner:
             self._log("read-only: requests from Modbus/TCP masters that are not reads get "
                       "exception 01 (illegal function) and never reach the bus; MQTT/Sparkplug "
                       "writes to writable points are refused too")
+        umap = self.mapping.options.modbus_unit_map
+        if self._unit_map:
+            self._log("unit map: requests from masters for " + ", ".join(
+                f"unit {sent} go to unit {unit}" for sent, unit in self._unit_map.items()))
+        if not isinstance(umap, dict) or len(umap) != len(self._unit_map):
+            self._log(f"warning: unit map {shown(umap)}: entries that are not a unit id 0-255 "
+                      "to a unit 1-255 are ignored")
         poll = self.mapping.modbus_poll
         if poll.broadcast_points:
             self._log(f"warning: poll point(s) {_names(poll.broadcast_points)} on unit 0, the "
@@ -1121,7 +1130,7 @@ class ModbusGatewayRunner:
                     if net.read_only and not modbus.is_read_request(pdu):
                         rpdu = self._refuse(master, pdu)
                     else:
-                        rpdu = await self._transaction(unit, pdu)
+                        rpdu = await self._transaction(self._unit_map.get(unit, unit), pdu)
                     writer.write(modbus.build_tcp_adu(txn, unit, rpdu))
                     await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError, OSError) as e:

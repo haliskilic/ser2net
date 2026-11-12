@@ -922,5 +922,9 @@
   "Read neighbouring points with one request": "Komşu noktaları tek istekle oku",
   "per unit and function, up to 125 registers or 2000 coils; a block the slave refuses is read point by point": "birim ve fonksiyon başına, en çok 125 register ya da 2000 coil; slave'in reddettiği bir blok nokta nokta okunur",
   "Unused registers a block may span": "Bir bloğun atlayabileceği kullanılmayan register'lar",
-  "between two points; 0 = only adjacent ones": "iki nokta arasında; 0 = yalnızca bitişik olanlar"
+  "between two points; 0 = only adjacent ones": "iki nokta arasında; 0 = yalnızca bitişik olanlar",
+  "The unit map sends unit ids 0-255 to RTU units 1-255, each id once, such as 255=1.": "Birim yönlendirme 0-255 arasındaki birim id'lerini 1-255 arasındaki RTU birimlerine gönderir, her id bir kez; örneğin 255=1.",
+  "The unit map is a list of pairs such as 255=1 (the unit id a master sends = the RTU unit it goes to); {0} is not one.": "Birim yönlendirme 255=1 gibi çiftlerden oluşan bir listedir (master'ın gönderdiği birim id'si = isteğin gittiği RTU birimi); {0} böyle bir çift değil.",
+  "Unit map": "Birim yönlendirme",
+  "optional: the unit id a master sends = the RTU unit it goes to, such as 255=1, 0=1; blank = as sent": "isteğe bağlı: master'ın gönderdiği birim id'si = isteğin gittiği RTU birimi, örneğin 255=1, 0=1; boş = gönderildiği gibi"
 }

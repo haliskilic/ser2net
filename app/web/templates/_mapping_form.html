@@ -195,6 +195,8 @@
     <div class="grid2" data-show-when="network_protocol=modbus">
       <label>{{ _("Response timeout (s)") }} <span class="muted">({{ _("how long an RTU slave gets to begin its reply once the request is out; then exception 0x0B") }})</span>
         <input type="number" name="opt_modbus_response_timeout_s" min="0.01" max="60" step="any" value="{{ mapping.options.modbus_response_timeout_s }}"></label>
+      <label>{{ _("Unit map") }} <span class="muted">({{ _("optional: the unit id a master sends = the RTU unit it goes to, such as 255=1, 0=1; blank = as sent") }})</span>
+        <input type="text" name="opt_modbus_unit_map" value="{{ mapping.options.modbus_unit_map_text }}" placeholder="255=1" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
     </div>
     <div data-show-when="network_protocol=rfc2217">
       <input type="hidden" name="opt_rfc2217_restore_on_disconnect_shown" value="1">
