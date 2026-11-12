@@ -14,7 +14,7 @@ _PORT_FIELDS = ("serial_", "serial_b_")
 
 
 def routes(ctx: Ctx) -> list:
-    state, render, require_role = ctx.state, ctx.render, ctx.require_role
+    state, render = ctx.state, ctx.render
 
     async def healthz(request):
         return PlainTextResponse("ok")
@@ -81,7 +81,7 @@ def routes(ctx: Ctx) -> list:
         """An open mapping form's Device field again, with the serial ports there are now
         (its ↻ button): ?prefix=serial_|serial_b_&selected=<what the form has chosen>. For
         operators, as the form is."""
-        if deny := require_role(request, "operator"):
+        if deny := ctx.require_role(request, "operator"):
             return deny
         prefix = request.query_params.get("prefix", "")
         if prefix not in _PORT_FIELDS:
