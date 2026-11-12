@@ -76,7 +76,11 @@ Runtime pins live in `requirements.txt` (with the Python 3.10 line kept by marke
 the optional feature packages bundled into the binaries and the Docker image in
 `requirements-optional.txt`. After changing `requirements.txt`, run
 `python tools/refresh_wheels.py` so `vendor/wheels/` (the offline install set) matches —
-this also applies to Dependabot's pull requests.
+this also applies to Dependabot's pull requests. GitHub's dependency graph (and so the
+Dependabot alerts) reads `requirements.txt` for its newest Python only; the pins only
+Python 3.10 installs are submitted to it from `main` by
+`.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`), so they get
+alerts too.
 
 ### Python versions
 CI tests Python 3.10–3.14 on Linux and Windows; the newest release (3.15) runs too, without
@@ -176,7 +180,10 @@ test başarısız olur.
 binary'lere ve Docker imajına giren isteğe bağlı paketler `requirements-optional.txt`'te.
 `requirements.txt`'i değiştirdikten sonra `python tools/refresh_wheels.py` çalıştırın;
 `vendor/wheels/` (çevrimdışı kurulum seti) eşleşsin. Bu Dependabot'un PR'ları için de
-geçerli.
+geçerli. GitHub'ın bağımlılık grafiği (dolayısıyla Dependabot uyarıları) `requirements.txt`'i
+yalnızca en yeni Python için okur; yalnızca Python 3.10'un kurduğu pin'leri
+`.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`) `main`'den grafiğe
+gönderir, böylece onlar için de uyarı çıkar.
 
 ### Python sürümleri
 CI, Python 3.10–3.14'ü Linux ve Windows'ta test eder; en yeni sürüm (3.15) de çalışır, ama
