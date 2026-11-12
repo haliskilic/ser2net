@@ -8,7 +8,7 @@ import sys
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-from ... import __version__, i18n, storage
+from ... import __version__, i18n, licences, storage
 from ...notify import no_data_for
 from ...engine import netguard, portlist
 from ...i18n import _
@@ -24,6 +24,11 @@ def routes(ctx: Ctx) -> list:
 
     async def healthz(request):
         return PlainTextResponse("ok")
+
+    async def licenses_page(request):
+        """The licence texts this copy carries (app/licences.py), for any signed-in role."""
+        texts = await asyncio.to_thread(licences.texts)
+        return render(request, "licenses.html", texts=texts)
 
     async def metrics(request):
         return PlainTextResponse(await metrics_text(state), media_type=METRICS_TYPE)
@@ -69,6 +74,7 @@ def routes(ctx: Ctx) -> list:
     return [
         Route("/lang/{code}", set_language),
         Route("/healthz", healthz),
+        Route("/licenses", licenses_page),
         Route("/metrics", metrics),
         Route("/api/ports.json", api_ports_json),
         Route("/api/ports/select", api_ports_select),

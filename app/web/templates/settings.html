@@ -283,7 +283,7 @@
 <section class="panel panel-narrow" id="ldap">
   <div class="panel-head"><h2>LDAP / Active Directory</h2></div>
   {{ feedback('ldap') }}
-  <p class="muted mb-sm">{{ _('Authenticate users against a directory; their group membership maps to a ser2net role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).') }}</p>
+  <p class="muted mb-sm">{{ _('Authenticate users against a directory; their group membership maps to a ser2net role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).') }} {{ _('Setup for Active Directory and OpenLDAP: <span class="mono">docs/SSO.md</span>.') }}</p>
   {% if ldap_problem %}{{ package_problem(ldap_problem, _("LDAP sign-in")) }}{% endif %}
   {% if ldap.enabled and ldap_tls_problem %}{{ tls_problem(ldap_tls_problem) }}{% endif %}
   {% if ldap.enabled and ldap.uses_tls and not ldap.tls_verify %}<div class="banner warn">{{ _('The directory server’s certificate is not checked: anyone on the network between ser2net and the directory could read the passwords and sign in as anyone. Set the CA certificate file below and untick “Don’t check the server certificate” as soon as you can.') }}</div>
@@ -339,7 +339,7 @@
 <section class="panel panel-narrow" id="oidc">
   <div class="panel-head"><h2>{{ _("Single sign-on (OIDC)") }}</h2></div>
   {{ feedback('oidc') }}
-  <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Needs <span class="mono">authlib</span> (optional).') }}</p>
+  <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Needs <span class="mono">authlib</span> (optional).') }} {{ _('Keycloak, Entra ID and Google settings: <span class="mono">docs/SSO.md</span>.') }}</p>
   {% if oidc_problem %}{{ package_problem(oidc_problem, _("Single sign-on (OIDC)")) }}{% endif %}
   <p class="mb-sm" id="oidc-redirect" data-uri="{{ oidc_redirect_uri }}"{% if oidc_redirect_auto %} data-auto{% endif %}>{{ _("Redirect URI to register at the identity provider:") }} <span class="mono">{{ oidc_redirect_uri }}</span>
     <span class="muted">({% if oidc_redirect_public %}{{ _("Redirect URI below is blank, so it is made from the public URL (Settings → Reverse proxy)") }}{% elif oidc_redirect_auto %}{{ _("Redirect URI below is blank, so it is made from the address in this page’s request") }}{% else %}{{ _("as set below") }}{% endif %})</span></p>
@@ -363,6 +363,7 @@
       <label>{{ _("Username claim") }} <input type="text" name="oidc_username_claim" value="{{ oidc.username_claim }}" placeholder="preferred_username"></label>
       <label>{{ _("Groups/roles claim") }} <input type="text" name="oidc_groups_claim" value="{{ oidc.groups_claim }}" placeholder="groups"></label>
     </div>
+    <p class="muted mb-sm">{{ _('Both are read from the ID token only, as top-level claims: Keycloak needs a mapper with “Add to ID token” (its realm roles are nested and can’t be read), and Entra ID sends the groups’ Object IDs, which are what the group settings below then name.') }}</p>
     <div class="grid3">
       <label>{{ _("Admin group") }} <input type="text" name="oidc_admin_group" value="{{ oidc.admin_group }}" placeholder="ser2net-admins"></label>
       <label>{{ _("Operator group") }} <input type="text" name="oidc_operator_group" value="{{ oidc.operator_group }}"></label>
@@ -465,13 +466,13 @@
         'peer_offline': _("Cluster node offline (not heard from, or a configured peer that doesn’t answer)"),
         'peer_back': _("Cluster node back"),
         'service_started': _("ser2net started (which mappings run)"),
+        'unit_offline': _("Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)"),
+        'unit_back': _("Modbus unit answering again"),
       } %}
       {% set event_hints = {
         'client_connected': _("sends the client’s IP address"),
         'client_disconnected': _("sends the client’s IP address"),
         'login_failed': _("sends the account name, or “(unknown user)”, and the IP address"),
-        'unit_offline': _("Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)"),
-        'unit_back': _("Modbus unit answering again"),
       } %}
       {% for e in notify_events %}
       <label class="chk"><input type="checkbox" name="notify_event_{{ e }}" {% if e in notify.events %}checked{% endif %}> {{ event_labels[e] }}{% if e in event_hints %} <span class="muted">({{ event_hints[e] }})</span>{% endif %}</label>
@@ -733,6 +734,7 @@
     <button class="btn" type="submit">{{ _("Preview import") }}</button>
   </form>
   <p class="muted mt-sm">{{ _("Nothing changes until you apply the preview. The current configuration is kept as a backup either way.") }}</p>
+  <p class="muted">{{ _('Moving from the classic ser2net (stop its service first; ports below 1024; what works differently): <span class="mono">docs/MIGRATING-FROM-SER2NET.md</span>.') }}</p>
   {% endif %}
 </section>
 {% endif %}

@@ -19,6 +19,7 @@ Checks (no sockets except the last part's server, in a netns):
 Run: python3 tests/test_health_events.py
 """
 import asyncio
+import re
 import types
 
 from _server import Browser, Server, free_port
@@ -301,6 +302,10 @@ def test_ui_and_metrics():
         _st, _h, page = b.get("/settings")
         for e in ("no_data", "data_back", "peer_offline", "peer_back", "service_started"):
             assert f'name="notify_event_{e}"' in page, e
+        # every event's checkbox has its label (not only a muted hint in parentheses)
+        for e in NOTIFY_EVENTS:
+            m = re.search(rf'name="notify_event_{e}"[^>]*>\s*([^<]*)', page)
+            assert m and m.group(1).strip() and not m.group(1).strip().startswith("("), (e, m)
         _st, _h, form = b.get("/api/mappings/q1/form")
         assert 'name="opt_no_data_alarm_s"' in form and 'value="30"' in form
         assert 'name="opt_no_data_reply_only"' in form

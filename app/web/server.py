@@ -25,7 +25,7 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.templating import Jinja2Templates
 
-from .. import __version__, clock, i18n
+from .. import __version__, clock, i18n, licences
 from ..config import ROLE_RANK, node_name
 from ..engine import netguard
 from ..explain import explain
@@ -425,6 +425,7 @@ def make_templates() -> Jinja2Templates:
         # until then (StaticAssets), also across restarts of the one-file executable
         asset_version=asset_version(),
         app_version=__version__,   # what the pages name as this version
+        source_url=licences.source_url(),  # the footer's source link (SER2NET_SOURCE_URL)
         # the server's time zone now ("UTC+03:00"), next to the times it shows
         server_zone=clock.zone,
         # the server's clock when it rendered the page (<body data-server-time>): app.js
