@@ -367,8 +367,15 @@ document.addEventListener("htmx:beforeSwap", function (e) {
       state: function (r) { return r.getAttribute("data-state") + " " + r.getAttribute("data-name"); },
       port: function (r) { return +r.getAttribute("data-port") || 0; }
     }[sort] || function (r) { return +r.getAttribute("data-order"); };
-    rows.sort(function (a, b) { var x = key(a), y = key(b); return x < y ? -1 : x > y ? 1 : 0; });
-    rows.forEach(function (r) { body.appendChild(r); });
+    var sorted = rows.slice().sort(function (a, b) { var x = key(a), y = key(b); return x < y ? -1 : x > y ? 1 : 0; });
+    // move rows only when the order changes: moving a row takes the keyboard focus from
+    // its buttons (put back below, as htmx put it back after the refresh)
+    if (sorted.some(function (r, i) { return r !== rows[i]; })) {
+      var had = document.activeElement;
+      sorted.forEach(function (r) { body.appendChild(r); });
+      if (had && had !== document.activeElement && body.contains(had)) had.focus({ preventScroll: true });
+    }
+    rows = sorted;
     var count = t.querySelector("[data-filter-count]");
     var said = (text || st) ? tr("shown", "{0} of {1} shown", shown, rows.length) : "";
     // a live region: set only when it changes (not at every refresh), so it is read once
@@ -483,7 +490,11 @@ var feedback = (function () {
     note.appendChild(banner);
     box.appendChild(note);
     shown[key] = note;
-    while (box.children.length > 4) drop(box.firstChild._key);   // the newest few
+    while (box.children.length > 4) {   // the newest few
+      var old = box.firstChild;
+      if (shown[old._key] === old) delete shown[old._key];
+      box.removeChild(old);
+    }
     if (kind === "ok") setTimeout(function () { if (shown[key] === note) drop(key); }, 6000);
   }
 
@@ -538,7 +549,9 @@ var feedback = (function () {
     var d = e.detail, xhr = d.xhr, el = d.askedBy || d.elt;
     if (!xhr || !xhr.status) return;   // no answer: htmx:sendError (or an abort)
     var poll = polls(el);
-    if (d.successful) {                // 2xx (204, 286 too) or a re-rendered form
+    // 2xx (204, 286 too) or a re-rendered form (1b); htmx sets "successful" once it has
+    // handled the answer
+    if (d.successful !== undefined ? d.successful : xhr.status < 400) {
       feedback.drop("session");
       feedback.drop("offline");
       if (poll) { setStale(el, false); feedback.drop(pollKey(el)); }
@@ -558,7 +571,7 @@ var feedback = (function () {
   // no answer at all: the server is down or the network is gone. The refreshes go on,
   // and the first answer that works takes this away again.
   document.addEventListener("htmx:sendError", function (e) {
-    var el = e.detail.elt;
+    var el = e.detail.askedBy || e.detail.elt;
     if (polls(el)) setStale(el, true);
     feedback.show("offline", "error", tr("offline", "The server can’t be reached: this page is not up to date. It updates again as soon as the server answers."));
   });
@@ -582,10 +595,10 @@ var panelFocus = (function () {
     return true;
   }
   function back() {
-    var id = wanted || opener;
+    var id = opener;
     opener = null;
-    if (give(id)) wanted = null;
-    else if (id) wanted = id;   // the table's next refresh may bring it
+    if (give(wanted)) wanted = null;
+    else if (!wanted) give(id);   // a wanted one not there yet: the refreshed table's (below)
   }
   function inView(el) {
     var r = el.getBoundingClientRect();
