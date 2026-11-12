@@ -1315,11 +1315,55 @@ def test_limits():
           "refused quickly; long flows, quoted scalars, many options read in one pass  OK")
 
 
+MIGRATION_NOTES = r"""
+connection: &low
+  accepter: tcp,23
+  connector: serialdev,/dev/ttyUSB0,9600n81
+  options:
+    openstr: 'ATZ\r'
+connection: &high
+  accepter: telnet,2001
+  connector: serialdev,/dev/ttyUSB1,9600n81
+connection: &out
+  accepter: tcp,2002
+  connector: serialdev,/dev/ttyUSB2,9600n81
+"""
+
+
+def test_migration_notes():
+    """What changes for a mapping moved from the classic ser2net: an openstr goes out once
+    the port opens (not per client), and a port below 1024 that this process may not use
+    (Linux without root or CAP_NET_BIND_SERVICE) is named before the mapping is applied."""
+    from app import ser2net_import
+    from app.engine import bindhint
+    saved = bindhint.may_bind_low_ports, bindhint.unprivileged_port_start
+    try:
+        bindhint.unprivileged_port_start = lambda: 1024
+        bindhint.may_bind_low_ports = lambda: False
+        maps, warns = parse(MIGRATION_NOTES)
+        assert has(warns, "low:", "openstr is sent once") and not has(warns, "high:", "openstr")
+        if sys.platform.startswith("linux"):
+            assert has(warns, "low:", "port 23 is below 1024", "CAP_NET_BIND_SERVICE"), warns
+        assert not has(warns, "high:", "below 1024") and not has(warns, "out:", "below 1024")
+        assert maps["low"]["enabled"] is True  # a note only: it is not held disabled
+        bindhint.may_bind_low_ports = lambda: True  # root, or the capability
+        _maps, warns = parse(MIGRATION_NOTES)
+        assert not has(warns, "below 1024"), warns
+        bindhint.may_bind_low_ports = lambda: False
+        assert ser2net_import._privileged_below({"mode": "server", "port": 23}, "win32") is None
+        assert ser2net_import._privileged_below({"mode": "client", "port": 23}, "linux") is None
+        assert ser2net_import._privileged_below({"mode": "udp", "port": 69}, "linux") == 1024
+    finally:
+        bindhint.may_bind_low_ports, bindhint.unprivileged_port_start = saved
+    print("migration notes: openstr once per open, a port below 1024 this process can't use  OK")
+
+
 def main():
     test_debian_default()
     test_accepters()
     test_protections()
     test_connectors()
+    test_migration_notes()
     test_serial_words()
     test_options()
     test_remaddr_default()
