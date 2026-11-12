@@ -1253,6 +1253,13 @@ class NotificationSettings:
     smtp_security: str = "starttls"  # starttls | ssl | none
     smtp_username: str = ""
     smtp_password: str = ""
+    # Personal data in what is sent (client_connected / client_disconnected: the client's
+    # IP address; login_failed: the account name and the IP address): with
+    # mask_personal_data, an address only as its network (IPv4 /24, IPv6 /48) and no
+    # account name. email_separately: each recipient gets a message of their own, so the
+    # recipients don't see each other's addresses. Both off by default (as up to 2.8).
+    mask_personal_data: bool = False
+    email_separately: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "NotificationSettings":
@@ -1260,6 +1267,9 @@ class NotificationSettings:
         known = {f.name for f in dataclasses.fields(NotificationSettings)}
         n = NotificationSettings(**{k: v for k, v in d.items() if k in known})
         n.events = [e for e in (n.events or []) if e in NOTIFY_EVENTS]
+        # a hand-edited value other than true is off, as before these settings existed
+        n.mask_personal_data = n.mask_personal_data is True
+        n.email_separately = n.email_separately is True
         return n
 
     @property

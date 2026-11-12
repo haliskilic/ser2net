@@ -133,7 +133,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
   With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
-  format has a `url` field.
+  format has a `url` field. The client events send the client's IP address, a failed
+  sign-in the account name (or `(unknown user)`) and the IP address; *Leave out personal
+  data* sends addresses only as their network (`10.0.5.x`, IPv6 /48) and no account names,
+  and e-mail can go to each recipient separately.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with

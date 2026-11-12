@@ -12,7 +12,11 @@ Checks:
   * Settings -> Notifications saves (secrets kept when left blank), validates, and
     "Save and send a test" delivers; a failed sign-in is notified;
   * with Turkish as the UI's default language the messages are Turkish, and an e-mail
-    with non-ASCII text stays 7-bit (quoted-printable, encoded subject).
+    with non-ASCII text stays 7-bit (quoted-printable, encoded subject);
+  * personal data: with mask_personal_data a client's address goes out as its network
+    (IPv4 /24, IPv6 /48; the repeat key stays the address) and a failed sign-in without
+    the account name; with email_separately each recipient gets a message of their own;
+    Discord pings no one; the Settings boxes are kept by a form that doesn't have them.
 
 Run: python3 tests/test_notifications.py
 """
@@ -23,6 +27,7 @@ import json
 import os
 import socketserver
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from _server import ROOT, Browser, Server
@@ -47,7 +52,7 @@ class Hook(BaseHTTPRequestHandler):
 
 
 class Smtp(socketserver.StreamRequestHandler):
-    """Just enough SMTP (no TLS, no auth) to receive one message."""
+    """Just enough SMTP (no TLS, no auth) to receive messages."""
 
     def handle(self):
         w = lambda s: self.wfile.write(s.encode() + b"\r\n")  # noqa: E731
@@ -58,7 +63,8 @@ class Smtp(socketserver.StreamRequestHandler):
             cmd = line.upper()
             if cmd.startswith(("EHLO", "HELO")):
                 w("250 test")
-            elif cmd.startswith("MAIL FROM"):
+            elif cmd.startswith("MAIL FROM"):  # a new message (also in the same session)
+                rcpt = []
                 w("250 ok")
             elif cmd.startswith("RCPT TO"):
                 rcpt.append(line.split(":", 1)[1].strip(" <>"))
@@ -104,7 +110,6 @@ def test_events():
 
 
 def test_repeat_keys():
-    import time
     from types import SimpleNamespace
 
     s = NotificationSettings.from_dict({
@@ -168,6 +173,52 @@ def test_formats_and_validation():
     print("webhook payloads (JSON/Slack/Teams/Discord/Telegram) + settings validation  OK")
 
 
+def test_personal_data():
+    from types import SimpleNamespace
+
+    for peer, want in (("10.0.5.77:5000", "10.0.5.x"), ("10.0.5.77", "10.0.5.x"),
+                       ("2001:db8:5:1::7:6000", "2001:db8:5::/48"),   # "ip:port", no brackets
+                       ("2001:db8:5:1:2:3:4:5:6000", "2001:db8:5::/48"),
+                       ("[2001:db8:7::1]:5000", "2001:db8:7::/48"),
+                       ("::ffff:10.1.2.3", "10.1.2.x"), ("::1:4001", "::/48"),
+                       ("plc-hall3:9000", "plc-hall3:9000"), ("", "")):
+        assert notify.mask_address(peer) == want, (peer, notify.mask_address(peer), want)
+    off, on = NotificationSettings(), NotificationSettings(mask_personal_data=True)
+    assert notify.sign_in_detail(off, "alice", "10.0.0.9") == "user 'alice' from 10.0.0.9"
+    assert notify.sign_in_detail(on, "alice", "10.0.0.9") == "user (name left out) from 10.0.0.x"
+    assert notify.sign_in_detail(off, "bob", "10.0.0.9", "LDAP", "the name of a local account") \
+        == "LDAP user 'bob' from 10.0.0.9: the name of a local account"
+    assert notify.sign_in_detail(on, "bob", "2001:db8::1", "OIDC", "it is empty") \
+        == "OIDC user (name left out) from 2001:db8::/48: it is empty"
+    s = NotificationSettings.from_dict({
+        "enabled": True, "events": ["client_connected", "login_failed"], "repeat_s": 300,
+        "webhook_url": "http://127.0.0.1:9/hook", "mask_personal_data": True})
+    st = SimpleNamespace(config=SimpleNamespace(notifications=s, mappings=[], admin_ui=AdminUI()),
+                         log=lambda m: None)
+    n = notify.Notifier(st)
+    assert n.emit("client_connected", "m1:10.0.0.5", "PLC", "10.0.0.5:5000")
+    assert not n.emit("client_connected", "m1:10.0.0.5", "PLC", "10.0.0.5:5001"), "a repeat"
+    assert n.emit("client_connected", "m1:10.0.0.6", "PLC", "10.0.0.6:5000"), \
+        "another client of the same network is another client"
+    assert n.emit("login_failed", "10.0.0.5", "", "user (name left out) from 10.0.0.x")
+    queued = [n._queue.get_nowait() for _ in range(3)]
+    assert queued == [("client_connected", "PLC", "10.0.0.x"),
+                      ("client_connected", "PLC", "10.0.0.x"),
+                      ("login_failed", "", "user (name left out) from 10.0.0.x")], queued
+    assert ("client_connected", "m1:10.0.0.5") in n._last, n._last
+    s.mask_personal_data = False
+    assert n.emit("client_connected", "m1:10.0.0.7", "PLC", "10.0.0.7:5000")
+    assert n._queue.get_nowait()[2] == "10.0.0.7:5000", "off: the address as it is"
+    # older configs (and hand-edited values other than true) keep today's payloads
+    for raw in ({}, {"mask_personal_data": "yes", "email_separately": 1}):
+        loaded = NotificationSettings.from_dict(raw)
+        assert loaded.mask_personal_data is False and loaded.email_separately is False, raw
+    body = notify.webhook_body("discord", "start_failed", "@everyone", "x")
+    assert body["allowed_mentions"] == {"parse": []} and "@everyone" in body["content"], body
+    print("personal data: addresses as their network (IPv4 /24, IPv6 /48, repeat key "
+          "unchanged), no account name; off by default; Discord pings no one  OK")
+
+
 async def test_delivery(hook_port, smtp_port):
     class State:
         def __init__(self):
@@ -194,6 +245,16 @@ async def test_delivery(hook_port, smtp_port):
     assert path == "/hook" and body["event"] == "device_lost" and body["mapping"] == "PLC"
     rcpt, data = MAILS[-1]
     assert rcpt == ["ops@example.com", "lead@example.com"] and "serial device lost" in data
+    assert "To: ops@example.com, lead@example.com" in data, data
+    s.email_separately = True   # one message per recipient, each with only its own To:
+    before = len(MAILS)
+    assert await n.deliver("device_lost", "PLC", "gone") == []
+    got = MAILS[before:]
+    assert [r for r, _d in got] == [["ops@example.com"], ["lead@example.com"]], got
+    for (r, d) in got:
+        mail = email.message_from_string(d, policy=email.policy.default)
+        assert mail["To"] == r[0] and "serial device lost" in mail["Subject"], d
+    s.email_separately = False
     st.config.admin_ui.language = "tr"
     errors = await n.deliver("device_lost", "Kazan dairesi ğüşıöç", "gone")
     lost = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))["serial device lost"]
@@ -240,16 +301,44 @@ def test_settings_ui(hook_port):
         for _ in range(50):
             if len(RECEIVED) > before:
                 break
-            import time
             time.sleep(0.1)
         assert len(RECEIVED) > before and "failed sign-in" in RECEIVED[-1][1]["text"], RECEIVED[-1:]
+        assert "user 'admin' from 127.0.0.1" in RECEIVED[-1][1]["text"], RECEIVED[-1]
         print("Settings: save (secret kept when blank), validation, test message, failed sign-in  OK")
+
+        # the personal-data boxes: hints next to the events that carry personal data
+        _, _, page = b.get("/settings")
+        assert "sends the client’s IP address" in page and 'name="notify_privacy_fields"' in page
+        st, _, page = b.post("/settings/notifications", {
+            **form, "notify_privacy_fields": "1", "notify_mask_personal_data": "on",
+            "notify_email_separately": "on"})
+        saved = srv.saved_config()["notifications"]
+        assert saved["mask_personal_data"] is True and saved["email_separately"] is True, saved
+        b.post("/settings/notifications", form)   # a page from before: no boxes, both kept
+        saved = srv.saved_config()["notifications"]
+        assert saved["mask_personal_data"] is True and saved["email_separately"] is True, saved
+        _, _, page = b.get("/settings")
+        assert 'name="notify_mask_personal_data" checked' in page, "box not shown ticked"
+        before = len(RECEIVED)
+        Browser(srv.base).post("/login", {"username": "admin", "password": "wrong-again"})
+        for _ in range(50):
+            if len(RECEIVED) > before:
+                break
+            time.sleep(0.1)
+        assert "user (name left out) from 127.0.0.x" in RECEIVED[-1][1]["text"], RECEIVED[-1]
+        assert "admin" not in RECEIVED[-1][1]["text"].split("\n", 1)[1], RECEIVED[-1]
+        b.post("/settings/notifications", {**form, "notify_privacy_fields": "1"})
+        saved = srv.saved_config()["notifications"]
+        assert saved["mask_personal_data"] is False and saved["email_separately"] is False, saved
+        print("Settings: personal data left out of a failed sign-in's message when asked; "
+              "a form without the boxes keeps them  OK")
 
 
 def main():
     test_events()
     test_repeat_keys()
     test_formats_and_validation()
+    test_personal_data()
     hook = serve(HTTPServer, Hook)
     smtp = serve(socketserver.ThreadingTCPServer, Smtp)
     try:

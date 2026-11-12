@@ -9,6 +9,7 @@ import time
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
+from ... import notify
 from ...config import (
     AccountNameError, ConfigError, User, external_name, external_name_problem, fold,
     new_pwd_version,
@@ -108,12 +109,14 @@ def routes(ctx: Ctx) -> list:
         state.log(f"{source.upper()}: {username!r} signed out everywhere: their groups give "
                   f"no role any more")
 
-    def _record_failure(ip: str, user: str, notice: str, action: str = "login_failed",
-                        detail: str = "") -> None:
+    def _record_failure(ip: str, user: str, source: str = "", reason: str = "",
+                        action: str = "login_failed", detail: str = "") -> None:
         """The audit record (bounded: state.failed_logins) and the notification of a
-        failed or refused sign-in."""
+        failed or refused sign-in (notify.sign_in_detail: personal data left out there
+        when Settings -> Notifications says so)."""
         state.failed_logins.add(ip, user, action, detail)
-        state.notifier.emit("login_failed", ip, "", notice)
+        state.notifier.emit("login_failed", ip, "", notify.sign_in_detail(
+            state.config.notifications, user, ip, source, reason))
 
     def _name_refused(request, source: str, username: str) -> str | None:
         """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
@@ -140,8 +143,8 @@ def routes(ctx: Ctx) -> list:
                     "claim" if source == "oidc" else "")
             state.log(f"{what} login denied for {username!r}: no account can have this name "
                       f"here: {why}{hint}")
-        _record_failure(ip, username, f"{what} user {username!r} from {ip}: "
-                        + (f"the name of a {taken.kind} account" if taken else why),
+        _record_failure(ip, username, what,
+                        f"the name of a {taken.kind} account" if taken else why,
                         f"{source}_login_denied",
                         f"{taken.kind} account {taken.username}" if taken else why)
         if taken and taken.source == "local":
@@ -339,7 +342,7 @@ def routes(ctx: Ctx) -> list:
         auth.UNKNOWN_USER: what was typed may well be a password."""
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
         state.log(f"failed login for {label!r} from {ip}")
-        _record_failure(ip, label, f"user {label!r} from {ip}")
+        _record_failure(ip, label)
         _note_name_paused(label, username)
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
