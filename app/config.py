@@ -999,6 +999,8 @@ class AdminUI:
     port: int = 8080
     tls_cert: str = ""
     tls_key: str = ""
+    # decrypts an encrypted tls_key (engine/tls.py: never asked for on a terminal)
+    tls_key_password: str = ""
     # Web-UI login can be switched off from Settings (trusted networks only): visitors
     # without a session then act with anonymous_role. Signing in still works, and the
     # REST API keeps its bearer token.

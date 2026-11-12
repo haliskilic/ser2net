@@ -6,7 +6,10 @@
   - edits (the mapping form, the REST API) load the files and refuse what does not load;
     an import takes such a mapping with a warning; the form never shows the stored
     password: a blank field keeps it, the remove box clears it; a viewer API token gets it
-    masked, and a PUT that sends the mask back keeps the stored one.
+    masked, and a PUT that sends the mask back keeps the stored one;
+  - the admin UI's key the same way (admin_ui.tls_key_password, Settings → Admin TLS): it
+    serves HTTPS with its password, and without one the start ends at once (exit 1, the
+    reason in all.log), before any mapping starts.
 Test certificates are made here (_pki.py, needs cryptography: SKIP without). Listens on
 127.0.0.1 only, on OS-assigned ports.
 
@@ -16,7 +19,9 @@ import asyncio
 import json
 import os
 import shutil
+import socket
 import ssl
+import subprocess
 import sys
 import tempfile
 import time
@@ -26,7 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _optional import need
-from _server import Browser, Server, free_port
+from _server import ROOT, Browser, Server, free_port
 
 from app import importer
 from app.config import ConfigError, MappingConfig
@@ -37,6 +42,8 @@ from app.web.auth import hash_password, hash_token
 MISSING_PORT = "COM250" if sys.platform == "win32" else "/dev/ser2net-test-missing"
 PASSWORD = "key-pass-1"
 TOKEN = "s2n_tls-mapping-test"
+USERS = [{"username": "admin", "password_hash": hash_password("admin-pass-1"),
+          "role": "admin", "pwd_version": 1, "source": "local"}]
 
 
 class Pki:
@@ -196,9 +203,7 @@ def api(srv: Server, method: str, path: str, body=None):
 
 
 def test_form_and_api(pki: Pki):
-    config = {"users": [{"username": "admin", "password_hash": hash_password("admin-pass-1"),
-                         "role": "admin", "pwd_version": 1, "source": "local"}],
-              "api_token_hash": hash_token(TOKEN), "api_token_role": "operator"}
+    config = {"users": USERS, "api_token_hash": hash_token(TOKEN), "api_token_role": "operator"}
     with Server(config) as srv:
         b = Browser(srv.base)
         b.login("admin", "admin-pass-1")
@@ -252,6 +257,66 @@ def test_form_and_api(pki: Pki):
           "keeps it  OK")
 
 
+def _https_healthz(port: int) -> bytes:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as raw, \
+            ctx.wrap_socket(raw) as s:
+        s.sendall(b"GET /healthz HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        out = b""
+        while chunk := s.recv(4096):
+            out += chunk
+    return out
+
+
+def test_admin_ui(pki: Pki):
+    admin = {"tls_cert": pki.cert, "tls_key": pki.locked, "tls_key_password": PASSWORD}
+    with Server({"users": USERS, "admin_ui": admin}) as srv:
+        assert b"200 OK" in _https_healthz(srv.port), srv.output()[-2000:]
+    data = tempfile.mkdtemp(prefix="s2n_tlsui_")
+    try:
+        cfg = {"users": USERS, "admin_ui": {"tls_cert": pki.cert, "tls_key": pki.locked},
+               "mappings": [mapping(port=free_port(), tls=False).to_dict()]}
+        with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh)
+        env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(free_port()))
+        p = subprocess.run([sys.executable, "ser2net.py", "--no-bootstrap", "--data-dir", data],
+                           cwd=ROOT, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                           encoding="utf-8", errors="replace", timeout=60)
+        with open(os.path.join(data, "all.log"), encoding="utf-8") as fh:
+            log = fh.read()
+        assert p.returncode == 1, (p.returncode, (p.stdout + p.stderr)[-2000:])
+        assert "is password-protected and no password is set" in log, log[-2000:]
+        assert "tls_key_password" in log and "[tls] " not in log, log[-2000:]
+    finally:
+        shutil.rmtree(data, ignore_errors=True)
+
+    with Server({"users": USERS}) as srv:
+        b = Browser(srv.base)
+        b.login("admin", "admin-pass-1")
+        fields = {"tls_cert": pki.cert, "tls_key": pki.locked}
+        st, _h, page = b.post("/settings/tls", fields)
+        assert "password-protected" in page and "could not be loaded" in page, page[-1500:]
+        st, _h, page = b.post("/settings/tls", dict(fields, tls_key_password="wrong"))
+        assert "Is the key password right" in page, page[-1500:]
+        st, _h, page = b.post("/settings/tls", dict(fields, tls_key_password=PASSWORD))
+        assert "Admin TLS saved" in page and PASSWORD not in page, page[-1500:]
+        assert srv.saved_config()["admin_ui"]["tls_key_password"] == PASSWORD
+        st, _h, page = b.post("/settings/tls", fields)  # blank: kept
+        assert "Admin TLS saved" in page, page[-1500:]
+        assert srv.saved_config()["admin_ui"]["tls_key_password"] == PASSWORD
+        st, _h, page = b.post("/settings/tls", dict(fields, tls_key_password_clear="on"))
+        assert "password-protected" in page, page[-1500:]
+        st, _h, page = b.post("/settings/tls", dict(fields, tls_key=pki.key,
+                                                    tls_key_password_clear="on"))
+        assert "Admin TLS saved" in page, page[-1500:]
+        assert srv.saved_config()["admin_ui"]["tls_key_password"] == ""
+    print("admin UI: an encrypted key serves HTTPS with admin_ui.tls_key_password; without "
+          "it the start ends at once (exit 1, all.log says why); Settings loads the pair "
+          "with the password, never shows it, blank keeps it  OK")
+
+
 def main():
     if not need("cryptography", what="per-mapping TLS files (test certificates)"):
         test_api_masks_the_password()
@@ -264,6 +329,7 @@ def main():
         test_api_masks_the_password()
         asyncio.run(_listener_starts(pki))
         test_form_and_api(pki)
+        test_admin_ui(pki)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\nALL PASS")

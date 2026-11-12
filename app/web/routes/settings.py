@@ -22,7 +22,9 @@ from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
     WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
     backup_time, host_port, new_pwd_version, parse_cluster_peer, serial_conflict,
+    tls_file_message,
 )
+from ...engine import tls
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
 from .. import auth, ldap_auth, selfsigned
@@ -195,21 +197,26 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
+        # never shown: a blank field keeps the stored password, unless the box removes it
+        password = (form.get("tls_key_password", "") or (
+            "" if _checkbox(form, "tls_key_password_clear")
+            else state.config.admin_ui.tls_key_password))
         if cert and key:
             # a pair that exists but doesn't load would stop the next start (runtime._serve)
             try:
-                await asyncio.to_thread(_load_tls_pair, cert, key)
-            except (OSError, ValueError) as e:  # ssl.SSLError is an OSError
+                await asyncio.to_thread(_load_tls_pair, cert, key, password)
+            except tls.TlsFileError as e:
                 return await settings_get(request, error=_(
-                    "The TLS certificate and key could not be loaded: {0}").format(e))
+                    "The TLS certificate and key could not be loaded: {0}").format(
+                    tls_file_message(e)))
         async with state.config_lock:
-            old = (state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key)
-            state.config.admin_ui.tls_cert = cert
-            state.config.admin_ui.tls_key = key
+            admin = state.config.admin_ui
+            old = (admin.tls_cert, admin.tls_key, admin.tls_key_password)
+            admin.tls_cert, admin.tls_key, admin.tls_key_password = cert, key, password
             try:
                 await state.asave()
             except ConfigError as e:
-                state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key = old
+                admin.tls_cert, admin.tls_key, admin.tls_key_password = old
                 return await settings_get(request, error=str(e))
         ctx.audit(request, "admin_tls_set", cert)
         return await settings_get(request, ok=_("Admin TLS saved. Restart to apply."))
@@ -230,6 +237,7 @@ def routes(ctx: Ctx) -> list:
         async with state.config_lock:
             state.config.admin_ui.tls_cert = cert
             state.config.admin_ui.tls_key = key
+            state.config.admin_ui.tls_key_password = ""  # (the key it writes is not encrypted)
             await state.asave()
         ctx.audit(request, "admin_tls_generate", "")
         return await settings_get(request, ok=_("Self-signed certificate generated. Restart to "
@@ -1159,14 +1167,13 @@ def _own_port_conflict(config, mappings, result) -> str:
                  if (c := config.own_port_conflict(m) or serial_conflict(m, result))), "")
 
 
-def _load_tls_pair(cert: str, key: str) -> None:
-    """Load a certificate and key as the admin UI will (raises what loading raises). A key
-    that needs a passphrase fails here: the admin UI has no way to be given one. A file
-    that is missing is left to the save, which says which one."""
-    import ssl
+def _load_tls_pair(cert: str, key: str, password: str) -> None:
+    """Load a certificate and key as the admin UI will, an encrypted key with ``password``
+    (raises tls.TlsFileError). A file that is missing is left to the save, which says
+    which one."""
     if not (os.path.isfile(cert) and os.path.isfile(key)):
         return
-    ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key, password=lambda: "")
+    tls.tls_context(server_side=True, cert=cert, key=key, password=password)
 
 
 def _key_hint(key: str) -> str:
