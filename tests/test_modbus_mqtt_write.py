@@ -62,7 +62,7 @@ from _server import ROOT  # noqa: F401  (sys.path setup)
 from app.config import MappingConfig
 from app.engine import modbus, serial_io, sparkplug
 from app.engine.modbus_gateway import ModbusGatewayRunner
-from app.engine.mqtt_pub import _matches
+from app.engine.mqtt_pub import _matches, shown
 
 REGS = {10: 0, 20: 0, 21: 0, 0: 0x41BC, 1: 0x0000}   # input regs 0/1 = float32 23.5
 COILS = {0: False, 1: False, 2: False}
@@ -1135,7 +1135,20 @@ async def test_no_stale_value_after_write(slave_port):
           "(plain, Sparkplug B)  OK")
 
 
+def test_shown_deep():
+    """A value nested deeper than repr() can follow (a JSON request that Python 3.14 and
+    later parse; on Windows repr() runs out of stack at 20000 levels) is named, not
+    quoted: quoting it raised RecursionError in the writer, which ended without answering."""
+    deep: list = []
+    for _ in range(200_000):  # past repr() on every platform (8 MB stack or a fixed limit)
+        deep = [deep]
+    assert shown(deep) == "a list nested too deeply", shown(deep)
+    assert shown("x" * 100) == repr("x" * 39)[:39] + "…" and shown(7) == "7"
+    print("shown(): a value too deep for repr() is named, not quoted  OK")
+
+
 async def main():
+    test_shown_deep()
     port = free_port()
     srv = await asyncio.start_server(fake_slave, "127.0.0.1", port)
     try:

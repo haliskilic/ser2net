@@ -227,7 +227,10 @@ async def read_polling():
     await asyncio.sleep(serial_compat.POLL_IDLE_AFTER_S + 0.05)
     assert t._idle_poll
     port.in_waiting = 5  # data: fast again (the stand-in reads b"" and stays "waiting")
-    await asyncio.sleep(serial_compat.POLL_IDLE_WAIT_S * 2)
+    # (at the next idle poll, 10 ms later: on Windows' 15.6 ms timer up to a few ticks)
+    end = loop.time() + serial_compat.POLL_IDLE_WAIT_S * 20
+    while t._idle_poll and loop.time() < end:
+        await asyncio.sleep(0.005)
     port.in_waiting = 0
     assert not t._idle_poll, "data arriving must bring the fast poll back"
     t.abort()
