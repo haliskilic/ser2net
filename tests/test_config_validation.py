@@ -8,6 +8,7 @@ M4: two enabled mappings must not target the same serial device.
 Pure stdlib + the app package (needs ./lib on path for app.web.routes).
 Run: python3 tests/test_config_validation.py
 """
+import json
 import os
 import sys
 
@@ -535,6 +536,43 @@ def test_form_hidden_blocks_kept():
     print("form: blocks hidden for the mode or kind keep their stored values  OK")
 
 
+def test_form_older_node():
+    """A cluster node running an older version renders the form without the newer fields:
+    what it can't post is kept. Before 2.8.0 its Modbus points have no "writable" (kept by
+    point name while it is still a coil or holding register); 2.6.1/2.6.2 forms have no
+    RS-485 fields."""
+    pts = [{"name": "run", "unit": 1, "fn": 1, "address": 0, "dtype": "bool", "writable": True},
+           {"name": "sp", "unit": 1, "fn": 3, "address": 10, "dtype": "int16", "writable": True},
+           {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "int16"}]
+    existing = MappingConfig.from_dict({
+        "name": "gw", "serial": {"port": "COM7", "advanced": {
+            "rs485_enabled": True, "rs485_delay_before_tx_ms": 0.5,
+            "rs485_delay_after_tx_ms": 0.5, "rs485_rts_level_for_tx": False}},
+        "network": {"protocol": "modbus", "port": 502}, "modbus_poll": {"points": pts}})
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502", "modbus_poll_interval_s": "5"}
+    old_points = json.dumps([{k: v for k, v in p.items() if k != "writable"} for p in pts])
+    # a 2.7.1 form: no "writable" in the points, no USB-identity marker
+    m = _edit(existing, dict(base, modbus_points=old_points))
+    assert [p.writable for p in m.modbus_poll.points] == [True, True, False]
+    # ...a point it changed into an input register can't be written
+    changed = json.loads(old_points)
+    changed[1].update(fn=4)
+    m = _edit(existing, dict(base, modbus_points=json.dumps(changed)))
+    assert [p.writable for p in m.modbus_poll.points] == [True, False, False]
+    # a 2.8.0+ form says "writable" itself: left out = not writable
+    m = _edit(existing, dict(base, modbus_points=old_points, serial_usb_match_shown="1"))
+    assert [p.writable for p in m.modbus_poll.points] == [False, False, False]
+    # 2.6.1/2.6.2: no RS-485 fields (2.6.3+: posted, unticked = off)
+    a = _edit(existing, base).serial.advanced
+    assert (a.rs485_enabled, a.rs485_delay_before_tx_ms, a.rs485_delay_after_tx_ms,
+            a.rs485_rts_level_for_tx) == (True, 0.5, 0.5, False), a
+    a = _edit(existing, dict(base, serial_rs485_delay_before_tx_ms="0")).serial.advanced
+    assert (a.rs485_enabled, a.rs485_delay_before_tx_ms) == (False, 0.0), a
+    print("form from an older node: writable kept by point name, RS-485 kept when absent  OK")
+
+
 def test_form_text_input_unchanged():
     """A close-on string with line breaks (imported from a ser2net configuration) can't be
     shown in a one-line input: posted back as the browser shows it, the stored value
@@ -574,6 +612,7 @@ def main():
     test_form_udp_reply_fields()
     test_form_mqtt_client_id()
     test_form_hidden_blocks_kept()
+    test_form_older_node()
     test_form_text_input_unchanged()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()

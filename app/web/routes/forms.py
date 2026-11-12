@@ -131,6 +131,8 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
     }
 
 
+_RS485 = ("rs485_enabled", "rs485_delay_before_tx_ms", "rs485_delay_after_tx_ms",
+          "rs485_rts_level_for_tx")
 _SERIAL = tuple(f.name for f in dataclasses.fields(SerialSettings))
 
 # Form fields that are not always posted: data-show-when hides AND disables a block,
@@ -148,6 +150,9 @@ _OPTIONAL_FORM_FIELDS = {
     # the USB-identity binding (see apply_usb_match); forms before 2.8.0 don't have it
     "serial_usb_match_shown": ("serial", ("match",)),
     "serial_b_usb_match_shown": ("serial_b", ("match",)),
+    # in every form since 2.6.3
+    "serial_rs485_delay_before_tx_ms": ("serial.advanced", _RS485),
+    "serial_b_rs485_delay_before_tx_ms": ("serial_b.advanced", _RS485),
     # TCP server and UDP: where it listens
     "network_port": ("network", ("bind_ip", "port")),
     # TCP client: where it connects to
@@ -178,7 +183,7 @@ _OPTIONAL_FORM_FIELDS = {
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
-    # Modbus gateways only
+    # Modbus gateways only (the points: see _keep_point_fields)
     "modbus_poll_interval_s": ("modbus_poll", ("interval_s",)),
 }
 
@@ -199,6 +204,10 @@ _TEXT_INPUTS = {
     "opt_banner": ("options", "banner"),
     "opt_closeon": ("options", "closeon"),
 }
+
+# What a form from before 2.8.0 (an older cluster node's) leaves out of each Modbus
+# point, kept from the stored point of the same name (see _keep_point_fields).
+_POINT_FIELDS_SINCE_2_8 = ("writable",)
 
 
 def _build_mapping_dict(form, strict: bool) -> dict:
@@ -395,7 +404,8 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     silently discards it: the settings the form doesn't have (_UNMANAGED_FIELDS), the
     not-always-posted fields the submitted `form` lacks (_OPTIONAL_FORM_FIELDS; no form
     = none posted), a one-line text field posted back unchanged although it can't show
-    the stored value (_TEXT_INPUTS). No-op when creating."""
+    the stored value (_TEXT_INPUTS), and the per-point Modbus fields a form from before
+    2.8.0 leaves out. No-op when creating."""
     if existing is None:
         return
     form = {} if form is None else form
@@ -410,6 +420,24 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
         cur, old = _part(new_map, section), _part(existing, section)
         if field in form and getattr(cur, attr) == _as_text_input(getattr(old, attr)):
             setattr(cur, attr, getattr(old, attr))
+    # every 2.8.0+ form has the A side's USB-identity marker (its block is never hidden)
+    if "serial_usb_match_shown" not in form:
+        _keep_point_fields(new_map, existing)
+
+
+def _keep_point_fields(new_map, existing) -> None:
+    """A form from before 2.8.0 (an older cluster node's) lists the Modbus points without
+    "writable" (_POINT_FIELDS_SINCE_2_8): each point keeps the stored value of the point
+    with the same name — "writable" only while it is still a coil or holding register."""
+    stored = {p.name: p for p in existing.modbus_poll.points}
+    for p in new_map.modbus_poll.points:
+        old = stored.get(p.name)
+        if old is None:
+            continue
+        for attr in _POINT_FIELDS_SINCE_2_8:
+            setattr(p, attr, getattr(old, attr))
+        if p.fn not in (1, 3):
+            p.writable = False
 
 
 def _form_error(render, request, state, form, message: str):
