@@ -103,7 +103,7 @@ def _nic_addresses6() -> list[tuple[str, str]]:
     skip = _skipped_ipv6()
     if psutil is not None:
         try:
-            stats = psutil.net_if_stats()
+            stats = _interface_stats()
             for ifname, addrs in psutil.net_if_addrs().items():
                 st = stats.get(ifname)
                 if st is not None and not st.isup:

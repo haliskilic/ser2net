@@ -6,8 +6,9 @@ net_if_stats() (it reads /proc/net/dev) then fails, while net_if_addrs() (getifa
 netlink, which the unit allows) still works. Without its own handling the whole psutil
 branch fell back to the host name's addresses (usually only 127.0.1.1, so the pickers
 listed no LAN address). Checked with a stand-in psutil: the interfaces and addresses are
-listed when net_if_stats() fails (they count as up), a down interface is still left out
-when it works, and the beacons go to each interface's directed broadcast too.
+listed when net_if_stats() fails (they count as up), IPv4 and IPv6, a down interface is
+still left out when it works, and the beacons go to each interface's directed broadcast
+too.
 
 Run: python3 tests/test_netinfo.py
 """
@@ -33,7 +34,8 @@ class FakePsutil:
                                    broadcast=broadcast, ptp=None)
         return {
             "lo": [a(socket.AF_INET, "127.0.0.1")],
-            "eth0": [a(socket.AF_INET, "192.0.2.10", "192.0.2.255")],
+            "eth0": [a(socket.AF_INET, "192.0.2.10", "192.0.2.255"),
+                     a(socket.AF_INET6, "2001:db8::10")],
             "wlan0": [a(socket.AF_INET, "198.51.100.7", "198.51.100.255")],
         }
 
@@ -66,6 +68,14 @@ def test_interfaces_without_proc_net():
     print("net_if_stats() failing (hidden /proc/net): the interfaces are listed by name  OK")
 
 
+def test_ipv6_interfaces_without_proc_net():
+    got = _with_psutil(FakePsutil(stats_error=True), netinfo._nic_addresses6)
+    assert ("eth0", "2001:db8::10") in got, got
+    got = _with_psutil(FakePsutil(stats_error=False, down=("eth0",)), netinfo._nic_addresses6)
+    assert ("eth0", "2001:db8::10") not in got, got
+    print("IPv6: net_if_stats() failing lists the interfaces' addresses too; a down one not  OK")
+
+
 def test_down_interface_left_out():
     got = _with_psutil(FakePsutil(stats_error=False, down=("wlan0",)), netinfo._nic_addresses)
     assert got == [("eth0", "192.0.2.10")], got
@@ -88,6 +98,7 @@ def test_real_host():
 
 if __name__ == "__main__":
     test_interfaces_without_proc_net()
+    test_ipv6_interfaces_without_proc_net()
     test_down_interface_left_out()
     test_beacons_use_directed_broadcasts()
     test_real_host()
