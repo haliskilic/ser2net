@@ -147,7 +147,7 @@
   <form method="post" action="/settings/users" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <div class="grid2">
-      <label>{{ _("Username") }} <input type="text" name="username" placeholder="{{ _('e.g. %(example)s', example='operator1') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" pattern="[A-Za-z0-9._\-]{1,32}" title="{{ _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.") }}" required></label>
+      <label>{{ _("Username") }} <input type="text" name="username" placeholder="{{ _('e.g. %(example)s', example='operator1') }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="32" pattern="[A-Za-z0-9._\-]{1,32}" title="{{ _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.") }}" required></label>
       <label>{{ _("Role") }}
         <select name="role">{% for r in roles %}<option value="{{ r }}" {% if r == 'viewer' %}selected{% endif %}>{{ r }}</option>{% endfor %}</select>
       </label>
@@ -201,8 +201,8 @@
     </label>
     <p class="muted">{{ _("…or search + bind with a service account:") }}</p>
     <div class="grid2">
-      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
-      <label>{{ _("Bind password") }} <input type="password" name="ldap_bind_password" placeholder="{% if ldap.bind_password %}{{ unchanged }}{% endif %}"></label>
+      <label>Bind DN <input type="text" name="ldap_bind_dn" value="{{ ldap.bind_dn }}" placeholder="cn=svc,dc=ex,dc=com" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>{{ _("Bind password") }} <input type="password" name="ldap_bind_password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if ldap.bind_password %}{{ unchanged }}{% endif %}"></label>
     </div>
     <div class="grid2">
       <label>{{ _("User search base") }} <input type="text" name="ldap_user_search_base" value="{{ ldap.user_search_base }}" placeholder="ou=people,dc=ex,dc=com"></label>
@@ -239,8 +239,8 @@
     <label class="chk"><input type="checkbox" name="oidc_enabled" {% if oidc.enabled %}checked{% endif %}> {{ _("Enable SSO login") }}</label>
     <label>{{ _("Issuer URL") }} <input type="text" name="oidc_issuer" value="{{ oidc.issuer }}" placeholder="https://keycloak.example.com/realms/main"></label>
     <div class="grid2">
-      <label>Client ID <input type="text" name="oidc_client_id" value="{{ oidc.client_id }}"></label>
-      <label>Client secret <input type="password" name="oidc_client_secret" placeholder="{% if oidc.client_secret %}{{ unchanged }}{% endif %}"></label>
+      <label>Client ID <input type="text" name="oidc_client_id" value="{{ oidc.client_id }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>Client secret <input type="password" name="oidc_client_secret" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if oidc.client_secret %}{{ unchanged }}{% endif %}"></label>
     </div>
     <div class="grid2">
       <label>Redirect URI <span class="muted">({{ _("blank = auto") }})</span><input type="text" name="oidc_redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="{{ _('auto from request') }}"></label>
@@ -287,7 +287,7 @@
     <input type="hidden" name="cluster_form" value="2">
     <label class="chk"><input type="checkbox" name="enabled" {% if cluster.enabled %}checked{% endif %}> {{ _("Enable LAN cluster") }}</label>
     <label>{{ _("Shared cluster key") }} <span class="muted">({{ _("the same on every node") }}{% if cluster_key_set %}; {{ _("blank = unchanged") }}{% endif %})</span>
-      <input type="password" name="key" autocomplete="new-password" placeholder="{% if cluster_key_set %}{{ unchanged }}{% else %}{{ _('a long random string — or use “Generate a new key and save”') }}{% endif %}"></label>
+      <input type="password" name="key" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if cluster_key_set %}{{ unchanged }}{% else %}{{ _('a long random string — or use “Generate a new key and save”') }}{% endif %}"></label>
     {% if cluster_key_set %}
     <label class="chk"><input type="checkbox" name="keep_old_key" checked> {{ _("When the key changes, keep accepting the current one for 7 days, until every node has the new one (untick it if the key leaked)") }}</label>
     {% if cluster_previous %}
@@ -346,7 +346,7 @@
       <legend>Webhook</legend>
       <div class="grid2">
         <label>URL <span class="muted">({{ _("kept secret") }}{% if notify.webhook_url %}; {{ _("blank = unchanged") }}{% endif %})</span>
-          <input type="password" name="notify_webhook_url" autocomplete="off" placeholder="{% if notify.webhook_url %}{{ unchanged }}{% else %}https://hooks.slack.com/services/…{% endif %}"></label>
+          <input type="url" name="notify_webhook_url" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if notify.webhook_url %}{{ unchanged }}{% else %}https://hooks.slack.com/services/…{% endif %}"></label>
         <label>{{ _("Format") }}
           <select name="notify_webhook_format">
             {% set formats = {'json': _('JSON (generic)'), 'slack': 'Slack / Mattermost', 'teams': 'Microsoft Teams (Workflows)', 'discord': 'Discord', 'telegram': _('Telegram bot')} %}
@@ -376,7 +376,7 @@
       </div>
       <div class="grid2">
         <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
-        <label>{{ _("Password") }} <input type="password" name="notify_smtp_password" autocomplete="new-password" placeholder="{% if notify.smtp_password %}{{ unchanged }}{% endif %}"></label>
+        <label>{{ _("Password") }} <input type="password" name="notify_smtp_password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if notify.smtp_password %}{{ unchanged }}{% endif %}"></label>
       </div>
     </fieldset>
     <div class="row-actions start">
