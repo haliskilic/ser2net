@@ -368,19 +368,6 @@ def rendered_actions(html, mid):
     return out
 
 
-def relevant(mappings):
-    """Mappings without the settings an edit may reset because they don't apply to the
-    mapping's kind (tests/_form_cases.IRRELEVANT)."""
-    out = []
-    for m in mappings:
-        m = json.loads(json.dumps(m))
-        for path in form_cases.IRRELEVANT.get(m["kind"], ()):
-            section, _dot, key = path.partition(".")
-            m[section].pop(key, None)
-        out.append(m)
-    return out
-
-
 def node_row(html, tag):
     """The fleet view's row of the node that has this tag ("manual", "this node")."""
     rows = re.findall(r'<tr class="node-row[^"]*">(.*?)</tr>', html, re.S)
@@ -602,8 +589,9 @@ def test_manual_peer_and_remote_control():
             assert code == 200, (sink["name"], code, page[:300])
             assert post_a("/api/cluster/peer-save", browser_post(page)) == 200, sink["name"]
         after = json.load(open(os.path.join(tb, "config.json")))["mappings"]
-        assert relevant(after) == relevant(before), [
-            (a["name"], a, b_) for a, b_ in zip(relevant(before), relevant(after), strict=True)
+        assert form_cases.relevant(after) == form_cases.relevant(before), [
+            (a["name"], a, b_) for a, b_ in zip(form_cases.relevant(before),
+                                                form_cases.relevant(after), strict=True)
             if a != b_][:1]
         print(f"remote edit: {len(form_cases.mappings())} kitchen-sink mappings saved "
               "unchanged through the rendered form keep every setting  OK")
