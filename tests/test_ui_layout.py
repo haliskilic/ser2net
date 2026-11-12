@@ -127,10 +127,17 @@ CHECK_JS = r"""() => {
 FILTER_ROW_JS = r"""sel => {
   const row = document.querySelector(sel);
   if (!row) return null;
-  const tops = new Set([...row.children].filter(el => el.getBoundingClientRect().width > 0)
-                       .map(el => Math.round(el.getBoundingClientRect().top / 8)));
+  // a line starts with a field below the previous line (the fields of one line differ in
+  // height, and the row centres them)
+  const boxes = [...row.children].map(el => el.getBoundingClientRect())
+                .filter(r => r.width > 0).sort((a, b) => a.top - b.top);
+  let lines = 0, bottom = -Infinity;
+  for (const r of boxes) {
+    if (r.top >= bottom - 1) { lines++; bottom = r.bottom; }
+    else bottom = Math.max(bottom, r.bottom);
+  }
   const search = row.querySelector('input[type=search]');
-  return {lines: tops.size, searchBg: getComputedStyle(search).backgroundColor,
+  return {lines, searchBg: getComputedStyle(search).backgroundColor,
           pageBg: getComputedStyle(document.body).backgroundColor};
 }"""
 
@@ -211,11 +218,12 @@ def live_checks(page, bad, active, row_button, press):
                              "X-Content-Hash": "patched.counters"},
         body=f'<span id="{span}" hx-swap-oob="true">9.9 MB / 1 B</span>'))
     page.wait_for_timeout(2600)
-    page.unroute("**/api/status*")
+    # (checked before the real answers come back: the next one is a whole table again)
     if page.evaluate(f"document.getElementById('{span}').textContent") != "9.9 MB / 1 B":
         bad("a counters-only answer did not update the In / Out cell")
     if not page.evaluate(same) or active() != log_id:
         bad(f"a counters-only answer replaced the table or took the focus: {active()!r}")
+    page.unroute("**/api/status*")
 
     # a pressed pointer or a text selection in the table: it is not replaced under them
     for what, start, end in (
