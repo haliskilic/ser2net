@@ -111,8 +111,14 @@ düzenlemeye gerek yok.
   değişse de eşleme doğru cihazı açar.
 - **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
 - **Onlarca eşleme:** tek ekrandan ekle/düzenle/sil/başlat/durdur, canlı durum; arama,
-  durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat.
-  Tablo yalnızca değiştiğinde yenilenir (titreme yok, seçimler korunur).
+  durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat
+  (*Gösterilenlerin hepsini seç*; toplu işlem yalnızca filtrenin gösterdiği işaretli
+  satırlara uygulanır ve önce sorar). Tablo yalnızca gösterdiği şey değiştiğinde yeniden
+  çizilir: yeni bayt sayıları yalnızca kendi hücrelerini günceller, bağlantı süreleri
+  tarayıcıda sayılır, arka plandaki sekme yenilenmez; böylece titreme olmaz, seçim, ipucu
+  ya da tıklama kaybolmaz. Çizim, köprüleri yürüten olay döngüsünün dışında yapılır.
+  Gelen / Giden B / KB / MB / GB olarak gösterilir (kesin sayılar REST API'de ve
+  `/metrics`'te).
 - **Erişim kontrolü (eşleme başına):** izinli IP/CIDR listesi, **yüksek-öncelikli**
   istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at,
   salt-okunur, banner, open/close string, `closeon` (Modbus gateway banner, open/close
@@ -312,15 +318,18 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 
 - **Eşleme ekle:** Ad, tür (Serial↔Network / Serial↔Serial), seri port + parametreler,
   ağ modu (server/client/udp), protokol, bind/remote IP:port, erişim kuralları.
-- **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda.
+- **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda. Bağlı istemci varken
+  Durdur ve Yeniden başlat önce sorar (istemcilerin bağlantısı kesilir; durdurulan eşleme
+  durdurulmuş kalır); Sil, eşlemenin log ve trace dosyalarını da siler.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
 - **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
   cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
   gönderdiklerini görür.
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
-  admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
-  **yedek al/yükle** (JSON), durum.
+  admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak` olarak
+  saklanır), **REST API token'ı** üret/iptal et ya da yalnızca rolünü değiştir (tek seferlik
+  token'ın Kopyala düğmesi var), mapping **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
   düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
@@ -351,7 +360,8 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
-Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
+Token, üretilirken seçilen rolü taşır (*Yalnızca rolü değiştir* token'ı koruyarak rolü
+değiştirir): `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
 sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
 `viewer` sayılır ve açılış log'u bunu yazar.
 
