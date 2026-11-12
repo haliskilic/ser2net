@@ -56,7 +56,7 @@ jobs:
       - name: Refresh vendor/wheels (and the locks and browser libraries, if they don't match)
         run: |
           python tools/refresh_wheels.py
-          python tools/refresh_locks.py --check || python tools/refresh_locks.py
+          python tools/refresh_locks.py --verify || python tools/refresh_locks.py   # e.g. a new PyInstaller dependency
           python tools/refresh_assets.py --check || python tools/refresh_assets.py
           python tools/refresh_wheels.py --verify
           python tools/refresh_locks.py --verify

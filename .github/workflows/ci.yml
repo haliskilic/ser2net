@@ -127,7 +127,7 @@ jobs:
         if: failure()
         run: |
           python tools/refresh_wheels.py || true
-          python tools/refresh_locks.py --check || python tools/refresh_locks.py || true
+          python tools/refresh_locks.py --verify || python tools/refresh_locks.py || true
           python tools/refresh_assets.py --check || python tools/refresh_assets.py || true
           paths=(vendor/wheels requirements-lock.txt requirements-build.txt vendor/npm
                  app/web/static tools/licenses/npm)
