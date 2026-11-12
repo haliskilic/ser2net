@@ -32,7 +32,7 @@ def _app_dir() -> str:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="ser2net.py",
+        prog="ser2netweb",
         description="Serial-to-network bridge with a web config UI.",
     )
     p.add_argument("--version", action="version", version=f"ser2netweb {__version__}")
