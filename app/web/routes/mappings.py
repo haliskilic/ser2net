@@ -19,6 +19,13 @@ from .common import TRIGGER, Ctx, console_interactive, sees_to_device
 from .forms import _form_error, _modbus_points_json
 
 
+def _bulk_refused(refused: list, total: int) -> str:
+    """Why some mappings of a bulk start / restart were not changed (the others were)."""
+    reasons = list(dict.fromkeys(str(r.error) for r in refused))  # once each, in order
+    return _("{0} of {1} selected mapping(s) not changed: {2}").format(
+        len(refused), total, " ".join(reasons[:3]) + (" …" if len(reasons) > 3 else ""))
+
+
 def routes(ctx: Ctx) -> list:
     state, render = ctx.state, ctx.render
     current_user, require_role, can_edit = ctx.current_user, ctx.require_role, ctx.can_edit
@@ -37,26 +44,26 @@ def routes(ctx: Ctx) -> list:
         if deny := require_role(request, "operator"):
             return deny
         mid = request.path_params["mid"]
-        async with state.config_lock:
-            m = state.config.get_mapping(mid)
-            if not m:
-                return PlainTextResponse(_("Mapping not found"), status_code=404)
-            d = m.to_dict()
-            d.pop("id", None)
-            d["name"] = f"{m.name} (copy)"
-            d["enabled"] = False  # don't auto-start a duplicate (avoids port clash)
-            dup = MappingConfig.from_dict(d)
-            # bump a listening port to the next free one
-            if dup.kind == "net" and dup.network.listens:
-                used = {mm.network.port for mm in state.config.mappings if mm.kind == "net"}
-                while dup.network.port in used and dup.network.port < 65535:
-                    dup.network.port += 1
-            state.config.mappings.append(dup)
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.mappings.remove(dup)
-                return PlainTextResponse(_("Duplicate failed: {0}").format(e), status_code=400)
+        dup = None
+        try:
+            async with state.edit_config():
+                m = state.config.get_mapping(mid)
+                if m:
+                    d = m.to_dict()
+                    d.pop("id", None)
+                    d["name"] = f"{m.name} (copy)"
+                    d["enabled"] = False  # don't auto-start a duplicate (avoids port clash)
+                    dup = MappingConfig.from_dict(d)
+                    # bump a listening port to the next free one
+                    if dup.kind == "net" and dup.network.listens:
+                        used = {mm.network.port for mm in state.config.mappings if mm.kind == "net"}
+                        while dup.network.port in used and dup.network.port < 65535:
+                            dup.network.port += 1
+                    state.config.mappings.append(dup)
+        except ConfigError as e:  # not saved, so not copied (config.json unwritable too)
+            return PlainTextResponse(_("Duplicate failed: {0}").format(e), status_code=400)
+        if dup is None:
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
         ctx.audit(request, "mapping_duplicate", dup.name)
         return Response("", headers=TRIGGER)
 
@@ -84,13 +91,18 @@ def routes(ctx: Ctx) -> list:
         ids = [i for i in form.getlist("ids") if i]
         if not ids or len(ids) > 500:
             return PlainTextResponse(_("Select one or more mappings."), status_code=400)
-        done = []
+        done, refused = [], []
         for mid in ids:
-            ok, name = await ops.apply_action(state, mid, action)
-            if ok:
-                done.append(name)
-                ctx.audit(request, f"mapping_{action}", name)
-        state.log(f"bulk {action}: {len(done)} mapping(s)")
+            res = await ops.apply_action(state, mid, action)
+            if res.error is not None:
+                refused.append(res)
+            elif res.found:
+                done.append(res.name)
+                ctx.audit(request, f"mapping_{action}", res.name)
+        state.log(f"bulk {action}: {len(done)} mapping(s)"
+                  + (f", {len(refused)} refused" if refused else ""))
+        if refused:  # the others are done
+            return PlainTextResponse(_bulk_refused(refused, len(ids)), status_code=400)
         return Response("", headers=TRIGGER)
 
     # ---------------- mapping form ----------------
@@ -190,7 +202,10 @@ def routes(ctx: Ctx) -> list:
     async def mapping_delete(request):
         if deny := require_role(request, "operator"):
             return deny
-        removed = await ops.delete_mapping(state, request.path_params["mid"])
+        try:
+            removed = await ops.delete_mapping(state, request.path_params["mid"])
+        except ConfigError as e:  # not deleted
+            return PlainTextResponse(_("Not deleted: {0}").format(e), status_code=400)
         if removed is not None:
             state.log(f"mapping deleted: {removed.name}")
             ctx.audit(request, "mapping_delete", removed.name)
@@ -203,11 +218,15 @@ def routes(ctx: Ctx) -> list:
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
-        ok, name = await ops.apply_action(state, mid, action)
-        if not ok:
-            return PlainTextResponse(name, status_code=404)
-        state.log(f"mapping {action}: {name}")
-        ctx.audit(request, f"mapping_{action}", name)
+        res = await ops.apply_action(state, mid, action)
+        if not res.found:
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
+        if res.error is not None:  # nothing changed
+            return PlainTextResponse(str(res.error), status_code=400)
+        state.log(f"mapping {action}: {res.name}")
+        ctx.audit(request, f"mapping_{action}", res.name)
+        if res.warning:  # stopped, but not saved
+            return PlainTextResponse(res.warning, status_code=200, headers=TRIGGER)
         return Response("", headers=TRIGGER)
 
     return [

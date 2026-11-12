@@ -211,7 +211,7 @@ def main():
         api("DELETE", f"/api/v1/mappings/{made['id']}", token=token, expect=200)
         print("telnet over UDP saved as raw, unused close-on named in `warnings`  OK")
 
-        # ---- a save that fails for another reason: JSON 500, nothing left in memory ----
+        # ---- a save that can't be written: JSON 500 save_failed, nothing left in memory ----
         if os.name == "posix" and os.geteuid() != 0:
             os.chmod(tmp, 0o500)  # config.json can't be replaced
             try:
@@ -221,11 +221,12 @@ def main():
                                                    "port": free_port()}))
             finally:
                 os.chmod(tmp, 0o700)
-            assert code == 500 and err == {"error": "internal",
-                                           "detail": "internal server error"}, (code, err)
+            assert code == 500 and err["error"] == "save_failed" and \
+                err["detail"].startswith("Could not save config.json: "), (code, err)
             code, listing = api("GET", "/api/v1/mappings", token=token, expect=200)
             assert [x["name"] for x in listing["mappings"]] == ["api-renamed"], listing
-            print("failed save: JSON 500, the mapping is not kept in memory  OK")
+            print("failed save: JSON 500 save_failed with the reason, the mapping is not kept "
+                  "in memory  OK")
         else:
             print("SKIP: failed-save check needs a POSIX non-root run")
 

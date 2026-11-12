@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ..config import ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
+from ..config import ROLE_RANK, ConfigError, ConfigWriteError, MappingConfig, valid_mapping_id
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
@@ -51,6 +51,15 @@ def _edit_view(mapping, state) -> dict:
 _BAD_INPUT = (ValueError, TypeError, AttributeError, OverflowError)
 
 
+def _not_saved(e: ConfigError) -> JSONResponse:
+    """A change that was refused when saved, and so not made: 400 when the config would
+    not validate (it shares a port or a serial device with another mapping, ...), 500 when
+    config.json can't be written."""
+    if isinstance(e, ConfigWriteError):
+        return JSONResponse({"error": "save_failed", "detail": str(e)}, status_code=500)
+    return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+
+
 def build_api_routes(state):
     async def list_mappings(request):
         return JSONResponse({"mappings": [_mapping_view(m, state) for m in state.config.mappings]})
@@ -77,15 +86,11 @@ def build_api_routes(state):
             mapping.validate_input()
         except _BAD_INPUT as e:  # ConfigError is a ValueError
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        async with state.config_lock:
-            state.config.mappings.append(mapping)
-            try:
-                await state.asave()
-            except Exception as e:  # not saved: not created either
-                state.config.mappings.remove(mapping)
-                if not isinstance(e, ConfigError):
-                    raise
-                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        try:
+            async with state.edit_config():
+                state.config.mappings.append(mapping)
+        except ConfigError as e:  # not saved: not created either
+            return _not_saved(e)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping created: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_create", mapping.name, user="api-token")
@@ -110,19 +115,16 @@ def build_api_routes(state):
             mapping.validate_input()
         except _BAD_INPUT as e:  # ConfigError is a ValueError
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
-        async with state.config_lock:
-            existing = state.config.get_mapping(mid)
-            if not existing:
-                return JSONResponse({"error": "not_found"}, status_code=404)
-            backup = list(state.config.mappings)
-            state.config.mappings[state.config.mappings.index(existing)] = mapping
-            try:
-                await state.asave()
-            except Exception as e:  # not saved: not changed either
-                state.config.mappings = backup
-                if not isinstance(e, ConfigError):
-                    raise
-                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        existing = None
+        try:
+            async with state.edit_config():
+                existing = state.config.get_mapping(mid)
+                if existing:
+                    state.config.mappings[state.config.mappings.index(existing)] = mapping
+        except ConfigError as e:  # not saved: not changed either
+            return _not_saved(e)
+        if not existing:
+            return JSONResponse({"error": "not_found"}, status_code=404)
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping updated: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_update", mapping.name, user="api-token")
@@ -130,7 +132,10 @@ def build_api_routes(state):
 
     async def delete_mapping(request):
         mid = request.path_params["mid"]
-        removed = await ops.delete_mapping(state, mid)
+        try:
+            removed = await ops.delete_mapping(state, mid)
+        except ConfigError as e:  # not deleted
+            return _not_saved(e)
         if removed is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping deleted: {removed.name}")
@@ -142,12 +147,17 @@ def build_api_routes(state):
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
             return JSONResponse({"error": "unknown_action"}, status_code=400)
-        ok, name = await ops.apply_action(state, mid, action)
-        if not ok:
+        res = await ops.apply_action(state, mid, action)
+        if not res.found:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        state.log(f"api: mapping {action}: {name}")
-        state.audit(_client_ip(request), f"api_mapping_{action}", name, user="api-token")
-        return JSONResponse({"id": mid, "action": action, "status": state.supervisor.status(mid)})
+        if res.error is not None:  # nothing changed
+            return _not_saved(res.error)
+        state.log(f"api: mapping {action}: {res.name}")
+        state.audit(_client_ip(request), f"api_mapping_{action}", res.name, user="api-token")
+        out = {"id": mid, "action": action, "status": state.supervisor.status(mid)}
+        if res.warning:  # stopped, but config.json could not keep it
+            out["warning"] = res.warning
+        return JSONResponse(out)
 
     async def status(request):
         return JSONResponse({"mappings": state.supervisor.all_status()})
@@ -218,7 +228,9 @@ def openapi_spec(admin) -> dict:
                          "requestBody": {"required": True, "content": {"application/json": {
                              "schema": {"$ref": "#/components/schemas/Mapping"}}}},
                          "responses": {"201": {"description": "created (see `warnings`)"},
-                                       "400": {"description": "validation error"}}},
+                                       "400": {"description": "validation error"},
+                                       "500": {"description": "config.json could not be "
+                                                              "written (save_failed)"}}},
             },
             "/mappings/{mid}": {
                 "parameters": [{"name": "mid", "in": "path", "required": True,
@@ -231,10 +243,14 @@ def openapi_spec(admin) -> dict:
                             "schema": {"$ref": "#/components/schemas/Mapping"}}}},
                         "responses": {"200": {"description": "updated (see `warnings`)"},
                                       "400": {"description": "validation error"},
-                                      "404": {"description": "not found"}}},
+                                      "404": {"description": "not found"},
+                                      "500": {"description": "config.json could not be "
+                                                             "written (save_failed)"}}},
                 "delete": {"summary": "Delete a mapping", "security": bearer,
                            "responses": {"200": {"description": "deleted"},
-                                         "404": {"description": "not found"}}},
+                                         "404": {"description": "not found"},
+                                         "500": {"description": "config.json could not be "
+                                                                "written (save_failed)"}}},
             },
             "/mappings/{mid}/{action}": {
                 "parameters": [
@@ -243,8 +259,18 @@ def openapi_spec(admin) -> dict:
                      "schema": {"type": "string", "enum": ["start", "stop", "restart"]}},
                 ],
                 "post": {"summary": "Start/stop/restart a mapping", "security": bearer,
+                         "description": "A start or restart that can't be saved changes "
+                                        "nothing (400 validation: e.g. it would share a "
+                                        "serial port with a running mapping; 500 "
+                                        "save_failed: config.json can't be written). A stop "
+                                        "always stops; when config.json can't be written, "
+                                        "`warning` says it starts again at the next start "
+                                        "of ser2net.",
                          "responses": {"200": {"description": "action applied"},
-                                       "404": {"description": "not found"}}},
+                                       "400": {"description": "not saved: validation error"},
+                                       "404": {"description": "not found"},
+                                       "500": {"description": "not saved: config.json could "
+                                                              "not be written"}}},
             },
         },
     }

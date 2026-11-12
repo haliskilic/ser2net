@@ -2,6 +2,8 @@
 validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
+from typing import NamedTuple, Optional
+
 from ...config import ConfigError, MappingConfig, valid_mapping_id
 from ...engine import portlist
 from ...i18n import _
@@ -63,64 +65,74 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
     # Hold the lock only to mutate + persist config; release it BEFORE the
     # (potentially slow) supervisor call so other admin requests aren't blocked
     # while a serial port is being (re)opened.
-    async with state.config_lock:
-        backup = list(state.config.mappings)
-        if posted_id:
-            existing = state.config.get_mapping(mapping.id)
-            if existing is None:  # deleted while this request was being checked
-                return False, _gone()
-            state.config.mappings[state.config.mappings.index(existing)] = mapping
-        else:
-            state.config.mappings.append(mapping)
-        try:
-            await state.asave()
-        except Exception as e:  # not saved: nothing changed
-            state.config.mappings = backup
-            if not isinstance(e, ConfigError):
-                raise
-            return False, str(e)
+    try:
+        async with state.edit_config():
+            if posted_id:
+                existing = state.config.get_mapping(mapping.id)
+                if existing is None:  # deleted while this request was being checked
+                    raise ConfigError(_gone())
+                state.config.mappings[state.config.mappings.index(existing)] = mapping
+            else:
+                state.config.mappings.append(mapping)
+    except ConfigError as e:  # not saved, nothing changed (config.json unwritable too)
+        return False, str(e)
     await state.supervisor.apply_mapping(mapping)
     return True, mapping.name
 
 
-async def apply_action(state, mid, action) -> tuple[bool, str]:
-    """Start/stop/restart a local mapping by id. Returns (ok, name-or-error).
-    Shared by the UI action endpoint, the cluster remote-control endpoint and the
-    REST API."""
-    async with state.config_lock:
-        m = state.config.get_mapping(mid)
-        if not m:
-            return False, "Mapping not found"
-        was = m.enabled
-        m.enabled = action != "stop"
-        try:
-            await state.asave()
-        except Exception:  # not saved, so nothing changed (e.g. starting it shares a serial port)
-            m.enabled = was
-            raise
-    if action == "stop":
+class ActionResult(NamedTuple):
+    """What apply_action did with one mapping."""
+    found: bool                          # a mapping has this id
+    name: str = ""
+    error: Optional[ConfigError] = None  # not done: its change can't be saved
+    warning: str = ""                    # done, but config.json could not keep it
+
+
+async def apply_action(state, mid, action) -> ActionResult:
+    """Start/stop/restart a local mapping by id. Shared by the UI action and bulk
+    endpoints, the cluster remote-control endpoint and the REST API.
+
+    The enabled flag is saved first, then the supervisor brings the runner in line (it
+    reads the config when the mapping's turn comes). A start or restart that can't be
+    saved (e.g. the mapping shares a serial port with a running one, or config.json can't
+    be written) changes nothing and gives `error`. A stop always stops: when config.json
+    can't be written, the mapping stays stopped (in memory too) and `warning` says it
+    starts again when ser2net restarts."""
+    stop = action == "stop"
+    m = None
+    warning = ""
+    try:
+        async with state.edit_config(keep_on_failure=stop):
+            m = state.config.get_mapping(mid)
+            if m is not None:
+                m.enabled = not stop
+    except ConfigError as e:  # (only a change is saved: m is the mapping)
+        if m is None or not stop:
+            return ActionResult(m is not None, getattr(m, "name", ""), error=e)
+        state.log(f"WARNING: [{m.name}] stopped, but config.json could not be saved ({e}): "
+                  "it starts again when ser2net restarts, unless a later change is saved")
+        warning = _("Stopped, but config.json could not be saved ({0}): it starts again when "
+                    "ser2net restarts.").format(e)
+    if m is None:
+        return ActionResult(False)
+    if stop:
         await state.supervisor.stop_mapping(mid)
     elif action == "restart":
         await state.supervisor.restart_mapping(m)
     else:  # start
         await state.supervisor.apply_mapping(m)
-    return True, m.name
+    return ActionResult(True, m.name, warning=warning)
 
 
 async def delete_mapping(state, mid):
     """Remove a mapping from the config, stop it and drop its log and traces. Returns the removed
-    MappingConfig, or None when no mapping has that id."""
+    MappingConfig, or None when no mapping has that id. Raises ConfigError when the deletion
+    can't be saved (then nothing is deleted)."""
     removed = None
-    async with state.config_lock:
+    async with state.edit_config():
         m = state.config.get_mapping(mid)
         if m:
-            index = state.config.mappings.index(m)
             state.config.mappings.remove(m)
-            try:
-                await state.asave()
-            except Exception:  # not saved, so not deleted
-                state.config.mappings.insert(index, m)
-                raise
             removed = m
     if removed is not None:  # by the stored id, never the id from the request
         await state.supervisor.remove_mapping(removed.id)

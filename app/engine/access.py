@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Collection, Optional, Protocol
 
@@ -112,6 +113,9 @@ def server_ssl(net: NetworkSettings) -> Optional[ssl.SSLContext]:
     if not net.tls:
         return None
     import ssl
+    for path in (net.tls_cert, net.tls_key):  # (saving no longer checks: say which one)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"TLS file not found: {path}")
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(net.tls_cert, net.tls_key)
     return ctx

@@ -354,6 +354,11 @@ import of such a file. In a hand-edited `config.json`, text in a protective swit
 (`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`) keeps it on unless empty, as
 before 2.9.0, with a start-up note. Keys that are not settings are ignored and named in the response's `warnings`
 list. An unexpected server error is a JSON `500` too.
+A change that can't be saved changes nothing: `400` (`validation`) when the configuration
+would not validate — a start that would share a serial port with a running mapping, for
+example — and `500` (`save_failed`) when `config.json` can't be written (a full or
+read-only disk). A stop always stops; when `config.json` can't be written, the response's
+`warning` says that the mapping starts again when ser2net restarts.
 The token has the role chosen when it was generated: a `viewer` token may only read (GET)
 and gets stored secrets (the MQTT password) masked. An `api_token_role` in `config.json`
 that is not a role counts as `viewer`, and the start-up log says so.

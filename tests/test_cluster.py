@@ -299,6 +299,21 @@ def test_endpoints():
         assert any(m["endpoint"].endswith(str(port)) for m in data["mappings"]), data["mappings"]
         print("cluster/local: created mapping appears with its endpoint  OK")
 
+        # a remote start that can't be saved (a copy on EDGE1's serial port): refused with
+        # the reason, in a signed 400, and nothing changes
+        edge = next(m for m in data["mappings"] if m["name"] == "EDGE1")
+        post(f"/api/mappings/{edge['id']}/duplicate", {"_csrf": csrf()}, header=True)
+        _, body = raw_request(ui, "/api/cluster/local", {"X-Cluster-Key": key})
+        copy = next(m for m in json.loads(body)["mappings"] if m["name"] == "EDGE1 (copy)")
+        form = urllib.parse.urlencode({"mapping_id": copy["id"], "action": "start"}).encode()
+        st, body, _reply, _h, ok = signed_call(ui, key, "/api/cluster/control", "POST", form,
+                                               to=node_id)
+        assert st == 400 and ok and body["ok"] is False, (st, body)
+        assert "both use serial port /dev/ttyTEST" in body["error"], body
+        _, body = raw_request(ui, "/api/cluster/local", {"X-Cluster-Key": key})
+        assert not next(m for m in json.loads(body)["mappings"] if m["id"] == copy["id"])["enabled"]
+        print("cluster/control: a start that can't be saved is refused with the reason  OK")
+
         # the aggregated table (session-authed) renders this node + mapping
         html = op.open(f"http://127.0.0.1:{ui}/api/cluster/status", timeout=10).read().decode()
         assert socket.gethostname() in html and "this node" in html, html[:400]

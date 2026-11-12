@@ -363,6 +363,11 @@ dosyanın içe aktarılması da. Elle düzenlenmiş bir `config.json`'da koruyuc
 (`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`) metin, 2.9.0 öncesindeki gibi
 boş değilse onu açık tutar ve açılışta not düşülür. Ayar olmayan anahtarlar yok sayılır ve yanıttaki `warnings` listesinde adlandırılır.
 Beklenmeyen bir sunucu hatası da JSON bir `500` döner.
+Kaydedilemeyen bir değişiklik hiçbir şeyi değiştirmez: yapılandırma doğrulanmıyorsa — örneğin
+çalışan bir eşlemeyle aynı seri portu kullanacak bir başlatmada — `400` (`validation`),
+`config.json` yazılamıyorsa (dolu ya da salt okunur disk) `500` (`save_failed`) döner.
+Durdurma her zaman durdurur; `config.json` yazılamıyorsa yanıttaki `warning`, eşlemenin
+ser2net yeniden başlayınca yine çalışacağını söyler.
 Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
 sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
 `viewer` sayılır ve açılış log'u bunu yazar.

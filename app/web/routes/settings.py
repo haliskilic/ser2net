@@ -125,10 +125,12 @@ def routes(ctx: Ctx) -> list:
         if err:
             return await settings_get(request, error=err)
         new_hash = await asyncio.to_thread(auth.hash_password, new)
-        async with state.config_lock:
-            user.password_hash = new_hash
-            user.pwd_version += 1
-            await state.asave()
+        try:
+            async with state.edit_config():
+                user.password_hash = new_hash
+                user.pwd_version += 1
+        except ConfigError as e:  # not saved: the password stays as it was
+            return await settings_get(request, error=str(e))
         state.log(f"password changed for {user.username}; their other sessions signed out")
         ctx.audit(request, "password_change", user.username)
         # refresh THIS session so the user isn't logged out by their own change
@@ -146,22 +148,15 @@ def routes(ctx: Ctx) -> list:
         return [u for u in state.config.external_accounts(target.username, "ldap")
                 if u is not target]
 
-    async def _bump_sessions(username: str):
-        """Sign every session of `username` out (pwd_version + 1). Returns the user, or
-        an error text. Caller holds config_lock."""
+    def _bump_sessions(username: str):
+        """Sign every session of `username` out (pwd_version + 1), in a state.edit_config()
+        block. Returns the user; raises ConfigError when there is none."""
         target = state.config.get_user(username)
         if target is None:
-            return None, _("User not found.")
-        accounts = [target, *_spellings(target)]
-        for u in accounts:
+            raise ConfigError(_("User not found."))
+        for u in (target, *_spellings(target)):
             u.pwd_version += 1
-        try:
-            await state.asave()
-        except ConfigError as e:
-            for u in accounts:
-                u.pwd_version -= 1
-            return None, str(e)
-        return target, None
+        return target
 
     async def settings_signout_others(request):
         """Any signed-in user: end their own sessions elsewhere, keep this one. Nothing
@@ -173,14 +168,16 @@ def routes(ctx: Ctx) -> list:
         me = current_user(request)
         if me is None or me.source == "anonymous":
             return await settings_get(request, error=_("Sign in to manage your sessions."))
-        async with state.config_lock:
-            if state.others_signed_out.get(me.username) == (
-                    me.pwd_version, state.sessions_issued.get(me.username, 0)):
-                return await settings_get(request,
-                                          ok=_("Your other sessions are already signed out."))
-            user, err = await _bump_sessions(me.username)
-        if err:
-            return await settings_get(request, error=err)
+        user = None
+        try:
+            async with state.edit_config():
+                if state.others_signed_out.get(me.username) != (
+                        me.pwd_version, state.sessions_issued.get(me.username, 0)):
+                    user = _bump_sessions(me.username)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
+        if user is None:
+            return await settings_get(request, ok=_("Your other sessions are already signed out."))
         state.log(f"{me.username} signed out their other sessions")
         ctx.audit(request, "sessions_signout_others", me.username)
         resp = await settings_get(request, ok=_("Your other sessions were signed out."))
@@ -196,15 +193,13 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
-        async with state.config_lock:
-            old = (state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key)
-            state.config.admin_ui.tls_cert = cert
-            state.config.admin_ui.tls_key = key
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key = old
-                return await settings_get(request, error=str(e))
+        try:
+            async with state.edit_config():
+                state.config.admin_ui.tls_cert = cert
+                state.config.admin_ui.tls_key = key
+                state.config.admin_ui.check_tls_files()  # here, not at every save
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         ctx.audit(request, "admin_tls_set", cert)
         return await settings_get(request, ok=_("Admin TLS saved. Restart to apply."))
 
@@ -221,10 +216,13 @@ def routes(ctx: Ctx) -> list:
             await asyncio.to_thread(selfsigned.generate, cert, key)
         except (selfsigned.CertError, OSError) as e:
             return await settings_get(request, error=_("Could not generate a certificate: {0}").format(e))
-        async with state.config_lock:
-            state.config.admin_ui.tls_cert = cert
-            state.config.admin_ui.tls_key = key
-            await state.asave()
+        try:
+            async with state.edit_config():
+                state.config.admin_ui.tls_cert = cert
+                state.config.admin_ui.tls_key = key
+        except ConfigError as e:
+            return await settings_get(request, error=_("The certificate was generated, but not "
+                                                       "set up: {0}").format(e))
         ctx.audit(request, "admin_tls_generate", "")
         return await settings_get(request, ok=_("Self-signed certificate generated. Restart to "
                                                 "apply TLS."))
@@ -251,17 +249,14 @@ def routes(ctx: Ctx) -> list:
                 return await settings_get(request, error=_("Session lifetime must be a number "
                                                            "of minutes."))
         ui = state.config.admin_ui
-        async with state.config_lock:
-            old = (ui.require_login, ui.anonymous_role, state.config.session_timeout_s, ui.language)
-            ui.require_login, ui.anonymous_role = require_login, role
-            state.config.session_timeout_s, ui.language = timeout, language
-            try:
-                await state.asave()
-            except ConfigError as e:
-                (ui.require_login, ui.anonymous_role, state.config.session_timeout_s,
-                 ui.language) = old
-                return await settings_get(request, error=str(e))
-        if timeout != old[2]:
+        old_timeout = state.config.session_timeout_s
+        try:
+            async with state.edit_config():
+                ui.require_login, ui.anonymous_role = require_login, role
+                state.config.session_timeout_s, ui.language = timeout, language
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
+        if timeout != old_timeout:
             state.log(f"web UI session lifetime set to {timeout // 60} min (new sign-ins)")
         if require_login:
             state.log("web UI login requirement ENABLED (every visitor must sign in)")
@@ -283,14 +278,11 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        async with state.config_lock:
-            old = state.config.secret_key
-            state.config.secret_key = secrets.token_hex(32)
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.secret_key = old
-                return await settings_get(request, error=str(e))
+        try:
+            async with state.edit_config():
+                state.config.secret_key = secrets.token_hex(32)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         state.revoked_sessions.clear()  # signed with the old key: dead anyway
         state.log("new session key: every web UI session was signed out")
         ctx.audit(request, "sessions_revoke_all", "")
@@ -313,10 +305,12 @@ def routes(ctx: Ctx) -> list:
         if role not in ROLES:
             return await settings_get(request, error=_("Invalid role."))
         token = auth.new_api_token()
-        async with state.config_lock:
-            state.config.api_token_hash = auth.hash_token(token)
-            state.config.api_token_role = role
-            await state.asave()
+        try:
+            async with state.edit_config():
+                state.config.api_token_hash = auth.hash_token(token)
+                state.config.api_token_role = role
+        except ConfigError as e:  # not saved: the token in use stays (this one is never shown)
+            return await settings_get(request, error=str(e))
         state.log(f"REST API token generated (role: {role})")
         ctx.audit(request, "api_token_generate", role)
         # show the token exactly once — only its hash is stored
@@ -330,9 +324,11 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        async with state.config_lock:
-            state.config.api_token_hash = ""
-            await state.asave()
+        try:
+            async with state.edit_config():
+                state.config.api_token_hash = ""
+        except ConfigError as e:  # not saved: the token still works
+            return await settings_get(request, error=str(e))
         state.log("REST API token revoked")
         ctx.audit(request, "api_token_revoke", "")
         return await settings_get(request, ok=_("API token revoked. The REST API is now disabled."))
@@ -379,19 +375,17 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        async with state.config_lock:
-            old = state.config.ldap
-            before = state.config.usable_admin_count()
-            state.config.ldap = _ldap_from_form(form, old)
-            if problem := (_directory_off_problem(before, "LDAP")
-                           or _ca_file_problem(state.config.ldap)):
-                state.config.ldap = old
-                return await settings_get(request, error=problem)
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.ldap = old
-                return await settings_get(request, error=str(e))
+        old = state.config.ldap
+        try:
+            async with state.edit_config():
+                old = state.config.ldap
+                before = state.config.usable_admin_count()
+                state.config.ldap = _ldap_from_form(form, old)
+                if problem := (_directory_off_problem(before, "LDAP")
+                               or _ca_file_problem(state.config.ldap)):
+                    raise ConfigError(problem)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         _clear_group_warnings("ldap")
         state.ldap_tls_problem = None   # answered; the next failing sign-in shows it again
         state.log(f"LDAP settings updated (enabled={state.config.ldap.enabled})")
@@ -411,18 +405,16 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        async with state.config_lock:
-            old = state.config.oidc
-            before = state.config.usable_admin_count()
-            state.config.oidc = _oidc_from_form(form, old)
-            if problem := _directory_off_problem(before, "OIDC"):
-                state.config.oidc = old
-                return await settings_get(request, error=problem)
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.oidc = old
-                return await settings_get(request, error=str(e))
+        old = state.config.oidc
+        try:
+            async with state.edit_config():
+                old = state.config.oidc
+                before = state.config.usable_admin_count()
+                state.config.oidc = _oidc_from_form(form, old)
+                if problem := _directory_off_problem(before, "OIDC"):
+                    raise ConfigError(problem)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         _clear_group_warnings("oidc")
         state.log(f"OIDC settings updated (enabled={state.config.oidc.enabled})")
         ctx.audit(request, "oidc_settings",
@@ -481,12 +473,14 @@ def routes(ctx: Ctx) -> list:
         if err:
             return await settings_get(request, error=err)
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
-        async with state.config_lock:
-            if err := taken():  # created while the password was hashed
-                return await settings_get(request, error=err)
-            state.config.users.append(User(username=username, password_hash=pw_hash,
-                                           role=role, pwd_version=new_pwd_version()))
-            await state.asave()
+        try:
+            async with state.edit_config():
+                if err := taken():  # created while the password was hashed
+                    raise ConfigError(err)
+                state.config.users.append(User(username=username, password_hash=pw_hash,
+                                               role=role, pwd_version=new_pwd_version()))
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         state.log(f"user created: {username} ({role})")
         ctx.audit(request, "user_create", f"{username}:{role}")
         return await settings_get(request, ok=_("User '{0}' created.").format(username))
@@ -499,17 +493,19 @@ def routes(ctx: Ctx) -> list:
             return csrf_failed()
         username = _target_name(request, form)
         role = form.get("role", "viewer")
-        async with state.config_lock:  # checked under the lock: two admins at once
-            target = state.config.get_user(username)
-            if target is None:
-                return await settings_get(request, error=_("User not found."))
-            if role not in ROLES:
-                return await settings_get(request, error=_("Invalid role."))
-            if target.role == "admin" and role != "admin" and _last_admin(target):
-                return await settings_get(request, error=_("Cannot demote the last admin."))
-            target.role = role
-            target.pwd_version += 1  # force re-login so the new role applies everywhere
-            await state.asave()
+        try:
+            async with state.edit_config():  # checked under the lock: two admins at once
+                target = state.config.get_user(username)
+                if target is None:
+                    raise ConfigError(_("User not found."))
+                if role not in ROLES:
+                    raise ConfigError(_("Invalid role."))
+                if target.role == "admin" and role != "admin" and _last_admin(target):
+                    raise ConfigError(_("Cannot demote the last admin."))
+                target.role = role
+                target.pwd_version += 1  # force re-login so the new role applies everywhere
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         state.log(f"user role changed: {username} -> {role}")
         ctx.audit(request, "user_role", f"{username}:{role}")
         return await settings_get(request, ok=_("Role updated for '{0}'. They must sign in again.").format(username))
@@ -521,20 +517,23 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         username = _target_name(request, form)
-        async with state.config_lock:  # checked under the lock: two admins at once
-            target = state.config.get_user(username)
-            if target is None:
-                return await settings_get(request, error=_("User not found."))
-            if _is_me(request, username):
-                return await settings_get(request, error=_("You cannot delete your own account."))
-            if target.role == "admin" and _last_admin(target):
-                return await settings_get(request, error=_("Cannot delete the last admin."))
-            others = [u for u in _spellings(target) if not _is_me(request, u.username)]
-            if others and _leaves_no_admin([target, *others]):
-                return await settings_get(request, error=_("Cannot delete the last admin."))
-            gone = [target, *others]
-            state.config.users = [u for u in state.config.users if not any(u is g for g in gone)]
-            await state.asave()
+        try:
+            async with state.edit_config():  # checked under the lock: two admins at once
+                target = state.config.get_user(username)
+                if target is None:
+                    raise ConfigError(_("User not found."))
+                if _is_me(request, username):
+                    raise ConfigError(_("You cannot delete your own account."))
+                if target.role == "admin" and _last_admin(target):
+                    raise ConfigError(_("Cannot delete the last admin."))
+                others = [u for u in _spellings(target) if not _is_me(request, u.username)]
+                if others and _leaves_no_admin([target, *others]):
+                    raise ConfigError(_("Cannot delete the last admin."))
+                gone = [target, *others]
+                state.config.users = [u for u in state.config.users
+                                      if not any(u is g for g in gone)]
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         for u in gone:
             state.log(f"user deleted: {u.username}")
             ctx.audit(request, "user_delete", u.username)
@@ -562,14 +561,11 @@ def routes(ctx: Ctx) -> list:
             return await settings_get(request, error=_(
                 "Enter 0 (never) or a number of days from {0} to {1}.").format(
                     EXPIRE_DAYS_MIN, EXPIRE_DAYS_MAX))
-        async with state.config_lock:
-            old = state.config.external_users_expire_days
-            state.config.external_users_expire_days = days
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.external_users_expire_days = old
-                return await settings_get(request, error=str(e))
+        try:
+            async with state.edit_config():
+                state.config.external_users_expire_days = days
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         state.log(f"LDAP/OIDC accounts are removed after {days} days without a sign-in" if days
                   else "LDAP/OIDC accounts are no longer removed for not signing in")
         ctx.audit(request, "users_expiry", str(days))
@@ -588,10 +584,11 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         username = _target_name(request, form)
-        async with state.config_lock:
-            target, err = await _bump_sessions(username)
-        if err:
-            return await settings_get(request, error=err)
+        try:
+            async with state.edit_config():
+                target = _bump_sessions(username)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         state.log(f"all sessions of {username} signed out")
         ctx.audit(request, "user_signout", username)
         resp = await settings_get(request, ok=_("'{0}' was signed out everywhere.").format(username))
@@ -625,17 +622,14 @@ def routes(ctx: Ctx) -> list:
         if err := problem() or _password_problem(pw, pw2):
             return await settings_get(request, error=err)
         pw_hash = await asyncio.to_thread(auth.hash_password, pw)
-        async with state.config_lock:
-            if err := problem():  # changed while the password was hashed
-                return await settings_get(request, error=err)
-            target = state.config.get_user(username)
-            old = (target.password_hash, target.pwd_version)
-            target.password_hash, target.pwd_version = pw_hash, target.pwd_version + 1
-            try:
-                await state.asave()
-            except ConfigError as e:
-                target.password_hash, target.pwd_version = old
-                return await settings_get(request, error=str(e))
+        try:
+            async with state.edit_config():
+                if err := problem():  # changed while the password was hashed
+                    raise ConfigError(err)
+                target = state.config.get_user(username)
+                target.password_hash, target.pwd_version = pw_hash, target.pwd_version + 1
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         state.log(f"password of {username} set by an admin; their sessions were signed out")
         ctx.audit(request, "user_password_set", username)
         return await settings_get(request, ok=_("New password set for '{0}'; they were signed out "
@@ -734,17 +728,13 @@ def routes(ctx: Ctx) -> list:
 
     async def _apply_import(request, plan, mode):
         rows = importer.plan_rows(state.config.mappings, plan.mappings, mode)
-        async with state.config_lock:
-            old = state.config.mappings
-            new_maps, touched = importer.apply_import(old, plan.mappings, mode)
-            state.config.mappings = new_maps
-            try:
-                await state.asave()
-            except Exception as e:  # not saved: the mappings stay as they were
-                state.config.mappings = old
-                if not isinstance(e, ConfigError):
-                    raise
-                return await settings_get(request, error=_("Import rejected: {0}").format(e))
+        try:
+            async with state.edit_config():
+                new_maps, touched = importer.apply_import(state.config.mappings, plan.mappings,
+                                                          mode)
+                state.config.mappings = new_maps
+        except ConfigError as e:  # not saved: the mappings stay as they were
+            return await settings_get(request, error=_("Import rejected: {0}").format(e))
         if mode == "replace":
             await state.supervisor.stop_all()
             await state.supervisor.start_all(state.config)
@@ -794,14 +784,11 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        async with state.config_lock:
-            old = state.config.notifications
-            try:
-                state.config.notifications = _notify_from_form(form, old)
-                await state.asave()
-            except ConfigError as e:
-                state.config.notifications = old
-                return await settings_get(request, error=str(e))
+        try:
+            async with state.edit_config():
+                state.config.notifications = _notify_from_form(form, state.config.notifications)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         new = state.config.notifications
         state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)})")
         ctx.audit(request, "notification_settings", "enabled" if new.enabled else "disabled")
@@ -910,38 +897,31 @@ def routes(ctx: Ctx) -> list:
                 "unknown_keys", "newer_writer"}
         if not with_accounts:
             keep |= {"users", "api_token_hash", "api_token_role"}
-        notes = []
-        async with state.config_lock:
-            cur = state.config
-            previous = {f.name: getattr(cur, f.name) for f in dataclasses.fields(AppConfig)}
-            usable_before = cur.usable_admin_count()
-            for f in dataclasses.fields(AppConfig):
-                if f.name not in keep:
-                    setattr(cur, f.name, getattr(restored, f.name))
-            if with_accounts:
-                cur.secret_key = secrets.token_hex(32)
-            else:  # both cluster keys are credentials: the key and the one still accepted
-                was = previous["cluster"]
-                cur.cluster = dataclasses.replace(cur.cluster, key=was.key,
-                                                  previous_key=was.previous_key,
-                                                  previous_until=was.previous_until)
-                if cur.cluster.enabled and not cur.cluster.key.strip():
-                    cur.cluster.enabled = False
-                    notes.append(_("The cluster stays off: this backup had it on, but its key "
-                                   "was not restored."))
-            problem = None
-            if usable_before and not cur.usable_admin_count():
-                problem = _("no admin could sign in afterwards (LDAP/OIDC accounts need their "
-                            "sign-in method on)")
-            else:
-                try:
-                    await state.asave()
-                except ConfigError as e:
-                    problem = str(e)
-            if problem:
-                for k, v in previous.items():
-                    setattr(cur, k, v)
-                return await settings_get(request, error=_("Restore rejected: {0}").format(problem))
+        notes: list[str] = []
+        cur = state.config
+        try:
+            async with state.edit_config():
+                previous = {f.name: getattr(cur, f.name) for f in dataclasses.fields(AppConfig)}
+                usable_before = cur.usable_admin_count()
+                for f in dataclasses.fields(AppConfig):
+                    if f.name not in keep:
+                        setattr(cur, f.name, getattr(restored, f.name))
+                if with_accounts:
+                    cur.secret_key = secrets.token_hex(32)
+                else:  # both cluster keys are credentials: the key and the one still accepted
+                    was = previous["cluster"]
+                    cur.cluster = dataclasses.replace(cur.cluster, key=was.key,
+                                                      previous_key=was.previous_key,
+                                                      previous_until=was.previous_until)
+                    if cur.cluster.enabled and not cur.cluster.key.strip():
+                        cur.cluster.enabled = False
+                        notes.append(_("The cluster stays off: this backup had it on, but its "
+                                       "key was not restored."))
+                if usable_before and not cur.usable_admin_count():
+                    raise ConfigError(_("no admin could sign in afterwards (LDAP/OIDC accounts "
+                                        "need their sign-in method on)"))
+        except ConfigError as e:  # nothing restored
+            return await settings_get(request, error=_("Restore rejected: {0}").format(e))
         if with_accounts:
             state.revoked_sessions.clear()  # signed with the old key: dead anyway
         await state.supervisor.stop_all()
@@ -1009,42 +989,41 @@ def routes(ctx: Ctx) -> list:
         except ConfigError as e:
             return await settings_get(request, error=str(e))
         generate = form.get("then") == "generate"
-        async with state.config_lock:
-            old = state.config.cluster
-            # The key is never shown: a blank field keeps it, "Generate" makes one (shown
-            # once). A changed key keeps the old one accepted for a while unless that is
-            # unticked (a planned change vs. a leaked key), so the fleet isn't split
-            # until every node has the new one.
-            key = secrets.token_urlsafe(32) if generate else (
-                (form.get("key") or "").strip() or old.key)
-            if _checkbox(form, "clear_key") and not generate:
-                key = ""
-            previous, until = old.previous_key, old.previous_until
-            changed = key_bytes(key) != key_bytes(old.key)
-            if changed:
-                keep = bool(old.key.strip()) and _checkbox(form, "keep_old_key")
-                previous, until = (old.key, time.time() + KEY_OVERLAP_S) if keep else ("", 0.0)
-            if _checkbox(form, "clear_previous_key") or not key.strip():
-                previous, until = "", 0.0
-            # a form from before these switches existed (an open tab during an upgrade, a
-            # script) leaves them as they are; an unticked box is only "off" in this form
-            current_form = form.get("cluster_form") == "2"
-            new = ClusterSettings(
-                enabled=form.get("enabled") == "on",
-                key=key,
-                discovery_port=port,
-                advertise_ip=(form.get("advertise_ip") or "").strip(),
-                peers=peers,
-                previous_key=previous, previous_until=until,
-                legacy_auth=_checkbox(form, "legacy_auth") if current_form else old.legacy_auth,
-                discovery=_checkbox(form, "discovery") if current_form else old.discovery,
-            )
-            state.config.cluster = new
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.cluster = old
-                return await settings_get(request, error=str(e))
+        old = state.config.cluster
+        try:
+            async with state.edit_config():
+                old = state.config.cluster
+                # The key is never shown: a blank field keeps it, "Generate" makes one (shown
+                # once). A changed key keeps the old one accepted for a while unless that is
+                # unticked (a planned change vs. a leaked key), so the fleet isn't split
+                # until every node has the new one.
+                key = secrets.token_urlsafe(32) if generate else (
+                    (form.get("key") or "").strip() or old.key)
+                if _checkbox(form, "clear_key") and not generate:
+                    key = ""
+                previous, until = old.previous_key, old.previous_until
+                changed = key_bytes(key) != key_bytes(old.key)
+                if changed:
+                    keep = bool(old.key.strip()) and _checkbox(form, "keep_old_key")
+                    previous, until = (old.key, time.time() + KEY_OVERLAP_S) if keep else ("", 0.0)
+                if _checkbox(form, "clear_previous_key") or not key.strip():
+                    previous, until = "", 0.0
+                # a form from before these switches existed (an open tab during an upgrade, a
+                # script) leaves them as they are; an unticked box is only "off" in this form
+                current_form = form.get("cluster_form") == "2"
+                new = ClusterSettings(
+                    enabled=form.get("enabled") == "on",
+                    key=key,
+                    discovery_port=port,
+                    advertise_ip=(form.get("advertise_ip") or "").strip(),
+                    peers=peers,
+                    previous_key=previous, previous_until=until,
+                    legacy_auth=_checkbox(form, "legacy_auth") if current_form else old.legacy_auth,
+                    discovery=_checkbox(form, "discovery") if current_form else old.discovery,
+                )
+                state.config.cluster = new
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         # apply live: restart discovery so a key/port/enable change takes effect now
         await state.cluster.stop()
         await state.cluster.start()
@@ -1084,15 +1063,14 @@ def routes(ctx: Ctx) -> list:
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        async with state.config_lock:
-            old = (state.config.instance_id, state.config.secret_key)
-            state.config.instance_id = secrets.token_hex(8)
-            state.config.secret_key = secrets.token_hex(32)
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.instance_id, state.config.secret_key = old
-                return await settings_get(request, error=str(e))
+        old = (state.config.instance_id, state.config.secret_key)
+        try:
+            async with state.edit_config():
+                old = (state.config.instance_id, state.config.secret_key)
+                state.config.instance_id = secrets.token_hex(8)
+                state.config.secret_key = secrets.token_hex(32)
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
         await state.cluster.stop()
         await state.cluster.start()
         new_id = state.config.instance_id
