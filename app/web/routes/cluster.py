@@ -115,11 +115,12 @@ def _fmt_uptime(seconds) -> str:
     d, s = divmod(s, 86400)
     h, s = divmod(s, 3600)
     m, _sec = divmod(s, 60)
+    # in the page's language
     if d:
-        return f"{d}d {h}h"
+        return _("{0}d {1}h").format(d, h)
     if h:
-        return f"{h}h {m}m"
-    return f"{m}m"
+        return _("{0}h {1}m").format(h, m)
+    return _("{0}m").format(m)
 
 
 

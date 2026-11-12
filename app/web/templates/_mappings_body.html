@@ -65,7 +65,8 @@
         {% if st and st.clients %}
           <div class="clients">
             {#- data-since: app.js counts the connection time on (the table is not sent again for it) #}
-            {% for cl in st.clients %}<span class="peer mono {% if cl.priority %}peer-prio{% endif %}"{% if cl.connected_at %} data-since="{{ cl.connected_at }}"{% endif %} title="{{ _('connected %(duration)s', duration=cl.duration) }}{% if cl.priority %} · {{ t.priority }}{% endif %}">{% if cl.priority %}★ {% endif %}{{ cl.peer }} · <span class="dur">{{ cl.duration }}</span></span>{% endfor %}
+            {#- the time in the page's language (the REST API's duration is English) #}
+            {% for cl in st.clients %}{% set dur = cl.connected_at|since if cl.connected_at else cl.duration %}<span class="peer mono {% if cl.priority %}peer-prio{% endif %}"{% if cl.connected_at %} data-since="{{ cl.connected_at }}"{% endif %} title="{{ _('connected %(duration)s', duration=dur) }}{% if cl.priority %} · {{ t.priority }}{% endif %}">{% if cl.priority %}★ {% endif %}{{ cl.peer }} · <span class="dur">{{ dur }}</span></span>{% endfor %}
           </div>
         {% endif %}
         {% if st and st.dropped_clients %}<div class="err-small">⚠ {{ _("%(n)s slow client(s) dropped", n=st.dropped_clients) }}</div>{% endif %}

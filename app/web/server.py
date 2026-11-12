@@ -26,7 +26,7 @@ from ..textfold import search_key
 from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
-from .routes.common import bytesize, domid
+from .routes.common import bytesize, domid, duration, since
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -215,6 +215,8 @@ def make_templates() -> Jinja2Templates:
     templates.env.filters["softbreak"] = softbreak
     templates.env.filters["domid"] = domid
     templates.env.filters["bytesize"] = bytesize
+    templates.env.filters["duration"] = duration   # seconds, in the page's language
+    templates.env.filters["since"] = since         # a Unix time until now, as duration
     # data-search of the dashboard rows: app.js folds what is typed the same way
     templates.env.filters["searchkey"] = search_key
     # _("...") in every template, translated for the request's language (app/i18n.py);
