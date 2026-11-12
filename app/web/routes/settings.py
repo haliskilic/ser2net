@@ -558,7 +558,7 @@ def routes(ctx: Ctx) -> list:
     async def settings_login_notice_post(request):
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         ui = state.config.admin_ui
@@ -586,7 +586,7 @@ def routes(ctx: Ctx) -> list:
     async def settings_node_name_post(request):
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         ui = state.config.admin_ui
@@ -612,7 +612,7 @@ def routes(ctx: Ctx) -> list:
     async def settings_request_log_post(request):
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         mode = str(form.get("request_log") or "")
@@ -635,7 +635,7 @@ def routes(ctx: Ctx) -> list:
     async def settings_proxy_post(request):
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         ui = state.config.admin_ui
@@ -726,7 +726,7 @@ def routes(ctx: Ctx) -> list:
         working (regenerating it to change the role broke every integration at once)."""
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         role = str(form.get("api_token_role") or "").strip().lower()
@@ -783,7 +783,7 @@ def routes(ctx: Ctx) -> list:
         of api_token_hash stays as it is."""
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         name = str(form.get("name") or "").strip()
@@ -831,7 +831,7 @@ def routes(ctx: Ctx) -> list:
     async def settings_api_tokens_revoke(request):
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         token_id = str(form.get("id") or "")
@@ -1117,7 +1117,7 @@ def routes(ctx: Ctx) -> list:
         the default). A setting the form doesn't send (a page of an older version) stays."""
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         wanted: dict[str, int] = {}
@@ -1246,7 +1246,7 @@ def routes(ctx: Ctx) -> list:
         it sets two-factor sign-in up again."""
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         username = str(form.get("username") or "")
@@ -1697,7 +1697,7 @@ def routes(ctx: Ctx) -> list:
         """Delete one backup (`name`), or every one (`all`)."""
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         name = str(form.get("name") or "")
@@ -1725,7 +1725,7 @@ def routes(ctx: Ctx) -> list:
         """Take an account that no longer exists out of every backup that still has it."""
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         username = str(form.get("username") or "")
@@ -1752,7 +1752,7 @@ def routes(ctx: Ctx) -> list:
         (app/reload.py): for an edit made outside the UI (by hand, Ansible ...)."""
         if deny := require_role(request, "admin"):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         ok, message = await reload.reload_config(state, "Settings", client_ip(request),
