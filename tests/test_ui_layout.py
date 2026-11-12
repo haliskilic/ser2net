@@ -16,7 +16,14 @@ longer:
     and never overlap; no cell's content overflows the cell;
   * the browser reports no errors (e.g. a Content-Security-Policy violation);
   * the cluster panel isn't refreshed while the tab is hidden (each refresh makes the
-    node ask every peer) and is refreshed as soon as the tab is shown again.
+    node ask every peer) and is refreshed as soon as the tab is shown again;
+  * what app.js does around the dashboard's requests (feedback_checks): the keyboard
+    focus survives the table's refreshes; a panel opened from far down the page comes
+    into view and takes the focus, which goes back to its button on Cancel; unsaved
+    form changes are not thrown away without asking; a save says so and the focus goes
+    back to the row; Shift+Tab leaves the console; a failed action, a lost connection
+    and an ended session are shown (refreshing panels marked "not up to date") and
+    cleared once requests work again.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -161,6 +168,153 @@ def start_node(cfg, backup=False):
     return proc, tmp, log
 
 
+def feedback_checks(browser, base, problems):
+    """The dashboard's behaviour around its requests (app.js), in a browser context of its
+    own. Failed requests are part of it: the browser's "failed to load" lines and htmx's
+    error lines are expected here; a script error or a CSP violation is not."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 600})
+    page = ctx.new_page()
+    errors, dialogs, answer = [], [], {"accept": False}
+    # (htmx logs the event name of a request that got no answer)
+    expected = ("Failed to load resource", "Response Status Error Code", "net::ERR_FAILED",
+                "htmx:afterRequest", "htmx:sendError")
+    page.on("console", lambda m: m.type == "error" and not m.text.startswith(expected)
+            and errors.append(m.text))
+    page.on("pageerror", lambda e: errors.append(str(e)))
+
+    def on_dialog(d):
+        dialogs.append(d.type)
+        d.accept() if answer["accept"] else d.dismiss()
+    page.on("dialog", on_dialog)
+
+    def bad(what):
+        problems.append(f"feedback: {what}")
+
+    def active():
+        return page.evaluate("document.activeElement && (document.activeElement.id || "
+                             "document.activeElement.className)")
+
+    def row_button(name, suffix):
+        row = page.locator("#mappings tr", has_text=name).first
+        return row.locator(f"button[id$='-{suffix}']").first.get_attribute("id")
+
+    def press(button_id):
+        """Click a row button. Not with the mouse: the table is replaced every 2 s while
+        clients are connected, and a slow machine may not hit a button in time."""
+        page.evaluate("id => document.getElementById(id).click()", button_id)
+
+    def sign_in(p):
+        p.goto(f"{base}/login")
+        p.fill("input[name=username]", USER)
+        p.fill("input[name=password]", PASSWORD)
+        p.click("button[type=submit]")
+        p.wait_for_url(f"{base}/")
+
+    def until(js, ms=8000):
+        try:
+            page.wait_for_function(js, timeout=ms)
+            return True
+        except Exception:
+            return False
+
+    sign_in(page)
+    page.wait_for_selector("#mappings table")
+    page.evaluate("window.__swaps = 0; document.addEventListener('htmx:afterSwap', "
+                  "e => { if (e.target.id === 'mappings') window.__swaps++; })")
+
+    # the focus survives the table's refreshes (the clients' durations change every second)
+    log_id = row_button("short", "log")
+    page.focus(f"#{log_id}")
+    page.wait_for_timeout(4500)
+    if page.evaluate("window.__swaps") < 1:
+        bad("the table was not refreshed while the clients were connected")
+    if active() != log_id:
+        bad(f"a table refresh took the focus from the row's Log button: {active()!r}")
+
+    # a panel opened from far down comes into view and takes the focus; Cancel gives it back
+    edit_id = row_button(LONG_NAME, "edit")
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    press(edit_id)
+    page.wait_for_selector("#form-panel form")
+    page.wait_for_timeout(400)
+    top = page.evaluate("document.getElementById('form-panel').getBoundingClientRect().top")
+    if not 0 <= top < 600:
+        bad(f"the opened form panel is not in view (top {top})")
+    if active() != "panel-title":
+        bad(f"the opened panel did not take the focus: {active()!r}")
+    # unsaved changes: another panel or Cancel asks first
+    page.fill("#form-panel input[name=name]", "changed")
+    press(row_button(LONG_NAME, "log"))
+    page.wait_for_timeout(400)
+    if dialogs != ["confirm"] or not page.query_selector("#form-panel form"):
+        bad(f"opening the log over a changed form did not ask, or replaced it: {dialogs}")
+    answer["accept"] = True
+    page.click("#form-cancel")
+    page.wait_for_timeout(300)
+    if dialogs != ["confirm", "confirm"] or page.query_selector("#form-panel form"):
+        bad(f"Cancel on a changed form did not ask, or kept it: {dialogs}")
+    if active() != edit_id:
+        bad(f"Cancel did not give the focus back to Edit: {active()!r}")
+
+    # Shift+Tab leaves an operator's console (Tab goes to the device)
+    press(row_button("short", "monitor"))
+    page.wait_for_selector("#term .xterm")
+    page.wait_for_timeout(500)
+    if active() != "xterm-helper-textarea":
+        bad(f"the console in view did not take the focus: {active()!r}")
+    page.keyboard.press("Shift+Tab")
+    if active() == "xterm-helper-textarea":
+        bad("Shift+Tab did not leave the console")
+    page.click("#console-close")
+
+    # a save says so, and the focus goes back to the row
+    short_edit = row_button("short", "edit")
+    press(short_edit)
+    page.wait_for_selector("#form-panel form")
+    page.click("#form-panel button[type=submit]")
+    if not until("() => document.getElementById('ui-status').textContent.includes('“short” saved.')"):
+        bad("a save was not confirmed")
+    page.wait_for_timeout(300)
+    if active() != short_edit:
+        bad(f"after a save the focus is not on the row's Edit: {active()!r}")
+
+    # a failed action is shown (a copy can't run while its original holds the serial port)
+    press(row_button("short", "copy"))
+    if not until("() => document.getElementById('ui-status').textContent.includes('Copied as')"):
+        bad("Copy was not confirmed")
+    page.wait_for_selector("#mappings tr:has-text('short (copy)')")
+    press(row_button("short (copy)", "run"))
+    if not until("() => document.getElementById('ui-alert').textContent.trim().length > 0"):
+        bad("a failed Start showed nothing")
+    press(row_button("short (copy)", "delete"))   # hx-confirm: accepted
+    page.wait_for_function("() => !document.querySelector('#mappings').textContent.includes('short (copy)')")
+    page.evaluate("document.querySelectorAll('#ui-alert .dismiss').forEach(b => b.click())")
+
+    # no answer at all: "can't be reached", the table marked; gone with the next answer
+    page.route("**/api/status*", lambda r: r.abort())
+    if not until("() => document.querySelector('#mappings.stale') && "
+                 "document.getElementById('ui-alert').textContent.includes('can’t be reached')"):
+        bad("a lost connection was not shown")
+    page.unroute("**/api/status*")
+    if not until("() => !document.querySelector('#mappings.stale') && "
+                 "!document.getElementById('ui-alert').textContent.trim()"):
+        bad("the lost-connection note stayed after the server answered again")
+
+    # an ended session: a lasting note with a sign-in link; signing in (another tab) clears it
+    ctx.clear_cookies(name="ser2net_session")
+    if not until("() => document.querySelector('#mappings.stale') && "
+                 "document.querySelector('#ui-alert a[href=\"/login\"]')"):
+        bad("an ended session was not shown with a sign-in link")
+    other = ctx.new_page()
+    sign_in(other)
+    other.close()
+    if not until("() => !document.querySelector('#mappings.stale') && "
+                 "!document.getElementById('ui-alert').textContent.trim()"):
+        bad("the session note stayed after signing in again")
+    problems.extend(f"feedback: browser error: {e}" for e in errors)
+    ctx.close()
+
+
 def skip(why):
     if REQUIRED:
         raise AssertionError(f"SER2NET_UI_TESTS=1 but {why}")
@@ -274,6 +428,10 @@ def main():
             if not polls:
                 problems.append("showing the tab again did not refresh the cluster panel")
             print("cluster panel: no refresh while the tab is hidden, one when shown")
+            n = len(problems)
+            feedback_checks(browser, base, problems)
+            print(f"dashboard feedback, focus, unsaved changes, console: "
+                  f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
             browser.close()
 
         assert not problems, "layout problems:\n  " + "\n  ".join(problems)
