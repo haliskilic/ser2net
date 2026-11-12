@@ -232,6 +232,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, a
   connect-out mapping loses or regains its remote server, clients come and go, or a
   sign-in fails; repeats are suppressed, a test message can be sent.
+  With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
+  format has a `url` field. The client events send the client's IP address, a failed
+  sign-in the account name (or `(unknown user)`) and the IP address; *Leave out personal
+  data* sends addresses only as their network (`10.0.5.x`, IPv6 /48) and no account names,
+  and e-mail can go to each recipient separately.
 - **Connect-out status:** a connect-out mapping's state stays the serial side's; its link
   to the remote server is shown next to it ("link down" with the reason, which the
   Problems filter counts; "connecting"), in `/api/v1/status` (`link`: `connecting` / `up`
@@ -371,8 +376,11 @@ copy left behind by a killed process still ages out as usual. For certificate ch
 over TLS, OIDC, LDAPS / StartTLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE`
 if set.
 
-`ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
-reports. `ser2net --licenses` prints the license text of every component inside the
+`ser2net --about` shows the versions (Python, OpenSSL, components) and where each
+component is loaded from, with the known folders shortened (`<python>`, `<ser2net>`,
+`<bundle>`, `<override>`, `~`) so the account name in a path stays out — add it to bug
+reports, and mask IP addresses, user names and the host name in log lines you paste.
+`ser2net --licenses` prints the license text of every component inside the
 executable (releases also attach it as `*.THIRD-PARTY-LICENSES.txt`).
 
 Build it yourself — Windows: `pip install -r requirements.txt -r requirements-optional.txt pyinstaller && pyinstaller ser2net.spec`;
@@ -424,7 +432,9 @@ process runs as the
 `ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
 image is taken over on the first start, and in a bind-mounted folder the files an older
 image wrote as root are handed to the folder's owner, so upgrading needs no manual step.
-The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
+The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
+`SER2NET_PUBLIC_URL` and `SER2NET_TRUSTED_PROXIES` set what Settings → Reverse proxy does
+([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Details:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
 ---
@@ -442,7 +452,10 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **Trace** (operators): the mapping's trace files, to list and download.
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
-  token**, mappings **backup/restore** (JSON), status.
+  token**, mappings **backup/restore** (JSON), status, and the **name of this instance**
+  (Admin interface; or `SER2NET_NODE_NAME`): notifications, the browser tab, the top bar and
+  the LAN cluster's fleet view use it instead of the host name, which instances on one
+  machine share; the generic JSON webhook also gets `hostname` and `instance_id`.
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects (of those, failed opens of the serial
   port, `ser2net_mapping_open_failures_total`, and losses of the open port,
@@ -501,8 +514,9 @@ Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (unauthenticated), `GET /openapi.json`.
 The token has the role chosen when it was generated: a `viewer` token may only read (GET)
-and gets stored secrets (the MQTT password) masked. An `api_token_role` in `config.json`
-that is not a role counts as `viewer`, and the start-up log says so.
+and gets stored secrets (the MQTT password) masked as `********`; a `PUT` that sends that
+mask back keeps the stored password. An `api_token_role` in `config.json` that is not a
+role counts as `viewer`, and the start-up log says so.
 
 ---
 
@@ -537,6 +551,15 @@ key, fails with an error that says so. The form and the REST API load a mapping'
 it is saved, never show the stored key password (a viewer API token gets it masked) and
 refuse a key that is the admin UI's own. Where certificates can't be managed, a VPN
 (WireGuard) or an stunnel in front of an untrusted network is the alternative.
+
+**HSTS:** with admin TLS, pages and REST API answers carry `Strict-Transport-Security` with
+a `max-age` of one year. A browser that trusts the certificate and reaches the UI by host
+name (not by IP address, and not after clicking through a certificate warning) then uses
+only https:// for that name, on every port, for that long after each visit: other plain-HTTP
+or self-signed web UIs on the same name stop opening in it, and so does this one once its
+TLS is switched off. **Settings → Admin TLS → HSTS max-age** (`admin_ui.hsts_max_age`, 0 to
+63072000 seconds) changes it at once; 0 sends `max-age=0`, which makes browsers forget it.
+Before switching TLS off, set 0 and let the users open the UI once.
 
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
@@ -595,17 +618,85 @@ the login page. Behind a reverse proxy, the proxy must pass the original name in
 and managed after signing in, and open consoles are closed when access is revoked or the
 role changes. While it is on, the UI shows a warning and startup logs it.
 
+**Sign-in notice (optional):** **Settings → Web UI access → Sign-in notice** sets a text the
+sign-in and first-run setup pages show before anyone signs in — a privacy notice, or the
+system-use notification that IEC 62443 (SR 1.12) and NIST SP 800-53 (AC-8) ask for — plus an
+optional http(s) link to the full text. It is plain text (line breaks kept, at most 2000
+characters, never HTML; `admin_ui.login_notice`, `admin_ui.login_notice_url`); with open
+access, visitors who don't sign in find it under *Notice* in the top bar. Changes are
+audited (`login_notice_set`). None is set by default.
+
+**Requests from other sites:** a change (any POST, PUT, PATCH or DELETE of the web UI) is
+refused with 403 when the browser says a page of another site sent it: `Sec-Fetch-Site`
+other than `same-origin`, or an `Origin` that isn't the address the UI was reached by —
+another port of the same host and a sibling subdomain count as other sites. This comes on
+top of the CSRF token, which is new after every sign-in and sign-out and lasts as long as
+the session. Behind a reverse proxy, the proxy must pass the address the browser uses as
+`Host` or `X-Forwarded-Host`, port included, or that address must be the public URL
+(Settings → Reverse proxy); all.log names the refused `Origin` and the address the UI saw.
+Scripts that send no `Origin` header, the REST API and cluster peers are not affected.
+
+**Behind a reverse proxy:** the console and hex-view WebSockets are checked the same way: a
+browser's handshake is accepted when it says it comes from this UI's own page
+(`Sec-Fetch-Site: same-origin`, sent over HTTPS) or when its `Origin` is the address in
+`Host`, `X-Forwarded-Host` or `Forwarded: host=`, port included, or the public URL. So a
+proxy must pass the browser's address on — nginx `proxy_set_header Host $http_host;`,
+Apache `ProxyPreserveHost On`, IIS ARR `preserveHostHeader` (Caddy and Traefik do it by
+default) — and pass WebSocket upgrades through; over plain HTTP browsers send no
+`Sec-Fetch-Site`, so there the address is all that counts. all.log names a refused
+`Origin` once a minute, with the addresses the UI saw. **Settings → Reverse proxy** has
+the rest: the **public URL** (the address users open; its origin counts as the UI's own,
+a blank SSO redirect URI is made from it, notifications link to it, and a path in it —
+`https://gw.example.com/ser2net` — serves the UI under that path too, with cookies of its
+own there, while `/` keeps working directly), the **trusted proxies** (only from them are
+`X-Forwarded-For` and `X-Forwarded-Proto` believed — none by default; up to 2.8.1 every
+connection from `127.0.0.1` / `::1` was believed) and HSTS through the proxy (off by
+default). The cookies are Secure whenever the browser used HTTPS, also through a TLS proxy
+that sends `X-Forwarded-Proto: https`. `SER2NET_PUBLIC_URL` / `SER2NET_TRUSTED_PROXIES` set
+them for one run instead; `FORWARDED_ALLOW_IPS` still works. Examples for nginx, Apache,
+Caddy, Traefik and IIS, and what all.log says when something is missing:
+[docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md).
+
+**Passwords** of local accounts are stored as scrypt hashes (N=2^14, r=8, p=5, OWASP's
+minimum; the hash names its cost, so the cost can be raised later). A hash made by 2.8.1 or
+older keeps working and is renewed with today's cost at that account's next sign-in (its
+sessions stay; `config.json` is saved, the previous one goes to `backups/`). Passwords are
+compared as Unicode NFKC: a letter with its accent as one character or two (text pasted
+from macOS or a PDF), a no-break space and a space, full-width forms are the same password.
+A directory (LDAP) gets the password exactly as typed. **Going back to 2.8.1 or older:**
+those versions can't read the renewed hashes, so an account that signed in with 2.9 can't
+sign in there: give it a new password with `ser2net --set-password NAME` (2.8.1), or, on
+2.8.0 and older, which have no such command, put back a `config.json` from `backups/` made
+before the upgrade.
+
 **Sessions:** logging out ends that session on the server (a copy of the cookie stops
 working too). Under **Settings → Users** an admin can sign a user out everywhere or set a
 local user's new password (which signs them out as well); everyone can *Sign out my other
 sessions*. **Settings → Web UI access → Sign out everyone** makes a new session key and
 ends every session at once, the admin's own excepted — use it when a copy of
 `config.json` or a backup may have leaked (downloaded backups leave the key out). While
-LDAP or OIDC is switched off, its accounts' sessions don't count.
+LDAP or OIDC is switched off, its accounts' sessions don't count. Browsers keep cookies per
+host name, not per port, so on a port other than 8080 the UI's cookies carry a tag of the
+port (`ser2net_session_1a2b3c4d`), and over HTTPS the `__Host-` prefix: instances reached
+under one host name on different ports (side by side, containers, SSH tunnels to
+`localhost`, the fleet view's *Open* link to a peer on the same address) keep their own
+sign-ins, and an `http://` address still works after an `https://` one of the same name.
+Sign-ins from before 2.9 carry over.
 
-**Failed sign-ins** are limited to 8 per address in 5 minutes. all.log has a line for each,
-and the audit log records them; a user name that is no account's is recorded as
-`(unknown user)`, never as typed (it may be a password typed into the wrong field). Past 20
+**Failed sign-ins** are limited to 8 per address in 5 minutes (an IPv6 address counts by
+its /64; behind a reverse proxy, each client's own address once the proxy is a trusted
+proxy, else the proxy's, shared by all) and to 10 per user
+name in 15 minutes, from any address and letter case aside; past either limit that address
+or that name gets HTTP 429 until its oldest failures are older than that — nothing is locked
+for good, and with LDAP the directory is asked no more often, which keeps such attempts
+below its own lock-out. A wrong current password in *Change your password* counts under the
+account's name too, and is logged and recorded in the audit log (`password_change_failed`).
+Password checks run two at a time and directory sign-ins four; while many wait already, a
+sign-in gets HTTP 429 (*Too many sign-ins at the same time*) without being tried. A name
+without a local account takes as long to refuse as a wrong password. all.log has a line for
+each failed sign-in, and the audit log records them; a user name that is no account's is
+recorded as `(unknown user)`, never as typed (it may be a password typed into the wrong
+field). Past 20
 failed sign-ins in 10 minutes the audit log only counts them and sums them up in one record
 at the end of those 10 minutes, so a flood of attempts can't push the other records out.
 Opening a mapping's console or hex view is recorded once per account (with open access: per
@@ -678,6 +769,17 @@ times (iat / nbf / exp) are accepted with up to 2 minutes of clock difference: k
 clocks of this server and of the provider synchronised (NTP); when a token is refused for its
 times, all.log says how many seconds this server's clock is behind or ahead of the
 provider's.
+
+**SSO redirect URI:** **Settings → Single sign-on (OIDC)** shows the redirect URI to register
+at the provider: the *Redirect URI* you set or, while it is blank, the one made from the
+page's request, or from the public URL when one is set (Settings → Reverse proxy:
+`<public URL>/auth/oidc/callback`); from the request: `X-Forwarded-Proto` or the request's
+scheme, `X-Forwarded-Host` or `Host` (of a list, the first), then `/auth/oidc/callback`;
+`Forwarded` and `X-Forwarded-Port` are not read, so the address
+working installs registered stays the same. When it is http:// for a host other than
+loopback, or differs from the browser's address (a reverse proxy in between changed the
+address), the page warns and shows the value for the browser's address: enter that as
+*Redirect URI*. Every SSO sign-in start writes the redirect URI it sends to all.log.
 
 **LDAP over TLS (LDAPS / StartTLS):** the directory server's certificate is checked. It
 must come from a CA the system trusts (Linux / Docker: its CA bundle; Windows: its
@@ -769,7 +871,8 @@ is no account at all; later starts ignore it.
   unit would fail with `status=216/GROUP`): set it with `systemctl edit ser2net`
   (`[Service]`, `SupplementaryGroups=`, then `SupplementaryGroups=uucp`; the unit's comment
   has it).
-  **Do not run as root.**
+  **Do not run as root.** Several instances: the template `systemd/ser2net@.service`
+  (below).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -779,7 +882,8 @@ is no account at all; later starts ignore it.
   `C:\ProgramData\ser2net\` (both writable by SYSTEM and Administrators only). The
   service starts at boot, needs no signed-in user
   (LocalSystem) and restarts 5 s after it crashes or exits with an error; the console asks
-  once for the UI address. Remove it with `--uninstall-service` (the data folder is kept);
+  once for the UI address. Remove it with `--uninstall-service` (the data folder is kept,
+with the configuration, backups, logs, audit log and traces: delete it to remove those);
   run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
   `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
   newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
@@ -815,6 +919,47 @@ is no account at all; later starts ignore it.
   `SER2NET_WINDOWS_SERIAL=pyserial` (for the service: a system environment variable) goes
   back to how pyserial writes (no pacing); please report the adapter and driver.
 
+### Several instances on one machine
+
+Each instance needs its own:
+
+- **data directory** (`--data-dir`): a second ser2net on the same one stops at start. Don't
+  copy a data directory to make another instance — the copy has the same cluster identity
+  (the fleet view then shows a "copy of this installation" warning) and session key:
+  start the new one empty and import the mappings (**Settings → Mappings export / import**).
+- **web UI port:** the console picker (first start, `--reconfigure`, `--install-service`)
+  tries the port it offers and, when another program (another instance) has it, says so
+  and offers the next free one; a choice you type is kept. A first start without a terminal
+  (a service, a container) keeps its port and logs the warning. Without the picker:
+  `SER2NET_BIND_IP` + `SER2NET_PORT`.
+- **mapping ports and serial devices:** a TCP/UDP port and a serial device belong to one
+  instance. A mapping saved while another program holds its port or device is kept, and the
+  UI says why it didn't start.
+- **name:** **Settings → Admin interface → Name of this instance** (or
+  `SER2NET_NODE_NAME`) — notifications, the browser tab, the top bar and the fleet view
+  then say which instance it is.
+- imported mappings that publish to MQTT need **ids** of their own: a client id that is
+  set, and a Sparkplug edge node id (the mapping's name when blank) — a broker drops a
+  client whose id another one takes over, and two Sparkplug nodes of one id in a group
+  confuse its host application.
+
+The browser keeps each instance's sign-in apart when they are on different ports
+(`http://host:8080`, `http://host:8081`); 2.8 and older shared one sign-in per host name, so
+reach those under different host names (the IP address and the name) or in separate browser
+profiles.
+
+- **Windows:** `ser2net-windows-x64.exe --install-service --service-name ser2net-line2
+  --data-dir C:\ProgramData\ser2net-line2` (and a firewall rule per service:
+  [docs/WINDOWS.md](docs/WINDOWS.md)).
+- **Linux (systemd):** the template `systemd/ser2net@.service` runs one instance per name,
+  with its data in `/var/lib/ser2net/<name>` and its address in `/etc/ser2net/<name>.env`
+  (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); the instance name is its name in
+  notifications. Install the bundled dependencies once (`python3 /opt/ser2net/bootstrap.py`
+  as the `ser2net` user), then `systemctl enable --now ser2net@line1 ser2net@line2`.
+- **Docker:** one container per instance, each with its own volume, `container_name` and
+  published ports (`8081:8080`), and `SER2NET_NODE_NAME` (or `hostname:`) for its name
+  ([docs/DOCKER.md](docs/DOCKER.md)).
+
 ---
 
 ## 🗂️ Configuration & state files
@@ -822,17 +967,27 @@ is no account at all; later starts ignore it.
 All state lives in the **data dir** (default `data/`). The data directory is locked to
 owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the files
 inside aren't readable by other users:
-- `config.json` — admin IP, password hash, all mappings (atomic write).
+- `config.json` — admin IP, password hashes, all mappings (atomic write), and the secrets
+  ser2net has to use itself, in plain text (see *Secrets* below).
 - `backups/` — the previous `config.json` before every change (newest 50). Download or
   restore one under Settings → *Configuration backups*. A restore first shows what changes
   for sign-in and access, then brings back the mappings and settings; the user accounts
   and passwords, the REST API token and the cluster key stay as they are unless you tick
   the box to restore them too (that also signs everyone else out). *Only its mappings*
   goes through the import preview. A restore can be undone too; a downloaded backup
-  leaves out the session key.
+  leaves out the session key. The list names each backup's accounts; an admin can delete
+  one backup or all of them there. Deleting a user leaves the account (with its password
+  hash) in the backups made before — a restore with accounts would bring it back — so
+  *Remove it from the backups* takes an account that no longer exists out of every backup
+  that has it (the rest of each backup stays as it was). All of it is audited.
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
-  under Settings → *Audit log*, CSV export.
+  under Settings → *Audit log*, CSV export. Every `all.log` line is also written to stdout,
+  which systemd's journal or Docker's container log keep under their own retention;
+  `SER2NET_LOG_STDOUT=off` keeps the lines in `all.log` only. `all.log` has a line with the
+  client's IP address for every web UI page and change: Settings → *Audit log* → *Web UI
+  requests in all.log* can log only changes and refused requests, or none (sign-ins and
+  the audit records are logged either way).
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
@@ -847,15 +1002,43 @@ inside aren't readable by other users:
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
 
+**Secrets:** `config.json` holds, in plain text, the LDAP bind password, the OIDC client
+secret, the SMTP password, the webhook URL (which often carries a token), each mapping's
+MQTT broker password, the cluster key (enough to read and change the mappings of every
+node) and the session key `secret_key` (with the accounts in the same file, enough to make
+a valid sign-in). Local passwords are kept as scrypt hashes and the REST API token only as a
+hash. `backups/` holds earlier copies of the same file (a downloaded backup leaves out the
+session key), and the mappings export holds the MQTT passwords. On this machine only the
+account ser2net runs as can read them; treat every copy — a copied data folder or Docker
+volume, a disk or VM image, a downloaded backup, an export — like a password vault.
+[SECURITY.md](SECURITY.md) (*Stored secrets*) lists what to change after such a copy leaked.
+
+**Personal data:** account names (an LDAP or SSO name is often an e-mail address), IP
+addresses, sign-ins and failed sign-ins are recorded in `config.json`, `backups/`,
+`all.log*` (and its stdout copy in the journal or Docker's log), `audit.log*` and `logs/`.
+Notifications, LDAP, SSO, MQTT and the cluster send data off the host only when you set them
+up, and there is no telemetry. **[docs/PRIVACY.md](docs/PRIVACY.md)** lists what is kept
+where and for how long, who can see it, the settings that keep less, and how to answer an
+access request or erase one person or the whole installation.
+
 Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
 replaced when the config is loaded or the file is imported; the start-up log or the import
 preview says so.
 
-Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
-`backups/` is never restored by itself — delete it too if you want it gone). To get back in
-after a lost password, use `--set-password` instead (see Security): it keeps everything else.
-`admin-requests/` only holds a command-line request until the running instance takes it.
+**Starting over:** stop ser2net, then delete the data directory (or everything in it; keep
+`tls/` to reuse a generated certificate). Deleting only `config.json` resets the accounts,
+settings and mappings, but `audit.log` (and `audit.log.1`), the rotated `all.log.1`–`.5`,
+`backups/` and `traces/` stay (`logs/` is emptied at the next start), and whoever completes
+the first-run setup next sees that audit log — the earlier users' names, addresses and
+failed sign-ins — and those backups, with the earlier accounts and secrets, in Settings.
+Don't do it while ser2net runs: its next save writes the configuration it has in memory,
+accounts included, back to `config.json`. Copies outside the data directory stay too: the
+journal (`journalctl -u ser2net`), Docker's container log (`docker compose down -v` removes
+it with the `/data` volume, see [docs/DOCKER.md](docs/DOCKER.md)) and messages
+notifications have sent. To get back in after a lost password, use `--set-password`
+instead (see Security): it keeps everything else. `admin-requests/` only holds a
+command-line request until the running instance takes it.
 
 **Copying an installation** (a disk or VM image, a copied data folder or Docker volume):
 `config.json` holds the node's identity — its cluster id (`instance_id`) and the key that

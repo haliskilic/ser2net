@@ -98,8 +98,12 @@ def main():
         assert saved["mappings"][0]["serial"]["match"]["serial_number"] == "A12345"
         assert saved["mappings"][5]["modbus_poll"]["points"][0]["dtype"] == "float32"
         assert saved["users"][3]["source"] == "ldap" and saved["users"][4]["source"] == "oidc"
-        print("old passwords (admin/operator/viewer) and the API token work; ids, match, "
-              "Modbus points, LDAP/OIDC users intact  OK")
+        # their first sign-in renewed the 2.7.1 hashes with today's cost, sessions kept
+        for old, now in zip(boot["users"][:3], saved["users"][:3]):
+            assert now["password_hash"].startswith("scrypt:16384:8:5$"), now
+            assert now["pwd_version"] == old["pwd_version"], (old, now)
+        print("old passwords (admin/operator/viewer) and the API token work (their hashes "
+              "renewed at sign-in); ids, match, Modbus points, LDAP/OIDC users intact  OK")
     print("\nPASS: upgrade from a v2.7.1 config")
 
 

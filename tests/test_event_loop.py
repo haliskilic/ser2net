@@ -54,6 +54,28 @@ def test_choice():
           "elsewhere the default loop  OK")
 
 
+def test_worker_threads():
+    import threading
+
+    async def go():
+        runtime.use_worker_threads(asyncio.get_running_loop())
+        names = await asyncio.to_thread(lambda: threading.current_thread().name)
+        assert names.startswith("ser2net"), names
+        gate, ready = threading.Barrier(runtime.WORKER_THREADS, timeout=10), []
+
+        def wait_for_all():  # every thread at once, whatever the number of CPUs
+            gate.wait()
+            ready.append(1)
+
+        await asyncio.gather(*(asyncio.to_thread(wait_for_all)
+                               for _ in range(runtime.WORKER_THREADS)))
+        assert len(ready) == runtime.WORKER_THREADS
+
+    asyncio.run(go())
+    print(f"default thread pool: {runtime.WORKER_THREADS} threads ('ser2net-*'), "
+          f"not min(32, CPUs + 4) = {min(32, (os.cpu_count() or 1) + 4)}  OK")
+
+
 def test_capped_selector():
     sel = netguard.CappedSelectSelector(limit=4)
     pairs = [socket.socketpair() for _ in range(6)]
@@ -256,6 +278,7 @@ def test_windows_proactor_boots():
 
 if __name__ == "__main__":
     test_choice()
+    test_worker_threads()
     test_capped_selector()
     test_budget_on_a_select_loop()
     test_fatal_error_reaches_the_log()

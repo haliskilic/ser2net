@@ -14,13 +14,12 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ..config import ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
+from ..config import REDACTED, ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
+from . import proxy
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
 API_PREFIX = "/api/v1"
-
-REDACTED = "********"
 
 
 def _mapping_view(mapping, state) -> dict:
@@ -119,6 +118,8 @@ def build_api_routes(state):
             existing = state.config.get_mapping(mid)
             if not existing:
                 return JSONResponse({"error": "not_found"}, status_code=404)
+            if mapping.mqtt.password == REDACTED:  # what a viewer token reads: keep it
+                mapping.mqtt.password = existing.mqtt.password
             backup = list(state.config.mappings)
             state.config.mappings[state.config.mappings.index(existing)] = mapping
             try:
@@ -165,7 +166,7 @@ def build_api_routes(state):
         return JSONResponse({"status": "ok", "mappings": len(state.config.mappings)})
 
     async def openapi(request):
-        return JSONResponse(openapi_spec(state.config.admin_ui))
+        return JSONResponse(openapi_spec(state.config.admin_ui, proxy.base(request)))
 
     return [
         Route(f"{API_PREFIX}/health", health, methods=["GET"]),
@@ -181,10 +182,11 @@ def build_api_routes(state):
     ]
 
 
-def openapi_spec(admin) -> dict:
+def openapi_spec(admin, base: str = "") -> dict:
     """Hand-written OpenAPI 3.0 description of the REST API (Starlette has no
     auto-generation). Kept deliberately compact: mappings are an open object so
-    the spec doesn't have to mirror every serial/network field."""
+    the spec doesn't have to mirror every serial/network field. `base`: the path
+    prefix the request came under (app/web/proxy.py)."""
     mapping_obj = {"type": "object", "description": "A serial<->network mapping (see config model)."}
     error_obj = {"type": "object", "properties": {"error": {"type": "string"},
                                                   "detail": {"type": "string"}}}
@@ -198,7 +200,7 @@ def openapi_spec(admin) -> dict:
                            "Authenticate with `Authorization: Bearer <token>` "
                            "(generate the token in Settings).",
         },
-        "servers": [{"url": API_PREFIX}],
+        "servers": [{"url": base + API_PREFIX}],
         "components": {
             "securitySchemes": {
                 "bearerAuth": {"type": "http", "scheme": "bearer"},

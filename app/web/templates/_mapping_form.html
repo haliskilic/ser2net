@@ -60,7 +60,7 @@
 {% set ip_values = ips | map(attribute='value') | list %}
 {% set bind_choice = '*' if mapping.network.both_families else mapping.network.bind_ip %}
 {% set bind_is_custom = bind_choice not in ip_values %}
-<form class="mform" hx-post="{{ '/api/cluster/peer-save' if remote else '/api/mappings/save' }}" hx-target="#form-panel" hx-swap="innerHTML">
+<form class="mform" hx-post="{{ base }}{{ '/api/cluster/peer-save' if remote else '/api/mappings/save' }}" hx-target="#form-panel" hx-swap="innerHTML">
   <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
   {% if remote %}
   <input type="hidden" name="host" value="{{ remote.host }}">
@@ -270,10 +270,15 @@
       <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
     </label>
     <div class="grid3">
-      <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
-      <label>{{ _("Password") }} <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="{{ _('optional') }}"></label>
+      <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      {# write-only: the stored password is never in the page; blank keeps it #}
+      {% set pw_stored = mqtt_password_stored | default(false) %}
+      <label>{{ _("Password") }}{% if pw_stored %} <span class="muted">({{ _("blank = unchanged") }})</span>{% endif %}
+        <input type="hidden" name="mqtt_password_write_only" value="1">
+        <input type="password" name="mqtt_password" value="{{ mqtt_password_typed | default('') }}" placeholder="{{ _('•••••• (unchanged)') if pw_stored else _('optional') }}" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore></label>
       <label class="chk chk-pad"><input type="checkbox" name="mqtt_tls" {% if mapping.mqtt.tls %}checked{% endif %}> TLS</label>
     </div>
+    {% if pw_stored %}<label class="chk"><input type="checkbox" name="mqtt_password_clear" {% if mqtt_password_clear | default(false) %}checked{% endif %}> {{ _("Remove the stored password") }}</label>{% endif %}
     <div data-show-when="network_protocol=raw,telnet,rfc2217">
       <div class="grid2">
         <label>{{ _("Line end") }} <span class="muted">({{ _("what ends a serial line that is published") }})</span>

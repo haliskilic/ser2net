@@ -11,10 +11,15 @@ portable test guards the template side of the contract on every platform:
     phone card layout; each row spans exactly as many columns as the header;
   * a mapping name / device path full of HTML is rendered escaped;
   * the static assets carry ?v=<version> (fresh CSS/JS right after an upgrade);
+  * htmx runs with eval, fragment <script>s and its injected <style> off;
+  * every password field says what it is (autocomplete), and the fields of a third-party
+    secret (MQTT, LDAP, OIDC, SMTP, webhook, cluster key) are not taken for a sign-in
+    form: new-password, the password managers' opt-outs, their user name fields off;
   * the mapping form does not offer a Modbus gateway the options it doesn't use.
 
 Run: python3 tests/test_ui_markup.py
 """
+import glob
 import html.parser
 import json
 import os
@@ -212,6 +217,66 @@ def test_ports_table_and_assets():
     for asset in ("app.css", "app.js", "htmx.min.js", "xterm.js", "xterm.css"):
         assert f"/static/{asset}?v={__version__}" in page, f"{asset} lacks the ?v= cache-buster"
     print("ports table contract + versioned static asset URLs  OK")
+
+
+def test_htmx_config():
+    """htmx runs without the features the UI doesn't use: eval (hx-on, js: values, trigger
+    filters), <script> elements from fragments, the indicator <style> it would inject.
+    The meta is read when htmx starts, so it must come before the htmx script."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    nodes = list(parse(make_templates().env.get_template("base.html").render(request=Req)).walk())
+    meta = [i for i, n in enumerate(nodes) if n.tag == "meta"
+            and n.attrs.get("name") == "htmx-config"]
+    script = [i for i, n in enumerate(nodes) if n.tag == "script"
+              and "/static/htmx.min.js" in (n.attrs.get("src") or "")]
+    assert len(meta) == 1 and len(script) == 1 and meta[0] < script[0], (meta, script)
+    config = json.loads(nodes[meta[0]].attrs["content"])
+    assert config == {"allowEval": False, "allowScriptTags": False,
+                      "includeIndicatorStyles": False}, config
+    print("htmx: no eval, no <script> from fragments, no injected <style>  OK")
+
+
+# third-party secrets and the user name / id beside each: never this UI's sign-in
+SECRET_FIELDS = {"mqtt_password", "ldap_bind_password", "oidc_client_secret", "key",
+                 "notify_smtp_password", "notify_webhook_url"}
+SECRET_IDS = {"mqtt_username", "ldap_bind_dn", "oidc_client_id", "notify_smtp_username"}
+PM_OPT_OUT = ("data-1p-ignore", "data-lpignore", "data-bwignore")
+
+
+def test_secret_fields():
+    """A browser or password manager fills the saved ser2net sign-in into an empty password
+    field that looks like the half of a login form; saved there, the admin password would
+    end up in config.json as the MQTT, LDAP, OIDC or SMTP password or the cluster key."""
+    inputs = []
+    for f in sorted(glob.glob(os.path.join(ROOT, "app", "web", "templates", "*.html"))):
+        src = open(f, encoding="utf-8").read()
+        inputs += [(os.path.basename(f), n) for n in parse(src).walk() if n.tag == "input"]
+    for where, n in inputs:
+        if n.attrs.get("type") == "password":
+            assert n.attrs.get("autocomplete") in ("current-password", "new-password"), \
+                (where, n.attrs.get("name"), n.attrs.get("autocomplete"))
+    names = {n.attrs.get("name"): n for _w, n in inputs if n.attrs.get("type") != "hidden"}
+    for name in SECRET_FIELDS:
+        n = names[name]
+        assert all(a in n.attrs for a in PM_OPT_OUT), (name, n.attrs)
+        if name == "notify_webhook_url":   # never shown back; a URL, not a password
+            assert n.attrs["type"] == "url" and n.attrs.get("autocomplete") == "off", n.attrs
+            assert n.attrs.get("spellcheck") == "false", n.attrs
+            css = open(os.path.join(ROOT, "app", "web", "static", "app.css"), encoding="utf-8").read()
+            assert "input[type=url]" in css, "a URL field is styled like the text fields"
+        else:
+            assert n.attrs["type"] == "password", (name, n.attrs)
+            assert n.attrs.get("autocomplete") == "new-password", (name, n.attrs)
+    for name in SECRET_IDS:
+        assert names[name].attrs.get("autocomplete") == "off", (name, names[name].attrs)
+    add_user = [n for w, n in inputs if w == "settings.html" and n.attrs.get("name") == "username"
+                and n.attrs.get("type") == "text"]
+    assert len(add_user) == 1 and add_user[0].attrs.get("autocomplete") == "off", add_user
+    print("password fields declare autocomplete; third-party secrets: new-password + password "
+          "manager opt-outs, their user names off; the webhook URL is a URL field  OK")
 
 
 def test_mapping_form_modbus_fields():
@@ -445,6 +510,8 @@ def main():
     test_mappings_table()
     test_cluster_table()
     test_ports_table_and_assets()
+    test_htmx_config()
+    test_secret_fields()
     test_mapping_form_modbus_fields()
     test_mapping_form_udp_fields()
     test_mapping_form_rfc2217_restore()

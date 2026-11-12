@@ -7,13 +7,14 @@
   <div class="panel">
     <h1>⇄ ser2net</h1>
     <p class="muted">{{ _("Sign in to manage serial-to-network mappings.") }}</p>
+    {% include "_login_notice.html" %}
     {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
     {% if oidc_error %}<div class="banner error">{{ oidc_error }}</div>{% endif %}
     {% if oidc_enabled %}
-    <a class="btn primary w-full" href="/auth/oidc/login">{{ _("Sign in with SSO") }}</a>
+    <a class="btn primary w-full" href="{{ base }}/auth/oidc/login">{{ _("Sign in with SSO") }}</a>
     <p class="muted or-line">{{ _("— or —") }}</p>
     {% endif %}
-    <form method="post" action="/login" class="authform">
+    <form method="post" action="{{ base }}/login" class="authform">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
       <label>{{ _("Username") }}
         <input type="text" name="username" value="admin" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>

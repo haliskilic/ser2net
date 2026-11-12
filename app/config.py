@@ -28,6 +28,7 @@ import socket
 import tempfile
 import time
 import unicodedata
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
@@ -53,6 +54,10 @@ MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year
 SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
 SESSION_TIMEOUT_MAX_S = 30 * 86400
+# Strict-Transport-Security max-age with admin TLS (AdminUI.hsts_max_age): one year, as
+# before it could be set; 0 sends max-age=0 (HSTS off, browsers drop what they stored)
+HSTS_MAX_AGE_DEFAULT = 365 * 86400
+HSTS_MAX_AGE_MAX = 2 * 365 * 86400
 # LDAP/OIDC accounts not signed in for this many days are removed (AppConfig
 # .external_users_expire_days, app/signins.py); 0 = never, the default: an admin turns it
 # on. At least the longest session lifetime, so no live session ends that way.
@@ -828,6 +833,12 @@ MQTT_LINE_ENDS = ("lf", "cr", "any")
 MQTT_TX_MAX_BYTES = 64 * 1024  # an MQTT write (<base_topic>/tx) at most, and all waiting
 
 
+# What a read-only REST API token gets instead of a stored secret (the MQTT password).
+# Sent back (a PUT of what such a token read, a form), it keeps the stored password, so it
+# is never stored as one.
+REDACTED = "********"
+
+
 @dataclass
 class MqttSettings:
     enabled: bool = False
@@ -1274,10 +1285,287 @@ class AdminUI:
     max_connections: int = 256
     max_connections_per_ip: int = 64
     request_timeout_s: int = 10
+    # With admin TLS, responses tell the browser to use only https:// for this host name
+    # - on every port - for this many seconds after each visit (Strict-Transport-Security);
+    # 0 sends max-age=0, which turns that off and makes browsers forget it. Settings ->
+    # Admin TLS.
+    hsts_max_age: int = HSTS_MAX_AGE_DEFAULT
+    # Behind a reverse proxy (Settings -> Reverse proxy; app/web/proxy.py). public_url: the
+    # address users open, such as https://ser2net.example.com, or with a path the UI is then
+    # also served under (https://gw.example.com/ser2net); '' = none. trusted_proxies: the
+    # addresses / networks whose X-Forwarded-For and X-Forwarded-Proto are believed; none by
+    # default. proxy_hsts: HSTS (hsts_max_age) also on HTTPS requests through a proxy.
+    public_url: str = ""
+    trusted_proxies: list[str] = field(default_factory=list)
+    proxy_hsts: bool = False
+    # A name for this instance (Settings -> Admin interface; SER2NET_NODE_NAME for one run
+    # instead), for instances that share a host name: notifications, the cluster's fleet
+    # view, the browser tab and the top bar use it. '' = the host name, as before.
+    node_name: str = ""
+    # Which web UI requests all.log gets an "HTTP <ip> <method> <path> -> <status>" line
+    # for (Settings -> Audit log): "all" (every page and change but the static files and
+    # the automatic refreshes, as before), "changes" (only requests that change something,
+    # and refused or failed ones: status 400 and up) or "off". Sign-ins, failed sign-ins
+    # and the audit records are logged whatever it says.
+    request_log: str = "all"
+    # A notice the sign-in and first-run setup pages show before anyone signs in (Settings
+    # -> Web UI access): who runs this system, what is recorded, a privacy notice or a
+    # system-use warning. Plain text (line breaks kept, never HTML), at most
+    # LOGIN_NOTICE_MAX characters; login_notice_url: an http(s) link to the full text.
+    # '' = none, as before.
+    login_notice: str = ""
+    login_notice_url: str = ""
 
     @property
     def tls_enabled(self) -> bool:
         return bool(self.tls_cert and self.tls_key)
+
+
+NODE_NAME_MAX = 64
+NODE_NAME_ENV = "SER2NET_NODE_NAME"
+
+
+def node_name_problem(value: Any) -> str | None:
+    """Why `value` can't be admin_ui.node_name, or None when it can (also when blank): at
+    most NODE_NAME_MAX characters and no control characters or line breaks (it goes into
+    e-mail subjects, where one would stop every message)."""
+    if not isinstance(value, str):
+        return _("The instance name must be text.")
+    text = value.strip()
+    if len(text) > NODE_NAME_MAX:
+        return _("The instance name can have at most {0} characters.").format(NODE_NAME_MAX)
+    if any(unicodedata.category(c) in ("Cc", "Cf", "Cs", "Zl", "Zp") for c in text):
+        return _("The instance name can’t have control characters or line breaks.")
+    return None
+
+
+def node_name_from_env(env=None) -> str:
+    """SER2NET_NODE_NAME when it is set and usable, else ''."""
+    raw = ((os.environ if env is None else env).get(NODE_NAME_ENV) or "").strip()
+    return raw if raw and node_name_problem(raw) is None else ""
+
+
+def node_name(admin: "AdminUI", env=None) -> str:
+    """This instance's name ('' = none: the host name is used): SER2NET_NODE_NAME when it
+    is set and usable, else admin_ui.node_name."""
+    return node_name_from_env(env) or admin.node_name
+
+
+def node_label(admin: "AdminUI") -> str:
+    """What names this instance where the host name did up to 2.8: node_name(), else the
+    host name (notifications, the cluster's beacon and fleet view)."""
+    return node_name(admin) or socket.gethostname()
+
+
+REQUEST_LOG_MODES = ("all", "changes", "off")
+LOGIN_NOTICE_MAX = 2000
+LOGIN_NOTICE_URL_MAX = 500
+# characters a sign-in notice keeps out: control characters but tab and line feed
+_NOTICE_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean_login_notice(text: str) -> str:
+    """A sign-in notice as it is kept: line breaks as line feeds, no other control
+    characters, no white space at its ends."""
+    return _NOTICE_CONTROL.sub("", str(text).replace("\r\n", "\n").replace("\r", "\n")).strip()
+
+
+def login_notice_problem(text: Any) -> str | None:
+    """Why `text` can't be admin_ui.login_notice, or None when it can (also when blank)."""
+    if not isinstance(text, str):
+        return _("The sign-in notice must be text.")
+    if len(clean_login_notice(text)) > LOGIN_NOTICE_MAX:
+        return _("The sign-in notice can have at most {0} characters.").format(LOGIN_NOTICE_MAX)
+    return None
+
+
+def login_notice_url_problem(url: Any) -> str | None:
+    """Why `url` can't be admin_ui.login_notice_url, or None when it can (also when blank):
+    an http:// or https:// address with a host name, without a user name or password."""
+    bad = _("The notice’s link must be an http:// or https:// address, such as "
+            "https://example.com/privacy.")
+    if not isinstance(url, str):
+        return bad
+    text = url.strip()
+    if not text:
+        return None
+    if len(text) > LOGIN_NOTICE_URL_MAX:
+        return _("The notice’s link can have at most {0} characters.").format(
+            LOGIN_NOTICE_URL_MAX)
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in text):
+        return bad
+    try:
+        parts = urllib.parse.urlsplit(text)
+        parts.port  # noqa: B018 (raises ValueError for a port that is no number)
+    except ValueError:
+        return bad
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname or "@" in parts.netloc:
+        return bad
+    return None
+
+
+def _normalize_login_notice(admin: "AdminUI", notes: list[str]) -> None:
+    """A hand-edited sign-in notice or link that can't be used is left out (a notice too
+    long is cut), with a load note."""
+    text = admin.login_notice
+    if not isinstance(text, str):
+        notes.append(f"admin_ui.login_notice is not text ({type(text).__name__}); no sign-in "
+                     "notice is shown")
+        admin.login_notice = ""
+    else:
+        admin.login_notice = clean_login_notice(text)
+        if len(admin.login_notice) > LOGIN_NOTICE_MAX:
+            notes.append(f"admin_ui.login_notice has {len(admin.login_notice)} characters; "
+                         f"the first {LOGIN_NOTICE_MAX} are shown")
+            admin.login_notice = admin.login_notice[:LOGIN_NOTICE_MAX].rstrip()
+    url = admin.login_notice_url
+    if login_notice_url_problem(url) is not None:
+        notes.append(f"admin_ui.login_notice_url {str(url)[:80]!r} is not an http(s) address; "
+                     "the sign-in notice has no link")
+        admin.login_notice_url = ""
+    else:
+        admin.login_notice_url = url.strip()
+
+
+def _normalize_request_log(admin: "AdminUI", notes: list[str]) -> None:
+    """A hand-edited admin_ui.request_log other than all / changes / off logs every request,
+    as before the setting existed, with a load note."""
+    if admin.request_log not in REQUEST_LOG_MODES:
+        notes.append(f"admin_ui.request_log {str(admin.request_log)[:40]!r} is not one of "
+                     f"{', '.join(REQUEST_LOG_MODES)}; using all")
+        admin.request_log = "all"
+
+
+def _normalize_node_name(admin: "AdminUI", notes: list[str]) -> None:
+    """A hand-edited admin_ui.node_name that can't be used is left out, with a load note."""
+    value = admin.node_name
+    if value == "":
+        return
+    if node_name_problem(value) is not None:
+        notes.append(f"admin_ui.node_name {str(value)[:80]!r} is not usable "
+                     f"({node_name_problem(value)}); the host name is used")
+        admin.node_name = ""
+    else:
+        admin.node_name = value.strip()
+
+
+# The first path segments of the UI's own pages: a public URL's path can't start with one,
+# or a page asked for without the path would be taken for one under it (app/web/proxy.py).
+RESERVED_PATHS = frozenset({"api", "auth", "favicon.ico", "healthz", "lang", "login", "logout",
+                            "metrics", "settings", "setup", "static"})
+_URL_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
+_HOST_NAME = re.compile(r"(?!-)[a-z0-9_-]{1,63}(?<!-)(\.(?!-)[a-z0-9_-]{1,63}(?<!-))*\.?")
+
+
+def _public_url_parts(value: str):
+    """(scheme, host as written in a URL, port or None, path without the trailing '/') of
+    a public URL, or the problem (a str) with it."""
+    text = value.strip()
+    bad = _("The public URL must be an http:// or https:// address with a host name, such "
+            "as https://ser2net.example.com.")
+    if any(c.isspace() or ord(c) < 32 or c == "\\" for c in text) or not text.isascii():
+        return bad
+    if "?" in text or "#" in text:
+        return _("The public URL can’t have a query (?…) or a fragment (#…).")
+    try:
+        parts = urllib.parse.urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return _("The public URL’s port must be a number from 1 to 65535.")
+    scheme, host = parts.scheme.lower(), parts.hostname or ""
+    if scheme not in ("http", "https") or not host or "@" in parts.netloc:
+        return bad
+    if port == 0:
+        return _("The public URL’s port must be a number from 1 to 65535.")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if not _HOST_NAME.fullmatch(host):
+            return bad
+        written = host
+    else:
+        written = f"[{ip.compressed}]" if ip.version == 6 else ip.compressed
+    path = parts.path.rstrip("/")
+    segments = path.split("/")[1:] if path else []
+    if any(not _URL_PATH_SEGMENT.fullmatch(s) or s in (".", "..") for s in segments):
+        return _("The public URL’s path may only have letters, digits and . _ ~ - between "
+                 "its slashes, such as /ser2net.")
+    if segments and segments[0].lower() in RESERVED_PATHS:
+        return _("The public URL’s path can’t start with /{0}: that is a page of this UI.") \
+            .format(segments[0])
+    return scheme, written, port, path
+
+
+def public_url_problem(value: Any) -> str | None:
+    """Why `value` can't be admin_ui.public_url, or None when it can (also when blank): an
+    http:// or https:// address with a host name, optionally a port and a path of plain
+    segments that doesn't start like one of the UI's own pages (RESERVED_PATHS); no user
+    name, query or fragment."""
+    if not isinstance(value, str):
+        return _("The public URL must be an http:// or https:// address with a host name, "
+                 "such as https://ser2net.example.com.")
+    if not value.strip():
+        return None
+    parts = _public_url_parts(value)
+    return parts if isinstance(parts, str) else None
+
+
+def normalize_public_url(value: str) -> str:
+    """A usable public URL as it is kept: scheme and host in lower case, the scheme's own
+    port and a trailing '/' left out ('' for a blank or unusable one)."""
+    parts = _public_url_parts(value) if isinstance(value, str) and value.strip() else ""
+    if isinstance(parts, str):
+        return ""
+    scheme, host, port, path = parts
+    shown = "" if port is None or port == {"http": 80, "https": 443}[scheme] else f":{port}"
+    return f"{scheme}://{host}{shown}{path}"
+
+
+def proxy_entry_problem(entry: Any) -> str | None:
+    """Why `entry` can't be one of admin_ui.trusted_proxies (an IP address or a network
+    such as 172.18.0.0/16), or None when it can."""
+    text = entry.strip() if isinstance(entry, str) else ""
+    try:
+        if not text or not text.isascii():
+            raise ValueError
+        ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return _("“{0}” is not an IP address or network (such as 172.18.0.0/16).").format(
+            str(entry)[:100])
+    return None
+
+
+def split_proxy_entries(text: str) -> list[str]:
+    """The entries of a list of trusted proxies written on one line (spaces or commas)."""
+    return [e for e in re.split(r"[\s,]+", text or "") if e]
+
+
+def _normalize_proxy_settings(admin: "AdminUI", notes: list[str]) -> None:
+    """A hand-edited public_url, trusted_proxies or proxy_hsts that can't be used is left
+    out, with a load note, rather than refused: config.json must not keep the UI from
+    starting."""
+    value = admin.trusted_proxies
+    entries = split_proxy_entries(value) if isinstance(value, str) else value
+    if not isinstance(entries, list):
+        notes.append(f"admin_ui.trusted_proxies {value!r} is not a list of IP addresses or "
+                     "networks; no proxy is trusted")
+        entries = []
+    kept = [e.strip() for e in entries if proxy_entry_problem(e) is None]
+    if len(kept) != len(entries):
+        dropped = [e for e in entries if proxy_entry_problem(e) is not None]
+        notes.append(f"admin_ui.trusted_proxies: {dropped!r} left out (not IP addresses or "
+                     "networks)")
+    admin.trusted_proxies = kept
+    url = admin.public_url
+    if public_url_problem(url) is not None:
+        notes.append(f"admin_ui.public_url {url!r} is not usable ({public_url_problem(url)}); "
+                     "none is used")
+        admin.public_url = ""
+    else:
+        admin.public_url = normalize_public_url(url)
+    if not isinstance(admin.proxy_hsts, bool):
+        notes.append(f"admin_ui.proxy_hsts {admin.proxy_hsts!r} is not true or false; using false")
+        admin.proxy_hsts = False
 
 
 # admin_ui connection limits: (default, lowest value other than 0, highest)
@@ -1288,8 +1576,9 @@ _ADMIN_LIMITS = {"max_connections": (256, 16, 65535),
 
 def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
     """Put an admin_ui connection limit that is not a usable whole number back to its
-    default (0, no limit, stays 0; a value below the lowest goes up to it), with a load
-    note: a hand-edited config.json must not keep the UI from starting, nor make it unusable."""
+    default (0, no limit, stays 0; a value below the lowest goes up to it), and so an
+    unusable hsts_max_age, with a load note: a hand-edited config.json must not keep the
+    UI from starting, nor make it unusable."""
     for name, (default, low, high) in _ADMIN_LIMITS.items():
         value = getattr(admin, name)
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= high:
@@ -1301,6 +1590,11 @@ def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
         setattr(admin, name, fixed)
         notes.append(f"admin_ui.{name} {value!r} is not usable (0 = no limit, else "
                      f"{low}-{high}); using {fixed}")
+    value = admin.hsts_max_age
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= HSTS_MAX_AGE_MAX:
+        admin.hsts_max_age = HSTS_MAX_AGE_DEFAULT
+        notes.append(f"admin_ui.hsts_max_age {value!r} is not a whole number of seconds from 0 "
+                     f"to {HSTS_MAX_AGE_MAX}; using {HSTS_MAX_AGE_DEFAULT} (one year)")
 
 
 UI_LANGUAGES = ("auto", "en", "tr")
@@ -1557,6 +1851,13 @@ class NotificationSettings:
     smtp_security: str = "starttls"  # starttls | ssl | none
     smtp_username: str = ""
     smtp_password: str = ""
+    # Personal data in what is sent (client_connected / client_disconnected: the client's
+    # IP address; login_failed: the account name and the IP address): with
+    # mask_personal_data, an address only as its network (IPv4 /24, IPv6 /48) and no
+    # account name. email_separately: each recipient gets a message of their own, so the
+    # recipients don't see each other's addresses. Both off by default (as up to 2.8).
+    mask_personal_data: bool = False
+    email_separately: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "NotificationSettings":
@@ -1564,6 +1865,9 @@ class NotificationSettings:
         known = {f.name for f in dataclasses.fields(NotificationSettings)}
         n = NotificationSettings(**{k: v for k, v in d.items() if k in known})
         n.events = [e for e in (n.events or []) if e in NOTIFY_EVENTS]
+        # a hand-edited value other than true is off, as before these settings existed
+        n.mask_personal_data = n.mask_personal_data is True
+        n.email_separately = n.email_separately is True
         return n
 
     @property
@@ -1743,6 +2047,10 @@ class AppConfig:
             mappings=[MappingConfig.from_dict(m) for m in d.get("mappings", [])],
         )
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
+        _normalize_proxy_settings(cfg.admin_ui, cfg.load_notes)
+        _normalize_node_name(cfg.admin_ui, cfg.load_notes)
+        _normalize_request_log(cfg.admin_ui, cfg.load_notes)
+        _normalize_login_notice(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
         raw_days = d.get("external_users_expire_days")
         if raw_days is not None and raw_days != cfg.external_users_expire_days:
@@ -2277,8 +2585,10 @@ class ConfigStore:
 
     Every save that changes config.json first copies the version it replaces to
     <data>/backups/config-<UTC time>.json (identical content is not copied twice; the
-    newest BACKUPS_KEPT are kept). Backups are never read back on their own: deleting
-    config.json still resets the system; restoring one is an explicit admin action."""
+    newest BACKUPS_KEPT are kept). Backups are never read back on their own: restoring one
+    is an explicit admin action (deleting config.json alone leaves them, and the next admin
+    sees them in Settings). An admin can delete backups, or remove a deleted account from
+    every backup (remove_account), in Settings -> Configuration backups."""
 
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
@@ -2384,30 +2694,110 @@ class ConfigStore:
         return sorted(names, key=_backup_order, reverse=True)
 
     def backups(self) -> list[dict]:
-        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users}], newest first."""
+        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users, accounts:
+        [{username, role, source}]}], newest first."""
         out = []
         for name in self.backup_names():
             path = os.path.join(self.backup_dir, name)
             info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
-                                    "time": backup_time(name)}
+                                    "accounts": [], "time": backup_time(name)}
             try:
                 info["size"] = os.path.getsize(path)
                 with open(path, encoding="utf-8") as fh:
                     doc = json.load(fh)
                 info["mappings"] = len(doc.get("mappings") or [])
-                info["users"] = len(doc.get("users") or [])
-            except (OSError, ValueError, AttributeError):
+                info["accounts"] = _backup_accounts(doc)
+                info["users"] = len(info["accounts"])
+            except (OSError, ValueError, AttributeError, TypeError):
                 pass
             out.append(info)
         return out
 
+    def _known_backup(self, name: str) -> str:
+        """The path of the backup `name`; ConfigError for an unknown / invalid name."""
+        if not _BACKUP_NAME.match(name or "") or name not in self.backup_names():
+            raise ConfigError(_("No such backup."))
+        return os.path.join(self.backup_dir, name)
+
+    def delete_backup(self, name: str) -> None:
+        """Delete one backup (ConfigError for an unknown name)."""
+        os.remove(self._known_backup(name))
+
+    def delete_backups(self) -> int:
+        """Delete every backup; how many were deleted."""
+        gone = 0
+        for name in self.backup_names():
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(os.path.join(self.backup_dir, name))
+                gone += 1
+        return gone
+
+    def remove_account(self, username: str) -> int:
+        """Take the account named exactly `username` out of every backup that has it (in
+        a backup from before accounts existed, the top-level password_hash is the 'admin'
+        account), rewriting each one atomically under its name with everything else as
+        it was: restoring those backups can't bring the account back. Returns how many
+        backups were changed."""
+        changed = 0
+        for name in self.backup_names():
+            path = os.path.join(self.backup_dir, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    doc = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if isinstance(doc, dict) and _drop_backup_account(doc, username):
+                _replace_file(self.backup_dir, path, json.dumps(doc, indent=2, ensure_ascii=False))
+                changed += 1
+        return changed
+
     def read_backup(self, name: str) -> str:
         """The text of one backup. Raises ConfigError for an unknown / invalid name
         (only names this store generated are accepted: no path tricks)."""
-        if not _BACKUP_NAME.match(name or "") or name not in self.backup_names():
-            raise ConfigError(_("No such backup."))
-        with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
+        with open(self._known_backup(name), encoding="utf-8") as fh:
             return fh.read()
+
+
+def _backup_accounts(doc: dict) -> list[dict]:
+    """The accounts in a backup's JSON: [{username, role, source}] (a config from before
+    accounts existed has one, 'admin', as its top-level password_hash)."""
+    users = doc.get("users")
+    if isinstance(users, list) and users:
+        return [{"username": str(u.get("username", "")), "role": str(u.get("role", "")),
+                 "source": str(u.get("source") or "local")} for u in users if isinstance(u, dict)]
+    if doc.get("password_hash"):
+        return [{"username": "admin", "role": "admin", "source": "local"}]
+    return []
+
+
+def _drop_backup_account(doc: dict, username: str) -> bool:
+    """Take the account named `username` out of a backup's JSON; True if it was there."""
+    users = doc.get("users")
+    if isinstance(users, list) and users:
+        kept = [u for u in users if not (isinstance(u, dict) and u.get("username") == username)]
+        if len(kept) == len(users):
+            return False
+        doc["users"] = kept
+        return True
+    if username == "admin" and doc.get("password_hash"):
+        doc.pop("password_hash", None)
+        doc.pop("pwd_version", None)
+        return True
+    return False
+
+
+def _replace_file(directory: str, path: str, text: str) -> None:
+    """Write `text` to `path` atomically (a temp file in `directory`, fsync, rename)."""
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".bak.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def backup_time(name: str) -> str:

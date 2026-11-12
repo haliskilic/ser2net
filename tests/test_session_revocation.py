@@ -24,7 +24,7 @@ import tempfile
 import urllib.error
 import urllib.request
 
-from _server import Browser, Server
+from _server import Browser, Server, ui_cookie
 
 from app.config import AppConfig, new_pwd_version
 from app.web import auth
@@ -51,8 +51,8 @@ def browser_with(srv, token: str) -> Browser:
     """A browser signed in with this session cookie."""
     b = Browser(srv.base)
     b.jar.set_cookie(http.cookiejar.Cookie(
-        0, "ser2net_session", token, None, False, "127.0.0.1", False, False, "/", True,
-        False, None, False, None, None, {}))
+        0, ui_cookie("ser2net_session", srv.port), token, None, False, "127.0.0.1", False, False,
+        "/", True, False, None, False, None, None, {}))
     return b
 
 
@@ -68,7 +68,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 def signed_in(srv, token: str) -> bool:
     """Does a request that carries only this session cookie get the settings page?"""
     req = urllib.request.Request(srv.base + "/settings",
-                                 headers={"Cookie": f"ser2net_session={token}"})
+                                 headers={"Cookie": f"{ui_cookie('ser2net_session', srv.port)}={token}"})
     try:
         r = urllib.request.build_opener(_NoRedirect).open(req, timeout=20)
     except urllib.error.HTTPError as e:

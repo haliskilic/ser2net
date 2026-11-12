@@ -241,6 +241,11 @@ düzenlemeye gerek yok.
   bir eşleme uzak sunucusunu kaybettiğinde/yeniden bulduğunda, istemci bağlanıp düştüğünde
   ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) ve/veya
   e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+  Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
+  bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını
+  (ya da `(unknown user)`) ve IP adresini gönderir; *Kişisel verileri gönderme* seçeneği
+  adresleri yalnızca ağlarıyla (`10.0.5.x`, IPv6 /48) gönderir, hesap adlarını hiç
+  göndermez; e-posta her alıcıya ayrı da gönderilebilir.
 - **Dışa bağlanma durumu:** dışa bağlanan bir eşlemenin durumu seri tarafı göstermeye devam
   eder; uzak sunucuyla bağlantısı yanında gösterilir ("bağlantı yok" ve nedeni, Sorunlu
   filtresi bunu sayar; "bağlanıyor"), `/api/v1/status`'ta (`link`: `connecting` / `up` /
@@ -389,8 +394,11 @@ Linux notları:
 - Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
   paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır.
 
-`ser2net --about` sürümleri (Python, OpenSSL, bileşenler) gösterir; hata bildirirken
-ekleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini yazar
+`ser2net --about` sürümleri (Python, OpenSSL, bileşenler) ve her bileşenin nereden
+yüklendiğini gösterir; bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `<bundle>`,
+`<override>`, `~`), böylece yoldaki hesap adı görünmez. Hata bildirirken ekleyin;
+yapıştırdığınız log satırlarındaki IP adreslerini, kullanıcı adlarını ve host adını
+maskeleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini yazar
 (sürümlere `*.THIRD-PARTY-LICENSES.txt` olarak da eklenir).
 
 Kendin derlemek için:
@@ -441,7 +449,9 @@ alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç root olarak d
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
 volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
 olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez.
-İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Ayrıntılar:
+İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Reverse proxy arkasında
+`SER2NET_PUBLIC_URL` ve `SER2NET_TRUSTED_PROXIES`, Ayarlar → Reverse proxy'nin yaptığını
+yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
 ---
@@ -458,7 +468,10 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
-  **yedek al/yükle** (JSON), durum.
+  **yedek al/yükle** (JSON), durum ve **bu kurulumun adı** (Yönetim arayüzü; ya da
+  `SER2NET_NODE_NAME`): bildirimler, tarayıcı sekmesi, üst bar ve LAN cluster'ın filo
+  görünümü, aynı makinedeki kurulumların paylaştığı host adı yerine bunu kullanır; genel
+  JSON webhook'u ayrıca `hostname` ve `instance_id` alır.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar
   (bunlardan seri portun açılamadığı denemeler, `ser2net_mapping_open_failures_total`, ve
@@ -518,8 +531,9 @@ Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
 Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
-sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
-`viewer` sayılır ve açılış log'u bunu yazar.
+sırları (MQTT parolası) `********` olarak maskeli görür; bu maskeyi geri gönderen bir `PUT`
+kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
+ve açılış log'u bunu yazar.
 
 ---
 
@@ -555,6 +569,15 @@ bunu söyleyen bir hatayla durur. Form ve REST API bir eşlemenin dosyalarını 
 yükler, kayıtlı anahtar parolasını hiç göstermez (viewer API token'ı maskeli alır) ve
 yönetim arayüzünün kendi anahtarını reddeder. Sertifika yönetilemeyen yerlerde güvenilmeyen
 ağın önünde bir VPN (WireGuard) ya da stunnel seçenektir.
+
+**HSTS:** admin TLS açıkken sayfalar ve REST API yanıtları bir yıllık `max-age` ile
+`Strict-Transport-Security` taşır. Sertifikaya güvenen ve arayüze host adıyla (IP adresiyle
+değil, sertifika uyarısı geçilerek de değil) gelen bir tarayıcı, her ziyaretten sonra bu süre
+boyunca o ad için her portta yalnızca https:// kullanır: aynı addaki düz HTTP ya da
+self-signed başka web arayüzleri o tarayıcıda açılmaz, TLS kapatılınca bu arayüz de.
+**Ayarlar → Admin TLS → HSTS max-age** (`admin_ui.hsts_max_age`, 0 ile 63072000 saniye
+arası) bunu hemen değiştirir; 0, tarayıcıların bunu unutmasını sağlayan `max-age=0`
+gönderir. TLS'yi kapatmadan önce 0 yapın ve kullanıcıların arayüzü bir kez açmasını bekleyin.
 
 **Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
@@ -615,6 +638,60 @@ LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve 
 erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
 gösterilir ve açılışta loga yazılır.
 
+**Giriş bilgilendirmesi (isteğe bağlı):** **Ayarlar → Web arayüzü erişimi → Giriş
+bilgilendirmesi**, giriş ve ilk kurulum sayfalarının giriş yapılmadan önce göstereceği bir
+metin belirler — bir aydınlatma metni ya da IEC 62443 (SR 1.12) ve NIST SP 800-53'ün (AC-8)
+istediği sistem kullanım uyarısı — ve metnin tamamına isteğe bağlı bir http(s) bağlantısı.
+Düz metindir (satır sonları korunur, en fazla 2000 karakter, HTML olmaz;
+`admin_ui.login_notice`, `admin_ui.login_notice_url`); açık erişimde giriş yapmayan
+ziyaretçiler onu üst bardaki *Bilgilendirme* bağlantısında bulur. Değişiklikler denetim
+kaydına yazılır (`login_notice_set`). Varsayılan olarak hiçbiri yoktur.
+
+**Başka sitelerden gelen istekler:** tarayıcı bir değişikliği (web arayüzüne giden her
+POST, PUT, PATCH ya da DELETE) başka bir sitenin sayfasının gönderdiğini söylüyorsa istek
+403 ile reddedilir: `Sec-Fetch-Site` `same-origin` değilse ya da `Origin` arayüze gelinen
+adres değilse — aynı host'un başka bir portu ve kardeş bir alt alan adı da başka site
+sayılır. Bu, CSRF token'ına ek bir kontroldür; token her giriş ve çıkıştan sonra yenilenir
+ve oturum kadar geçerli kalır. Ters proxy arkasında proxy, tarayıcının kullandığı adresi
+port dahil `Host` ya da `X-Forwarded-Host` olarak iletmeli ya da bu adres genel URL olmalıdır
+(Ayarlar → Reverse proxy); all.log reddedilen `Origin`'i ve arayüzün gördüğü adresi yazar.
+`Origin` başlığı göndermeyen betikler, REST API ve cluster eşleri bundan etkilenmez.
+
+**Ters proxy arkasında:** konsol ve hex görünümü WebSocket'leri de aynı şekilde denetlenir:
+tarayıcının el sıkışması, bu arayüzün kendi sayfasından geldiğini söylüyorsa
+(`Sec-Fetch-Site: same-origin`, HTTPS'te gönderilir) ya da `Origin`'i port dahil `Host`,
+`X-Forwarded-Host` veya `Forwarded: host=` içindeki adresse ya da genel URL ise kabul edilir.
+Bu yüzden proxy tarayıcının adresini iletmeli — nginx'te `proxy_set_header Host $http_host;`,
+Apache'de `ProxyPreserveHost On`, IIS ARR'de `preserveHostHeader` (Caddy ve Traefik bunu zaten
+yapar) — ve WebSocket yükseltmesini geçirmelidir; düz HTTP'de tarayıcılar `Sec-Fetch-Site`
+göndermediği için orada yalnızca adres belirleyicidir. all.log reddedilen `Origin`'i ve
+arayüzün gördüğü adresleri dakikada en fazla bir kez yazar. Gerisi **Ayarlar → Reverse
+proxy**'de: **genel URL** (kullanıcıların açtığı adres; origin'i arayüzün kendi adresi
+sayılır, boş bir SSO redirect URI'si ondan oluşturulur, bildirimler ona bağlantı verir ve
+içindeki bir yol — `https://gw.example.com/ser2net` — arayüzü o yolun altında da sunar,
+oradaki cookie'ler ayrıdır; `/` doğrudan erişimde çalışmaya devam eder), **güvenilen
+proxy'ler** (`X-Forwarded-For` ve `X-Forwarded-Proto` yalnızca onlardan gelince dikkate
+alınır — varsayılan olarak hiçbiri; 2.8.1'e kadar `127.0.0.1` / `::1`'den gelen her bağlantıya
+güveniliyordu) ve proxy üzerinden HSTS (varsayılan kapalı). Tarayıcı HTTPS kullandığında
+cookie'ler Secure olur; `X-Forwarded-Proto: https` gönderen bir TLS proxy arkasında da.
+`SER2NET_PUBLIC_URL` / `SER2NET_TRUSTED_PROXIES` bunları bir çalıştırma için ayarlar;
+`FORWARDED_ALLOW_IPS` çalışmaya devam eder. nginx, Apache, Caddy, Traefik ve IIS örnekleri ve
+bir şey eksik olduğunda all.log'un ne yazdığı (İngilizce):
+[docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md).
+
+**Parolalar:** yerel hesapların parolaları scrypt hash'i olarak saklanır (N=2^14, r=8, p=5,
+OWASP'ın en düşük önerisi; hash maliyetini kendisi taşır, böylece maliyet ileride
+artırılabilir). 2.8.1 ya da daha eski bir sürümün yaptığı hash çalışmaya devam eder ve o
+hesabın bir sonraki girişinde bugünkü maliyetle yenilenir (oturumları sürer; `config.json`
+kaydedilir, öncekisi `backups/`'a gider). Parolalar Unicode NFKC olarak karşılaştırılır:
+aksanı tek karakter ya da iki karakter olan bir harf (macOS'tan ya da bir PDF'ten
+yapıştırılan metin), bölünmez boşlukla normal boşluk, tam genişlikli karakterler aynı
+parolayı verir. Dizine (LDAP) parola yazıldığı gibi gider. **2.8.1'e ya da daha eski bir
+sürüme dönerken:** o sürümler yenilenen hash'leri okuyamaz, yani 2.9 ile giriş yapmış bir
+hesap orada giriş yapamaz: `ser2net --set-password AD` ile (2.8.1) yeni parola verin; böyle
+bir komutu olmayan 2.8.0 ve öncesinde `backups/` içinden yükseltmeden önceki bir
+`config.json`'u geri koyun.
+
 **Oturumlar:** çıkış yapınca o oturum sunucuda da biter (çerezin bir kopyası da artık
 çalışmaz). **Ayarlar → Kullanıcılar**'da admin bir kullanıcının tüm oturumlarını kapatabilir
 ya da yerel bir kullanıcıya yeni parola verebilir (bu da oturumlarını kapatır); herkes
@@ -622,12 +699,28 @@ ya da yerel bir kullanıcıya yeni parola verebilir (bu da oturumlarını kapat�
 erişimi → Herkesin oturumunu kapat** yeni bir oturum anahtarı üretip admin'in kendi oturumu
 dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yedeğin kopyası sızmış
 olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
-kapalıyken o hesapların oturumları geçersizdir.
+kapalıyken o hesapların oturumları geçersizdir. Tarayıcılar çerezleri porta göre değil host
+adına göre tutar; bu yüzden 8080 dışındaki bir portta arayüzün çerez adlarına portun bir
+etiketi eklenir (`ser2net_session_1a2b3c4d`), HTTPS'te de `__Host-` öneki: aynı host adıyla
+farklı portlardan açılan kurulumlar (yan yana servisler, container'lar, `localhost`'a SSH
+tünelleri, filo görünümündeki *Aç* bağlantısıyla aynı adresteki bir eş) birbirinin
+oturumunu kapatmaz, aynı adın `https://` adresinden sonra `http://` adresi de çalışır.
+2.9'dan önceki girişler geçerli kalır.
 
-**Başarısız girişler** adres başına 5 dakikada 8 ile sınırlıdır. all.log her biri için bir
-satır tutar, denetim kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bir kullanıcı adı
-yazıldığı gibi değil `(unknown user)` olarak kaydedilir (yanlış alana yazılmış bir parola
-olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnızca sayar ve o 10
+**Başarısız girişler** adres başına 5 dakikada 8 (bir IPv6 adresi /64'üyle sayılır; reverse
+proxy arkasında proxy güvenilen bir proxy ise her istemcinin kendi adresiyle, değilse tüm
+istemcilerin paylaştığı proxy adresiyle), kullanıcı adı başına da hangi
+adresten gelirse gelsin ve büyük/küçük harf fark etmeksizin 15 dakikada 10 ile sınırlıdır;
+sınırı aşan adres ya da ad, en eski başarısız denemeleri bu süreden eskiyene kadar HTTP 429
+alır. Hiçbir şey kalıcı olarak kilitlenmez; LDAP'ta dizine de daha sık sorulmaz, böylece bu
+denemeler dizinin kendi hesap kilitleme eşiğinin altında kalır. *Parolanı değiştir*
+bölümünde yanlış girilen mevcut parola da hesabın adına sayılır, all.log'a ve denetim
+kaydına (`password_change_failed`) yazılır. Parola kontrolleri aynı anda en çok iki, dizin
+girişleri dört tane çalışır; çok sayıda istek bekliyorsa yeni bir giriş denenmeden HTTP 429
+(*Aynı anda çok fazla giriş deneniyor*) alır. Yerel hesabı olmayan bir adın reddedilmesi de
+yanlış bir parola kadar sürer. all.log her başarısız giriş için bir satır tutar, denetim
+kaydı da bunları kaydeder; hiçbir hesaba ait olmayan bir kullanıcı adı yazıldığı gibi değil
+`(unknown user)` olarak kaydedilir (yanlış alana yazılmış bir parola olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnızca sayar ve o 10
 dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
 itemez. Bir eşlemenin konsolunu ya da hex görünümünü açmak, hesap (açık erişimde: adres),
 eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 böyle kayıt yazılır,
@@ -700,6 +793,17 @@ yapılandırılandan farklıysa all.log bir kez uyarır. id_token'ın zamanları
 2 dakikalık saat farkıyla kabul edilir: bu sunucunun ve sağlayıcının saatlerini senkron tutun
 (NTP); bir token zamanı yüzünden reddedilirse all.log bu sunucunun saatinin sağlayıcınınkinden
 kaç saniye geri ya da ileri olduğunu yazar.
+
+**SSO redirect URI'si:** **Ayarlar → Tek oturum açma (OIDC)**, sağlayıcıya kaydedilecek
+redirect URI'yi gösterir: girilen *Redirect URI*'yi ya da alan boşsa genel URL ayarlıyken
+ondan (`<genel URL>/auth/oidc/callback`, Ayarlar → Reverse proxy), değilse sayfanın
+isteğinden oluşturulanı (`X-Forwarded-Proto` ya da isteğin şeması, `X-Forwarded-Host` ya da
+`Host` — bir listeden ilki —, ardından `/auth/oidc/callback`; `Forwarded` ve
+`X-Forwarded-Port` okunmaz, böylece çalışan kurulumların kaydettiği adres değişmez). Bu
+adres loopback dışı bir host için http:// ise ya da tarayıcının adresinden farklıysa (arada
+adresi değiştiren bir reverse proxy varsa) sayfa uyarır ve tarayıcının adresine göre değeri
+gösterir; o değeri *Redirect URI* alanına girin. Her SSO girişinin başlangıcı gönderilen
+redirect URI'yi all.log'a yazar.
 
 **TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
 Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika
@@ -794,7 +898,8 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   Manjaro ve EndeavourOS'ta seri grup `uucp`'dir ve `dialout` grubu yoktur (unit
   `status=216/GROUP` ile başlamaz): grubu `systemctl edit ser2net` ile ayarla (`[Service]`,
   `SupplementaryGroups=`, ardından `SupplementaryGroups=uucp`; unit'in yorumunda yazıyor).
-  **root ile çalıştırmayın.**
+  **root ile çalıştırmayın.** Birden çok kurulum için: `systemd/ser2net@.service` şablonu
+  (aşağıda).
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -805,7 +910,9 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   (ikisini de yalnızca SYSTEM ve Administrators değiştirebilir).
   Servis açılışta başlar, kullanıcı oturumu gerektirmez (LocalSystem), çökerse ya da
   hatayla çıkarsa 5 sn sonra yeniden başlar; arayüz adresi ilk kurulumda konsolda sorulur.
-  Kaldırmak: `--uninstall-service` (veri klasörü kalır); birden fazla örnek için
+  Kaldırmak: `--uninstall-service` (veri klasörü yapılandırma, yedekler, log'lar, denetim
+  kaydı ve trace'lerle birlikte kalır: bunları da kaldırmak için klasörü silin); birden fazla
+  örnek için
   `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net` ya da *Hizmetler*
   (services.msc). Yeni bir exe ile `--install-service`'i yeniden çalıştırmak servisi
   yerinde yükseltir ve servisin kullandığı veri klasörünü korur (2.8.0 servisinde de).
@@ -842,6 +949,46 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   `SER2NET_WINDOWS_SERIAL=pyserial` (servis için: sistem ortam değişkeni) pyserial'ın kendi
   yazma biçimine (hız denetimi olmadan) döner; lütfen adaptörü ve sürücüyü bildirin.
 
+### Aynı makinede birden çok kurulum
+
+Her kurulumun kendine ait olması gerekenler:
+
+- **veri klasörü** (`--data-dir`): aynı klasördeki ikinci bir ser2net açılışta durur. Yeni
+  bir kurulum için veri klasörünü kopyalamayın — kopyanın cluster kimliği (filo görünümü o
+  zaman "bu kurulumun bir kopyası" uyarısı gösterir) ve oturum anahtarı aynıdır: yeni
+  kurulumu boş başlatıp eşlemeleri içe aktarın (**Ayarlar → Eşlemeleri dışa / içe aktar**).
+- **web arayüzü portu:** konsoldaki seçici (ilk açılış, `--reconfigure`,
+  `--install-service`) önerdiği portu dener; başka bir program (başka bir kurulum) onu
+  kullanıyorsa bunu söyler ve ilk boş portu önerir; elle yazdığınız seçim yine kabul
+  edilir. Terminalsiz bir ilk açılış (servis, container) portunu korur ve uyarıyı log'a
+  yazar. Seçici olmadan: `SER2NET_BIND_IP` + `SER2NET_PORT`.
+- **eşleme portları ve seri cihazlar:** bir TCP/UDP portu ve bir seri cihaz tek bir
+  kuruluma aittir. Portunu ya da cihazını başka bir program tutarken kaydedilen eşleme
+  saklanır ve arayüz neden başlamadığını söyler.
+- **ad:** **Ayarlar → Yönetim arayüzü → Bu kurulumun adı** (ya da `SER2NET_NODE_NAME`) —
+  bildirimler, tarayıcı sekmesi, üst bar ve filo görünümü hangi kurulum olduğunu söyler.
+- içe aktarılan, MQTT'ye yayın yapan eşlemelerin kendi **id**'leri olmalı: ayarlanmış bir
+  client id ve Sparkplug edge node id'si (boşsa eşlemenin adı) — broker, id'sini başka bir
+  istemcinin aldığı istemcinin bağlantısını keser, bir grupta aynı id'li iki Sparkplug
+  düğümü de host uygulamasını şaşırtır.
+
+Tarayıcı, farklı portlardaki kurulumların (`http://host:8080`, `http://host:8081`)
+oturumlarını ayrı tutar; 2.8 ve öncesi bir host adı başına tek oturum paylaşıyordu, onlara
+farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle girin.
+
+- **Windows:** `ser2net-windows-x64.exe --install-service --service-name ser2net-line2
+  --data-dir C:\ProgramData\ser2net-line2` (ve her servis için bir güvenlik duvarı
+  kuralı: [docs/WINDOWS.md](docs/WINDOWS.md)).
+- **Linux (systemd):** `systemd/ser2net@.service` şablonu her ad için bir kurulum çalıştırır;
+  verisi `/var/lib/ser2net/<ad>` altında, adresi `/etc/ser2net/<ad>.env` içinde durur
+  (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); kurulum adı bildirimlerdeki adı olur.
+  Paketlenmiş bağımlılıkları bir kez kurun (`ser2net` kullanıcısıyla
+  `python3 /opt/ser2net/bootstrap.py`), sonra
+  `systemctl enable --now ser2net@line1 ser2net@line2`.
+- **Docker:** her kurulum için ayrı bir container; her birinin kendi volume'ü,
+  `container_name`'i ve yayınlanan portları (`8081:8080`), adı için de `SER2NET_NODE_NAME`
+  (ya da `hostname:`) ([docs/DOCKER.md](docs/DOCKER.md)).
+
 ---
 
 ## 🗂️ Yapılandırma & durum dosyaları
@@ -849,17 +996,29 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 Tüm durum **veri dizininde** (varsayılan `data/`). Veri dizini yalnızca sahibe açık
 kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), böylece
 içindeki dosyalar başka kullanıcılarca okunamaz:
-- `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
+- `config.json` — admin IP, parola hash'leri, tüm eşlemeler (atomik yazım) ve ser2net'in
+  kendisinin kullanması gereken gizli değerler, açık metin olarak (aşağıda *Gizli değerler*).
 - `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
   *Yapılandırma yedekleri*'nden indirilir ya da geri yüklenir. Geri yükleme önce giriş ve
   erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
   kullanıcı hesapları ve parolaları, REST API token'ı ve cluster anahtarı, onları da geri
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
   oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
-  de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
+  de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz. Liste her yedeğin
+  hesaplarını gösterir; admin orada tek bir yedeği ya da hepsini silebilir. Bir kullanıcıyı
+  silmek, hesabı (parola hash'iyle) daha önce alınmış yedeklerde bırakır — hesaplarıyla
+  birlikte geri yükleme onu geri getirir —, bu yüzden *Yedeklerden çıkar* artık olmayan bir
+  hesabı onu içeren her yedekten çıkarır (yedeklerin geri kalanı olduğu gibi kalır). Hepsi
+  denetim kaydına yazılır.
 - `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
   konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
-  *Audit log*'da aranabilir, CSV olarak indirilebilir.
+  *Audit log*'da aranabilir, CSV olarak indirilebilir. `all.log`'un her satırı stdout'a da
+  yazılır; systemd'nin journal'ı ya da Docker'ın container log'u bunları kendi saklama
+  süreleriyle tutar. `SER2NET_LOG_STDOUT=off` satırları yalnızca `all.log`'da tutar.
+  `all.log` her web arayüzü sayfası ve değişikliği için istemcinin IP adresiyle bir satır
+  yazar: Ayarlar → *Denetim kaydı* → *all.log'daki web arayüzü istekleri* yalnızca
+  değişiklikleri ve reddedilen istekleri ya da hiçbirini yazdırabilir (girişler ve denetim
+  kayıtları her durumda yazılır).
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
@@ -874,14 +1033,43 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
 
+**Gizli değerler:** `config.json` LDAP bind parolasını, OIDC client secret'ı, SMTP
+parolasını, webhook URL'sini (çoğu zaman içinde bir token vardır), her eşlemenin MQTT broker
+parolasını, cluster anahtarını (tüm düğümlerin eşlemelerini okumaya ve değiştirmeye yeter)
+ve oturum anahtarı `secret_key`'i (aynı dosyadaki hesaplarla birlikte geçerli bir oturum
+üretmeye yeter) açık metin olarak tutar. Yerel parolalar scrypt hash'i, REST API token'ı da
+yalnızca hash'i olarak saklanır. `backups/` aynı dosyanın önceki kopyalarını tutar (indirilen
+bir yedekte oturum anahtarı yoktur), eşleme dışa aktarımı da MQTT parolalarını içerir. Bu
+makinede bunları yalnızca ser2net'in çalıştığı hesap okuyabilir; her kopyayı — kopyalanan
+bir veri klasörünü ya da Docker volume'unu, bir disk ya da VM imajını, indirilen bir yedeği,
+bir dışa aktarımı — bir parola kasası gibi koruyun. Böyle bir kopya sızarsa neyin
+değiştirileceği [SECURITY.md](SECURITY.md)'de (*Saklanan gizli değerler*) yazar.
+
+**Kişisel veriler:** hesap adları (LDAP ya da SSO adı çoğu zaman bir e-posta adresidir), IP
+adresleri, girişler ve başarısız girişler `config.json`, `backups/`, `all.log*` (ve onun
+journal'daki ya da Docker log'undaki stdout kopyası), `audit.log*` ve `logs/` içinde
+kaydedilir. Bildirimler, LDAP, SSO, MQTT ve cluster yalnızca siz kurduğunuzda host dışına
+veri gönderir; telemetri yoktur. **[docs/PRIVACY.md](docs/PRIVACY.md)** neyin nerede ve ne
+kadar süre tutulduğunu, kimin görebildiğini, daha az tutan ayarları ve bir erişim talebinin
+nasıl yanıtlanacağını, bir kişinin ya da tüm kurulumun nasıl silineceğini anlatır.
+
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
 ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış
 logu ya da içe aktarma önizlemesi bunu belirtir.
 
-`config.json` + `all.log` silinince sistem **sıfırdan** başlar (orphan loglar otomatik
-temizlenir; `backups/` kendiliğinden geri yüklenmez, isterseniz onu da silin). Parola
-unutulduysa bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
+**Sıfırdan başlamak:** ser2net'i durdurun, sonra veri dizinini (ya da içindeki her şeyi)
+silin; üretilmiş sertifikayı yeniden kullanmak için `tls/`'i bırakın. Yalnızca `config.json`'u
+silmek hesapları, ayarları ve eşlemeleri sıfırlar, ama `audit.log` (ve `audit.log.1`),
+dönmüş `all.log.1`–`.5`, `backups/` ve `traces/` kalır (`logs/` bir sonraki açılışta
+boşaltılır); ilk kurulumu sonra kim tamamlarsa o denetim kaydını — önceki kullanıcıların
+adlarını, adreslerini ve başarısız girişlerini — ve önceki hesapları ve gizli değerleri
+içeren o yedekleri Ayarlar'da görür. Bunu ser2net çalışırken yapmayın: bir sonraki kayıt,
+bellekteki yapılandırmayı hesaplarla birlikte `config.json`'a geri yazar. Veri dizini
+dışındaki kopyalar da kalır: journal (`journalctl -u ser2net`), Docker'ın container log'u
+(`docker compose down -v` onu `/data` volume'uyla birlikte siler, bkz.
+[docs/DOCKER.md](docs/DOCKER.md)) ve bildirimlerin gönderdiği mesajlar. Parola unutulduysa
+bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey kaybolmaz.
 `admin-requests/` yalnızca komut satırından gelen bir isteği, çalışan örnek alana kadar tutar.
 
 **Bir kurulumu kopyalamak** (disk ya da VM imajı, kopyalanan veri klasörü ya da Docker

@@ -72,6 +72,8 @@ PORTABLE = [
     "test_backups_import.py",
     "test_audit_log.py",
     "test_sign_in_limits.py",  # request body limits, failed sign-in records, log caps
+    "test_login_throttle.py",  # sign-in attempt limits (address, name), password work
+    "test_password_hashing.py",  # hash format and cost, older hashes, renewal at sign-in
     "test_healthcheck.py",
     "test_upgrade_from_2_7.py",
     "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)
@@ -117,6 +119,22 @@ PORTABLE = [
     "test_ipv6.py",                # IPv6 parts skip where the machine has no IPv6 loopback
     "test_tls_mapping.py",         # a mapping's TLS files; needs cryptography (SKIP without)
     "test_tls_paths.py",           # TLS paths in a moved data directory; most need cryptography
+    "test_browser_hardening.py",  # CSP and the other protections the browser is told to apply
+    "test_mqtt_password_form.py",  # the mapping form never holds the stored MQTT password
+    "test_reverse_proxy.py",   # WebSockets, the SSO redirect URI, the UI through a proxy
+    "test_hsts.py",            # Strict-Transport-Security max-age (admin_ui.hsts_max_age)
+    "test_trusted_proxies.py",  # X-Forwarded-For / -Proto from trusted proxies only
+    "test_secure_cookies.py",  # Secure cookies and HSTS behind a TLS reverse proxy
+    "test_public_url.py",      # admin_ui.public_url and the path the UI is served under
+    "test_cookie_names.py",    # cookie names per port, path and scheme; 2.8 names moved
+    "test_node_name.py",       # Settings -> Admin interface -> Name of this instance
+    "test_console_port_picker.py",  # the console picker tries the admin UI port it offers
+    "test_save_start_result.py",  # a mapping save says when the mapping didn't start
+    "test_systemd_units.py",   # ser2net.service and the per-instance ser2net@.service
+    "test_activity_log.py",    # SER2NET_LOG_STDOUT, admin_ui.request_log
+    "test_login_notice.py",    # Settings -> Web UI access -> Sign-in notice
+    "test_backup_erasure.py",  # deleting backups, a deleted account out of every backup
+    "test_privacy_doc.py",     # docs/PRIVACY.md's numbers and settings match the code
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

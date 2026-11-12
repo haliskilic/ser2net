@@ -26,6 +26,7 @@ import urllib.request
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from _server import ui_cookie  # noqa: E402
 from app.web.auth import hash_password, hash_token
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -119,7 +120,7 @@ def main():
         jar = http.cookiejar.CookieJar()
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         op.open(f"http://127.0.0.1:{ui}/login", timeout=10)
-        csrf = next(c.value for c in jar if c.name == "ser2net_csrf")
+        csrf = next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui))
         r = op.open(urllib.request.Request(
             f"http://127.0.0.1:{ui}/login",
             data=urllib.parse.urlencode({"username": "admin", "password": "oldpass1234",

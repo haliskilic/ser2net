@@ -9,6 +9,11 @@ function tr(key, fallback) {
   for (var i = 2; i < arguments.length; i++) s = s.replace("{" + (i - 2) + "}", arguments[i]);
   return s;
 }
+// the path prefix the page came under ("" at "/"; a public URL's path, base.html)
+function basePath() {
+  var m = document.querySelector('meta[name="ser2net-base"]');
+  return m ? m.getAttribute("content") : "";
+}
 
 // 0) Theme: apply the saved light/dark preference as early as possible, and toggle
 //    it (persisted in localStorage) when a [data-theme-toggle] control is clicked.
@@ -161,6 +166,19 @@ document.addEventListener("DOMContentLoaded", function () {
 document.addEventListener("submit", function (e) {
   var f = e.target.closest ? e.target.closest("form[data-confirm]") : null;
   if (f && !window.confirm(f.getAttribute("data-confirm"))) e.preventDefault();
+});
+
+// 2d) Settings → Single sign-on: with no Redirect URI set, the one shown is made from
+//     the address the request reached ser2net with. When a reverse proxy changed that
+//     address, show the redirect URI for this browser's address too.
+document.addEventListener("DOMContentLoaded", function () {
+  var shown = document.querySelector("#oidc-redirect[data-auto]");
+  var warn = document.getElementById("oidc-redirect-mismatch");
+  if (!shown || !warn) return;
+  var mine = location.origin + basePath() + "/auth/oidc/callback";
+  if (shown.getAttribute("data-uri") === mine) return;
+  warn.querySelector("[data-browser-uri]").textContent = mine;
+  warn.hidden = false;
 });
 
 // 3) Cancel/Close buttons clear the form/log panel. Done via a delegated
@@ -365,7 +383,7 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     if (!b) return;
     if (b.hasAttribute("data-bulk-clear")) { selected.clear(); apply(); return; }
     if (!selected.size || !window.htmx) return;
-    htmx.ajax("POST", "/api/mappings/bulk", { swap: "none", values: {
+    htmx.ajax("POST", basePath() + "/api/mappings/bulk", { swap: "none", values: {
       action: b.getAttribute("data-bulk-action"), ids: Array.from(selected) } });
   });
 

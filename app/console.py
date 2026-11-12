@@ -6,16 +6,69 @@ configuration web UI should listen on — chosen from the machine's own addresse
 Every interface of both families is stored as "" (asyncio's every interface). In a
 non-interactive context (service/headless) we keep the address configured, else
 127.0.0.1 (see choose_admin_bind).
+
+The port offered is tried first (port_in_use): when another program has it — the
+usual case is a second instance on the same machine — the picker says so and offers
+the next free port, but takes a port typed in (it never refuses one: that program may
+be gone by the time this one starts). Without a terminal the port stays as it is, with
+a warning for the log.
 """
 from __future__ import annotations
 
+import errno
+import os
+import socket
 import sys
 
 from .config import AdminUI, host_port
 from .engine import netinfo
 
+# how far past a taken port the picker looks for a free one
+_FREE_PORT_TRIES = 50
 
-def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
+
+def port_in_use(ip: str, port: int) -> bool:
+    """Does another socket listen on ip:port now, so that the admin UI couldn't bind it?
+    Tried as asyncio's create_server binds (uvicorn's listener): SO_REUSEADDR on POSIX,
+    IPV6_V6ONLY for an IPv6 address; the socket is closed at once. Only "address in use"
+    counts: an address this machine doesn't have is not this check's business."""
+    try:
+        family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_STREAM)
+    except OSError:
+        return False
+    with sock:
+        try:
+            if os.name == "posix" and sys.platform != "cygwin":
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            sock.bind((ip, port))
+        except OSError as e:
+            # Windows: WSAEADDRINUSE, or WSAEACCES for a port held exclusively / reserved
+            return e.errno == errno.EADDRINUSE or getattr(e, "winerror", None) in (10048, 10013)
+    return False
+
+
+def next_free_port(ip: str, port: int) -> int | None:
+    """The first port after `port` that port_in_use() finds free on `ip`, or None."""
+    for candidate in range(port + 1, min(port + _FREE_PORT_TRIES, 65535) + 1):
+        if not port_in_use(ip, candidate):
+            return candidate
+    return None
+
+
+def in_use_warning(ip: str, port: int) -> str:
+    return (f"WARNING: port {port} on {ip} is in use (another ser2net instance or another "
+            "program?) — the web UI can't listen there until it is free. Give this instance "
+            "its own port: --reconfigure, or SER2NET_BIND_IP + SER2NET_PORT")
+
+
+def choose_admin_bind(current: AdminUI | None = None,
+                      notes: list[str] | None = None) -> tuple[str, int]:
+    """(bind IP, port) for the admin UI, asked on the console. Without a terminal the
+    current (or default) address. A warning for the start-up log goes to `notes` when the
+    port kept is taken."""
     candidates = netinfo.list_ip_candidates()
     # (a configured "" is every interface, IPv4 and IPv6: a choice made here before)
     default_ip = current.bind_ip if current is not None else "127.0.0.1"
@@ -28,6 +81,11 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
         print(f"[ser2net] non-interactive console; admin UI bind defaults to "
               f"{host_port(default_ip, default_port)} ({where}). Run with a terminal or "
               f"--reconfigure to expose it on the network.", flush=True)
+        if port_in_use(default_ip, default_port):
+            warning = in_use_warning(default_ip, default_port)
+            print(f"[ser2net] {warning}", flush=True)
+            if notes is not None:
+                notes.append(warning)
         return default_ip, default_port
 
     print("\n=== ser2net — configuration interface setup ===")
@@ -58,6 +116,11 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
             pass
         print("  Invalid selection, try again.")
 
+    if port_in_use(ip, default_port):
+        free = next_free_port(ip, default_port)
+        print(f"  Port {default_port} on {ip} is in use (another ser2net instance or another "
+              "program?)" + (f"; {free} is free." if free else "."))
+        default_port = free or default_port
     while True:
         raw = input(f"Web UI TCP port [{default_port}]: ").strip() or str(default_port)
         try:
@@ -67,6 +130,11 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
         except ValueError:
             pass
         print("  Invalid port, try again.")
+    if port_in_use(ip, port):
+        print(f"  NOTE: port {port} on {ip} is in use right now: the web UI can't listen "
+              "there until the program that has it stops.")
+        if notes is not None:
+            notes.append(in_use_warning(ip, port))
 
     print(f"\n[ser2net] Configuration UI will listen on  http://{host_port(ip, port)}")
     if ip not in ("127.0.0.1", "localhost", "::1"):
