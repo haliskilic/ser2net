@@ -228,7 +228,17 @@ düzenlemeye gerek yok.
   loglanır. Eşlemenin durumu (REST API'de `mqtt`: durum, broker, ne zamandan beri, hata,
   teslim edilemeyen mesajlar) ve `/metrics` bunu taşır; pano nedeniyle birlikte
   **⚠ MQTT: … ile bağlantı yok** gösterir. `+` ya da `#` içeren bir base topic (hiçbir mesaj
-  ona yayınlanamaz) eşlemenin MQTT'sini kapalı tutar ve loglanır. Broker'a
+  ona yayınlanamaz) eşlemenin MQTT'sini kapalı tutar ve loglanır. **TLS**'te broker'ın
+  sertifikası sistemin güvendiği bir CA'ya — **CA sertifika dosyası** (PEM ya da DER)
+  verilmişse yalnızca o dosyadaki bir CA'ya — bağlanmalı ve broker'ın host adını (DNS adı
+  ya da IP adresi) taşımalı; **Broker'ın host adını doğrula** kapalıyken host adını
+  taşımayan bir sertifika da kabul edilir (yine de güvenilen bir CA'dan gelmeli). Bir
+  **istemci sertifikası** (PEM; anahtarı ayrı dosyada ya da aynı dosyada, şifreli anahtar
+  **parolasıyla**) sertifika isteyen broker'a sunulur (karşılıklı TLS, ör. AWS IoT Core).
+  Eşleme formu ve REST API kullanılamayan dosyaları reddeder; içe aktarma böyle bir eşlemeyi
+  uyarıyla alır, dosyaları kaybolan bir eşleme ise yüklenmeye devam eder ve MQTT'siz çalışır
+  (loglanır, panoda görünür) — asla düz metinle bağlanmaz. Docker'da dosyaları `/data`
+  altına koy (ör. `/data/certs/`); Windows servisi bunları okuyabilmeli. Broker'a
   ulaşılamadığı sürece QoS 0 mesajlar kaybolur (teslim edilemeyen olarak sayılır); QoS
   1/2'de eşleme başına en çok 10 000 mesaj bekler ve yeniden bağlanınca gönderilir — bunun
   ötesinde en yeniler atılır (sayılır, kesinti başına bir kez loglanır) — periyodik okunan
@@ -311,7 +321,8 @@ Linux notları:
   geçici dosya temizleyicileri uzun süre çalışan bir binary'nin dosyalarını silmez.
   Öldürülen bir sürecin geride bıraktığı kopya ise her zamanki gibi temizlenir.
 - Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
-  paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır.
+  paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır (MQTT eşlemesi ya da LDAP için bir CA
+  dosyası verilmemişse).
 
 `ser2net --about` sürümleri (Python, OpenSSL, bileşenler) gösterir; hata bildirirken
 ekleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini yazar

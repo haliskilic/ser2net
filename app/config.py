@@ -555,6 +555,17 @@ class MqttSettings:
     # <base_topic>/unit<N>/status ("online" / "offline"), on every change and after each
     # (re)connect. Off: nothing beyond the points' values and <base_topic>/status.
     unit_status: bool = False
+    # TLS (tls on): the broker's certificate must chain to a CA the system trusts, or with
+    # ca_file to one in that file only (PEM or DER); client_cert (PEM) is presented to a
+    # broker that asks for a certificate (mutual TLS), with its key in client_key or in the
+    # same file, encrypted with client_key_password if at all; tls_check_hostname off: the
+    # certificate need not name the broker host (its chain is still checked). See
+    # engine/mqtt_pub.tls_context; edits check the files (check_mqtt_tls_files).
+    ca_file: str = ""
+    client_cert: str = ""
+    client_key: str = ""
+    client_key_password: str = ""
+    tls_check_hostname: bool = True
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MqttSettings":
@@ -765,6 +776,32 @@ class MappingConfig:
                 if not isinstance(host, str) or any(c in host for c in "/+#"):
                     raise ConfigError(_("Sparkplug {0} must not contain '/', '+' or '#'.").format(
                         _("primary host ID")))
+
+    def check_mqtt_tls_files(self) -> None:
+        """An edit on the node that runs the mapping (its form, the REST API): with MQTT
+        over TLS, the CA file and the client certificate and key must be usable here.
+        Neither validate() nor validate_input() checks them: a stored config whose files
+        are gone has to keep loading (the mapping then runs without MQTT, logged), a fleet
+        edit is checked by the node it is for (its own form save), and an import only warns.
+        Raises ConfigError."""
+        mq = self.mqtt
+        if not (self.kind == "net" and mq.enabled and mq.tls):
+            return
+        from .engine.mqtt_pub import TlsFileError, tls_context
+        try:
+            tls_context(mq)
+        except TlsFileError as e:
+            text = {
+                "ca_unreadable": _("The MQTT CA file {0} can't be read: {1}"),
+                "ca_empty": _("The MQTT CA file {0} holds no certificate (PEM or DER)."),
+                "key_without_cert": _("An MQTT client key needs its client certificate."),
+                "cert_unreadable": _("The MQTT client certificate or key ({0}) can't be read: "
+                                     "{1}"),
+                "cert_unusable": _("The MQTT client certificate {0} can't be used with its key "
+                                   "({1}). Is the key password right, and is it the "
+                                   "certificate's key?"),
+            }[e.kind]
+            raise ConfigError(text.format(e.path, e.detail)) from None
 
     def _validate_udp_peer(self) -> None:
         """A UDP mapping's reply address and peer timeout (an edit's rules: a stored

@@ -259,6 +259,35 @@ def test_mapping_form_modbus_fields():
           "for modbus  OK")
 
 
+def test_mapping_form_mqtt_tls_fields():
+    """The MQTT TLS files sit with the other broker fields (every net mapping that
+    publishes: serial lines, plain Modbus, Sparkplug B), under the MQTT fieldset only; the
+    CA file field is their presence marker, so it must be posted whenever the others are;
+    the key password is a password field; the host name check is ticked by default."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    for stored, checked in (({}, True), ({"tls_check_hostname": False}, False)):
+        m = MappingConfig.from_dict({"id": "m1", "name": "m", "serial": {"port": "COM3"},
+                                     "mqtt": dict({"enabled": True, "host": "b",
+                                                   "base_topic": "t", "tls": True,
+                                                   "client_key_password": "pw"}, **stored)})
+        root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                                ports=[], ips=[], error=None))
+        fields = {n.attrs.get("name"): n for n in root.walk() if n.attrs.get("name")}
+        for name in ("mqtt_ca_file", "mqtt_client_cert", "mqtt_client_key",
+                     "mqtt_client_key_password", "mqtt_tls_check_hostname"):
+            conditions = [a.attrs["data-show-when"] for a in fields[name].ancestors()
+                          if "data-show-when" in a.attrs]
+            assert conditions == ["kind=net"], (name, conditions)
+        assert fields["mqtt_client_key_password"].attrs.get("type") == "password"
+        assert ("checked" in fields["mqtt_tls_check_hostname"].attrs) == checked, stored
+    print("mapping form: MQTT CA / client certificate / key / password / host name check "
+          "with the broker fields  OK")
+
+
 def test_mapping_form_udp_fields():
     """The UDP reply address and peer timeout are offered for UDP only, in one block whose
     timeout field is the presence marker (forms.py _OPTIONAL_FORM_FIELDS), next to a note
@@ -493,6 +522,7 @@ def main():
     test_cluster_table()
     test_ports_table_and_assets()
     test_mapping_form_modbus_fields()
+    test_mapping_form_mqtt_tls_fields()
     test_mapping_form_udp_fields()
     test_mapping_form_rfc2217_restore()
     test_mapping_form_kick_hint()

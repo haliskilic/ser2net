@@ -52,6 +52,7 @@ PORTABLE = [
     "test_route_access.py",   # every route and WebSocket against the access matrix
     "test_mqtt_pub.py",
     "test_mqtt_link.py",      # MQTT connection log, status, /metrics; broker parts need paho
+    "test_mqtt_tls.py",       # MQTT TLS options; needs cryptography, broker parts paho
     "test_modbus_poll.py",
     "test_modbus_unit_health.py",
     "test_ldap.py",

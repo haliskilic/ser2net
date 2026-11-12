@@ -61,6 +61,11 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
             m.validate_input()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
+        try:  # files of another machine: the mapping is taken, its MQTT stays off
+            m.check_mqtt_tls_files()
+        except ConfigError as e:
+            warnings.append(_("Mapping #{0} ({1}): {2} It runs without MQTT until that is "
+                              "fixed.").format(i, m.name, e))
         if item.get("id") and item["id"] != m.id:
             warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "
                               "digits or _), so it gets a new one.").format(
