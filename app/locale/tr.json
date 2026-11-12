@@ -895,5 +895,7 @@
   "Lost the app or the device? An admin can turn two-factor sign-in off for you in Settings → Users. On the server, <span class=\"mono\">ser2net --set-password NAME</span> sets a new password and turns it off — also for the only admin.": "Uygulamayı ya da cihazı mı kaybettin? Bir admin Ayarlar → Kullanıcılar'dan senin için iki adımlı girişi kapatabilir. Sunucuda <span class=\"mono\">ser2net --set-password AD</span> yeni bir parola verir ve onu kapatır — tek admin için de.",
   "created %(date)s": "oluşturulma: %(date)s",
   "expires %(date)s": "bitiş: %(date)s",
-  "never expires": "süresiz"
+  "never expires": "süresiz",
+  "Saved; the test notification was sent, but: {0}": "Kaydedildi; test bildirimi gönderildi, ama: {0}",
+  "With security “none”, the user name and password go to the mail server unencrypted. Choose STARTTLS or TLS unless the network to it is trusted.": "Güvenlik “yok” iken kullanıcı adı ve parola e-posta sunucusuna şifrelenmeden gider. Oraya giden ağ güvenilir değilse STARTTLS ya da TLS seç."
 }
