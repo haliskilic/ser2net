@@ -23,8 +23,8 @@ MQTT client is a stand-in that records what is published. Checks:
     its values are published again when it answers;
   * Modbus/TCP masters are not affected: a request to an offline unit still goes out;
   * the status lists each unit (state, cause, failed reads) and /metrics has
-    ser2net_modbus_unit_up and ser2net_modbus_unit_poll_errors_total per unit; a unit not
-    polled yet has no _up line.
+    ser2net_modbus_unit_up and ser2net_modbus_unit_poll_errors_total per unit (a unit not
+    polled yet has no _up line); the notifier sees unit_offline / unit_back.
 
 Run: python3 tests/test_modbus_unit_health.py
 """
@@ -36,6 +36,7 @@ from contextlib import suppress
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
+from app import notify
 from app.config import MappingConfig
 from app.engine import modbus, sparkplug
 from app.engine.modbus_gateway import UNIT_OFFLINE_AFTER, ModbusGatewayRunner
@@ -227,6 +228,8 @@ async def test_sparkplug_unit_health(slave_port):
               "logged once (with its unit)  OK")
 
         # unit 2 stops answering
+        names = {r.mapping.id: r.mapping.name}
+        snap = notify.snapshot({r.mapping.id: r.status.as_dict()})
         SILENT_UNITS.add(2)
         seen = len(logs)
         assert await wait(lambda: sent(fake, "DDEATH", "unit2")), logs[seen:]
@@ -263,8 +266,11 @@ async def test_sparkplug_unit_health(slave_port):
             assert any(line.startswith("ser2net_modbus_unit_poll_errors_total{"
                                        + lbl.format(r.mapping.id, unit) + "} ")
                        for line in body.splitlines()), body
-        print("status units (state, cause, errors) and /metrics ser2net_modbus_unit_up / "
-              "_poll_errors_total  OK")
+        events = notify.status_events(snap, {r.mapping.id: r.status.as_dict()}, names)
+        assert events == [("unit_offline", f"{r.mapping.id}:unit2", "Line 3 PLC", "unit 2")], events
+        snap = notify.snapshot({r.mapping.id: r.status.as_dict()})
+        print("status units (state, cause, errors), /metrics ser2net_modbus_unit_up / "
+              "_poll_errors_total, a unit_offline notification  OK")
 
         # a rebirth and a reconnect leave it out
         r._sparkplug.birth()
@@ -290,6 +296,8 @@ async def test_sparkplug_unit_health(slave_port):
         REGS[(2, 30)] = 102
         assert await wait(lambda: values(sent(fake, "DDATA", "unit2")[-1]) == {"level": 102})
         assert r._units[2].state == "online"
+        events = notify.status_events(snap, {r.mapping.id: r.status.as_dict()}, names)
+        assert [e[0] for e in events] == ["unit_back"], events
         print("unit 2 answers again: DBIRTH with the values just read, one log line, DDATA "
               "goes on  OK")
 

@@ -335,6 +335,8 @@
         'client_connected': _("Client connected"),
         'client_disconnected': _("Client disconnected"),
         'login_failed': _("Failed sign-in to this UI"),
+        'unit_offline': _("Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)"),
+        'unit_back': _("Modbus unit answering again"),
       } %}
       {% for e in notify_events %}
       <label class="chk"><input type="checkbox" name="notify_event_{{ e }}" {% if e in notify.events %}checked{% endif %}> {{ event_labels[e] }}</label>
