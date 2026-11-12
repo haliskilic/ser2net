@@ -98,8 +98,9 @@ def test_form_saves(srv):
     assert after[0]["mqtt"]["client_id"] == "s2n-plc1"
     # a save that comes back with an error, then is saved as shown again
     st, _h, page = b.get(f"/api/mappings/{before[0]['id']}/form")
-    fields = [(k, "10.0.0.300" if k == "network_bind_ip_custom" else
-               "custom" if k == "network_bind_ip" else v) for k, v in browser_post(page)]
+    # (Custom... picked: app.js enables its input, which is posted with what was typed)
+    fields = [(k, "custom" if k == "network_bind_ip" else v) for k, v in browser_post(page)
+              if k != "network_bind_ip_custom"] + [("network_bind_ip_custom", "10.0.0.300")]
     st, _h, again = post_form(b, "/api/mappings/save", fields)
     assert st == 400 and "Invalid bind IP" in again, (st, again[:500])
     assert re.search(r'name="serial_usb_match" checked', again), "the USB box came back unticked"

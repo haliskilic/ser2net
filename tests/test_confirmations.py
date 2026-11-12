@@ -19,8 +19,10 @@ Run: python3 tests/test_confirmations.py
 import json
 import os
 import re
+import ssl
+import urllib.request
 
-from _server import ROOT, Browser, Server
+from _server import ROOT, Browser, Server, _NoRedirect
 
 from app.config import MappingConfig
 from app.web import selfsigned
@@ -82,8 +84,7 @@ def test_settings():
         page = b.get("/settings")[2]
         gen = re.search(r'<form method="post" action="/settings/tls/generate"[^>]*>', page).group(0)
         assert "data-confirm" not in gen, "no certificate set: nothing to replace"
-        # a certificate of its own (used from the next start; a pair that loads: an edit
-        # test-loads it)
+        # a certificate of its own (a pair that loads: an edit test-loads it; served at once)
         cert, key = os.path.join(srv.data, "ours.pem"), os.path.join(srv.data, "ours.key")
         try:
             selfsigned.generate(cert, key)
@@ -94,6 +95,13 @@ def test_settings():
             st, _, page = b.post("/settings/tls", {"tls_cert": cert, "tls_key": key})
             assert srv.saved_config()["admin_ui"]["tls_cert"] == cert, \
                 page[page.find("banner"):][:200]
+            # the UI serves HTTPS now: signed in again there (cookies of their own per scheme)
+            b = Browser(srv.base.replace("http://", "https://"))
+            b.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(b.jar),
+                                               _NoRedirect(), urllib.request.HTTPSHandler(
+                                                   context=ssl._create_unverified_context()))
+            b.op.addheaders = [("Accept-Language", "tr")]
+            b.login("admin", PW)
         st, _, page = b.get("/settings")
         assert st == 200
 
