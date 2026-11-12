@@ -223,12 +223,14 @@ def newest(name: str, spec, targets: list[str]) -> str:
 
 
 def closure(roots: dict[str, str], pinned: dict[str, str], target: str,
-            choose: bool) -> dict[str, str]:
+            choose: bool, prefer: dict[str, str] | None = None) -> dict[str, str]:
     """{name: version} of roots and everything they need in the target. A dependency in
-    pinned must satisfy its specifier; any other is chosen (newest matching) when choose,
-    else it is an error (an unlocked dependency)."""
+    pinned must satisfy its specifier; any other is chosen when choose (its version in
+    prefer if that still matches, else the newest that does), else it is an error (an
+    unlocked dependency)."""
     _M, _R, SpecifierSet, Version = _packaging()
     pins = {canonical(k): v for k, v in pinned.items()}
+    kept = {canonical(k): v for k, v in (prefer or {}).items()}
     have = {canonical(k): v for k, v in roots.items()}
     todo = list(have)
     while todo:
@@ -239,6 +241,9 @@ def closure(roots: dict[str, str], pinned: dict[str, str], target: str,
                 version = have[dep]
             elif dep in pins:
                 version = pins[dep]
+            elif choose and dep in kept and req.specifier.contains(Version(kept[dep]),
+                                                                    prereleases=True):
+                version = kept[dep]
             elif choose:
                 version = newest(dep, req.specifier, [target])
             else:
@@ -269,19 +274,18 @@ def _hashes(name: str, version: str) -> list[str]:
     return sorted(u["digests"]["sha256"] for u in files)
 
 
-def _pyinstaller_pin() -> str:
+def _build_pins() -> dict[str, str]:
     path = os.path.join(ROOT, BUILD)
-    if os.path.isfile(path):
-        locked = read_lock(path).get("pyinstaller")
-        if locked:
-            return locked[0]
-    raise SystemExit(f"{BUILD} pins no pyinstaller version: pass --pyinstaller X.Y.Z")
+    return {n: v for n, (v, _m, _h) in read_lock(path).items()} if os.path.isfile(path) else {}
 
 
 def refresh(pyinstaller: str | None = None) -> int:
     runtime = runtime_pins()
     flat = {n: v for n, (v, _m) in runtime.items()}
-    pyi = pyinstaller or _pyinstaller_pin()
+    kept = _build_pins()  # PyInstaller's dependencies keep their versions while they fit
+    pyi = pyinstaller or kept.get("pyinstaller")
+    if not pyi:
+        raise SystemExit(f"{BUILD} pins no pyinstaller version: pass --pyinstaller X.Y.Z")
     # the runtime set must be complete: nothing chosen here, every dependency pinned
     runtime_on: dict[str, set[str]] = {}
     build_on: dict[str, set[str]] = {}
@@ -292,7 +296,8 @@ def refresh(pyinstaller: str | None = None) -> int:
         got = closure(roots, {}, target, choose=False)
         for n in got:
             runtime_on.setdefault(n, set()).add(target)
-        tools = closure({"pyinstaller": pyi}, {**flat, **build_versions}, target, choose=True)
+        tools = closure({"pyinstaller": pyi}, {**flat, **build_versions}, target, choose=True,
+                        prefer=kept)
         for n, v in tools.items():
             if n in {canonical(k) for k in flat}:
                 continue
