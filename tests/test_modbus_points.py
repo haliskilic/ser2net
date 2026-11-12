@@ -279,6 +279,45 @@ def test_form_point_keys():
     print("form: word_order / bit / length shown when set, kept for an older peer's form  OK")
 
 
+def test_form_block_reads():
+    """Block reads are off by default and in the form (with their own marker); a form
+    without them (an older peer's, another protocol) keeps the stored ones; an edit
+    refuses values that can't be used and a stored one reads as off / gap 0."""
+    from app.config import poll_block_gap
+    assert poll_block_gap(gateway([]).modbus_poll) is None, "off by default"
+    stored = gateway([{"name": "a", "fn": 3}], id="abcdef012345",
+                     modbus_poll={"points": [{"name": "a", "fn": 3}], "block_reads": True,
+                                  "block_gap": 4})
+    assert poll_block_gap(stored.modbus_poll) == 4
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, stored, form)
+        return m.modbus_poll.block_reads, m.modbus_poll.block_gap
+    points = '[{"name": "a", "fn": 3}]'
+    assert parsed(form_of(points)) == (True, 4), "kept for a form without the fields"
+    assert parsed(form_of(points, modbus_block_reads_shown="1")) == (False, 0)
+    assert parsed(form_of(points, modbus_block_reads_shown="1", modbus_block_reads="on",
+                          modbus_block_gap="10")) == (True, 10)
+    assert parsed(form_of(points, modbus_block_reads_shown="1", modbus_block_reads="on",
+                          modbus_block_gap="")) == (True, 0)
+    for poll, words in (({"block_reads": "yes"}, "Block reads must be on or off"),
+                        ({"block_gap": 125}, "from 0 to 124"),
+                        ({"block_gap": -1}, "from 0 to 124"),
+                        ({"block_gap": 2.5}, "from 0 to 124")):
+        m = gateway([], modbus_poll=dict({"points": [{"name": "a", "fn": 3}]}, **poll))
+        m.validate()
+        try:
+            m.validate_input()
+            raise AssertionError(f"took {poll}")
+        except ConfigError as e:
+            assert words in str(e), (poll, str(e))
+    assert poll_block_gap(ModbusPoll(block_reads="yes")) is None
+    assert poll_block_gap(ModbusPoll(block_reads=True, block_gap="x")) == 0
+    print("form: block reads off by default, kept for an older form; unusable values "
+          "refused, stored ones read safely  OK")
+
+
 def boot_config(port):
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
@@ -379,6 +418,7 @@ def main():
     test_refused_form_shown_again()
     test_non_ascii_text()
     test_form_point_keys()
+    test_form_block_reads()
     test_server()
     print("\nPASS: Modbus poll points")
 

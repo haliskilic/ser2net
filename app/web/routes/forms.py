@@ -174,6 +174,8 @@ _OPTIONAL_FORM_FIELDS = {
     # points JSON: a form without this marker (an older peer's, whose JSON can't carry them)
     # keeps each point's stored ones, by point name (see _keep_point_options)
     "modbus_point_options_shown": ("modbus_poll", ()),
+    # block reads (2.9): a checkbox and the gap, shown for Modbus gateways
+    "modbus_block_reads_shown": ("modbus_poll", ("block_reads", "block_gap")),
 }
 # the point options an older form drops (see "modbus_point_options_shown"), and what they
 # apply to: one is kept only for a point it still fits (its type may have been changed)
@@ -292,6 +294,10 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         "modbus_poll": {
             "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),
             "points": _parse_modbus_points(form.get("modbus_points", ""), strict),
+            **({"block_reads": _checkbox(form, "modbus_block_reads"),
+                "block_gap": (_num(form, "modbus_block_gap", 0, strict=strict)
+                              if form.get("modbus_block_gap", "").strip() else 0)}
+               if "modbus_block_reads_shown" in form else {}),
         },
     }
 
