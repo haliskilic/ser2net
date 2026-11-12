@@ -258,7 +258,10 @@ ekleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metnini
 (sürümlere `*.THIRD-PARTY-LICENSES.txt` olarak da eklenir).
 
 Kendin derlemek için:
-- Windows: `pip install -r requirements.txt -r requirements-optional.txt pyinstaller && pyinstaller ser2net.spec`
+- Windows: `pwsh tools\build_standalone_windows.ps1` (sürümlerde çalışan derleme: sabitlenmiş
+  python-build-standalone yorumlayıcısı, hash kilitli paketler, lisans metinleri ve SBOM) ya
+  da kendi Python 3.12'nizle
+  `pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`
 - Linux (eski dağıtımlarda da çalışsın diye eski glibc'li bir konteynerde):
   `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`
 

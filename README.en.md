@@ -247,7 +247,10 @@ uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
 reports. `ser2net --licenses` prints the license text of every component inside the
 executable (releases also attach it as `*.THIRD-PARTY-LICENSES.txt`).
 
-Build it yourself — Windows: `pip install -r requirements.txt -r requirements-optional.txt pyinstaller && pyinstaller ser2net.spec`;
+Build it yourself — Windows: `pwsh tools\build_standalone_windows.ps1` (what the release
+runs: the pinned python-build-standalone interpreter, the hash-locked packages, license
+texts and SBOM), or with a Python 3.12 of your own
+`pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`;
 Linux (in an old-glibc container, so the result runs on older distributions too):
 `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`.
 

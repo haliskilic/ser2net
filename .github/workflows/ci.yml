@@ -105,6 +105,11 @@ jobs:
       # byte-for-byte rebuild of the pure-Python repack from one
       - name: The wheels are PyPI's files
         run: python tools/refresh_wheels.py --verify
+      # the image's and the binaries' hash locks: every hash is a file PyPI publishes for
+      # that release, every target (Linux x86_64/aarch64, Windows x64) has a wheel among
+      # them, and every dependency there is locked
+      - name: The build locks match PyPI
+        run: python tools/refresh_locks.py --verify
 
   ui:
     name: ui layout (Chromium)
