@@ -11,6 +11,9 @@
 * the image is pushed by digest only, that digest is smoke-tested natively on amd64 and
   arm64, and only then (after the release files) does it get its tags, unchanged. The
   tags come from the tag check: a pre-release never moves X.Y or latest.
+* the jobs that can mint attestations or write the release run GitHub's own actions only;
+  the attest job can't write the release, and the release is created by the runner's gh
+  CLI from exactly the attested files (a pre-release marked as one).
 
 Run: python3 tests/test_release_pipeline.py   (stdlib only)
 """
@@ -122,10 +125,36 @@ def test_image_published_as_tested():
     print("the pushed digest is tested on amd64 + arm64, then tagged unchanged  OK")
 
 
+def test_privileged_jobs_run_only_github_actions():
+    release = jobs(read("release.yml"))
+    privileged = {job: block for job, block in release.items()
+                  if {"contents", "id-token", "attestations"}
+                  & {s for s, level in permissions(block).items() if level == "write"}}
+    assert set(privileged) == {"attest", "publish", "image"}, sorted(privileged)
+    for job, block in privileged.items():
+        for _line, ref, _rest in uses(block):
+            assert ref.startswith("actions/"), f"{job} runs {ref}"
+    attest, publish = release["attest"], release["publish"]
+    assert permissions(attest).get("contents") == "read", permissions(attest)
+    assert "actions/attest-build-provenance@" in attest and "actions/attest-sbom@" in attest
+    assert "name: release-files" in attest, "attest hands the files on"
+    assert permissions(publish) == {"contents": "write"}, permissions(publish)
+    assert needs(publish) == ["verify", "attest"], needs(publish)
+    assert "actions/checkout" not in publish, "no repository code runs where releases are written"
+    assert "name: release-files" in publish, publish
+    assert 'gh release create "$GITHUB_REF_NAME" out/* --verify-tag' in publish, publish
+    assert "PRERELEASE: ${{ needs.verify.outputs.prerelease }}" in publish, publish
+    assert "flags+=(--prerelease)" in publish, publish
+    for name in names():
+        assert "action-gh-release" not in read(name), name
+    print("attest / publish / image run GitHub's own actions; gh uploads the attested files  OK")
+
+
 if __name__ == "__main__":
     test_actions_pinned_by_sha()
     test_tag_checked_first()
     test_release_runs_the_whole_ci()
     test_one_release_at_a_time()
     test_image_published_as_tested()
+    test_privileged_jobs_run_only_github_actions()
     print("\nPASS: release pipeline")
