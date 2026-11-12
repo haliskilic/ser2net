@@ -8,6 +8,9 @@
   * a nested object merges (network.port alone), null resets a field to its default;
   * a patch that makes the mapping invalid, a body that is no JSON object and an unknown
     mapping are refused and change nothing; the change is audited;
+  * a patch is checked as a PUT is: a serial port another enabled mapping uses or the
+    admin UI's own port is refused, the MQTT / TLS key password mask sent back keeps the
+    stored secret;
   * a created mapping's URL is in Location; a client's connection time is also a number;
   * openapi.json describes every route build_api_routes registers, with the token errors
     (401, 503; 403 for a change) and the Error schema; the mapping schemas are made from
@@ -236,6 +239,43 @@ def test_patch():
         print("PATCH is audited  OK")
 
 
+def test_patch_checks():
+    other = {"id": "patchother001", "name": "other", "enabled": True,
+             "serial": {"port": "/dev/ser2net-rest-patch-other"},
+             "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": free_port()}}
+    mine = {"id": MID, "name": "plc", "enabled": False,
+            "serial": {"port": "/dev/ser2net-rest-patch"},
+            "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": free_port(),
+                        "tls_key_password": "key-secret"},
+            "mqtt": {"enabled": False, "host": "broker", "password": "broker-secret"}}
+    config = {"users": [{"username": "admin", "password_hash": hash_password("patchpass1"),
+                         "role": "admin", "pwd_version": 1}],
+              "api_token_hash": hash_token(TOKEN), "api_token_role": "operator",
+              "mappings": [other, mine]}
+    with Server(config) as srv:
+        def saved():
+            return next(m for m in srv.saved_config()["mappings"] if m["id"] == MID)
+
+        good = saved()
+        st, doc = call(srv.base, "PATCH", f"/api/v1/mappings/{MID}",
+                       {"enabled": True, "serial": {"port": "/dev/ser2net-rest-patch-other"}})
+        assert st == 400 and doc["error"] == "validation", (st, doc)
+        assert "both use serial port /dev/ser2net-rest-patch-other" in doc["detail"], doc
+        st, doc = call(srv.base, "PATCH", f"/api/v1/mappings/{MID}",
+                       {"network": {"port": srv.port}})
+        assert st == 400 and "the admin UI's port" in doc["detail"], (st, doc)
+        assert saved() == good, "a refused patch changed the mapping"
+        st, doc = call(srv.base, "PATCH", f"/api/v1/mappings/{MID}",
+                       {"name": "plc-2", "mqtt": {"password": "********"},
+                        "network": {"tls_key_password": "********"}})
+        assert st == 200, (st, doc)
+        m = saved()
+        assert m["name"] == "plc-2" and m["mqtt"]["password"] == "broker-secret", m
+        assert m["network"]["tls_key_password"] == "key-secret", m
+    print("PATCH: a shared serial port and the admin UI's port are refused; the password "
+          "masks sent back keep the stored secrets  OK")
+
+
 def test_connected_seconds():
     from app.engine.bridge import RunnerStatus
 
@@ -252,6 +292,7 @@ def main():
     test_connected_seconds()
     test_spec()
     test_patch()
+    test_patch_checks()
     print("\nPASS: REST API PATCH (JSON merge patch)")
 
 
