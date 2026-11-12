@@ -225,8 +225,10 @@ def test_web() -> None:
                                                                     "node_name": ""},
                              headers={"Cookie": jar})
         assert "instance name cleared: the host name is used" in a.lines
-        backups = sorted(os.listdir(os.path.join(a.tmp, "backups")))
-        st, _, page = a.call("GET", f"/settings?restore={backups[-1]}", headers={"Cookie": jar})
+        # (each save keeps a backup of what it wrote: the newest is the cleared name, the one
+        # before it has the name)
+        before = a.state.store.backup_names()[1]
+        st, _, page = a.call("GET", f"/settings?restore={before}", headers={"Cookie": jar})
         assert st == 200 and "Instance name: — → Line 1 &lt;b&gt;" in page, page[-800:]
     print("web UI: the name in the signed-in pages' title and top bar and the fleet view; "
           "Settings saves / refuses / logs / audits it, the environment's read-only  OK")
