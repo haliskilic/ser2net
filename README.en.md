@@ -758,7 +758,8 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
 Coming from the classic `ser2net` daemon (the distribution package)? Import its
 `/etc/ser2net/ser2net.yaml` or `/etc/ser2net.conf` in **Settings → Mappings export /
 import**: the preview shows each connection as the mapping it becomes, which come in
-disabled and why, and what works differently. Then, before you start the mappings:
+disabled and why, and what works differently. Before you apply it (that starts the enabled
+mappings):
 - stop and disable the classic daemon (`sudo systemctl disable --now ser2net`), which holds
   the same ports and devices; its unit has the same name, `ser2net.service`, so remove its
   package or run this one as an instance of `ser2net@.service`;
