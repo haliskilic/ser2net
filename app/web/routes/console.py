@@ -15,8 +15,27 @@ from starlette.routing import WebSocketRoute
 from ...engine.bridge import TO_DEVICE
 from .. import auth
 from .common import Ctx, client_ip, console_interactive, sees_to_device
+from ...engine.netguard import LogEvery
 
 CONSOLE_ACCESS_RECHECK_S = 2.0  # how often an open console re-checks its access
+# Consoles and hex views open at once (counted together): per account — an open-access
+# visitor: per address — and mapping, per mapping, and in all. One more is accepted, then
+# closed with CLOSE_BUSY and the limit it is over.
+VIEWERS_PER_USER = 4
+VIEWERS_PER_MAPPING = 16
+VIEWERS_TOTAL = 64
+# What a viewer has not been sent yet (_Feed): at most FEED_MAX_BYTES of traffic in at
+# most FEED_MAX_ITEMS chunks, the oldest dropped first; taken FRAME_MAX_BYTES at a time. A
+# viewer whose sending has been stuck for STALL_S while its traffic is being dropped
+# takes nothing: it is closed (CLOSE_SLOW), so the bridges stop feeding it.
+FEED_MAX_BYTES = 1024 * 1024
+FEED_MAX_ITEMS = 4096
+FRAME_MAX_BYTES = 64 * 1024
+STALL_S = 30.0
+CLOSE_WAIT_S = 5.0  # a close the client takes nothing of is given up after this long
+# close codes after the handshake
+CLOSE_BUSY = 1013  # past a VIEWERS_* limit ("try again later")
+CLOSE_SLOW = 4003  # took nothing for STALL_S while its traffic was being dropped
 
 
 def routes(ctx: Ctx) -> list:
@@ -36,51 +55,105 @@ def routes(ctx: Ctx) -> list:
         websocket.state.user = ws_user  # like request.state.user (ctx.audit)
         return ws_user, token
 
+    # ---------------- the viewers: consoles and hex views ----------------
+    viewers = _Viewers()
+    refused = LogEvery(lambda msg: state.log(msg))  # past a VIEWERS_* limit: once a minute
+
+    def _who(websocket) -> tuple:
+        """Whose viewer it is, for the limits and the audit records: the account — an
+        open-access visitor: per address."""
+        return ctx.actor(websocket), client_ip(websocket) if ctx.is_anonymous(websocket) else ""
+
     def _record_open(websocket, action: str, mapping, detail: str) -> None:
         """The audit record of a console or hex view opened, bounded (AppState.view_records):
         per account — an open-access visitor: per address —, mapping and kind."""
-        ip, user = client_ip(websocket), ctx.actor(websocket)
-        who = (user, ip if ctx.is_anonymous(websocket) else "")
-        state.view_records.open(ip, user, action, f"{mapping.name} ({detail})",
-                                key=(*who, action, mapping.id))
+        state.view_records.open(client_ip(websocket), ctx.actor(websocket), action,
+                                f"{mapping.name} ({detail})",
+                                key=(*_who(websocket), action, mapping.id))
 
-    # ---------------- console (xterm over WebSocket) ----------------
-    async def console_ws(websocket):
-        cfg = state.config
+    async def _admit(websocket, kind: str) -> _Accepted | None:
+        """The handshake of a console or hex view (`kind`, for the log): accepted and
+        counted in (_end counts it out), or None once it has been refused and closed."""
         ws_user, token = await _authorize(websocket)
         if ws_user is None:
-            return
+            return None
         mid = websocket.path_params["mid"]
-        runner = state.supervisor.get_runner(mid)
-        mapping = cfg.get_mapping(mid)
-        if runner is None or mapping is None:
+        mapping = state.config.get_mapping(mid)
+        if state.supervisor.get_runner(mid) is None or mapping is None:
             await websocket.close(code=1011)
-            return
-
+            return None
         await websocket.accept()
         # the mapping's runner as it is now, with nothing awaited until the monitor is in:
         # a restart while the handshake went on replaced the one looked up above
         runner = state.supervisor.get_runner(mid)
         if runner is None:  # deleted meanwhile
-            await websocket.close(code=1011)
-            return
-        mon = _Monitor()
-        runner.add_monitor(mon)
-        # viewers get an observe-only console; writing to the device needs operator+
-        interactive = console_interactive(ws_user, mapping)
+            await _close(websocket, 1011)
+            return None
         peer = websocket.client.host if websocket.client else "?"
-        state.log(f"[{mapping.name}] console opened by {ws_user.username} ({peer})")
-        _record_open(websocket, "console_open", mapping,
-                     "interactive" if interactive else "read-only")
+        who = _who(websocket)
+        if why := viewers.admit(who, mid):
+            refused(f"[{mapping.name}] {kind} of {ws_user.username} ({peer}) refused: {why}")
+            await _close(websocket, CLOSE_BUSY, why)
+            return None
+        return _Accepted(ws_user, token, mapping, runner, peer, who)
+
+    async def _serve(websocket, v: _Accepted, mon, sender, receiver) -> tuple[int, str]:
+        """Serve an accepted viewer until it ends: `sender` returns (its feed ended: the
+        mapping stopped), `receiver` returns (the browser closed it), its access changed,
+        or it stalled (_Feed.stalled). The close code and reason for that."""
+
+        async def access_watch():
+            # A viewer outlives the check at connect: end it once its access is gone (login
+            # switched back on, session revoked by a password change, role changed) instead
+            # of letting it keep watching — or writing to — the device.
+            while True:
+                await asyncio.sleep(CONSOLE_ACCESS_RECHECK_S)
+                now = auth.request_user(state.config, v.token, websocket.headers,
+                                        state.revoked_sessions)
+                if now is None or now.role != v.user.role:
+                    return
+
+        ends = {asyncio.create_task(sender()): (1000, ""),
+                asyncio.create_task(receiver()): None,  # nothing more to say to it
+                asyncio.create_task(access_watch()): (1000, "access changed"),
+                asyncio.create_task(mon.stalled.wait()):
+                    (CLOSE_SLOW, f"took nothing for {STALL_S:g} s")}
+        try:
+            done, _ = await asyncio.wait(ends, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for t in ends:
+                t.cancel()
+            for t in ends:
+                with contextlib.suppress(BaseException):
+                    await t
+        for t in done:
+            end = ends[t]
+            if end and not t.cancelled() and t.exception() is None:
+                return end
+        return 1000, ""
+
+    async def _end(websocket, kind: str, v: _Accepted, code: int, reason: str) -> None:
+        """After its monitor is gone: count the viewer out and close it, saying why."""
+        viewers.leave(v.who, v.mapping.id)
+        await _close(websocket, code, reason)
+        state.log(f"[{v.mapping.name}] {kind} closed ({v.peer})" + (f": {reason}" if reason else ""))
+
+    # ---------------- console (xterm over WebSocket) ----------------
+    async def console_ws(websocket):
+        v = await _admit(websocket, "console")
+        if v is None:
+            return
+        # viewers get an observe-only console; writing to the device needs operator+
+        interactive = console_interactive(v.user, v.mapping)
+        mon, (code, reason) = _Monitor(), (1000, "")
 
         async def sender():
             while True:
                 chunks, ended = await mon.take()
                 for data in chunks:
                     await websocket.send_bytes(data)
+                    mon.sent()
                 if ended:  # mapping stopped
-                    with contextlib.suppress(Exception):
-                        await websocket.close()
                     return
 
         async def receiver():
@@ -92,35 +165,17 @@ def routes(ctx: Ctx) -> list:
                 if data is None and msg.get("text") is not None:
                     data = msg["text"].encode("utf-8", "replace")
                 if data and interactive:
-                    await runner.serial_write(data)
+                    await v.runner.serial_write(data)
 
-        async def access_watch():
-            # A console outlives the check at connect: end it once its access is gone
-            # (login switched back on, session revoked by a password change, role
-            # changed) instead of letting it keep watching — or writing to — the device.
-            while True:
-                await asyncio.sleep(CONSOLE_ACCESS_RECHECK_S)
-                now = auth.request_user(state.config, token, websocket.headers,
-                                        state.revoked_sessions)
-                if now is None or now.role != ws_user.role:
-                    state.log(f"[{mapping.name}] console closed: access changed ({peer})")
-                    return
-
-        st = asyncio.create_task(sender())
-        rt = asyncio.create_task(receiver())
-        wt = asyncio.create_task(access_watch())
         try:
-            await asyncio.wait({st, rt, wt}, return_when=asyncio.FIRST_COMPLETED)
+            v.runner.add_monitor(mon)
+            state.log(f"[{v.mapping.name}] console opened by {v.user.username} ({v.peer})")
+            _record_open(websocket, "console_open", v.mapping,
+                         "interactive" if interactive else "read-only")
+            code, reason = await _serve(websocket, v, mon, sender, receiver)
         finally:
-            for t in (st, rt, wt):
-                t.cancel()
-            for t in (st, rt, wt):
-                with contextlib.suppress(BaseException):
-                    await t
-            runner.discard_monitor(mon)
-            with contextlib.suppress(Exception):
-                await websocket.close()
-            state.log(f"[{mapping.name}] console closed ({peer})")
+            v.runner.discard_monitor(mon)
+            await _end(websocket, "console", v, code, reason)
 
     # ---------------- traffic feed for the hex view (read-only) ----------------
     async def traffic_ws(websocket):
@@ -128,33 +183,18 @@ def routes(ctx: Ctx) -> list:
         [direction: 1 byte (0 = from the device, 1 = to it)][time: float64 BE][bytes].
         Read-only for everyone who may open the console; what is sent to the device
         only for those who may see it (sees_to_device), the others never get it queued."""
-        ws_user, token = await _authorize(websocket)
-        if ws_user is None:
+        v = await _admit(websocket, "hex view")
+        if v is None:
             return
-        mid = websocket.path_params["mid"]
-        runner = state.supervisor.get_runner(mid)
-        mapping = state.config.get_mapping(mid)
-        if runner is None or mapping is None:
-            await websocket.close(code=1011)
-            return
-        await websocket.accept()
-        runner = state.supervisor.get_runner(mid)  # as it is now (see the console's)
-        if runner is None:
-            await websocket.close(code=1011)
-            return
-        to_device = sees_to_device(ws_user, mapping)
-        mon = _TrafficMonitor(to_device=to_device)
-        runner.add_traffic_monitor(mon)
-        peer = websocket.client.host if websocket.client else "?"
-        state.log(f"[{mapping.name}] hex view opened by {ws_user.username} ({peer})")
-        _record_open(websocket, "hex_view_open", mapping,
-                     "both directions" if to_device else "device output only")
+        to_device = sees_to_device(v.user, v.mapping)
+        mon, (code, reason) = _TrafficMonitor(to_device=to_device), (1000, "")
 
         async def sender():
             while True:
                 records, ended = await mon.take()
                 for direction, ts, data in records:
                     await websocket.send_bytes(struct.pack(">Bd", direction, ts) + data)
+                    mon.sent()
                 if ended:  # mapping stopped
                     return
 
@@ -162,27 +202,15 @@ def routes(ctx: Ctx) -> list:
             while (await websocket.receive()).get("type") != "websocket.disconnect":
                 pass
 
-        async def access_watch():
-            while True:
-                await asyncio.sleep(CONSOLE_ACCESS_RECHECK_S)
-                now = auth.request_user(state.config, token, websocket.headers,
-                                        state.revoked_sessions)
-                if now is None or now.role != ws_user.role:
-                    return
-
-        tasks = [asyncio.create_task(c()) for c in (sender, receiver, access_watch)]
         try:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            v.runner.add_traffic_monitor(mon)
+            state.log(f"[{v.mapping.name}] hex view opened by {v.user.username} ({v.peer})")
+            _record_open(websocket, "hex_view_open", v.mapping,
+                         "both directions" if to_device else "device output only")
+            code, reason = await _serve(websocket, v, mon, sender, receiver)
         finally:
-            for t in tasks:
-                t.cancel()
-            for t in tasks:
-                with contextlib.suppress(BaseException):
-                    await t
-            runner.discard_traffic_monitor(mon)
-            with contextlib.suppress(Exception):
-                await websocket.close()
-            state.log(f"[{mapping.name}] hex view closed ({peer})")
+            v.runner.discard_traffic_monitor(mon)
+            await _end(websocket, "hex view", v, code, reason)
 
     return [
         WebSocketRoute("/api/mappings/{mid}/console", console_ws),
@@ -190,25 +218,86 @@ def routes(ctx: Ctx) -> list:
     ]
 
 
-class _Feed:
-    """What one browser viewer has not been sent yet. The bridges put() into it
-    synchronously from their read loops, best-effort: when it is full the oldest item is
-    dropped, so a slow viewer never stalls a bridge. Its end is a flag, not an item in the
-    queue, so a full feed can't lose it: the sender sends what is left, then stops."""
+class _Accepted:
+    """A console or hex view past its handshake (routes._admit): who opened it (`user`,
+    the session `token`; `peer`: its address, `who`: the key it is counted by) and the
+    mapping and runner it watches."""
 
-    MAX_ITEMS = 4096
+    __slots__ = ("user", "token", "mapping", "runner", "peer", "who")
+
+    def __init__(self, user, token, mapping, runner, peer: str, who: tuple) -> None:
+        self.user, self.token, self.mapping, self.runner = user, token, mapping, runner
+        self.peer, self.who = peer, who
+
+
+async def _close(websocket, code: int = 1000, reason: str = "") -> None:
+    """Close a WebSocket, giving up after CLOSE_WAIT_S: a client that takes nothing would
+    hold the close, and the handler, for good."""
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(websocket.close(code=code, reason=reason), CLOSE_WAIT_S)
+
+
+class _Viewers:
+    """The consoles and hex views open, counted per account (an open-access visitor: per
+    address) and mapping, per mapping and in all: the VIEWERS_* limits."""
 
     def __init__(self) -> None:
-        self._items: collections.deque = collections.deque()
-        self._ready = asyncio.Event()  # something to take, or closed
-        self.closed = False
+        self._open: collections.Counter = collections.Counter()
 
-    def put(self, item) -> None:
+    @staticmethod
+    def _keys(who: tuple, mid: str) -> tuple:
+        return ("all",), ("mapping", mid), ("user", who, mid)
+
+    def admit(self, who: tuple, mid: str) -> str:
+        """Count one more viewer in: '' — or, past a limit, why not (it isn't counted)."""
+        total, mapping, user = (self._open[k] for k in self._keys(who, mid))
+        if total >= VIEWERS_TOTAL:
+            return f"too many consoles and hex views open ({VIEWERS_TOTAL} in all)"
+        if mapping >= VIEWERS_PER_MAPPING:
+            return f"too many consoles and hex views of this mapping open ({VIEWERS_PER_MAPPING})"
+        if user >= VIEWERS_PER_USER:
+            return (f"too many consoles and hex views of this mapping open for one user "
+                    f"({VIEWERS_PER_USER})")
+        self._open.update(self._keys(who, mid))
+        return ""
+
+    def leave(self, who: tuple, mid: str) -> None:
+        for k in self._keys(who, mid):
+            self._open[k] -= 1
+            if self._open[k] <= 0:
+                del self._open[k]
+
+
+class _Feed:
+    """What one browser viewer has not been sent yet. The bridges put() into it
+    synchronously from their read loops, best-effort: past FEED_MAX_BYTES of traffic or
+    FEED_MAX_ITEMS chunks the oldest are dropped, so a slow viewer never stalls a bridge.
+    Its end is a flag, not an item in the queue, so a full feed can't lose it: the sender
+    sends what is left, then stops. A viewer whose sending has been stuck for STALL_S
+    while its traffic is being dropped is `stalled`: it takes nothing."""
+
+    def __init__(self) -> None:
+        self._items: collections.deque = collections.deque()  # (item, bytes of traffic)
+        self._bytes = 0
+        self._ready = asyncio.Event()  # something to take, or closed
+        self._busy_since: float | None = None  # sending what it took, since (monotonic)
+        self.dropped = 0  # bytes of traffic dropped
+        self.closed = False
+        self.stalled = asyncio.Event()
+
+    def put(self, item, size: int) -> None:
         if self.closed:
             return
-        self._items.append(item)
-        if len(self._items) > self.MAX_ITEMS:
-            self._items.popleft()
+        items = self._items
+        items.append((item, size))
+        self._bytes += size
+        while self._bytes > FEED_MAX_BYTES or len(items) > FEED_MAX_ITEMS:
+            _old, n = items.popleft()
+            self._bytes -= n
+            self.dropped += n
+            busy = self._busy_since
+            if busy is not None and time.monotonic() - busy > STALL_S:
+                self.stalled.set()
         self._ready.set()
 
     def close(self) -> None:
@@ -216,24 +305,34 @@ class _Feed:
         self.closed = True
         self._ready.set()
 
-    async def take(self) -> tuple[list, bool]:
-        """What to send next, once there is something: (items, ended). `ended`: the feed
-        is closed and nothing is left after these."""
+    async def take(self, max_bytes: int = FRAME_MAX_BYTES) -> tuple[list, bool]:
+        """What to send next, once there is something: (items, ended) — at most `max_bytes`
+        of traffic, at least one item. `ended`: the feed is closed and nothing is left."""
+        self._busy_since = None
         while not self._items and not self.closed:
             self._ready.clear()
             await self._ready.wait()
-        items = list(self._items)
-        self._items.clear()
-        return items, self.closed
+        items, n = self._items, 0
+        out: list = []
+        while items and (not out or n + items[0][1] <= max_bytes):
+            item, size = items.popleft()
+            out.append(item)
+            n += size
+        self._bytes -= n
+        self._busy_since = time.monotonic()
+        return out, self.closed and not items
+
+    def sent(self) -> None:
+        """The sender got a message out: it is not stuck."""
+        self._busy_since = time.monotonic()
 
 
 class _Monitor(_Feed):
     """A browser console observer: what the device sends (runner.add_monitor)."""
 
-    MAX_ITEMS = 2048
-
     def feed(self, data: bytes) -> None:
-        self.put(data)
+        if data:
+            self.put(data, len(data))
 
 
 class _TrafficMonitor(_Feed):
@@ -245,6 +344,6 @@ class _TrafficMonitor(_Feed):
         self.to_device = to_device
 
     def feed_traffic(self, direction: int, data: bytes) -> None:
-        if direction == TO_DEVICE and not self.to_device:
+        if not data or (direction == TO_DEVICE and not self.to_device):
             return
-        self.put((direction, time.time(), bytes(data)))
+        self.put((direction, time.time(), bytes(data)), len(data))
