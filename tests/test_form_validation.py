@@ -93,7 +93,7 @@ def main():
         # the Modbus points field is raw JSON: a value of the wrong type is named, not a 500
         gateway = {"name": "GW", "kind": "net", "network_mode": "server",
                    "network_protocol": "modbus", "network_bind_ip": "127.0.0.1",
-                   "network_port": "5099", "serial_port": "/dev/ttyUSB-gw",
+                   "network_port": str(free_port()), "serial_port": "/dev/ttyUSB-gw",
                    "serial_baudrate": "9600"}
         for points, needle in (
                 ('[{"name":"t","unit":"one","fn":3,"address":0,"dtype":"uint16"}]',
