@@ -85,9 +85,10 @@
           {% set peer = {"host": n.ip, "port": n.port, "mid": m.id} %}
           {% if m.enabled %}
             {#- asked only while clients are connected, as on the node itself #}
-            {% set n = m.client_count if m.client_count is number else 0 %}
-            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="stop")|tojson }}'{% if n %} hx-confirm="{{ ngettext('Stop “%(name)s”? %(num)s connected client will be disconnected, and it stays stopped until it is started again.', 'Stop “%(name)s”? %(num)s connected clients will be disconnected, and it stays stopped until it is started again.', n, name=m.name) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ _("Stop") }}</button>
-            <button class="btn sm" id="{{ rid }}-restart" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="restart")|tojson }}'{% if n %} hx-confirm="{{ ngettext('Restart “%(name)s”? %(num)s connected client will be disconnected.', 'Restart “%(name)s”? %(num)s connected clients will be disconnected.', n, name=m.name) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ _("Restart") }}</button>
+            {#- (not `n`: that is the node, whose caps the Edit button below reads) #}
+            {% set clients = m.client_count if m.client_count is number else 0 %}
+            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="stop")|tojson }}'{% if clients %} hx-confirm="{{ ngettext('Stop “%(name)s”? %(num)s connected client will be disconnected, and it stays stopped until it is started again.', 'Stop “%(name)s”? %(num)s connected clients will be disconnected, and it stays stopped until it is started again.', clients, name=m.name) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ _("Stop") }}</button>
+            <button class="btn sm" id="{{ rid }}-restart" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="restart")|tojson }}'{% if clients %} hx-confirm="{{ ngettext('Restart “%(name)s”? %(num)s connected client will be disconnected.', 'Restart “%(name)s”? %(num)s connected clients will be disconnected.', clients, name=m.name) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ _("Restart") }}</button>
           {% else %}
             <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="{{ base }}/api/cluster/control-peer" hx-vals='{{ dict(peer, action="start")|tojson }}' hx-swap="none" hx-disabled-elt="this">{{ _("Start") }}</button>
           {% endif %}
