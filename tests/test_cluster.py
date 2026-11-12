@@ -49,6 +49,7 @@ from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign, 
                                 canonical_target, format_auth, key_header, parse_auth,
                                 reply_mac, request_mac)
 from app.web.auth import hash_password                         # noqa: E402
+from _server import ui_cookie                                   # noqa: E402
 
 
 def free_port():
@@ -209,7 +210,7 @@ def test_endpoints():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next(c.value for c in jar if c.name == "ser2net_csrf")
+            return next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui))
 
         def post(path, fields, header=False):
             req = urllib.request.Request(f"http://127.0.0.1:{ui}{path}",
@@ -401,7 +402,8 @@ def test_manual_peer_and_remote_control():
               "mappings": [{"name": "REMOTE1", "enabled": False, "kind": "net",
                             "serial": {"port": "/dev/ttyTEST", "baudrate": 9600},
                             "network": {"mode": "server", "protocol": "raw",
-                                        "bind_ip": "127.0.0.1", "port": map_port}},
+                                        "bind_ip": "127.0.0.1", "port": map_port},
+                            "mqtt": {"host": "broker", "password": "remote1-broker-pw"}},
                            {"name": "REMOTE2", "enabled": False, "kind": "net",
                             "serial": {"port": "/dev/ttyTEST2", "baudrate": 9600},
                             "network": {"mode": "server", "protocol": "raw",
@@ -422,7 +424,7 @@ def test_manual_peer_and_remote_control():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next(c.value for c in jar if c.name == "ser2net_csrf")
+            return next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui_a))
 
         def post_a(path, fields):
             req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}",
@@ -520,6 +522,7 @@ def test_manual_peer_and_remote_control():
         assert 'name="scheme"' not in html, "the form must not carry a scheme back"
         assert "Edit mapping" in html and "/dev/ttyTEST" in html, "form should show peer's values"
         assert f"on 127.0.0.1:{ui_b}" in html, "the form names the peer where A reaches it"
+        assert "remote1-broker-pw" not in html, "the peer's MQTT password is in the page"
         assert not trapped(trap), "the form must be loaded from the peer itself"
         # a GET without the token header (a link from another site) makes no peer call
         assert get_a(form_url, header=False)[0] == 403, "peer-form needs the CSRF header"
@@ -535,7 +538,8 @@ def test_manual_peer_and_remote_control():
                 "serial_bytesize": "8", "serial_parity": "N", "serial_stopbits": "1",
                 "serial_flowcontrol": "none", "network_mode": "server",
                 "network_protocol": "raw", "network_bind_ip": "127.0.0.1",
-                "network_port": str(map_port)}
+                "network_port": str(map_port), "mqtt_host": "broker",
+                "mqtt_password_write_only": "1", "mqtt_password": ""}
         assert post_a("/api/cluster/peer-save", edit) == 200, "remote edit should be accepted"
         for _ in range(20):
             _, body = raw_request(ui_b, "/api/cluster/local", hdr)
@@ -546,6 +550,8 @@ def test_manual_peer_and_remote_control():
             "remote edit did not change the peer's mapping"
         html = op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=10).read().decode()
         assert "ttyEDITED" in html, "A's fleet view must show the edit at once"
+        assert json.load(open(os.path.join(tb, "config.json")))["mappings"][0]["mqtt"][
+            "password"] == "remote1-broker-pw", "a blank password field keeps the peer's"
         assert not trapped(trap), "the edit must be saved on the peer itself"
         trap.close()
         print("remote edit of a peer's mapping took effect on the peer  OK")
@@ -601,17 +607,19 @@ def test_manual_peer_and_remote_control():
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _old_peer(key, peer_id, seen):
+def _old_peer(key, peer_id, seen, posted=None):
     """A stand-in for a v2.7/v2.8 cluster node that keeps a mapping under an id this
     version would not take (it rewrites such ids on load). Serves the key-guarded peer
-    endpoints the fleet view's edit uses, and records what it was asked (``seen``)."""
+    endpoints the fleet view's edit uses, and records what it was asked (``seen``) and
+    the fields of each save (``posted``)."""
     import http.server
     import threading
 
     mapping = {"id": peer_id, "name": "OLD1", "enabled": False, "kind": "net",
                "serial": {"port": "/dev/ttyOLD", "baudrate": 9600},
                "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
-                           "port": 4555}, "options": {"trace_both": ""}}
+                           "port": 4555}, "options": {"trace_both": ""},
+               "mqtt": {"host": "broker", "username": "plc", "password": "old-peer-broker-pw"}}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_a):
@@ -650,8 +658,11 @@ def _old_peer(key, peer_id, seen):
             if self.headers.get("X-Cluster-Key") != key:
                 return self._reply(403, {"error": "forbidden"})
             fields = urllib.parse.parse_qs(
-                self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
+                self.rfile.read(int(self.headers.get("Content-Length", 0))).decode(),
+                keep_blank_values=True)
             seen.append(("mapping-save", fields.get("id", [""])[0]))
+            if posted is not None:
+                posted.append(fields)
             if fields.get("id", [""])[0] != peer_id:
                 return self._reply(400, {"ok": False, "error": "no such mapping"})
             return self._reply(200, {"ok": True, "name": "OLD1"})
@@ -667,8 +678,8 @@ def test_edit_on_a_peer_with_its_own_id():
     one), and the save reaches the peer's mapping under it."""
     key = "old-peer-key-1"
     peer_id = "my-port&x"
-    seen = []
-    stub = _old_peer(key, peer_id, seen)
+    seen, posted = [], []
+    stub = _old_peer(key, peer_id, seen, posted)
     stub_port = stub.server_address[1]
     ui_a = free_port()
     pa, ta = start_node({"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a},
@@ -680,7 +691,7 @@ def test_edit_on_a_peer_with_its_own_id():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next(c.value for c in jar if c.name == "ser2net_csrf")
+            return next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui_a))
 
         def post_a(path, fields):
             req = urllib.request.Request(f"http://127.0.0.1:{ui_a}{path}",
@@ -708,6 +719,8 @@ def test_edit_on_a_peer_with_its_own_id():
         assert seen[-1] == ("mapping-data", peer_id), seen
         assert '<input type="hidden" name="id" value="my-port&amp;x">' in html, html[:1500]
         assert "/dev/ttyOLD" in html
+        assert "old-peer-broker-pw" not in html, "the peer's MQTT password is in the page"
+        assert 'name="mqtt_password_write_only"' in html and 'name="mqtt_password_clear"' in html
 
         edit = {"_csrf": csrf(), "host": "127.0.0.1", "port": str(stub_port),
                 "id": peer_id, "name": "OLD1", "enabled": "on", "kind": "net",
@@ -717,6 +730,23 @@ def test_edit_on_a_peer_with_its_own_id():
                 "network_protocol": "raw", "network_bind_ip": "127.0.0.1", "network_port": "4555"}
         assert post_a("/api/cluster/peer-save", edit) == 200, seen
         assert ("mapping-data", peer_id) in seen and seen[-1] == ("mapping-save", peer_id), seen
+        # The form leaves the MQTT password blank to keep it, but a 2.8 peer would store a
+        # blank field as the password: the peer is sent the password to store (the one it
+        # has, unless one was typed or the remove box ticked), never the write-only marker.
+        # A form without the marker (an older node's) is forwarded as it was posted.
+        for extra, want in (({}, ""),
+                            ({"mqtt_password_write_only": "1", "mqtt_password": ""},
+                             "old-peer-broker-pw"),
+                            ({"mqtt_password_write_only": "1", "mqtt_password": "********"},
+                             "old-peer-broker-pw"),
+                            ({"mqtt_password_write_only": "1", "mqtt_password": "typed-5"},
+                             "typed-5"),
+                            ({"mqtt_password_write_only": "1", "mqtt_password": "",
+                              "mqtt_password_clear": "on"}, "")):
+            assert post_a("/api/cluster/peer-save", {**edit, **extra}) == 200, (extra, seen)
+            assert posted[-1].get("mqtt_password") == [want], (extra, posted[-1])
+            assert "mqtt_password_write_only" not in posted[-1], posted[-1]
+            assert "mqtt_password_clear" not in posted[-1], posted[-1]
         # a form that comes back with an error keeps the peer's id too
         req = urllib.request.Request(f"http://127.0.0.1:{ui_a}/api/cluster/peer-save",
                                      data=urllib.parse.urlencode(
@@ -731,8 +761,10 @@ def test_edit_on_a_peer_with_its_own_id():
             assert e.code == 400
             again = e.read().decode()
         assert '<input type="hidden" name="id" value="my-port&amp;x">' in again, again[:1500]
+        assert "old-peer-broker-pw" not in again
         print("remote edit of a v2.7/v2.8 peer's mapping under the peer's own id (one this "
-              "version would not take): form, save and a re-shown form keep it  OK")
+              "version would not take): form, save and a re-shown form keep it; the MQTT "
+              "password is never in the form, and the peer is sent the one to store  OK")
     finally:
         stub.shutdown()
         pa.terminate()
@@ -851,11 +883,12 @@ def test_signed_legacy_and_mismatch():
         jar = http.cookiejar.CookieJar()
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         op.open(f"http://127.0.0.1:{ui_a}/login", timeout=10)
-        csrf = next(c.value for c in jar if c.name == "ser2net_csrf")
+        csrf = next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui_a))
         op.open(urllib.request.Request(
             f"http://127.0.0.1:{ui_a}/login", method="POST",
             data=urllib.parse.urlencode({"username": "admin", "password": "clusteradmin1",
                                          "_csrf": csrf}).encode()), timeout=10)
+        csrf = next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui_a))  # new after signing in
 
         def status_html():
             return op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=15).read().decode()

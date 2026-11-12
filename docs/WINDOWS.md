@@ -114,7 +114,9 @@ netsh advfirewall firewall delete rule name="ser2net"
 
 ser2net does not open the firewall for you (secure by default). Prefer binding the admin
 UI to `127.0.0.1` and reaching it over SSH / a reverse proxy if you don't need it on the
-LAN; the mapping ports still need the rule to be reachable from other hosts.
+LAN; the mapping ports still need the rule to be reachable from other hosts. Behind a
+reverse proxy (IIS ARR, nginx), set **Settings → Reverse proxy** — the service needs no
+environment variables for it ([REVERSE-PROXY.md](REVERSE-PROXY.md)).
 
 ## Changing the admin UI address
 

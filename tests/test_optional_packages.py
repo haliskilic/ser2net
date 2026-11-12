@@ -177,9 +177,57 @@ def test_about():
         assert lines["paho-mqtt"].split(None, 1)[1] == ("failed to import: ModuleNotFoundError: "
                                                         "No module named "
                                                         "'s2n_test_missing_dependency'"), out
+        # the override's folder is written as <override> (the account name in a path stays
+        # out of a bug report), and the last line says what the labels stand for
+        assert lines["authlib"].endswith(f"(<override>{os.sep}authlib)"), out
+        assert folder not in out, out
+        assert "<override> = SER2NET_LIB_OVERRIDE" in out.splitlines()[-1], out
+        home = os.path.expanduser("~")
+        if os.path.dirname(home) != home:
+            assert home not in out, out
     finally:
         shutil.rmtree(folder, ignore_errors=True)
-    print("--about: pyserial-asyncio-fast and pyasn1 listed; a broken package says why  OK")
+    print("--about: pyserial-asyncio-fast and pyasn1 listed; a broken package says why; "
+          "folders as labels  OK")
+
+
+def test_about_paths():
+    """--about writes a package's folder under a known root as that root's label, the most
+    specific root first: which copy is loaded stays visible, the account name doesn't."""
+    sys.path.insert(0, ROOT)
+    import ser2net as entry
+
+    def p(*parts):
+        return os.path.abspath(os.path.join(os.sep, *parts))
+
+    roots = [("<override>", p("srv", "override")), ("<bundle>", p("tmp", "_MEI1234")),
+             ("<ser2net>", p("home", "ayse", "ser2net")),
+             ("<python>", p("home", "ayse", "ser2net", ".venv")), ("~", p("home", "ayse"))]
+    cases = {
+        p("home", "ayse", "ser2net", ".venv", "lib", "site-packages", "serial"):
+            os.path.join("<python>", "lib", "site-packages", "serial"),
+        p("home", "ayse", "ser2net", "lib", "ldap3"): os.path.join("<ser2net>", "lib", "ldap3"),
+        p("home", "ayse", ".local", "lib", "uvicorn"): os.path.join("~", ".local", "lib", "uvicorn"),
+        p("srv", "override", "ldap3"): os.path.join("<override>", "ldap3"),
+        p("tmp", "_MEI1234", "starlette"): os.path.join("<bundle>", "starlette"),
+        p("home", "ayse"): "~",
+        p("home", "ayse2", "lib"): p("home", "ayse2", "lib"),   # only a common prefix
+        p("usr", "lib", "python3", "dist-packages", "serial"):
+            p("usr", "lib", "python3", "dist-packages", "serial"),
+    }
+    for path, want in cases.items():
+        got = entry._where(path, roots)
+        assert got == want, (path, got, want)
+    if os.name == "nt":  # letter case aside, as Windows compares paths
+        assert entry._where(r"C:\USERS\Ayse\AppData\x", [("~", r"c:\users\ayse")]) == \
+            r"~\AppData\x"
+        assert entry._where(r"D:\x", [("~", r"C:\Users\ayse")]) == r"D:\x"   # another drive
+    labels = [label for label, _folder in entry._known_roots({"SER2NET_LIB_OVERRIDE": " o "})]
+    assert labels[0] == "<override>" and "<ser2net>" in labels and "<python>" in labels, labels
+    assert "<override>" not in [lb for lb, _f in entry._known_roots({})]
+    assert all(os.path.dirname(f) != f for _lb, f in entry._known_roots({})), "a whole drive"
+    print("--about: folders under the override, the bundle, ser2net, Python or the home "
+          "folder are written as labels; others as they are  OK")
 
 
 def test_settings_and_sign_in():
@@ -239,6 +287,7 @@ def main():
     test_load()
     test_features_with_broken_packages()
     test_about()
+    test_about_paths()
     test_settings_and_sign_in()
     print("\nPASS: optional packages that are missing or fail to import are reported truthfully")
 

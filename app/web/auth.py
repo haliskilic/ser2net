@@ -3,8 +3,10 @@
 The admin UI is network-exposed by design, so it is password-protected by default:
   - scrypt password hashing (no extra dependency),
   - a stateless HMAC-signed session cookie (secret from AppConfig.secret_key),
-  - double-submit-cookie CSRF protection on every state-changing request,
-  - a simple in-memory per-IP login rate limiter to blunt brute force.
+  - double-submit-cookie CSRF protection on every state-changing request, which the
+    browser must not say a page of another site made (cross_site),
+  - a simple in-memory per-IP login rate limiter to blunt brute force, and a cap on
+    how many password checks (and directory sign-ins) run at once (SlowWork).
 
 An admin may switch the login requirement off for trusted networks: a visitor
 without a session then gets a pseudo-user with ``admin_ui.anonymous_role``. That
@@ -18,6 +20,7 @@ setup code (AppState.prepare_first_run).
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import functools
 import hashlib
@@ -28,49 +31,123 @@ import re
 import secrets
 import socket
 import time
+import unicodedata
 from collections import OrderedDict, deque
+
+from ..engine.netguard import address_key  # an IPv6 address by its /64, as the connection caps
+from . import proxy
 
 SESSION_COOKIE = "ser2net_session"
 CSRF_COOKIE = "ser2net_csrf"
 
+# The scrypt cost of new password hashes: N=2^14, r=8, p=5, OWASP's minimum for scrypt.
+# It needs 16 MiB like the p=1 used before 2.9, and about 5 times the CPU time. A hash
+# names the cost it was made with ("scrypt:N:r:p$<salt hex>$<hash hex>"), so the cost can
+# change without breaking the hashes stored before; one in the format of older versions
+# ("scrypt$<salt hex>$<hash hex>") was made with N=2^14, r=8, p=1.
 _SCRYPT_N = 2 ** 14
 _SCRYPT_R = 8
-_SCRYPT_P = 1
+_SCRYPT_P = 5
 _DKLEN = 32
+_COST = (_SCRYPT_N, _SCRYPT_R, _SCRYPT_P)
+_LEGACY_COST = (2 ** 14, 8, 1)
+# what a stored hash may ask for (more is refused, not computed): at most 256 MiB
+_MAX_N, _MAX_R, _MAX_P, _MAX_MEM, _MAX_DKLEN = 2 ** 20, 32, 64, 256 * 1024 * 1024, 64
 
 
 # --------------------------------------------------------------------------
 # password hashing
 # --------------------------------------------------------------------------
+def _cost(scheme: str) -> tuple[int, int, int] | None:
+    """(N, r, p) a stored hash's scheme names ("scrypt" or "scrypt:N:r:p"), or None."""
+    if scheme == "scrypt":
+        return _LEGACY_COST
+    name, _sep, rest = scheme.partition(":")
+    values = rest.split(":")
+    if name != "scrypt" or len(values) != 3 or not all(v.isascii() and v.isdigit()
+                                                       for v in values):
+        return None
+    n, r, p = (int(v) for v in values)
+    if not (2 <= n <= _MAX_N and n & (n - 1) == 0 and 1 <= r <= _MAX_R and 1 <= p <= _MAX_P
+            and 128 * r * n <= _MAX_MEM):
+        return None
+    return n, r, p
+
+
+def _parse(stored) -> tuple[tuple[int, int, int], bytes, bytes] | None:
+    """(cost, salt, hash) of a hash_password() result (of any version), or None."""
+    parts = str(stored).split("$")
+    if len(parts) != 3:
+        return None
+    cost = _cost(parts[0])
+    try:
+        salt, expected = bytes.fromhex(parts[1]), bytes.fromhex(parts[2])
+    except ValueError:
+        return None
+    if cost is None or not salt or not 1 <= len(expected) <= _MAX_DKLEN:
+        return None
+    return cost, salt, expected
+
+
+def _prep(password: str) -> str:
+    """A password as it is hashed: Unicode NFKC, like the cluster key (engine/cluster.py
+    key_bytes), so that the same password typed on another device or pasted from
+    elsewhere is the same text - a letter with its accent as one character or two (NFD,
+    from macOS file names or some PDFs), a no-break space (macOS Option+Space, text from
+    Word or the web) for a space, full-width forms. Letters typed on a keyboard, Turkish
+    ones included, are NFKC already. Only for local accounts: a directory gets the
+    password as it was typed."""
+    return unicodedata.normalize("NFKC", password)
+
+
+def _scrypt(password: str, salt: bytes, cost: tuple[int, int, int], dklen: int) -> bytes:
+    n, r, p = cost
+    # the memory these parameters need (OpenSSL refuses more than 32 MiB unless told)
+    maxmem = 128 * r * (n + p + 2) + 1024 * 1024
+    return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=n, r=r, p=p, dklen=dklen,
+                          maxmem=maxmem)
+
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
-    dk = hashlib.scrypt(password.encode("utf-8"), salt=salt,
-                        n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=_DKLEN)
-    return f"scrypt${salt.hex()}${dk.hex()}"
+    dk = _scrypt(_prep(password), salt, _COST, _DKLEN)
+    return f"scrypt:{_SCRYPT_N}:{_SCRYPT_R}:{_SCRYPT_P}${salt.hex()}${dk.hex()}"
+
+
+# What a sign-in under a name that has no local account is checked against while there is
+# no directory to ask: a hash of a password nobody knows, so that such a sign-in takes as
+# long as a wrong password and the answer's timing doesn't tell which names have one.
+DUMMY_HASH = (f"scrypt:{_SCRYPT_N}:{_SCRYPT_R}:{_SCRYPT_P}"
+              f"${secrets.token_hex(16)}${secrets.token_hex(_DKLEN)}")
 
 
 def is_password_hash(stored: str) -> bool:
-    """Is `stored` a hash_password() result ("scrypt$<salt hex>$<hash hex>")?"""
-    parts = str(stored).split("$")
-    if len(parts) != 3 or parts[0] != "scrypt":
-        return False
-    try:
-        return bool(bytes.fromhex(parts[1])) and bool(bytes.fromhex(parts[2]))
-    except ValueError:
-        return False
+    """Is `stored` a hash_password() result, of this version or an older one?"""
+    return _parse(stored) is not None
+
+
+def needs_rehash(stored: str) -> bool:
+    """Was `stored` made with another cost than new hashes get (an older version's)?"""
+    parsed = _parse(stored)
+    return parsed is None or parsed[0] != _COST or len(parsed[2]) != _DKLEN
 
 
 def verify_password(password: str, stored: str) -> bool:
+    """Does `password` match `stored`? Checked as NFKC (_prep), the form every hash of
+    this version is made of; a hash in the format of older versions, which hashed the
+    password as typed, is also checked against that when it differs (one scrypt more,
+    only for a password that NFKC changes)."""
+    parsed = _parse(stored)
+    if parsed is None:
+        return False
+    cost, salt, expected = parsed
     try:
-        scheme, salt_hex, hash_hex = stored.split("$", 2)
-        if scheme != "scrypt":
-            return False
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(hash_hex)
-        dk = hashlib.scrypt(password.encode("utf-8"), salt=salt,
-                            n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=len(expected))
-        return hmac.compare_digest(dk, expected)
-    except (ValueError, AttributeError):
+        tries = [_prep(password)]
+        if str(stored).startswith("scrypt$") and password != tries[0]:
+            tries.append(password)
+        return any(hmac.compare_digest(_scrypt(pw, salt, cost, len(expected)), expected)
+                   for pw in tries)
+    except (ValueError, TypeError, MemoryError):  # not (encodable) text; out of memory
         return False
 
 
@@ -314,6 +391,72 @@ def foreign_host(headers) -> str:
     return next((h for h in _claimed_hosts(headers) if not is_own_host(h)), "")
 
 
+# --------------------------------------------------------------------------
+# requests that a page of another site makes the browser send
+# --------------------------------------------------------------------------
+SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
+def _host_port(netloc: str, scheme: str) -> tuple[str, str] | None:
+    """('host', 'port') of a Host-style 'host[:port]' (IPv6 in brackets), lower-cased, the
+    port of `scheme` when none is given; None when it is not such a value."""
+    n = netloc.strip().lower()
+    if n.startswith("["):
+        end = n.find("]")
+        host, rest = (n[:end + 1], n[end + 1:]) if end > 0 else ("", "")
+    elif n.count(":") == 1:
+        host, rest = n.split(":")[0], n[n.find(":"):]
+    else:
+        host, rest = ("", "") if ":" in n else (n, "")
+    if not host or (rest and not (rest[0] == ":" and rest[1:].isascii() and rest[1:].isdigit())):
+        return None
+    return host, str(int(rest[1:])) if rest else _DEFAULT_PORTS.get(scheme, "")
+
+
+def _origin(value: str) -> tuple[str, str, str] | None:
+    """(scheme, host, port) of an http(s) origin 'scheme://host[:port]' (no path), the
+    scheme's port when none is given; None when it is not such a value."""
+    scheme, sep, netloc = value.strip().partition("://")
+    scheme = scheme.lower()
+    if not sep or scheme not in _DEFAULT_PORTS:
+        return None
+    hp = _host_port(netloc, scheme)
+    return (scheme, *hp) if hp else None
+
+
+# What a refusal of a page's own request behind a reverse proxy usually needs (all.log).
+PROXY_HINT = ("behind a reverse proxy, pass the browser's address on as Host (nginx: "
+              "proxy_set_header Host $http_host; Apache: ProxyPreserveHost On) or as "
+              "X-Forwarded-Host")
+
+
+def cross_site(headers, also=()) -> str:
+    """Why the browser says a request was made by a page of another site, or '' when it
+    doesn't: the forms and changes of the web UI, and its WebSockets (the console, the
+    hex view). Sec-Fetch-Site (sent to HTTPS and localhost) must be same-origin or none;
+    without it, an Origin must be one of the hosts the request claims (Host, and
+    X-Forwarded-Host / Forwarded host= from a reverse proxy, which a page can't set),
+    port included, or one of the origins in `also` ('scheme://host[:port]', an address
+    the UI is published under): another port of the same host or a sibling subdomain is
+    another site, and its pages can put a CSRF cookie of their own into the browser. A
+    request with neither header (a script, a very old browser) is left to the CSRF token
+    and the session. The model of Go's net/http CrossOriginProtection."""
+    site = (headers.get("sec-fetch-site") or "").strip().lower()
+    if site:
+        return "" if site in ("same-origin", "none") else f"Sec-Fetch-Site {site!r}"
+    origin = headers.get("origin")
+    if origin is None:
+        return ""
+    ours = _origin(origin)
+    claimed = _claimed_hosts(headers)
+    if ours is not None and (any(_host_port(h, ours[0]) == ours[1:] for h in claimed)
+                             or any(_origin(o) == ours for o in also)):
+        return ""
+    return (f"Origin {origin[:200]!r}; this UI was addressed as "
+            + ", ".join(repr(h[:100]) for h in claimed))
+
+
 def anonymous_user(cfg, headers):
     """The pseudo-user for a visitor without a session, or None when login is
     required (the default), setup isn't done yet, or a claimed host isn't this
@@ -368,14 +511,77 @@ def bearer_token(request) -> str:
 
 
 # --------------------------------------------------------------------------
+# cookies
+# --------------------------------------------------------------------------
+def is_https(request, cfg) -> bool:
+    """Did the browser use HTTPS for this request? With admin TLS; when the request's
+    scheme is https (uvicorn's TLS, or X-Forwarded-Proto from a trusted proxy:
+    app/web/proxy.py); or when the first X-Forwarded-Proto or Forwarded proto= says so,
+    whoever sent it: it only makes cookies stricter (Secure) and adds HSTS, which browsers
+    take only over HTTPS, and a page can't add those headers to the browser's requests -
+    so a TLS proxy needs no trusted-proxy setting for the cookies to be Secure."""
+    return cfg.admin_ui.tls_enabled or proxy.browser_https(request)
+
+
+def set_cookie(response, request, cfg, name: str, value: str, max_age: int,
+               path: str = "/") -> None:
+    """One of the UI's cookies: HttpOnly, SameSite=Lax, Secure whenever the browser used
+    HTTPS (is_https), under the request's path prefix and with its name for the request
+    (proxy.cookie_name / cookie_path: by port, path and scheme)."""
+    response.set_cookie(proxy.cookie_name(request, name, path), value, max_age=max_age,
+                        path=proxy.cookie_path(request, path), httponly=True, samesite="lax",
+                        secure=is_https(request, cfg))
+
+
+def delete_cookie(response, request, cfg, name: str, path: str = "/") -> None:
+    response.delete_cookie(proxy.cookie_name(request, name, path),
+                           path=proxy.cookie_path(request, path),
+                           httponly=True, samesite="lax", secure=is_https(request, cfg))
+
+
+def cookie(request, name: str, path: str = "/", legacy: bool = True) -> str | None:
+    """The value of one of the UI's cookies (its name for this request: set_cookie); when
+    the request has none under that name, the one under the name 2.8 and older gave it
+    (proxy.legacy_cookie_name), unless `legacy` is False. Such a session cookie is moved to
+    its new name by GuardMiddleware (legacy_session / move_session)."""
+    value = request.cookies.get(proxy.cookie_name(request, name, path))
+    if value is None and legacy and (old := proxy.legacy_cookie_name(request, name, path)):
+        value = request.cookies.get(old)
+    return value
+
+
+def legacy_session(request, cfg, revoked: RevokedSessions | None = None) -> str | None:
+    """A session cookie of this UI under the name of 2.8 and older (a sign-in from before
+    the upgrade), when the request has none under its name now: the token, only when it
+    is a valid session here. Another instance on this host name may still use that name
+    (one of 2.8, or one on port 8080, whose name it is): its cookie doesn't verify with
+    this UI's key and is left alone."""
+    old = proxy.legacy_cookie_name(request, SESSION_COOKIE)
+    if old is None or proxy.cookie_name(request, SESSION_COOKIE) in request.cookies:
+        return None
+    token = request.cookies.get(old)
+    return token if session_user(cfg, token, revoked) is not None else None
+
+
+def move_session(response, request, cfg, token: str) -> None:
+    """Move a legacy_session to the session cookie's name now (the same token, until it
+    expires anyway) - unless the response sets or deletes that cookie itself (a sign-in, a
+    sign-out) - and delete it under the old name."""
+    name = proxy.cookie_name(request, SESSION_COOKIE)
+    if not any(c.startswith(name + "=") for c in response.headers.getlist("set-cookie")):
+        data = decode_session(cfg.secret_key, token)
+        if data is not None:
+            set_cookie(response, request, cfg, SESSION_COOKIE, token,
+                       max_age=max(1, data["exp"] - int(time.time())))
+    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="lax",
+                           secure=is_https(request, cfg))
+
+
+# --------------------------------------------------------------------------
 # CSRF (double-submit cookie)
 # --------------------------------------------------------------------------
 def new_csrf_token() -> str:
     return secrets.token_urlsafe(32)
-
-
-def csrf_from_request(request) -> str:
-    return request.cookies.get(CSRF_COOKIE, "")
 
 
 def csrf_token_matches(request, token) -> bool:
@@ -387,50 +593,82 @@ def csrf_token_matches(request, token) -> bool:
     (checked in middleware); plain HTML form posts pass _csrf in the body and are
     validated by their handlers, which read the form exactly once.
     """
-    cookie = request.cookies.get(CSRF_COOKIE)
-    if not cookie or not token:
+    stored = cookie(request, CSRF_COOKIE)  # a 2.8 one too, until GuardMiddleware moves it
+    if not stored or not token:
         return False
     token = str(token)
     # tokens are ASCII; compare_digest raises on other text, which is just a mismatch
-    return token.isascii() and cookie.isascii() and hmac.compare_digest(token, cookie)
+    return token.isascii() and stored.isascii() and hmac.compare_digest(token, stored)
 
 
 # --------------------------------------------------------------------------
-# login rate limiter (per IP, sliding window)
+# login rate limiter (per IP or per user name, sliding window)
 # --------------------------------------------------------------------------
 class LoginRateLimiter:
-    """Blocks an address after `max_attempts` failed sign-ins in `window_s` seconds.
-    Keeps the times of at most that many failures for at most MAX_ADDRESSES addresses
-    (when full, the one whose last failure is the oldest is forgotten), so addresses
-    that only ever fail don't add up in memory."""
+    """Blocks an address (an IPv6 one by its /64: address_key), or what `key` makes of the
+    value given (a user name), after `max_attempts` failed sign-ins in `window_s` seconds.
+    Keeps the times of at most that many failures for at most MAX_ADDRESSES keys (when
+    full, the one whose last failure is the oldest is forgotten), so addresses that only
+    ever fail don't add up in memory."""
 
     MAX_ADDRESSES = 4096
 
-    def __init__(self, max_attempts: int = 8, window_s: int = 300):
+    def __init__(self, max_attempts: int = 8, window_s: int = 300, key=None):
         self.max_attempts = max_attempts
         self.window_s = window_s
+        self._key = key or address_key
         self._fails: OrderedDict[str, deque] = OrderedDict()
 
     def blocked(self, ip: str) -> bool:
-        q = self._fails.get(ip)
+        k = self._key(ip)
+        q = self._fails.get(k)
         if q is None:
             return False
         now = time.monotonic()
         while q and now - q[0] > self.window_s:
             q.popleft()
         if not q:
-            del self._fails[ip]
+            del self._fails[k]
         return len(q) >= self.max_attempts
 
     def record_failure(self, ip: str) -> None:
-        q = self._fails.get(ip)
+        k = self._key(ip)
+        q = self._fails.get(k)
         if q is None:
-            q = self._fails[ip] = deque(maxlen=self.max_attempts)
+            q = self._fails[k] = deque(maxlen=self.max_attempts)
             while len(self._fails) > self.MAX_ADDRESSES:
                 self._fails.popitem(last=False)
         else:
-            self._fails.move_to_end(ip)
+            self._fails.move_to_end(k)
         q.append(time.monotonic())
 
     def reset(self, ip: str) -> None:
-        self._fails.pop(ip, None)
+        self._fails.pop(self._key(ip), None)
+
+
+# --------------------------------------------------------------------------
+# password checks and directory sign-ins: a few at a time
+# --------------------------------------------------------------------------
+class SlowWork:
+    """Runs slow sign-in work (scrypt: CPU time and 16 MiB each; a directory bind:
+    seconds when the server is slow) in worker threads, at most `limit` at a time; the
+    rest wait their turn. A burst of sign-ins thus can't take every thread of the shared
+    pool, where serial ports are opened and closed and config.json is saved too, nor
+    the memory of one scrypt job per request. busy(): `queue` jobs wait already — a
+    sign-in is answered 429 then instead of queueing as well."""
+
+    def __init__(self, limit: int, queue: int) -> None:
+        self.limit, self.queue = limit, queue
+        self._slots = asyncio.Semaphore(limit)
+        self._pending = 0  # running or waiting
+
+    def busy(self) -> bool:
+        return self._pending >= self.limit + self.queue
+
+    async def run(self, fn, /, *args, **kwargs):
+        self._pending += 1
+        try:
+            async with self._slots:
+                return await asyncio.to_thread(fn, *args, **kwargs)
+        finally:
+            self._pending -= 1

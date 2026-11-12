@@ -18,6 +18,9 @@ made from another site:
            header  the X-CSRF-Token header, checked by GuardMiddleware for /api/
            origin  a WebSocket: a browser's Origin must be this server
            none    nothing to forge (GET, or authenticated by a key or token)
+         Besides, GuardMiddleware refuses every state-changing request that the browser
+         says a page of another site made (Sec-Fetch-Site / Origin), before the token is
+         looked at; the cluster peer routes and the REST API are not browser routes.
 
 The test fails when
   * the app registers a route ROUTES doesn't classify, or ROUTES names one that is gone
@@ -48,7 +51,7 @@ import types
 import urllib.parse
 import urllib.request
 
-from _server import Browser, Server, _NoRedirect, free_port
+from _server import Browser, Server, _NoRedirect, free_port, ui_cookie
 
 from app.web import server as web_server
 from app.web.auth import hash_password, hash_token
@@ -75,6 +78,10 @@ ROUTES = {
     ("POST", "/settings/tls"): (ADMIN, FORM),
     ("POST", "/settings/tls/generate"): (ADMIN, FORM),
     ("POST", "/settings/access"): (ADMIN, FORM),
+    ("POST", "/settings/proxy"): (ADMIN, FORM),
+    ("POST", "/settings/node-name"): (ADMIN, FORM),
+    ("POST", "/settings/request-log"): (ADMIN, FORM),
+    ("POST", "/settings/login-notice"): (ADMIN, FORM),
     ("POST", "/settings/sessions/revoke-all"): (ADMIN, FORM),
     ("POST", "/settings/api-token"): (ADMIN, FORM),
     ("POST", "/settings/api-token/revoke"): (ADMIN, FORM),
@@ -99,6 +106,8 @@ ROUTES = {
     ("GET", "/settings/audit.csv"): (ADMIN, NONE),
     ("POST", "/settings/backups/restore"): (ADMIN, FORM),
     ("POST", "/settings/backups/restore-mappings"): (ADMIN, FORM),
+    ("POST", "/settings/backups/delete"): (ADMIN, FORM),
+    ("POST", "/settings/backups/remove-account"): (ADMIN, FORM),
     ("GET", "/settings/backups/{name}"): (ADMIN, NONE),
     # ---- api.py: the REST API (bearer token, checked in GuardMiddleware) ----
     ("GET", "/api/v1/health"): (TOKEN_PUBLIC, NONE),
@@ -166,6 +175,9 @@ WRITE_METHODS = ("POST", "PUT", "DELETE", "PATCH")
 
 ROLE_DENIED = "Forbidden: requires the {0} role."
 CSRF_DENIED = "CSRF validation failed. Reload the page."
+CROSS_SITE_DENIED = ("Refused: this request was sent by a page of another web site. If you used "
+                     "ser2net’s own page, its address must reach ser2net unchanged (behind a "
+                     "reverse proxy: as Host or X-Forwarded-Host).")
 PEER_DENIED = "Sign in to manage other cluster nodes."
 DENIALS = {ROLE_DENIED.format("operator"), ROLE_DENIED.format("admin"), CSRF_DENIED, PEER_DENIED}
 
@@ -394,7 +406,8 @@ def ws_status(base: str, path: str, cookie: str | None = None, origin: str | Non
     from websockets.exceptions import InvalidStatus
     from websockets.sync.client import connect
 
-    headers = {"Cookie": f"ser2net_session={cookie}"} if cookie else {}
+    name = ui_cookie("ser2net_session", urllib.parse.urlsplit(base).port)
+    headers = {"Cookie": f"{name}={cookie}"} if cookie else {}
     try:
         with connect("ws" + base[len("http"):] + path, additional_headers=headers,
                      origin=origin, open_timeout=10):
@@ -455,8 +468,8 @@ def _live(srv) -> None:
             check_session_route(who, *route)
     forged = Client(base, "a forged session cookie")
     forged.jar.set_cookie(http.cookiejar.Cookie(
-        0, "ser2net_session", "eyJ1IjoiYWRtaW4ifQ.forged", None, False, "127.0.0.1", False, False,
-        "/", True, False, None, False, None, None, {}))
+        0, ui_cookie("ser2net_session", srv.port), "eyJ1IjoiYWRtaW4ifQ.forged", None, False,
+        "127.0.0.1", False, False, "/", True, False, None, False, None, None, {}))
     assert gated("/", *forged.send("GET", "/"))
     assert gated("/api/status", *forged.send("GET", "/api/status"))
     st, _, body = admin.send("POST", "/api/mappings/save", headers={"X-CSRF-Token": "not-the-cookie"},
@@ -464,6 +477,20 @@ def _live(srv) -> None:
     assert st == 403 and body.strip() == CSRF_DENIED, "a CSRF header must match the cookie"
     print(f"sessions: {len(routes)} routes x (no session, viewer, operator, admin) answer as the "
           "matrix says; a form a role may post is refused without its CSRF token  OK")
+
+    # ---- a page of another site: every state-changing browser route refuses it ----
+    writes = [(m, p) for (m, p), (a, _c) in ROUTES.items() if m in WRITE_METHODS
+              and a not in (CLUSTER_KEY, TOKEN_PUBLIC, TOKEN_READ, TOKEN_WRITE)]
+    for method, path in writes:
+        for who in (anon, admin):
+            for headers in ({"Origin": "http://attacker.example"},
+                            {"Origin": base.replace(str(srv.port), str(srv.port + 1))},
+                            {"Sec-Fetch-Site": "cross-site", "Origin": base}):
+                st, _, body = who.send(method, probe_path(method, path), headers=headers)
+                assert st == 403 and body.strip() == CROSS_SITE_DENIED, \
+                    f"{who.name}: {method} {path} {headers} -> {st} {body[:120]!r}"
+    print(f"cross-site: all {len(writes)} state-changing browser routes refuse a request a page "
+          "of another site made, with a valid CSRF token too  OK")
 
     # ---- public routes and first-run setup (the gate's side: test_inventory) ----
     for (method, path), (access, csrf) in ROUTES.items():

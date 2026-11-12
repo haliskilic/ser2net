@@ -1,12 +1,13 @@
 """Health, Prometheus metrics and the serial port list."""
 from __future__ import annotations
 
-from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from ... import i18n
 from ...engine import netguard, portlist
 from ...i18n import _
+from .. import auth, proxy
 from .common import Ctx
 
 # the serial sides of a mapping form (GET /api/ports/select?prefix=)
@@ -101,15 +102,15 @@ def routes(ctx: Ctx) -> list:
 
     async def set_language(request):
         """/lang/tr?next=/settings: remember the visitor's UI language (a cookie), then
-        go back. Only a local path is followed (no open redirect)."""
+        go back. Only a local path is followed (no open redirect), under the path prefix
+        the request came under (`next` is the page's path without it)."""
         code = request.path_params["code"]
         nxt = request.query_params.get("next") or "/"
         if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
             nxt = "/"
-        resp = RedirectResponse(nxt, status_code=303)
+        resp = proxy.redirect(request, nxt)
         if code in i18n.LANGUAGES:
-            resp.set_cookie(i18n.COOKIE, code, max_age=365 * 86400, httponly=True,
-                            samesite="lax", secure=state.config.admin_ui.tls_enabled, path="/")
+            auth.set_cookie(resp, request, state.config, i18n.COOKIE, code, max_age=365 * 86400)
         return resp
 
     return [

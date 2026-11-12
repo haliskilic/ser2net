@@ -4,14 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ request.state.csrf_token }}">
+  <meta name="ser2net-base" content="{{ base }}">
   <title>{% block title %}ser2net{% endblock %}</title>
-  <link rel="stylesheet" href="/static/xterm.css?v={{ asset_version }}">
-  <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="{{ base }}/static/xterm.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_version }}">
   <link rel="icon" href="data:,">
-  <script src="/static/htmx.min.js?v={{ asset_version }}" defer></script>
-  <script src="/static/xterm.js?v={{ asset_version }}" defer></script>
-  <script src="/static/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
-  <script src="/static/app.js?v={{ asset_version }}" defer></script>
+  {# htmx features the UI doesn't use stay off: no eval (hx-on, js: values, trigger
+     filters), no <script> run from a fragment, no injected indicator <style> #}
+  <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false}'>
+  <script src="{{ base }}/static/htmx.min.js?v={{ asset_version }}" defer></script>
+  <script src="{{ base }}/static/xterm.js?v={{ asset_version }}" defer></script>
+  <script src="{{ base }}/static/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
+  <script src="{{ base }}/static/app.js?v={{ asset_version }}" defer></script>
 </head>
 <body data-i18n="{{ {
   'disconnected': _('console disconnected'),

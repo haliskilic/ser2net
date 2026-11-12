@@ -18,6 +18,8 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 UI = 8086
 BASE = f"http://127.0.0.1:{UI}"
 
+from _server import ui_cookie  # noqa: E402
+
 
 def wait_port(port, timeout=10):
     end = time.time() + timeout
@@ -44,7 +46,7 @@ def main():
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
         def csrf():
-            return next((c.value for c in jar if c.name == "ser2net_csrf"), "")
+            return next((c.value for c in jar if c.name == ui_cookie("ser2net_csrf", UI)), "")
 
         def post(path, data, header=True):
             req = urllib.request.Request(BASE + path,
