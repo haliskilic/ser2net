@@ -22,7 +22,7 @@ from starlette.responses import HTMLResponse, PlainTextResponse, Response
 from ...config import ROLE_RANK
 from ...explain import explain
 from ...i18n import _
-from .. import auth
+from .. import auth, proxy
 
 # HTMX response header: tells the dashboard to re-fetch the mappings table now
 TRIGGER = {"HX-Trigger": "refreshMappings"}
@@ -40,6 +40,18 @@ def unchanged_or(request, resp):
     return resp
 
 
+def page_context(templates, request, ctx: dict) -> dict:
+    """What a template rendered straight from its Jinja template (off the event loop:
+    LiveTable, Ctx.arender) gets, as a page rendered through the templates does: the
+    request, what the context processors give every page (the base path the links go
+    under, the instance's name, ...), then `ctx`."""
+    context: dict = {"request": request}
+    for processor in getattr(templates, "context_processors", ()):
+        context.update(processor(request))
+    context.update(ctx)
+    return context
+
+
 class LiveTable:
     """A table the dashboard polls every few seconds (the mappings, the fleet view),
     answered without rendering it again when that can be helped.
@@ -55,7 +67,8 @@ class LiveTable:
         rows takes 100+ ms, during which every bridge on the loop would wait - a Modbus
         RTU reply that pauses for 10 ms counts as finished), and kept for other tabs
         that ask for the same table. (So the template may not use the request beyond
-        the language, which is part of the fingerprint.)
+        the language and the base path its links go under, which are part of the
+        fingerprint.)
     The fingerprints are taken in the same worker thread (a repr of every mapping is
     not free either). They are keyed with a secret of this process: the shape covers
     settings the browser is not shown. A tab from before an upgrade or a restart sends
@@ -79,11 +92,12 @@ class LiveTable:
         renders the table from the same data."""
         sent = request.headers.get("x-content-hash") or ""
         lang = getattr(request.state, "lang", "")
+        base = proxy.base(request)   # (a tab at the public URL's path, another one at /)
 
         def work() -> tuple[str, str | None, bool]:
             """(tag, body or None for "unchanged", whether body is only the counters)"""
             shape, spans = snapshot()
-            tag = self._digest((lang, shape)) + "." + self._digest(spans)
+            tag = self._digest((lang, base, shape)) + "." + self._digest(spans)
             if sent == tag:
                 return tag, None, False
             if spans is not None and sent.partition(".")[0] == tag.partition(".")[0]:
@@ -93,7 +107,7 @@ class LiveTable:
                 body = self._bodies.get(tag)
             if body is None:
                 body = self.ctx.templates.get_template(self.template).render(
-                    {"request": request, **context})
+                    page_context(self.ctx.templates, request, context))
                 with self._lock:
                     self._bodies[tag] = body
                     while len(self._bodies) > self._size:
@@ -263,7 +277,7 @@ class Ctx:
         render would hold up every bridge on the event loop for as long as it takes (the
         page's language, a context variable, goes along)."""
         template = self.templates.get_template(name)
-        body = await asyncio.to_thread(template.render, {"request": request, **ctx})
+        body = await asyncio.to_thread(template.render, page_context(self.templates, request, ctx))
         return HTMLResponse(body, status_code=status_code, headers=headers)
 
     def set_session(self, response, request, user) -> None:
