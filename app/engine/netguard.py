@@ -35,9 +35,10 @@ connection only once it is done, and decides about capacity, kicking and "Busy" 
 When the listener can't take its address it raises ``BindError``; ``udp_socket`` makes a
 UDP mapping's socket, with the same error.
 
-Address families: a TCP listener on :: takes IPv6 clients only (asyncio sets IPV6_V6ONLY);
-one that takes both (network.dual_stack on a wildcard, ``listen_hosts``) has two sockets,
-0.0.0.0 and ::, so its IPv4 clients have plain IPv4 addresses.
+Address families: a listener on :: takes IPv6 clients only, on every OS (IPV6_V6ONLY: asyncio
+sets it for TCP, ``udp_socket`` for UDP); one that takes both (network.dual_stack on a
+wildcard) has two TCP sockets, 0.0.0.0 and :: (``listen_hosts``), so its IPv4 clients have
+plain IPv4 addresses, or one UDP socket on :: that takes IPv4 senders too.
 """
 from __future__ import annotations
 
@@ -604,7 +605,7 @@ def listen_where(net: NetworkSettings, sockets: Sequence[socket.socket]) -> str:
         if families == {socket.AF_INET}:
             return f"{host_port('0.0.0.0', net.port)}, IPv4 only (IPv6 is not available here)"
     where = host_port(net.bind_ip, net.port)
-    if canonical_ip(net.bind_ip) == "::" and not net.both_families and net.mode != "udp":
+    if canonical_ip(net.bind_ip) == "::" and not net.both_families:
         where += ", IPv6 clients only"
     return where
 
@@ -617,10 +618,12 @@ def _takes_ipv4(sock: socket.socket) -> bool:
 
 
 async def udp_socket(net: NetworkSettings) -> socket.socket:
-    """A UDP mapping's socket, bound to its address and port. One that takes both families
-    (NetworkSettings.both_families) is one socket on :: with IPV6_V6ONLY off (where this
-    machine has no IPv6, an IPv4 one on 0.0.0.0). Raises BindError when the address and
-    port can't be taken."""
+    """A UDP mapping's socket, bound to its address and port. IPV6_V6ONLY is set on an IPv6
+    one as the mapping says, not left to the OS (Linux would let a socket on :: take IPv4
+    senders too, Windows not): one that takes both families (NetworkSettings.both_families)
+    is one socket on :: with it off (where this machine has no IPv6, an IPv4 one on
+    0.0.0.0), any other has it on, so :: takes IPv6 senders only, as a TCP listener does.
+    Raises BindError when the address and port can't be taken."""
     both = net.both_families
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(
@@ -637,8 +640,8 @@ async def udp_socket(net: NetworkSettings) -> socket.socket:
     except OSError as e:
         raise BindError.of(e) from e
     try:
-        if both and family == socket.AF_INET6:
-            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0 if both else 1)
         sock.bind(address)
         sock.setblocking(False)
     except OSError as e:
