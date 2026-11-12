@@ -8,19 +8,23 @@ authenticated. Every response is JSON. The OpenAPI 3.0 description is served at
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import typing
 
 from starlette.exceptions import HTTPException
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-from .. import config
+from .. import config, importer
 from ..config import ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
 from .routes import ops
 from .routes.common import client_ip as _client_ip
+from .routes.system import METRICS_TYPE, metrics_text
 
 API_PREFIX = "/api/v1"
+# the values a true/false query parameter may have
+_BOOLEANS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
 
 REDACTED = "********"
 
@@ -193,6 +197,50 @@ def build_api_routes(state):
         state.audit(_client_ip(request), f"api_mapping_{action}", name, user="api-token")
         return JSONResponse({"id": mid, "action": action, "status": state.supervisor.status(mid)})
 
+    async def import_mappings(request):
+        """POST /import: many mappings in one change. The body is a mappings export
+        ({"mappings": [...]}, which is also what GET /mappings answers), a whole
+        config.json (only its mappings are used) or a classic ser2net.yaml / ser2net.conf.
+        ?mode=merge (the default: a mapping with the same id, else the same name, is
+        updated, the others added) or replace (the body's mappings replace all of them);
+        ?dry_run=true answers what it would do, and why it would be refused, without
+        changing anything. A real run is one save: one backup, all or nothing."""
+        mode = request.query_params.get("mode", "merge")
+        if mode not in importer.MODES:
+            return JSONResponse({"error": "invalid_parameter",
+                                 "detail": "mode must be merge or replace"}, status_code=400)
+        dry = request.query_params.get("dry_run", "false").strip().lower()
+        if dry not in _BOOLEANS:
+            return JSONResponse({"error": "invalid_parameter",
+                                 "detail": "dry_run must be true or false"}, status_code=400)
+        raw = await request.body()  # over the route's size limit: 413
+        try:
+            # parsing is bounded, but a big file takes a moment: not on the event loop
+            plan = await asyncio.to_thread(importer.parse_mappings_file, raw, "")
+        except ConfigError as e:
+            return JSONResponse({"error": "invalid_import", "detail": str(e)}, status_code=400)
+        answer = {"mode": mode, "dry_run": _BOOLEANS[dry], "source": plan.source,
+                  "count": len(plan.mappings), "warnings": plan.warnings}
+        if _BOOLEANS[dry]:
+            rows, problem = ops.import_preview(state, plan, mode)
+            return JSONResponse({**answer, "rows": rows, "summary": ops.import_counts(rows),
+                                 "valid": problem is None, "problem": problem, "applied": False})
+        try:
+            rows, _new = await ops.import_mappings(state, plan, mode)
+        except ConfigError as e:
+            return JSONResponse({**answer, "error": "validation", "detail": str(e),
+                                 "applied": False}, status_code=400)
+        count = ops.import_counts(rows)
+        state.log(f"api: mappings imported ({mode}): {count['add']} added, {count['update']} "
+                  f"updated, {count['same']} unchanged, {count['remove']} removed")
+        state.audit(_client_ip(request), f"api_config_import_{mode}",
+                    f"{len(plan.mappings)} mappings ({plan.source})", user="api-token")
+        return JSONResponse({**answer, "rows": rows, "summary": count, "valid": True,
+                             "problem": None, "applied": True})
+
+    async def metrics(request):
+        return PlainTextResponse(metrics_text(state), media_type=METRICS_TYPE)
+
     async def status(request):
         return JSONResponse({"mappings": state.supervisor.all_status()})
 
@@ -209,6 +257,9 @@ def build_api_routes(state):
         Route(f"{API_PREFIX}/health", health, methods=["GET"]),
         Route(f"{API_PREFIX}/openapi.json", openapi, methods=["GET"]),
         Route(f"{API_PREFIX}/status", status, methods=["GET"]),
+        Route(f"{API_PREFIX}/metrics", metrics, methods=["GET"]),
+        Route(f"{API_PREFIX}/import", import_mappings, methods=["POST"],
+              max_body_size=importer.MAX_FILE_BYTES),
         Route(f"{API_PREFIX}/ports", ports, methods=["GET"]),
         Route(f"{API_PREFIX}/mappings", list_mappings, methods=["GET"]),
         Route(f"{API_PREFIX}/mappings", create_mapping, methods=["POST"]),
@@ -361,6 +412,21 @@ def openapi_spec(admin) -> dict:
             "status": {"allOf": [{"$ref": "#/components/schemas/MappingStatus"}],
                        "nullable": True}}},
         "Deleted": {"type": "object", "properties": {"deleted": {"type": "string"}}},
+        "ImportResult": {"type": "object", "additionalProperties": True, "properties": {
+            "mode": {"type": "string", "enum": list(importer.MODES)},
+            "dry_run": {"type": "boolean"},
+            "source": {"type": "string", "description": "what the body was"},
+            "count": {"type": "integer", "description": "mappings in the body"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+            "rows": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "kind": {"type": "string"},
+                "action": {"type": "string", "enum": ["add", "update", "same", "remove"]},
+                "target": {"type": "string", "description": "the mapping it updates"}}}},
+            "summary": {"type": "object", "additionalProperties": {"type": "integer"}},
+            "valid": {"type": "boolean", "description": "the result can be saved"},
+            "problem": {"type": "string", "nullable": True,
+                        "description": "why the result can't be saved"},
+            "applied": {"type": "boolean"}}},
         "MergePatch": {"type": "object", "additionalProperties": True, "description": (
             "An RFC 7396 JSON merge patch on a Mapping: an object merges into the stored "
             "one, a list or a value replaces it, null resets the field to its default.")},
@@ -370,8 +436,10 @@ def openapi_spec(admin) -> dict:
     })
     responses = {
         "BadRequest": _json("Error", "The request is not valid: a body that is not a JSON "
-                                     "object (invalid_json), a mapping that is not valid "
-                                     "(validation), an unknown action (unknown_action)."),
+                                     "object (invalid_json), a mapping or an import result "
+                                     "that is not valid (validation), an unknown action "
+                                     "(unknown_action) or query value (invalid_parameter), a "
+                                     "body that is nothing importable (invalid_import)."),
         "Unauthorized": _json("Error", "No token, a wrong one (unauthorized), or no API token "
                                        "configured (api_token_not_configured)."),
         "Forbidden": _json("Error", "The token's role may only read (forbidden)."),
@@ -386,7 +454,7 @@ def openapi_spec(admin) -> dict:
         return {"$ref": f"#/components/responses/{name}"}
 
     def op(summary: str, ok: tuple, *errors: str, write: bool = False, body=None,
-           description: str = "") -> dict:
+           description: str = "", parameters=None) -> dict:
         """One operation: its 2xx answer, the errors it can give, and the token errors
         every authenticated call can (403 for a call that changes something)."""
         resp = {ok[0]: _json(ok[1], ok[2])}
@@ -402,6 +470,8 @@ def openapi_spec(admin) -> dict:
             out["description"] = description
         if body is not None:
             out["requestBody"] = body
+        if parameters:
+            out["parameters"] = parameters
         return out
 
     def mapping_body(schema: str = "Mapping", types=("application/json",)) -> dict:
@@ -440,6 +510,33 @@ def openapi_spec(admin) -> dict:
                                               "schema": {"type": "object"}}}}}}},
             "/status": {"get": op("Live status of all mappings", ("200", "StatusMap", "status map"))},
             "/ports": {"get": op("Detected serial ports", ("200", "PortList", "port list"))},
+            "/metrics": {"get": {
+                "summary": "Prometheus metrics (the same as /metrics in a web UI session)",
+                "security": bearer,
+                "responses": {"200": {"description": "text exposition format 0.0.4",
+                                      "content": {"text/plain": {"schema": {"type": "string"}}}},
+                              "401": ref("Unauthorized"), "503": ref("SetupIncomplete")}}},
+            "/import": {"post": op(
+                "Import many mappings in one change", ("200", "ImportResult", "imported, or "
+                                                       "what a dry run would do"),
+                "BadRequest", "TooLarge", write=True,
+                description="The body: a mappings export ({\"mappings\": [...]}, also what "
+                            "GET /mappings answers), a whole config.json (only its mappings) "
+                            "or a classic ser2net.yaml / ser2net.conf. One save and one "
+                            "backup; refused as a whole (400, nothing changed) when the "
+                            "result is not valid.",
+                body={"required": True, "content": {
+                    "application/json": {"schema": {"type": "object"}},
+                    "text/plain": {"schema": {"type": "string"}}}},
+                parameters=[
+                    {"name": "mode", "in": "query", "schema": {
+                        "type": "string", "enum": list(importer.MODES), "default": "merge"},
+                     "description": "merge: a mapping with the same id, else the same name, is "
+                                    "updated, the others are added; replace: the body's "
+                                    "mappings replace all of them"},
+                    {"name": "dry_run", "in": "query",
+                     "schema": {"type": "boolean", "default": False},
+                     "description": "true: answer what it would do; change nothing"}])},
             "/mappings": {
                 "get": op("List mappings (config + status)", ("200", "MappingList", "mappings")),
                 "post": op("Create a mapping", ("201", "Mapping", "created (Location: its URL)"),

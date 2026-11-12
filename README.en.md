@@ -312,7 +312,8 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
-- **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
+- **/metrics:** Prometheus-format metrics (a web UI session; with the REST API token:
+  `/api/v1/metrics`, see REST API): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
   the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
@@ -343,8 +344,8 @@ curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/me
 curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/<id>/stop
 ```
 Endpoints: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
-`POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
-`GET /health` (unauthenticated), `GET /openapi.json`.
+`POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
+`GET /metrics`, `GET /health` (unauthenticated), `GET /openapi.json`.
 
 **`PUT` replaces the whole mapping.** Every field the body leaves out gets its default, as in
 a new mapping: listen on `0.0.0.0` port 4001, no client allow-list, not read-only, enabled
@@ -356,6 +357,31 @@ that changes only what the body names. An object merges into the stored one
 replaces it, and `null` resets a field to its default (`{"network":{"allowed_client_ips":null}}`).
 The result is checked like any edit; a refused patch changes nothing (HTTP 400). The
 previous configuration of every change stays in `backups/`.
+
+**Many mappings in one change:** `POST /import` takes what **Settings → Mappings export / import**
+writes or `GET /mappings` answers (`{"mappings": [...]}`), a whole `config.json` (only its
+mappings are used) or a classic `ser2net.yaml` / `ser2net.conf`. `?mode=merge` (the default)
+updates a mapping with the same id, else the same name, and adds the others;
+`?mode=replace` makes the body's mappings the only ones. It is one save — one backup, all
+or nothing: a result that isn't valid (two mappings on one port, ...) is refused whole
+(HTTP 400) and nothing changes. `?dry_run=true` answers what it would do (each mapping
+added, updated, unchanged or removed, and why it would be refused) without changing
+anything:
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  --data-binary @ser2net-mappings.json "http://HOST:8080/api/v1/import?mode=merge&dry_run=true"
+```
+**Prometheus with the token:** `GET /api/v1/metrics` answers the same metrics as `/metrics`
+(which needs a web UI session) to any API token:
+```yaml
+scrape_configs:
+  - job_name: ser2net
+    metrics_path: /api/v1/metrics
+    authorization:
+      credentials_file: /etc/prometheus/ser2net-token   # the token, e.g. a viewer one
+    static_configs:
+      - targets: ["HOST:8080"]
+```
 The token has the role chosen when it was generated: a `viewer` token may only read (GET)
 and gets stored secrets (the MQTT password) masked. An `api_token_role` in `config.json`
 that is not a role counts as `viewer`, and the start-up log says so.
