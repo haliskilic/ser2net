@@ -71,11 +71,14 @@
         {%- elif st and st.link == 'connecting' and state == 'running' %} <span class="tag">{{ t.connecting }}</span>{% endif %}
         {% if st and st.last_error and state in ('error','device-missing','reconnecting')
               and not (link_down and st.last_error == st.link_error) %}
-          {#- what it means in the page's language; the error itself in the tooltip #}
-          <div class="err-small" title="{{ st.last_error }}">{{ (st.last_error|explain or st.last_error)|softbreak }}</div>
-          {#- what to do: a serial port's (device-missing / reconnecting), or a refused listener
-              port's (error: the supervisor sets it at each failed start) #}
-          {% if st.hint %}<div class="warn-small" title="{{ st.hint }}">{{ st.hint|softbreak }}</div>{% endif %}
+          {#- what it means in the page's language; the error itself in the tooltip. With
+              state "error" a hint is why the system refused the listener's port and what to
+              do (the supervisor sets it at each failed start): it says that instead (a
+              general "ports below 1024" would be wrong on Windows) #}
+          {%- set bind_hint = st.hint if state == 'error' else '' %}
+          <div class="err-small" title="{{ st.last_error }}">{{ (bind_hint or st.last_error|explain or st.last_error)|softbreak }}</div>
+          {#- a serial port's hint (device-missing / reconnecting): what to do, under it #}
+          {% if st.hint and not bind_hint %}<div class="warn-small" title="{{ st.hint }}">{{ st.hint|softbreak }}</div>{% endif %}
         {% endif %}
         {% if link_down and st.link_error %}
           <div class="err-small" title="{{ st.link_error }}">{{ (st.link_error|explain or st.link_error)|softbreak }}</div>
