@@ -42,7 +42,7 @@ echo "psutil in ./lib: $psutil"
 "$PY" ser2netweb.py --about
 
 echo "== 3. a start from ./lib answers /healthz"
-SER2NET_BIND_IP=127.0.0.1 SER2NET_PORT=18091 "$PY" ser2netweb.py --data-dir "$data/d" \
+SER2NETWEB_BIND_IP=127.0.0.1 SER2NETWEB_PORT=18091 "$PY" ser2netweb.py --data-dir "$data/d" \
     > "$data/server.log" 2>&1 &
 pid=$!
 ok=""

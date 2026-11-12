@@ -53,7 +53,7 @@ a = Analysis(
     excludes=["bootstrap"],  # the frozen build skips the offline bootstrap (deps are inside)
     noarchive=False,
     # LGPL: ldap3 goes in as plain .py files (not into the archive), so a user can load a
-    # modified version instead with SER2NET_LIB_OVERRIDE=<dir> (see THIRD-PARTY-NOTICES.md)
+    # modified version instead with SER2NETWEB_LIB_OVERRIDE=<dir> (see THIRD-PARTY-NOTICES.md)
     module_collection_mode={"ldap3": "py"},
 )
 # libgcc_s (wanted by cryptography's Rust module) is part of every glibc system, and

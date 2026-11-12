@@ -23,7 +23,7 @@ without the fields is posted; Settings and the start-up log warn while the check
 and while passwords go unencrypted (ldap:// without StartTLS).
 
 The pure parts (settings, the reason in an exception, the messages) always run; the
-rest needs ldap3 and cryptography (SKIP without, or fail with SER2NET_OPTIONAL_TESTS=1).
+rest needs ldap3 and cryptography (SKIP without, or fail with SER2NETWEB_OPTIONAL_TESTS=1).
 Run: python3 tests/test_ldap_tls.py
 """
 import contextlib

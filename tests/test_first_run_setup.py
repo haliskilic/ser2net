@@ -8,7 +8,7 @@
     never the code;
   * a second setup request that was let in before the first finished (its body still
     on the way) does not replace the first admin;
-  * with SER2NET_ADMIN_PASSWORD_FILE set but unusable, setup in the browser stays closed;
+  * with SER2NETWEB_ADMIN_PASSWORD_FILE set but unusable, setup in the browser stays closed;
   * demoting yourself is refused when the other admins can't sign in (LDAP off);
   * the user name fields (setup, sign-in, Add user) don't let a phone keyboard capitalise
     or correct the name; setup and Add user also check the rule in the browser, and a
@@ -122,14 +122,14 @@ def test_second_setup_request():
 
 def test_locked():
     d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "no-such-dir", "pw")
-    with Server(None, env={"SER2NET_ADMIN_PASSWORD_FILE": d}) as srv:
+    with Server(None, env={"SER2NETWEB_ADMIN_PASSWORD_FILE": d}) as srv:
         st, page = request(srv, "/setup")
         assert st == 403 and "Setup in the browser is closed" in page and 'name="password"' not in page
         st, _ = request(srv, "/setup", data=form())
         assert st == 403 and srv.saved_config()["users"] == []
-        assert "ERROR: SER2NET_ADMIN_PASSWORD_FILE" in srv.output()
+        assert "ERROR: SER2NETWEB_ADMIN_PASSWORD_FILE" in srv.output()
         assert not os.path.exists(os.path.join(srv.data, "setup-code.txt"))
-    print("SER2NET_ADMIN_PASSWORD_FILE set but unusable: setup in the browser stays closed  OK")
+    print("SER2NETWEB_ADMIN_PASSWORD_FILE set but unusable: setup in the browser stays closed  OK")
 
 
 def test_last_usable_admin():

@@ -10,12 +10,14 @@ nobody is told to install what is already installed.
 from __future__ import annotations
 
 import importlib
-import os
 import sys
 import types
 from dataclasses import dataclass
 
+from . import envvars
+
 REQUIREMENTS = "requirements-optional.txt"
+LIB_OVERRIDE_ENV = "SER2NETWEB_LIB_OVERRIDE"
 
 
 @dataclass
@@ -25,13 +27,14 @@ class Problem:
     missing: bool        # not installed; else installed, but importing it failed
     error: str           # the import error: "Type: message"
     frozen: bool = False  # a standalone executable, which bundles every optional package
-    override: str = ""   # SER2NET_LIB_OVERRIDE (a folder imported before the bundled copy)
+    override: str = ""   # SER2NETWEB_LIB_OVERRIDE (a folder imported before the bundled copy)
+    override_env: str = LIB_OVERRIDE_ENV  # the name it is set under (or SER2NET_LIB_OVERRIDE)
 
     @property
     def hint(self) -> str:
         """What to do about it."""
         if self.override and not self.missing:
-            return f"SER2NET_LIB_OVERRIDE puts {self.override} first: check the {self.dist} there"
+            return f"{self.override_env} puts {self.override} first: check the {self.dist} there"
         if self.frozen:
             return f"this executable should contain {self.dist}; please report it"
         return f"pip install -r {REQUIREMENTS}" + ("" if self.missing else ", then restart ser2net")
@@ -52,7 +55,8 @@ def problem(exc: BaseException, dist: str, root: str = "") -> Problem:
                and exc.name in {".".join(parts[:i]) for i in range(1, len(parts) + 1)})
     return Problem(dist, missing, f"{type(exc).__name__}: {exc}",
                    frozen=bool(getattr(sys, "frozen", False)),
-                   override=os.environ.get("SER2NET_LIB_OVERRIDE", "").strip())
+                   override=envvars.text(LIB_OVERRIDE_ENV),
+                   override_env=envvars.source(LIB_OVERRIDE_ENV))
 
 
 def load(module: str, dist: str, root: str = "") -> tuple[types.ModuleType | None, Problem | None]:

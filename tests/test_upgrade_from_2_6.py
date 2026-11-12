@@ -3,7 +3,7 @@
 Writes a config the way 2.6.x left it (no keepalive / connect-timeout / max-time /
 web-access keys; values the old REST API accepted unchecked, e.g. idle_timeout_s
 -1 or "300"), then boots the real server the way Docker / headless installs do —
-with SER2NET_BIND_IP set, which re-saves (and so validates) the config when loading
+with SER2NETWEB_BIND_IP set, which re-saves (and so validates) the config when loading
 changed it, as here. Checks: it starts, the old password still logs in, mappings /
 users / API token survive, legacy values are normalised, and the new settings take
 their safe defaults (keepalive on, login still required). Cross-platform.
@@ -87,7 +87,7 @@ def main():
     ui = free_port()
     with open(cfg_path, "w", encoding="utf-8") as fh:
         json.dump(v26_config(ui), fh)
-    env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(ui))
+    env = dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(ui))
     # server output goes to a file, never an unread pipe (a full pipe blocks the server)
     log_path = os.path.join(tmp, "server.log")
     server_log = open(log_path, "wb")
@@ -100,7 +100,7 @@ def main():
             with open(log_path, "rb") as fh:
                 out = fh.read().decode("utf-8", "replace")
             raise AssertionError(f"2.6.x config did not boot (Docker-style re-save):\n{out[-1500:]}")
-        print("2.6.x config boots with SER2NET_BIND_IP (re-saved + validated on start)  OK")
+        print("2.6.x config boots with SER2NETWEB_BIND_IP (re-saved + validated on start)  OK")
 
         with open(cfg_path, encoding="utf-8") as fh:
             saved = json.load(fh)

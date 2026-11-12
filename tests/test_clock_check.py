@@ -112,7 +112,8 @@ def test_start_up_warning():
     d = _data("config-20261111T120000Z.json", config_time=newest - 600)
     try:
         path = os.path.join(d, "config.json")
-        for k in ("SER2NET_BIND_IP", "SER2NET_PORT", "SER2NET_ADMIN_PASSWORD_FILE"):
+        for k in ("SER2NETWEB_BIND_IP", "SER2NETWEB_PORT", "SER2NETWEB_ADMIN_PASSWORD_FILE",
+                  "SER2NET_BIND_IP", "SER2NET_PORT", "SER2NET_ADMIN_PASSWORD_FILE"):
             os.environ.pop(k, None)
         with WallClock.patch(clock, shift=newest - 3 * DAY - time.time()):
             _store, cfg = runtime.prepare_config(path)

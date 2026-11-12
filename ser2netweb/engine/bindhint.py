@@ -31,7 +31,7 @@ _EXPLAIN = {
     PRIVILEGED_PORT: (
         "ports below {start} need the CAP_NET_BIND_SERVICE capability on Linux (systemd: "
         "AmbientCapabilities=CAP_NET_BIND_SERVICE; Docker on the host network: "
-        "SER2NET_LOW_PORTS=1), or use port {start} or above (README: Ports below 1024)"),
+        "SER2NETWEB_LOW_PORTS=1), or use port {start} or above (README: Ports below 1024)"),
     EXCLUDED_PORT: (
         "Windows doesn't let ser2net use this port: another program holds it, or Windows "
         "reserves it (netsh interface ipv4 show excludedportrange protocol=tcp); pick "

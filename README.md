@@ -710,6 +710,28 @@ python3 ser2netweb.py --reconfigure
 `--set-password`, `--sign-out-all`, `--reload`, `--about`, `--licenses`, `--version` ve
 `--healthcheck` işini yapıp çıkar; diğerleri ser2net'i başlatır.
 
+### Ortam değişkenleri
+Bir konteynerin, servis unit'inin ya da bir script'in bir çalıştırma için verdiği ayarlar
+(her biri kendi özelliğiyle birlikte anlatılıyor):
+
+| Değişken | Ne ayarlar |
+|---|---|
+| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | yönetim arayüzünün adresi ve portu; her açılışta `config.json`'un önüne geçer (`*`: IPv4 ve IPv6 bütün arayüzler) |
+| `SER2NETWEB_ADMIN_PASSWORD_FILE`, `SER2NETWEB_ADMIN_USER` | hiç hesap yokken ilk admin hesabı, bir dosyadan (Docker secret) |
+| `SER2NETWEB_NODE_NAME` | bu kopyanın adı |
+| `SER2NETWEB_PUBLIC_URL`, `SER2NETWEB_TRUSTED_PROXIES` | Ayarlar → Reverse proxy'nin ayarladıkları |
+| `SER2NETWEB_LOG_STDOUT=off` | log satırları yalnızca `all.log`'da |
+| `SER2NETWEB_LOW_PORTS=1` | Docker: host ağında 1024 altı portlar |
+| `SER2NETWEB_LOOP_WATCHDOG` | event loop watchdog'unun saniye cinsinden sınırı (`0`: kapalı) |
+| `SER2NETWEB_WINDOWS_LOOP=proactor`, `SER2NETWEB_WINDOWS_SERIAL=pyserial` | Windows: olay döngüsü, seri port sınıfı |
+| `SER2NETWEB_LIB_OVERRIDE` | Python modülleri gömülü olanlardan önce yüklenen bir klasör (ldap3, LGPL) |
+| `SER2NETWEB_SOURCE_URL` | değiştirilmiş bir kopya için alt bilgideki kaynak kod bağlantısı |
+
+2.9.x'e kadar adları `SER2NET_` ile başlıyordu (`SER2NET_BIND_IP` vb.). Eski adlar
+çalışmaya devam ediyor; onları kullanan compose dosyaları, unit'ler ve script'ler değişiklik
+gerektirmez. Bir değişkenin iki adı birden ayarlıysa `SER2NETWEB_` ile başlayan geçerlidir,
+boş bir değer verilmiş olsa bile.
+
 ### Offline kurulum (internetsiz makine)
 Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2netweb.py` ilk açılışta bunları
 `./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, her işletim
@@ -763,8 +785,8 @@ arm/v7): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (ya da `:2.9`, `:2.9.0`); `docker-compose.yml` bunu kullanır. Sürümler arasında Debian/Python
 tabanı değişince `:latest` ve `:X.Y` yeni tabanla yeniden derlenir (haftalık kontrol;
 `:X.Y.Z` yayımlandığı gibi kalır) — bkz. [`docs/DOCKER.md`](docs/DOCKER.md).
-Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
-ayarlanır — başsız ortamda interaktif seçici çalışamaz; `SER2NET_BIND_IP=*` IPv4 ve IPv6
+Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT` env ile
+ayarlanır — başsız ortamda interaktif seçici çalışamaz; `SER2NETWEB_BIND_IP=*` IPv4 ve IPv6
 tüm arayüzler demektir). Her eşlemenin portunu da yayınlayın
 (yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
 alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç hiçbir zaman root olarak
@@ -772,10 +794,10 @@ alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç hiçbir zaman
 sahibiyle (veya verilen `--user` ile) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
 volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
 olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez
-(host ağında 1024 altında bir eşleme portu varsa `SER2NET_LOW_PORTS=1` gerekir, bkz.
+(host ağında 1024 altında bir eşleme portu varsa `SER2NETWEB_LOW_PORTS=1` gerekir, bkz.
 [`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Reverse proxy arkasında
-`SER2NET_PUBLIC_URL` ve `SER2NET_TRUSTED_PROXIES`, Ayarlar → Reverse proxy'nin yaptığını
+`SER2NETWEB_PUBLIC_URL` ve `SER2NETWEB_TRUSTED_PROXIES`, Ayarlar → Reverse proxy'nin yaptığını
 yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
@@ -842,12 +864,12 @@ Adımlar, farklar ve seçenek tablosu (İngilizce):
   token'ın Kopyala düğmesi var), **Eşlemeleri dışa / içe aktar** (JSON), **Yapılandırma
   yedekleri** (kayıtlı bir `config.json`'u geri yükle; *config.json'u yeniden yükle*),
   **Saklama süresi** ve **bu kurulumun
-  adı** (Yönetim arayüzü; ya da `SER2NET_NODE_NAME`): bildirimler, tarayıcı sekmesi, üst bar
+  adı** (Yönetim arayüzü; ya da `SER2NETWEB_NODE_NAME`): bildirimler, tarayıcı sekmesi, üst bar
   ve LAN cluster'ın filo görünümü, aynı makinedeki kurulumların paylaştığı host adı yerine
   bunu kullanır; genel JSON webhook'u ayrıca `hostname` ve `instance_id` alır. Yönetim
   arayüzü panelinde arayüzün sunduğu adres ve protokol, `config.json`'da değişip bir sonraki
   açılışı bekleyen adres ve bu kurulumda adresin nasıl değiştiği görünür (Docker:
-  `SER2NET_BIND_IP` / `SER2NET_PORT`; Windows servisi: `--reconfigure` ile yeniden kurulum;
+  `SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT`; Windows servisi: `--reconfigure` ile yeniden kurulum;
   diğerleri: `--reconfigure` ile başlatma). Kaydedilen bir form sayfaya, kendi bölümüne döner
   ve sonucu orada yazar (`/settings#<bölüm>`'e `303`); sayfayı yenilemek ya da Geri formu
   yeniden göndermez (yeni bir token üretmez, yedeği yeniden yüklemez). Reddedilen bir form
@@ -1193,7 +1215,7 @@ proxy'ler** (`X-Forwarded-For` ve `X-Forwarded-Proto` yalnızca onlardan gelince
 alınır — varsayılan olarak hiçbiri; 2.8.1'e kadar `127.0.0.1` / `::1`'den gelen her bağlantıya
 güveniliyordu) ve proxy üzerinden HSTS (varsayılan kapalı). Tarayıcı HTTPS kullandığında
 cookie'ler Secure olur; `X-Forwarded-Proto: https` gönderen bir TLS proxy arkasında da.
-`SER2NET_PUBLIC_URL` / `SER2NET_TRUSTED_PROXIES` bunları bir çalıştırma için ayarlar;
+`SER2NETWEB_PUBLIC_URL` / `SER2NETWEB_TRUSTED_PROXIES` bunları bir çalıştırma için ayarlar;
 `FORWARDED_ALLOW_IPS` çalışmaya devam eder. nginx, Apache, Caddy, Traefik ve IIS örnekleri ve
 bir şey eksik olduğunda all.log'un ne yazdığı (İngilizce):
 [docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md).
@@ -1406,9 +1428,9 @@ sahibine geçer):
 
 **Tarayıcısız ilk admin:** ilk açılıştan önce `ser2net --set-password admin` çalıştırın
 (systemd altındaki bir kaynak kurulumda servisin `data/`'yı oluşturan ilk açılışından sonra;
-`config.json`'u oluşturur; `--reconfigure` ya da `SER2NET_BIND_IP` aksini söylemedikçe
-arayüz `127.0.0.1:8080`'de dinler) ya da Docker'da `SER2NET_ADMIN_PASSWORD_FILE`'ı parolayı
-içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` (varsayılan
+`config.json`'u oluşturur; `--reconfigure` ya da `SER2NETWEB_BIND_IP` aksini söylemedikçe
+arayüz `127.0.0.1:8080`'de dinler) ya da Docker'da `SER2NETWEB_ADMIN_PASSWORD_FILE`'ı parolayı
+içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USER` (varsayılan
 `admin`). Değişken yalnızca hiç hesap yokken kullanılır, sonraki açılışlar onu yok sayar.
 
 ### LAN cluster
@@ -1540,7 +1562,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
     kullanın, bkz. Güvenlik) ve `sudo systemctl restart ser2net` yapın:
     ```ini
     [Service]
-    Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+    Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
     ```
     İlk parolayı tarayıcıda ya da `--set-password` ile belirleyin (Güvenlik altındaki
     tablo). Bu tür komutları `ser2net` kullanıcısıyla çalıştırın (`sudo -u ser2net …`): hesap
@@ -1577,7 +1599,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   1024 altındaki boş her portta dinleyebilir. python3'e `setcap cap_net_bind_service=+ep`
   işe yaramaz (`NoNewPrivileges` dosya yetkilerini yok sayar) ve bu hakkı makinedeki her
   Python programına verir. Ya da 1024 ya da üstünde bir port kullanın. Host ağında Docker:
-  `SER2NET_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
+  `SER2NETWEB_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -1617,7 +1639,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   loop'ta çalışır. Bir çağrı onu bloklarsa ser2net 90 sn sonra her thread'in yığınını veri
   klasöründeki `hang.log`'a yazar ve çıkar (kod 70); yeniden başlatma politikası (Docker,
   systemd, Windows servisi) onu yeniden başlatır, sonraki açılış dosyayı `hang.log.1`
-  olarak saklar ve `all.log`'a yazar. Süreyi `SER2NET_LOOP_WATCHDOG=<saniye>` değiştirir,
+  olarak saklar ve `all.log`'a yazar. Süreyi `SER2NETWEB_LOOP_WATCHDOG=<saniye>` değiştirir,
   `0` kapatır. 90 sn, meşgul bir örneğin loop'una dönmesi için gerekenin (yaklaşık bir
   saniye) çok üstündedir; uykuya geçen bir makine ya da duraklatılan bir container
   sayılmaz. `/metrics` loop gecikmesini verir (`ser2net_event_loop_lag_seconds`).
@@ -1635,7 +1657,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 - **Windows'ta çok sayıda bağlantı:** ser2net'in orada kullandığı event loop (`select()`) en
   fazla 512 soketi izler (dinleyiciler, istemciler, arayüz bağlantıları). Bu sınıra
   yaklaşınca yeni bağlantılar log'a bir satır yazılarak reddedilir ve servis çalışmaya
-  devam eder. `SER2NET_WINDOWS_LOOP=proactor` ortam değişkeni (servis için: sistem ortam
+  devam eder. `SER2NETWEB_WINDOWS_LOOP=proactor` ortam değişkeni (servis için: sistem ortam
   değişkeni) böyle bir sınırı olmayan proactor loop'una geçirir; yeni olduğundan,
   güvenmeden önce seri zamanlamayı (ör. Modbus RTU) onunla deneyin. Kullanılan loop açılış
   log'unda yazar.
@@ -1644,7 +1666,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   seri hattın hızına yavaşlatılır. Bir saniyedir trafiği olmayan bir port 0,5 ms yerine
   10 ms'de bir yoklanır, veri gelir ya da gider gitmez yeniden 0,5 ms'de bir (bir isteğin
   yanıtı gecikmez). Bir seri sürücü bununla sorun çıkarırsa
-  `SER2NET_WINDOWS_SERIAL=pyserial` (servis için: sistem ortam değişkeni) pyserial'ın kendi
+  `SER2NETWEB_WINDOWS_SERIAL=pyserial` (servis için: sistem ortam değişkeni) pyserial'ın kendi
   yazma biçimine (hız denetimi olmadan) döner; lütfen adaptörü ve sürücüyü bildirin.
 
 ### Aynı makinede birden çok kurulum
@@ -1660,12 +1682,12 @@ Her kurulumun kendine ait olması gerekenler:
   kullanıyorsa bunu söyler ve ilk boş portu önerir; elle yazdığınız seçim yine kabul
   edilir. Terminalsiz bir ilk açılış (servis, container) portunu korur ve uyarıyı log'a
   yazar. Portu dolu olan arayüz eşlemelerini yine başlatır ve port boşalana kadar dener.
-  Seçici olmadan: `SER2NET_BIND_IP` + `SER2NET_PORT`.
+  Seçici olmadan: `SER2NETWEB_BIND_IP` + `SER2NETWEB_PORT`.
 - **eşleme portları ve seri cihazlar:** bir TCP/UDP portu ve bir seri cihaz tek bir
   kuruluma aittir. Portunu ya da cihazını başka bir program tutarken kaydedilen eşleme
   saklanır ve arayüz neden başlamadığını söyler; yeniden denenir ve portu boşalınca
   başlar.
-- **ad:** **Ayarlar → Yönetim arayüzü → Bu kurulumun adı** (ya da `SER2NET_NODE_NAME`) —
+- **ad:** **Ayarlar → Yönetim arayüzü → Bu kurulumun adı** (ya da `SER2NETWEB_NODE_NAME`) —
   bildirimler, tarayıcı sekmesi, üst bar ve filo görünümü hangi kurulum olduğunu söyler.
 - içe aktarılan, MQTT'ye yayın yapan eşlemelerin kendi **id**'leri olmalı: ayarlanmış bir
   client id ve Sparkplug edge node id'si (boşsa eşlemenin adı) — broker, id'sini başka bir
@@ -1681,7 +1703,7 @@ farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle g
   kuralı: [docs/WINDOWS.md](docs/WINDOWS.md)).
 - **Linux (systemd):** `systemd/ser2net@.service` şablonu her ad için bir kurulum çalıştırır;
   verisi `/var/lib/ser2net/<ad>` altında, adresi `/etc/ser2net/<ad>.env` içinde durur
-  (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); kurulum adı bildirimlerdeki adı olur.
+  (`SER2NETWEB_BIND_IP=0.0.0.0`, `SER2NETWEB_PORT=8081`); kurulum adı bildirimlerdeki adı olur.
   Unit'i ve paketlenmiş bağımlılıkları bir kez, bağımlılıkları her yükseltmeden sonra da
   yeniden kurun (kurulumlar `--no-bootstrap` ile başlar ve `lib/` güncel değilken açılış
   log'ları uyarır):
@@ -1692,7 +1714,7 @@ farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle g
   sudo systemctl enable --now ser2net@line1 ser2net@line2
   ```
 - **Docker:** her kurulum için ayrı bir container; her birinin kendi volume'ü,
-  `container_name`'i ve yayınlanan portları (`8081:8080`), adı için de `SER2NET_NODE_NAME`
+  `container_name`'i ve yayınlanan portları (`8081:8080`), adı için de `SER2NETWEB_NODE_NAME`
   (ya da `hostname:`) ([docs/DOCKER.md](docs/DOCKER.md)).
 
 ### Saat senkronizasyonu
@@ -1786,7 +1808,7 @@ klasörünü verin:
   olsun Excel'de çift tıklayınca Türkçe harfler ve sütunlar bozulmadan açılır) olarak
   indirilebilir. `all.log`'un her satırı stdout'a da
   yazılır; systemd'nin journal'ı ya da Docker'ın container log'u bunları kendi saklama
-  süreleriyle tutar. `SER2NET_LOG_STDOUT=off` satırları yalnızca `all.log`'da tutar.
+  süreleriyle tutar. `SER2NETWEB_LOG_STDOUT=off` satırları yalnızca `all.log`'da tutar.
   `all.log` her web arayüzü sayfası ve değişikliği için istemcinin IP adresiyle bir satır
   yazar: Ayarlar → *Denetim kaydı* → *all.log'daki web arayüzü istekleri* yalnızca
   değişiklikleri ve reddedilen istekleri ya da hiçbirini yazdırabilir (girişler ve denetim
@@ -1941,7 +1963,7 @@ bunun yerine `--set-password` kullanın (bkz. Güvenlik): başka hiçbir şey ka
 `admin-requests/` yalnızca komut satırından gelen bir isteği, çalışan örnek alana kadar tutar.
 
 **Eski bir sürüme dönmek:** önce servisi durdurup veri klasörünü kopyalayın. Bir sürüm,
-bilmediği ayarları ilk kaydında atar — 2.7.x bunu Docker'da hemen yapar (`SER2NET_BIND_IP`
+bilmediği ayarları ilk kaydında atar — 2.7.x bunu Docker'da hemen yapar (`SER2NETWEB_BIND_IP`
 ile her açılışta kaydeder) — ve 2.7.x yedek tutmaz; Modbus coil / discrete input
 noktalarını (fn 1/2) da reddeder, bu yüzden bunları içeren bir config orada açılmaz.
 2.9.0'dan beri en yeni yedek her zaman güncel `config.json`'dur; böylece eski bir sürüm onu
@@ -2006,14 +2028,14 @@ ser2net **çift lisanslıdır**:
 
 Birlikte gelen üçüncü-taraf bileşenler kendi lisanslarını korur — bkz. [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md);
 binary'deki tam metinler: `ser2net --licenses`. LGPL lisanslı ldap3 binary'de kaynak
-dosyaları olarak durur; `SER2NET_LIB_OVERRIDE=<klasör>` ile başka bir sürümü yüklenebilir.
+dosyaları olarak durur; `SER2NETWEB_LIB_OVERRIDE=<klasör>` ile başka bir sürümü yüklenebilir.
 Güvenlik açığı bildirimi: [SECURITY.md](SECURITY.md).
 
 Web arayüzünün her sayfası lisansla ve bir **Kaynak kodu** bağlantısıyla biter (giriş
 yapılmışsa sürümle ve **Lisanslar** sayfasıyla da: bu kopyanın taşıdığı lisans metinleri —
 LICENSE, NOTICE, ticari lisans ve üçüncü taraf bildirimleri, bir binary'de ise onun
 `THIRD-PARTY-LICENSES.txt`'i). Başkalarının ağ üzerinden kullandığı değiştirilmiş bir sürüm
-onlara kendi kaynak kodunu sunmalıdır (AGPL-3.0 13. madde): bağlantıyı `SER2NET_SOURCE_URL`
+onlara kendi kaynak kodunu sunmalıdır (AGPL-3.0 13. madde): bağlantıyı `SER2NETWEB_SOURCE_URL`
 ile ona yöneltin (`https://git.example.com/bizim-ser2net`; http(s) adresi olmayan bir değer
 kullanılmaz, açılışta uyarı verilir).
 

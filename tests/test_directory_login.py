@@ -2,7 +2,7 @@
 ser2net server against a small LDAP server (_ldap_server.py) and a small HTTPS OpenID
 provider in this process. The LDAP part needs ldap3, the OIDC part authlib and
 cryptography; each is skipped without them (a SKIP line, which tests/run_all.py
-repeats), or fails with SER2NET_OPTIONAL_TESTS=1.
+repeats), or fails with SER2NETWEB_OPTIONAL_TESTS=1.
 
   * a group setting that is only part of a group's name ("admins" for ser2net-admins)
     no longer gives that role: the sign-in is refused with the usual message, all.log

@@ -275,7 +275,7 @@ def _start(args: list[str], folder: str, port: int):
     try:
         return subprocess.Popen(
             [sys.executable, "ser2netweb.py", "--no-bootstrap", *args], cwd=ROOT,
-            env=dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(port)),
+            env=dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(port)),
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     finally:
         log.close()

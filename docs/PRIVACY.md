@@ -86,7 +86,7 @@ Only what you set up; nothing is on by default but the web UI itself.
 | Setting | Effect | Default |
 |---|---|---|
 | Settings → *Audit log* → *Web UI requests in all.log* | only changes and refused requests, or none | every page and change |
-| `SER2NET_LOG_STDOUT=off` (systemd: a commented line in `ser2net.service` and `ser2net@.service`; add it to `ser2net-standalone.service` with `systemctl edit`) | the log lines only in `all.log`, no journal / Docker copy | on |
+| `SER2NETWEB_LOG_STDOUT=off` (systemd: a commented line in `ser2net.service` and `ser2net@.service`; add it to `ser2net-standalone.service` with `systemctl edit`) | the log lines only in `all.log`, no journal / Docker copy | on |
 | Settings → *Notifications* → *Leave out personal data* | addresses as their network, no account names | off |
 | Settings → *Notifications* → *Send each recipient a message of their own* | one e-mail per recipient | off |
 | Settings → *Retention* | no log record, backup or trace older than that many days | off |
@@ -222,7 +222,7 @@ açık değildir.
 | Ayar | Etkisi | Varsayılan |
 |---|---|---|
 | Ayarlar → *Denetim kaydı* → *all.log'daki web arayüzü istekleri* | yalnızca değişiklikler ve reddedilen istekler, ya da hiçbiri | her sayfa ve değişiklik |
-| `SER2NET_LOG_STDOUT=off` (systemd: `ser2net.service` ve `ser2net@.service`'te yorum satırı olarak; `ser2net-standalone.service`'e `systemctl edit` ile ekleyin) | log satırları yalnızca `all.log`'da, journal / Docker kopyası yok | açık |
+| `SER2NETWEB_LOG_STDOUT=off` (systemd: `ser2net.service` ve `ser2net@.service`'te yorum satırı olarak; `ser2net-standalone.service`'e `systemctl edit` ile ekleyin) | log satırları yalnızca `all.log`'da, journal / Docker kopyası yok | açık |
 | Ayarlar → *Bildirimler* → *Kişisel verileri gönderme* | adresler ağlarıyla, hesap adları yok | kapalı |
 | Ayarlar → *Bildirimler* → *Her alıcıya ayrı bir mesaj gönder* | her alıcıya ayrı e-posta | kapalı |
 | Ayarlar → *Saklama süresi* | o kadar günden eski log kaydı, yedek ya da trace kalmaz | kapalı |

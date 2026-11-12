@@ -6,7 +6,7 @@ future-proof vs. the deprecated event-loop policies) and run uvicorn.Server.serv
 INSIDE that loop with loop="asyncio". On Linux the default selector loop (epoll) is
 correct. On Windows it is a SelectorEventLoop whose select() takes at most 512 sockets:
 its selector refuses a socket past that instead of stopping the loop, and incoming
-connections are refused before it fills (engine/netguard.py). SER2NET_WINDOWS_LOOP=proactor
+connections are refused before it fills (engine/netguard.py). SER2NETWEB_WINDOWS_LOOP=proactor
 runs the ProactorEventLoop instead, which has no such limit (event_loop_choice).
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
 from . import (
-    accounts, clock, console, datalock, i18n, logsetup, reload, sdnotify, standalone,
+    accounts, clock, console, datalock, envvars, i18n, logsetup, reload, sdnotify, standalone,
     watchdog,
 )
 from .config import (NODE_NAME_ENV, ConfigError, ConfigStore, data_path, host_port, node_name,
@@ -46,7 +46,8 @@ from .web.server import build_app
 
 
 def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
-    """Apply SER2NET_BIND_IP / SER2NET_PORT env vars to the admin UI bind address.
+    """Apply SER2NETWEB_BIND_IP / SER2NETWEB_PORT env vars (or SER2NET_BIND_IP /
+    SER2NET_PORT, their names up to 2.9.x: envvars) to the admin UI bind address.
 
     Lets a headless/containerized deployment set the bind address without the
     interactive console picker (which, being non-interactive in a container,
@@ -54,13 +55,13 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
     port). Returns True if a bind IP was provided. Env wins on every start, so a
     container's compose/run config stays the source of truth across restarts.
 
-    SER2NET_BIND_IP=* is every interface, IPv4 and IPv6 (admin_ui.bind_ip "", as the
+    SER2NETWEB_BIND_IP=* is every interface, IPv4 and IPv6 (admin_ui.bind_ip "", as the
     console's "All interfaces (IPv4 + IPv6)"); 0.0.0.0 is IPv4 only, :: IPv6 only.
 
-    Raises ConfigError for a SER2NET_BIND_IP that is not an IP address or * or a
-    SER2NET_PORT outside 1-65535 (the UI could not start on either). A SER2NET_PORT
-    that is not a number is ignored, as it always was, with a warning in `notes`."""
-    ip = (os.environ.get("SER2NET_BIND_IP") or "").strip()
+    Raises ConfigError for a bind IP that is not an IP address or * or a port outside
+    1-65535 (the UI could not start on either). A port that is not a number is ignored,
+    as it always was, with a warning in `notes`. Messages name the variable as it is set."""
+    ip = envvars.text("SER2NETWEB_BIND_IP")
     if not ip:
         return False
     if ip == "*":
@@ -69,20 +70,21 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
         try:
             ipaddress.ip_address(ip)
         except ValueError:
-            raise ConfigError(f"SER2NET_BIND_IP must be an IP address (e.g. 0.0.0.0) or * "
-                              f"(every interface, IPv4 and IPv6), not {ip!r}") from None
-    port = (os.environ.get("SER2NET_PORT") or "").strip()
+            raise ConfigError(f"{envvars.source('SER2NETWEB_BIND_IP')} must be an IP address "
+                              f"(e.g. 0.0.0.0) or * (every interface, IPv4 and IPv6), "
+                              f"not {ip!r}") from None
+    port, port_var = envvars.text("SER2NETWEB_PORT"), envvars.source("SER2NETWEB_PORT")
     number = None
     if port:
         try:
             number = int(port)
         except ValueError:
             if notes is not None:
-                notes.append(f"WARNING: SER2NET_PORT {port!r} is not a number and is ignored "
+                notes.append(f"WARNING: {port_var} {port!r} is not a number and is ignored "
                              f"— the admin UI uses port {admin.port}")
         else:
             if not 1 <= number <= 65535:
-                raise ConfigError(f"SER2NET_PORT must be a port number (1-65535), not {port!r}")
+                raise ConfigError(f"{port_var} must be a port number (1-65535), not {port!r}")
     admin.bind_ip = ip
     if number is not None:
         admin.port = number
@@ -167,8 +169,8 @@ def request_shutdown() -> None:
 
 def prepare_config(config_path: str, reconfigure: bool = False):
     """Load config.json (creating it on the first run, when the console asks for the
-    admin UI address), apply SER2NET_BIND_IP / SER2NET_PORT and create the first admin
-    from SER2NET_ADMIN_PASSWORD_FILE. Returns (store, config).
+    admin UI address), apply SER2NETWEB_BIND_IP / SER2NETWEB_PORT and create the first
+    admin from SER2NETWEB_ADMIN_PASSWORD_FILE. Returns (store, config).
 
     A config.json that loads is never refused: what validate() rejects in it is logged
     as a warning (config.load_notes) and accepted (AppConfig.tolerate_problems), so the
@@ -177,8 +179,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     The file is written back only when this start changes it (first run, --reconfigure,
     a new env address, an upgrade's normalisation, TLS files found in a moved data
     directory: AppConfig.find_moved_tls_files); a failing write is a warning too.
-    Fatal, with one line instead of a traceback: an unusable SER2NET_BIND_IP /
-    SER2NET_PORT, a config.json that can't be read or parsed, a first run that can't
+    Fatal, with one line instead of a traceback: an unusable SER2NETWEB_BIND_IP /
+    SER2NETWEB_PORT, a config.json that can't be read or parsed, a first run that can't
     create it."""
     data_dir = os.path.dirname(os.path.abspath(config_path))
     try:
@@ -236,7 +238,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
                          "own)")
     if admin:
         write_audit_record(os.path.join(os.path.dirname(store.path), "audit.log"), "local",
-                           "first_run_setup", "SER2NET_ADMIN_PASSWORD_FILE", admin,
+                           "first_run_setup",
+                           envvars.source("SER2NETWEB_ADMIN_PASSWORD_FILE"), admin,
                            max_age_s=config.log_max_age_days * 86400)
     if problems:
         notes.append("WARNING: ser2net starts with the setting(s) above anyway — what they "
@@ -245,7 +248,7 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     return store, config
 
 
-WINDOWS_LOOP_ENV = "SER2NET_WINDOWS_LOOP"
+WINDOWS_LOOP_ENV = "SER2NETWEB_WINDOWS_LOOP"
 
 
 def event_loop_choice(platform: str = sys.platform,
@@ -253,16 +256,15 @@ def event_loop_choice(platform: str = sys.platform,
     """The event loop ser2net runs on ("default", "selector" or "proactor") and the line the
     start-up log gets about it ("" when there is nothing to say). Windows: the
     SelectorEventLoop, which serial ports and sockets have run on so far, unless
-    SER2NET_WINDOWS_LOOP=proactor; elsewhere the platform's default."""
+    SER2NETWEB_WINDOWS_LOOP=proactor; elsewhere the platform's default."""
     if platform != "win32":
         return "default", ""
-    env = os.environ if env is None else env
-    want = (env.get(WINDOWS_LOOP_ENV) or "").strip().lower()
+    want, name = envvars.text(WINDOWS_LOOP_ENV, env).lower(), envvars.source(WINDOWS_LOOP_ENV, env)
     if want == "proactor":
-        return "proactor", (f"event loop: proactor ({WINDOWS_LOOP_ENV}=proactor), no "
+        return "proactor", (f"event loop: proactor ({name}=proactor), no "
                             f"{netguard.SELECT_LIMIT}-socket limit")
     note = "" if want in ("", "selector") else (
-        f"{WINDOWS_LOOP_ENV}={want!r} is neither 'selector' nor 'proactor'; ")
+        f"{name}={want!r} is neither 'selector' nor 'proactor'; ")
     return "selector", (note + f"event loop: selector (select() watches at most "
                         f"{netguard.SELECT_LIMIT} sockets, so new connections are refused "
                         f"near that; {WINDOWS_LOOP_ENV}=proactor has no such limit)")
@@ -407,10 +409,10 @@ def use_worker_threads(loop: asyncio.AbstractEventLoop) -> None:
 
 
 def node_name_notes(env: Optional[Mapping[str, str]] = None) -> list[str]:
-    """The start-up warning for a SER2NET_NODE_NAME that can't be used (none otherwise)."""
-    raw = ((os.environ if env is None else env).get(NODE_NAME_ENV) or "").strip()
+    """The start-up warning for a SER2NETWEB_NODE_NAME that can't be used (none otherwise)."""
+    raw = envvars.text(NODE_NAME_ENV, env)
     if raw and (why := node_name_problem(raw)) is not None:
-        return [f"WARNING: {NODE_NAME_ENV} {raw[:80]!r} is not used: {why}"]
+        return [f"WARNING: {envvars.source(NODE_NAME_ENV, env)} {raw[:80]!r} is not used: {why}"]
     return []
 
 
@@ -516,11 +518,11 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     scheme = "https" if admin.tls_enabled else "http"
     published = proxy.public_url(admin)
     name = node_name(admin)
+    via = (envvars.source(proxy.PUBLIC_URL_ENV) if proxy.public_url_from_env()
+           else "admin_ui.public_url")
     state.log(f"ser2net starting{f' as {name!r}' if name else ''} — admin UI on "
               f"{scheme}://{host_port(admin.bind_ip, admin.port)}"
-              + (f", published as {published} "
-                 f"({proxy.PUBLIC_URL_ENV if proxy.public_url_from_env() else 'admin_ui.public_url'})"
-                 if published else ""))
+              + (f", published as {published} ({via})" if published else ""))
     for note in (standalone.notes + config.load_notes + ([loop_note] if loop_note else [])
                  + proxy.start_notes(admin) + node_name_notes()):
         state.log(note)

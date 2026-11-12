@@ -20,9 +20,9 @@ and any other one added later):
 - the template keeps each instance's data in /var/lib/ser2net/<instance> (StateDirectory,
   0700: never the shared code tree or /opt/ser2net/data, whatever the instance is called),
   starts with --no-bootstrap (the instances share ./lib), reads an optional
-  /etc/ser2net/<instance>.env (SER2NET_BIND_IP / SER2NET_PORT) after naming the instance
-  by its instance name (SER2NET_NODE_NAME), and has every hardening line of
-  ser2net.service.
+  /etc/ser2net/<instance>.env (SER2NETWEB_BIND_IP / SER2NETWEB_PORT) after naming the instance
+  by its instance name (SER2NET_NODE_NAME, the old name, which either name in that file
+  overrides), and has every hardening line of ser2net.service.
 What only a real start shows (the sandbox around a running server) is the CI job
 "systemd unit" (tests/systemd_smoke.sh).
 

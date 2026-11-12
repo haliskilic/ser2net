@@ -1,11 +1,11 @@
 """A name for each instance: Settings -> Admin interface -> Name of this instance
-(admin_ui.node_name, or SER2NET_NODE_NAME for one run).
+(admin_ui.node_name, or SER2NETWEB_NODE_NAME for one run).
 
 Instances on one host share its host name, which was all notifications, the cluster's
 fleet view and the browser tab had to tell them apart by. Checks:
   * config.json: optional ('' = the host name, as before); a hand-edited value that is too
     long, has control characters / line breaks or isn't text is dropped with a load note
-    (no new validate() rule); SER2NET_NODE_NAME wins while it is usable, a start-up warning
+    (no new validate() rule); SER2NETWEB_NODE_NAME wins while it is usable, a start-up warning
     says why not otherwise;
   * notifications: "ser2net <name>: …" in the title and text, the JSON webhook's "node"
     (plus "hostname" and "instance_id" for programs), e-mail From display name
@@ -62,13 +62,13 @@ def test_config() -> None:
         cfg.validate()
     assert AppConfig.from_dict({"admin_ui": {"node_name": "x" * 64}}).admin_ui.node_name == "x" * 64
     admin = AdminUI(node_name="stored")
-    assert node_name(admin, {"SER2NET_NODE_NAME": " from-env "}) == "from-env"
-    assert node_name(admin, {"SER2NET_NODE_NAME": "x" * 65}) == "stored"
-    assert node_name(admin, {"SER2NET_NODE_NAME": ""}) == "stored"
-    assert runtime.node_name_notes({"SER2NET_NODE_NAME": "x" * 65}) == [
-        f"WARNING: SER2NET_NODE_NAME {'x' * 65!r} is not used: The instance name can have at "
+    assert node_name(admin, {"SER2NETWEB_NODE_NAME": " from-env "}) == "from-env"
+    assert node_name(admin, {"SER2NETWEB_NODE_NAME": "x" * 65}) == "stored"
+    assert node_name(admin, {"SER2NETWEB_NODE_NAME": ""}) == "stored"
+    assert runtime.node_name_notes({"SER2NETWEB_NODE_NAME": "x" * 65}) == [
+        f"WARNING: SER2NETWEB_NODE_NAME {'x' * 65!r} is not used: The instance name can have at "
         "most 64 characters."]
-    assert runtime.node_name_notes({"SER2NET_NODE_NAME": "fine"}) == []
+    assert runtime.node_name_notes({"SER2NETWEB_NODE_NAME": "fine"}) == []
     print("config: optional, unusable hand-edited values dropped with a note, the environment "
           "first while usable  OK")
 
@@ -174,6 +174,7 @@ def _sign_in(a: App) -> str:
 
 
 def test_web() -> None:
+    os.environ.pop("SER2NETWEB_NODE_NAME", None)
     os.environ.pop("SER2NET_NODE_NAME", None)
     with App({"users": USERS, "cluster": {"enabled": True, "key": "k" * 32}}) as a:
         jar = _sign_in(a)
@@ -212,14 +213,14 @@ def test_web() -> None:
         st, _, _ = a.call("POST", "/settings/node-name", fields={"_csrf": CSRF},
                           headers={"Cookie": jar})
         assert st == 303 and a.state.config.admin_ui.node_name == "Line 1 <b>"
-        os.environ["SER2NET_NODE_NAME"] = "from-env"
+        os.environ["SER2NETWEB_NODE_NAME"] = "from-env"
         try:
             st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
             assert '<input type="text" value="from-env" disabled>' in page
-            assert "Set by <span class=\"mono\">SER2NET_NODE_NAME</span>" in page
+            assert "Set by <span class=\"mono\">SER2NETWEB_NODE_NAME</span>" in page
             assert "<title>from-env · Settings — ser2net</title>" in page
         finally:
-            del os.environ["SER2NET_NODE_NAME"]
+            del os.environ["SER2NETWEB_NODE_NAME"]
         # restore preview: an earlier backup has no name
         st, _, page = a.call("POST", "/settings/node-name", fields={"_csrf": CSRF,
                                                                     "node_name": ""},
@@ -236,11 +237,11 @@ def test_web() -> None:
 
 def test_start() -> None:
     with Server({"users": USERS, "admin_ui": {"node_name": "Line 1"}},
-                env={"SER2NET_NODE_NAME": "y" * 65}) as srv:
+                env={"SER2NETWEB_NODE_NAME": "y" * 65}) as srv:
         out = srv.output()
     assert "ser2net starting as 'Line 1' — admin UI on http://127.0.0.1:" in out, out[:800]
-    assert "WARNING: SER2NET_NODE_NAME 'yyyy" in out and "at most 64 characters" in out
-    print("start-up: 'ser2net starting as <name>', an unusable SER2NET_NODE_NAME warned  OK")
+    assert "WARNING: SER2NETWEB_NODE_NAME 'yyyy" in out and "at most 64 characters" in out
+    print("start-up: 'ser2net starting as <name>', an unusable SER2NETWEB_NODE_NAME warned  OK")
 
 
 def main() -> None:

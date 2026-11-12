@@ -157,7 +157,8 @@ def test_start_after_a_move():
                "tls_key": r"C:\ProgramData\ser2net\tls\key.pem"}
         with open(path, "w", encoding="utf-8") as fh:
             json.dump({"users": USERS, "admin_ui": old}, fh)
-        with env(SER2NET_BIND_IP=None, SER2NET_PORT=None):
+        with env(SER2NETWEB_BIND_IP=None, SER2NETWEB_PORT=None, SER2NET_BIND_IP=None,
+                 SER2NET_PORT=None):
             _store, cfg = runtime.prepare_config(path)
         runtime.require_admin_tls(cfg.admin_ui)  # (would exit with the old paths)
         assert (cfg.admin_ui.tls_cert, cfg.admin_ui.tls_key) == (cert, key), cfg.admin_ui
@@ -179,8 +180,8 @@ def test_start_after_a_move():
             json.dump({"users": USERS, "admin_ui": old}, fh)
         p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data],
                            cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True,
-                           env=dict(os.environ, SER2NET_BIND_IP="127.0.0.1",
-                                    SER2NET_PORT=str(free_port())),
+                           env=dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1",
+                                    SER2NETWEB_PORT=str(free_port())),
                            encoding="utf-8", errors="replace", timeout=60)
         out = p.stdout + p.stderr
         assert p.returncode == 1 and "Traceback" not in out, (p.returncode, out[-2000:])

@@ -27,7 +27,7 @@ python ser2netweb.py --no-bootstrap --data-dir /tmp/s2n-dev
 | Tests (any OS) | `python tests/run_all.py -v` |
 | + serial data path (Linux, needs `socat`) | `python tests/run_all.py --socat -v` |
 | Coverage (CI fails below the floor in `ci.yml`, job `coverage`) | `pip install coverage && python tests/coverage_run.py && coverage report` |
-| Browser layout | `pip install playwright && python -m playwright install chromium`, then `SER2NET_UI_TESTS=1 python tests/test_ui_layout.py` |
+| Browser layout | `pip install playwright && python -m playwright install chromium`, then `SER2NETWEB_UI_TESTS=1 python tests/test_ui_layout.py` |
 | Offline wheels | `python tests/test_vendor_wheels.py`; against PyPI (network): `python tools/refresh_wheels.py --verify` |
 | Offline first start (a fresh checkout without `lib/`; CI: every test leg, plus Linux arm64, macOS, armv7 under QEMU) | `tests/offline_first_start.sh python3` |
 | Known vulnerabilities | `pip install pip-audit && pip-audit -r requirements.txt` |
@@ -45,9 +45,9 @@ in a comment (`uses: actions/checkout@<sha>  # v7.0.1`); Dependabot updates both
 and `tests/test_release_pipeline.py` fail on a tag reference.
 
 `tests/test_dead_peer.py` blackholes a loopback flow with iptables; run it with
-`SER2NET_BLACKHOLE_TESTS=1` only in a throwaway network namespace or VM, never on a
+`SER2NETWEB_BLACKHOLE_TESTS=1` only in a throwaway network namespace or VM, never on a
 machine whose firewall matters. The standalone executable checks need a build
-(`SER2NET_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`).
+(`SER2NETWEB_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`).
 `tests/systemd_smoke.sh` (CI jobs `systemd unit` and `systemd unit (binary)`) installs the
 systemd units as the README says and runs them on the runner's systemd: it adds a `ser2net`
 user, `/opt/ser2net` and the service, so run it only on a throwaway VM. A change to a unit in
@@ -252,9 +252,9 @@ Dependabot günceller, tag ile verilen bir referansta zizmor ve
 `tests/test_release_pipeline.py` başarısız olur.
 
 `tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
-`SER2NET_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
+`SER2NETWEB_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
 ya da sanal makinede çalıştırın. Standalone binary denetimleri bir derleme ister
-(`SER2NET_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`). `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
+(`SER2NETWEB_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`). `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
 `systemd unit (binary)` işleri) systemd unit'lerini README'deki gibi kurar ve runner'ın
 systemd'sinde çalıştırır: bir `ser2net` kullanıcısı, `/opt/ser2net` ve servisi ekler; bu
 yüzden yalnızca silinebilir bir sanal makinede çalıştırın. `systemd/` altındaki bir unit'te

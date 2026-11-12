@@ -5,7 +5,7 @@ Checks:
     stack to hang.log (naming the blocking call), a line to all.log, and exits 70;
   * a process that was frozen as a whole (sleep, docker pause, a suspended VM) is not
     ended for it: the watchdog measures anew; without heartbeats it still fires later;
-  * SER2NET_LOOP_WATCHDOG: seconds, 0 = off, anything else: the default and a warning;
+  * SER2NETWEB_LOOP_WATCHDOG: seconds, 0 = off, anything else: the default and a warning;
   * the next start keeps the previous hang.log as hang.log.1 and says so in all.log;
   * sd_notify does nothing without NOTIFY_SOCKET; with it a real server sends READY=1
     (with a STATUS) once its UI listens, WATCHDOG=1 pings under WatchdogSec=, STOPPING=1
@@ -130,7 +130,7 @@ def test_settings_and_previous_hang():
         assert os.path.exists(os.path.join(d, "hang.log.1"))
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    print("SER2NET_LOOP_WATCHDOG parsed (0 = off, bad -> default + warning); previous "
+    print("SER2NETWEB_LOOP_WATCHDOG parsed (0 = off, bad -> default + warning); previous "
           "hang.log kept as .1  OK")
 
 

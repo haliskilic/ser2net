@@ -68,7 +68,7 @@ The service is *Starting* until its mappings were started and its admin UI liste
 *Running* from then on, so `--install-service` waits for that and reports a service that
 stops while it starts (its exit code, and where to look) instead of success. A service
 whose event loop is stuck for 90 s writes `hang.log` and exits, and is started again 5 s
-later (`SER2NET_LOOP_WATCHDOG`, a system environment variable, sets the limit; `0` = off).
+later (`SER2NETWEB_LOOP_WATCHDOG`, a system environment variable, sets the limit; `0` = off).
 
 Look in the data directory (`C:\ProgramData\ser2net\` by default):
 
@@ -147,8 +147,8 @@ A named service (`--service-name NAME`) needs a rule of its own for its exe,
 uses.
 
 Two environment variables change how ser2net uses Windows (for the service: system
-environment variables, then restart it): `SER2NET_WINDOWS_LOOP=proactor` lifts the
-512-socket limit of the default event loop, and `SER2NET_WINDOWS_SERIAL=pyserial` goes back
+environment variables, then restart it): `SER2NETWEB_WINDOWS_LOOP=proactor` lifts the
+512-socket limit of the default event loop, and `SER2NETWEB_WINDOWS_SERIAL=pyserial` goes back
 to pyserial's own serial writes if a virtual COM driver misbehaves with the paced ones
 (README → *Run as a service*).
 

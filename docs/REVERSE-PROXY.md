@@ -42,8 +42,8 @@ each other's UI port directly too (next section).
 
 | Setting | `config.json` | For one run instead | Default |
 |---|---|---|---|
-| Public URL | `admin_ui.public_url` | `SER2NET_PUBLIC_URL` | none |
-| Trusted proxies | `admin_ui.trusted_proxies` | `SER2NET_TRUSTED_PROXIES` | none |
+| Public URL | `admin_ui.public_url` | `SER2NETWEB_PUBLIC_URL` | none |
+| Trusted proxies | `admin_ui.trusted_proxies` | `SER2NETWEB_TRUSTED_PROXIES` | none |
 | Send HSTS on HTTPS through the proxy | `admin_ui.proxy_hsts` | — | off |
 
 Changes apply at once. While an environment variable sets a value, the page shows it
@@ -91,7 +91,7 @@ trust networks your clients are in (`0.0.0.0/0`, the LAN) while they can reach t
 port directly: anyone there could then choose the address the sign-in limits see.
 
 `FORWARDED_ALLOW_IPS`, uvicorn's variable that worked up to 2.8.1, is still read when
-neither the setting nor `SER2NET_TRUSTED_PROXIES` gives a list (the start-up log says so);
+neither the setting nor `SER2NETWEB_TRUSTED_PROXIES` gives a list (the start-up log says so);
 `*` there is warned about.
 
 The connection limits of the UI's listener (`admin_ui.max_connections_per_ip`) count the
@@ -211,8 +211,8 @@ services:
   ser2net:
     image: ghcr.io/haliskilic/ser2net:latest
     environment:
-      SER2NET_PUBLIC_URL: https://ser2net.example.com
-      SER2NET_TRUSTED_PROXIES: 172.30.0.0/24       # the network below
+      SER2NETWEB_PUBLIC_URL: https://ser2net.example.com
+      SER2NETWEB_TRUSTED_PROXIES: 172.30.0.0/24       # the network below
     ports: ["4001:4001"]                           # mappings only; no 8080
     networks: [web]
     # devices:, volumes: as in docker-compose.yml

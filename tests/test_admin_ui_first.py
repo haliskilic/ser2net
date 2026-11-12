@@ -222,7 +222,7 @@ def test_tls_that_does_not_load():
                "mappings": [mapping("Never", free_port(), "never0000001")]}
         with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as fh:
             json.dump(cfg, fh)
-        env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(port))
+        env = dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(port))
         p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data],
                            cwd=ROOT, env=env, stdin=subprocess.DEVNULL, capture_output=True,
                            encoding="utf-8", errors="replace", timeout=60)

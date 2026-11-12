@@ -74,7 +74,8 @@ class Applied:
 
 
 def keep_env_address(admin) -> None:
-    """SER2NET_BIND_IP / SER2NET_PORT win over config.json (and a backup), as at start-up."""
+    """SER2NETWEB_BIND_IP / SER2NETWEB_PORT win over config.json (and a backup), as at
+    start-up."""
     from .runtime import _env_bind_override  # (runtime imports this module's users)
     _env_bind_override(admin)
 

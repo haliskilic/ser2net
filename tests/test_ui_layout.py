@@ -54,9 +54,9 @@ in Turkish, whose texts are longer:
     it unchanged keeps every setting of the mapping.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
-Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
+Skipped when Playwright or its browser is missing, unless SER2NETWEB_UI_TESTS=1 (the
 CI 'ui' job sets it, so a missing browser fails there instead of skipping). Set
-SER2NET_UI_ARTIFACTS=<dir> to keep a screenshot of every page and width.
+SER2NETWEB_UI_ARTIFACTS=<dir> to keep a screenshot of every page and width.
 Like test_cluster.py, the two nodes open their UDP cluster-discovery socket.
 
 Run: python3 tests/test_ui_layout.py
@@ -78,10 +78,11 @@ sys.path.insert(0, ROOT)
 import _form_cases as form_cases
 from _formsubmit import browser_post
 
+from ser2netweb import envvars
 from ser2netweb.web.auth import hash_password
 
-REQUIRED = os.environ.get("SER2NET_UI_TESTS") == "1"
-ARTIFACTS = os.environ.get("SER2NET_UI_ARTIFACTS", "")
+REQUIRED = envvars.get("SER2NETWEB_UI_TESTS") == "1"
+ARTIFACTS = envvars.get("SER2NETWEB_UI_ARTIFACTS", "")
 WIDTHS = (1440, 1280, 1024, 960, 768, 390)  # desktop … half-screen … tablet … phone
 
 with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as _fh:
@@ -746,7 +747,7 @@ def settings_checks(browser, base, problems, config_path):
 
 def skip(why):
     if REQUIRED:
-        raise AssertionError(f"SER2NET_UI_TESTS=1 but {why}")
+        raise AssertionError(f"SER2NETWEB_UI_TESTS=1 but {why}")
     print(f"SKIP browser layout test: {why} "
           "(pip install playwright && python -m playwright install chromium)")
 

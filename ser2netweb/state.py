@@ -7,7 +7,7 @@ are persisted atomically, or undone, before the supervisor is reconciled.
 All activity (logins/logouts, serial port open/close, client connect/disconnect,
 mapping start/stop/edit, HTTP requests, errors) is funneled through ``log()`` and
 written to ``all.log`` next to ``config.json`` (and to stdout, unless
-SER2NET_LOG_STDOUT=off). The data directory holds more state: audit.log(.1), the rotated
+SER2NETWEB_LOG_STDOUT=off). The data directory holds more state: audit.log(.1), the rotated
 all.log.N, backups/, logs/, traces/ and tls/. Deleting config.json alone resets the
 accounts, settings and mappings but leaves those (audit.log and backups/ are shown to the
 next admin; the next start prunes the per-mapping logs and traces that no mapping owns
@@ -32,7 +32,7 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from . import accounts, clock, logsetup, storage, tlsreload
+from . import accounts, clock, envvars, logsetup, storage, tlsreload
 from .config import (
     AppConfig, ConfigStore, ConfigWriteError, User, fold, lock_down_dir, mapping_file,
     valid_mapping_id,
@@ -96,9 +96,9 @@ API_AUTH_REPEAT_S = 60
 REFUSED_LOG_S = 60
 # first-run setup through a host name that isn't this machine's needs this file's code
 SETUP_CODE_FILE = "setup-code.txt"
-# SER2NET_LOG_STDOUT=off: the log lines go only to all.log, not to stdout as well (where
+# SER2NETWEB_LOG_STDOUT=off: the log lines go only to all.log, not to stdout as well (where
 # systemd's journal or Docker's container log keep a copy of their own)
-LOG_STDOUT_ENV = "SER2NET_LOG_STDOUT"
+LOG_STDOUT_ENV = "SER2NETWEB_LOG_STDOUT"
 # the log trim (_trim_log_file): what it copies at a time, what of a line's start it reads
 # for the line's time, and how often it tries to swap the file (Windows: a log view may
 # hold it open for a moment)
@@ -114,13 +114,14 @@ _SURELY_OLDER_S = 2 * 86400
 def log_stdout(environ=None) -> tuple[bool, str]:
     """(whether the log lines also go to stdout, a warning for a value that is neither
     on nor off — then they do, as without it)."""
-    raw = ((os.environ if environ is None else environ).get(LOG_STDOUT_ENV) or "").strip()
+    raw = envvars.text(LOG_STDOUT_ENV, environ)
     value = raw.lower()
     if value in ("", "on", "1", "yes", "true"):
         return True, ""
     if value in ("off", "0", "no", "false"):
         return False, ""
-    return True, (f"WARNING: {LOG_STDOUT_ENV}={raw[:40]!r} is not on or off; the log lines "
+    return True, (f"WARNING: {envvars.source(LOG_STDOUT_ENV, environ)}={raw[:40]!r} is not "
+                  "on or off; the log lines "
                   "also go to stdout")
 
 
@@ -1263,17 +1264,19 @@ class AppState:
         this machine's IP address or name it just works; through any other name (DNS
         rebinding, but also a reverse proxy or Docker's host name) it asks for a one-time
         code, which is written to setup-code.txt in the data directory — never to a log.
-        With SER2NET_ADMIN_PASSWORD_FILE / _USER set the admin comes from there, and the
-        page stays closed if that failed."""
+        With SER2NETWEB_ADMIN_PASSWORD_FILE / _USER (or their 2.9.x names SER2NET_...) set
+        the admin comes from there, and the page stays closed if that failed."""
         environ = os.environ if environ is None else environ
         if self.config.password_set:
             self.first_run_done()
             return
         if accounts.provision_requested(environ):
             self.setup_locked = True
-            self.log("first-run setup in the browser is closed: SER2NET_ADMIN_PASSWORD_FILE / "
-                     "SER2NET_ADMIN_USER is set but created no admin (see above). Fix it and "
-                     "restart, or run: ser2net --set-password <name>")
+            self.log(f"first-run setup in the browser is closed: "
+                     f"{envvars.source(accounts.PASSWORD_FILE_ENV, environ)} / "
+                     f"{envvars.source(accounts.ADMIN_USER_ENV, environ)} is set but created "
+                     "no admin (see above). Fix it and restart, or run: ser2net --set-password "
+                     "<name>")
             return
         self.setup_code = "-".join(secrets.token_hex(2) for _ in range(5))
         try:

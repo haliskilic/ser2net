@@ -10,7 +10,7 @@ vendor job also compares every hash with PyPI: python tools/refresh_locks.py --v
 
 Run: python3 tests/test_build_lock.py   (stdlib only)
 
-With SER2NET_SKIP_PIN_CHECKS=1 (CI's test matrix and coverage job) the comparison with the
+With SER2NETWEB_SKIP_PIN_CHECKS=1 (CI's test matrix and coverage job) the comparison with the
 repository's current pins is left to the job "offline wheels match requirements.txt".
 """
 import os
@@ -21,8 +21,11 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, ROOT)
 
 import refresh_locks as rl
+
+from ser2netweb import envvars
 
 
 def read(rel):
@@ -149,7 +152,7 @@ def test_builds_install_the_locks():
 
 
 if __name__ == "__main__":
-    if os.environ.get("SER2NET_SKIP_PIN_CHECKS") == "1":
+    if envvars.get("SER2NETWEB_SKIP_PIN_CHECKS") == "1":
         print("SKIP: the locks against the pins (CI: job 'offline wheels match requirements.txt')")
     else:
         test_locks_match_the_pins()

@@ -12,13 +12,13 @@ Portable part (any OS):
     checkpoints until then), so --install-service reports a start that fails;
   * the service's stderr goes to service.log, and a service that stops on an error says
     why in all.log and the Application event log (the entry itself on Windows only).
-Windows part (SER2NET_SERVICE_TESTS=1, as Administrator; CI runs it): install a
+Windows part (SER2NETWEB_SERVICE_TESTS=1, as Administrator; CI runs it): install a
 service on a throwaway data directory, wait until the UI answers, set the admin's
 password with --set-password while it runs (the service applies it; the request folder
 leaves SYSTEM read and delete, and no other account an entry), kill the process
 and see the SCM restart it, stop it (clean shutdown in the log), set the password again
 while it is stopped (the data directory stays SYSTEM's and Administrators' only), start
-it with that password, remove it. Uses SER2NET_STANDALONE_BIN when set (the frozen exe),
+it with that password, remove it. Uses SER2NETWEB_STANDALONE_BIN when set (the frozen exe),
 else python + ser2netweb.py.
 
 Run: python3 tests/test_windows_service.py
@@ -38,7 +38,7 @@ from types import SimpleNamespace
 
 from _server import ROOT, Browser, free_port, wait_port
 
-from ser2netweb import runtime, winservice
+from ser2netweb import envvars, runtime, winservice
 from ser2netweb.web.auth import hash_password
 
 WINDOWS = os.name == "nt"
@@ -853,12 +853,12 @@ def test_stop_progress():
 
 
 def test_real_service():
-    if not WINDOWS or os.environ.get("SER2NET_SERVICE_TESTS") != "1":
-        print("SKIP real Windows service test (Windows + Administrator + SER2NET_SERVICE_TESTS=1)")
+    if not WINDOWS or envvars.get("SER2NETWEB_SERVICE_TESTS") != "1":
+        print("SKIP real Windows service test (Windows + Administrator + SER2NETWEB_SERVICE_TESTS=1)")
         return
     import psutil
 
-    exe = os.environ.get("SER2NET_STANDALONE_BIN")
+    exe = envvars.get("SER2NETWEB_STANDALONE_BIN")
     base = [os.path.abspath(exe)] if exe else [sys.executable, os.path.join(ROOT, "ser2netweb.py")]
     name = "s2n-test-" + uuid.uuid4().hex[:6]
     work = tempfile.mkdtemp(prefix="s2n svc ")  # a space in the path, on purpose

@@ -7,7 +7,7 @@ authlib, paho-mqtt, cryptography).
 
 A missing package skips that part with a SKIP line, which tests/run_all.py repeats under
 the test's PASS line, so a skipped part never passes unnoticed. With
-SER2NET_OPTIONAL_TESTS=1 (set on the CI legs that install requirements-optional.txt) a
+SER2NETWEB_OPTIONAL_TESTS=1 (set on the CI legs that install requirements-optional.txt) a
 missing package fails the test instead. A package that is installed but fails to import
 fails the test either way (the import error is raised).
 """
@@ -15,8 +15,12 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 
-REQUIRED = os.environ.get("SER2NET_OPTIONAL_TESTS") == "1"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from ser2netweb import envvars
+
+REQUIRED = envvars.get("SER2NETWEB_OPTIONAL_TESTS") == "1"
 
 
 def _installed(module: str) -> bool:
@@ -36,6 +40,6 @@ def need(*modules: str, what: str) -> bool:
         return True
     why = " and ".join(missing) + (" is" if len(missing) == 1 else " are") + " not installed"
     if REQUIRED:
-        raise AssertionError(f"SER2NET_OPTIONAL_TESTS=1, but {why} (needed for: {what})")
+        raise AssertionError(f"SER2NETWEB_OPTIONAL_TESTS=1, but {why} (needed for: {what})")
     print(f"SKIP {what}: {why} (pip install -r requirements-optional.txt)")
     return False

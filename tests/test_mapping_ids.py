@@ -175,7 +175,7 @@ def test_server():
     with Server(boot_config(ports)) as srv:
         log = srv.output()
         assert log.count("is not a valid mapping id") == 4, log[-3000:]
-        saved = srv.saved_config()   # SER2NET_BIND_IP set: the boot re-saved the config
+        saved = srv.saved_config()   # SER2NETWEB_BIND_IP set: the boot re-saved the config
         ids = [m["id"] for m in saved["mappings"]]
         assert all(valid_mapping_id(i) for i in ids) and ids[-1] == "goodid12", ids
         data = srv.data

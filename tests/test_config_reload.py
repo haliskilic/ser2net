@@ -133,7 +133,7 @@ def server(cfg_extra, env=None) -> Server:
     """A server whose admin UI address comes from config.json (not the environment), so a
     changed address can be seen waiting for the next start."""
     srv = Server(None, env=env)
-    del srv.env["SER2NET_BIND_IP"], srv.env["SER2NET_PORT"]
+    del srv.env["SER2NETWEB_BIND_IP"], srv.env["SER2NETWEB_PORT"]
     cfg = {"admin_ui": {"bind_ip": "127.0.0.1", "port": srv.port},
            "users": [{"username": "admin", "password_hash": hash_password(PW),
                       "role": "admin", "pwd_version": 1},

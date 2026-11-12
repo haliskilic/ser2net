@@ -685,6 +685,28 @@ python3 ser2netweb.py --reconfigure
 `--set-password`, `--sign-out-all`, `--reload`, `--about`, `--licenses`, `--version` and
 `--healthcheck` do their work and exit; the others start ser2net.
 
+### Environment variables
+What a container, a service unit or a script sets for a run (each is explained with its
+feature):
+
+| Variable | What it sets |
+|---|---|
+| `SER2NETWEB_BIND_IP`, `SER2NETWEB_PORT` | the admin UI's address and port, which win over `config.json` at every start (`*`: every interface, IPv4 and IPv6) |
+| `SER2NETWEB_ADMIN_PASSWORD_FILE`, `SER2NETWEB_ADMIN_USER` | the first admin account, from a file (a Docker secret), while there is no account |
+| `SER2NETWEB_NODE_NAME` | this instance's name |
+| `SER2NETWEB_PUBLIC_URL`, `SER2NETWEB_TRUSTED_PROXIES` | what Settings → Reverse proxy sets |
+| `SER2NETWEB_LOG_STDOUT=off` | the log lines in `all.log` only |
+| `SER2NETWEB_LOW_PORTS=1` | Docker: ports below 1024 on the host network |
+| `SER2NETWEB_LOOP_WATCHDOG` | the event loop watchdog's limit in seconds (`0`: off) |
+| `SER2NETWEB_WINDOWS_LOOP=proactor`, `SER2NETWEB_WINDOWS_SERIAL=pyserial` | Windows: the event loop, the serial port class |
+| `SER2NETWEB_LIB_OVERRIDE` | a folder whose Python modules load before the bundled ones (ldap3, LGPL) |
+| `SER2NETWEB_SOURCE_URL` | the footer's source code link, for a modified copy |
+
+Up to 2.9.x their names began with `SER2NET_` (`SER2NET_BIND_IP` and so on). The old names
+still work, so compose files, units and scripts that use them need no change; when both
+names of a variable are set, the `SER2NETWEB_` one wins, also when it is set to an empty
+value.
+
 ### Offline install (no-internet machine)
 Dependencies live in `vendor/wheels/`; `ser2netweb.py` installs them to `./lib` on first
 launch (`pip install --no-index`). No internet needed. The set covers Python 3.10–3.14 on
@@ -738,8 +760,8 @@ Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (or `:2.9`, `:2.9.0`); `docker-compose.yml` uses it. Between releases `:latest` and `:X.Y`
 are rebuilt on a newer Debian/Python base when it changes (weekly check; `:X.Y.Z` stays as
 released) — see [`docs/DOCKER.md`](docs/DOCKER.md).
-Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
-`SER2NET_PORT` — the interactive picker can't run headless; `SER2NET_BIND_IP=*` is every
+Inside the container the UI binds to `0.0.0.0` (set via `SER2NETWEB_BIND_IP` /
+`SER2NETWEB_PORT` — the interactive picker can't run headless; `SER2NETWEB_BIND_IP=*` is every
 interface, IPv4 and IPv6). Publish each mapping's port
 too (a new mapping gets 4001), or use the host network. A serial device's group is taken
 from the device itself, so `--group-add` isn't needed for the usual device names. The
@@ -747,10 +769,10 @@ process never runs as root: as the `ser2net` user (uid 10001), or as the owner o
 bind-mounted `/data` folder (or the `--user` given); a `/data` volume written by an older (root-running)
 image is taken over on the first start, and in a bind-mounted folder the files an older
 image wrote as root are handed to the folder's owner, so upgrading needs no manual step
-(but on the host network with a mapping port below 1024: `SER2NET_LOW_PORTS=1`, see
+(but on the host network with a mapping port below 1024: `SER2NETWEB_LOW_PORTS=1`, see
 [`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
-`SER2NET_PUBLIC_URL` and `SER2NET_TRUSTED_PROXIES` set what Settings → Reverse proxy does
+`SER2NETWEB_PUBLIC_URL` and `SER2NETWEB_TRUSTED_PROXIES` set what Settings → Reverse proxy does
 ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Details:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
@@ -814,12 +836,12 @@ what differs and an option table: [`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRAT
   generate/revoke **REST API tokens** or change the first token's role only (a one-time
   token has a Copy button), **Mappings export / import** (JSON), **Configuration backups**
   (restore a saved `config.json`; *Reload config.json*), **Retention**, and the
-  **name of this instance** (Admin interface; or `SER2NET_NODE_NAME`): notifications, the
+  **name of this instance** (Admin interface; or `SER2NETWEB_NODE_NAME`): notifications, the
   browser tab, the top bar and the LAN cluster's fleet view use it instead of the host name,
   which instances on one machine share; the generic JSON webhook also gets `hostname` and
   `instance_id`. The Admin interface panel shows the address and protocol the UI serves, a
   changed address in `config.json` that waits for the next start, and how this installation
-  changes it (Docker: `SER2NET_BIND_IP` / `SER2NET_PORT`; Windows service: reinstall with
+  changes it (Docker: `SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT`; Windows service: reinstall with
   `--reconfigure`; else a start with `--reconfigure`). A saved form returns to the page at
   its own section, which says what was done (`303` to `/settings#<section>`); a reload or
   Back does not post it again (no second token, no second restore). A refused form (`400`)
@@ -1140,7 +1162,7 @@ own there, while `/` keeps working directly), the **trusted proxies** (only from
 `X-Forwarded-For` and `X-Forwarded-Proto` believed — none by default; up to 2.8.1 every
 connection from `127.0.0.1` / `::1` was believed) and HSTS through the proxy (off by
 default). The cookies are Secure whenever the browser used HTTPS, also through a TLS proxy
-that sends `X-Forwarded-Proto: https`. `SER2NET_PUBLIC_URL` / `SER2NET_TRUSTED_PROXIES` set
+that sends `X-Forwarded-Proto: https`. `SER2NETWEB_PUBLIC_URL` / `SER2NETWEB_TRUSTED_PROXIES` set
 them for one run instead; `FORWARDED_ALLOW_IPS` still works. Examples for nginx, Apache,
 Caddy, Traefik and IIS, and what all.log says when something is missing:
 [docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md).
@@ -1354,9 +1376,9 @@ directory's owner by itself):
 **First admin without the browser:** run `ser2net --set-password admin` before the first
 start (a source install under systemd: after the service's first start, which makes its
 `data/`; it creates `config.json`; the UI then listens on `127.0.0.1:8080` unless
-`--reconfigure` or `SER2NET_BIND_IP` says otherwise), or — Docker — point
-`SER2NET_ADMIN_PASSWORD_FILE` at a file (a Docker secret) holding the password, with
-`SER2NET_ADMIN_USER` for the name (default `admin`). The variable is used only while there
+`--reconfigure` or `SER2NETWEB_BIND_IP` says otherwise), or — Docker — point
+`SER2NETWEB_ADMIN_PASSWORD_FILE` at a file (a Docker secret) holding the password, with
+`SER2NETWEB_ADMIN_USER` for the name (default `admin`). The variable is used only while there
 is no account at all; later starts ignore it.
 
 ### LAN cluster
@@ -1482,7 +1504,7 @@ is no account at all; later starts ignore it.
     address, see Security) and `sudo systemctl restart ser2net`:
     ```ini
     [Service]
-    Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+    Environment=SER2NETWEB_BIND_IP=0.0.0.0 SER2NETWEB_PORT=8080
     ```
     Set the first password in the browser, or with `--set-password` (the table under
     Security). Run such commands as the `ser2net` user (`sudo -u ser2net …`): the account
@@ -1518,7 +1540,7 @@ is no account at all; later starts ignore it.
   listen on any free port below 1024. `setcap cap_net_bind_service=+ep` on python3 does not
   help (`NoNewPrivileges` ignores file capabilities) and would give that right to every
   Python program on the machine. Or use port 1024 or above. Docker on the host network:
-  `SER2NET_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
+  `SER2NETWEB_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -1554,7 +1576,7 @@ with the configuration, backups, logs, audit log and traces: delete it to remove
   When a call blocks it, ser2net writes every thread's stack to `hang.log` in the data
   directory and exits (code 70) after 90 s, so the restart policy (Docker, systemd, the
   Windows service) starts it again; the next start keeps the file as `hang.log.1` and says
-  so in `all.log`. `SER2NET_LOOP_WATCHDOG=<seconds>` changes the limit, `0` switches it
+  so in `all.log`. `SER2NETWEB_LOOP_WATCHDOG=<seconds>` changes the limit, `0` switches it
   off. 90 s is far above what a busy instance needs to get back to its loop (about a
   second), and a machine that slept or a container that was paused is not counted.
   `/metrics` has the loop's lag (`ser2net_event_loop_lag_seconds`). `/healthz` answers
@@ -1572,7 +1594,7 @@ with the configuration, backups, logs, audit log and traces: delete it to remove
 - **Many connections on Windows:** the event loop ser2net uses there (`select()`) watches at
   most 512 sockets (listeners, clients, the UI's connections). Near that, new connections
   are refused with a log line, and the service keeps running. The environment variable
-  `SER2NET_WINDOWS_LOOP=proactor` (for the service: a system environment variable) switches
+  `SER2NETWEB_WINDOWS_LOOP=proactor` (for the service: a system environment variable) switches
   to the proactor loop, which has no such limit; it is new, so test serial timing (e.g.
   Modbus RTU) with it before relying on it. The start-up log names the loop in use.
 - **Serial writes on Windows** wait for the device, as on Linux: at most 8 KiB per port are
@@ -1580,7 +1602,7 @@ with the configuration, backups, logs, audit log and traces: delete it to remove
   speed instead of filling the driver's queue. A port with no traffic for a second is
   polled every 10 ms instead of every 0.5 ms, and at once again every 0.5 ms when data comes
   or goes (a reply after a request is not delayed). Should a serial driver misbehave with this,
-  `SER2NET_WINDOWS_SERIAL=pyserial` (for the service: a system environment variable) goes
+  `SER2NETWEB_WINDOWS_SERIAL=pyserial` (for the service: a system environment variable) goes
   back to how pyserial writes (no pacing); please report the adapter and driver.
 
 ### Several instances on one machine
@@ -1596,12 +1618,12 @@ Each instance needs its own:
   and offers the next free one; a choice you type is kept. A first start without a terminal
   (a service, a container) keeps its port and logs the warning. A UI whose port is taken
   starts its mappings anyway and keeps trying the port until it is free. Without the picker:
-  `SER2NET_BIND_IP` + `SER2NET_PORT`.
+  `SER2NETWEB_BIND_IP` + `SER2NETWEB_PORT`.
 - **mapping ports and serial devices:** a TCP/UDP port and a serial device belong to one
   instance. A mapping saved while another program holds its port or device is kept, and the
   UI says why it didn't start; it is tried again, and starts once its port is free.
 - **name:** **Settings → Admin interface → Name of this instance** (or
-  `SER2NET_NODE_NAME`) — notifications, the browser tab, the top bar and the fleet view
+  `SER2NETWEB_NODE_NAME`) — notifications, the browser tab, the top bar and the fleet view
   then say which instance it is.
 - imported mappings that publish to MQTT need **ids** of their own: a client id that is
   set, and a Sparkplug edge node id (the mapping's name when blank) — a broker drops a
@@ -1618,7 +1640,7 @@ profiles.
   [docs/WINDOWS.md](docs/WINDOWS.md)).
 - **Linux (systemd):** the template `systemd/ser2net@.service` runs one instance per name,
   with its data in `/var/lib/ser2net/<name>` and its address in `/etc/ser2net/<name>.env`
-  (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); the instance name is its name in
+  (`SER2NETWEB_BIND_IP=0.0.0.0`, `SER2NETWEB_PORT=8081`); the instance name is its name in
   notifications. Install the unit and the bundled dependencies once, and the dependencies
   again after each upgrade (the instances start with `--no-bootstrap`, and their start-up
   log warns while `lib/` is out of date):
@@ -1629,7 +1651,7 @@ profiles.
   sudo systemctl enable --now ser2net@line1 ser2net@line2
   ```
 - **Docker:** one container per instance, each with its own volume, `container_name` and
-  published ports (`8081:8080`), and `SER2NET_NODE_NAME` (or `hostname:`) for its name
+  published ports (`8081:8080`), and `SER2NETWEB_NODE_NAME` (or `hostname:`) for its name
   ([docs/DOCKER.md](docs/DOCKER.md)).
 
 ### Time synchronisation
@@ -1717,7 +1739,7 @@ when other accounts can use the folder — give ser2net a folder of its own:
   letters and columns intact, whatever the regional settings). Every `all.log` line is also
   written to stdout,
   which systemd's journal or Docker's container log keep under their own retention;
-  `SER2NET_LOG_STDOUT=off` keeps the lines in `all.log` only. `all.log` has a line with the
+  `SER2NETWEB_LOG_STDOUT=off` keeps the lines in `all.log` only. `all.log` has a line with the
   client's IP address for every web UI page and change: Settings → *Audit log* → *Web UI
   requests in all.log* can log only changes and refused requests, or none (sign-ins and
   the audit records are logged either way).
@@ -1865,7 +1887,7 @@ command-line request until the running instance takes it.
 
 **Going back to an older version:** stop the service and copy the data folder first. A
 release drops the settings it doesn't know at its first save — 2.7.x at once in Docker (with
-`SER2NET_BIND_IP` it saves at every start) — and 2.7.x keeps no backups; it also refuses
+`SER2NETWEB_BIND_IP` it saves at every start) — and 2.7.x keeps no backups; it also refuses
 Modbus coil / discrete-input points (fn 1/2), so a config with them doesn't start there.
 Since 2.9.0 the newest backup is always the current `config.json`, so the newer file is still
 in `backups/` after an older release replaced it: after upgrading again, restore it under
@@ -1927,14 +1949,14 @@ ser2net is **dual-licensed**:
 
 Bundled third-party components keep their own licenses — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md);
 the full texts inside an executable: `ser2net --licenses`. The LGPL-licensed ldap3 stays
-in the executable as plain source files; `SER2NET_LIB_OVERRIDE=<dir>` loads another
+in the executable as plain source files; `SER2NETWEB_LIB_OVERRIDE=<dir>` loads another
 version of it. Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 
 Every page of the web UI ends with the licence and a **Source code** link (signed in: also
 the version and **Licences**, a page with the licence texts this copy carries — LICENSE,
 NOTICE, the commercial licence and the third-party notices, or in an executable its
 `THIRD-PARTY-LICENSES.txt`). A modified version that others use over a network has to offer
-them its source (AGPL-3.0 section 13): point the link at it with `SER2NET_SOURCE_URL`
+them its source (AGPL-3.0 section 13): point the link at it with `SER2NETWEB_SOURCE_URL`
 (`https://git.example.com/our-ser2net`; a value that is not an http(s) address is not used,
 with a start-up warning).
 

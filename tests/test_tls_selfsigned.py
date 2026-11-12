@@ -22,7 +22,7 @@ executables — and the openssl command is only a fallback for source installs.
      Settings → Admin TLS shows it, and generating while the server's clock reads
      earlier than it can warns (generated all the same)
 Parts 1, 3 and 4 need cryptography (pip install cryptography) and are skipped without (a
-SKIP line, which tests/run_all.py repeats), or fail with SER2NET_OPTIONAL_TESTS=1.
+SKIP line, which tests/run_all.py repeats), or fail with SER2NETWEB_OPTIONAL_TESTS=1.
 
 Run: python3 tests/test_tls_selfsigned.py
 """

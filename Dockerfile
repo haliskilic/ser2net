@@ -64,6 +64,9 @@ EXPOSE 8080
 # Bind the admin UI to all interfaces inside the container (the container network
 # boundary + the published port are the real perimeter). Always set an admin
 # password on first access, and put TLS in front for untrusted networks.
+# These defaults use the variables' names up to 2.9.x on purpose: SER2NETWEB_BIND_IP /
+# SER2NETWEB_PORT win over them, and a SER2NET_BIND_IP / SER2NET_PORT set with
+# `docker run -e` or in a compose file replaces them, so a setting under either name works.
 ENV SER2NET_BIND_IP=0.0.0.0 \
     SER2NET_PORT=8080
 

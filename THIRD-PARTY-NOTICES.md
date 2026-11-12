@@ -94,7 +94,7 @@ every distribution of ser2net — AGPL or commercial:
 - **Source and Docker installs:** ldap3 is a normal Python package; install another
   version with `pip`.
 - **Standalone executables:** ldap3 is stored as plain source files (`.py`), not inside
-  the executable's compressed archive. Point `SER2NET_LIB_OVERRIDE` at a directory that
+  the executable's compressed archive. Point `SER2NETWEB_LIB_OVERRIDE` at a directory that
   contains your version (`<dir>/ldap3/...`) and ser2net loads it instead of the bundled
   copy; `ser2net --about` shows which one is in use. The bundled source is the
   Corresponding Source of the library; the project is at https://github.com/cannatag/ldap3.

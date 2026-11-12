@@ -21,7 +21,7 @@ the Will, retained messages and reconnects all run as they do in service. Checks
     link dropped: the broker publishes the NDEATH Will, the next session's Will and NBIRTH
     carry bdSeq 1; an NCMD rebirth gives a new NBIRTH; stop: NDEATH with the session's
     bdSeq.
-Needs paho-mqtt (skips without it; SER2NET_OPTIONAL_TESTS=1 makes that a failure). Runs
+Needs paho-mqtt (skips without it; SER2NETWEB_OPTIONAL_TESTS=1 makes that a failure). Runs
 with paho-mqtt 2.x and 1.6.
 
 Run: python3 tests/test_modbus_mqtt_broker.py

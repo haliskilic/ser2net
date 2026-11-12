@@ -4,7 +4,7 @@ reported truthfully (ser2netweb/optional.py):
   * "not installed" only for a ModuleNotFoundError of the package itself; a missing
     dependency, an incompatible version (ImportError, TypeError) or a warning turned
     into an error is "installed but failed to import: <the error>"; the hint is
-    `pip install -r requirements-optional.txt` (+ restart), the SER2NET_LIB_OVERRIDE
+    `pip install -r requirements-optional.txt` (+ restart), the SER2NETWEB_LIB_OVERRIDE
     folder when that is set, and no pip for a standalone executable;
   * LDAP / OIDC sign-in and MQTT publishing with such a package log that line and fail
     cleanly — a sign-in gets 401, never a 500;
@@ -12,7 +12,7 @@ reported truthfully (ser2netweb/optional.py):
     `ser2net --about` lists pyserial-asyncio-fast and pyasn1 and says "failed to import"
     with the error instead of "not installed".
 
-The fake packages come in through sys.path / SER2NET_LIB_OVERRIDE, so this runs without
+The fake packages come in through sys.path / SER2NETWEB_LIB_OVERRIDE, so this runs without
 the real ones. Run: python3 tests/test_optional_packages.py
 """
 import contextlib
@@ -73,18 +73,21 @@ def fake_packages(packages):
 
 @contextlib.contextmanager
 def environment(frozen=False, override=""):
-    saved = os.environ.pop("SER2NET_LIB_OVERRIDE", None)
+    saved = os.environ.pop("SER2NETWEB_LIB_OVERRIDE", None)
+    old = os.environ.pop("SER2NET_LIB_OVERRIDE", None)
     if override:
-        os.environ["SER2NET_LIB_OVERRIDE"] = override
+        os.environ["SER2NETWEB_LIB_OVERRIDE"] = override
     had = hasattr(sys, "frozen")
     if frozen:
         sys.frozen = True
     try:
         yield
     finally:
-        os.environ.pop("SER2NET_LIB_OVERRIDE", None)
+        os.environ.pop("SER2NETWEB_LIB_OVERRIDE", None)
         if saved is not None:
-            os.environ["SER2NET_LIB_OVERRIDE"] = saved
+            os.environ["SER2NETWEB_LIB_OVERRIDE"] = saved
+        if old is not None:
+            os.environ["SER2NET_LIB_OVERRIDE"] = old
         if frozen and not had:
             del sys.frozen
 
@@ -111,7 +114,7 @@ def test_classification():
         assert not optional.problem(missing_module("ldap3x"), "ldap3").missing
     with environment(override="/opt/lgpl"):
         p = optional.problem(TypeError("x"), "ldap3")
-        assert p.hint == "SER2NET_LIB_OVERRIDE puts /opt/lgpl first: check the ldap3 there", p
+        assert p.hint == "SER2NETWEB_LIB_OVERRIDE puts /opt/lgpl first: check the ldap3 there", p
         assert optional.problem(missing_module("ldap3"), "ldap3").hint == PIP
     with environment(frozen=True):
         for exc in (missing_module("ldap3"), TypeError("x")):
@@ -166,7 +169,7 @@ def test_about():
     folder = tempfile.mkdtemp(prefix="s2n_override_")
     try:
         write_packages(folder, BROKEN)
-        env = dict(os.environ, SER2NET_LIB_OVERRIDE=folder)
+        env = dict(os.environ, SER2NETWEB_LIB_OVERRIDE=folder)
         out = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--about"], cwd=ROOT,
                              env=env, capture_output=True, text=True, encoding="utf-8",
                              timeout=60).stdout
@@ -184,7 +187,7 @@ def test_about():
         # out of a bug report), and the last line says what the labels stand for
         assert lines["authlib"].endswith(f"(<override>{os.sep}authlib)"), out
         assert folder not in out, out
-        assert "<override> = SER2NET_LIB_OVERRIDE" in out.splitlines()[-1], out
+        assert "<override> = SER2NETWEB_LIB_OVERRIDE" in out.splitlines()[-1], out
         home = os.path.expanduser("~")
         if os.path.dirname(home) != home:
             assert home not in out, out
@@ -225,7 +228,7 @@ def test_about_paths():
         assert entry._where(r"C:\USERS\Ayse\AppData\x", [("~", r"c:\users\ayse")]) == \
             r"~\AppData\x"
         assert entry._where(r"D:\x", [("~", r"C:\Users\ayse")]) == r"D:\x"   # another drive
-    labels = [label for label, _folder in entry._known_roots({"SER2NET_LIB_OVERRIDE": " o "})]
+    labels = [label for label, _folder in entry._known_roots({"SER2NETWEB_LIB_OVERRIDE": " o "})]
     assert labels[0] == "<override>" and "<ser2net>" in labels and "<python>" in labels, labels
     assert "<override>" not in [lb for lb, _f in entry._known_roots({})]
     assert all(os.path.dirname(f) != f for _lb, f in entry._known_roots({})), "a whole drive"
@@ -243,13 +246,13 @@ def test_settings_and_sign_in():
               "oidc": {"enabled": True, "issuer": "https://idp.invalid", "client_id": "ser2net",
                        "client_secret": "s3cret"}}
     try:
-        with Server(config, env={"SER2NET_LIB_OVERRIDE": folder}) as srv:
+        with Server(config, env={"SER2NETWEB_LIB_OVERRIDE": folder}) as srv:
             st, _, page = Browser(srv.base).post("/login", {"username": "alice", "password": "x"})
             assert st == 401 and "Invalid username or password." in page, st
             with open(os.path.join(srv.data, "all.log"), encoding="utf-8") as fh:
                 log = fh.read()
             assert ("LDAP login disabled: ldap3 is installed but failed to import: TypeError: "
-                    f"this ldap3 is incompatible (SER2NET_LIB_OVERRIDE puts {folder} first: "
+                    f"this ldap3 is incompatible (SER2NETWEB_LIB_OVERRIDE puts {folder} first: "
                     "check the ldap3 there)") in log, log[-1500:]
             admin = Browser(srv.base)
             admin.login("admin", PW)
@@ -260,7 +263,7 @@ def test_settings_and_sign_in():
             assert ("Single sign-on (OIDC) is on, but <span class=\"mono\">authlib</span> is "
                     "installed and failed to import") in page, "no OIDC banner"
             assert "No module named &#39;authlib.jose&#39;" in page
-            assert f"SER2NET_LIB_OVERRIDE loads modules from <span class=\"mono\">{folder}" in page
+            assert f"SER2NETWEB_LIB_OVERRIDE loads modules from <span class=\"mono\">{folder}" in page
             assert "pip install" not in page
             print("server: LDAP sign-in with a broken ldap3 is a 401; Settings says why  OK")
     finally:
@@ -272,7 +275,7 @@ def test_settings_and_sign_in():
                                                      "'ldap3'\", name='ldap3')\n"}})
     del config["oidc"]
     try:
-        with Server(config, env={"SER2NET_LIB_OVERRIDE": folder}) as srv:
+        with Server(config, env={"SER2NETWEB_LIB_OVERRIDE": folder}) as srv:
             admin = Browser(srv.base)
             admin.login("admin", PW)
             _, _, page = admin.get("/settings")

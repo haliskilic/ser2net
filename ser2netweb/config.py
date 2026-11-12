@@ -35,7 +35,7 @@ import urllib.parse
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable, Optional, Union
-from . import __version__, i18n
+from . import __version__, envvars, i18n
 from .i18n import LANGUAGES, _
 from .textfold import fold  # how names compare; still importable as ser2netweb.config.fold
 
@@ -2479,7 +2479,7 @@ class AdminUI:
     public_url: str = ""
     trusted_proxies: list[str] = field(default_factory=list)
     proxy_hsts: bool = field(default=False, metadata=_ONLY_TRUE)
-    # A name for this instance (Settings -> Admin interface; SER2NET_NODE_NAME for one run
+    # A name for this instance (Settings -> Admin interface; SER2NETWEB_NODE_NAME for one run
     # instead), for instances that share a host name: notifications, the cluster's fleet
     # view, the browser tab and the top bar use it. '' = the host name, as before.
     node_name: str = ""
@@ -2511,7 +2511,7 @@ class AdminUI:
 
 
 NODE_NAME_MAX = 64
-NODE_NAME_ENV = "SER2NET_NODE_NAME"
+NODE_NAME_ENV = "SER2NETWEB_NODE_NAME"
 
 
 def node_name_problem(value: Any) -> str | None:
@@ -2529,14 +2529,14 @@ def node_name_problem(value: Any) -> str | None:
 
 
 def node_name_from_env(env=None) -> str:
-    """SER2NET_NODE_NAME when it is set and usable, else ''."""
-    raw = ((os.environ if env is None else env).get(NODE_NAME_ENV) or "").strip()
+    """SER2NETWEB_NODE_NAME (or SER2NET_NODE_NAME) when it is set and usable, else ''."""
+    raw = envvars.text(NODE_NAME_ENV, env)
     return raw if raw and node_name_problem(raw) is None else ""
 
 
 def node_name(admin: "AdminUI", env=None) -> str:
-    """This instance's name ('' = none: the host name is used): SER2NET_NODE_NAME when it
-    is set and usable, else admin_ui.node_name."""
+    """This instance's name ('' = none: the host name is used): SER2NETWEB_NODE_NAME (or
+    SER2NET_NODE_NAME) when it is set and usable, else admin_ui.node_name."""
     return node_name_from_env(env) or admin.node_name
 
 

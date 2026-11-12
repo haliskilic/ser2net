@@ -104,7 +104,7 @@ PORTABLE = [
     "test_healthcheck.py",
     "test_upgrade_from_2_7.py",
     "test_upgrade_from_2_8.py",  # a 2.8.0 config.json (tests/make_config_fixture.py) and data/
-    "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)
+    "test_windows_service.py",  # real service part: Windows + SER2NETWEB_SERVICE_TESTS=1 (CI)
     "test_systemd_units.py",    # systemd/*.service (also ser2net@.service): paths, sandbox, verify
     "test_install_script.py",   # systemd/ser2net-install.sh, staged under a scratch root
     "test_single_instance.py",
@@ -163,12 +163,12 @@ PORTABLE = [
     "test_node_name.py",       # Settings -> Admin interface -> Name of this instance
     "test_console_port_picker.py",  # the console picker tries the admin UI port it offers
     "test_save_start_result.py",  # a mapping save says when the mapping didn't start
-    "test_activity_log.py",    # SER2NET_LOG_STDOUT, admin_ui.request_log
+    "test_activity_log.py",    # SER2NETWEB_LOG_STDOUT, admin_ui.request_log
     "test_login_notice.py",    # Settings -> Web UI access -> Sign-in notice
     "test_backup_erasure.py",  # deleting backups, a deleted account out of every backup
     "test_privacy_doc.py",     # docs/PRIVACY.md's numbers and settings match the code
     "test_docs.py",            # the READMEs name every CLI option and link every guide; links resolve
-    "test_licenses_page.py",   # footer: licence + source link (SER2NET_SOURCE_URL); /licenses
+    "test_licenses_page.py",   # footer: licence + source link (SER2NETWEB_SOURCE_URL); /licenses
     "test_clock_ages.py",     # ages and client order by the monotonic clock (no wall clock)
     "test_time_stamps.py",    # log/audit times with their UTC offset; old lines still read
     "test_clock_check.py",    # a clock that reads earlier than it can: start-up log, Settings

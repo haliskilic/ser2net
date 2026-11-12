@@ -12,7 +12,7 @@ Two layers:
 1. Always (portable, unprivileged): the accepted (server-mode), connect-out and
    Modbus-gateway sockets carry SO_KEEPALIVE with the mapping's idle / interval /
    count (default on: 60 s / 10 s / 3), and tcp_keepalive=false turns it off.
-2. Opt-in end-to-end (SER2NET_BLACKHOLE_TESTS=1): a REAL half-open connection is
+2. Opt-in end-to-end (SER2NETWEB_BLACKHOLE_TESTS=1): a REAL half-open connection is
    produced by blackholing one direction of a loopback flow — Linux: iptables (as
    root or via passwordless sudo); Windows: WinDivert (``pip install pydivert``, run
    as Administrator). Then:
@@ -26,7 +26,7 @@ Two layers:
    needs TCP_USER_TIMEOUT), the legacy Windows SIO_KEEPALIVE_VALS path, a dead remote
    in connect-out mode (it reconnects), a dead Modbus master, and a connect-out SYN
    to a silent host (connect timeout). FIN/RST closes are checked portably.
-   CI sets SER2NET_BLACKHOLE_TESTS=1, so a missing backend FAILS there instead of
+   CI sets SER2NETWEB_BLACKHOLE_TESTS=1, so a missing backend FAILS there instead of
    silently skipping. Locally it is opt-in because it edits the firewall
    (tip: run it inside a throwaway network namespace on Linux).
 
@@ -48,6 +48,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from ser2netweb import envvars
 from ser2netweb.config import MappingConfig
 from ser2netweb.engine import sockopts
 from ser2netweb.engine.bridge import MappingRunner
@@ -56,7 +57,7 @@ from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
 # Short keepalive so a dead peer is detected in ~3 s (1 s idle + 2 probes x 1 s).
 KA = {"tcp_keepalive": True, "keepalive_idle_s": 1, "keepalive_interval_s": 1,
       "keepalive_count": 2}
-OPT_IN = os.environ.get("SER2NET_BLACKHOLE_TESTS") == "1"
+OPT_IN = envvars.get("SER2NETWEB_BLACKHOLE_TESTS") == "1"
 MARGIN_S = 5.0
 
 
@@ -666,7 +667,7 @@ def main() -> int:
 
     if not OPT_IN:
         print("\nSKIP end-to-end half-open tests (they edit the firewall): set "
-              "SER2NET_BLACKHOLE_TESTS=1 (Linux: root/sudo + iptables; "
+              "SER2NETWEB_BLACKHOLE_TESTS=1 (Linux: root/sudo + iptables; "
               "Windows: Administrator + pip install pydivert)")
     else:
         backend, why = _blackhole_backend()
