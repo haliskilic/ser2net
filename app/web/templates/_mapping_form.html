@@ -287,6 +287,13 @@
       <textarea name="modbus_points" rows="5" spellcheck="false"
                 placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}, {"name":"setpoint","unit":1,"fn":3,"address":10,"dtype":"int16","writable":true}]'>{{ modbus_points_json }}</textarea>
     </label>
+    {% if not is_new and not remote %}
+    <div class="mb-sm">
+      <button type="button" class="btn sm" hx-post="/api/mappings/{{ mapping.id }}/modbus-read" hx-include="[name='modbus_points']" hx-target="#modbus-read" hx-swap="innerHTML">{{ _("Read these points now") }}</button>
+      <span class="muted">{{ _("through the running gateway, as typed above; nothing is saved or published") }}</span>
+      <div id="modbus-read" aria-live="polite"></div>
+    </div>
+    {% endif %}
     <p class="sub mb-sm">{{ _('Who may write is up to the broker: let only trusted clients publish to <span class="mono">&lt;topic&gt;/+/set</span> (Sparkplug: the node’s NCMD and DCMD topics), and use TLS and a username. Read-only refuses every write.') }}</p>
     {% if mapping.modbus_poll.broadcast_points %}<div class="banner warn" data-unit-warning>{{ _('Points on unit 0, the broadcast address: %(names)s. They are never read (no slave answers a broadcast); a write to one goes to every slave on the line and is not read back.', names=mapping.modbus_poll.broadcast_points|join(', ')) }}</div>{% endif %}
     {% if mapping.modbus_poll.reserved_unit_points %}<div class="banner warn" data-unit-warning>{{ _('Points on units 248–255, which a Modbus serial line reserves (slave addresses are 1–247): %(names)s.', names=mapping.modbus_poll.reserved_unit_points|join(', ')) }}</div>{% endif %}
