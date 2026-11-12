@@ -307,13 +307,14 @@ anyio'yu) değiştirir.
 Bu yapılamazsa — bu makine için paketlenmiş wheel yoksa (macOS, ARM Linux: `python3
 bootstrap.py --online` çalıştırın), `lib/` ser2net'in çalıştığı hesap için yazılabilir
 değilse ya da aynı klasörden çalışan başka bir ser2net hâlâ açıksa — ser2net eski `lib/` ile
-açılır ve bunu log'una yazar (`WARNING: not refreshing ./lib: …`); bu sürüm eski paketlerle
-hiç çalışamıyorsa (2.8.1 ve sonrası 2.7'ninkilerle) açılış bunu söyleyen tek bir satırla durur.
-`python3 bootstrap.py` seti elle kurar (önce ser2net'i durdurun ve komutu ser2net'in çalıştığı hesapla çalıştırın,
-ör. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); `--no-bootstrap` kullanılıyorsa her
-yükseltmeden sonra yol budur ve `lib/` güncel olmadıkça açılış log'u uyarır. Çalışan bir
-ser2net'in yanında da çalışabilen tek seferlik komutlar (`--set-password`, `--sign-out-all`,
-`--about`, `--install-service`) `lib/`'e dokunmaz, yalnızca uyarır.
+açılır ve nedenini log'una yazar (`WARNING: … ./lib …`); bu sürüm eski paketlerle hiç
+çalışamıyorsa (2.8.1 ve sonrası 2.7'ninkilerle) açılış bunu söyleyen tek bir satırla durur.
+`python3 bootstrap.py` seti elle kurar (önce ser2net'i durdurun ve komutu ser2net'in
+çalıştığı hesapla çalıştırın, ör. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`);
+`--no-bootstrap` kullanılıyorsa her yükseltmeden sonra yol budur ve `lib/` güncel olmadıkça
+açılış log'u uyarır. Çalışan bir ser2net'in yanında da çalışabilen tek seferlik komutlar
+(`--set-password`, `--sign-out-all`, `--about`, `--install-service`) `lib/`'e dokunmaz,
+yalnızca uyarır.
 
 ### Docker
 ```bash

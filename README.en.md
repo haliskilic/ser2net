@@ -295,14 +295,14 @@ in `lib/` (possibly 2.7's starlette and anyio, which have published advisories).
 When that can't be done — no bundled wheels for this machine (macOS, ARM Linux: run
 `python3 bootstrap.py --online`), `lib/` not writable for the account ser2net runs as, or
 another ser2net still running from the same folder — ser2net starts with the old `lib/` and
-says so in its log (`WARNING: not refreshing ./lib: …`); when this version can't run on the
-old packages at all (2.8.1 and newer on 2.7's), the start stops with one line that says so.
-`python3 bootstrap.py` installs the
-set by hand (stop ser2net first, and run it as the account ser2net runs as, e.g.
-`sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); with `--no-bootstrap` that is the way
-after every upgrade, and the start-up log warns while `lib/` is out of date. The one-off
-commands (`--set-password`, `--sign-out-all`, `--about`, `--install-service`), which may run
-beside a running ser2net, leave `lib/` as it is and only warn.
+says why in its log (`WARNING: … ./lib …`); when this version can't run on the old packages
+at all (2.8.1 and newer on 2.7's), the start stops with one line that says so.
+`python3 bootstrap.py` installs the set by hand (stop ser2net first, and run it as the
+account ser2net runs as, e.g. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); with
+`--no-bootstrap` that is the way after every upgrade, and the start-up log warns while
+`lib/` is out of date. The one-off commands (`--set-password`, `--sign-out-all`, `--about`,
+`--install-service`), which may run beside a running ser2net, leave `lib/` as it is and
+only warn.
 
 ### Docker
 ```bash
