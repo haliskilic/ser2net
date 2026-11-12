@@ -980,5 +980,7 @@
   "Imported {0} mapping (replaced the existing ones).": "{0} eşleme içe aktarıldı (mevcut eşlemelerin yerini aldı).",
   "{0} byte left out: this browser did not keep up": "{0} bayt atlandı: bu tarayıcı yetişemedi",
   "for visitors who haven’t picked one with the language switch": "dil seçiciyle bir dil seçmemiş ziyaretçiler için",
-  "serial option '{0}': ser2net 4.x takes the parity words in capitals only ({1}), so it did not accept this one; not imported": "seri seçenek '{0}': ser2net 4.x parite sözcüklerini yalnızca büyük harfle ({1}) kabul eder, bunu kabul etmemişti; içe aktarılmadı"
+  "serial option '{0}': ser2net 4.x takes the parity words in capitals only ({1}), so it did not accept this one; not imported": "seri seçenek '{0}': ser2net 4.x parite sözcüklerini yalnızca büyük harfle ({1}) kabul eder, bunu kabul etmemişti; içe aktarılmadı",
+  "delete_default {0}: no class is given, and ser2net refuses such a file (a default set without a class can't be deleted); nothing is deleted": "delete_default {0}: sınıf verilmemiş; ser2net böyle bir dosyayı reddeder (sınıfsız ayarlanmış bir varsayılan silinemez); hiçbir şey silinmedi",
+  "delete_default {0}: no default of class {1} is set, and ser2net refuses such a file; nothing is deleted": "delete_default {0}: {1} sınıfı için ayarlanmış bir varsayılan yok; ser2net böyle bir dosyayı reddeder; hiçbir şey silinmedi"
 }

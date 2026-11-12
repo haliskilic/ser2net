@@ -16,7 +16,8 @@ dicts plus warnings. Checks:
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
     trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
   * the default remaddr only for a connection without addresses of its own (4.x / 3.x);
-  * *(name), $(name), =(name) and *alias substitution; defaults; version 2 files;
+  * *(name), $(name), =(name) and *alias substitution; defaults by position and class
+    (rfc2217, banner/openstr/closeon too), delete_default; version 2 files;
   * YAML subset details: quotes, comments, flow [..]/{..}, block scalars, documents;
   * a 3.x ser2net.conf with BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/DEFAULT/
     CONTROLPORT/LED/SIGNATURE lines, every state and line continuation;
@@ -674,6 +675,9 @@ def test_substitution():
     print("version 2: defines/=(name), defaults, connections map, two documents, rotator  OK")
 
 
+# ser2net.yaml(5): "The order in the file is important, you must set a default before it
+# is used" - ser2net sets each connection up as it reads it, so a default reaches only the
+# connections after it; delete_default needs the class whose value it deletes
 DEFAULTS = r"""
 connection: &before
   accepter: tcp,5001
@@ -682,6 +686,7 @@ default: { name: speed, value: 115200 }
 default:
   name: kickolduser
   value: true
+  class: ser2net
 default:
   name: mdns
   value: true
@@ -710,8 +715,111 @@ def test_defaults():
     assert maps["last"]["serial"]["baudrate"] == 9600
     assert not maps["last"]["network"].get("kick_old_user")
     assert has(warns, "default mdns", "not imported") and not has(warns, "ipmisol")
+    assert not has(warns, "delete_default")
     print("default: (flow and block form) applies to later connections; delete_default; "
           "unsupported defaults warned  OK")
+
+
+# gensio (lib/gensio.c gensio_get_default): a class's own value comes before the base value
+# whatever the order; gensio_del_default with a class deletes only that class's value
+# (GE_NOTFOUND when there is none, and ser2net's yamlconf.c then refuses the file; it also
+# refuses a delete_default without a class). The telnet gensio reads its rfc2217 default
+# (a built-in default, class telnet) and ser2net its banner/openstr/closestr/closeon
+# defaults (defaults.c, read in portconfig.c init_port_data) as each connection is set up.
+DEFAULT_CLASSES = r"""
+connection: &plain0
+  accepter: telnet,tcp,5101
+  connector: serialdev,/dev/ttyS1
+default:
+  name: rfc2217
+  value: true
+connection: &rfc
+  accepter: telnet,tcp,5102
+  connector: serialdev,/dev/ttyS2
+connection: &explicit
+  accepter: telnet(rfc2217=false),tcp,5103
+  connector: serialdev,/dev/ttyS3
+connection: &rawtcp
+  accepter: tcp,5104
+  connector: serialdev,/dev/ttyS4
+default:
+  name: rfc2217
+  value: false
+  class: telnet
+connection: &classwins
+  accepter: telnet,tcp,5105
+  connector: serialdev,/dev/ttyS5
+default:
+  name: rfc2217
+  value: true
+connection: &stillclass
+  accepter: telnet,tcp,5106
+  connector: serialdev,/dev/ttyS6
+default:
+  name: speed
+  value: 19200
+  class: serialdev
+default:
+  name: speed
+  value: 4800
+connection: &speedclass
+  accepter: tcp,5107
+  connector: serialdev,/dev/ttyS7
+delete_default:
+  name: rfc2217
+  class: telnet
+delete_default:
+  name: speed
+  class: serialdev
+connection: &baseagain
+  accepter: telnet,tcp,5108
+  connector: serialdev,/dev/ttyS8
+default:
+  name: banner
+  value: 'Port \N\r\n'
+  class: ser2net
+default:
+  name: openstr
+  value: 'AT\r'
+default:
+  name: closeon
+  value: "NO CARRIER\r\n"
+default:
+  name: signature
+  value: "line1\r\nline2"
+connection: &strings
+  accepter: tcp,5109
+  connector: serialdev,/dev/ttyS9
+  options:
+    openstr: 'ATZ\r'
+delete_default:
+  name: kickolduser
+  class: ser2net
+delete_default:
+  name: openstr
+"""
+
+
+def test_default_classes():
+    maps, warns = parse(DEFAULT_CLASSES)
+    proto = {n: m["network"]["protocol"] for n, m in maps.items()}
+    assert proto == {"plain0": "telnet", "rfc": "rfc2217", "explicit": "telnet",
+                     "rawtcp": "raw", "classwins": "telnet", "stillclass": "telnet",
+                     "speedclass": "raw", "baseagain": "rfc2217", "strings": "raw"}, proto
+    assert not has(warns, "rfc2217"), warns  # the telnet default is imported, not warned
+    assert maps["speedclass"]["serial"]["baudrate"] == 19200   # the class value wins
+    assert maps["baseagain"]["serial"]["baudrate"] == 4800     # deleted: the base value
+    o = maps["strings"]["options"]
+    assert (o["banner"], o["openstr"], o["closeon"]) == ("Port \\N\\r\\n", "ATZ\r",
+                                                         "NO CARRIER\r\n"), o
+    assert "banner" not in maps["baseagain"]["options"]       # only after the default
+    assert not any(w.startswith(("default banner", "default openstr")) for w in warns)
+    sig = next(w for w in warns if w.startswith("default signature"))
+    assert "line1\\r\\nline2" in sig and "\r" not in sig and "\n" not in sig, repr(sig)
+    assert has(warns, "delete_default kickolduser", "class ser2net", "refuses")
+    assert has(warns, "delete_default openstr", "no class", "refuses")
+    print("defaults: the telnet rfc2217 default (base and class), class values before base "
+          "values, banner/openstr/closeon defaults, delete_default per class  OK")
 
 
 SYNTAX = r"""%YAML 1.1
@@ -967,6 +1075,7 @@ def main():
     test_remaddr_default()
     test_substitution()
     test_defaults()
+    test_default_classes()
     test_yaml_syntax()
     test_v3()
     test_names_and_clashes()

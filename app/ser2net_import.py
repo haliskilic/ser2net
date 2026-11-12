@@ -625,6 +625,15 @@ def _bool(value: str) -> Optional[bool]:
     return True if v in _TRUE else False if v in _FALSE else None
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _shown(value: str) -> str:
+    """A value as a warning shows it: control characters (a CR/LF in a banner) escaped."""
+    return _CONTROL.sub(lambda m: {"\r": "\\r", "\n": "\\n", "\t": "\\t"}.get(
+        m.group(), f"\\x{ord(m.group()):02x}"), value)
+
+
 def _split_gensio(spec: str) -> list[str]:
     """Split a gensio string at the commas outside (...) and quotes."""
     parts: list[str] = []
@@ -725,8 +734,11 @@ _OTHER_TERMINALS = ("unix", "unixdgram", "stdio", "pty", "file", "echo", "dummy"
                     "ssl", "certauth", "mux")
 
 
-def _accepter(c: _Conn, spec: str, ssl_defaults: Optional[dict[str, str]] = None) -> bool:
-    """The listening side: telnet / telnet(rfc2217) over tcp|udp,[host,]port."""
+def _accepter(c: _Conn, spec: str, ssl_defaults: Optional[dict[str, str]] = None,
+              rfc2217: Optional[bool] = None) -> bool:
+    """The listening side: telnet / telnet(rfc2217) over tcp|udp,[host,]port. `rfc2217`:
+    the file's telnet default for it (None: not set), for a telnet layer that doesn't
+    say."""
     layers = _split_gensio(spec)
     for idx, part in enumerate(layers):
         name, opts = _layer(part)
@@ -738,8 +750,11 @@ def _accepter(c: _Conn, spec: str, ssl_defaults: Optional[dict[str, str]] = None
                 c.note(_("SCTP is not supported here: the mapping listens on TCP instead"))
             return _listen_address(c, layers[idx + 1:])
         if low == "telnet":
-            rfc = any(o.split("=", 1)[0].strip().lower() == "rfc2217"
-                      and _bool(o.split("=", 1)[1] if "=" in o else "true") for o in opts)
+            rfc = rfc2217
+            for o in opts:
+                key, eq, value = o.partition("=")
+                if key.strip().lower() == "rfc2217":
+                    rfc = bool(_bool(value)) if eq else True
             c.network["protocol"] = "rfc2217" if rfc else "telnet"
         elif low == "ssl":
             c.ssl = _ssl_layer(opts, ssl_defaults or {})  # resolved in _tls()
@@ -1183,7 +1198,19 @@ _SERIAL_DEFAULTS = {"speed", "nobreak", "rtscts", "xonxoff", "local", "hangup-wh
                     "dtr", "rts", "custspeed", "rs485", "uucplock", "flock", "wronly"}
 _OPTION_DEFAULTS = {"kickolduser", "max-connections", "remaddr", "telnet-brk-on-sync",
                     "chardelay", "trace-hexdump", "trace-timestamp", "trace-both-hexdump",
-                    "trace-both-timestamp"}
+                    "trace-both-timestamp", "banner", "openstr", "closestr", "closeon"}
+_STRING_OPTIONS = ("banner", "openstr", "closestr", "closeon")
+_SSL_DEFAULTS = {"key", "cert", "clientauth"}
+# the gensio class that reads each default used here (it reads the base value, set
+# without a class, too)
+_DEFAULT_CLASS = {**dict.fromkeys(_SERIAL_DEFAULTS, "serialdev"),
+                  **dict.fromkeys(_OPTION_DEFAULTS, "ser2net"),
+                  **dict.fromkeys(_SSL_DEFAULTS, "ssl"), "rfc2217": "telnet"}
+
+
+def _gensio_class(cls: str) -> str:
+    c = cls.strip().lower()
+    return "serialdev" if c == "sdev" else c
 
 
 _REFERENCE = {act: re.compile("[" + re.escape(act) + "$]") for act in ("*", "=", "*=")}
@@ -1257,9 +1284,14 @@ class _Yaml:
         self.warnings: list[str] = []
         self.conns: list[_Conn] = []
         self.connections = 0                 # connection entries read (MAX_CONNECTIONS)
+        self.defaults: dict[tuple[str, str], str] = {}  # (name, class) -> value, so far
+        # what each gensio class gets from them for the connections from here on
         self.serial_defaults: dict[str, str] = {}
         self.option_defaults: dict[str, str] = {}
         self.ssl_defaults: dict[str, str] = {}   # key / cert / clientauth of the ssl layer
+        self.telnet_defaults: dict[str, str] = {}  # rfc2217 of the telnet layer
+        self._views = {"serialdev": self.serial_defaults, "ser2net": self.option_defaults,
+                       "ssl": self.ssl_defaults, "telnet": self.telnet_defaults}
 
     def text(self, node: Any, note: Callable[[str], None], what: str) -> str:
         if isinstance(node, (_YMap, list)):
@@ -1302,10 +1334,12 @@ class _Yaml:
                     self.default(name, self.gtext(body.get("value", ""), f"default {name}"),
                                  self.gtext(body.get("class", ""), f"default {name}"))
         elif k == "delete_default" and isinstance(value, _YMap):
-            self.delete_default(self.gtext(value.get("name", ""), "delete_default"))
+            self.delete_default(*(self.gtext(value.get(f, ""), "delete_default")
+                                  for f in ("name", "class")))
         elif k == "delete_defaults" and isinstance(value, _YMap):
-            for name, _v, _a in value.entries:
-                self.delete_default(name)
+            for name, classes, _a in value.entries:  # <name>: [<class>, ...]
+                for cls in classes if isinstance(classes, list) else [classes]:
+                    self.delete_default(name, self.gtext(cls, f"delete_defaults {name}"))
         elif k in ("rotator", "rotators"):
             names = ([anchor] if k == "rotator" else
                      [n for n, _v, _a in value.entries] if isinstance(value, _YMap) else [])
@@ -1323,24 +1357,54 @@ class _Yaml:
             self.warnings.append(_("unknown top-level entry '{0}' ignored").format(key))
 
     def default(self, name: str, value: str, cls: str) -> None:
-        n, cls = name.strip().lower(), cls.strip().lower()
-        if n in ("key", "cert", "clientauth") and cls in ("", "ssl"):
-            self.ssl_defaults[n] = value.strip()  # for the accepters' ssl layers
+        """A default, for the connections after it (ser2net sets each connection up as it
+        reads it). gensio keeps a value per class besides the base value (set without a
+        class), and a class's own value wins over the base value whatever their order."""
+        n, cls = name.strip().lower(), _gensio_class(cls)
+        if not n:
             return
-        if not n or cls not in ("", "serialdev", "sdev", "ser2net"):
-            return  # a default for another gensio (ipmisol, certauth, ...) does not apply
-        if n in _SERIAL_DEFAULTS and cls != "ser2net":
-            self.serial_defaults[n] = value.strip()
-        elif n in _OPTION_DEFAULTS and cls in ("", "ser2net"):
-            self.option_defaults[n] = value.strip()
-        else:
-            self.warnings.append(_("default {0}: {1} is not imported (no equivalent here)")
-                                 .format(name, value))
+        reader = _DEFAULT_CLASS.get(n)
+        if reader is None or cls not in ("", reader):
+            if cls in ("", "serialdev", "ser2net"):  # (another gensio's: does not apply here)
+                self.warnings.append(_("default {0}: {1} is not imported (no equivalent here)")
+                                     .format(name, _shown(value)))
+            self.defaults[(n, cls)] = value.strip()  # (for a delete_default of it)
+            return
+        if reader == "telnet" and _bool(value) is None:
+            self.warnings.append(_("{0}: '{1}' is not true/false, ignored")
+                                 .format(f"default {name}", _shown(value)))
+            return
+        # (a banner or open string as it is: its spaces and line breaks are sent)
+        self.defaults[(n, cls)] = value if n in _STRING_OPTIONS else value.strip()
+        self._resolve(n)
 
-    def delete_default(self, name: str) -> None:
-        self.serial_defaults.pop(name.strip().lower(), None)
-        self.option_defaults.pop(name.strip().lower(), None)
-        self.ssl_defaults.pop(name.strip().lower(), None)
+    def _resolve(self, n: str) -> None:
+        """What the connections from here on get for default `n`: the value of the class
+        that reads it, else the base value."""
+        cls = _DEFAULT_CLASS[n]
+        value = self.defaults.get((n, cls), self.defaults.get((n, "")))
+        if value is None:
+            self._views[cls].pop(n, None)
+        else:
+            self._views[cls][n] = value
+
+    def delete_default(self, name: str, cls: str) -> None:
+        """The value set for a class goes, so that class gets the base value again. ser2net
+        refuses a file whose delete_default gives no class (a base value can't be
+        deleted) or names a value that is not set: reported here, nothing deleted."""
+        n, cls = name.strip().lower(), _gensio_class(cls)
+        if not n:
+            return
+        if not cls:
+            self.warnings.append(_("delete_default {0}: no class is given, and ser2net refuses "
+                                   "such a file (a default set without a class can't be "
+                                   "deleted); nothing is deleted").format(name))
+        elif self.defaults.pop((n, cls), None) is None:
+            self.warnings.append(_("delete_default {0}: no default of class {1} is set, and "
+                                   "ser2net refuses such a file; nothing is deleted")
+                                 .format(name, cls))
+        elif n in _DEFAULT_CLASS:
+            self._resolve(n)
 
     def connection(self, name: str, body: Any) -> None:
         self.connections += 1
@@ -1356,7 +1420,8 @@ class _Yaml:
             connector = self.text(body.get("connector", ""), c.note, "connector").strip()
             if not accepter or not connector:
                 c.skip(_("it needs both an accepter and a connector"))
-            elif _accepter(c, accepter, self.ssl_defaults):
+            elif _accepter(c, accepter, self.ssl_defaults,
+                           _bool(self.telnet_defaults.get("rfc2217", ""))):
                 if not name:
                     c.name = c.label = f"ser2net-{c.network['port']}"
                 defaults = [f"{k}={v}" for k, v in self.serial_defaults.items()]
