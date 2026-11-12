@@ -29,7 +29,7 @@ import time
 from typing import Any, Callable, Optional, Protocol
 
 from .. import tlsreload
-from ..config import AppConfig, MappingConfig
+from ..config import AppConfig, MappingConfig, mqtt_start_warnings, mqtt_warnings
 from . import portlist, serial_io
 from .bridge import MappingRunner, RunnerStatus, remove_files
 from .netguard import BindError
@@ -69,12 +69,15 @@ class Runner(Protocol):
     async def serial_write(self, data: bytes) -> bool: ...
 
 
-def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None) -> Runner:
+def make_runner(mapping: MappingConfig, logger, trace_dir: Optional[str] = None,
+                state_dir: Optional[str] = None) -> Runner:
     """Pick the runner for a mapping: the Modbus RTU<->TCP gateway when the network
-    protocol is 'modbus', otherwise the transparent serial<->network bridge."""
+    protocol is 'modbus', otherwise the transparent serial<->network bridge. ``state_dir``:
+    the data folder, where a runner keeps state across restarts (None: in memory only)."""
     if mapping.kind == "net" and mapping.network.protocol == "modbus":
         from .modbus_gateway import ModbusGatewayRunner
-        return ModbusGatewayRunner(mapping, logger=logger, trace_dir=trace_dir)
+        return ModbusGatewayRunner(mapping, logger=logger, trace_dir=trace_dir,
+                                   state_dir=state_dir)
     return MappingRunner(mapping, logger=logger, trace_dir=trace_dir)
 
 
@@ -111,9 +114,10 @@ class _Unbuildable:
         pass
 
 
-def _build_runner(mapping: MappingConfig, logger, trace_dir: Optional[str]):
+def _build_runner(mapping: MappingConfig, logger, trace_dir: Optional[str],
+                  state_dir: Optional[str] = None):
     try:
-        return make_runner(mapping, logger, trace_dir)
+        return make_runner(mapping, logger, trace_dir, state_dir)
     except Exception as e:  # only this mapping is down
         return _Unbuildable(e)
 
@@ -142,9 +146,11 @@ class Supervisor:
     def __init__(self, logger: Optional[Callable[[str], None]] = None,
                  logger_factory: Optional[Callable[[MappingConfig], Callable[[str], None]]] = None,
                  trace_dir: Optional[str] = None,
-                 lookup: Optional[Callable[[str], Optional[MappingConfig]]] = None):
+                 lookup: Optional[Callable[[str], Optional[MappingConfig]]] = None,
+                 state_dir: Optional[str] = None):
         self._runners: dict[str, Runner] = {}
         self.trace_dir = trace_dir  # data/traces: the only place traces are written
+        self.state_dir = state_dir  # data/: what runners keep across restarts (Sparkplug bdSeq)
         self._order: list[str] = []
         self.log = logger or (lambda m: None)
         # per-mapping logger: defaults to the global logger with a "[name]" prefix
@@ -189,10 +195,12 @@ class Supervisor:
         STOP_ALL_TIMEOUT_S) is started in the background once that stop ends, so it can't
         hold up the others (an import or a restore stops all, then starts all)."""
         self._order = [m.id for m in config.mappings]
-        for m in list(config.mappings):
+        # (in one pass: each against those started before it)
+        notes = mqtt_start_warnings(config.mappings)
+        for m, mqtt_notes in zip(list(config.mappings), notes, strict=True):
             if m.id in self._late:
                 self._logger_factory(m)("start waits for the previous stop to end")
-                task = asyncio.ensure_future(self.apply_mapping(m))
+                task = asyncio.ensure_future(self.apply_mapping(m, mqtt_notes))
                 self._stopping.add(task)
                 task.add_done_callback(self._stopping.discard)
                 task.add_done_callback(_consume_error)
@@ -202,7 +210,7 @@ class Supervisor:
                 if current is None:
                     continue  # deleted meanwhile
                 if current.enabled:
-                    await self._apply(current.id, current)
+                    await self._apply(current.id, current, mqtt_notes)
                 else:
                     self._ensure_stopped_placeholder(current)
 
@@ -250,7 +258,8 @@ class Supervisor:
     def _ensure_stopped_placeholder(self, mapping: MappingConfig) -> None:
         """Register a non-running runner so status is queryable for disabled mappings."""
         if mapping.id not in self._runners:
-            r = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir)
+            r = _build_runner(mapping, self._logger_factory(mapping), self.trace_dir,
+                              self.state_dir)
             r.status.state = "stopped"
             self._runners[mapping.id] = r
             if mapping.id not in self._order:
@@ -266,14 +275,17 @@ class Supervisor:
             log = self._logger_factory(mapping) if mapping is not None else self.log
             log(f"stopping failed: {e!r}")
 
-    async def apply_mapping(self, mapping: MappingConfig) -> tuple[bool, str]:
+    async def apply_mapping(self, mapping: MappingConfig,
+                            mqtt_notes: Optional[list[str]] = None) -> tuple[bool, str]:
         """Create/replace and (if enabled) start the runner for a mapping, from its config
         when its turn comes. A start that fails because the listener can't bind is tried
-        again later (_retry)."""
+        again later (_retry). ``mqtt_notes``: its mqtt_warnings, when the caller has them
+        already (start_all)."""
         async with self._turn(mapping.id):
-            return await self._apply(mapping.id, self._current(mapping))
+            return await self._apply(mapping.id, self._current(mapping), mqtt_notes)
 
-    async def _apply(self, mapping_id: str, mapping: Optional[MappingConfig]) -> tuple[bool, str]:
+    async def _apply(self, mapping_id: str, mapping: Optional[MappingConfig],
+                     mqtt_notes: Optional[list[str]] = None) -> tuple[bool, str]:
         """apply_mapping in the mapping's turn. None: it was deleted meanwhile, so its
         runner only goes."""
         await self._cancel_retry(mapping_id)
@@ -286,7 +298,7 @@ class Supervisor:
             return False, "the mapping was deleted meanwhile"
 
         log = self._logger_factory(mapping)
-        runner = _build_runner(mapping, log, self.trace_dir)
+        runner = _build_runner(mapping, log, self.trace_dir, self.state_dir)
         if mapping.id not in self._order:
             self._order.append(mapping.id)
         self._runners[mapping.id] = runner
@@ -294,6 +306,14 @@ class Supervisor:
         if not mapping.enabled:
             runner.status.state = "stopped"
             return True, "disabled"
+        # what it shares over MQTT with the other enabled mappings (which the edits refuse
+        # or warn about), and its own MQTT topics the edits refuse: said at each start
+        if mqtt_notes is None:
+            mqtt_notes = mqtt_warnings(mapping, [
+                r.mapping for mid, r in list(self._runners.items())
+                if mid != mapping.id and isinstance(getattr(r, "mapping", None), MappingConfig)])
+        for line in mqtt_notes:
+            log(f"warning: {line}")
         try:
             # a stored URL port fails the start once, instead of retrying it forever
             for side in mapping.serial_sides():

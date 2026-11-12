@@ -13,6 +13,9 @@
   'link_down_title': _('the connection to the remote server is down; it is tried again'),
   'dropped': _('data from the network that was not written to the serial device; the mapping’s log says why'),
   'trace_not_written': _('trace not written'),
+  'units_offline': _('polled Modbus units that gave no reply to any of their points in 3 polls in a row; they are polled with one point per cycle until they answer (see the mapping’s log)'),
+  'mqtt_down': _('the mapping’s connection to its MQTT broker; it keeps trying (see the mapping’s log)'),
+  'mqtt_off': _('MQTT publishing could not start (see the mapping’s log)'),
   'stop': _('Stop'), 'restart': _('Restart'), 'start': _('Start'), 'edit': _('Edit'), 'log': _('Log'),
   'monitor': _('Monitor'), 'trace': _('Trace'), 'duplicate': _('Copy'), 'delete': _('Delete'),
 } %}
@@ -83,6 +86,11 @@
         {% endif %}
         {% set quiet = no_data_for(m, st) %}
         {% if quiet %}<div class="err-small" title="{{ _('the mapping’s no-data alarm: %(n)s s', n=m.options.no_data_alarm_s) }}">⚠ {{ _("no data from the device for %(n)s s", n=quiet) if not m.options.no_data_reply_only else _("no answer from the device for %(n)s s", n=quiet) }}</div>{% endif %}
+        {% set silent = (st.units if st and st.units else [])|selectattr('state', 'equalto', 'offline')|map(attribute='unit')|list %}
+        {% if state == 'running' and silent %}<div class="err-small" data-units-offline title="{{ t.units_offline }}">⚠ {{ ngettext("Modbus unit not answering: %(units)s", "Modbus units not answering: %(units)s", silent|length, units=silent|join(', ')) }}</div>{% endif %}
+        {% set mq = st.mqtt if st and st.mqtt else {} %}
+        {% if mq.state == 'down' %}<div class="err-small" data-mqtt-down title="{{ t.mqtt_down }}">⚠ {{ _("MQTT: no connection to %(broker)s (%(error)s)", broker=mq.broker, error=mq.error) }}</div>
+        {% elif mq.state == 'off' %}<div class="err-small" data-mqtt-down title="{{ t.mqtt_off }}">⚠ {{ _("MQTT off: %(error)s", error=mq.error) }}</div>{% endif %}
       </td>
       <td data-label="{{ t.clients }}">
         {{ st.client_count if st else 0 }}{% if m.network.max_connections > 1 %}/{{ m.network.max_connections }}{% endif %}

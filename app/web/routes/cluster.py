@@ -34,7 +34,8 @@ from . import ops
 from .common import Ctx, LiveTable, bytesize, csrf_failed, domid, notice, reason, start_failed
 from .forms import (
     _TEXT_INPUTS, MQTT_PASSWORD_CLEAR, MQTT_PASSWORD_WRITE_ONLY, _build_mapping_dict,
-    blocks_not_read, form_context, in_text_box, mapping_for_rerender, mqtt_password_from_form,
+    _parse_modbus_points, blocks_not_read, form_context, in_text_box, mapping_for_rerender,
+    mqtt_password_from_form,
 )
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -151,6 +152,9 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     if not peer_mapping:
         return None, _("This mapping no longer exists on the peer; reload the fleet view.")
     try:
+        # the points as strictly as the peer reads them: an older peer would store a
+        # top-level object as no points
+        _parse_modbus_points(form.get("modbus_points", ""), strict=True)
         MappingConfig.from_dict(_build_mapping_dict(form, strict=False)).validate_input()
     except (ValueError, ConfigError) as e:
         return None, str(e)
@@ -595,14 +599,18 @@ def routes(ctx: Ctx) -> list:
 
         def _reload(msg):
             peer = data or {}
-            stored = (MappingConfig.from_dict(peer["mapping"])
-                      if isinstance(peer.get("mapping"), dict) else None)
+            try:
+                stored = (MappingConfig.from_dict(peer["mapping"])
+                          if isinstance(peer.get("mapping"), dict) else None)
+            except Exception:  # (a peer's mapping this node can't read: the form as posted)
+                stored = None
             ports = peer.get("ports", [])
             mapping = mapping_for_rerender(form, stored, ports)
             return render(request, "_mapping_form.html", status_code=400, **form_context(
                 mapping, ports, peer.get("ips", []), is_new=False, error=msg,
                 links=_peer_links(data), mqtt_stored=stored.mqtt.password if stored else "",
                 tls_stored=stored.network.tls_key_password if stored else "", form=form,
+                mqtt_key_stored=stored.mqtt.client_key_password if stored else "",
                 **_peer_form(target, mapping, version, form.get("id", ""), peer)))
 
         if not data:

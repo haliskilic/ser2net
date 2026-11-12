@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import math
 import struct
+from typing import NamedTuple, Optional
 
 MBAP_LEN = 7  # txn(2) + proto(2) + length(2) + unit(1)
 MAX_PDU = 253  # Modbus PDU max (256-byte ADU minus addr+CRC)
+MAX_ADU = MAX_PDU + 3  # an RTU frame at most: unit + PDU + CRC
 
 READ_HOLDING = 3   # read holding registers
 READ_INPUT = 4     # read input registers
@@ -54,6 +56,122 @@ def rtu_unwrap(frame: bytes) -> tuple[int, bytes]:
     return body[0], body[1:]
 
 
+# The length of a slave's reply (Modbus Application Protocol v1.1b3), counted as an RTU
+# frame (unit + PDU + CRC): fixed for these function codes ...
+_FIXED_REPLY = {5: 8, 6: 8, 7: 5, 11: 8, 15: 8, 16: 8, 22: 10}
+# ... and 5 + the byte count that follows the function code for these (FC1-4 reads,
+# 12 comm event log, 17 report server id, 20/21 file records, 23 read/write registers)
+_COUNTED_REPLY = frozenset({1, 2, 3, 4, 12, 17, 20, 21, 23})
+_READ_FIFO_QUEUE = 24  # 6 + a two-byte byte count
+
+
+def rtu_reply_length(head: bytes | bytearray) -> Optional[int]:
+    """The length of the RTU reply that starts with ``head`` (its unit id first), from the
+    function code and byte count at its start, as libmodbus frames replies: the whole
+    frame's length once ``head`` holds them, else the least it can be (read that many
+    bytes, then ask again). None when the function code does not tell (FC8 diagnostics,
+    FC43, user-defined and unknown codes): such a reply ends where the line goes quiet."""
+    if len(head) < 2:
+        return 4  # unit + function + CRC: no frame is shorter
+    function = head[1]
+    if function & 0x80:  # an exception: unit, function | 0x80, exception code, CRC
+        return 5
+    if function in _FIXED_REPLY:
+        return _FIXED_REPLY[function]
+    if function in _COUNTED_REPLY:
+        return 5 + head[2] if len(head) > 2 else 5
+    if function == _READ_FIFO_QUEUE:
+        return 6 + int.from_bytes(head[2:4], "big") if len(head) > 3 else 6
+    return None
+
+
+# write requests whose reply is their echo: the whole request, or its first 5 bytes
+# (function, start address, quantity)
+_ECHO_REPLY = frozenset({5, 6, 22})
+_ECHO_HEAD_REPLY = frozenset({15, 16})
+
+
+def reply_mismatch(request: bytes, reply: bytes) -> str:
+    """Why the PDU ``reply`` is not the answer to the PDU ``request``, or "" when it can be.
+    It has to be an exception for the request's function, or carry that function and: for
+    a read of bits or registers (FC1-4, FC23) the byte count the quantity read gives; for
+    a write, its echo (FC5, FC6, FC22: the whole request; FC15, FC16: its first 5 bytes).
+    Other functions are matched by function code only.
+
+    A read's reply carries no address, so the reply to an earlier read of the same unit,
+    function and quantity passes: only waiting for the line to go quiet after a request
+    that got no reply in time keeps such a late reply apart (the gateway does)."""
+    function = request[0] if request else 0
+    if not reply:
+        return "an empty reply"
+    if reply[0] == (function | 0x80) & 0xFF:
+        return ""
+    if reply[0] != function:
+        return f"an FC{reply[0]} reply to FC{function}"
+    if function in (1, 2, 3, 4, 23) and len(request) >= 5:
+        quantity = int.from_bytes(request[3:5], "big")
+        want = (quantity + 7) // 8 if function in (1, 2) else 2 * quantity
+        got = reply[1] if len(reply) > 1 else 0
+        if got != want:
+            unit = "bit" if function in (1, 2) else "register"
+            return f"{got} data bytes for {quantity} {unit}(s) of FC{function}"
+    elif function in _ECHO_REPLY or function in _ECHO_HEAD_REPLY:
+        echo = bytes(request) if function in _ECHO_REPLY else bytes(request[:5])
+        if bytes(reply) != echo:
+            return f"an FC{function} reply that is not the request's echo ({bytes(reply).hex(' ')})"
+    return ""
+
+
+class ReplyScan(NamedTuple):
+    span: Optional[tuple[int, int]]  # buf[start:end] is the reply (None: not found)
+    pending: bool  # a frame from the unit has begun and may still be completed
+    started: bool  # a frame from the unit began in buf at all
+    rejected: str = ""  # why the last whole frame from the unit was not the reply
+
+
+def find_reply(buf: bytes | bytearray, unit: int, request: bytes, *,
+               quiet: bool = False) -> ReplyScan:
+    """Look for the reply to ``request`` (a PDU sent to ``unit``) in ``buf``, the bytes read
+    off the line since it was sent. They may begin with bytes no request is waiting for
+    (the late tail of an earlier reply, noise), which are skipped.
+
+    A reply starts with ``unit`` and the request's function code (or its exception code),
+    is as long as its header says (rtu_reply_length), passes its CRC and answers the
+    request (reply_mismatch); a whole frame that answers something else is skipped too.
+    ``quiet``: the line has gone quiet since buf's last byte, so a frame whose length its
+    header does not give, or that fails its CRC at that length (a slave that miscounts),
+    may end with buf: it is then tried as a whole too."""
+    function = request[0] if request else 0
+    starts = (function, (function | 0x80) & 0xFF)
+    pending = started = False
+    rejected = ""
+    for start in range(len(buf) - 1):
+        if buf[start] != unit or buf[start + 1] not in starts:
+            continue
+        started = True
+        length = rtu_reply_length(buf[start:start + 4])
+        ends = []
+        if length is None:
+            pending = True  # it ends where the line goes quiet
+        elif length <= MAX_ADU:
+            if start + length <= len(buf):
+                ends.append(start + length)
+            else:
+                pending = True
+        if quiet and len(buf) - start <= MAX_ADU and len(buf) not in ends:
+            ends.append(len(buf))
+        for end in ends:
+            try:
+                _unit, pdu = rtu_unwrap(bytes(buf[start:end]))
+            except ValueError:
+                continue
+            why = reply_mismatch(request, pdu)
+            if not why:
+                return ReplyScan((start, end), pending, started, rejected)
+            rejected = why
+    return ReplyScan(None, pending, started, rejected)
+
+
 def build_tcp_adu(txn: int, unit: int, pdu: bytes) -> bytes:
     """Build a Modbus/TCP ADU (MBAP header + PDU)."""
     length = len(pdu) + 1  # unit id + PDU
@@ -66,7 +184,8 @@ def take_tcp_adu(buf: bytearray) -> tuple[int, int, bytes] | None:
 
     Returns (txn, unit, pdu) and removes the consumed bytes from ``buf``; returns
     None if a full frame isn't buffered yet. Raises ValueError on a framing error
-    (non-zero protocol id or an absurd length) so the caller can drop the peer.
+    (non-zero protocol id, or a length that leaves no function code or goes past the
+    largest PDU) so the caller can drop the peer.
     """
     if len(buf) < MBAP_LEN:
         return None
@@ -76,7 +195,7 @@ def take_tcp_adu(buf: bytearray) -> tuple[int, int, bytes] | None:
     unit = buf[6]
     if proto != 0:
         raise ValueError("not Modbus/TCP (protocol id != 0)")
-    if not (1 <= length <= MAX_PDU + 1):
+    if not (2 <= length <= MAX_PDU + 1):  # unit id + at least a function code
         raise ValueError(f"invalid MBAP length {length}")
     total = MBAP_LEN + (length - 1)  # length counts unit id, already in the header
     if len(buf) < total:
@@ -94,6 +213,8 @@ def exception_pdu(function: int, code: int) -> bytes:
 
 
 ILLEGAL_FUNCTION = 0x01       # exception code: the function is not allowed here
+ILLEGAL_DATA_ADDRESS = 0x02   # exception code: an address the slave does not have
+ILLEGAL_DATA_VALUE = 0x03     # exception code: a value (or quantity) it does not take
 GATEWAY_PATH_UNAVAILABLE = 0x0A  # exception code: no path to the slaves (the port is down)
 GATEWAY_TARGET_FAILED = 0x0B  # exception code for a non-responding RTU slave
 
@@ -150,8 +271,19 @@ def response_data(pdu: bytes, function: int) -> bytes:
     return data
 
 
-_DTYPE_REGS = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2}
+_DTYPE_REGS = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2,
+               "int64": 4, "uint64": 4, "float64": 4}
 DTYPES = tuple(_DTYPE_REGS)
+_DTYPE_FMT = {"uint16": ">H", "int16": ">h", "uint32": ">I", "int32": ">i", "float32": ">f",
+              "int64": ">q", "uint64": ">Q", "float64": ">d"}
+MAX_READ_REGISTERS = 125       # FC3/FC4: the most registers one read may ask for
+
+# How a device lays out a value's bytes in its registers, one letter per byte, A the most
+# significant: ABCD is the Modbus convention (each register high byte first, the high
+# register first); CDAB has the registers the other way round ("word swap", common for
+# 32-bit values), BADC the bytes of each register swapped, DCBA both (little-endian). For a
+# 64-bit value the same rule holds for its four registers (CDAB: the lowest one first).
+WORD_ORDERS = ("ABCD", "CDAB", "BADC", "DCBA")
 
 
 def dtype_registers(dtype: str) -> int:
@@ -160,18 +292,48 @@ def dtype_registers(dtype: str) -> int:
     return _DTYPE_REGS[dtype]
 
 
-def decode_value(data: bytes, dtype: str, scale: float = 1.0):
-    """Decode the first `dtype` value from big-endian register bytes, multiplied by
-    `scale`. Integers stay integers when scale is 1; floats/scaled values are floats."""
+def word_order(data: bytes, order: str) -> bytes:
+    """Register bytes laid out as ``order`` (see WORD_ORDERS) rearranged to ABCD, or ABCD
+    bytes to ``order``: the same rearrangement works both ways."""
+    if order == "ABCD":
+        return bytes(data)
+    if order == "DCBA":
+        return bytes(data[::-1])
+    words = [bytes(data[i:i + 2]) for i in range(0, len(data), 2)]
+    if order == "CDAB":
+        return b"".join(reversed(words))
+    if order == "BADC":
+        return b"".join(w[::-1] for w in words)
+    raise ValueError(f"unknown word order {order!r}")
+
+
+def decode_value(data: bytes, dtype: str, scale: float = 1.0, order: str = "ABCD"):
+    """Decode the first `dtype` value from register bytes laid out as `order` (big-endian,
+    high register first by default), multiplied by `scale`. Integers stay integers when
+    scale is 1; floats/scaled values are floats."""
     need = dtype_registers(dtype) * 2
     chunk = data[:need]
     if len(chunk) < need:
         raise ValueError("not enough data for dtype")
-    fmt = {"uint16": ">H", "int16": ">h", "uint32": ">I", "int32": ">i", "float32": ">f"}[dtype]
-    value = struct.unpack(fmt, chunk)[0]
+    value = struct.unpack(_DTYPE_FMT[dtype], word_order(chunk, order))[0]
     if scale and scale != 1.0:
         return value * scale
     return value
+
+
+def decode_string(data: bytes, order: str = "ABCD") -> str:
+    """Text held in registers, two characters each: the first in the high byte (ABCD, CDAB)
+    or in the low byte (BADC, DCBA, as some devices store it). It ends at the first NUL;
+    trailing spaces (padding) are dropped, and bytes that are not UTF-8 read as U+FFFD."""
+    raw = word_order(data, "BADC") if order in ("BADC", "DCBA") else bytes(data)
+    return raw.split(b"\0", 1)[0].decode("utf-8", "replace").rstrip(" ")
+
+
+def register_bit(data: bytes, bit: int) -> bool:
+    """One bit of the first register in ``data`` (0 = the least significant)."""
+    if len(data) < 2:
+        raise ValueError("not enough data for a register")
+    return bool(int.from_bytes(data[:2], "big") >> bit & 1)
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +442,25 @@ def write_multiple_registers_pdu(address: int, registers: list[int]) -> bytes:
                   count >> 8, count & 0xFF, len(data)]) + data
 
 
+BROADCAST = 0  # unit 0: every slave on the line carries out a write, and none answers
+
+
+def broadcast_reply(pdu: bytes) -> Optional[bytes]:
+    """What a gateway answers a master for a broadcast (unit 0), which no slave answers:
+    for a well-formed write, the reply each slave would give it as a unicast, its echo
+    (FC5, FC6, FC22: the whole request; FC15, FC16: its first 5 bytes, as
+    check_write_response expects). None for anything else."""
+    function = pdu[0] if pdu else 0
+    if function in (WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER) and len(pdu) == 5:
+        return bytes(pdu)
+    if function == 22 and len(pdu) == 7:  # mask write register
+        return bytes(pdu)
+    if (function in (WRITE_MULTIPLE_COILS, WRITE_MULTIPLE_REGISTERS) and len(pdu) >= 6
+            and len(pdu) == 6 + pdu[5]):
+        return bytes(pdu[:5])
+    return None
+
+
 def check_write_response(pdu: bytes, request: bytes) -> None:
     """Check a slave's reply to a write ``request`` PDU; returns None if the write was
     acknowledged. FC5/FC6 replies echo the request exactly, FC15/FC16 replies echo its
@@ -304,19 +485,20 @@ def check_write_response(pdu: bytes, request: bytes) -> None:
                          f"the request ({expected.hex(' ')})")
 
 
-_DTYPE_FMT = {"uint16": ">H", "int16": ">h", "uint32": ">I", "int32": ">i", "float32": ">f"}
 _INT_RANGE = {"uint16": (0, 0xFFFF), "int16": (-0x8000, 0x7FFF),
-              "uint32": (0, 0xFFFFFFFF), "int32": (-0x80000000, 0x7FFFFFFF)}
+              "uint32": (0, 0xFFFFFFFF), "int32": (-0x80000000, 0x7FFFFFFF),
+              "uint64": (0, (1 << 64) - 1), "int64": (-(1 << 63), (1 << 63) - 1)}
 
 
-def encode_value(value: float, dtype: str, scale: float = 1.0) -> list[int]:
-    """Inverse of decode_value: the register words that hold ``value`` as ``dtype``,
-    big-endian with the high word first (the order decode_value reads).
+def encode_value(value: float, dtype: str, scale: float = 1.0,
+                 order: str = "ABCD") -> list[int]:
+    """Inverse of decode_value: the register words that hold ``value`` as ``dtype``, laid
+    out as ``order`` (big-endian with the high word first by default).
 
     The raw value is value / scale (a scale of 0 or 1 means unscaled, exactly as in
-    decode_value). float32 stores it as is; integer dtypes round it to the nearest
-    integer (ties to even, like round()). Raises ValueError for a non-number, NaN or
-    infinity, or a raw value outside the dtype's range."""
+    decode_value). float32 / float64 store it as is; integer dtypes round it to the
+    nearest integer (ties to even, like round()). Raises ValueError for a non-number, NaN
+    or infinity, or a raw value outside the dtype's range."""
     dtype_registers(dtype)  # ValueError for an unknown dtype
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"value must be a number, got {value!r}")
@@ -332,11 +514,11 @@ def encode_value(value: float, dtype: str, scale: float = 1.0) -> list[int]:
             raise ValueError(f"value {value!r} out of range for {dtype}") from None
         if not math.isfinite(raw):
             raise ValueError(f"value {value!r} / scale {scale!r} out of range for {dtype}")
-    if dtype == "float32":
+    if dtype in ("float32", "float64"):
         try:  # float() first: a huge int then fails with OverflowError, not struct.error
-            packed = struct.pack(">f", float(raw))
+            packed = struct.pack(_DTYPE_FMT[dtype], float(raw))
         except OverflowError:
-            raise ValueError(f"value {value!r} out of range for float32") from None
+            raise ValueError(f"value {value!r} out of range for {dtype}") from None
     else:
         lo, hi = _INT_RANGE[dtype]
         number = raw if isinstance(raw, int) else round(raw)
@@ -344,4 +526,5 @@ def encode_value(value: float, dtype: str, scale: float = 1.0) -> list[int]:
             raise ValueError(f"value {value!r} (raw {number}) out of range for {dtype} "
                              f"({lo}..{hi})")
         packed = struct.pack(_DTYPE_FMT[dtype], number)
+    packed = word_order(packed, order)
     return [int.from_bytes(packed[i:i + 2], "big") for i in range(0, len(packed), 2)]

@@ -87,29 +87,143 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   is refused each time it is asked for.
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
-  integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
+  integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer
+  within the response timeout, which starts once the request has gone out on the line
+  (set in the mapping form's Options: 1 s by default, 0.01–60 s). A reply ends when it is
+  as long as its header says (after 50 ms of silence for function codes whose header
+  doesn't size the reply: FC8, FC43, user-defined ones), so the latency of USB adapters
+  and the Windows clock don't cut replies. A reply has to answer its
+  request (the same function or its exception, the byte count of the quantity read, a
+  write's echo), and after a request that got no reply in time the gateway waits until the
+  line has been quiet for 250 ms (at most the response timeout) before it sends the next
+  one, so a late reply is dropped, and the late slave logged, instead of being handed to
+  the next master or poll point. Bytes that are not the reply are dropped and show up in
+  the trace as `ser>drop`, in the console and in the hex view. A broadcast (unit 0) write
+  (FC5/6/15/16/22) goes on the bus and is answered, after a 200 ms turnaround (at most the
+  response timeout), with the echo a slave would send; a read of unit 0 gets `0x0B` at once
+  without reaching the bus.
   If the serial port goes away (a USB adapter unplugged), masters get `0x0A` (gateway path
-  unavailable) at once meanwhile and the port is reopened like any mapping's (state
-  `reconnecting`, device lost/back notifications). Masters are admitted like other
+  unavailable) at once meanwhile (so does a request waiting for its reply at that moment)
+  and the port is reopened like any mapping's (state `reconnecting`, device lost/back
+  notifications). Masters are admitted like other
   clients (allowed IPs, max connections, priority IPs, kick-old-user); a **read-only**
   gateway answers every request that is not a read (writes such as FC5/6/15/16/22/23,
   diagnostics that restart or silence a slave, unknown function codes) with exception
   `0x01` without putting it on the bus. Banner, open/close strings and `closeon` don't
   apply (they would break the Modbus framing).
   **Edge mode:** also polls coils and registers on an interval and publishes the decoded
-  values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
-  values from MQTT (`<topic>/<point>/set`, one value for that point only: FC5 for a coil,
-  FC6/FC16 for a holding register's own one or two registers; a JSON list or other text
-  gets `error: …` on `.../set/result`). **Read-only** refuses these writes too (`error:
-  mapping is read-only`; a refused DCMD is logged), and the dashboard marks a mapping that
-  takes MQTT writes with **CMD** (see Security: the broker decides who may send them).
-  Optionally as a **Sparkplug B** edge node with one device per Modbus unit (`unit1`, …):
-  NBIRTH/NDEATH with `bdSeq`, DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD.
-  A command is written once, when it is published: a retained `/set` that the broker sends
+  values to MQTT (bool, uint/int 16/32/64, float 32/64, text, a register's bit, scaling,
+  word order: see Modbus points below); `"writable": true` points take values from MQTT
+  (`<topic>/<point>/set`, one value for that point only: FC5 for a coil, FC6/FC16 for a
+  holding register's own registers; a JSON list or other text gets `error: …` on
+  `.../set/result`). A point on unit 0 is never read; a write to it is
+  broadcast and not read back. The mapping form and the log warn about points on unit 0
+  and on units 248–255, which a serial line reserves. **Read-only** refuses these writes
+  too (`error: mapping is read-only`; a refused DCMD is logged), and the dashboard marks a
+  mapping that takes MQTT writes with **CMD** (see Security: the broker decides who may
+  send them). Points are read unit by unit, and each unit's health is followed: a unit
+  that gives no reply to any of its points in 3 polls in a row (or whose serial port stays
+  gone that long) is **offline**, logged once, and from then on polled with one point per
+  cycle (each in turn), so it holds the bus for one response timeout per cycle; when it
+  answers, all its points are read again. A slave exception (such as `0x02` for a register
+  it doesn't have) is an answer; such a point is logged with its unit when it starts
+  failing (at most once a minute) and when it reads again. Requests from Modbus/TCP
+  masters are not affected. Each unit's state is in the status (REST API) and `/metrics`,
+  the dashboard names the units that stopped answering, the **Modbus unit not answering /
+  answering again** notifications (off until ticked) report them, and plain MQTT can
+  publish it, retained, to `<topic>/unit<N>/status` (`online` / `offline`; **Publish each
+  unit's state** in the mapping form; it keeps the last state while the mapping is
+  stopped, so read it together with `<topic>/status`). Optionally as a **Sparkplug B**
+  edge node with one device per Modbus unit (`unit1`, …): NBIRTH/NDEATH with `bdSeq`,
+  DBIRTH/DDATA with `seq`, writes via DCMD, rebirth via NCMD. An offline unit gets a
+  DDEATH and is left out of the births; when it answers again it gets a DBIRTH with the
+  values just read (a point whose read fails is sent as null in a birth, not with its old
+  value). Data goes out only after the session's NBIRTH and DBIRTHs, each metric is
+  stamped with the time it was read, and a value that stays NaN is sent once. `bdSeq`
+  (Int64) continues across restarts (`data/sparkplug-bdseq.json`), so a host can tell the
+  Will of a session cut off by a power loss from the new session. DDATA keeps the metric
+  datatypes (the specification only advises against them, and older Tahu hosts and simple
+  consumers rely on them). A **primary host ID** (optional) makes the node follow that
+  host application's STATE (Sparkplug 3.0 `spBv1.0/STATE/<id>`, or the older
+  `STATE/<id>`): the births go out only while it is online, and when it goes offline the
+  node sends NDEATH and reconnects to wait for it. There is one broker per mapping (no
+  broker list to walk; a DNS name or a virtual IP in front of redundant brokers gives
+  basic failover), and nothing is stored for a host that is away (no store and forward). A
+  command is written once, when it is published: a retained `/set` that the broker sends
   again after a reconnect, a restart or a configuration save is ignored (and logged)
   unless **Re-apply a retained /set after every connect** is ticked; a retained Sparkplug
   NCMD/DCMD is always ignored, an empty message (clearing a retained one) is not a
   command, and a command published while ser2net is not connected is not delivered later.
+- **MQTT commands (edge mode):** writes from `/set` and Sparkplug DCMD are made one at a
+  time, in the order they came, and take turns on the bus with the poll and the Modbus/TCP
+  masters; the answers on `.../set/result` keep that order. At most 32 wait for the bus: a
+  command beyond them gets `error: busy`, and one that waited more than 10 s for its turn
+  is not written (`error: expired`). A `/set` over 64 KiB gets `error: too large: …`; a
+  Sparkplug NCMD/DCMD over 256 KiB, a DCMD with more metrics than its device has points and
+  an NCMD with more than 64 are ignored, and what a command leaves out (metrics that are not
+  writable points of the device, nulls) is logged in one line, at most once a minute. A
+  rebirth asked for less than 2 s after the last births goes out once those 2 s are up. The
+  broker's own limits (Mosquitto `message_size_limit`) and ACLs remain the first guard.
+  Answers go out at QoS 1 (or the mapping's QoS if higher), as `/set` is subscribed. A
+  `/set` may also be JSON, `{"value": 25, "id": "abc"}` (the id is optional: a string of up
+  to 64 characters or an integer); its answer is JSON too, `{"id": "abc", "ok": true,
+  "value": 25}` with the value read back from the device (null if it can't be read), or
+  `{"id": "abc", "ok": false, "error": "…"}`, while a plain value keeps the plain `ok` /
+  `error: …`. A unit that doesn't answer a write gives `error: no reply from unit N within
+  T s`. Sparkplug B: after every DCMD to a writable point the point is read back and sent
+  in a DDATA, changed or not (also when the write was refused, or the slave answered with
+  an exception), so the host sees how it went; a unit that did not answer goes offline
+  instead (DDEATH). A point can limit what MQTT may write to it (optional, in the points
+  JSON): `"min"` and `"max"` (in the point's own units, as published) and `"allowed": [0,
+  1, 2]` (`[true]` for a coil that may only be switched on); a value outside them is
+  refused before it reaches the bus (`error: 3000 is outside the range 0..1500 of
+  'setpoint'`). They don't limit Modbus/TCP masters, and a v2.8 node (a fleet edit from
+  one) or a downgrade drops them. `"poll": false` makes a writable point write-only, for a
+  command register that can't be read: never polled, a write not read back. An integer
+  type rounds a fraction (ties to even: `12.5` → 12) and the answer is still `ok`; the log
+  line of the write names the raw value written (`raw value 13`). **Fail-safe outputs:**
+  ser2net writes no safe value by itself when the broker or the host goes away. Use a
+  heartbeat: the host writes a counter to a holding register through `/set` (or a DCMD)
+  every few seconds, and the PLC's own logic (a watchdog timer) puts its outputs in a safe
+  state when the counter stops changing. A device's own communication-loss timeout alone
+  won't do, as ser2net's polling keeps talking to it. Stopping the mapping (also a save, a restart or an
+  import that changes it) answers every write before the MQTT connection closes: the one
+  on the bus may finish (at most 2 s; else `error: cancelled: mapping stopped (sent,
+  outcome unknown)` or `(not sent)`), the ones still waiting get `error: cancelled: mapping
+  stopped`, and a command that comes meanwhile gets `error: mapping stopped`; the log
+  says which were not made.
+- **Modbus points (edge mode):** each point is `{"name", "unit", "fn", "address", "dtype",
+  "scale", …}` in the points JSON of the mapping form, or with **Edit the points as
+  fields** one box of fields per point (the JSON stays what the form saves; keys without a
+  field, such as `"min"`, are kept). Types: `uint16`/`int16` (one register),
+  `uint32`/`int32`/`float32` (two), `int64`/`uint64`/`float64` (four, written with FC16),
+  `"string"` with its `"length"` in registers (two characters each; it ends at a NUL,
+  trailing spaces are dropped), and `"bool"`: a coil or discrete input, or with `"bit":
+  0–15` one bit of a holding or input register; strings and register bits are read-only.
+  `"word_order"` says how the device lays out a value's bytes, for reads and writes:
+  `"ABCD"` (the default, high register first), `"CDAB"` (low register first, the common
+  "word swap" of 32-bit meters), `"BADC"` (each register's bytes swapped) or `"DCBA"`; a
+  string's characters come high byte first (`"ABCD"`) or low byte first (`"BADC"`).
+  Sparkplug B sends them as Int64, UInt64, Double, String and Boolean (the other types keep
+  their datatypes). Values are checked when a mapping is edited (form, REST API, import,
+  fleet edit): `"unit": "1"` and `"scale": "0.1"` count as numbers, `"writable": "false"`
+  as false, and what can't be used (a scale that is not a number, a misspelt key such as
+  `"adress"` in the form) is refused with a message naming the point; the form says where
+  invalid JSON breaks (line and column) and keeps what was typed. **Read neighbouring
+  points with one request** (off by default) reads a unit's points of one function that
+  lie close together with one request (at most 125 registers or 2000 coils, with up to the
+  given number of unused registers in between): 100 points at 9600 baud then take a
+  fraction of a second instead of several seconds per poll. A block the slave refuses
+  (exception 02 or 03) is read point by point from then on (logged once), and a block
+  without a reply counts as no reply for each of its points. **Read these points now** in
+  the edit form reads the points as typed (not saved) through the running gateway and
+  shows their values; the status (REST API) lists each point's last value, when it was
+  read and why the last read failed. **Unit map** (Modbus gateways, optional): `255=1,
+  0=1` sends a master's requests for unit 255 and unit 0 to RTU unit 1 and answers them
+  with the id the master sent (many masters address a gateway's device as 255 or 0).
+  Retries are not added: a unit that stops answering is polled once per cycle (see
+  above). A v2.8 node (a fleet edit from one) or a downgrade drops `word_order`, `bit`,
+  `length`, the block reads and the unit map, and its polling fails on the new types.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -253,7 +367,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   node offline** (a node heard from that is no longer heard from for 20 s, or a configured
   peer that misses two answers a minute apart) and back, and **ser2net started** (15 s
   after a start: which mappings run, and whether the previous run was ended by the event
-  loop watchdog). The same events are logged in all.log whether or not they are sent.
+  loop watchdog), and a **Modbus unit** that a gateway polls **stops answering** (no reply
+  to any of its points in 3 polls in a row) or answers again. The same events are logged in all.log whether or not they are sent.
   With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
   format has a `url` field. The client events send the client's IP address, a failed
   sign-in the account name (or `(unknown user)`) and the IP address; *Leave out personal
@@ -304,7 +419,65 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
-  broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status.
+  broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status:
+  `<topic>/status` reads `online` after every connect to the broker (a reconnect too),
+  and `offline` when the mapping stops or, as the Last-Will, when the broker loses the
+  connection. With a blank client ID the broker can't tie a new connection to the one
+  that broke, whose Will it may publish only after the new `online` (it waits up to 1.5 ×
+  the 30 s keepalive), so `online` is sent once more 50 s after each connect. The
+  connection is logged as it changes (connecting, connected, refused with the broker's
+  reason, can't connect with the error — DNS, no answer, a TLS certificate — and lost; each
+  problem once until it changes), as is a subscription the broker refuses and the first
+  failed publish to a topic. The mapping's status (`mqtt` in the REST API: state, broker,
+  since, error, dropped messages) and `/metrics` carry it, and the dashboard shows
+  **⚠ MQTT: no connection to …** with the reason. A base topic with `+` or `#` (no message
+  can be published to it) keeps MQTT off for the mapping, with a log line. Edits (the
+  mapping form, the REST API, an import, a cluster node's save) refuse such a base topic,
+  a plain-format point name with `+`, `#` or the null character (`/` is fine), and a
+  point whose topic the mapping already uses: `status`, `unit<N>/status` with the unit
+  states on, or another point's `<point>/set` or `/set/result`. Two enabled mappings on
+  the same broker (host:port) can't share an explicit client ID (the broker keeps one
+  connection per ID), a Sparkplug B group and edge node ID, or a command topic — a `/set`
+  (or a serial mapping's `<topic>/tx`) both would take, or one that the other publishes
+  its data to. Mappings that only
+  publish to the same topics (a shared base topic, whose `<topic>/status` then shows
+  whichever connected last) are allowed, with a warning in the mapping's log when it
+  starts. A config.json that already has such a clash keeps loading and running: start-up
+  and each start of the mapping log it, and an edit of either mapping has to resolve it
+  (or disable one of them); starting a disabled mapping that would clash with an enabled
+  one (Start, a bulk start, the REST API, a cluster node) is refused with the reason, as for
+  a shared serial port. Two ser2net installations can't see each other's mappings:
+  give each its own topics and client IDs. Over **TLS**
+  the broker's certificate must chain to a CA the system trusts — or, with a **CA
+  certificate file** (PEM, or DER), to one in that file only — and name the broker host
+  (a DNS name or an IP address); **Check the broker's host name** off accepts a
+  certificate that doesn't (it must still come from a trusted CA). A **client
+  certificate** (PEM; its key in its own file or in the same one, an encrypted key with
+  its **password**) is presented to a broker that asks for one (mutual TLS, such as AWS
+  IoT Core); the form never shows a stored key password (a blank field keeps it, *Remove
+  the stored password* clears it). The mapping form and the REST API refuse files that
+  can't be used; an
+  import takes such a mapping with a warning, and a mapping whose files are gone keeps
+  loading and runs without MQTT (logged, shown on the dashboard) — never in clear text.
+  A relative path names a file in the data folder, as for a mapping's TLS files.
+  In Docker put the files under `/data` (for example `/data/certs/`); the Windows service
+  must be able to read them. While the
+  broker is away, QoS 0 messages are lost (counted as dropped); at QoS 1/2 up to 10 000
+  messages per mapping wait and go out after the reconnect — beyond that the newest are
+  dropped (counted, logged once per outage) — and polled Modbus values keep only the
+  latest value of each point instead (no burst of stale readings after an outage).
+  Stopping or restarting a mapping waits at most 3 s for the broker to take its last
+  message (`offline`, or a Sparkplug NDEATH; beyond that the Last-Will says the same),
+  without holding up the other mappings or the UI. **Retain the data** (plain format)
+  publishes the serial lines and the polled Modbus values retained, so a subscriber that
+  connects later (Home Assistant, Node-RED, Telegraf) gets the last one at once instead of
+  waiting for the next poll or line (Sparkplug B never retains data, command results are
+  not retained; to drop a retained value, publish an empty retained message to its
+  topic). Modbus values are plain text by default; **Value format: JSON** publishes
+  `{"value": 21.5, "ts": 1731400000123, "quality": "good"}` (`ts`: when it was read, in ms
+  since the epoch; a bit is `true` / `false`, a NaN reading `null`), and once
+  `{"value": null, …, "quality": "bad"}` for a point whose read fails or whose unit stops
+  answering, until it reads again. The client speaks MQTT 3.1.1.
   Needs `paho-mqtt` (optional; the bridge runs normally without it). A line ends at **LF**
   (the default; a CR before it is left out), **CR** (scales, analyzers and other devices
   that end their records with CR; an LF next to it is left out) or **CR or LF**
@@ -407,7 +580,7 @@ that isn't. While it runs it keeps that copy locked and its access times fresh, 
 cleaners (systemd-tmpfiles, tmpreaper) don't delete it under a long-running instance; a
 copy left behind by a killed process still ages out as usual. For certificate checks (MQTT
 over TLS, OIDC, LDAPS / StartTLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE`
-if set.
+if set (unless a CA file is set for the MQTT mapping or for LDAP).
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) and where each
 component is loaded from, with the known folders shortened (`<python>`, `<ser2net>`,
@@ -479,11 +652,15 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
   rules.
 - **Start/Stop/Restart/Copy/Delete:** per row. Stop and Restart ask first while clients
   are connected (they are disconnected; a stopped mapping stays stopped); Delete also
-  removes the mapping's log and trace files.
+  removes the mapping's log and trace files. **Copy** makes a disabled copy named
+  `<name> (copy)` (`(copy 2)`, …) on the next free port (for its transport and address,
+  not one of ser2net's own; searched downwards past 65535), with no MQTT client ID, the
+  base topic `<topic>-copy` (`-copy-2`, …) and a Sparkplug B edge node ID made from its
+  new name, so it can run next to the original once its serial port is changed.
 - **Edit:** an edit form opened before the mapping changed (another user or tab, a start or
   stop, the REST API) is not saved: it comes back with your values and a note, and saving
   it again replaces the changes. A form whose mapping was deleted meanwhile comes back as a
-  new mapping. A copy (*Copy*) has no MQTT client ID of its own until you give it one.
+  new mapping.
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
   device on network mappings that aren't read-only (a Modbus gateway's console only
@@ -529,7 +706,11 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
   connections, TLS handshakes in progress and waiting for one to end, the connections
   refused right after accept (`ser2net_connections_refused_total`, by reason), the data
   folder's disk (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) and what traces and
-  logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`). Every series has its
+  logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`); for a Modbus gateway's
+  polled units whether each answers (`ser2net_modbus_unit_up`) and its failed reads
+  (`ser2net_modbus_unit_poll_errors_total`); for a mapping that publishes to MQTT whether
+  it is connected to its broker (`ser2net_mqtt_connected`) and the messages it could not
+  hand to it (`ser2net_mqtt_messages_dropped_total`). Every series has its
   `# HELP` and `# TYPE` line. Without a session a scraper gets `401` (a browser is sent to
   the sign-in page), and successful scrapes are not written to `all.log`.
 
@@ -608,10 +789,10 @@ type is refused with `400` and the setting's path (`serial.baudrate: "fast" is n
 number.`). A protective switch (`read_only`, `tls`) takes only JSON `true` / `false`: text is
 refused (`network.read_only: use true or false (JSON booleans), not a string.`), and so is an
 import of such a file. In a hand-edited `config.json`, text in a protective switch
-(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`) keeps it on unless empty, as
-before 2.9.0, with a start-up note. The switches that turn something on only when set to
+(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`, the
+MQTT `tls_check_hostname`) keeps it on unless empty, as before 2.9.0, with a start-up note. The switches that turn something on only when set to
 JSON `true` (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
-the MQTT `tx_enabled`, `proxy_hsts`, `mask_personal_data`, `email_separately`) refuse text as
+the MQTT `tx_enabled`, `proxy_hsts`, `email_separately`) refuse text as
 well; in a hand-edited `config.json` it leaves them off, with a start-up note. Keys that are
 not settings are ignored and named in the response's `warnings` list. An unexpected server error is a JSON `500` too.
 A change that can't be saved changes nothing: `400` (`validation`) when the configuration
@@ -647,7 +828,8 @@ scrape_configs:
 ```
 The token has the role chosen when it was generated (*Change the role only* changes it and
 keeps the token): a `viewer` token may only read (GET)
-and gets stored secrets (the MQTT password, a mapping's TLS key password) masked as
+and gets stored secrets (the MQTT password and client key password, a mapping's TLS key
+password) masked as
 `********`; a `PUT` or `PATCH` that sends that mask back keeps the stored password. An `api_token_role` in `config.json` that is not a
 role counts as `viewer`, and the start-up log says so.
 
@@ -1332,16 +1514,20 @@ inside aren't readable by other users:
   path); backups and imports from before the move are handled the same way.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
+- `sparkplug-bdseq.json` — the `bdSeq` of each Sparkplug B edge node's (group/node) last
+  session; after a restart the numbering goes on from there. Deleted, the next start begins
+  at 0.
 
 **Secrets:** `config.json` holds, in plain text, the LDAP bind password, the OIDC client
 secret, the SMTP password, the webhook URL (which often carries a token), each mapping's
-MQTT broker password, the TLS key passwords (a mapping's and the admin UI's), the cluster
+MQTT broker password and MQTT client key password, the TLS key passwords (a mapping's and
+the admin UI's), the cluster
 key (enough to read and change the mappings of every node) and the session key `secret_key`
 (with the accounts in the same file, enough to make a valid sign-in), and the two-factor
 sign-in key of each account that uses it. Local passwords are kept as scrypt hashes and the
 REST API tokens only as hashes. `backups/` holds earlier copies
 of the same file (a downloaded backup leaves out the session key), and the mappings export
-holds the MQTT and TLS key passwords. On this machine only the account ser2net runs as can
+holds the MQTT passwords and the MQTT and TLS key passwords. On this machine only the account ser2net runs as can
 read them; treat every copy — a copied data folder or Docker
 volume, a disk or VM image, a downloaded backup, an export — like a password vault.
 [SECURITY.md](SECURITY.md) (*Stored secrets*) lists what to change after such a copy leaked.
@@ -1377,7 +1563,8 @@ Linux/macOS; `docker kill -s HUP ser2net`), `ser2net --reload` with the same `--
 (any platform, also for the Windows service and in a container) or Settings →
 *Configuration backups* → *Reload config.json*. The file is checked as an edit is: when it
 can't be read or doesn't validate (a value of the wrong type in a changed mapping, two
-mappings on one port, no user accounts, a TLS pair that doesn't load) nothing changes and
+mappings on one port, no user accounts, a TLS pair that doesn't load, an MQTT client ID
+another enabled mapping uses on the same broker) nothing changes and
 `all.log` says why. Otherwise it is applied part by part: a mapping whose settings didn't
 change keeps running with its clients (one that should run but doesn't is started), a
 changed one restarts, a removed one stops, a new one starts; the cluster restarts only when
@@ -1440,6 +1627,8 @@ Modbus points have no `writable`, no trace rotation, no Sparkplug B, ...) are na
 preview; a merge keeps their current values, *replace all* gives them the defaults. The
 one-step import of 2.7 scripts (a POST without `step=preview`) still replaces all mappings
 from a JSON file; a classic ser2net file is taken only through the preview.
+**Export** writes the mappings as a UTF-8 JSON file (non-ASCII names and topics as they are,
+like `config.json`); the import reads it (and the escaped files of older versions).
 
 ---
 

@@ -101,7 +101,7 @@ async def _after_a_late_stop():
     sup._runners = {"stuck00000001": FakeRunner("stuck", 1.2),
                     "gone000000001": FakeRunner("gone", 1.2)}
     with mock.patch.object(supervisor, "STOP_ALL_TIMEOUT_S", 0.3), \
-            mock.patch.object(supervisor, "_build_runner", lambda m, _log, _dir: Startable(m)):
+            mock.patch.object(supervisor, "_build_runner", lambda m, _log, _dir, _state=None: Startable(m)):
         await sup.stop_all()
         t0 = time.monotonic()
         await sup.start_all(cfg)

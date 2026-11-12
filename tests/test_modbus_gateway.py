@@ -12,6 +12,12 @@ like bridge clients (allow-list, max connections, kick_old_user, priority IPs), 
 read-only gateway answers anything that is not a read with exception 01 without
 touching the bus.
 
+How replies are read off the line runs against an in-memory bus (MemoryBus: each part of
+a reply is fed after its own delay) and a thread-driven slave (real pauses between the
+parts of a reply, on any platform's event loop): a reply ends when it is as long as its
+header says, however it is split up, stale bytes in front of it are skipped, and nothing
+holds the bus for longer than a whole frame takes after the response timeout.
+
 Run: python3 tests/test_modbus_gateway.py
 """
 import asyncio
@@ -19,6 +25,9 @@ import contextlib
 import os
 import socket
 import sys
+import tempfile
+import threading
+import time
 from contextlib import suppress
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -27,7 +36,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app import notify
 from app.config import MappingConfig
 from app.engine import modbus, serial_io
-from app.engine.modbus_gateway import ModbusGatewayRunner
+from app.engine.bridge import FROM_DEVICE, open_tracer
+from app.engine.modbus_gateway import (
+    GUARD_S, SILENCE_S, TURNAROUND_S, ModbusGatewayRunner, NoReply,
+)
 
 RESPONSIVE_UNIT = 1
 SILENT_UNIT = 9
@@ -147,9 +159,17 @@ async def running_gateway(slave_port, logs=None, options=None, **network):
         serial_io.open_serial = real_open
 
 
+def echo_answer(pdu):
+    """A register read (FC3/FC4) gets that many registers (all 0); anything else its own
+    PDU back (what a slave sends for an accepted single write, or an FC8/00 echo)."""
+    if pdu[0] in (3, 4):
+        count = int.from_bytes(pdu[3:5], "big")
+        return bytes([pdu[0], 2 * count]) + bytes(2 * count)
+    return pdu
+
+
 def echo_slave(seen):
-    """An RTU slave that records each request and answers with the request PDU itself
-    (what a slave sends back for an accepted single write; good enough for any FC here)."""
+    """An RTU slave that records each request and answers it with echo_answer."""
     async def handle(reader, writer):
         buf = bytearray()
         try:
@@ -162,11 +182,405 @@ def echo_slave(seen):
                     unit, pdu = modbus.rtu_unwrap(bytes(buf))
                     buf.clear()
                     seen.append((unit, pdu))
-                    writer.write(modbus.rtu_wrap(unit, pdu))
+                    writer.write(modbus.rtu_wrap(unit, echo_answer(pdu)))
                     await writer.drain()
         except (ConnectionError, OSError):
             pass
     return handle
+
+
+class MemoryBus:
+    """The gateway's serial port as an in-memory stream pair (SerialLink.attach takes it):
+    each request the gateway writes is recorded and passed to ``answer(unit, pdu)``, which
+    returns the [(delay_s, bytes), ...] to feed back that long after the write."""
+
+    def __init__(self, answer=None):
+        self.reader = asyncio.StreamReader()
+        self.answer = answer or (lambda unit, pdu: [])
+        self.requests = []  # (unit, pdu) of each request, as the line carried it
+
+    def write(self, data):
+        unit, pdu = modbus.rtu_unwrap(bytes(data))
+        self.requests.append((unit, pdu))
+        loop = asyncio.get_running_loop()
+        for delay, part in self.answer(unit, pdu):
+            loop.call_later(delay, self.reader.feed_data, part)
+
+    async def drain(self):
+        pass
+
+
+def memory_gateway(answer=None, baud=9600, timeout=0.3, logs=None, trace_dir=None):
+    """A gateway (not started) whose serial port is a MemoryBus; returns (runner, bus)."""
+    mapping = MappingConfig.from_dict({
+        "name": "mb", "kind": "net", "serial": {"port": "/dev/ttyUSB-mem", "baudrate": baud},
+        "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1", "port": 1502},
+        "options": {"modbus_response_timeout_s": timeout,
+                    **({"trace_both": "mb.trace"} if trace_dir else {})}})
+    runner = ModbusGatewayRunner(mapping, logger=logs.append if logs is not None else
+                                 (lambda _m: None), trace_dir=trace_dir)
+    bus = MemoryBus(answer)
+    runner._link.attach(bus.reader, bus)
+    return runner, bus
+
+
+class Recorder:
+    """A console and hex-view observer that keeps what it is given."""
+
+    def __init__(self):
+        self.console, self.traffic = [], []
+
+    def feed(self, data):
+        self.console.append(bytes(data))
+
+    def feed_traffic(self, direction, data):
+        self.traffic.append((direction, bytes(data)))
+
+    def close(self):
+        pass
+
+
+def regs_reply(unit, count, base=0):
+    """The RTU frame of an FC3 reply with ``count`` registers base, base+1, ..."""
+    data = b"".join((base + i).to_bytes(2, "big") for i in range(count))
+    return modbus.rtu_wrap(unit, bytes([3, len(data)]) + data)
+
+
+def regs_of(rpdu):
+    return [int.from_bytes(rpdu[2 + 2 * i:4 + 2 * i], "big") for i in range(rpdu[1] // 2)]
+
+
+async def timed(coro):
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    result = await coro
+    return result, loop.time() - started
+
+
+async def test_reply_framing():
+    """A reply is complete when it is as long as its header says, not after a pause: split
+    by pauses far longer than the 10 ms the gateway once took for the end of a frame, it
+    still arrives whole; in one piece it is passed on at once."""
+    read10 = modbus.read_pdu(3, 0, 10)
+    frame = regs_reply(1, 10, base=100)
+
+    runner, bus = memory_gateway(lambda u, p: [(0, frame)])
+    runner._gap = 5.0  # a whole reply must not wait for any silence after it
+    rpdu, took = await timed(runner._transaction(1, read10))
+    assert regs_of(rpdu) == list(range(100, 110)) and took < 1.0, (rpdu, took)
+    print(f"whole reply: passed on in {took * 1000:.0f} ms, without waiting for silence  OK")
+
+    # in two or three parts, with pauses of 20 and 120 ms (USB latency, a busy event loop,
+    # the Windows clock): still whole, for a sized reply and for a user-defined function
+    for parts in ((frame[:9], frame[9:]), (frame[:4], frame[4:20], frame[20:])):
+        for pause in (0.02, 0.12):
+            runner, bus = memory_gateway(lambda u, p, parts=parts, pause=pause:
+                                         [(i * pause, part) for i, part in enumerate(parts)])
+            rpdu = await runner._transaction(1, read10)
+            assert regs_of(rpdu) == list(range(100, 110)), (pause, rpdu.hex(" "))
+    user = modbus.rtu_wrap(1, bytes([0x41]) + bytes(range(12)))
+    for pause in (0.02, 0.12):
+        runner, bus = memory_gateway(lambda u, p, pause=pause: [(0, user[:6]), (pause, user[6:])])
+        assert await runner._transaction(1, b"\x41\x00") == user[1:-2], pause
+    print("split replies (20 / 120 ms pauses, 2-3 parts, a user-defined code): whole  OK")
+
+
+async def test_dropped_bytes():
+    """Bytes in front of a reply (the late tail of an earlier one, noise) are skipped; they
+    are counted and shown in the trace (ser>drop), the console and the hex view."""
+    frame = regs_reply(1, 2, base=7)
+    junk = b"\x55\xaa" + regs_reply(1, 10)[-6:]  # noise, then the tail of another reply
+    with tempfile.TemporaryDirectory() as tmp:
+        runner, bus = memory_gateway(lambda u, p: [(0, junk + frame)], trace_dir=tmp)
+        runner.mapping.options.trace_hexdump = True
+        runner._tracer = open_tracer(runner.mapping, tmp, lambda _m: None)
+        seen = Recorder()
+        runner.add_monitor(seen)
+        runner.add_traffic_monitor(seen)
+        rpdu = await runner._transaction(1, modbus.read_pdu(3, 0, 2))
+        assert regs_of(rpdu) == [7, 8], rpdu.hex(" ")
+        assert runner.status.bytes_in == len(junk) + len(frame), runner.status.as_dict()
+        rx = [data for direction, data in seen.traffic if direction == FROM_DEVICE]
+        assert rx == [junk, frame], rx
+        assert b"\xaa rx (dropped) " + junk in seen.console, seen.console
+        assert b"\xaa rx " + frame in seen.console, seen.console
+        path = runner._tracer.path
+        await runner._tracer.aclose()
+        with open(path, encoding="utf-8") as fh:
+            trace = fh.read()
+    assert f"ser>drop [{len(junk)}] {junk.hex(' ')}" in trace, trace
+    assert f"ser>net [{len(frame)}] {frame.hex(' ')}" in trace, trace
+    print("bytes in front of a reply: skipped, counted, in the trace (ser>drop), console "
+          "and hex view  OK")
+
+    # an RS-485 adapter that echoes each request in front of the reply: the echo is
+    # dropped, and the next request does not wait for a quiet line because of it
+    runner, bus = memory_gateway(lambda u, p: [
+        (0, modbus.rtu_wrap(u, p)), (0.005, regs_reply(u, 2, base=int.from_bytes(p[1:3], "big")))])
+    replies, took = await timed(asyncio.gather(
+        *(runner._transaction(1, modbus.read_pdu(3, a, 2)) for a in (3, 9, 30))))
+    assert [regs_of(r) for r in replies] == [[3, 4], [9, 10], [30, 31]], replies
+    assert took < GUARD_S, f"3 requests took {took:.2f}s"
+    print(f"request echoed by the adapter: dropped; 3 requests in {took * 1000:.0f} ms  OK")
+
+
+async def test_cut_and_chattering():
+    """A reply that never completes ends in 0x0B within the response timeout plus a frame's
+    time (and the guard wait for a quiet line after the request before), with one log line
+    saying what came (repeats are counted into the next line); a line that never goes
+    quiet holds a request back by a bounded time."""
+    frame = regs_reply(1, 10)
+    logs = []
+    runner, bus = memory_gateway(lambda u, p: [(0, frame[:9])], logs=logs)
+    limit = runner._resp_timeout + modbus.MAX_ADU * runner._char_s + runner._gap + GUARD_S + 0.2
+    for _ in range(3):
+        rpdu, took = await timed(runner._transaction(1, modbus.read_pdu(3, 0, 10)))
+        assert rpdu == TIMEOUT_PDU and took < limit, (rpdu, took)
+    notes = [m for m in logs if m.startswith("unit 1: no usable reply to FC3")]
+    assert len(notes) == 1 and "dropped 9 byte(s)" in notes[0] and "cut short" in notes[0], logs
+    print(f"cut reply: 0x0B in {took:.2f} s, logged once (then counted)  OK")
+
+    # a line that never stops chattering (faster than the gateway waits for stale bytes
+    # before a request), before and after the request
+    logs = []
+    runner, bus = memory_gateway(logs=logs)
+    stop = asyncio.Event()
+
+    async def chatter():
+        while not stop.is_set():
+            bus.reader.feed_data(b"\x55" * 16)
+            await asyncio.sleep(0)
+    noise = asyncio.create_task(chatter())
+    try:
+        await asyncio.sleep(0.05)
+        limit = (runner._resp_timeout + 2 * modbus.MAX_ADU * runner._char_s + runner._gap
+                 + GUARD_S + 0.3)
+        for _ in range(2):
+            rpdu, took = await timed(runner._transaction(1, modbus.read_pdu(3, 0, 2)))
+            assert rpdu == TIMEOUT_PDU and took < limit, (rpdu, took, limit)
+    finally:
+        stop.set()
+        await noise
+    assert sum("no request was waiting for" in m for m in logs) == 1, logs
+    print(f"chattering line: each request answered 0x0B within {took:.2f} s (bounded)  OK")
+
+
+async def test_wire_time():
+    """The response timeout starts once the request is out on the line: a long request at a
+    low baud rate takes longer than the timeout to send, and its reply still counts."""
+    regs = list(range(25))
+    pdu = modbus.write_multiple_registers_pdu(0, regs)  # 59 bytes: 0.54 s at 1200 baud
+    runner, bus = memory_gateway(lambda u, p: [(0.6, modbus.rtu_wrap(u, p[:5]))],
+                                 baud=1200, timeout=0.3)
+    rpdu = await runner._transaction(1, pdu)
+    assert rpdu == pdu[:5], rpdu.hex(" ")
+    print("FC16 of 59 bytes at 1200 baud, timeout 0.3 s: the echo 0.6 s later counts  OK")
+
+
+def register_slave(delay_of=lambda address: 0.0):
+    """MemoryBus answers of a slave whose holding register N holds N, each read answered
+    ``delay_of(address)`` seconds after its request came (None: never)."""
+    def answer(unit, pdu):
+        address, count = int.from_bytes(pdu[1:3], "big"), int.from_bytes(pdu[3:5], "big")
+        delay = delay_of(address)
+        return [] if delay is None else [(delay, regs_reply(unit, count, base=address))]
+    return answer
+
+
+async def test_late_reply_dropped():
+    """A reply that comes after the response timeout is not taken for the next request's:
+    a read of the same unit, function and quantity at another address can't tell them apart
+    (a read's reply carries no address), so after a request that got no reply in time the
+    line has to be quiet for the guard time before the next request goes out. The late
+    slave is logged once."""
+    logs = []
+    runner, bus = memory_gateway(register_slave(lambda a: 0.35 if a == 100 else 0.1),
+                                 timeout=0.3, logs=logs)
+    first, second = await asyncio.gather(runner._transaction(1, modbus.read_pdu(3, 100, 2)),
+                                         runner._transaction(1, modbus.read_pdu(3, 200, 2)))
+    assert first == TIMEOUT_PDU, first.hex(" ")
+    assert regs_of(second) == [200, 201], f"the next request got {regs_of(second)}"
+    late = [m for m in logs if m.startswith("unit 1 answered FC3 after the response timeout")]
+    assert len(late) == 1 and "0.3 s" in late[0], logs
+    print("late reply: dropped while the line settles, the next read gets its own value, "
+          "the late unit is logged  OK")
+
+    # the wait is counted from the request that got no reply: a request that comes once
+    # the line has been quiet that long (the next poll cycle, a slower master) waits for
+    # nothing; a late reply that came meanwhile is still dropped
+    for late_by, quick in ((None, True), (0.35, False)):
+        runner, bus = memory_gateway(register_slave(lambda a, d=late_by: d if a == 100 else 0.0),
+                                     timeout=0.3)
+        assert await runner._transaction(1, modbus.read_pdu(3, 100, 2)) == TIMEOUT_PDU
+        await asyncio.sleep(GUARD_S + 0.1)
+        rpdu, took = await timed(runner._transaction(1, modbus.read_pdu(3, 200, 2)))
+        assert regs_of(rpdu) == [200, 201], (late_by, rpdu)
+        assert took < (GUARD_S / 2 if quick else GUARD_S + 0.15), (late_by, took)
+    print("a request once the line has been quiet for the guard time: no wait; a late reply "
+          "in the buffer is dropped  OK")
+
+    # the poll path and a queueing slave (it answers every request 0.35 s after it came,
+    # in order): whatever times out, no point ever gets another point's value
+    runner, bus = memory_gateway(register_slave(lambda a: 0.35), timeout=0.3)
+    points = [MappingConfig.from_dict({"modbus_poll": {"points": [
+        {"name": f"p{a}", "unit": 1, "fn": 3, "address": a, "dtype": "uint32"}]}}
+    ).modbus_poll.points[0] for a in (10, 20, 30)]
+    for p in points:
+        try:
+            value = await runner._read_point(p)
+        except NoReply as e:  # what the gateway makes of 0x0B for a poll point
+            assert str(e) == "no reply from unit 1 within 0.3 s", e
+            continue
+        assert value == (p.address << 16) | (p.address + 1), (p.name, value)
+    print("queueing slave: every poll point gets its own value or 0x0B, never a neighbour's  OK")
+
+
+async def test_reply_must_answer_request():
+    """The frame from the right unit has to answer the request: an FC3 frame on the line is
+    no reply to an FC6 write (the echo after it is), a 10-register reply none to a 2-register
+    read, and a write's reply must be its echo; what does not answer is dropped and logged."""
+    write = modbus.write_single_register_pdu(1, 3)
+    stale = modbus.rtu_wrap(1, bytes.fromhex("0302000a"))
+    runner, bus = memory_gateway(lambda u, p: [(0, stale), (0.02, modbus.rtu_wrap(u, p))])
+    assert await runner._transaction(1, write) == write
+    print("FC6: an FC3 frame in front of its echo is skipped, the echo is the reply  OK")
+
+    logs = []
+    runner, bus = memory_gateway(lambda u, p: [(0, stale)], logs=logs)
+    assert await runner._transaction(1, write) == bytes([0x86, 0x0B])
+    assert any(m.startswith("unit 1: no usable reply to FC6") and "none of them answers" in m
+               for m in logs), logs
+
+    # FC16: an echo of another quantity; FC5: of the other state
+    runner, bus = memory_gateway(lambda u, p: [(0, modbus.rtu_wrap(u, p[:3] + b"\x00\x01"))])
+    assert await runner._transaction(1, modbus.write_multiple_registers_pdu(0, [1, 2])) == \
+        bytes([0x90, 0x0B])
+    runner, bus = memory_gateway(lambda u, p: [(0, modbus.rtu_wrap(u, p[:3] + b"\x00\x00"))])
+    assert await runner._transaction(1, modbus.write_single_coil_pdu(5, True)) == \
+        bytes([0x85, 0x0B])
+
+    # the poll path: a uint32 point (2 registers) answered with 10 is an error, not a value
+    logs = []
+    runner, bus = memory_gateway(lambda u, p: [(0, regs_reply(u, 10))], logs=logs)
+    point = MappingConfig.from_dict({"modbus_poll": {"points": [
+        {"name": "flow", "unit": 1, "fn": 3, "address": 0, "dtype": "uint32"}]}}
+    ).modbus_poll.points[0]
+    try:
+        value = await runner._read_point(point)
+        raise AssertionError(f"a 10-register reply was decoded as {value}")
+    except NoReply as e:
+        assert str(e).startswith("no reply from unit 1 within "), e
+    assert any("20 data bytes for 2 register(s)" in m for m in logs), logs
+    print("no reply: a wrong function, a write echo that differs, a 10-register reply to a "
+          "uint32 point -> 0x0B and a log line  OK")
+
+
+async def test_broadcast():
+    """Unit 0 is a broadcast: every slave carries out a write and none answers. A write goes
+    on the bus and gets, after the turnaround delay (not the response timeout), the echo a
+    slave would have sent; a read of unit 0 is answered 0x0B at once and never put on the
+    bus; anything else is put on the bus and answered 0x0B after the turnaround."""
+    runner, bus = memory_gateway(timeout=1.0)
+    writes = [modbus.write_single_register_pdu(1, 3), modbus.write_single_coil_pdu(5, True),
+              modbus.write_multiple_registers_pdu(10, [1, 2, 3]),
+              modbus.write_multiple_coils_pdu(0, [True, False, True]),
+              bytes.fromhex("16000400f20025")]
+    for pdu in writes:
+        reply, took = await timed(runner._transaction(modbus.BROADCAST, pdu))
+        assert reply == modbus.broadcast_reply(pdu) and reply is not None, (pdu.hex(" "), reply)
+        assert TURNAROUND_S * 0.8 <= took < TURNAROUND_S + 0.25, took
+    assert bus.requests == [(0, pdu) for pdu in writes], bus.requests
+    print(f"broadcast writes: on the bus, echoed after the turnaround ({took * 1000:.0f} ms, "
+          "not the 1 s timeout)  OK")
+
+    bus.requests.clear()
+    for pdu in (modbus.read_pdu(3, 0, 2), modbus.read_bits_pdu(1, 0, 8), bytes.fromhex("080000a537")):
+        reply, took = await timed(runner._transaction(modbus.BROADCAST, pdu))
+        assert reply == bytes([pdu[0] | 0x80, 0x0B]) and took < 0.1, (pdu.hex(" "), reply, took)
+    assert bus.requests == [], "a read of unit 0 must not reach the bus"
+    reply, took = await timed(runner._transaction(modbus.BROADCAST, b"\x41\x00"))
+    assert reply == b"\xc1\x0b" and took < TURNAROUND_S + 0.25, (reply, took)
+    assert bus.requests == [(0, b"\x41\x00")], bus.requests
+    print("unit 0 reads: 0x0B at once, nothing on the bus; other codes: sent, then 0x0B  OK")
+
+    # a short response timeout caps the turnaround; a slave that answers a broadcast anyway
+    # is dropped and does not reach the next request
+    runner, bus = memory_gateway(lambda u, p: [(0.01, modbus.rtu_wrap(u, p))] if u == 0 else
+                                 [(0, regs_reply(u, 2, base=5))], timeout=0.05)
+    pdu = modbus.write_single_register_pdu(1, 3)
+    reply, took = await timed(runner._transaction(modbus.BROADCAST, pdu))
+    assert reply == pdu and took < 0.2, (reply, took)
+    assert regs_of(await runner._transaction(1, modbus.read_pdu(3, 5, 2))) == [5, 6]
+    print("broadcast: the turnaround is at most the response timeout; a reply to it is "
+          "dropped  OK")
+
+
+class ThreadSlave:
+    """An RTU slave on a plain socket served by a thread, so that the pauses inside a reply
+    are real (time.sleep), not event-loop timers: each request is answered with
+    ``answer(unit, pdu)``, the [(pause_s, bytes), ...] to send one after the other."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.conn = None
+        self.sock = socket.create_server(("127.0.0.1", 0))
+        self.port = self.sock.getsockname()[1]
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        with suppress(OSError):
+            conn, _addr = self.sock.accept()
+            self.conn = conn
+            with conn:
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                buf = bytearray()
+                while data := conn.recv(512):
+                    buf += data
+                    try:
+                        unit, pdu = modbus.rtu_unwrap(bytes(buf))
+                    except ValueError:
+                        continue
+                    buf.clear()
+                    for pause, part in self.answer(unit, pdu):
+                        time.sleep(pause)
+                        conn.sendall(part)
+
+    def close(self):
+        if self.conn is not None:  # ends the thread's recv() (the event loop waits meanwhile)
+            with suppress(OSError):
+                self.conn.shutdown(socket.SHUT_RDWR)
+        self.sock.close()
+        self.thread.join(timeout=5)
+
+
+async def test_split_reply_real_pauses():
+    """A slave whose reply comes in two parts with real pauses between them (5 ms, about
+    an FTDI adapter's 16 ms, and more than the silence that ends an unsized frame): the
+    gateway passes it on whole, through the TCP master path."""
+    frame = regs_reply(1, 10, base=40)
+    user = modbus.rtu_wrap(1, bytes([0x41]) + bytes(range(12)))
+    for pause in (0.005, 0.016, SILENCE_S + 0.03):
+        slave = ThreadSlave(lambda u, p, pause=pause: (
+            [(0, frame[:9]), (pause, frame[9:])] if p[0] == 3 else [(0, user[:6]), (pause, user[6:])]))
+        runner = ModbusGatewayRunner(gateway_mapping(free_port()), logger=lambda _m: None)
+        sr, sw = await asyncio.open_connection("127.0.0.1", slave.port)
+        runner._link.attach(sr, sw)
+        server = await asyncio.start_server(runner._on_client, "127.0.0.1", 0)
+        try:
+            mr, mw = await asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1])
+            for txn in (1, 2):
+                rpdu = await request(mr, mw, txn, RESPONSIVE_UNIT, modbus.read_pdu(3, 0, 10))
+                assert regs_of(rpdu) == list(range(40, 50)), (pause, rpdu.hex(" "))
+            assert await request(mr, mw, 3, RESPONSIVE_UNIT, b"\x41\x00") == user[1:-2], pause
+            mw.close()
+        finally:
+            server.close()
+            with suppress(Exception):
+                await asyncio.wait_for(server.wait_closed(), timeout=2)
+            sw.close()
+            slave.close()
+    print("thread-driven slave, replies split by 5 / 16 / 80 ms: passed on whole  OK")
 
 
 async def closed_by_gateway(reader, timeout=3.0):
@@ -237,12 +651,12 @@ async def test_reopen_after_port_loss(slave_port):
     real_open, serial_io.open_serial = serial_io.open_serial, port.open
     gw_port = free_port()
     mapping = gateway_mapping(gw_port, points=[{"name": "level", "unit": RESPONSIVE_UNIT,
-                                                "fn": 3, "address": 0, "dtype": "uint16"}])
+                                                "fn": 3, "address": 0, "dtype": "uint32"}])
     logs = []
     runner = ModbusGatewayRunner(mapping, logger=logs.append)
     names = {mapping.id: mapping.name}
     polled = []
-    runner._publish_values = polled.append  # what the poll loop would publish
+    runner._publish_values = lambda values, stamps=None: polled.append(values)  # (what is polled)
     poll = None
 
     def snap():
@@ -325,6 +739,37 @@ async def test_reopen_after_port_loss(slave_port):
     assert runner.status.state == "stopped" and not runner._link.is_open
 
 
+async def test_port_lost_during_request(slave_port):
+    """The port goes away while a request waits for its reply: the master gets 0x0A (gateway
+    path unavailable) as soon as the gateway notices, not 0x0B after the response timeout."""
+    port = FakePort(slave_port)
+    real_open, serial_io.open_serial = serial_io.open_serial, port.open
+    gw_port = free_port()
+    runner = ModbusGatewayRunner(gateway_mapping(gw_port, {"modbus_response_timeout_s": 3.0}),
+                                 logger=lambda _m: None)
+    try:
+        await runner.start()
+        assert await wait_for(lambda: runner._link.is_open), runner.status.as_dict()
+        mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        mw.write(modbus.build_tcp_adu(0x77, SILENT_UNIT, READ_PDU))  # never answered
+        await mw.drain()
+        await asyncio.sleep(0.2)
+        assert runner._bus_lock.locked(), "the request should be waiting for its reply"
+        port.unplug()
+        txn, _unit, rpdu = await read_tcp_adu(mr)
+        took = loop.time() - started
+        assert (txn, rpdu) == (0x77, UNAVAILABLE_PDU), (hex(txn), rpdu)
+        assert took < 1.5, f"answered after {took:.2f}s (the timeout is 3 s)"
+        mw.close()
+        print(f"port lost during a request: 0x0A after {took * 1000:.0f} ms, not 0x0B after "
+              "the timeout  OK")
+    finally:
+        serial_io.open_serial = real_open
+        await asyncio.wait_for(runner.stop(), timeout=10)
+
+
 async def test_missing_port_at_start(slave_port):
     """A port that can't be opened once the listener is up is reported by the first
     attempt (before the reconnect backoff's first pause), not shown as running until the
@@ -404,7 +849,8 @@ async def test_read_only():
             txn = 0x100
             for pdu in reads:
                 txn += 1
-                assert await request(mr, mw, txn, RESPONSIVE_UNIT, pdu) == pdu, pdu.hex(" ")
+                got = await request(mr, mw, txn, RESPONSIVE_UNIT, pdu)
+                assert got == echo_answer(pdu), (pdu.hex(" "), got.hex(" "))
             for pdu in refused:
                 txn += 1
                 got = await request(mr, mw, txn, RESPONSIVE_UNIT, pdu)
@@ -435,6 +881,31 @@ async def test_read_only():
         srv.close()
         with suppress(Exception):
             await asyncio.wait_for(srv.wait_closed(), timeout=2)
+
+
+async def test_frame_without_function():
+    """A Modbus/TCP frame whose MBAP length leaves no function code (1: the unit id alone)
+    is a framing error: the master is dropped, as for other bad frames, and nothing reaches
+    the bus (it used to go out as a 3-byte RTU frame and get a made-up 80 0b)."""
+    seen = []
+    srv = await asyncio.start_server(echo_slave(seen), "127.0.0.1", 0)
+    logs = []
+    try:
+        async with running_gateway(srv.sockets[0].getsockname()[1], logs) as (runner, gw_port):
+            mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
+            read = modbus.read_pdu(3, 0, 2)
+            assert await request(mr, mw, 1, RESPONSIVE_UNIT, read) == echo_answer(read)
+            mw.write(bytes([0, 2, 0, 0, 0, 1, RESPONSIVE_UNIT]))
+            await mw.drain()
+            assert await closed_by_gateway(mr), "the master must be dropped"
+            assert await wait_for(lambda: any("bad Modbus/TCP framing" in m and
+                                              "invalid MBAP length 1" in m for m in logs)), logs
+        assert [p for _u, p in seen] == [read], f"nothing more may reach the bus: {seen}"
+    finally:
+        srv.close()
+        with suppress(Exception):
+            await asyncio.wait_for(srv.wait_closed(), timeout=2)
+    print("MBAP length 1 (no function code): master dropped, logged, nothing on the bus  OK")
 
 
 async def test_master_admission(slave_port):
@@ -487,6 +958,29 @@ async def test_master_admission(slave_port):
     print("allow-list: a master outside it is dropped  OK")
 
 
+def test_unit_warnings_logged():
+    """Poll points on unit 0 (the broadcast address) or on 248-255 (reserved on a serial line)
+    stay allowed (a stored config must keep loading and saving); the gateway names them in a
+    warning at start."""
+    m = MappingConfig.from_dict({
+        "name": "mb", "kind": "net", "serial": {"port": "/dev/ttyUSB-fake"},
+        "network": {"mode": "server", "protocol": "modbus", "port": 1502},
+        "modbus_poll": {"points": [
+            {"name": "all", "unit": 0, "fn": 3, "address": 1, "dtype": "uint16", "writable": True},
+            {"name": "odd", "unit": 250, "fn": 3, "address": 1, "dtype": "uint16"},
+            {"name": "fine", "unit": 247, "fn": 3, "address": 1, "dtype": "uint16"}]}})
+    m.validate()
+    m.validate_input()
+    assert m.modbus_poll.broadcast_points == ["all"] and m.modbus_poll.reserved_unit_points == ["odd"]
+    logs = []
+    ModbusGatewayRunner(m, logger=logs.append)._log_policy()
+    assert any(line.startswith("warning: poll point(s) 'all' on unit 0, the broadcast address")
+               for line in logs), logs
+    assert any(line.startswith("warning: poll point(s) 'odd' on units 248-255") for line in logs)
+    assert not any("'fine'" in line for line in logs), logs
+    print("points on unit 0 / 248-255: allowed, warned about at start  OK")
+
+
 async def test_unused_options_logged(slave_port):
     """A banner, open string or close-on string would put bytes outside Modbus frames:
     the gateway sends none of them and says so once at start."""
@@ -507,12 +1001,23 @@ async def main():
     slave_srv = await asyncio.start_server(fake_rtu_slave, "127.0.0.1", slave_port)
     try:
         await test_request_path(slave_port)
+        await test_reply_framing()
+        await test_dropped_bytes()
+        await test_cut_and_chattering()
+        await test_wire_time()
+        await test_split_reply_real_pauses()
+        await test_late_reply_dropped()
+        await test_reply_must_answer_request()
+        await test_broadcast()
         await test_reopen_after_port_loss(slave_port)
+        await test_port_lost_during_request(slave_port)
         await test_missing_port_at_start(slave_port)
         await test_slow_first_open(slave_port)
         await test_read_only()
+        await test_frame_without_function()
         await test_master_admission(slave_port)
         await test_unused_options_logged(slave_port)
+        test_unit_warnings_logged()
         print("\nPASS: Modbus RTU<->TCP gateway")
     finally:
         slave_srv.close()

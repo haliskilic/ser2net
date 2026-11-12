@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import itertools
 from typing import NamedTuple, Optional
 
 from ... import importer
 from ...config import (
-    ConfigError, MappingConfig, mapping_revision, serial_conflict, valid_mapping_id,
+    ConfigError, MappingConfig, _ip_overlaps, mapping_revision, mqtt_clashes, serial_conflict,
+    sparkplug_identity, valid_mapping_id,
 )
 from ...i18n import _
 from .forms import apply_usb_match as apply_usb_match  # where it was before 2.9.0
@@ -71,6 +73,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
         mapping.validate()
         mapping.validate_input()
         await asyncio.to_thread(mapping.check_tls_files)  # (reads the files)
+        await asyncio.to_thread(mapping.check_mqtt_tls_files)
     # ConfigError is a ValueError; values of the wrong type are read as the right one
     # (config._read_fields), so the others only guard a check that still trips over one
     except (ValueError, TypeError, AttributeError, OverflowError) as e:
@@ -103,11 +106,80 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
 def edit_conflict(config, m: MappingConfig) -> str:
     """Why mapping `m`, created or changed, can't be saved in `config` ("" when it can):
     it would listen on one of ser2net's own ports (AppConfig.own_port_conflict), share a
-    serial port with another enabled mapping (serial_conflict) or use the admin UI's TLS
-    key (admin_key_reuse). Edit-time checks, never validate()'s (a stored clash keeps
-    loading and saving). The form, a cluster peer's save, the REST API."""
+    serial port with another enabled mapping (serial_conflict), use the admin UI's TLS
+    key (admin_key_reuse) or share its MQTT client ID, Sparkplug B edge node or a command
+    topic with another enabled mapping on its broker (mqtt_conflict). Edit-time checks,
+    never validate()'s (a stored clash keeps loading and saving). The form, a cluster
+    peer's save, the REST API (POST, PUT, PATCH)."""
     return (config.own_port_conflict(m) or config.serial_conflict(m)
-            or config.admin_key_reuse(m))
+            or config.admin_key_reuse(m) or mqtt_conflict(config, m))
+
+
+def mqtt_conflict(config, m: MappingConfig) -> str:
+    """What `m` would share on its MQTT broker with another enabled mapping of `config`
+    that the edits refuse (config.check_mqtt_clashes), "" when nothing."""
+    return next((c.text() for c in mqtt_clashes(m, config.mappings) if c.refused), "")
+
+
+def copy_of(config, m: MappingConfig) -> MappingConfig:
+    """The dashboard's Copy: ``m``'s settings under a new id, disabled, and nothing in it
+    that clashes with ``m`` (or another mapping) when it is enabled next to it, once its
+    serial port is changed: the name "<name> (copy)" ("(copy 2)", … when taken), the next
+    free listening port for its transport and address that is not one of ser2net's own
+    (AppConfig.own_port_conflict; searched down from ``m``'s once 65535 is reached), no
+    MQTT client ID (a broker keeps one connection per ID), the base
+    topic "<topic>-copy" ("-copy-2", …) so a /set is not written by both, and a Sparkplug
+    B edge node ID made from the new name. Raises ConfigError when no port is free."""
+    d = m.to_dict()
+    d.pop("id", None)
+    d["enabled"] = False  # don't auto-start a duplicate
+    dup = MappingConfig.from_dict(d)
+    names = {x.name for x in config.mappings}
+    dup.name, k = f"{m.name} (copy)", 1
+    while dup.name in names:
+        k += 1
+        dup.name = f"{m.name} (copy {k})"
+    mq = dup.mqtt
+    mq.client_id = ""
+    base = str(mq.base_topic).rstrip("/")
+    if base:
+        topics = {str(x.mqtt.base_topic).rstrip("/") for x in config.mappings}
+        mq.base_topic, k = f"{base}-copy", 1
+        while mq.base_topic in topics:
+            k += 1
+            mq.base_topic = f"{base}-copy-{k}"
+    mq.sparkplug_node_id = ""  # made from the name, unless another mapping has that one
+    if mq.payload_format == "sparkplug_b":
+        nodes = {sparkplug_identity(x) for x in config.mappings
+                 if x.mqtt.payload_format == "sparkplug_b"}
+        group, node = sparkplug_identity(dup)
+        k = 1
+        while (group, mq.sparkplug_node_id or node) in nodes:
+            k += 1
+            mq.sparkplug_node_id = f"{node}_{k}"
+    net = dup.network
+    if dup.kind == "net" and net.listens:
+        proto = "udp" if net.mode == "udp" else "tcp"
+        taken = {x.network.port for x in config.mappings
+                 if x.kind == "net" and x.network.listens
+                 and ("udp" if x.network.mode == "udp" else "tcp") == proto
+                 and _ip_overlaps(x.network.bind_ip, net.bind_ip, x.network.both_families,
+                                  net.both_families)}
+
+        def free(port: int) -> bool:  # (not ser2net's own ports either: own_port_conflict)
+            net.port = port
+            return port not in taken and not config.own_port_conflict(dup)
+
+        start = net.port
+        if not free(start):
+            port = next((p for p in itertools.chain(range(max(start + 1, 1), 65536),
+                                                    range(min(start - 1, 65535), 0, -1))
+                         if free(p)), None)
+            if port is None:
+                raise ConfigError(_("No free {0} port is left on {1} for the copy.").format(
+                    proto.upper(), net.bind_ip))
+            net.port = port
+    return dup
 
 
 class ActionResult(NamedTuple):
@@ -180,16 +252,23 @@ async def apply_actions(state, ids, action) -> list[ActionResult]:
     return results
 
 
+def _start_clash(config, m: MappingConfig) -> str:
+    """What a mapping just switched on would share with another enabled one: a serial port
+    (AppConfig.serial_conflict, in any spelling of the port and by USB identity), or on its
+    MQTT broker a client ID, Sparkplug B edge node or command topic (mqtt_conflict)."""
+    return config.serial_conflict(m) or mqtt_conflict(config, m)
+
+
 def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
-    """Mappings just switched on whose start would share a serial port with another
-    enabled one (AppConfig.serial_conflict, in any spelling of the port and by USB
-    identity) or that the save would refuse: each is switched off again, by id with the
-    reason. One check when none is refused; otherwise they are switched on again one by
-    one, in order, so the first of two that share a port starts. (ser2net's own ports and
-    the admin UI's TLS key are checked when a mapping is created or changed, not at a
-    start: a stored clash must not stop one.)"""
+    """Mappings just switched on whose start would share a serial port or what an MQTT
+    broker tells clients apart by with another enabled one (_start_clash), or that the
+    save would refuse: each is switched off again, by id with the reason. One check when
+    none is refused; otherwise they are switched on again one by one, in order, so the
+    first of two that share a port starts. (ser2net's own ports and the admin UI's TLS key
+    are checked when a mapping is created or changed, not at a start: a stored clash must
+    not stop one; nor does a clash between mappings enabled already.)"""
     def refusal(m) -> Optional[ConfigError]:
-        if clash := config.serial_conflict(m):
+        if clash := _start_clash(config, m):
             return ConfigError(clash)
         try:
             config.validate_for_save()
@@ -197,7 +276,7 @@ def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
             return e
         return None
 
-    if not any(config.serial_conflict(m) for m in started):
+    if not any(_start_clash(config, m) for m in started):
         try:
             config.validate_for_save()
             return {}
@@ -283,9 +362,11 @@ def import_conflict(config, mappings, result) -> str:
     """The first of ``mappings`` (an import's new and changed ones) that can't listen next
     to ser2net's own listeners (AppConfig.own_port_conflict) or would share a serial port
     with another enabled one of ``result`` (the mappings after the import; serial_conflict),
-    "" when none."""
-    return next((c for m in mappings
-                 if (c := config.own_port_conflict(m) or serial_conflict(m, result))), "")
+    else the first that would share its MQTT client ID, Sparkplug B edge node or a command
+    topic with another enabled one on its broker (importer.mqtt_clash); "" when none."""
+    return (next((c for m in mappings
+                  if (c := config.own_port_conflict(m) or serial_conflict(m, result))), "")
+            or importer.mqtt_clash(result, list(mappings)) or "")
 
 
 def import_counts(rows: list[dict]) -> dict[str, int]:

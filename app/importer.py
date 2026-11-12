@@ -29,7 +29,8 @@ from typing import Optional
 
 from . import i18n
 from .config import (
-    AppConfig, ConfigError, MappingConfig, ModbusPoint, _new_id, host_port, normalize_cidr,
+    AppConfig, ConfigError, MappingConfig, ModbusPoint, _new_id, check_mqtt_clashes, host_port,
+    normalize_cidr,
 )
 from .i18n import _
 from .ser2net_import import Note, looks_yaml, parse_ser2net_config
@@ -152,6 +153,11 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
                               "the files of that name in this data directory's tls folder are "
                               "used.").format(i, m.name))
         warnings.extend(_tls_warning(i, m))
+        try:  # files of another machine: the mapping is taken, its MQTT stays off
+            m.check_mqtt_tls_files()
+        except ConfigError as e:
+            warnings.append(_("Mapping #{0} ({1}): {2} It runs without MQTT until that is "
+                              "fixed.").format(i, m.name, e))
         warnings.extend(_("Mapping #{0} ({1}): {2}").format(i, m.name, w)
                         for w in m.input_warnings() + m.ignored_settings())
         if item.get("id") and item["id"] != m.id:
@@ -380,6 +386,19 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
             result.append(m)
         touched.append(m)
     return result, touched
+
+
+def mqtt_clash(mappings: list[MappingConfig], touched: list[MappingConfig]) -> Optional[str]:
+    """Why an import that leaves ``mappings`` (adding or changing ``touched``) can't be
+    applied over MQTT (see config.check_mqtt_clashes): a mapping it brings shares its MQTT
+    client ID, Sparkplug B edge node or a command topic with another enabled mapping on
+    the same broker. None when it doesn't."""
+    for m in touched:
+        try:
+            check_mqtt_clashes(m, mappings)
+        except ConfigError as e:
+            return _("Mapping '{0}': {1}").format(m.name, e)
+    return None
 
 
 def plan_rows(current: list[MappingConfig], incoming: list[MappingConfig],
