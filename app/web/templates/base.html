@@ -5,12 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ request.state.csrf_token }}">
   <title>{% block title %}ser2net{% endblock %}</title>
-  <link rel="stylesheet" href="/static/xterm.css?v={{ asset_version }}">
+  {#- a page's own assets (the dashboard's console: xterm.js), before app.css so it wins #}
+  {% block head %}{% endblock %}
   <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
   <link rel="icon" href="data:,">
   <script src="/static/htmx.min.js?v={{ asset_version }}" defer></script>
-  <script src="/static/xterm.js?v={{ asset_version }}" defer></script>
-  <script src="/static/xterm-addon-fit.js?v={{ asset_version }}" defer></script>
   <script src="/static/app.js?v={{ asset_version }}" defer></script>
 </head>
 <body data-i18n="{{ {

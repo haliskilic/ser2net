@@ -9,6 +9,8 @@ anonymous pseudo-user (see auth.anonymous_user) and role checks still apply.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import os
 import re
 from typing import TYPE_CHECKING
@@ -182,6 +184,21 @@ class GuardMiddleware(BaseHTTPMiddleware):
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
 
 
+@functools.lru_cache(maxsize=None)
+def asset_version(static_dir: str = STATIC_DIR) -> str:
+    """A short hash of every file under static/ (names and contents)."""
+    h = hashlib.sha256()
+    for root, dirs, files in os.walk(static_dir):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            h.update(os.path.relpath(path, static_dir).replace(os.sep, "/").encode() + b"\0")
+            with open(path, "rb") as fh:
+                h.update(fh.read())
+            h.update(b"\0")
+    return h.hexdigest()[:12]
+
+
 def make_templates() -> Jinja2Templates:
     """The Jinja environment every page is rendered with (globals + filters)."""
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -191,14 +208,14 @@ def make_templates() -> Jinja2Templates:
         COMMON_BAUDRATES, BYTESIZES, PARITIES, PARITY_LABELS, STOPBITS,
         FLOWCONTROLS, PROTOCOLS, LINE_STATES,
     )
-    from .. import __version__
     templates.env.globals.update(
         baudrates=COMMON_BAUDRATES, bytesizes=BYTESIZES, parities=PARITIES,
         parity_labels=PARITY_LABELS, stopbits=STOPBITS, flowcontrols=FLOWCONTROLS,
         protocols=PROTOCOLS, line_states=LINE_STATES,
-        # ?v=<version> on the static URLs: browsers fetch the new CSS/JS right after an
-        # upgrade instead of reusing a heuristically cached copy with the new templates
-        asset_version=__version__,
+        # ?v=<hash of the static files> on the asset URLs: browsers fetch the new CSS/JS as
+        # soon as an asset changes (an upgrade, a build from main) and may keep it for good
+        # until then (StaticAssets), also across restarts of the one-file executable
+        asset_version=asset_version(),
     )
     templates.env.filters["softbreak"] = softbreak
     # _("...") in every template, translated for the request's language (app/i18n.py);

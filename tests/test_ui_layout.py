@@ -249,9 +249,16 @@ def main():
                     for view in ("Log", "Monitor", "Edit"):
                         dashboard()
                         open_view(TR[view] if lang == "tr" else view)
+                        if view == "Monitor":  # xterm.js opened the console and FitAddon sized it
+                            page.wait_for_selector("#term .xterm-screen")
+                            cols = page.evaluate("() => document.getElementById('term')._term.cols")
+                            if not cols or cols < 20:
+                                problems.append(f"{lang} console @{w}: {cols} columns")
                         check(f"{lang} {view.lower()} view @{w}")
                     page.goto(f"{base}/settings")
                     page.wait_for_selector("section.panel")
+                    if page.evaluate("() => typeof Terminal !== 'undefined'"):
+                        problems.append("xterm.js loaded on the settings page")
                     check(f"{lang} settings @{w}")
                     page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
                     page.wait_for_selector("#backups h3")

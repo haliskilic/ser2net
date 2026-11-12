@@ -73,11 +73,15 @@ Each native library's own license text is included in `ser2net --licenses` and i
 
 ## Browser assets (`app/web/static/`)
 
-| Component | License |
-|---|---|
-| htmx | 0BSD |
-| xterm.js (xterm.js, xterm.css) | MIT |
-| xterm-addon-fit | MIT |
+Copied unmodified from their npm releases; `vendor/npm/package.json` records the versions,
+the files and their sha256, and the license texts are in `tools/licenses/npm/` (and in
+`ser2net --licenses`).
+
+| Component | npm package | License |
+|---|---|---|
+| htmx (`htmx.min.js`) | `htmx.org` | 0BSD |
+| xterm.js (`xterm.js`, `xterm.css`) | `@xterm/xterm` | MIT |
+| xterm.js fit addon (`xterm-addon-fit.js`) | `@xterm/addon-fit` | MIT |
 
 ## LGPL components
 
