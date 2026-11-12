@@ -76,6 +76,10 @@ counts) is refused before its CSRF token is looked at, and the token is renewed 
 sign-in and sign-out. With admin TLS, responses carry `Strict-Transport-Security` for one
 year by default; since it covers every port of the host name, Settings → Admin TLS →
 *HSTS max-age* changes how long (0 sends `max-age=0`, which makes browsers forget it).
+Behind a TLS reverse proxy the cookies are Secure too (`X-Forwarded-Proto: https`), HSTS
+goes through it only when Settings → Reverse proxy asks for it, and `X-Forwarded-For` is
+believed only from the proxies listed there (none by default), so a client can't choose
+the address the sign-in limits and the audit log see ([docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md)).
 
 ## Türkçe
 
@@ -152,4 +156,9 @@ değişiklik (`Sec-Fetch-Site`, `Origin`; aynı host'un başka bir portu da say�
 token'ına bakılmadan reddedilir; token her giriş ve çıkışta yenilenir. Admin TLS açıkken
 yanıtlar varsayılan olarak bir yıllık `Strict-Transport-Security` taşır; host adının tüm
 portlarını kapsadığı için süresi Ayarlar → Admin TLS → *HSTS max-age* ile değiştirilebilir
-(0, tarayıcıların bunu unutmasını sağlayan `max-age=0` gönderir).
+(0, tarayıcıların bunu unutmasını sağlayan `max-age=0` gönderir). TLS sonlandıran bir
+reverse proxy arkasında da cookie'ler Secure olur (`X-Forwarded-Proto: https`), HSTS proxy
+üzerinden yalnızca Ayarlar → Reverse proxy isterse gönderilir ve `X-Forwarded-For` yalnızca
+orada listelenen proxy'lerden gelince dikkate alınır (varsayılan olarak hiçbiri); böylece bir
+istemci giriş sınırlarının ve denetim kaydının gördüğü adresi seçemez
+([docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md)).

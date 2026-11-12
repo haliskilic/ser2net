@@ -137,6 +137,8 @@ düzenlemeye gerek yok.
 - **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
   bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+  Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
+  bir `url` alanı olur.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
@@ -303,7 +305,9 @@ alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç root olarak d
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
 volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
 olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez.
-İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Ayrıntılar:
+İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Reverse proxy arkasında
+`SER2NET_PUBLIC_URL` ve `SER2NET_TRUSTED_PROXIES`, Ayarlar → Reverse proxy'nin yaptığını
+yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
 ---
@@ -440,20 +444,31 @@ POST, PUT, PATCH ya da DELETE) başka bir sitenin sayfasının gönderdiğini s�
 adres değilse — aynı host'un başka bir portu ve kardeş bir alt alan adı da başka site
 sayılır. Bu, CSRF token'ına ek bir kontroldür; token her giriş ve çıkıştan sonra yenilenir
 ve oturum kadar geçerli kalır. Ters proxy arkasında proxy, tarayıcının kullandığı adresi
-port dahil `Host` ya da `X-Forwarded-Host` olarak iletmelidir (all.log reddedilen `Origin`'i
-ve arayüzün gördüğü adresi yazar). `Origin` başlığı göndermeyen betikler, REST API ve
-cluster eşleri bundan etkilenmez.
+port dahil `Host` ya da `X-Forwarded-Host` olarak iletmeli ya da bu adres genel URL olmalıdır
+(Ayarlar → Reverse proxy); all.log reddedilen `Origin`'i ve arayüzün gördüğü adresi yazar.
+`Origin` başlığı göndermeyen betikler, REST API ve cluster eşleri bundan etkilenmez.
 
 **Ters proxy arkasında:** konsol ve hex görünümü WebSocket'leri de aynı şekilde denetlenir:
 tarayıcının el sıkışması, bu arayüzün kendi sayfasından geldiğini söylüyorsa
 (`Sec-Fetch-Site: same-origin`, HTTPS'te gönderilir) ya da `Origin`'i port dahil `Host`,
-`X-Forwarded-Host` veya `Forwarded: host=` içindeki adresse kabul edilir. Bu yüzden proxy
-tarayıcının adresini iletmeli — nginx'te `proxy_set_header Host $http_host;`, Apache'de
-`ProxyPreserveHost On`, IIS ARR'de `preserveHostHeader` (Caddy ve Traefik bunu zaten yapar) —
-ve WebSocket yükseltmesini geçirmelidir; düz HTTP'de tarayıcılar `Sec-Fetch-Site`
+`X-Forwarded-Host` veya `Forwarded: host=` içindeki adresse ya da genel URL ise kabul edilir.
+Bu yüzden proxy tarayıcının adresini iletmeli — nginx'te `proxy_set_header Host $http_host;`,
+Apache'de `ProxyPreserveHost On`, IIS ARR'de `preserveHostHeader` (Caddy ve Traefik bunu zaten
+yapar) — ve WebSocket yükseltmesini geçirmelidir; düz HTTP'de tarayıcılar `Sec-Fetch-Site`
 göndermediği için orada yalnızca adres belirleyicidir. all.log reddedilen `Origin`'i ve
-arayüzün gördüğü adresleri dakikada en fazla bir kez yazar. nginx, Apache, IIS, Caddy ve
-Traefik örnekleri: [docs/DOCKER.md → Behind a reverse proxy](docs/DOCKER.md#behind-a-reverse-proxy).
+arayüzün gördüğü adresleri dakikada en fazla bir kez yazar. Gerisi **Ayarlar → Reverse
+proxy**'de: **genel URL** (kullanıcıların açtığı adres; origin'i arayüzün kendi adresi
+sayılır, boş bir SSO redirect URI'si ondan oluşturulur, bildirimler ona bağlantı verir ve
+içindeki bir yol — `https://gw.example.com/ser2net` — arayüzü o yolun altında da sunar,
+oradaki cookie'ler ayrıdır; `/` doğrudan erişimde çalışmaya devam eder), **güvenilen
+proxy'ler** (`X-Forwarded-For` ve `X-Forwarded-Proto` yalnızca onlardan gelince dikkate
+alınır — varsayılan olarak hiçbiri; 2.8.1'e kadar `127.0.0.1` / `::1`'den gelen her bağlantıya
+güveniliyordu) ve proxy üzerinden HSTS (varsayılan kapalı). Tarayıcı HTTPS kullandığında
+cookie'ler Secure olur; `X-Forwarded-Proto: https` gönderen bir TLS proxy arkasında da.
+`SER2NET_PUBLIC_URL` / `SER2NET_TRUSTED_PROXIES` bunları bir çalıştırma için ayarlar;
+`FORWARDED_ALLOW_IPS` çalışmaya devam eder. nginx, Apache, Caddy, Traefik ve IIS örnekleri ve
+bir şey eksik olduğunda all.log'un ne yazdığı (İngilizce):
+[docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md).
 
 **Parolalar:** yerel hesapların parolaları scrypt hash'i olarak saklanır (N=2^14, r=8, p=5,
 OWASP'ın en düşük önerisi; hash maliyetini kendisi taşır, böylece maliyet ileride
@@ -478,7 +493,8 @@ olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da O
 kapalıyken o hesapların oturumları geçersizdir.
 
 **Başarısız girişler** adres başına 5 dakikada 8 (bir IPv6 adresi /64'üyle sayılır; reverse
-proxy arkasında tüm istemciler proxy'nin adresini paylaşır), kullanıcı adı başına da hangi
+proxy arkasında proxy güvenilen bir proxy ise her istemcinin kendi adresiyle, değilse tüm
+istemcilerin paylaştığı proxy adresiyle), kullanıcı adı başına da hangi
 adresten gelirse gelsin ve büyük/küçük harf fark etmeksizin 15 dakikada 10 ile sınırlıdır;
 sınırı aşan adres ya da ad, en eski başarısız denemeleri bu süreden eskiyene kadar HTTP 429
 alır. Hiçbir şey kalıcı olarak kilitlenmez; LDAP'ta dizine de daha sık sorulmaz, böylece bu
@@ -564,13 +580,15 @@ yapılandırılandan farklıysa all.log bir kez uyarır. id_token'ın zamanları
 kaç saniye geri ya da ileri olduğunu yazar.
 
 **SSO redirect URI'si:** **Ayarlar → Tek oturum açma (OIDC)**, sağlayıcıya kaydedilecek
-redirect URI'yi gösterir: girilen *Redirect URI*'yi ya da alan boşsa sayfanın isteğinden
-oluşturulanı (`X-Forwarded-Proto` ya da isteğin şeması, `X-Forwarded-Host` ya da `Host`, ardından
-`/auth/oidc/callback`; `Forwarded` ve `X-Forwarded-Port` okunmaz, böylece çalışan kurulumların
-kaydettiği adres değişmez). Bu adres loopback dışı bir host için http:// ise ya da tarayıcının
-adresinden farklıysa (arada adresi değiştiren bir reverse proxy varsa) sayfa uyarır ve
-tarayıcının adresine göre değeri gösterir; o değeri *Redirect URI* alanına girin. Her SSO
-girişinin başlangıcı gönderilen redirect URI'yi all.log'a yazar.
+redirect URI'yi gösterir: girilen *Redirect URI*'yi ya da alan boşsa genel URL ayarlıyken
+ondan (`<genel URL>/auth/oidc/callback`, Ayarlar → Reverse proxy), değilse sayfanın
+isteğinden oluşturulanı (`X-Forwarded-Proto` ya da isteğin şeması, `X-Forwarded-Host` ya da
+`Host` — bir listeden ilki —, ardından `/auth/oidc/callback`; `Forwarded` ve
+`X-Forwarded-Port` okunmaz, böylece çalışan kurulumların kaydettiği adres değişmez). Bu
+adres loopback dışı bir host için http:// ise ya da tarayıcının adresinden farklıysa (arada
+adresi değiştiren bir reverse proxy varsa) sayfa uyarır ve tarayıcının adresine göre değeri
+gösterir; o değeri *Redirect URI* alanına girin. Her SSO girişinin başlangıcı gönderilen
+redirect URI'yi all.log'a yazar.
 
 **TLS üzerinden LDAP (LDAPS / StartTLS):** dizin sunucusunun sertifikası denetlenir.
 Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Windows: sertifika

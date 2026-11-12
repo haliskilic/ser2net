@@ -16,20 +16,32 @@
     registered at their provider); every sign-in start logs it; Settings -> Single
     sign-on shows the value for its own request (or the configured one), warns about an
     http:// one for a host other than loopback, and gives the browser what it needs to
-    show the value for its own address when a proxy changed it.
+    show the value for its own address when a proxy changed it;
+  * through a reverse proxy set up as docs/REVERSE-PROXY.md says (a small one in this
+    process: the browser's Host passed on, X-Forwarded-For / -Proto added, WebSocket
+    upgrades tunnelled, TLS ending at the proxy when cryptography is there), with the
+    proxy trusted and a public URL with a path: signing in, pages, forms and the console
+    under the path, Secure cookies of the path's own, the client's address in the logs;
+    a proxy that strips the path (X-Forwarded-Prefix) works the same; '/' still works
+    directly; the start-up log says what is published and trusted.
 
 Run: python3 tests/test_reverse_proxy.py
 """
 import html
+import http.cookiejar
 import http.server
 import json
+import os
+import select
 import socket
+import ssl
 import threading
 import time
 import urllib.parse
 import urllib.request
 
-from _server import Browser, Server, free_port
+from _optional import need
+from _server import Browser, Server, _NoRedirect, free_port
 
 from app.config import OidcSettings
 from app.web import auth, oidc_auth
@@ -274,6 +286,176 @@ def test_sso_redirect(srv, issuer: str) -> None:
           "(made from its request / as set), the http:// warning  OK")
 
 
+class Proxy:
+    """A reverse proxy in front of the test server, set up like the nginx recipe of
+    docs/REVERSE-PROXY.md: Host as the browser sent it, X-Forwarded-For with the address
+    the proxy was reached from added (CLIENT stands in for it: everything here is
+    127.0.0.1), X-Forwarded-Proto, WebSocket upgrades tunnelled, one request per
+    connection otherwise. `strip`: the path prefix is cut off and sent as
+    X-Forwarded-Prefix (Traefik's StripPrefix). `tls`: (cert, key) - TLS ends here."""
+
+    CLIENT = "198.51.100.20"
+
+    def __init__(self, upstream: int, prefix: str = "", strip: bool = False, tls=None):
+        self.upstream, self.prefix, self.strip = upstream, prefix, strip
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(16)
+        self.port = self.sock.getsockname()[1]
+        self.ctx = None
+        if tls:
+            self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.ctx.load_cert_chain(*tls)
+        self.scheme = "https" if tls else "http"
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def close(self) -> None:
+        self.sock.close()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn) -> None:
+        try:
+            if self.ctx is not None:
+                conn = self.ctx.wrap_socket(conn, server_side=True)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return conn.close()
+                data += chunk
+            head, rest = data.split(b"\r\n\r\n", 1)
+            line, *fields = head.decode("latin-1").split("\r\n")
+            method, target, version = line.split(" ")
+            headers = [f.split(":", 1) for f in fields]
+            names = {k.strip().lower() for k, _v in headers}
+            upgrade = "upgrade" in names
+            out = [(k, v.strip()) for k, v in headers
+                   if k.strip().lower() not in ("x-forwarded-proto", "x-forwarded-prefix")
+                   and (upgrade or k.strip().lower() != "connection")]
+            xff = [v for k, v in out if k.lower() == "x-forwarded-for"]
+            out = [(k, v) for k, v in out if k.lower() != "x-forwarded-for"]
+            out.append(("X-Forwarded-For", ", ".join(xff + [self.CLIENT])))
+            out.append(("X-Forwarded-Proto", self.scheme))
+            if not upgrade:
+                out.append(("Connection", "close"))
+            if self.strip and (target == self.prefix or target.startswith(self.prefix + "/")):
+                target = target[len(self.prefix):] or "/"
+                out.append(("X-Forwarded-Prefix", self.prefix))
+            up = socket.create_connection(("127.0.0.1", self.upstream), timeout=20)
+            up.sendall((f"{method} {target} {version}\r\n"
+                        + "".join(f"{k}: {v}\r\n" for k, v in out) + "\r\n").encode("latin-1")
+                       + rest)
+            self._pump(conn, up)
+        except (OSError, ValueError):
+            conn.close()
+
+    @staticmethod
+    def _pump(conn, up) -> None:
+        """Both directions in one thread (a TLS socket can't be read and written from two
+        threads at once), until either side closes."""
+        other = {conn: up, up: conn}
+        try:
+            while True:
+                ready = [conn] if getattr(conn, "pending", lambda: 0)() else \
+                    select.select([conn, up], [], [], 30)[0]
+                if not ready:
+                    break
+                for src in ready:
+                    chunk = src.recv(65536)
+                    if not chunk:
+                        raise EOFError
+                    other[src].sendall(chunk)
+        except (OSError, EOFError):
+            pass
+        for s in (conn, up):
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
+def proxied_browser(base: str) -> Browser:
+    b = Browser(base)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE   # the test's own certificate
+    b.jar = http.cookiejar.CookieJar()
+    b.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(b.jar),
+                                       urllib.request.HTTPSHandler(context=ctx), _NoRedirect())
+    return b
+
+
+def test_through_proxy(srv, proxied: Proxy, stripping: Proxy) -> None:
+    public = f"{proxied.scheme}://127.0.0.1:{proxied.port}"
+    tag = auth.proxy.cookie_name({"root_path": "/ser2net", "path": "/"}, "")
+    log = srv.output()
+    assert (f"admin UI on http://127.0.0.1:{srv.port}, published as {public}/ser2net "
+            "(admin_ui.public_url)") in log, log[:1500]
+    assert "trusted proxies (admin_ui.trusted_proxies): 127.0.0.1 —" in log
+    b = proxied_browser(public)
+    st, h, page = b.get("/ser2net/login")
+    assert st == 200 and 'action="/ser2net/login"' in page, st
+    assert 'href="/ser2net/static/app.css' in page
+    st, h, _ = b.post("/ser2net/login", {"username": "admin", "password": PW,
+                                         "_csrf": b.cookie(f"ser2net_csrf{tag}").value})
+    assert st == 303 and h.get("Location") == "/ser2net/", (st, dict(h))
+    secure = proxied.scheme == "https"
+    # (Browser.post also fetched /login, outside the path, for a CSRF cookie of its own)
+    made = {c.name: (c.path, c.secure) for c in b.jar if c.name.endswith(tag)}
+    assert made == {f"ser2net_csrf{tag}": ("/ser2net", secure),
+                    f"ser2net_session{tag}": ("/ser2net", secure)}, made
+    st, _, page = b.get("/ser2net/settings")
+    assert st == 200 and f'Published as <a class="mono" href="{public}/ser2net">' in page
+    # a form of the page, with the browser's Origin
+    csrf = b.cookie(f"ser2net_csrf{tag}").value
+    st, _, _ = b._open(urllib.request.Request(
+        public + "/ser2net/settings/access", method="POST", headers={
+            "Origin": public, "Content-Type": "application/x-www-form-urlencoded"},
+        data=urllib.parse.urlencode({"_csrf": csrf, "require_login": "on",
+                                     "anonymous_role": "viewer"}).encode()))
+    assert st == 200, st
+    time.sleep(0.2)
+    log = srv.output()
+    assert f"AUDIT {Proxy.CLIENT} web_access login-required by admin" in log, log[-1500:]
+    assert f"login: admin (admin, local) from {Proxy.CLIENT}" in log
+    # the console, through the tunnel
+    session = b.cookie(f"ser2net_session{tag}").value
+    raw = socket.create_connection(("127.0.0.1", proxied.port), timeout=10)
+    if secure:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+        raw = ctx.wrap_socket(raw)
+    with raw:
+        raw.sendall((f"GET /ser2net/api/mappings/{MID}/console HTTP/1.1\r\n"
+                     f"Host: 127.0.0.1:{proxied.port}\r\nUpgrade: websocket\r\n"
+                     "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                     f"Sec-WebSocket-Version: 13\r\nOrigin: {public}\r\n"
+                     f"Cookie: ser2net_session{tag}={session}\r\n\r\n").encode())
+        answer = raw.recv(4096)
+    assert answer.startswith(b"HTTP/1.1 101"), answer[:200]
+    # a proxy that strips the path and says so
+    s = proxied_browser(f"{stripping.scheme}://127.0.0.1:{stripping.port}")
+    st, h, page = s.get("/ser2net/login")
+    assert st == 200 and 'action="/ser2net/login"' in page
+    st, h, _ = s.post("/ser2net/login", {"username": "admin", "password": PW,
+                                         "_csrf": s.cookie(f"ser2net_csrf{tag}").value})
+    assert st == 303 and h.get("Location") == "/ser2net/", st
+    assert s.get("/ser2net/settings")[0] == 200
+    # '/' directly, as before
+    d = Browser(srv.base)
+    d.login("admin", PW)
+    assert {c.name: c.path for c in d.jar} == {"ser2net_csrf": "/", "ser2net_session": "/"}
+    print(f"through a reverse proxy ({proxied.scheme}, the path passed on or stripped): "
+          "sign-in, pages, forms and the console under the path, its own"
+          + (" Secure" if secure else "") + " cookies, the client's address  OK")
+
+
 def main():
     test_matcher()
     test_redirect_uri()
@@ -294,6 +476,25 @@ def main():
     finally:
         provider.shutdown()
         provider.server_close()
+
+    srv = Server()
+    tls = None
+    if need("cryptography", what="TLS at the test's reverse proxy (it then speaks plain HTTP)"):
+        from app.web.selfsigned import generate
+        tls = (os.path.join(srv.tmp, "cert.pem"), os.path.join(srv.tmp, "key.pem"))
+        generate(*tls)
+    proxied = Proxy(srv.port, "/ser2net", tls=tls)
+    stripping = Proxy(srv.port, "/ser2net", strip=True, tls=tls)
+    with open(srv.config_path, "w", encoding="utf-8") as fh:
+        json.dump(dict(cfg, oidc={}, admin_ui={
+            "public_url": f"{proxied.scheme}://127.0.0.1:{proxied.port}/ser2net",
+            "trusted_proxies": ["127.0.0.1"]}), fh)
+    try:
+        with srv:
+            test_through_proxy(srv, proxied, stripping)
+    finally:
+        proxied.close()
+        stripping.close()
     print("\nPASS: reverse proxy")
 
 
