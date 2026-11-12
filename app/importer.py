@@ -118,10 +118,13 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
             raise ConfigError(_("Mapping #{0} is not an object.").format(i))
         try:
             m = MappingConfig.from_dict(item)
+            # TLS files of a data directory that moved are this one's (tls folder) before an
+            # edit's rules ask whether they exist
+            moved = AppConfig(mappings=[m]).find_moved_tls_files()
             m.validate_input()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
-        if AppConfig(mappings=[m]).find_moved_tls_files():
+        if moved:
             warnings.append(_("Mapping #{0} ({1}): its TLS files are not where the file says; "
                               "the files of that name in this data directory's tls folder are "
                               "used.").format(i, m.name))
