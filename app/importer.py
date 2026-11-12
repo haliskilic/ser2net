@@ -97,7 +97,7 @@ def apply_import(current: list[MappingConfig], incoming: list[MappingConfig],
     """(new mapping list, mappings that were added or changed). Pure: the inputs
     are not modified."""
     if mode not in MODES:
-        raise ConfigError(_("Import mode must be one of {0}.").format(MODES))
+        raise ConfigError(_("Import mode must be one of {0}.").format(", ".join(MODES)))
     if mode == "replace":
         seen: set[str] = set()
         out = []

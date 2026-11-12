@@ -131,6 +131,39 @@ def esc(text):
     return str(markupsafe.escape(text))
 
 
+def banner(page: str) -> str:
+    m = re.search(r'<div class="banner error"[^>]*>(.*?)</div>', page, re.S)
+    assert m, page[:400]
+    return m.group(1)
+
+
+def test_form_errors(b, tr):
+    """A blank or mistyped number, or a value that isn't allowed, is refused in the page's
+    language with the field's name — never Python's own text ("invalid literal for int()
+    with base 10: ''", "could not convert string to float") or a tuple ("(5, 6, 7, 8)")."""
+    form = {"name": "x", "kind": "net", "serial_port": "/dev/ttyUSB-i18n", "network_mode": "server",
+            "network_protocol": "raw", "network_bind_ip": "127.0.0.1", "network_port": "4123"}
+    whole, number = tr["{0}: enter a whole number."], tr["{0}: enter a number."]
+    cases = [
+        ({"network_port": ""}, whole.format(tr["Listen port"])),
+        ({"network_port": "12x"}, whole.format(tr["Listen port"])),
+        ({"serial_baudrate": "custom", "serial_custom_baud": ""}, whole.format(tr["Baud rate"])),
+        ({"kind": "serialbridge", "serial_b_port": "/dev/ttyUSB-i18n-b", "serial_b_baudrate": "custom",
+          "serial_b_custom_baud": " "}, whole.format(tr["{0} (serial port B)"].format(tr["Baud rate"]))),
+        ({"network_mode": "client", "network_remote_host": "10.0.0.9", "network_remote_port": "4001",
+          "network_connect_timeout_s": "abc"}, number.format(tr["Connect timeout (s)"])),
+        ({"opt_trace_max_mb": "nan", "opt_trace_keep": "3"}, number.format(tr["Trace file size (MB)"])),
+        ({"serial_bytesize": "9"}, tr["Data bits must be one of {0}."].format("5, 6, 7, 8")),
+    ]
+    for change, want in cases:
+        st, _, page = b.post("/api/mappings/save", {**form, **change}, htmx=True)
+        text = banner(page)
+        assert st == 400 and esc(want) in text, (change, text)
+        assert not any(raw in text for raw in ("invalid literal", "could not convert", "('", "(5,")), text
+    print(f"form errors: {len(cases)} blank / mistyped / not allowed values named in Turkish, "
+          "no Python or tuple text  OK")
+
+
 def test_pages():
     tr = json.load(open(CATALOG, encoding="utf-8"))
     users = [{"username": "admin", "password_hash": hash_password("i18n-pass-1"),
@@ -148,6 +181,7 @@ def test_pages():
             assert st == 200 and esc(tr[en]) in page, (path, page[:300])
         st, _, page = b.post("/api/mappings/save", {"name": "x", "kind": "net", "serial_port": ""}, htmx=True)
         assert st == 400 and esc(tr["Serial port is required."]) in page, page[page.find("banner"):][:200]
+        test_form_errors(b, tr)
         classic = (b"connection: &plc\n  accepter: tcp,127.0.0.1,4001\n"
                    b"  connector: serialdev,/dev/ttyUSB9,9600n81\n  options:\n    chardelay-scale: 20\n")
         st, _, page = b.post("/settings/config/import", {"step": "preview", "mode": "merge"},

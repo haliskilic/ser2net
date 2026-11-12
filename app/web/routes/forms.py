@@ -7,9 +7,10 @@ to defaults (new mapping) or the stored values (edit, see _preserve_unmanaged_fi
 from __future__ import annotations
 
 import json
+import math
 import re
 
-from ...config import LdapSettings, MappingConfig, OidcSettings
+from ...config import ConfigError, LdapSettings, MappingConfig, OidcSettings
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -94,23 +95,54 @@ def _split(s: str) -> list:
     return [x for x in re.split(r"[\s,]+", s or "") if x]
 
 
+def _field_label(name: str) -> str:
+    """The mapping form's label of the number field `name`, for a message that names it."""
+    side_b = name.startswith("serial_b_")
+    key = name[len("serial_b_"):] if side_b else name.removeprefix("serial_")
+    label = {
+        "custom_baud": _("Baud rate"), "baudrate": _("Baud rate"), "bytesize": _("Data bits"),
+        "stopbits": _("Stop bits"),
+        "network_port": _("Listen port"), "network_remote_port": _("Remote port"),
+        "network_connect_timeout_s": _("Connect timeout (s)"),
+        "network_max_connections": _("Max connections"),
+        "network_client_queue_max": _("Client buffer (chunks)"),
+        "network_udp_peer_port": _("Reply to port"), "network_udp_peer_timeout_s": _("Peer timeout (s)"),
+        "network_keepalive_idle_s": _("Keepalive idle (s)"),
+        "network_keepalive_interval_s": _("Probe interval (s)"),
+        "network_keepalive_count": _("Probe count"),
+        "opt_idle_timeout_s": _("Idle timeout (s)"),
+        "opt_max_connection_time_s": _("Max connection time (s)"),
+        "opt_trace_max_mb": _("Trace file size (MB)"), "opt_trace_keep": _("Rotated trace files kept"),
+        "mqtt_port": _("MQTT broker port"), "mqtt_qos": "QoS",
+    }.get(key, key)
+    return _("{0} (serial port B)").format(label) if side_b else label
+
+
 def _num(form, name, default, *, strict, cast=int):
+    """The number in the form field `name` (`default` when the form doesn't have it).
+    strict: one that isn't a number is refused with a message naming the field (not
+    Python's "invalid literal for int() with base 10: ''"); else it reads as `default`."""
     v = form.get(name, default)
-    if strict:
-        return cast(v)
     try:
-        return cast(v)
+        n = cast(v)
+        if isinstance(n, float) and not math.isfinite(n):
+            raise ValueError(v)
+        return n
     except (TypeError, ValueError):
-        return default
+        if not strict:
+            return default
+        raise ConfigError((_("{0}: enter a whole number.") if cast is int else
+                           _("{0}: enter a number.")).format(_field_label(name))) from None
 
 
 def _serial_dict(form, prefix: str, strict: bool) -> dict:
-    baud = form.get(prefix + "baudrate", "9600")
+    baud_field = prefix + "baudrate"
+    baud = form.get(baud_field, "9600")
     if baud == "custom":
-        baud = form.get(prefix + "custom_baud", "").strip()
+        baud_field, baud = prefix + "custom_baud", form.get(prefix + "custom_baud", "").strip()
     return {
         "port": form.get(prefix + "port", "").strip(),
-        "baudrate": (int(baud) if strict else _num({"b": baud}, "b", 9600, strict=False)),
+        "baudrate": _num({baud_field: baud}, baud_field, 9600, strict=strict),
         "bytesize": _num(form, prefix + "bytesize", 8, strict=strict),
         "parity": form.get(prefix + "parity", "N"),
         "stopbits": _num(form, prefix + "stopbits", 1, strict=strict, cast=float),
