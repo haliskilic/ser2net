@@ -69,6 +69,11 @@ _LOOPBACK = ("0.0.0.0", "::", "127.0.0.1", "localhost", "")
 
 AUTH_HEADER = "X-Cluster-Auth"   # a signed peer request or reply (after 2.8.0)
 KEY_HEADER = "X-Cluster-Key"     # the raw key: all that releases up to 2.8.0 send and check
+# Who acted on the sending node: form fields of a remote start/stop/restart or save, in the
+# body the signature covers (nodes up to 2.8.1 send none and ignore them, as any field
+# their forms don't have). The receiving node records them as that node's claim.
+ACTOR_FIELD, ACTOR_NODE_FIELD = "_actor", "_actor_node"
+ACTOR_MAX = 128                  # characters of a user name sent (and taken) at most
 AUTH_SCHEME = "v2"
 PROTOCOL = 2                     # a beacon's "v": 2 = the node signs its requests (older: 1)
 CLOCK_WINDOW_S = 60.0            # a signed request's time may differ this much from ours
@@ -826,10 +831,15 @@ class ClusterDiscovery:
         status, data = await self._request(target, "GET", path, query, None, timeout)
         return data if 200 <= status < 300 else None
 
-    async def post_peer(self, target: dict, path: str, fields, timeout: float = 6.0) -> dict | None:
+    async def post_peer(self, target: dict, path: str, fields, timeout: float = 6.0,
+                        actor: str = "") -> dict | None:
         """POST a form to a key-guarded path of a known peer: its JSON answer — also a
         400 refusal, whose "error" is the peer's own message (e.g. why it can't save
-        a mapping) — or None."""
+        a mapping) — or None. *actor*: the user acting on this node, sent with this
+        node's host name (ACTOR_FIELD, ACTOR_NODE_FIELD) for the peer's audit log."""
+        fields = list(fields.items() if isinstance(fields, dict) else fields)
+        if actor:
+            fields += [(ACTOR_FIELD, actor[:ACTOR_MAX]), (ACTOR_NODE_FIELD, socket.gethostname())]
         body = urllib.parse.urlencode(fields).encode()
         status, data = await self._request(target, "POST", path, None, body, timeout)
         return data if 200 <= status < 300 or status == 400 else None
@@ -871,9 +881,10 @@ class ClusterDiscovery:
             self._fetching.pop(_target_key(peer), None)
 
     async def control_peer(self, target: dict, mapping_id: str, action: str,
-                           timeout: float = 4.0) -> dict | None:
+                           timeout: float = 4.0, actor: str = "") -> dict | None:
         return await self.post_peer(target, "/api/cluster/control",
-                                    {"mapping_id": mapping_id, "action": action}, timeout)
+                                    {"mapping_id": mapping_id, "action": action}, timeout,
+                                    actor=actor)
 
     async def _request(self, target: dict, method: str, path: str, query: dict | None,
                        body: bytes | None, timeout: float) -> tuple[int, dict | None]:
