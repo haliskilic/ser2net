@@ -804,6 +804,14 @@ account ser2net runs as can read them; treat every copy — a copied data folder
 volume, a disk or VM image, a downloaded backup, an export — like a password vault.
 [SECURITY.md](SECURITY.md) (*Stored secrets*) lists what to change after such a copy leaked.
 
+**Personal data:** account names (an LDAP or SSO name is often an e-mail address), IP
+addresses, sign-ins and failed sign-ins are recorded in `config.json`, `backups/`,
+`all.log*` (and its stdout copy in the journal or Docker's log), `audit.log*` and `logs/`.
+Notifications, LDAP, SSO, MQTT and the cluster send data off the host only when you set them
+up, and there is no telemetry. **[docs/PRIVACY.md](docs/PRIVACY.md)** lists what is kept
+where and for how long, who can see it, the settings that keep less, and how to answer an
+access request or erase one person or the whole installation.
+
 Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
 replaced when the config is loaded or the file is imported; the start-up log or the import
