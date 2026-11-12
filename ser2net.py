@@ -16,6 +16,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
 
@@ -161,7 +162,7 @@ def print_about() -> int:
              f"Platform: {platform.platform()} ({platform.machine()})",
              f"Build: {'standalone executable' if FROZEN else 'source'}"]
     components = (("pyserial", "serial"), ("pyserial-asyncio-fast", "serial_asyncio_fast"),
-                  ("starlette", "starlette"), ("uvicorn", "uvicorn"),
+                  ("starlette", "starlette"), ("uvicorn", "uvicorn"), ("anyio", "anyio"),
                   ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),
                   ("authlib", "authlib"), ("cryptography", "cryptography"))
     width = max(len(dist) for dist, _module in components)
@@ -198,23 +199,18 @@ def main(argv: list[str] | None = None) -> int:
         print(msg)
         return 0 if ok else 1
 
-    # 1. dependencies — a frozen build has everything bundled, so skip the bootstrap
-    if not FROZEN:
-        sys.path.insert(0, ROOT)  # ensure local packages (app/, bootstrap) import first
-        if not args.no_bootstrap:
-            import bootstrap
+    config_path = args.config or os.path.join(args.data_dir, "config.json")
+    if args.service:
+        return _service(args, config_path)
 
-            bootstrap.ensure(online=args.online)
-        else:
-            lib = os.path.join(ROOT, "lib")
-            if os.path.isdir(lib):
-                sys.path.insert(0, lib)
+    # 1. dependencies. The one-off commands may run beside a running ser2net, so they
+    # leave an out-of-date ./lib as it is (with a warning); a server start refreshes it.
+    one_off = (args.about or args.set_password is not None or args.sign_out_all
+               or args.install_service)
+    load_dependencies(args, refresh=not one_off)
 
     if args.about:
         return print_about()
-
-    # 2. resolve config path
-    config_path = args.config or os.path.join(args.data_dir, "config.json")
 
     if args.set_password is not None or args.sign_out_all:
         from app import accounts
@@ -222,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         return accounts.main(args, config_path)
 
     # 3. hand off
-    from app import runtime
+    runtime = _import_runtime()
 
     if args.install_service:
         if _service_call(lambda ws: ws.require_windows()):
@@ -246,13 +242,82 @@ def main(argv: list[str] | None = None) -> int:
         if rc == 0 and done.get("config") is not None:
             _print_firewall_hint(done["config"], args.service_name)
         return rc
-    if args.service:
-        from app import winservice
-
-        return winservice.run(args.service_name,
-                              lambda: runtime.service_main(config_path),
-                              runtime.request_shutdown)
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
+
+
+def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
+    """Make the bundled dependencies importable: the offline bootstrap into ./lib (a
+    frozen build has everything inside). With ``refresh``, a ./lib installed for other
+    pins (an upgrade) is brought up to date too. Its warnings go to the start-up log."""
+    if FROZEN:
+        return
+    sys.path.insert(0, ROOT)  # ensure local packages (app/, bootstrap) import first
+    import bootstrap
+
+    if not args.no_bootstrap:
+        bootstrap.ensure(online=args.online, refresh_lib=refresh)
+    else:
+        lib = os.path.join(ROOT, "lib")
+        if os.path.isdir(lib):
+            sys.path.insert(0, lib)
+        bootstrap.warn_if_stale()
+    if bootstrap.notes:
+        from app import standalone  # (its notes are the lines all.log gets at start-up)
+
+        standalone.notes.extend(bootstrap.notes)
+
+
+def _import_runtime():
+    """app.runtime, which imports the dependencies. When they come from a ./lib an older
+    release installed that could not be refreshed (the bootstrap said why) and lack what
+    this version needs, the start stops with that instead of a traceback."""
+    try:
+        from app import runtime
+    except ImportError as e:
+        bootstrap = sys.modules.get("bootstrap")
+        if bootstrap is None or not bootstrap.lib_is_stale():
+            raise
+        raise SystemExit(f"ser2net: {e} — ./lib holds the dependencies of an older release, "
+                         "and they could not be updated (see the warning before): run "
+                         f"python3 bootstrap.py in {ROOT} as the account ser2net runs "
+                         "as") from None
+    return runtime
+
+
+def _service(args: argparse.Namespace, config_path: str) -> int:
+    """--service, as the Windows Service Control Manager starts it. The SCM waits about
+    30 s for the process to connect (winservice.run), and refreshing ./lib after an
+    upgrade can take longer, so the dependencies and the server load in the service's
+    thread, once it is connected."""
+    import threading
+
+    from app import winservice
+
+    stop_asked = threading.Event()
+
+    def serve() -> int:
+        try:
+            load_dependencies(args, refresh=True)
+            runtime = _import_runtime()
+        except SystemExit as e:  # a service has no console: all.log says why
+            if isinstance(e.code, str):
+                import time
+
+                log = os.path.join(os.path.dirname(os.path.abspath(config_path)), "all.log")
+                with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
+                    fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {e.code}\n")
+            raise
+        if stop_asked.is_set():  # the SCM asked to stop while they loaded
+            runtime.request_shutdown()
+        return runtime.service_main(config_path)
+
+    def stop() -> None:
+        stop_asked.set()
+        runtime = sys.modules.get("app.runtime")
+        if runtime is not None and hasattr(runtime, "request_shutdown"):
+            runtime.request_shutdown()
+
+    return winservice.run(args.service_name, serve, stop)
 
 
 def _print_firewall_hint(config, service_name: str) -> None:

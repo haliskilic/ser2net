@@ -295,6 +295,26 @@ wheel'lerini de indirip kurun: `pip download -r requirements-optional.txt -d ven
 ardından `pip install --no-index --find-links vendor/wheels -r requirements-optional.txt`.
 (Standalone binary bunları zaten içerir.)
 
+### Kaynak kurulumu yükseltmek
+Dosyaları güncelleyin (`git pull` ya da yeni kaynağı eskisinin üzerine açın) ve ser2net'i
+yeniden başlatın. Yeni sürüm bağımlılıkları başka sürümlere sabitliyorsa ilk açılış onları
+`lib/` içine kurar; çevrimdışı ve bir kez (birkaç saniye). `lib/`'e kendi eklediğiniz paketler
+kalır, eski sürümlerin metadata klasörleri silinir. `lib/.ser2net-deps.json`, `lib/`'in neye
+göre kurulduğunu (sabitlemeler, Python sürümü, platform) kaydeder; böylece yeni bir Python da
+aynı şekilde ele alınır. 2.8.x ya da daha eski bir sürümden yükseltirken bu ilk açılış, o
+sürümlerin `lib/`'de bıraktıklarını (belki de güvenlik duyurusu yayımlanmış 2.7 starlette ve
+anyio'yu) değiştirir.
+Bu yapılamazsa — bu makine için paketlenmiş wheel yoksa (macOS, ARM Linux: `python3
+bootstrap.py --online` çalıştırın), `lib/` ser2net'in çalıştığı hesap için yazılabilir
+değilse ya da aynı klasörden çalışan başka bir ser2net hâlâ açıksa — ser2net eski `lib/` ile
+açılır ve bunu log'una yazar (`WARNING: not refreshing ./lib: …`); bu sürüm eski paketlerle
+hiç çalışamıyorsa (2.8.1 ve sonrası 2.7'ninkilerle) açılış bunu söyleyen tek bir satırla durur.
+`python3 bootstrap.py` seti elle kurar (önce ser2net'i durdurun ve komutu ser2net'in çalıştığı hesapla çalıştırın,
+ör. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`); `--no-bootstrap` kullanılıyorsa her
+yükseltmeden sonra yol budur ve `lib/` güncel olmadıkça açılış log'u uyarır. Çalışan bir
+ser2net'in yanında da çalışabilen tek seferlik komutlar (`--set-password`, `--sign-out-all`,
+`--about`, `--install-service`) `lib/`'e dokunmaz, yalnızca uyarır.
+
 ### Docker
 ```bash
 docker compose up -d        # önce docker-compose.yml'deki `devices:` ve `ports:` kısmını düzenleyin

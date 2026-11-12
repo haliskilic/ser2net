@@ -39,11 +39,12 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 # Writable paths (rest of FS is read-only under ProtectSystem=strict):
 #  - /opt/ser2net/data : config.json + logs (adjust to your --data-dir)
-#  - /opt/ser2net/lib  : where the first-run offline bootstrap installs the bundled
-#    wheels. Without it ProtectSystem=strict makes ./lib read-only and the first
-#    start fails to install dependencies. If you instead pre-install deps at deploy
-#    time (python3 bootstrap.py) and add --no-bootstrap to ExecStart, you can drop
-#    /opt/ser2net/lib from this list.
+#  - /opt/ser2net/lib  : where the offline bootstrap installs the bundled wheels, on the
+#    first start and once more on the first start after an upgrade changed the pinned
+#    versions. Without it ProtectSystem=strict makes ./lib read-only and the first
+#    start fails to install dependencies. If you instead install them at deploy time
+#    and after each upgrade (sudo -u ser2net python3 /opt/ser2net/bootstrap.py) and add
+#    --no-bootstrap to ExecStart, you can drop /opt/ser2net/lib from this list.
 # Both must exist when the service starts: the ExecStartPre= lines above make them.
 ReadWritePaths=/opt/ser2net/data /opt/ser2net/lib
 ProtectSystem=strict
