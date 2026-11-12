@@ -2,18 +2,31 @@
 # PyInstaller spec — build a standalone ser2net executable (no Python install needed).
 #   pip install pyinstaller && pyinstaller ser2net.spec
 # Produces dist/ser2net(.exe). Config/logs are written next to the binary (./data).
-# Release builds: Linux via tools/build_standalone_linux.sh (old-glibc container),
-# Windows in .github/workflows/standalone.yml; tests/test_standalone.py checks both.
+# Release builds: tools/build_standalone_linux.sh (old-glibc container) and
+# tools/build_standalone_windows.ps1, from .github/workflows/standalone.yml;
+# tests/test_standalone.py checks both.
 import os
+import subprocess
+import sys
 
 from PyInstaller.utils.hooks import collect_all
 
 # the files the app reads at run time: page templates, static assets, UI translations
 # (tests/test_standalone.py fails when a data file under app/ is left out)
 datas = [(d, d) for d in ("app/web/templates", "app/web/static", "app/locale")]
-# every bundled component's license (tools/third_party.py; `ser2net --licenses` prints it)
-if os.path.isfile("build/THIRD-PARTY-LICENSES.txt"):
-    datas.append(("build/THIRD-PARTY-LICENSES.txt", "."))
+# every bundled component's license (tools/third_party.py; `ser2net --licenses` prints it).
+# The build scripts write it first; a plain `pyinstaller ser2net.spec` gets it written here,
+# from this environment (the interpreter's native libraries' own texts only come with the
+# build scripts' --extra), instead of an executable without it.
+# (SPECPATH: PyInstaller is building; tests/test_standalone.py reads the spec without it)
+BUILDING = "SPECPATH" in globals()
+LICENSES = os.path.join("build", "THIRD-PARTY-LICENSES.txt")
+if BUILDING and not os.path.isfile(LICENSES):
+    print(f"ser2net.spec: {LICENSES} is missing; writing it with tools/third_party.py")
+    subprocess.run([sys.executable, os.path.join("tools", "third_party.py"), "licenses", LICENSES],
+                   check=True)
+if os.path.isfile(LICENSES):
+    datas.append((LICENSES, "."))
 binaries = []
 hiddenimports = ["app", "app.runtime"]
 
@@ -47,6 +60,12 @@ a = Analysis(
 # manylinux wheels expect the system's copy; bundling the build machine's would only
 # raise the minimum glibc version.
 a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).startswith("libgcc_s.so")]
+# what the executable carries, for `tools/third_party.py sbom --binaries`: which of the
+# interpreter's native libraries (expat, mpdecimal, SQLite ...) the SBOM lists
+if BUILDING:
+    os.makedirs("build", exist_ok=True)
+    with open(os.path.join("build", "bundled-binaries.txt"), "w", encoding="utf-8") as fh:
+        fh.write("".join(f"{b[0]}\n" for b in a.binaries))
 pyz = PYZ(a.pure)
 # Windows: stamp the exe with a version resource (tools/win_version_info.py writes
 # build/win_version.txt from app.__version__ at build time) and the ser2net icon, so

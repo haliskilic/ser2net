@@ -262,6 +262,7 @@ Kendin derlemek için:
   python-build-standalone yorumlayıcısı, hash kilitli paketler, lisans metinleri ve SBOM) ya
   da kendi Python 3.12'nizle
   `pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`
+  (spec, `--licenses` metnini o ortamdan kendisi yazar)
 - Linux (eski dağıtımlarda da çalışsın diye eski glibc'li bir konteynerde):
   `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`
 
