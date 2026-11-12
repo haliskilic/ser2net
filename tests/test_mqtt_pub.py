@@ -6,7 +6,10 @@ newline-delimited serial lines are published to the base topic, partial lines ar
 buffered, CR is stripped, and online/offline status is published with retain; that the
 "online" birth goes out after every CONNACK (a client that drops QoS 0 messages until it
 is connected, as paho does, gets it at QoS 0 too), and with a blank client ID once more
-after STALE_WILL_S; and that
+after STALE_WILL_S; that while the broker is away at QoS 1/2 polled values keep only the
+latest one per topic (sent after the next connect, after the birth) and paho's queue is
+bounded (MAX_QUEUED_MESSAGES; what it refuses is counted and logged once per outage);
+and that
 a command subscription handles a command when it is published, not the broker's retained
 replay of it (unless accept_retained), and never an empty message. Also that paho's
 network thread waits with poll(), not select() (which refuses descriptors >= 1024), and
@@ -195,6 +198,110 @@ def test_birth_again_after_a_stale_will():
         mqtt_pub.STALE_WILL_S = saved
     print("blank client ID: birth again after STALE_WILL_S, once per session; not with a "
           "client ID or after close()  OK")
+
+
+class Info:
+    def __init__(self, rc):
+        self.rc = rc
+
+
+class QueueClient(PahoLikeClient):
+    """paho's QoS 1/2 queue with room for ``room`` messages while not connected."""
+
+    def __init__(self, room):
+        super().__init__()
+        self.room = room
+
+    def publish(self, topic, payload, qos=0, retain=False):
+        if qos and not self.up:
+            if self.room <= 0:
+                return Info(15)  # MQTT_ERR_QUEUE_SIZE
+            self.room -= 1
+        super().publish(topic, payload, qos, retain)
+        return Info(0 if self.up else 4)
+
+
+def test_offline_queue():
+    """QoS 1/2 while the broker is away: polled values keep the latest one per topic and
+    go out after the next connect (after the birth); serial lines and other messages wait
+    in paho's queue, bounded, and what it refuses is counted and logged once per outage.
+    QoS 0 messages are lost meanwhile (counted)."""
+    logs = []
+    fake = QueueClient(room=2)
+    pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="p", qos=1),
+                        logger=logs.append, client=fake)
+    pub.connect()
+    pub.publish_value("a", b"1")
+    pub.publish_value("b", b"5")
+    pub.publish_value("a", b"2")              # replaces a=1
+    assert fake.published == [], fake.published
+    fake.up = True
+    pub.handle_connect()
+    assert fake.published == [("p/status", b"online", 1, True), ("p/b", b"5", 1, False),
+                              ("p/a", b"2", 1, False)], fake.published
+    pub.publish_value("a", b"3")              # connected: straight to paho
+    assert fake.published[-1] == ("p/a", b"3", 1, False)
+
+    fake.up = False
+    pub.handle_disconnect("Keep alive timeout", True)  # lost
+    logs.clear()
+    fake.published.clear()
+    pub.publish_value("a", b"4")
+    for line in (b"x1\n", b"x2\n", b"x3\n", b"x4\n"):  # serial lines: paho's queue
+        pub.feed(line)
+    assert fake.published == [("p", b"x1", 1, False), ("p", b"x2", 1, False)], fake.published
+    assert pub.state["dropped"] == 2, pub.state
+    assert logs == ["MQTT: 10000 QoS 1 messages are waiting for h:1883, the most kept; newer "
+                    "ones are dropped until it takes them"], logs
+    fake.up = True
+    pub.handle_connect()
+    assert fake.published[-1] == ("p/a", b"4", 1, False), fake.published
+    fake.up, fake.room = False, 0
+    pub.handle_disconnect("Keep alive timeout", True)
+    pub.feed(b"x5\n")
+    assert pub.state["dropped"] == 3 and len([m for m in logs if "waiting" in m]) == 2, logs
+    print("QoS 1 while away: latest value per point after the connect; paho's queue full: "
+          "counted, logged once per outage  OK")
+
+    fake = QueueClient(room=0)
+    pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="p"),
+                        logger=logs.append, client=fake)
+    pub.connect()
+    pub.publish_value("a", b"1")              # QoS 0 while away: lost, as before
+    pub.feed(b"l\n")
+    fake.up = True
+    pub.handle_connect()
+    assert fake.published == [("p/status", b"online", 0, True)], fake.published
+    assert pub.state["dropped"] == 2, pub.state
+    print("QoS 0 while away: nothing kept, counted as dropped  OK")
+
+
+def test_paho_queue_limit():
+    """paho itself: the publisher sets its queue limit before connecting, and paho refuses
+    QoS 1 messages beyond it while the broker can't be reached."""
+    if not need("paho.mqtt", what="paho-mqtt's QoS 1 queue limit"):
+        return
+    logs = []
+    saved = mqtt_pub.MAX_QUEUED_MESSAGES
+    mqtt_pub.MAX_QUEUED_MESSAGES = 5
+    with socket.socket() as s:   # a port nothing listens on
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    pub = MqttPublisher(MqttSettings(enabled=True, host="127.0.0.1", port=port,
+                                     base_topic="plant/meter", qos=1), logger=logs.append)
+    try:
+        assert pub.connect() is True
+        assert pub._client.max_queued_messages == 5
+        for n in range(8):
+            pub.feed(b"%d kWh\n" % n)
+        assert len(pub._client._out_messages) == 5, len(pub._client._out_messages)
+        assert pub.state["dropped"] == 3, pub.state
+        assert sum("5 QoS 1 messages are waiting" in m for m in logs) == 1, logs
+    finally:
+        mqtt_pub.MAX_QUEUED_MESSAGES = saved
+        pub.close()
+    print("paho: queue limit set before connecting; QoS 1 beyond it refused, counted, "
+          "logged once  OK")
 
 
 def test_will_is_set_for_lwt():
@@ -434,9 +541,11 @@ def main():
     test_disabled_until_connected()
     test_birth_after_each_connect()
     test_birth_again_after_a_stale_will()
+    test_offline_queue()
     test_will_is_set_for_lwt()
     test_retained_commands()
     test_paho_birth_at_qos0()
+    test_paho_queue_limit()
     if os.name == "posix":
         test_poll_select_answers_like_select()
         test_poll_select_above_fd_setsize()
