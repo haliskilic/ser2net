@@ -61,6 +61,8 @@ def build_api_routes(state):
             mapping.validate_input()
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        if conflict := state.config.own_port_conflict(mapping):  # the admin UI's port, ...
+            return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
         async with state.config_lock:
             state.config.mappings.append(mapping)
             try:
@@ -93,6 +95,8 @@ def build_api_routes(state):
             mapping.validate_input()
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        if conflict := state.config.own_port_conflict(mapping):  # the admin UI's port, ...
+            return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
         async with state.config_lock:
             existing = state.config.get_mapping(mid)
             if not existing:

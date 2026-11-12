@@ -631,7 +631,9 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   alınır: arayüzün adres ve portundaki bir eşleme arayüzü engellemek yerine `error` gösterir.
   Arayüzün kendi adresi kullanılamazsa (portu başka bir program tutuyor ya da IP açılışta
   henüz atanmamış) eşlemeler yine başlar, arayüz en fazla 30 sn arayla yeniden dener
-  (`all.log` bunu yazar).
+  (`all.log` bunu yazar). Arayüzün TCP adres ve portuna bir eşleme, keşif açıkken cluster'ın
+  keşif portuna da bir UDP eşleme kaydedilemez (form, REST API, cluster, içe aktarma; kopyanın
+  portu bunları atlar).
 - **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
   dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
   açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar

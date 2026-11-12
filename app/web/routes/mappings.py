@@ -46,10 +46,11 @@ def routes(ctx: Ctx) -> list:
             d["name"] = f"{m.name} (copy)"
             d["enabled"] = False  # don't auto-start a duplicate (avoids port clash)
             dup = MappingConfig.from_dict(d)
-            # bump a listening port to the next free one
+            # bump a listening port to the next free one (not the admin UI's, ...)
             if dup.kind == "net" and dup.network.listens:
                 used = {mm.network.port for mm in state.config.mappings if mm.kind == "net"}
-                while dup.network.port in used and dup.network.port < 65535:
+                while ((dup.network.port in used or state.config.own_port_conflict(dup))
+                       and dup.network.port < 65535):
                     dup.network.port += 1
             state.config.mappings.append(dup)
             try:
