@@ -128,7 +128,7 @@ def test_discovery_unit():
 
     # stale peers expire after PEER_TTL
     for row in b._peers.values():
-        row["last_seen"] = time.time() - PEER_TTL - 5
+        row["last_seen"] = time.monotonic() - PEER_TTL - 5
     assert b.peers() == [], "stale peer should expire"
     print("stale peer expiry  OK")
 

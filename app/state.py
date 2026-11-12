@@ -378,7 +378,8 @@ class AppState:
         self.pending_imports: dict[str, dict] = {}
         self.notifier = Notifier(self)
         self.config_lock = asyncio.Lock()
-        self.started_at = time.time()
+        self.started_at = time.time()        # when this process started (wall clock)
+        self.started_mono = time.monotonic()  # the same for how long it runs (uptime)
         # the admin UI listener's connection guard (runtime.py; None in tests without one)
         self.admin_guard: Any = None
         # first-run setup (see prepare_first_run)

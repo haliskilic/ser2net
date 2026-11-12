@@ -33,6 +33,7 @@ from .. import optional
 from ..config import external_name
 from .ldap_auth import role_for_groups  # shared group/claim -> role mapping
 
+# issuer -> (its discovery document, time.monotonic() when it was fetched)
 _DISCOVERY_CACHE: dict[str, tuple[dict, float]] = {}
 _DISCOVERY_TTL = 3600.0
 # How far this host's clock may be off the identity provider's when an ID token's times
@@ -132,12 +133,12 @@ def _error_text(body: bytes) -> str:
 def discover(issuer: str, fetch=_get_json) -> dict:
     issuer = issuer.rstrip("/")
     cached = _DISCOVERY_CACHE.get(issuer)
-    if cached and (time.time() - cached[1] < _DISCOVERY_TTL):
+    if cached and (time.monotonic() - cached[1] < _DISCOVERY_TTL):
         return cached[0]
     doc = fetch(secure_url(issuer + "/.well-known/openid-configuration", "discovery document"))
     if not isinstance(doc, dict):
         raise ValueError("the discovery document is not a JSON object")
-    _DISCOVERY_CACHE[issuer] = (doc, time.time())
+    _DISCOVERY_CACHE[issuer] = (doc, time.monotonic())
     return doc
 
 

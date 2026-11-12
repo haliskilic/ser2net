@@ -92,8 +92,7 @@ def routes(ctx: Ctx) -> list:
                       **_cluster_view(),
                       session_minutes=state.config.session_timeout_s // 60,
                       notify=state.config.notifications, notify_events=NOTIFY_EVENTS,
-                      webhook_formats=WEBHOOK_FORMATS, smtp_security=SMTP_SECURITY,
-                      uptime=int(state.started_at))
+                      webhook_formats=WEBHOOK_FORMATS, smtp_security=SMTP_SECURITY)
 
     async def settings_page(request):
         """GET /settings; ?restore=<backup> shows what restoring that backup would change."""
@@ -789,10 +788,10 @@ def routes(ctx: Ctx) -> list:
     # ---- import: the form first shows a preview (step=preview), then applies it in
     #      "merge" or "replace" mode. A POST without step (scripts written for 2.7)
     #      keeps the old behaviour: replace everything at once.
-    PENDING_TTL_S = 900
+    PENDING_TTL_S = 900   # (time.monotonic(): a clock step neither ends nor extends it)
 
     def _pending_put(user: str, plan) -> str:
-        now, pend = time.time(), state.pending_imports
+        now, pend = time.monotonic(), state.pending_imports
         for k in [k for k, v in pend.items() if now - v["created"] > PENDING_TTL_S]:
             del pend[k]
         while len(pend) >= 20:
@@ -803,7 +802,7 @@ def routes(ctx: Ctx) -> list:
 
     def _pending_get(token: str, user: str):
         item = state.pending_imports.get(token or "")
-        if not item or item["user"] != user or time.time() - item["created"] > PENDING_TTL_S:
+        if not item or item["user"] != user or time.monotonic() - item["created"] > PENDING_TTL_S:
             return None
         return item
 
