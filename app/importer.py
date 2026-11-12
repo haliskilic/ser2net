@@ -172,6 +172,12 @@ def _bind_reach(ip: str) -> int:
     return 0 if a.is_loopback else 2 if a.is_unspecified else 1
 
 
+def _reach(net) -> int:
+    """How far a listener (NetworkSettings) reaches: _bind_reach, and 3 for every
+    interface of both families (dual_stack on 0.0.0.0 / ::)."""
+    return 3 if net.both_families else _bind_reach(net.bind_ip)
+
+
 def _within(inner: list[str], outer: list[str]) -> bool:
     """The clients `inner` allows are all allowed by `outer` too (an empty list: any)."""
     if not outer:
@@ -191,10 +197,12 @@ def _overlay(old: MappingConfig, new: MappingConfig) -> MappingConfig:
     """`new`, from a classic ser2net file, merged into `old`, the mapping it updates. The
     file says only part of what a mapping has here (what ser2net_import writes), so only
     that is taken from it, and never so that the mapping gets more open: a disabled
-    mapping stays disabled, the bind IP, the allowed clients and read-only are not
-    widened, TLS is not turned off, a Modbus gateway stays one. What the file leaves at
-    ser2net's default (no banner, no timeout, ...) keeps the mapping's own value; the
-    serial framing is always the file's (ser2net ran with it, 9600N81 by default)."""
+    mapping stays disabled, the bind IP (with the families it takes, dual_stack), the
+    allowed clients and read-only are not widened, TLS is not turned off and a TLS client
+    CA is not dropped, a Modbus gateway stays one. What the file leaves at ser2net's
+    default (no banner, no timeout, ...) keeps the mapping's own value, the port locking
+    (flock / uucplock) too; the serial framing is always the file's (ser2net ran with it,
+    9600N81 by default)."""
     r = MappingConfig.from_dict(old.to_dict())
     plain = MappingConfig()
 
@@ -207,19 +215,22 @@ def _overlay(old: MappingConfig, new: MappingConfig) -> MappingConfig:
     s, ns = r.serial, new.serial
     s.port, s.baudrate, s.bytesize, s.parity, s.stopbits, s.flowcontrol = (
         ns.port, ns.baudrate, ns.bytesize, ns.parity, ns.stopbits, ns.flowcontrol)
-    given(s, ns, plain.serial, "rts_on_open", "dtr_on_open")
-    given(s.advanced, ns.advanced, plain.serial.advanced, "hangup_when_done", "nobreak")
+    given(s, ns, plain.serial, "rts_on_open", "dtr_on_open", "exclusive")
+    given(s.advanced, ns.advanced, plain.serial.advanced, "hangup_when_done", "nobreak",
+          "tiocexcl", "respect_uucp_locks")
     n, nn = r.network, new.network
     n.mode, n.port = nn.mode, nn.port
     if old.network.protocol != "modbus" or nn.mode != "server":  # (a gateway is a TCP server)
         n.protocol = nn.protocol
-    if _bind_reach(nn.bind_ip) <= _bind_reach(n.bind_ip):
-        n.bind_ip = nn.bind_ip
+    if _reach(nn) <= _reach(n):
+        n.bind_ip, n.dual_stack = nn.bind_ip, nn.dual_stack
     if nn.allowed_client_ips and _within(nn.allowed_client_ips, n.allowed_client_ips):
         n.allowed_client_ips = list(nn.allowed_client_ips)
     n.read_only = n.read_only or nn.read_only
     if nn.tls:
         n.tls, n.tls_cert, n.tls_key = True, nn.tls_cert, nn.tls_key
+        if nn.tls_client_ca:   # (clientauth with its CA file here; a CA the mapping has stays)
+            n.tls_client_ca = nn.tls_client_ca
     given(n, nn, plain.network, "kick_old_user", "max_connections")
     if n.protocol == "rfc2217":
         n.max_connections = 1  # (RFC 2217 takes a single client here: the file's is 1 too)
@@ -315,7 +326,7 @@ def _after(m: MappingConfig) -> dict:
     return {"enabled": m.enabled, "tls": listens and n.tls, "read_only": n.read_only,
             "clients": len(n.allowed_client_ips) if listens else None,
             "open": listens and m.enabled and not n.allowed_client_ips
-            and _bind_reach(n.bind_ip) > 0}
+            and _reach(n) > 0}
 
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]")
@@ -361,7 +372,7 @@ def _fields(m: MappingConfig) -> list[tuple[str, str]]:
         (_("RTS on open"), s.rts_on_open),
         (_("DTR on open"), s.dtr_on_open),
         (_("Protocol"), f"{n.mode}/{n.protocol}"),
-        (_("Bind IP"), n.bind_ip),
+        (_("Bind IP"), _("All interfaces (IPv4 + IPv6)") if n.both_families else n.bind_ip),
         (_("Listen port"), str(n.port)),
         ("TLS", on if n.tls else off),
         (_("Allowed client IPs / CIDRs"), " ".join(n.allowed_client_ips) or _("any client")),
@@ -386,7 +397,7 @@ def _looser(old: MappingConfig, new: MappingConfig) -> set[str]:
         out.add(_("State"))
     if a.tls and not b.tls:
         out.add("TLS")
-    if _bind_reach(b.bind_ip) > _bind_reach(a.bind_ip):
+    if _reach(b) > _reach(a):
         out.add(_("Bind IP"))
     if not _within(b.allowed_client_ips, a.allowed_client_ips):
         out.add(_("Allowed client IPs / CIDRs"))

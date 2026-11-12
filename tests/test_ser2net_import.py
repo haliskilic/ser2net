@@ -174,7 +174,7 @@ connection: &v6any
 connection: &v6long
   accepter: tcp,ipv6,[0:0:0:0:0:0:0:1],2008
   connector: serialdev,/dev/ttyUSB8
-connection: &v6only
+connection: &v6n4
   accepter: tcp,ipv6n4,2012
   connector: serialdev,/dev/ttyUSB14
 connection: &udp6
@@ -212,15 +212,20 @@ def test_accepters():
     # the IPv6 loopback stays the IPv6 loopback (any spelling of it), with nothing to say
     assert net["v6"]["bind_ip"] == "::1" and not has(warns, "v6:")
     assert net["v6long"]["bind_ip"] == "::1" and not has(warns, "v6long:")
-    assert net["v6any"]["bind_ip"] == "::" and net["v6only"]["bind_ip"] == "::"
-    assert not any(n.get("dual_stack") for n in net.values()), "never wider: one family each"
-    for name in ("v6only", "udp6"):  # (a UDP one too, where IPv6 sockets take IPv4 by default)
-        assert MappingConfig.from_dict(maps[name]).network.both_families is False, name
+    assert net["v6any"]["bind_ip"] == "::" and net["v6n4"]["bind_ip"] == "::"
+    # ipv6 without an address: IPv6 only; ipv6n4 is an IPv6 socket that takes IPv4
+    # connections too (gensio.5): both families here, on TCP and UDP alike
+    assert MappingConfig.from_dict(maps["v6any"]).network.both_families is False
+    for name in ("v6n4", "udp6"):
+        assert MappingConfig.from_dict(maps[name]).network.both_families is True, name
+    assert not any(n.get("dual_stack") for k, n in net.items() if k not in ("v6n4", "udp6")), \
+        "never wider: one family each"
+
     # ser2net listens on both families without one named: here that is 0.0.0.0, IPv4 only
     assert net["tel"]["bind_ip"] == "0.0.0.0" and not net["tel"].get("dual_stack")
     wide = [w for w in warns if "ser2net listened on IPv4 and IPv6" in w]
     assert len(wide) == 1 and "tel, " in wide[0] and "“All interfaces (IPv4 + IPv6)”" in wide[0]
-    assert "v6any" not in wide[0] and "rfc," not in wide[0] and "v6only" not in wide[0], wide
+    assert "v6any" not in wide[0] and "rfc," not in wide[0] and "v6n4" not in wide[0], wide
     # a host name can't be bound: listening on 0.0.0.0 would be wider, so it comes in disabled
     assert net["hostname"]["bind_ip"] == "0.0.0.0" and maps["hostname"]["enabled"] is False
     assert has(warns, "hostname:", "myhost.example.com", "imported disabled")
