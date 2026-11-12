@@ -8,6 +8,10 @@
     password: a blank field keeps it, the remove box clears it; a viewer API token gets it
     masked, and a PUT that sends the mask back keeps the stored one; a mapping can't be
     saved with the admin UI's own key file (a stored one keeps working);
+  - connect-out: the server certificate's SHA-256 fingerprint is logged at every connect
+    and, with network.tls_fingerprint, must be one it lists (else the link is not used);
+    tls_cert/tls_key are optional, and presented to a server that asks for a client
+    certificate;
   - the admin UI's key the same way (admin_ui.tls_key_password, Settings → Admin TLS): it
     serves HTTPS with its password, and without one the start ends at once (exit 1, the
     reason in all.log), before any mapping starts.
@@ -17,6 +21,7 @@ Test certificates are made here (_pki.py, needs cryptography: SKIP without). Lis
 Run: python3 tests/test_tls_mapping.py
 """
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -27,6 +32,7 @@ import sys
 import tempfile
 import time
 import types
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -36,7 +42,8 @@ from _server import ROOT, Browser, Server, free_port
 
 from app import importer
 from app.config import ConfigError, MappingConfig
-from app.engine import tls
+from app.engine import serial_io, tls
+from app.engine.bridge import MappingRunner
 from app.engine.supervisor import make_runner
 from app.web.auth import hash_password, hash_token
 
@@ -180,6 +187,151 @@ async def _listener_starts(pki: Pki):
     assert time.monotonic() - started < 5
     print("a listener with an encrypted key: starts with its password, fails at once with "
           "a clear error without one  OK")
+
+
+class TlsServer:
+    """A TLS server on 127.0.0.1 (OS-assigned port) that asks for a client certificate from
+    ``client_ca`` (if given) and records each client's certificate subject."""
+
+    def __init__(self, cert: str, key: str, client_ca: str = ""):
+        self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.ctx.load_cert_chain(cert, key)
+        if client_ca:
+            self.ctx.verify_mode = ssl.CERT_REQUIRED
+            self.ctx.load_verify_locations(client_ca)
+            # TLS 1.2: a client without a certificate fails in its handshake (with TLS 1.3
+            # its handshake is over first, and the server's alert ends the link after)
+            self.ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        self.subjects: list[str] = []
+
+    async def __aenter__(self):
+        self.server = await asyncio.start_server(self._client, "127.0.0.1", 0, ssl=self.ctx)
+        self.port = self.server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *exc):
+        self.server.close()
+        await self.server.wait_closed()
+
+    async def _client(self, reader, writer):
+        cert = writer.get_extra_info("peercert") or {}
+        self.subjects.append(", ".join(f"{k}={v}" for rdn in cert.get("subject", ())
+                                       for k, v in rdn) or "-")
+        with contextlib.suppress(OSError):  # (a client that drops the link: a reset)
+            await reader.read()  # until the link closes
+        writer.close()
+
+
+def client_mapping(port: int, **network) -> MappingConfig:
+    net = {"mode": "client", "protocol": "raw", "remote_host": "127.0.0.1",
+           "remote_port": port, "connect_timeout_s": 3, "tls": True}
+    net.update(network)
+    return MappingConfig.from_dict({"name": "uplink", "serial": {"port": MISSING_PORT},
+                                    "network": net})
+
+
+async def _port_open(settings):
+    await asyncio.Event().wait()  # the serial port "opens" and stays open
+
+
+async def _until(check, timeout=10.0):
+    end = asyncio.get_running_loop().time() + timeout
+    while not check():
+        assert asyncio.get_running_loop().time() < end, "timed out"
+        await asyncio.sleep(0.05)
+
+
+async def _link(m: MappingConfig, logs: list) -> dict:
+    """Start a connect-out runner until its link is up or down: its status."""
+    runner = MappingRunner(m, logger=logs.append)
+    with mock.patch.object(serial_io, "open_serial", _port_open):
+        await runner.start()
+        try:
+            await _until(lambda: runner.status.link in ("up", "down"))
+            return runner.status.as_dict()
+        finally:
+            await runner.stop()
+
+
+async def _connect_out(pki: Pki):
+    der = ssl.PEM_cert_to_DER_cert(open(pki.cert, encoding="ascii").read())
+    seen = tls.fingerprint(der)
+    client_cert, client_key = pki.ca.issue(pki.folder, "client", ["client-7"])
+    async with TlsServer(pki.cert, pki.key) as srv:
+        logs: list[str] = []
+        st = await _link(client_mapping(srv.port), logs)
+        assert st["link"] == "up", st
+        line = next(x for x in logs if x.startswith("connected out"))
+        assert f"server certificate SHA-256 {seen}, not checked" in line, line
+        for pin in (seen, seen.replace(":", "").lower(), f"{'00' * 32}, {seen}"):
+            logs = []
+            st = await _link(client_mapping(srv.port, tls_fingerprint=pin), logs)
+            assert st["link"] == "up", (pin, st)
+            assert any(f"SHA-256 {seen}, pinned" in x for x in logs), logs
+        logs = []
+        st = await _link(client_mapping(srv.port, tls_fingerprint="ab" * 32), logs)
+        assert st["link"] == "down" and "not the pinned one" in st["link_error"], st
+        assert seen in st["link_error"], st
+    async with TlsServer(pki.cert, pki.key, client_ca=pki.ca.path) as srv:
+        st = await _link(client_mapping(srv.port), [])
+        assert st["link"] == "down", st  # it asks for a client certificate
+        st = await _link(client_mapping(srv.port, tls_cert=client_cert, tls_key=client_key), [])
+        assert st["link"] == "up", st
+        await _until(lambda: srv.subjects)
+        assert srv.subjects == ["commonName=client-7"], srv.subjects
+        locked = pki.encrypted(client_key, PASSWORD)
+        st = await _link(client_mapping(srv.port, tls_cert=client_cert, tls_key=locked,
+                                        tls_key_password=PASSWORD), [])
+        assert st["link"] == "up", st
+        st = await _link(client_mapping(srv.port, tls_cert=client_cert, tls_key=locked), [])
+        assert st["link"] == "down" and "password-protected" in st["link_error"], st
+    print("connect-out: the server certificate's fingerprint is logged; a pin that does not "
+          "match keeps the link down; a client certificate is presented when set (its key "
+          "decrypted with its password)  OK")
+
+
+def test_connect_out_rules():
+    client_mapping(1).validate()  # no certificate or key: fine for a connect-out link
+    for net in ({"tls_cert": "/c.pem"}, {"tls_key": "/k.pem"}):
+        try:
+            client_mapping(1, **net).validate()
+        except ConfigError as e:
+            assert "or neither" in str(e), e
+        else:
+            raise AssertionError(net)
+    try:
+        mapping(tls_cert="", tls_key="").validate()
+    except ConfigError as e:
+        assert "both a certificate and a key" in str(e), e
+    else:
+        raise AssertionError("a TLS listener without a certificate")
+    client_mapping(1, tls_fingerprint="AB:" * 31 + "AB").validate_input()
+    for bad in ("AB:CD", "zz" * 32, "sha256:" + "ab" * 32):
+        try:
+            client_mapping(1, tls_fingerprint=bad).validate_input()
+        except ConfigError as e:
+            assert "is not a SHA-256 fingerprint" in str(e), e
+        else:
+            raise AssertionError(bad)
+    print("rules: a connect-out link needs no certificate (both or neither), a listener "
+          "does; a pin must be SHA-256 fingerprints  OK")
+
+
+def test_older_forms_keep_the_fields():
+    """A form without the new fields (an older cluster node's, or the block hidden for
+    another mode) keeps what is stored."""
+    from app.web.routes.forms import _mapping_from_form, _preserve_unmanaged_fields
+    stored = client_mapping(1, tls_fingerprint="ab" * 32, tls_key_password="pw")
+    fields = {"name": "uplink", "kind": "net", "serial_port": MISSING_PORT,
+              "network_mode": "client", "network_remote_host": "127.0.0.1",
+              "network_remote_port": "1", "network_tls": "on"}
+    m = MappingConfig.from_dict(_mapping_from_form(fields))
+    _preserve_unmanaged_fields(m, stored, fields)
+    assert m.network.tls_fingerprint == "ab" * 32 and m.network.tls_key_password == "pw", m.network
+    m = MappingConfig.from_dict(_mapping_from_form(dict(fields, network_tls_fingerprint="")))
+    _preserve_unmanaged_fields(m, stored, dict(fields, network_tls_fingerprint=""))
+    assert m.network.tls_fingerprint == "", m.network
+    print("forms: a form without the TLS fields keeps the stored ones  OK")
 
 
 def form(port: int, pki: Pki, **fields) -> dict:
@@ -355,6 +507,9 @@ def main():
         test_import_warns(pki)
         test_api_masks_the_password()
         asyncio.run(_listener_starts(pki))
+        test_connect_out_rules()
+        test_older_forms_keep_the_fields()
+        asyncio.run(_connect_out(pki))
         test_form_and_api(pki)
         test_admin_ui(pki)
     finally:

@@ -529,13 +529,17 @@ class NetworkSettings:
     # seconds and retry. 0 = no limit of our own (the OS gives up after ~21 s on
     # Windows, ~2 min on Linux).
     connect_timeout_s: float = 10.0
-    # Per-mapping TLS for the data bridge (server/client TCP), see engine/tls.py. Both files
-    # required. tls_key_password decrypts an encrypted key (never asked for on a terminal);
-    # edits load the files with it (MappingConfig.check_tls_files).
+    # Per-mapping TLS for the data bridge (server/client TCP), see engine/tls.py. A listener
+    # needs tls_cert and tls_key. A connect-out link presents them (when set) to a server
+    # that asks for a client certificate, and checks the server's certificate against the
+    # SHA-256 fingerprints in tls_fingerprint (when set; without, it only encrypts).
+    # tls_key_password decrypts an encrypted key (never asked for on a terminal); edits
+    # load the files with it (MappingConfig.check_tls_files).
     tls: bool = False
     tls_cert: str = ""
     tls_key: str = ""
     tls_key_password: str = ""
+    tls_fingerprint: str = ""
 
     @property
     def listens(self) -> bool:
@@ -603,10 +607,13 @@ class NetworkSettings:
         if self.tls:
             if self.mode == "udp":
                 raise ConfigError(_("TLS is not applicable to UDP mappings."))
-            if not (self.tls_cert and self.tls_key):
+            if self.listens and not (self.tls_cert and self.tls_key):
                 raise ConfigError(_("Enable TLS requires both a certificate and a key."))
+            if bool(self.tls_cert) != bool(self.tls_key):  # connect-out: both or neither
+                raise ConfigError(_("Connect-out TLS: set both a certificate and a key (for a "
+                                    "server that asks for a client certificate), or neither."))
             for p in (self.tls_cert, self.tls_key):
-                if not os.path.isfile(p):
+                if p and not os.path.isfile(p):
                     raise ConfigError(_("TLS file not found: {0}").format(p))
         for label, lst in ((_("allowed"), self.allowed_client_ips),
                            (_("priority"), self.priority_client_ips)):
@@ -925,6 +932,14 @@ class MappingConfig:
                                 "IP 0.0.0.0 or ::, not {0}.").format(net.bind_ip))
         if self.kind == "net" and net.mode == "udp":
             self._validate_udp_peer()
+        if self.kind == "net" and net.tls and net.mode == "client":
+            from .engine.tls import parse_pins
+            try:
+                parse_pins(net.tls_fingerprint)
+            except ValueError as e:
+                raise ConfigError(_("TLS server fingerprint: {0} is not a SHA-256 fingerprint "
+                                    "(64 hex digits, with or without colons).").format(
+                    repr(str(e)))) from None
 
     def check_tls_files(self) -> None:
         """An edit's check (mapping form, so also a cluster peer's save on the node it is

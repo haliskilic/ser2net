@@ -966,7 +966,11 @@ class MappingRunner:
         worker thread that cancellation can't stop, so timing it out would leave one
         stuck thread behind per retry during a DNS outage and starve the shared
         executor (asyncio.to_thread: password hashing, config saves, log reads).
-        Connecting to the resolved IP literal needs no further lookup."""
+        Connecting to the resolved IP literal needs no further lookup.
+
+        Returns (reader, writer, what the log says about TLS); over TLS the server's
+        certificate is checked first (tls.check_server: a pin that does not match is that
+        address's failure)."""
         net = self.mapping.network
         loop = asyncio.get_running_loop()
         infos = await loop.getaddrinfo(net.remote_host, net.remote_port,
@@ -975,7 +979,7 @@ class MappingRunner:
         error: BaseException = ConnectionError(f"no address for {net.remote_host}")
         for family, _type, _proto, _name, sockaddr in infos:
             try:
-                return await asyncio.wait_for(
+                reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(
                         str(sockaddr[0]), int(sockaddr[1]), family=family, ssl=ssl_ctx,
                         server_hostname=net.remote_host if ssl_ctx else None),
@@ -985,7 +989,16 @@ class MappingRunner:
                     error = e  # the OS's own connect timeout, not ours
                     continue
                 error = ConnectionError(f"timed out after {net.connect_timeout_s:g}s")
+                continue
             except OSError as e:
+                error = e
+                continue
+            if ssl_ctx is None:
+                return reader, writer, ""
+            try:  # the server's certificate, before any byte of the link is used
+                return reader, writer, f" ({tls.check_server(net, writer)})"
+            except ConnectionError as e:
+                writer.transport.abort()
                 error = e
         raise error
 
@@ -1000,12 +1013,12 @@ class MappingRunner:
                 break
             st = self.status
             try:
-                reader, writer = await self._connect_out()
+                reader, writer, tls_note = await self._connect_out()
                 self._enable_keepalive(writer, target)
                 client = _ClientConn(self, reader, writer, net.remote_host, net.remote_port)
                 self._clients.add(client)
                 self._refresh_clients()
-                self._log(f"connected out to {target}{failures.recovered()}")
+                self._log(f"connected out to {target}{tls_note}{failures.recovered()}")
                 if st.link_error and st.last_error == st.link_error:
                     st.last_error = ""  # (the link's error, not one of the serial side)
                 st.set_link("up")
