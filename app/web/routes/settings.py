@@ -320,6 +320,7 @@ def routes(ctx: Ctx) -> list:
             state.config.api_token_hash = auth.hash_token(token)
             state.config.api_token_role = role
             await state.asave()
+        state.api_token_used.pop("", None)  # the token it replaced was used, not this one
         state.log(f"REST API token generated (role: {role})")
         ctx.audit(request, "api_token_generate", role)
         # show the token exactly once — only its hash is stored
@@ -336,6 +337,7 @@ def routes(ctx: Ctx) -> list:
         async with state.config_lock:
             state.config.api_token_hash = ""
             await state.asave()
+        state.api_token_used.pop("", None)
         state.log("REST API token revoked")
         ctx.audit(request, "api_token_revoke", "")
         if state.config.api_tokens:
