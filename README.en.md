@@ -313,8 +313,11 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   removes the mapping's log and trace files.
 - **Log:** the mapping's history (newest first, persists across restarts).
 - **Monitor:** live serial terminal in the browser (xterm.js); operators type to the
-  device on network mappings. The hex view shows both directions; viewers see only what
-  the device sends.
+  device on network mappings that aren't read-only (a Modbus gateway's console only
+  watches its bus, and opens in the hex view). The hex view shows both directions; viewers
+  see only what the device sends. When the mapping stops or restarts, the console says so
+  and connects again by itself; a browser that doesn't keep up is told how many bytes it
+  missed.
 - **Trace** (operators): the mapping's trace files, to list and download.
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed; a previous generated pair is kept
@@ -440,7 +443,9 @@ failed sign-ins in 10 minutes the audit log only counts them and sums them up in
 at the end of those 10 minutes, so a flood of attempts can't push the other records out.
 Opening a mapping's console or hex view is recorded once per account (with open access: per
 address), mapping and kind in 5 minutes, and at most 50 such records in 10 minutes, summed up
-the same way (all.log keeps a line for every one).
+the same way (all.log keeps a line for every one). At most 4 consoles and hex views (together)
+are open per account (with open access: per address) and mapping, 16 per mapping and 64 in
+all; one that takes nothing for 30 s while its traffic is being dropped is closed.
 Names over 256 characters aren't tried. Request bodies are limited too: the sign-in, setup
 and sign-out forms to 64 KB, a configuration import to 16 MB and everything else (forms,
 the REST API) to 2 MB; a larger one gets HTTP 413.

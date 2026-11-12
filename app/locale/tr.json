@@ -894,5 +894,14 @@
   "The REST API token’s role is now {0}; the token stays the same.": "REST API token'ının rolü artık {0}; token aynı kalıyor.",
   "The previous certificate and key are kept as {0}.": "Önceki sertifika ve anahtar {0} olarak saklandı.",
   "Passwords and keys you typed are not shown again: type them once more.": "Yazdığın parola ve anahtarlar yeniden gösterilmez: onları bir kez daha yaz.",
-  "{0} bytes left out: this browser did not keep up": "{0} bayt atlandı: bu tarayıcı yetişemedi"
+  "{0} bytes left out: this browser did not keep up": "{0} bayt atlandı: bu tarayıcı yetişemedi",
+  "the mapping is not running: its traffic shows here once it is started": "eşleme çalışmıyor: trafiği, eşleme başlatılınca burada görünür",
+  "connected again": "yeniden bağlandı",
+  "the mapping stopped or restarted: connecting again": "eşleme durdu ya da yeniden başlatıldı: yeniden bağlanılıyor",
+  "could not connect (signed out, or a reverse proxy changed the Host / Origin header)": "bağlanılamadı (oturum kapalı ya da bir reverse proxy Host / Origin başlığını değiştirdi)",
+  "too many consoles and hex views are open: close one, then try again": "çok fazla konsol ve hex görünümü açık: birini kapatıp yeniden dene",
+  "the mapping stopped or restarted": "eşleme durdu ya da yeniden başlatıldı",
+  "closed: signed out, or your access changed": "kapatıldı: oturum kapandı ya da erişimin değişti",
+  "closed: this browser took nothing for too long": "kapatıldı: bu tarayıcı uzun süre hiçbir şey almadı",
+  "the mapping no longer exists": "eşleme artık yok"
 }

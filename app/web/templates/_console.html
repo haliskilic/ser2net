@@ -13,4 +13,5 @@
      data-ws="/api/mappings/{{ mid }}/console"
      data-ws-hex="/api/mappings/{{ mid }}/traffic"
      data-bridge="{{ '1' if bridge else '0' }}"
-     data-interactive="{{ '1' if interactive else '0' }}"></div>
+     data-interactive="{{ '1' if interactive else '0' }}"
+     data-mode="{{ 'hex' if hex_first else 'text' }}"></div>

@@ -322,9 +322,11 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   Durdur ve Yeniden başlat önce sorar (istemcilerin bağlantısı kesilir; durdurulan eşleme
   durdurulmuş kalır); Sil, eşlemenin log ve trace dosyalarını da siler.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
-- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); ağ eşlemelerinde operator'ler
-  cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
-  gönderdiklerini görür.
+- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); salt okunur olmayan ağ
+  eşlemelerinde operator'ler cihaza yazabilir (Modbus gateway konsolu yalnızca hattı izler
+  ve hex görünümünde açılır). Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
+  gönderdiklerini görür. Eşleme durunca ya da yeniden başlayınca konsol bunu söyler ve
+  kendiliğinden yeniden bağlanır; yetişemeyen bir tarayıcıya kaç bayt kaçırdığı söylenir.
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak` olarak
@@ -453,8 +455,10 @@ olabilir). 10 dakikada 20'yi aşan başarısız girişleri denetim kaydı yalnı
 dakikanın sonunda tek bir kayıtta toplar; böylece bir deneme seli diğer kayıtları dışarı
 itemez. Bir eşlemenin konsolunu ya da hex görünümünü açmak, hesap (açık erişimde: adres),
 eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 böyle kayıt yazılır,
-fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). 256 karakterden uzun
-adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
+fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). Hesap (açık erişimde:
+adres) ve eşleme başına aynı anda en çok 4 konsol ve hex görünümü (birlikte) açık olabilir;
+eşleme başına 16, toplam 64. Trafiği atılırken 30 saniye hiçbir şey almayan biri kapatılır.
+256 karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
 çıkış formları 64 KB, yapılandırma içe aktarma 16 MB, geri kalan her şey (formlar, REST API)
 2 MB; daha büyüğü HTTP 413 alır.
 

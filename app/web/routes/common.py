@@ -194,7 +194,9 @@ def has_role(user, role: str) -> bool:
 def console_interactive(user, mapping) -> bool:
     """Does what `user` types in the console of `mapping` go to the device? Only on a
     network mapping that isn't read-only, and only for operators and admins."""
-    return mapping.kind == "net" and not mapping.network.read_only and has_role(user, "operator")
+    return (mapping.kind == "net" and not mapping.network.read_only
+            # a Modbus gateway only watches its bus: raw bytes would corrupt its frames
+            and mapping.network.protocol != "modbus" and has_role(user, "operator"))
 
 
 def sees_to_device(user, mapping) -> bool:

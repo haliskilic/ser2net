@@ -251,6 +251,7 @@ def test_traffic_feed():
     net = MappingConfig.from_dict({"name": "net", "kind": "net"})
     read_only = MappingConfig.from_dict({"name": "ro", "kind": "net", "network": {"read_only": True}})
     bridge = MappingConfig.from_dict({"name": "pair", "kind": "serialbridge"})
+    gateway = MappingConfig.from_dict({"name": "gw", "kind": "net", "network": {"protocol": "modbus"}})
     viewer, operator, admin = (User(username=r, role=r) for r in ("viewer", "operator", "admin"))
     visitors = [User(username="(no login)", role=r, source="anonymous") for r in ("viewer", "operator")]
     for u in (viewer, visitors[0]):
@@ -259,6 +260,7 @@ def test_traffic_feed():
     for u in (operator, admin, visitors[1]):
         assert sees_to_device(u, net) and console_interactive(u, net), u
         assert not console_interactive(u, read_only) and not console_interactive(u, bridge), u
+        assert not console_interactive(u, gateway), "a Modbus gateway only watches its bus"
 
     def fed(mon):
         mon.feed_traffic(TO_DEVICE, b"typed-secret")

@@ -302,6 +302,7 @@ document.addEventListener("click", function (e) {
 function closeTerm() {
   var el = document.getElementById("term");
   if (!el) return;
+  clearTimeout(el._retry);
   if (el._ws) { try { el._ws.close(); } catch (e) {} el._ws = null; }
   if (el._onresize) { window.removeEventListener("resize", el._onresize); el._onresize = null; }
   if (el._term) { try { el._term.dispose(); } catch (e) {} el._term = null; }
@@ -319,10 +320,11 @@ function initTerm(root) {
   el._term = term;
   // xterm keeps Tab and Shift+Tab (it sends them to the device), so the keyboard could
   // not leave the console: Shift+Tab leaves it — and Tab too where nothing typed goes to
-  // the device. (false: xterm leaves the key alone, and the browser moves the focus.)
+  // the device (a read-only console, the hex view). (false: xterm leaves the key alone,
+  // and the browser moves the focus.)
   var typing = el.getAttribute("data-interactive") === "1";
   term.attachCustomKeyEventHandler(function (ev) {
-    return !(ev.key === "Tab" && (ev.shiftKey || !typing));
+    return !(ev.key === "Tab" && (ev.shiftKey || !typing || el._mode === "hex"));
   });
 
   // size the terminal to its container (FitAddon); refit after layout settles
@@ -344,44 +346,89 @@ function initTerm(root) {
     // the focus: once the panel is in view (8) — keys typed into a console out of view
     // (Space / PageDown to scroll the page) would go to the device
   }
-  connectTerm(el, "text");
+  // a Modbus gateway's console opens in the hex view (data-mode): its frames as they are
+  connectTerm(el, el.getAttribute("data-mode") === "hex" ? "hex" : "text");
 }
 
 // text: the console socket (raw device output, typing goes to the device);
 // hex: the traffic socket, both directions. Both speak protocol 2 (?v=2, see
-// routes/console.py): a text message is a notice (JSON: {"dropped": n}); a binary one of
-// the hex view holds records [dir u8][time f64 BE][length u32 BE][bytes], one after another.
-function connectTerm(el, mode) {
+// routes/console.py): a text message is a notice (JSON: {"dropped": n}, {"state":
+// "stopped"}); a binary one of the hex view holds records [dir u8][time f64 BE]
+// [length u32 BE][bytes], one after another. `again`: connecting again after the mapping
+// stopped or restarted (CLOSE_STOPPED) — what the terminal shows stays.
+function connectTerm(el, mode, again) {
   var term = el._term;
   if (el._ws) { try { el._ws.onclose = null; el._ws.close(); } catch (e) {} }
+  clearTimeout(el._retry);
   el._mode = mode;
-  term.reset();
+  if (!again) {
+    el._retries = 0;
+    term.reset();
+    if (mode === "hex")
+      term.write("\x1b[90m " + tr("hex_header", "time          direction   offset  bytes" +
+                 "                                            text") + "\x1b[0m\r\n");
+  }
   var scheme = location.protocol === "https:" ? "wss" : "ws";
   var path = el.getAttribute(mode === "hex" ? "data-ws-hex" : "data-ws");
   var ws = new WebSocket(scheme + "://" + location.host + path + "?v=2");
   ws.binaryType = "arraybuffer";
   el._ws = ws;
-  var bridge = el.getAttribute("data-bridge") === "1";
+  var bridge = el.getAttribute("data-bridge") === "1", opened = false;
   function say(msg) { term.write("\r\n\x1b[33m[" + msg + "]\x1b[0m\r\n"); }
   function notice(text) {
     var n = null;
     try { n = JSON.parse(text); } catch (e) {}
     if (n && n.dropped)
       say(tr("dropped", "{0} bytes left out: this browser did not keep up", n.dropped));
+    if (n && n.state === "stopped")
+      say(tr("ws_not_running", "the mapping is not running: its traffic shows here once it is started"));
   }
+  ws.onopen = function () {
+    opened = true;
+    if (again) say(tr("ws_reconnected", "connected again"));
+  };
   ws.onmessage = function (ev) {
-    if (typeof ev.data === "string") notice(ev.data);
-    else if (mode === "text") term.write(new Uint8Array(ev.data));
+    if (typeof ev.data === "string") { notice(ev.data); return; }
+    el._retries = 0;
+    if (mode === "text") term.write(new Uint8Array(ev.data));
     else term.write(hexRecords(ev.data, bridge));
   };
-  ws.onclose = function () {
-    say(tr("disconnected", "console disconnected"));
+  ws.onclose = function (ev) {
+    if (el._ws !== ws || !el._term) return;   // replaced (the other view) or closed
+    el._ws = null;
+    // the mapping stopped or restarted: its runner let the viewer go — connect again,
+    // to the runner it has now (a few times in a row at most, if nothing comes)
+    if (opened && ev.code === 4001 && el._retries < 5) {
+      el._retries++;
+      say(tr("ws_reconnecting", "the mapping stopped or restarted: connecting again"));
+      el._retry = setTimeout(function () { if (el._term) connectTerm(el, mode, true); }, 1000);
+      return;
+    }
+    say(closedText(ev.code, opened));
   };
-  var btn = el.closest("#form-panel") ? el.closest("#form-panel").querySelector("[data-term-mode]") : null;
-  if (btn) btn.textContent = mode === "hex" ? tr("text_view", "Text view") : tr("hex_view", "Hex view");
-  if (mode === "hex")
-    term.write("\x1b[90m " + tr("hex_header", "time          direction   offset  bytes" +
-               "                                            text") + "\x1b[0m\r\n");
+  var panel = el.closest("#form-panel");
+  if (panel) {
+    // what is typed goes to the device in the text view only
+    panel.querySelectorAll("[data-text-only]").forEach(function (n) { n.hidden = mode === "hex"; });
+    var btn = panel.querySelector("[data-term-mode]");
+    if (btn) btn.textContent = mode === "hex" ? tr("text_view", "Text view") : tr("hex_view", "Hex view");
+  }
+}
+
+// why a console or hex view ended: a handshake that was refused (no session, or a
+// reverse proxy that changed the Host or Origin header: HTTP 403, the browser only
+// sees 1006), else the close code (routes/console.py CLOSE_*)
+function closedText(code, opened) {
+  if (!opened)
+    return tr("ws_refused", "could not connect (signed out, or a reverse proxy changed the Host / Origin header)");
+  switch (code) {
+    case 1013: return tr("ws_busy", "too many consoles and hex views are open: close one, then try again");
+    case 4001: return tr("ws_stopped", "the mapping stopped or restarted");
+    case 4002: return tr("ws_access", "closed: signed out, or your access changed");
+    case 4003: return tr("ws_slow", "closed: this browser took nothing for too long");
+    case 4004: return tr("ws_gone", "the mapping no longer exists");
+  }
+  return tr("disconnected", "console disconnected");
 }
 
 // the hex view's lines for one message of packed records

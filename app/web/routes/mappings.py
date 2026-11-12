@@ -219,7 +219,9 @@ def routes(ctx: Ctx) -> list:
         me = current_user(request)  # what the console WebSockets will allow this user
         return render(request, "_console.html", mid=mid, mapping_name=m.name,
                       interactive=console_interactive(me, m), to_device=sees_to_device(me, m),
-                      bridge=m.kind == "serialbridge")
+                      bridge=m.kind == "serialbridge",
+                      # a Modbus gateway's text view is binary noise: its frames in hex
+                      hex_first=m.kind == "net" and m.network.protocol == "modbus")
 
     async def mapping_save(request):
         if deny := require_role(request, "operator"):

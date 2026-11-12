@@ -268,8 +268,8 @@ def main():
         try:
             ws.recv(timeout=6)  # no serial data flows here: only a close can end this
             raise AssertionError("an open anonymous console survived login being switched on")
-        except ConnectionClosed:
-            pass
+        except ConnectionClosed as e:
+            assert e.rcvd is not None and e.rcvd.code == 4002, e.rcvd  # access changed
         except TimeoutError:
             raise AssertionError("an open anonymous console survived login being switched on") from None
         finally:
