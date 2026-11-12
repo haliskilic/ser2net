@@ -5,9 +5,12 @@ published and the Will; the broker's CONNACK is handle_connect(), a lost connect
 _paho_on_disconnect(). Checks:
   * no DDATA before the session's NBIRTH and DBIRTHs (at start and after a reconnect): a
     poll that ends meanwhile only updates the values the births then carry;
+  * report by exception: a NaN that stays NaN is not sent again on every poll;
 
 Run: python3 tests/test_sparkplug_node.py
 """
+import math
+
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
 from app.config import MappingConfig
@@ -105,8 +108,25 @@ def test_no_data_before_births():
     print("no DDATA before the session's births; values read meanwhile go into the births  OK")
 
 
+def test_nan_sent_once():
+    node, pub, client = node_with()
+    pub.handle_connect()
+    nan = float("nan")
+    for _ in range(3):
+        node.update({"temp": nan, "level": 7})
+    ddata = sent(client, "DDATA", "unit1")
+    assert len(ddata) == 1 and math.isnan(values(ddata[0])["temp"]), ddata
+    assert len(sent(client, "DDATA", "unit2")) == 1
+    node.update({"temp": 1.5})
+    node.update({"temp": nan})
+    assert [values(p)["temp"] for p in sent(client, "DDATA", "unit1")][1] == 1.5
+    assert len(sent(client, "DDATA", "unit1")) == 3
+    print("a NaN point is reported once, not on every poll  OK")
+
+
 def main():
     test_no_data_before_births()
+    test_nan_sent_once()
     print("\nPASS: Sparkplug B edge node session state")
 
 

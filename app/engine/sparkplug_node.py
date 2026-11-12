@@ -23,6 +23,7 @@ MqttPublisher's disconnect hook), as the specification asks.
 """
 from __future__ import annotations
 
+import math
 import time
 from typing import Callable
 
@@ -35,6 +36,14 @@ BOOLEAN = sparkplug.DataType.Boolean
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _changed(old, new) -> bool:
+    """Whether a point's value differs from the one last reported: a NaN (a meter's
+    "no data") that stays NaN is no change, although NaN != NaN."""
+    if isinstance(old, float) and isinstance(new, float) and math.isnan(old) and math.isnan(new):
+        return False
+    return old != new
 
 
 def device_id(unit: int) -> str:
@@ -120,7 +129,8 @@ class SparkplugNode:
     def update(self, values: dict) -> None:
         """A DDATA per device with the metrics whose value changed since the last report.
         Before the session's births the values are only kept: the births carry them."""
-        changed = {n for n, v in values.items() if n in self.points and self.values.get(n) != v}
+        changed = {n for n, v in values.items()
+                   if n in self.points and _changed(self.values.get(n), v)}
         for n in changed:
             self.values[n] = values[n]
         if not self._born:
