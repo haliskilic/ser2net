@@ -117,7 +117,8 @@ def build_api_routes(state):
         state.log(f"api: mapping created: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_create", mapping.name, user=_caller(request))
         return JSONResponse(_mapping_view(mapping, state, request), status_code=201,
-                            headers={"Location": f"{API_PREFIX}/mappings/{mapping.id}"})
+                            headers={"Location": proxy.url(request,
+                                                           f"{API_PREFIX}/mappings/{mapping.id}")})
 
     async def update_mapping(request):
         mid = request.path_params["mid"]

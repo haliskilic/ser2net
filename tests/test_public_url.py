@@ -23,6 +23,8 @@ Checks:
     it, and cookies of their own (a name with a tag of the path, Path=<path>); the CSRF
     check and the REST API's token gate hold there (also with open access), the cluster
     peer endpoints stay public; '/' is served exactly as before (cookie names, links);
+  * under the path too: the two-factor code step (its cookie under the path, the session
+    after the code) and the Location of a mapping made through the REST API;
   * no template, redirect or app.js address is written root-relative any more.
 
 Calls the web app in this process (no socket).
@@ -35,6 +37,7 @@ import glob
 import json
 import os
 import re
+import time
 
 from _asgi import App, cookies, header
 
@@ -42,7 +45,7 @@ from app import notify, runtime
 from app.config import (
     RESERVED_PATHS, AdminUI, AppConfig, normalize_public_url, public_url_problem,
 )
-from app.web import auth, oidc_auth, proxy
+from app.web import auth, oidc_auth, proxy, totp
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 PW = "public-url-pass-1"
@@ -343,6 +346,40 @@ def _base_path(a: App) -> None:
           "its own cookies; CSRF / token / session checks hold; '/' as before  OK")
 
 
+def test_base_path_totp_and_rest() -> None:
+    secret, token = totp.new_secret(), "s2n_public-url-operator-token"
+    cfg = _cfg(public_url=PUBLIC)
+    cfg["users"].append({"username": "twofa", "password_hash": auth.hash_password(PW),
+                         "role": "operator", "pwd_version": 1, "totp_secret": secret})
+    cfg.update(api_token_hash=auth.hash_token(token), api_token_role="operator")
+    with App(cfg) as a:
+        csrf = f"ser2net_csrf{TAG}={CSRF}"
+        st, h, _ = a.call("POST", "/ser2net/login", headers={"Cookie": csrf},
+                          fields={"username": "twofa", "password": PW, "_csrf": CSRF})
+        assert st == 303 and header(h, "location") == "/ser2net/auth/totp", (st, h)
+        pending = cookies(h)[f"ser2net_2fa{TAG}"]
+        assert "path=/ser2net/auth/totp;" in pending[1], pending
+        assert not any(k.startswith("ser2net_session") for k in cookies(h)), h
+        jar = f"{csrf}; ser2net_2fa{TAG}={pending[0]}"
+        st, _, page = a.call("GET", "/ser2net/auth/totp", headers={"Cookie": jar})
+        assert st == 200 and 'action="/ser2net/auth/totp"' in page, (st, page[:300])
+        st, h, _ = a.call("POST", "/ser2net/auth/totp", headers={"Cookie": jar},
+                          fields={"code": totp.code_at(secret, time.time()), "_csrf": CSRF})
+        assert st == 303 and header(h, "location") == "/ser2net/", (st, h)
+        got = cookies(h)
+        assert "path=/ser2net;" in got[f"ser2net_session{TAG}"][1], got
+        assert got[f"ser2net_csrf{TAG}"][0] != CSRF, "a new CSRF token after the sign-in"
+        assert "max-age=0" in got[f"ser2net_2fa{TAG}"][1].lower(), got
+        st, h, body = a.call("POST", "/ser2net/api/v1/mappings",
+                             headers={"Authorization": f"Bearer {token}"},
+                             json_body={"name": "made", "enabled": False,
+                                        "serial": {"port": "/dev/s2n-test-2"},
+                                        "network": {"bind_ip": "127.0.0.1", "port": 4012}})
+        made = json.loads(body)
+        assert st == 201 and header(h, "location") == f"/ser2net/api/v1/mappings/{made['id']}", h
+    print("under the public URL's path: the two-factor code step and a REST Location  OK")
+
+
 def test_no_root_relative_addresses() -> None:
     """Every address in a template goes under the request's path prefix ({{ base }})."""
     names = r'\b(?:href|src|action|formaction|hx-(?:get|post|put|patch|delete)|data-ws(?:-hex)?)'
@@ -376,6 +413,7 @@ def main() -> None:
     test_warning_and_notifications()
     test_origins_and_sso()
     test_base_path()
+    test_base_path_totp_and_rest()
     test_no_root_relative_addresses()
     print("\nPASS: public URL and path")
 

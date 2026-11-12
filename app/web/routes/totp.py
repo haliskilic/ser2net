@@ -16,19 +16,16 @@ only admin, and with ser2net stopped.
 """
 from __future__ import annotations
 
-import asyncio
-
-from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
 from ...config import ConfigError
 from ...i18n import _
-from .. import auth, totp
+from .. import auth, proxy, totp
 from ..auth import LoginRateLimiter
 from .common import Ctx, csrf_failed
 
-PENDING_COOKIE = "ser2net_2fa"
-PENDING_PATH = "/auth/totp"
+PENDING_COOKIE = "ser2net_2fa"   # its name for a request: auth.set_cookie (proxy.cookie_name)
+PENDING_PATH = "/auth/totp"      # also its Path (under the public URL's path)
 PENDING_TTL_S = 300          # from the password to the code
 ENROL_TTL_S = 1800           # from showing a new key to confirming it with a code
 CODE_ATTEMPTS = 5            # wrong codes for one account ...
@@ -43,13 +40,12 @@ def challenge(ctx: Ctx, request, user):
     """`user`'s password was right and their account takes a code too: no session yet,
     the pending cookie for the code step instead (/auth/totp)."""
     state = ctx.state
-    resp = RedirectResponse(PENDING_PATH, status_code=303)
-    resp.set_cookie(PENDING_COOKIE,
+    resp = proxy.redirect(request, PENDING_PATH)
+    auth.set_cookie(resp, request, state.config, PENDING_COOKIE,
                     auth.sign_payload(state.config.secret_key,
                                       {"p": "totp", "u": user.username, "v": user.pwd_version},
                                       ttl_seconds=PENDING_TTL_S),
-                    max_age=PENDING_TTL_S, httponly=True, samesite="lax",
-                    secure=state.config.admin_ui.tls_enabled, path=PENDING_PATH)
+                    max_age=PENDING_TTL_S, path=PENDING_PATH)
     state.log(f"login: password of {user.username} accepted from {ctx.client_ip(request)}; "
               "waiting for the two-factor code")
     return resp
@@ -75,7 +71,8 @@ def routes(ctx: Ctx) -> list:
         """The account whose password the pending cookie vouches for, while it still takes
         a code: same password version (no password change or sign-out since) and two-factor
         sign-in still on. None otherwise."""
-        data = auth.read_payload(state.config.secret_key, request.cookies.get(PENDING_COOKIE))
+        data = auth.read_payload(state.config.secret_key,
+                                 auth.cookie(request, PENDING_COOKIE, PENDING_PATH, legacy=False))
         if not data or data.get("p") != "totp" or not isinstance(data.get("u"), str):
             return None
         user = state.config.get_user(data["u"])
@@ -90,13 +87,13 @@ def routes(ctx: Ctx) -> list:
     def _start_again(request, status_code, error):
         resp = render(request, "login.html", status_code=status_code, error=error,
                       oidc_enabled=state.config.oidc.enabled)
-        resp.delete_cookie(PENDING_COOKIE, path=PENDING_PATH)
+        auth.delete_cookie(resp, request, state.config, PENDING_COOKIE, PENDING_PATH)
         return resp
 
     async def code_get(request):
         user = _pending_user(request)
         if user is None:
-            return RedirectResponse("/login", status_code=303)
+            return proxy.redirect(request, "/login")
         return _code_page(request, user)
 
     async def code_post(request):
@@ -125,12 +122,14 @@ def routes(ctx: Ctx) -> list:
                 "That code is not right. Enter the code your app shows now; if it never "
                 "works, the clock of this server or of your device is off."))
         state.rate_limiter.reset(ip)
+        state.name_limiter.reset(user.username)  # as a sign-in with the password alone
         code_limiter.reset(user.username)
         state.log(f"login: {user.username} ({user.role}, local, two-factor) from {ip}")
         ctx.audit(request, "login", f"{user.role}, local, two-factor", user=user.username)
-        resp = RedirectResponse("/", status_code=303)
+        resp = proxy.redirect(request, "/")
         set_session(resp, request, user)
-        resp.delete_cookie(PENDING_COOKIE, path=PENDING_PATH)
+        ctx.new_csrf_token(request)
+        auth.delete_cookie(resp, request, state.config, PENDING_COOKIE, PENDING_PATH)
         return resp
 
     # ---------------- setting it up / turning it off (Settings) ----------------
@@ -161,7 +160,9 @@ def routes(ctx: Ctx) -> list:
         return _page(request)
 
     async def _password_ok(me, password) -> bool:
-        return await asyncio.to_thread(auth.verify_password, str(password or ""), me.password_hash)
+        # (scrypt: with the sign-ins' limit on such work at a time, AppState.password_work)
+        return await state.password_work.run(auth.verify_password, str(password or ""),
+                                             me.password_hash)
 
     async def _store(request, me, secret: str):
         """Save `secret` ("" = off) for the signed-in account and end its other sessions

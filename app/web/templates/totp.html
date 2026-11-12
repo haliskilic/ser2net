@@ -2,7 +2,7 @@
 {% block title %}{{ _("Two-factor sign-in") }} — ser2net{% endblock %}
 {% block main %}
 <section class="panel panel-narrow">
-  <div class="panel-head"><h2>{{ _("Two-factor sign-in") }}</h2><a class="btn sm" href="/settings">{{ _("← Settings") }}</a></div>
+  <div class="panel-head"><h2>{{ _("Two-factor sign-in") }}</h2><a class="btn sm" href="{{ base }}/settings">{{ _("← Settings") }}</a></div>
   {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
   {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
   {% if refusal %}
@@ -10,7 +10,7 @@
   {% elif enabled %}
   <p><span class="tag">{{ _("enabled") }}</span> {{ _('Signing in as <span class="mono">%(user)s</span> takes your password and a code from your authenticator app.', user=me.username) }}</p>
   <h3 class="mt-sm">{{ _("Turn it off") }}</h3>
-  <form method="post" action="/settings/totp/disable" class="authform">
+  <form method="post" action="{{ base }}/settings/totp/disable" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label>{{ _("Current password") }} <input type="password" name="password" autocomplete="current-password" required></label>
     <label>{{ _("Code") }} <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
@@ -26,7 +26,7 @@
     </li>
     <li>{{ _("Enter the code the app shows, and your password:") }}</li>
   </ol>
-  <form method="post" action="/settings/totp/enable" class="authform">
+  <form method="post" action="{{ base }}/settings/totp/enable" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <input type="hidden" name="enrol" value="{{ enrol }}">
     <label>{{ _("Code") }} <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
