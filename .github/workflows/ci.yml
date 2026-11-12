@@ -90,6 +90,11 @@ jobs:
   audit:
     uses: ./.github/workflows/audit.yml
 
+  # Everything derived from the pins: the offline wheels and the build locks. The test
+  # legs skip these checks (SER2NET_SKIP_PIN_CHECKS), so a Dependabot bump fails here
+  # alone while the matrix shows whether the new versions work. On a failure, the
+  # refreshed files are attached (artifact "refreshed-pins") and the summary says how to
+  # apply them; on Dependabot's branches .github/workflows/refresh-pins.yml pushes them.
   vendor:
     name: offline wheels match requirements.txt
     runs-on: ubuntu-latest
@@ -101,6 +106,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python tests/test_vendor_wheels.py
+      - run: python tests/test_build_lock.py
       # every wheel is the file PyPI publishes (its sha256 from PyPI's JSON API), or the
       # byte-for-byte rebuild of the pure-Python repack from one
       - name: The wheels are PyPI's files
@@ -110,6 +116,34 @@ jobs:
       # them, and every dependency there is locked
       - name: The build locks match PyPI
         run: python tools/refresh_locks.py --verify
+      - name: The refreshed wheels and locks, as a patch (on failure)
+        if: failure()
+        run: |
+          python tools/refresh_wheels.py || true
+          python tools/refresh_locks.py --check || python tools/refresh_locks.py || true
+          git add --intent-to-add vendor/wheels
+          git diff --binary -- vendor/wheels requirements-lock.txt requirements-build.txt > refreshed-pins.patch
+          git diff --stat -- vendor/wheels requirements-lock.txt requirements-build.txt
+          {
+            echo "### The offline wheels or build locks don't match the pins"
+            echo
+            echo "Refresh them on the branch and commit the result:"
+            echo
+            echo '```'
+            echo 'python tools/refresh_wheels.py && python tools/refresh_locks.py'
+            echo 'git add vendor/wheels requirements-lock.txt requirements-build.txt'
+            echo 'git commit -m "deps: refresh the offline wheels and build locks"'
+            echo '```'
+            echo
+            echo 'or download the artifact **refreshed-pins** of this run and `git apply --binary refreshed-pins.patch`.'
+            echo 'On a Dependabot branch, Actions -> Refresh pinned files does it (and starts CI).'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: failure()
+        with:
+          name: refreshed-pins
+          path: refreshed-pins.patch
+          retention-days: 14
 
   ui:
     name: ui layout (Chromium)
@@ -162,6 +196,8 @@ jobs:
       # tests/_optional.py: where the optional packages are installed, a test that
       # needs a missing one fails instead of skipping
       SER2NET_OPTIONAL_TESTS: ${{ matrix.optional && '1' || '' }}
+      # the wheels / locks against the pins: the vendor job's (one red check on a bump)
+      SER2NET_SKIP_PIN_CHECKS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -217,6 +253,7 @@ jobs:
     env:
       SER2NET_BLACKHOLE_TESTS: "1"
       SER2NET_SERVICE_TESTS: "1"
+      SER2NET_SKIP_PIN_CHECKS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -245,6 +282,7 @@ jobs:
     env:
       SER2NET_BLACKHOLE_TESTS: "1"
       SER2NET_OPTIONAL_TESTS: "1"
+      SER2NET_SKIP_PIN_CHECKS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

@@ -9,6 +9,10 @@ Fix with: python tools/refresh_wheels.py   (CI also compares every wheel with Py
 python tools/refresh_wheels.py --verify)
 
 Run: python3 tests/test_vendor_wheels.py   (stdlib only)
+
+With SER2NET_SKIP_PIN_CHECKS=1 (CI's test matrix and coverage job) only the checks that
+don't depend on the repository's current wheels run: a pin bump then fails one CI job,
+"offline wheels match requirements.txt", instead of every leg.
 """
 import importlib.util
 import os
@@ -147,6 +151,9 @@ def test_bootstrap_checks_digests():
 if __name__ == "__main__":
     test_markers()
     test_wheel_tags()
+    if os.environ.get("SER2NET_SKIP_PIN_CHECKS") == "1":
+        print("SKIP: vendor/wheels against the pins (CI: job 'offline wheels match requirements.txt')")
+        raise SystemExit(0)
     test_vendor_matches_requirements()
     test_digests_recorded()
     test_repack_reproducible()

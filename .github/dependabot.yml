@@ -1,7 +1,9 @@
 # Dependabot: weekly version-update PRs (grouped, one per ecosystem) plus security
-# updates. A requirements.txt bump also needs the offline wheels refreshed — run
-# `python tools/refresh_wheels.py` on the Dependabot branch (CI job "offline wheels
-# match requirements.txt" stays red until then). See CONTRIBUTING.md.
+# updates. It updates requirements.txt and the hash locks (requirements-lock.txt,
+# requirements-build.txt) itself; the offline wheels follow through
+# .github/workflows/refresh-pins.yml, which pushes them onto the Dependabot branch and
+# re-runs CI (until then only the job "offline wheels match requirements.txt" is red).
+# See CONTRIBUTING.md.
 version: 2
 updates:
   - package-ecosystem: pip
