@@ -276,6 +276,7 @@ def test_by_path_names():
     from serial.tools import list_ports
     with mock.patch.object(list_ports, "comports", lambda: [port("/dev/ttyUSB1"),
                                                             port("/dev/ttyUSB0")]), \
+            mock.patch.object(portlist, "serial_devices", lambda: []), \
             mock.patch.object(portlist, "BY_ID_DIR", by_id), \
             mock.patch.object(portlist, "BY_PATH_DIR", by_path), \
             mock.patch.object(portdiag, "port_warnings", lambda dev: []), \
@@ -316,8 +317,63 @@ def test_rebinding_keeps_a_socket():
     print("form: a binding that has a USB socket (location) keeps one when bound again  OK")
 
 
+def test_serial_drivers_enumerated():
+    """Ports whose names pyserial 3.5 doesn't look for are found through the kernel's serial
+    drivers (/proc/tty/drivers), by the major and minor numbers each one lists."""
+    import stat as st_mod
+    d = tempfile.mkdtemp(prefix="s2n_drivers_")
+    nodes = {}  # path -> (major, minor), a stand-in for the device nodes
+
+    def node(name, major, minor):
+        path = os.path.join(d, name)
+        open(path, "w").close()
+        nodes[path] = (major, minor)
+        return path
+
+    mxc1, mxc2 = node("ttymxc1", 207, 17), node("ttymxc2", 207, 18)
+    node("ttymxc9", 207, 99)       # outside the driver's minors
+    node("ttymxcfoo", 5, 1)        # another driver's node with that prefix
+    ths0 = node("ttyTHS0", 238, 0)
+    pts = node("pts0", 136, 0)
+    drivers = os.path.join(d, "drivers")
+    with open(drivers, "w") as fh:
+        fh.write(f"/dev/tty             /dev/tty        5       0 system:/dev/tty\n"
+                 f"IMX-uart             {d}/ttymxc    207 16-23 serial\n"
+                 f"serial-tegra         {d}/ttyTHS    238 0 serial\n"
+                 f"pty_slave            {d}/pts      136 0-1048575 pty:slave\n"
+                 f"broken               {d}/ttyX     xx 0 serial\n")
+
+    def fake_stat(path):
+        if path not in nodes:
+            raise FileNotFoundError(path)
+        major, minor = nodes[path]
+        return SimpleNamespace(st_mode=st_mod.S_IFCHR | 0o660, st_rdev=os.makedev(major, minor))
+
+    found = portlist.serial_devices(drivers, fake_stat)
+    assert found == sorted([mxc1, mxc2, ths0]), found
+    assert pts not in found, "a pty driver is not a serial one"
+    assert portlist.serial_devices(os.path.join(d, "missing")) == []
+    if not sys.platform.startswith("linux"):
+        print("serial drivers: nodes found by major/minor (snapshot merge: Linux only)  OK")
+        return
+    from serial.tools import list_ports
+    uart = SimpleNamespace(device="/dev/ttyS0", name="ttyS0", description="ttyS0", hwid="",
+                           vid=None, pid=None, serial_number=None, manufacturer=None,
+                           product=None, location=None)
+    with mock.patch.object(list_ports, "comports", lambda: [uart]), \
+            mock.patch.object(portlist, "serial_devices", lambda: ["/dev/ttyS0", "/dev/ttymxc1"]), \
+            mock.patch.object(portdiag, "port_warnings", lambda dev: []), \
+            mock.patch.object(portdiag, "access", lambda dev: None):
+        ports = portlist.snapshot()
+    assert [p["device"] for p in ports] == ["/dev/ttyS0", "/dev/ttymxc1"], ports
+    assert ports[1]["vid"] is None and ports[1]["hardware"] is None
+    print("serial drivers: nodes of every serial driver found by major/minor and merged "
+          "with pyserial's list once each  OK")
+
+
 def main():
     test_sysfs_and_by_id()
+    test_serial_drivers_enumerated()
     test_form_binding()
     test_identity_flags()
     test_by_path_names()

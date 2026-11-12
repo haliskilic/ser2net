@@ -15,7 +15,9 @@ one older than a couple of seconds (PortWatcher.current), and at least every min
 from __future__ import annotations
 
 import asyncio
+import glob
 import os
+import stat
 import sys
 import time
 from typing import Any, Callable, Optional
@@ -25,6 +27,7 @@ from ..config import canonical_device
 BY_ID_DIR = "/dev/serial/by-id"
 BY_PATH_DIR = "/dev/serial/by-path"
 SYS_CLASS_TTY = "/sys/class/tty"
+PROC_TTY_DRIVERS = "/proc/tty/drivers"
 
 
 def _normalize(p: Any) -> dict[str, Any]:
@@ -109,22 +112,78 @@ def has_hardware(device: str, sys_class: str = "/sys/class/tty") -> Optional[boo
         return None
 
 
+def serial_devices(drivers: str = PROC_TTY_DRIVERS,
+                   stat_device: Callable[[str], Any] = os.stat) -> list[str]:
+    """Linux: the device nodes of the kernel's serial drivers, whatever they are called (the
+    drivers of type "serial" in /proc/tty/drivers, their nodes by the major and minor numbers
+    each one lists). pyserial 3.5 looks for seven name patterns only (not ttymxc / ttyLP on
+    i.MX, ttyTHS / ttyTCU on Jetson, ttyMSM, ttyPS / ttyUL on Xilinx, ttyMV, ttyAML, ttyMAX,
+    ttyMI, ttyGS, vendor USB drivers such as ttyCH343USB) and drops the ports on the platform
+    bus, which before Linux 6.5 are a Raspberry Pi's ttyS0 and other SoC UARTs. Its master
+    branch reads /proc/tty/drivers the same way: this can go once a pyserial release after
+    3.5 is pinned. Blocking (one small read, a glob and a stat per node)."""
+    try:
+        with open(drivers, encoding="ascii", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    found: set[str] = set()
+    for line in lines:
+        # name, node prefix, major, minors ("64-111" or one number), type
+        fields = line.split()
+        if len(fields) < 5 or fields[-1] != "serial" or not fields[1].startswith("/"):
+            continue
+        try:
+            major = int(fields[2])
+            low, _sep, high = fields[3].partition("-")
+            minors = range(int(low), int(high or low) + 1)
+        except ValueError:
+            continue
+        for node in glob.glob(glob.escape(fields[1]) + "*"):
+            try:
+                st = stat_device(node)
+            except OSError:
+                continue
+            if (stat.S_ISCHR(st.st_mode) and os.major(st.st_rdev) == major
+                    and os.minor(st.st_rdev) in minors):
+                found.add(node)
+    return sorted(found)
+
+
+def _ports() -> list[Any]:
+    """pyserial's port list, and on Linux the serial ports it misses (serial_devices), with
+    the same details (its sysfs reader)."""
+    from serial.tools import list_ports
+
+    listed = list(list_ports.comports())
+    if sys.platform.startswith("linux"):
+        from serial.tools.list_ports_linux import SysFS
+
+        have = {os.path.realpath(p.device) for p in listed}
+        for node in serial_devices():
+            real = os.path.realpath(node)
+            if real not in have:
+                have.add(real)
+                listed.append(SysFS(node))
+    return listed
+
+
 def snapshot() -> list[dict[str, Any]]:
     """Synchronous one-shot enumeration (blocking; call via executor in async code).
     Each port also gets ``by_id`` and ``by_path`` (its Linux udev names: by serial number,
     by USB socket; else None), ``same_identity`` and ``ambiguous`` (_identities),
     ``hardware`` (see has_hardware), ``warnings`` (what else may use it:
     portdiag.port_warnings) and ``access`` (whether this process may open it; None: can't
-    tell, Windows)."""
-    from serial.tools import list_ports
-
+    tell, Windows). On Linux it also has the serial ports pyserial 3.5 misses
+    (serial_devices); the kernel's placeholders among them are hardware False, as pyserial's
+    own."""
     from . import portdiag
 
     linux = sys.platform.startswith("linux")
     by_id = _links(BY_ID_DIR) if linux else {}
     by_path = _links(BY_PATH_DIR) if linux else {}
     ports = []
-    for p in list_ports.comports():
+    for p in _ports():
         d = _normalize(p)
         real = os.path.realpath(d["device"])
         d["by_id"] = by_id.get(real)
