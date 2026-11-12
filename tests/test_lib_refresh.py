@@ -320,14 +320,21 @@ def test_ser2net_entry_points():
         assert "WARNING: not refreshing ./lib: (test)" in standalone.notes, "to all.log"
 
         # --service: connect first (winservice.run), load the dependencies after that,
-        # in the service's main; a stop before then is kept
-        def fake_run(name, main, stop):
-            calls.append(("connected", name))
+        # in the service's main; a stop before then is kept. The SCM's "running" callback
+        # (on_ready) reaches runtime.when_ready once the runtime is loaded; stderr goes to
+        # the data directory's service.log
+        def ready():
+            pass
+
+        def fake_run(name, main, stop, log_path=None, on_ready=None):
+            calls.append(("connected", name, log_path))
+            on_ready(ready)
             stop()
             return main()
 
-        def fake_service_main(path):
-            calls.append(("serve", path, runtime._shutdown_requested.is_set()))
+        def fake_service_main(path, name="ser2net"):
+            calls.append(("serve", path, name, runtime._shutdown_requested.is_set(),
+                          ready in runtime._ready_hooks))
             return 0
 
         # dependencies from an old lib/ that couldn't be refreshed and lack what this
@@ -358,9 +365,10 @@ def test_ser2net_entry_points():
         calls.clear()
         winservice.run = fake_run
         runtime.service_main = fake_service_main
-        assert cli.main(["--service", "--data-dir", d]) == 0
-        assert calls == [("connected", "ser2net"), ("ensure", True),
-                         ("serve", os.path.join(d, "config.json"), True)], calls
+        assert cli.main(["--service", "--service-name", "plant-2", "--data-dir", d]) == 0
+        assert calls == [("connected", "plant-2", os.path.join(d, winservice.SERVICE_LOG)),
+                         ("ensure", True),
+                         ("serve", os.path.join(d, "config.json"), "plant-2", True, True)], calls
     finally:
         if saved[0] is None:
             sys.modules.pop("bootstrap", None)
@@ -368,6 +376,7 @@ def test_ser2net_entry_points():
             sys.modules["bootstrap"] = saved[0]
         winservice.run, runtime.service_main = saved[1], saved[2]
         runtime._shutdown_requested.clear()
+        runtime._ready_hooks.clear()
         standalone.notes.clear()
         shutil.rmtree(d, ignore_errors=True)
     print("ser2net.py: a start refreshes, --about doesn't; warnings reach the log; an old "
