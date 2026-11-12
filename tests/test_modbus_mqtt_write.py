@@ -70,6 +70,7 @@ DISCRETE = {5: True}
 SEEN = []   # every request PDU the fake slave got
 ON_REQUEST = []  # callables the fake slave calls with each request PDU before it answers
 HOLD_WRITES = []  # an asyncio.Event here: the fake slave answers a write once it is set
+WRITE_TAKES = [0.0]  # seconds the fake slave takes to carry out a write (then answers)
 
 
 def free_port():
@@ -122,6 +123,8 @@ async def fake_slave(reader, writer):
                     hook(pdu)
                 if HOLD_WRITES and pdu[0] in (5, 6, 15, 16):
                     await HOLD_WRITES[0].wait()
+                if WRITE_TAKES[0] and pdu[0] in (5, 6, 15, 16):
+                    await asyncio.sleep(WRITE_TAKES[0])
                 reply = answer(pdu)
                 if unit != modbus.BROADCAST:  # a broadcast is carried out, never answered
                     writer.write(modbus.rtu_wrap(unit, reply))
@@ -736,11 +739,14 @@ async def test_write_queue(slave_port):
         print("plain: writes one at a time in arrival order; a refused command's answer "
               "keeps its place  OK")
 
-        # one write on the bus (held), 32 waiting, then two more: busy
+        # one write on the bus (held), 32 waiting, then two more: busy. Each write then
+        # takes 20 ms on the bus, so the 33 take longer than a few poll intervals (0.1 s)
+        # however fast the rest of a transaction is (Windows: a 1 ms wait may end at once)
         hold.clear()
         fake.published.clear()
         SEEN.clear()
         asked.clear()
+        WRITE_TAKES[0] = 0.02
         for n in range(1 + modbus_gateway.WRITE_QUEUE_MAX + 2):
             r._mqtt.handle_message("plant/a/setpoint/set", str(100 + n).encode())
             if n == 0:
@@ -756,6 +762,7 @@ async def test_write_queue(slave_port):
                                              for n in range(1 + modbus_gateway.WRITE_QUEUE_MAX)]
         polled = [p for p in SEEN[writes[0]:writes[-1]] if p[0] in (1, 2, 4)]
         assert polled, "the poll did not get the bus while the writes were made"
+        WRITE_TAKES[0] = 0.0
         print("plain: 32 writes wait at most (beyond: error: busy, logged once); the poll "
               "takes turns with them  OK")
 
@@ -783,6 +790,7 @@ async def test_write_queue(slave_port):
               "written  OK")
     finally:
         HOLD_WRITES.clear()
+        WRITE_TAKES[0] = 0.0
         ON_REQUEST.remove(asked.append)
         r._stop.set()
         poll.cancel()
