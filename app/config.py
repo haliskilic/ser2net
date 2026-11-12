@@ -244,7 +244,9 @@ class FieldNote:
                   warning (`why` in English for the log, `warning` in the language of the
                   request that sent it);
       switch_text - a protective switch (_PROTECTIVE) given as text: loading reads it as
-                  before 2.9.0 (`used`: any text but "" is on), an edit refuses it."""
+                  before 2.9.0 (`used`: any text but "" is on), an edit refuses it.
+    A switch that is on only for JSON true (_ONLY_TRUE) given anything else is invalid
+    (`used`: false)."""
     path: str
     kind: str
     value: Any = None
@@ -303,6 +305,11 @@ _FALSE_WORDS = ("false", "0", "off", "no", "")
 # never weakens a hand-edited config whose "false" in quotes kept it on; an edit refuses
 # text in it, so a client sending "false" learns it was not taken (_read_fields)
 _PROTECTIVE = {"protective": True}
+# Field metadata of a switch that is on only for JSON true: what this release added and
+# checked that way from the start (`is True`: a listener that takes both families, MQTT
+# writes to the device, HSTS through a proxy ...). Any other value reads as false, with a
+# note, and an edit refuses it, so no text or number turns one on
+_ONLY_TRUE = {"only_true": True}
 
 
 def _text_number(text: str) -> Any:
@@ -421,6 +428,10 @@ def _read_fields(cls, d: dict[str, Any], notes: list[FieldNote], path: str = "",
         value, hint = d[f.name], hints[f.name]
         if value is None and hint in (int, float):  # a number left unset
             out[f.name] = _field_default(f)
+            continue
+        if f.metadata.get("only_true") and value is not None and not isinstance(value, bool):
+            notes.append(FieldNote(path + f.name, "invalid", value, False, "bool"))
+            out[f.name] = False
             continue
         if isinstance(value, str) and f.metadata.get("protective"):
             used = bool(value)
@@ -833,7 +844,7 @@ class NetworkSettings:
     # interfaces (IPv4 + IPv6)". It means nothing with another address (edits refuse
     # that); a release without it listens on the bind IP alone.
     bind_ip: str = "0.0.0.0"
-    dual_stack: bool = False
+    dual_stack: bool = field(default=False, metadata=_ONLY_TRUE)
     port: int = 4001
     # client mode: the connect-out target (UDP does not use these: see udp_peer_host)
     remote_host: str = ""
@@ -851,7 +862,7 @@ class NetworkSettings:
     # before anyone has), each "IP:port" ("[IPv6]:port"): e.g. an NMEA 0183 feed to a LAN's
     # broadcast address. Sending to a broadcast address needs udp_broadcast (SO_BROADCAST).
     udp_targets: list[str] = field(default_factory=list)
-    udp_broadcast: bool = False
+    udp_broadcast: bool = field(default=False, metadata=_ONLY_TRUE)
     max_connections: int = 1
     kick_old_user: bool = False
     # TCP (raw / telnet / rfc2217, server and connect-out): while the serial port is not
@@ -861,7 +872,7 @@ class NetworkSettings:
     # Off (default): clients stay connected and are taken, and what they send for the
     # device meanwhile is dropped (counted in bytes_dropped); RFC 2217 sessions follow a
     # reopened port.
-    disconnect_without_device: bool = False
+    disconnect_without_device: bool = field(default=False, metadata=_ONLY_TRUE)
     allowed_client_ips: list[str] = field(default_factory=list)
     # High-priority clients: when the port is at capacity, a connection from one of
     # these IPs/CIDRs is admitted by kicking an existing client (oldest non-priority
@@ -1143,7 +1154,7 @@ class MappingOptions:
     # poll_with_clients.
     poll_string: str = ""
     poll_interval_s: float = 0.0
-    poll_with_clients: bool = False
+    poll_with_clients: bool = field(default=False, metadata=_ONLY_TRUE)
     # No-data alarm (notify.py: no_data / data_back, the dashboard, /metrics): the serial
     # port is open but the device has sent nothing for this many seconds (0 = off,
     # else NO_DATA_MIN_S..NO_DATA_MAX_S); with no_data_reply_only, only while something
@@ -1232,7 +1243,7 @@ class MqttSettings:
     # serial port as it is, and answer on <base_topic>/tx/result ("ok" / "error: ...").
     # Read-only refuses them; a retained one (the broker's copy, sent again after each
     # (re)connect) is ignored. Off: MQTT only publishes.
-    tx_enabled: bool = False
+    tx_enabled: bool = field(default=False, metadata=_ONLY_TRUE)
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -1741,7 +1752,7 @@ class AdminUI:
     # default. proxy_hsts: HSTS (hsts_max_age) also on HTTPS requests through a proxy.
     public_url: str = ""
     trusted_proxies: list[str] = field(default_factory=list)
-    proxy_hsts: bool = False
+    proxy_hsts: bool = field(default=False, metadata=_ONLY_TRUE)
     # A name for this instance (Settings -> Admin interface; SER2NET_NODE_NAME for one run
     # instead), for instances that share a host name: notifications, the cluster's fleet
     # view, the browser tab and the top bar use it. '' = the host name, as before.
@@ -2320,8 +2331,8 @@ class NotificationSettings:
     # mask_personal_data, an address only as its network (IPv4 /24, IPv6 /48) and no
     # account name. email_separately: each recipient gets a message of their own, so the
     # recipients don't see each other's addresses. Both off by default (as up to 2.8).
-    mask_personal_data: bool = False
-    email_separately: bool = False
+    mask_personal_data: bool = field(default=False, metadata=_ONLY_TRUE)
+    email_separately: bool = field(default=False, metadata=_ONLY_TRUE)
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
