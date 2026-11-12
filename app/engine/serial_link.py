@@ -220,7 +220,7 @@ class SerialLink:
 
     async def _failed(self, e: Exception, was_open: bool) -> None:
         """The port could not be opened, or went away (``was_open``): say why in the status
-        and the log (FailureLog), and what that means (a new error only)."""
+        and the log (FailureLog), and what that means."""
         st = self.status
         st.last_error = str(e)
         if was_open:
@@ -231,8 +231,10 @@ class SerialLink:
             st.open_failures += 1
             st.state = "device-missing" if portdiag.missing(e) else "reconnecting"
             self._lost_rdev = None
-        if self._failures.failed(str(e)):
-            st.hint = None if was_open else await asyncio.to_thread(explain, e, self.settings)
+        self._failures.failed(str(e))
+        # (worked out at every failed open: the same error can come to mean something else,
+        # a user just added to the device's group needs a restart)
+        st.hint = None if was_open else await asyncio.to_thread(explain, e, self.settings)
 
     def attach(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                serial: Any = None, device: str = "") -> None:
@@ -249,13 +251,13 @@ class SerialLink:
                       "another program may be using it (a login prompt on it?)")
         self._lost_rdev = None
         notes = serial_io.open_notes(serial)
-        if self.status.hangups:
-            notes.append(portdiag.Note("hangups", (self.status.hangups,)))
+        hangups = self.status.hangups
+        hung_up = (portdiag.Note("hangups", (hangups,)),) if hangups else ()
         self.status.device = device
         self.status.devices = (device,) if device else ()
         self.status.last_error = ""
         self.status.hint = None
-        self.status.warnings = tuple(notes)
+        self.status.warnings = tuple(notes) + hung_up
         self.status.state = "running"
         self.down = False
         self.ready.set()
