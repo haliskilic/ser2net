@@ -60,7 +60,7 @@ from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
 from .protocols.base import ProtocolError, ProtocolSession
-from .serial_link import Backoff, NoteLog, SerialLink, close_stream
+from .serial_link import Backoff, FailureLog, NoteLog, SerialLink, close_stream, fmt_duration
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -130,17 +130,6 @@ def _iter_leaf_exceptions(eg: BaseExceptionGroup):
             yield from _iter_leaf_exceptions(exc)
         else:
             yield exc
-
-
-def fmt_duration(secs: float) -> str:
-    secs = max(0, int(secs))
-    h, rem = divmod(secs, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}h {m:02d}m"
-    if m:
-        return f"{m}m {s:02d}s"
-    return f"{s}s"
 
 
 def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
@@ -312,7 +301,9 @@ class RunnerStatus:
     bytes_out: int = 0      # handed to the serial device (from clients, datagrams, the console)
     bytes_dropped: int = 0  # sent for the device but not written: the port was not open,
     #                         or a UDP datagram found UDP_BACKLOG_MAX bytes waiting
-    reconnects: int = 0
+    reconnects: int = 0     # serial port: attempts to open it again (failed opens + losses)
+    open_failures: int = 0  # of which: opens that failed
+    device_lost: int = 0    # times the open port went away
     dropped_clients: int = 0   # clients dropped because their output queue overflowed
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
     last_error: str = ""
@@ -365,6 +356,8 @@ class RunnerStatus:
             "bytes_out": self.bytes_out,
             "bytes_dropped": self.bytes_dropped,
             "reconnects": self.reconnects,
+            "open_failures": self.open_failures,
+            "device_lost": self.device_lost,
             "dropped_clients": self.dropped_clients,
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
@@ -994,6 +987,7 @@ class MappingRunner:
         net = self.mapping.network
         target = f"{net.remote_host}:{net.remote_port}"
         backoff = Backoff()
+        failures = FailureLog(self._log, "connect-out failed")
         while not self._stop.is_set():
             # an RFC 2217 session drives the serial port: connect out only while it is open
             if net.protocol == "rfc2217" and not await self._serial_open():
@@ -1005,7 +999,7 @@ class MappingRunner:
                 client = _ClientConn(self, reader, writer, net.remote_host, net.remote_port)
                 self._clients.add(client)
                 self._refresh_clients()
-                self._log(f"connected out to {target}")
+                self._log(f"connected out to {target}{failures.recovered()}")
                 if st.link_error and st.last_error == st.link_error:
                     st.last_error = ""  # (the link's error, not one of the serial side)
                 st.set_link("up")
@@ -1028,7 +1022,7 @@ class MappingRunner:
                 st.last_error = str(e)
                 st.connect_failures += 1
                 st.set_link("down", str(e))
-                self._log(f"connect-out failed: {e}")
+                failures.failed(str(e))
             if self._stop.is_set():
                 break
             if not await backoff.wait(self._stop):
@@ -1043,10 +1037,13 @@ class MappingRunner:
         every few seconds)."""
         backoff = Backoff()
         notes = NoteLog(self._log)
+        failures = FailureLog(self._log, "serial bridge error")
+        st = self.status
         sides = (self.mapping.serial, self.mapping.serial_b)
         first = 0  # the side opened first: 0 = A, 1 = B
         while not self._stop.is_set():
             opened: list = [None, None]  # (reader, writer, serial, device) of each side
+            was_open = False
             try:
                 for side in (first, 1 - first):
                     try:
@@ -1054,6 +1051,7 @@ class MappingRunner:
                     except Exception:
                         first = side
                         raise
+                was_open = True
                 (ra, wa, sa, da), (rb, wb, sb, db) = opened
                 self.status.device = f"{da} <-> {db}"
                 self.status.devices = (da, db)
@@ -1063,20 +1061,27 @@ class MappingRunner:
                     for side, ser in (("A", sa), ("B", sb)) for note in serial_io.open_notes(ser))
                 self.status.state = "running"
                 backoff.reset()
-                self._log(f"serial bridge open: {da} <-> {db}")
+                self._log(f"serial bridge open: {da} <-> {db}{failures.recovered()}")
                 notes(self.status.warnings)
                 async with TaskGroup() as tg:
                     tg.create_task(self._pump_serial_pair(ra, wb, "A>B"))
                     tg.create_task(self._pump_serial_pair(rb, wa, "B>A"))
+                if not self._stop.is_set():  # (a pump ends by raising why)
+                    raise ConnectionError("serial EOF / device removed")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                # TaskGroup raises an ExceptionGroup; flatten its messages
-                inner = getattr(e, "exceptions", None)
-                self.status.last_error = ("; ".join(str(x) for x in inner)
-                                          if inner else str(e))
-                self.status.state = "reconnecting" if backoff.attempt else "device-missing"
-                self._log(f"serial bridge error: {self.status.last_error}")
+                if not self._stop.is_set():
+                    # TaskGroup raises an ExceptionGroup; flatten its messages
+                    inner = getattr(e, "exceptions", None)
+                    st.last_error = "; ".join(str(x) for x in inner) if inner else str(e)
+                    if was_open:
+                        st.device_lost += 1
+                        st.state = "reconnecting"
+                    else:
+                        st.open_failures += 1
+                        st.state = "device-missing" if portdiag.missing(e) else "reconnecting"
+                    failures.failed(st.last_error)
             finally:
                 self.status.warnings = ()
                 await asyncio.gather(*(close_stream(port[1], self._log)
@@ -1084,7 +1089,6 @@ class MappingRunner:
             if self._stop.is_set():
                 break
             self.status.reconnects += 1
-            self.status.state = "reconnecting"
             if not await backoff.wait(self._stop):
                 break
 

@@ -119,6 +119,15 @@ düzenlemeye gerek yok.
   (+ seri no) ile bağlanır; çıkarılıp takılınca `ttyUSB0`→`ttyUSB1` ya da COM numarası
   değişse de eşleme doğru cihazı açar.
 - **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
+- **Eksik ya da meşgul seri cihaz:** cihaz yokken (çıkarılmış, henüz tanınmamış) eşleme
+  `cihaz yok`, açık port az önce kaybolduğunda ya da başka bir nedenle açılamadığında
+  `yeniden bağlanıyor` gösterir; birkaç saniyede bir (en fazla yaklaşık 10 sn arayla) yeniden
+  denenir. Log, her denemede bir satır yazmak yerine ilk hatayı ve hatanın her değişmesini,
+  aynı hatayı ise yalnızca 15 dakikada bir, ne zamandan beri kaç denemenin başarısız
+  olduğuyla birlikte yazar; port yeniden açılınca ne kadar süre kapalı kaldığını söyler
+  (başarısız olmayı sürdüren dışa bağlantılar için de aynısı). `/api/v1/status`, açılamayan
+  denemeleri (`open_failures`) ve açık portun kaybedilmesini (`device_lost`) ayrı sayar;
+  `reconnects` eskisi gibi ikisini birden sayar.
 - **Dinleyiciler kendiliğinden açılır:** başlarken adresini kullanamayan bir eşleme
   (açılışta IP henüz atanmamış ya da port hâlâ dolu) `error` durumunda "N sn sonra yeniden
   denenecek" gösterir ve çalışana kadar en fazla 30 sn arayla yeniden başlatılır (Durdur
@@ -344,7 +353,9 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
-  çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
+  çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar
+  (bunlardan seri portun açılamadığı denemeler, `ser2net_mapping_open_failures_total`, ve
+  açık portun kaybedilmesi, `ser2net_mapping_device_lost_total`) ve
   düşürülen yavaş istemciler (dışa bağlanan eşlemede bağlantının açık olup olmadığı,
   `ser2net_mapping_link_up`, ve başarısız bağlanma denemeleri,
   `ser2net_mapping_connect_failures_total`); süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,

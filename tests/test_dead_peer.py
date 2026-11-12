@@ -582,9 +582,11 @@ async def e2e_connect_timeout_on_silent_host(Blackhole):
         await runner.start()
         try:
             failures = lambda: [ln for ln in logs if "connect-out failed" in ln]  # noqa: E731
-            assert await _wait_for(lambda: len(failures()) >= 2, 6), \
+            assert await _wait_for(lambda: runner.status.connect_failures >= 2, 6), \
                 f"no timed-out connect attempts: {logs}"
-            assert all("timed out after 1s" in ln for ln in failures()), failures()
+            # the same error again is not logged at every attempt (FailureLog)
+            assert failures() == ["connect-out failed: timed out after 1s"], failures()
+            assert runner.status.link_error == "timed out after 1s", runner.status
         finally:
             await runner.stop()
     print("client (connect-out): SYN to a silent host abandoned after 1s and retried  OK")

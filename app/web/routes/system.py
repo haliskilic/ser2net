@@ -53,6 +53,9 @@ def routes(ctx: Ctx) -> list:
                 f"ser2net_mapping_bytes_out_total{{{lbl}}} {st.get('bytes_out', 0)}",
                 f"ser2net_mapping_bytes_dropped_total{{{lbl}}} {st.get('bytes_dropped', 0)}",
                 f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
+                # of those: failed opens of the serial port, and losses of the open port
+                f"ser2net_mapping_open_failures_total{{{lbl}}} {st.get('open_failures', 0)}",
+                f"ser2net_mapping_device_lost_total{{{lbl}}} {st.get('device_lost', 0)}",
                 f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
             ]
             if m.kind == "net" and m.network.mode == "client":

@@ -113,6 +113,15 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
   COM number still opens the right device.
+- **A missing or busy serial device:** the mapping shows `device missing` while the
+  device isn't there (unplugged, not enumerated yet) and `reconnecting` right after an open
+  port went away or when it can't be opened for another reason; it is tried again every
+  few seconds (at most about 10 s apart). The log says the first failure and each change
+  of the error, then the same error only every 15 minutes with how many attempts failed
+  since when, and once the port opens again how long it was down, instead of a line at
+  every attempt (the same for a connect-out that keeps failing). `/api/v1/status` counts
+  failed opens (`open_failures`) and losses of the open port (`device_lost`) apart;
+  `reconnects` counts both, as before.
 - **Listeners come up on their own:** a mapping whose address can't be used when it
   starts (its IP is not assigned yet at boot, or the port is still taken) shows `error`
   with "retrying in N s" and is started again, at most 30 s apart, until it works (a Stop
@@ -335,7 +344,9 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
-  its clients, bytes in / out / dropped, reconnects and dropped slow clients (a connect-out
+  its clients, bytes in / out / dropped, reconnects (of those, failed opens of the serial
+  port, `ser2net_mapping_open_failures_total`, and losses of the open port,
+  `ser2net_mapping_device_lost_total`) and dropped slow clients (a connect-out
   mapping also whether its link is up, `ser2net_mapping_link_up`, and its failed connect
   attempts, `ser2net_mapping_connect_failures_total`); for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),

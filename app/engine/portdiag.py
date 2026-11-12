@@ -7,8 +7,12 @@ a task a web request started inherits that request's language.
 """
 from __future__ import annotations
 
+import errno
 from dataclasses import dataclass
 from typing import Any, Callable
+
+# an open that failed because there is no such device (unplugged, not enumerated yet)
+_MISSING_ERRNOS = frozenset({errno.ENOENT, errno.ENXIO, errno.ENODEV})
 
 
 def _english(message: str) -> str:
@@ -28,6 +32,16 @@ class Note:
 
 def reason(e: BaseException) -> str:
     return str(e) or type(e).__name__
+
+
+def missing(e: BaseException) -> bool:
+    """Whether opening a port failed because there is no such device: what the state
+    device-missing stands for. pyserial keeps the errno of a failed open on POSIX; on
+    Windows its message names the error (could not open port 'COM9':
+    FileNotFoundError(2, 'The system cannot find the file specified.', None, 2))."""
+    if getattr(e, "errno", None) in _MISSING_ERRNOS:
+        return True
+    return "FileNotFoundError(" in str(e)
 
 
 # what each kind of Note says; `_` is the translate function (test_i18n finds the texts)
