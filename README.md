@@ -716,7 +716,10 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
-  yollar dosya adına indirgenir ve açılışta log'a yazılır.
+  yollar dosya adına indirgenir ve açılışta log'a yazılır. Yazılamayan bir trace (klasör
+  silinmiş, disk dolu, dosya tanıtıcısı kalmamış) durmak yerine bekler: panodaki satır ve
+  Trace paneli nedenini gösterir, ser2net birkaç saniyede bir yeniden dener (klasörü de
+  yeniden oluşturur) ve trace sonra kaç baytın eksik olduğunu yazar.
 - `tls/` — self-signed üretilirse sertifika/anahtar.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.

@@ -5,6 +5,9 @@
     <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
   </div>
 </div>
+{% if tracing and trace_error %}
+<div class="banner warn">{{ _("Not recording now: %(error)s. ser2net tries again every few seconds; the trace then says how many bytes are missing.", error=trace_error) }}</div>
+{% endif %}
 {% if tracing %}
 <p class="muted mb-sm">{{ _('Recording to <span class="mono">traces/%(file)s</span> in the data folder (%(mb)s MB per file, %(keep)s older file(s) kept).', file=current|softbreak, mb=max_mb, keep=keep) }}{% if hexdump %} {{ _("Hex dump.") }}{% endif %}</p>
 {% else %}

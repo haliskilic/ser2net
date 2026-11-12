@@ -886,5 +886,7 @@
   "Mapping #{0} ({1}): the file has no {2} (an export of an older version?). Merged into a mapping of the same name, they keep their current values; otherwise they take the defaults.": "Eşleme #{0} ({1}): dosyada {2} yok (daha eski bir sürümün dışa aktarımı mı?). Aynı adlı bir eşlemeyle birleştirilirse bunlar mevcut değerlerini korur, yoksa varsayılanları alır.",
   "This mapping no longer exists (it may have been deleted in the meantime). The form shows your values as a new mapping: save it to add the mapping again, or Cancel.": "Bu eşleme artık yok (bu arada silinmiş olabilir). Form, girdiğin değerleri yeni bir eşleme olarak gösteriyor: eşlemeyi yeniden eklemek için kaydet ya da İptal'e bas.",
   "This mapping was changed after this form was opened (by someone else, in another tab, or by a start or stop). The form shows your values: save again to replace the changes, or Cancel to keep them.": "Bu eşleme, bu form açıldıktan sonra değişti (başka biri, başka bir sekme ya da bir başlatma veya durdurma tarafından). Form senin değerlerini gösteriyor: o değişikliklerin yerine bunları yazmak için yeniden kaydet, korumak için İptal'e bas.",
-  "Saved on {0} (version {1}), but it did not keep: {2}.": "{0} düğümüne (sürüm {1}) kaydedildi, ama şunları saklamadı: {2}."
+  "Saved on {0} (version {1}), but it did not keep: {2}.": "{0} düğümüne (sürüm {1}) kaydedildi, ama şunları saklamadı: {2}.",
+  "Not recording now: %(error)s. ser2net tries again every few seconds; the trace then says how many bytes are missing.": "Şu an kaydedilmiyor: %(error)s. ser2net birkaç saniyede bir yeniden deniyor; trace sonra kaç baytın eksik olduğunu yazar.",
+  "trace not written": "trace yazılmıyor"
 }
