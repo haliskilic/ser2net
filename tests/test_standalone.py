@@ -890,8 +890,13 @@ def test_binary():
         s.request("/lang/en?next=/settings")
         print(f"{where}: TR / EN -> the Settings page is in Turkish (translations bundled)  OK")
 
-        st, _, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
-        assert "Self-signed certificate generated" in page, \
+        st, headers, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
+        # done: 303 to the Settings page (Post/Redirect/Get), which says so, as a browser
+        # follows it
+        where_to = headers.get("Location", "") if headers else ""
+        assert st == 303 and where_to.startswith("/settings"), f"generate: {st} {where_to!r}"
+        st, _, page = s.request(where_to.split("#", 1)[0])
+        assert st == 200 and "Self-signed certificate generated" in page, \
             re.sub(r"\s+", " ", page[page.find("banner"):][:300])
         for f in ("cert.pem", "key.pem"):
             assert os.path.getsize(os.path.join(data, "tls", f)) > 0, f
