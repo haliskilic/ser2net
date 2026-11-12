@@ -11,12 +11,11 @@ installed or fails to import, publishing is disabled with a log line saying whic
 The paho client runs its own network thread (loop_start) and ``publish()`` is
 thread-safe, so feeding it from the asyncio serial loop never blocks the loop; a mapping's
 stop closes it with aclose(), which waits for that thread off the loop (at most
-MQTT_CLOSE_TIMEOUT_S). Its
-connection to the broker is logged when it changes (connecting, connected, refused, can't
-connect, lost; each reason once until it changes) and kept in ``MqttPublisher.state``
-(the mapping status' ``mqtt``). That
-thread waits for its sockets with select.select(), which refuses descriptors at or above
-FD_SETSIZE (1024); on POSIX the client waits with poll() instead (``PollSelect``).
+MQTT_CLOSE_TIMEOUT_S). The thread waits for its sockets with select.select(), which
+refuses descriptors at or above FD_SETSIZE (1024); on POSIX the client waits with poll()
+instead (``PollSelect``). The connection to the broker is logged when it changes
+(connecting, connected, refused, can't connect, lost; each reason once until it changes)
+and kept in ``MqttPublisher.state`` (the mapping status' ``mqtt``).
 """
 from __future__ import annotations
 
@@ -52,12 +51,11 @@ _QUEUE_SIZE = 15  # paho's MQTT_ERR_QUEUE_SIZE
 class MqttPublisher:
     """``will`` replaces the retained <base>/status "offline" Last-Will and ``birth``
     the "online" message, sent after every connect (Sparkplug B sends NDEATH / NBIRTH
-    instead); a callable
-    ``will`` is asked again after every disconnect (in paho's thread), so the next
-    connection carries a fresh one (the Sparkplug bdSeq). ``on_connect``
-    runs on the event loop after every (re)connect; ``subscriptions`` maps topics to
-    handlers ``(topic, payload)`` that also run on the event loop — paho's network
-    thread never touches the bridges directly.
+    instead); a callable ``will`` is asked again after every disconnect (in paho's
+    thread), so the next connection carries a fresh one (the Sparkplug bdSeq).
+    ``on_connect`` runs on the event loop after every (re)connect; ``subscriptions`` maps
+    topics to handlers ``(topic, payload)`` that also run on the event loop — paho's
+    network thread never touches the bridges directly.
 
     The subscriptions are command topics, and a command is acted on once, when it arrives:
     the broker also sends the last retained message of a topic on every (re)subscribe
@@ -311,7 +309,7 @@ class MqttPublisher:
 
     def handle_connect(self) -> None:
         """After every (re)connect: the retained "online" birth, the subscriptions again,
-        then the owner's callback."""
+        the owner's callback, then the polled values kept while not connected."""
         if not self._connected or self._client is None:  # a late callback after close()
             return
         self._sessions += 1
