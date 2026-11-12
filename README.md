@@ -815,7 +815,8 @@ uymayan bir değer `400` ve ayarın yoluyla reddedilir (`serial.baudrate: "fast"
 number.`). Koruyucu bir ayar (`read_only`, `tls`) yalnızca JSON `true` / `false` alır: metin
 reddedilir (`network.read_only: use true or false (JSON booleans), not a string.`), böyle bir
 dosyanın içe aktarılması da. Elle düzenlenmiş bir `config.json`'da koruyucu bir ayardaki
-(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`) metin,
+(`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`,
+MQTT'nin `tls_check_hostname`'i) metin,
 2.9.0 öncesindeki gibi boş değilse onu açık tutar ve açılışta not düşülür. Yalnızca JSON `true` ile bir şeyi açan
 ayarlar (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
 MQTT'nin `tx_enabled`'ı, `proxy_hsts`, `email_separately`) de metni
