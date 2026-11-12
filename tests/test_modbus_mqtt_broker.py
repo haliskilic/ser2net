@@ -202,7 +202,9 @@ async def plain_checks(broker):
                            and broker.payloads("plant/a/pump/set/result") == [b"ok", b"ok"])
         print("plain: link dropped -> Will 'offline', reconnect -> 'online', subscriptions "
               "renewed, the retained /set not written again, a live one is  OK")
-    assert broker.topics(status)[-1] == (b"offline", 0, True)
+    # (QoS 0: the stop hands it to the socket; the broker's thread records it a moment later)
+    assert await until(lambda: broker.topics(status)[-1] == (b"offline", 0, True)), \
+        broker.topics(status)
     print("plain: stop -> retained 'offline'  OK")
 
 
@@ -318,7 +320,9 @@ async def sparkplug_checks(broker):
         assert await until(lambda: [bdseq(p) for p in decoded(broker, "NBIRTH")] == [0, 1, 1])
         print("sparkplug: link dropped -> the broker publishes the NDEATH Will (bdSeq 0); "
               "the next session's Will and NBIRTH carry bdSeq 1; an NCMD rebirth  OK")
-    assert [bdseq(p) for p in decoded(broker, "NDEATH")] == [0, 1]
+    # (acknowledged before the broker's thread records it)
+    assert await until(lambda: [bdseq(p) for p in decoded(broker, "NDEATH")] == [0, 1]), \
+        [bdseq(p) for p in decoded(broker, "NDEATH")]
     print("sparkplug: stop -> NDEATH with the session's bdSeq  OK")
 
 
