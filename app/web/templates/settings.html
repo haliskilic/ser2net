@@ -42,7 +42,7 @@
   {% if me and me.source == 'local' %}
   <h3 class="mt-sm">{{ _("Two-factor sign-in") }}</h3>
   <p class="mb-sm">{% if me.totp_on %}<span class="tag">{{ _("enabled") }}</span> {{ _("Signing in takes your password and a code from your authenticator app.") }}{% else %}<span class="tag">{{ _("disabled") }}</span> <span class="muted">{{ _("Your password alone signs you in. Add a code from an authenticator app on your phone or computer, so a password alone is not enough.") }}</span>{% endif %}</p>
-  <a class="btn" href="/settings/totp">{{ _("Turn off…") if me.totp_on else _("Set up…") }}</a>
+  <a class="btn" href="{{ base }}/settings/totp">{{ _("Turn off…") if me.totp_on else _("Set up…") }}</a>
   {% endif %}
   {% endif %}
 </section>
@@ -544,7 +544,7 @@
         <td class="mono">{{ t.name }}{% if t.expired %} <span class="tag">{{ _("expired") }}</span>{% endif %}<br><span class="muted">{{ _("created %(date)s", date=t.created) }} · {% if t.expires %}{{ _("expires %(date)s", date=t.expires) }}{% else %}{{ _("never expires") }}{% endif %} · {{ _("last used: %(time)s", time=t.last_used) }}</span></td>
         <td class="mono">{{ t.role }}</td>
         <td>
-          <form method="post" action="/settings/api-tokens/revoke" class="inline">
+          <form method="post" action="{{ base }}/settings/api-tokens/revoke" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
             <input type="hidden" name="id" value="{{ t.id }}">
             <button class="btn sm danger" type="submit">{{ _("Revoke") }}</button>
@@ -557,7 +557,7 @@
   </div>
   {% endif %}
   {% if api_token_rows|length < api_token_max %}
-  <form method="post" action="/settings/api-tokens" class="authform">
+  <form method="post" action="{{ base }}/settings/api-tokens" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <div class="grid2">
       <label>{{ _("Name") }} <input type="text" name="name" placeholder="{{ _('e.g. %(example)s', example='prometheus') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="64" pattern="[A-Za-z0-9._\-]{1,64}" title="{{ _("A token name is 1-64 characters: English letters, digits, '.', '_' or '-'.") }}" required></label>
