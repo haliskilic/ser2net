@@ -14,7 +14,7 @@ from starlette.routing import Route
 
 from ...config import ConfigError, MappingConfig, console_charset, console_encoding
 from ...engine import netinfo, portlist
-from ...i18n import _
+from ...i18n import _, ngettext
 from . import ops
 from .common import (
     TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice, reason,
@@ -123,9 +123,12 @@ def routes(ctx: Ctx) -> list:
                     failed.append(name)
         state.log(f"bulk {action}: {len(done)} mapping(s)")
         n, total = len(done) - len(failed), len(ids)
-        text = (_("Started {0} of {1} selected mapping(s).") if action == "start" else
-                _("Stopped {0} of {1} selected mapping(s).") if action == "stop" else
-                _("Restarted {0} of {1} selected mapping(s).")).format(n, total)
+        text = (ngettext("Started {0} of {1} selected mapping.", "Started {0} of {1} selected mappings.",
+                         total) if action == "start" else
+                ngettext("Stopped {0} of {1} selected mapping.", "Stopped {0} of {1} selected mappings.",
+                         total) if action == "stop" else
+                ngettext("Restarted {0} of {1} selected mapping.",
+                         "Restarted {0} of {1} selected mappings.", total)).format(n, total)
         if failed:
             more = len(failed) - 5
             text += " " + _("Could not start: {0}.").format(

@@ -23,5 +23,5 @@
 {% if show_all %}
   <p class="muted mt-sm"><button type="button" class="link" id="ports-all" data-ports-all="0">{{ _("Hide the ports without hardware") }}</button></p>
 {% elif hidden %}
-  <p class="muted mt-sm">{{ _('%(n)s port(s) without hardware behind them are hidden (the kernel’s placeholder <span class="mono">ttyS</span> devices).', n=hidden) }} <button type="button" class="link" id="ports-all" data-ports-all="1">{{ _("Show them") }}</button></p>
+  <p class="muted mt-sm">{{ ngettext('%(num)s port without hardware behind it is hidden (the kernel’s placeholder <span class="mono">ttyS</span> device).', '%(num)s ports without hardware behind them are hidden (the kernel’s placeholder <span class="mono">ttyS</span> devices).', hidden) }} <button type="button" class="link" id="ports-all" data-ports-all="1">{{ _("Show them") }}</button></p>
 {% endif %}

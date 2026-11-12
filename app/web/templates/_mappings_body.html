@@ -70,10 +70,10 @@
             {% for cl in st.clients %}{% set dur = cl.connected_at|since if cl.connected_at else cl.duration %}<span class="peer mono {% if cl.priority %}peer-prio{% endif %}"{% if cl.connected_at %} data-since="{{ cl.connected_at }}"{% endif %} title="{{ _('connected %(duration)s', duration=dur) }}{% if cl.priority %} · {{ t.priority }}{% endif %}">{% if cl.priority %}★ {% endif %}{{ cl.peer }} · <span class="dur">{{ dur }}</span></span>{% endfor %}
           </div>
         {% endif %}
-        {% if st and st.dropped_clients %}<div class="err-small">⚠ {{ _("%(n)s slow client(s) dropped", n=st.dropped_clients) }}</div>{% endif %}
+        {% if st and st.dropped_clients %}<div class="err-small">⚠ {{ ngettext("%(num)s slow client dropped", "%(num)s slow clients dropped", st.dropped_clients) }}</div>{% endif %}
       </td>
       <td class="mono nowrap" data-label="{{ t.in_out }}"><span id="{{ rid }}-bytes">{{ (st.bytes_in|default(0) if st else 0)|bytesize }} / {{ (st.bytes_out|default(0) if st else 0)|bytesize }}</span>
-        {% if st and st.bytes_dropped %}<div class="err-small" title="{{ t.dropped }}">⚠ {{ _("%(n)s bytes dropped", n=st.bytes_dropped) }}</div>{% endif %}</td>
+        {% if st and st.bytes_dropped %}<div class="err-small" title="{{ t.dropped }}">⚠ {{ ngettext("%(num)s byte dropped", "%(num)s bytes dropped", st.bytes_dropped) }}</div>{% endif %}</td>
       <td class="col-actions">
         <div class="row-actions">
           {% if can_edit %}
@@ -82,8 +82,8 @@
             {#- asked only while clients are connected: they are disconnected (a question at
                 every click would soon be clicked through) #}
             {% set n = st.client_count|default(0) if st else 0 %}
-            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/stop"{% if n %} hx-confirm="{{ _('Stop “%(name)s”? %(n)s connected client(s) will be disconnected, and it stays stopped until it is started again.', name=m.name, n=n) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ t.stop }}</button>
-            <button class="btn sm" id="{{ rid }}-restart" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/restart"{% if n %} hx-confirm="{{ _('Restart “%(name)s”? %(n)s connected client(s) will be disconnected.', name=m.name, n=n) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ t.restart }}</button>
+            <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/stop"{% if n %} hx-confirm="{{ ngettext('Stop “%(name)s”? %(num)s connected client will be disconnected, and it stays stopped until it is started again.', 'Stop “%(name)s”? %(num)s connected clients will be disconnected, and it stays stopped until it is started again.', n, name=m.name) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ t.stop }}</button>
+            <button class="btn sm" id="{{ rid }}-restart" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/restart"{% if n %} hx-confirm="{{ ngettext('Restart “%(name)s”? %(num)s connected client will be disconnected.', 'Restart “%(name)s”? %(num)s connected clients will be disconnected.', n, name=m.name) }}"{% endif %} hx-swap="none" hx-disabled-elt="this">{{ t.restart }}</button>
             {% else %}
             <button class="btn sm" id="{{ rid }}-run" aria-describedby="{{ rid }}-name" hx-post="/api/mappings/{{ m.id }}/start" hx-swap="none" hx-disabled-elt="this">{{ t.start }}</button>
             {% endif %}

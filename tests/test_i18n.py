@@ -1,7 +1,11 @@
 """The web UI's Turkish translation is complete and consistent.
 
   * every string wrapped for translation — _("...") in the templates and in the Python
-    sources — has an entry in app/locale/tr.json, and every entry is still used;
+    sources, and both forms of an ngettext("...", "...", n) — has an entry in
+    app/locale/tr.json, and every entry is still used; the two forms of a text with a
+    count have the same placeholders, and no text writes a count as "(s)";
+  * the languages are listed once (i18n.LANGUAGES; config.UI_LANGUAGES is derived from
+    it), and every one but English has its catalog file;
   * a translation keeps the placeholders of its English source ({0} {1} in Python,
     %(name)s in templates) and the HTML tags in it, and can't break the formatting (a
     bare % in a template string, a stray brace in a Python one);
@@ -31,6 +35,12 @@ TEMPLATES = os.path.join(ROOT, "app", "web", "templates")
 CATALOG = os.path.join(ROOT, "app", "locale", "tr.json")
 # _("...") / _('...') in templates (the first argument; Jinja string escapes are rare)
 _TEMPLATE_CALL = re.compile(r"""\b_\(\s*(?P<q>["'])(?P<s>(?:\\.|(?!(?P=q)).)*)(?P=q)""", re.S)
+# ngettext("one", "other", n) in templates: both forms; for app.js (base.html) the two
+# forms are a list, [_("one"), _("other")]
+_TEMPLATE_PLURAL = re.compile(r"""\bngettext\(\s*(?P<q>["'])(?P<s>(?:\\.|(?!(?P=q)).)*)(?P=q)\s*,"""
+                              r"""\s*(?P<q2>["'])(?P<p>(?:\\.|(?!(?P=q2)).)*)(?P=q2)""", re.S)
+_JS_PLURAL = re.compile(r"""\[_\(\s*(?P<q>["'])(?P<s>(?:\\.|(?!(?P=q)).)*)(?P=q)\s*\)\s*,"""
+                        r"""\s*_\(\s*(?P<q2>["'])(?P<p>(?:\\.|(?!(?P=q2)).)*)(?P=q2)\s*\)\s*\]""", re.S)
 _PY_PLACEHOLDER = re.compile(r"(?<!{){(\d+)}(?!})")
 _TPL_PLACEHOLDER = re.compile(r"%\((\w+)\)s")
 _TAG = re.compile(r"</?([a-z][a-z0-9]*)\b")
@@ -40,36 +50,57 @@ _BARE_PERCENT = re.compile(r"%(?!\(\w+\)s|%)")
 _BRACES = re.compile(r"\{\{|\}\}|\{[^{}]*\}|[{}]")
 
 
-def template_strings() -> set:
+def _unescape(s: str) -> str:
+    return bytes(s, "utf-8").decode("unicode_escape") if "\\" in s else s
+
+
+def template_strings(plurals: list | None = None) -> set:
+    """The texts wrapped in the templates; `plurals` gets each ngettext's (one, other)."""
     out = set()
     for f in glob.glob(os.path.join(TEMPLATES, "*.html")):
         src = open(f, encoding="utf-8").read()
         for m in _TEMPLATE_CALL.finditer(src):
-            s = m.group("s")
-            out.add(bytes(s, "utf-8").decode("unicode_escape") if "\\" in s else s)
+            out.add(_unescape(m.group("s")))
+        for m in (*_TEMPLATE_PLURAL.finditer(src), *_JS_PLURAL.finditer(src)):
+            pair = (_unescape(m.group("s")), _unescape(m.group("p")))
+            out.update(pair)
+            if plurals is not None:
+                plurals.append(pair)
     return out
 
 
-def python_strings() -> set:
-    """Literal first arguments of _() calls in app/**/*.py (implicitly concatenated
-    literals are one Constant in the AST)."""
+def python_strings(plurals: list | None = None) -> set:
+    """Literal first arguments of _() calls in app/**/*.py, both of an ngettext()
+    (implicitly concatenated literals are one Constant in the AST)."""
     out = set()
     for f in glob.glob(os.path.join(ROOT, "app", "**", "*.py"), recursive=True):
         tree = ast.parse(open(f, encoding="utf-8").read())
         for node in ast.walk(tree):
             name = isinstance(node, ast.Call) and (getattr(node.func, "id", None)
                                                    or getattr(node.func, "attr", None))
-            if (name in ("_", "gettext")
-                    and node.args and isinstance(node.args[0], ast.Constant)
-                    and isinstance(node.args[0].value, str)):
+            literal = [isinstance(a, ast.Constant) and isinstance(a.value, str) for a in node.args[:2]] \
+                if isinstance(node, ast.Call) else []
+            if name in ("_", "gettext") and literal[:1] == [True]:
                 out.add(node.args[0].value)
+            elif name == "ngettext" and literal == [True, True]:
+                pair = (node.args[0].value, node.args[1].value)
+                out.update(pair)
+                if plurals is not None:
+                    plurals.append(pair)
     return out
 
 
 def test_catalog_complete():
     cat = json.load(open(CATALOG, encoding="utf-8"))
-    in_templates, in_python = template_strings(), python_strings()
+    plurals: list = []
+    in_templates, in_python = template_strings(plurals), python_strings(plurals)
     used = in_templates | in_python
+    assert len(plurals) >= 20, plurals
+    for one, other in plurals:   # either is formatted with the same values
+        for rx in (_PY_PLACEHOLDER, _TPL_PLACEHOLDER):
+            assert sorted(rx.findall(one)) == sorted(rx.findall(other)), (one, other)
+    counted = sorted(t for t in used if re.search(r"[a-z]\(s\)", t))
+    assert not counted, "a count written as '(s)' (use ngettext):\n  " + "\n  ".join(counted)
     missing = sorted(used - set(cat))
     stale = sorted(set(cat) - used)
     assert not missing, "untranslated strings:\n  " + "\n  ".join(missing[:40])
@@ -88,7 +119,19 @@ def test_catalog_complete():
         if en in in_python and sorted(_BRACES.findall(en)) != sorted(_BRACES.findall(tr)):
             bad.append(f"braces differ (str.format): {en!r} -> {tr!r}")
     assert not bad, "\n  ".join(bad[:40])
-    print(f"catalog: {len(used)} strings, all translated, placeholders and tags kept  OK")
+    print(f"catalog: {len(used)} strings ({len(plurals)} with a count, both forms), all "
+          "translated, placeholders and tags kept  OK")
+
+
+def test_language_registry():
+    from app.config import UI_LANGUAGES
+    assert UI_LANGUAGES == ("auto", *i18n.LANGUAGES), UI_LANGUAGES
+    for code in i18n.LANGUAGES:
+        if code != i18n.DEFAULT:
+            assert os.path.isfile(os.path.join(ROOT, "app", "locale", f"{code}.json")), code
+    assert i18n.ngettext("%(num)s record", "%(num)s records", 1) == "%(num)s record"
+    assert i18n.ngettext("%(num)s record", "%(num)s records", 0) == "%(num)s records"
+    print("languages: one list (UI_LANGUAGES derived), a catalog for each; ngettext's forms  OK")
 
 
 def test_negotiation():
@@ -222,6 +265,7 @@ def test_pages():
 
 def main():
     test_catalog_complete()
+    test_language_registry()
     test_negotiation()
     test_missing_catalog_reported()
     test_pages()

@@ -28,7 +28,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
-from .i18n import _
+from .i18n import LANGUAGES, _
 from .textfold import fold  # how names compare; still importable as app.config.fold
 
 # ---------------------------------------------------------------------------
@@ -837,7 +837,8 @@ def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
                      f"{low}-{high}); using {fixed}")
 
 
-UI_LANGUAGES = ("auto", "en", "tr")
+# the languages the UI offers are listed once, in app/i18n.py ("auto": the browser's)
+UI_LANGUAGES = ("auto", *LANGUAGES)
 ROLES = ("admin", "operator", "viewer")
 # higher rank = more privilege; a route requires >= some rank
 ROLE_RANK = {"viewer": 1, "operator": 2, "admin": 3}

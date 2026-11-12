@@ -287,7 +287,7 @@ def main():
         assert "expired" in section(admin.get(url)[2], "import"), "applied: gone"
         st, _h, page = admin.post("/settings/config/import", {}, follow=False,
                                   files={"file": ("m.json", export.encode())})
-        assert st == 200 and "Imported 1 mappings" in section(page, "import"), (st, page[:300])
+        assert st == 200 and "Imported 1 mapping (replaced" in section(page, "import"), (st, page[:300])
         assert '<main data-page-url="/settings#import">' in page
         print("import preview: 303 to its own address (reload, language, that user only); the "
               "one-step import still answers the page  OK")
