@@ -104,7 +104,7 @@ PORTABLE = [
     "test_changelog.py",
     "test_browser_hardening.py",  # CSP and the other protections the browser is told to apply
     "test_mqtt_password_form.py",  # the mapping form never holds the stored MQTT password
-    "test_reverse_proxy.py",   # WebSockets and the SSO redirect URI behind a reverse proxy
+    "test_reverse_proxy.py",   # WebSockets, the SSO redirect URI, the UI through a proxy
     "test_hsts.py",            # Strict-Transport-Security max-age (admin_ui.hsts_max_age)
     "test_trusted_proxies.py",  # X-Forwarded-For / -Proto from trusted proxies only
     "test_secure_cookies.py",  # Secure cookies and HSTS behind a TLS reverse proxy

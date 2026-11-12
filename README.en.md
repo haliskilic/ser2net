@@ -132,6 +132,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
+  With a public URL (Settings → Reverse proxy) each message ends with it, and the JSON
+  format has a `url` field.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with
@@ -293,7 +295,9 @@ process runs as the
 `ser2net` user (uid 10001), not root; a `/data` volume written by an older (root-running)
 image is taken over on the first start, and in a bind-mounted folder the files an older
 image wrote as root are handed to the folder's owner, so upgrading needs no manual step.
-The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
+The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Behind a reverse proxy,
+`SER2NET_PUBLIC_URL` and `SER2NET_TRUSTED_PROXIES` set what Settings → Reverse proxy does
+([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Details:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
 ---
@@ -429,20 +433,30 @@ other than `same-origin`, or an `Origin` that isn't the address the UI was reach
 another port of the same host and a sibling subdomain count as other sites. This comes on
 top of the CSRF token, which is new after every sign-in and sign-out and lasts as long as
 the session. Behind a reverse proxy, the proxy must pass the address the browser uses as
-`Host` or `X-Forwarded-Host`, port included (all.log names the refused `Origin` and the
-address the UI saw). Scripts that send no `Origin` header, the REST API and cluster peers
-are not affected.
+`Host` or `X-Forwarded-Host`, port included, or that address must be the public URL
+(Settings → Reverse proxy); all.log names the refused `Origin` and the address the UI saw.
+Scripts that send no `Origin` header, the REST API and cluster peers are not affected.
 
 **Behind a reverse proxy:** the console and hex-view WebSockets are checked the same way: a
 browser's handshake is accepted when it says it comes from this UI's own page
 (`Sec-Fetch-Site: same-origin`, sent over HTTPS) or when its `Origin` is the address in
-`Host`, `X-Forwarded-Host` or `Forwarded: host=`, port included. So a proxy must pass the
-browser's address on — nginx `proxy_set_header Host $http_host;`, Apache
-`ProxyPreserveHost On`, IIS ARR `preserveHostHeader` (Caddy and Traefik do it by default) —
-and pass WebSocket upgrades through; over plain HTTP browsers send no `Sec-Fetch-Site`, so
-there the address is all that counts. all.log names a refused `Origin` once a minute,
-with the addresses the UI saw. Examples for nginx, Apache, IIS, Caddy and Traefik:
-[docs/DOCKER.md → Behind a reverse proxy](docs/DOCKER.md#behind-a-reverse-proxy).
+`Host`, `X-Forwarded-Host` or `Forwarded: host=`, port included, or the public URL. So a
+proxy must pass the browser's address on — nginx `proxy_set_header Host $http_host;`,
+Apache `ProxyPreserveHost On`, IIS ARR `preserveHostHeader` (Caddy and Traefik do it by
+default) — and pass WebSocket upgrades through; over plain HTTP browsers send no
+`Sec-Fetch-Site`, so there the address is all that counts. all.log names a refused
+`Origin` once a minute, with the addresses the UI saw. **Settings → Reverse proxy** has
+the rest: the **public URL** (the address users open; its origin counts as the UI's own,
+a blank SSO redirect URI is made from it, notifications link to it, and a path in it —
+`https://gw.example.com/ser2net` — serves the UI under that path too, with cookies of its
+own there, while `/` keeps working directly), the **trusted proxies** (only from them are
+`X-Forwarded-For` and `X-Forwarded-Proto` believed — none by default; up to 2.8.1 every
+connection from `127.0.0.1` / `::1` was believed) and HSTS through the proxy (off by
+default). The cookies are Secure whenever the browser used HTTPS, also through a TLS proxy
+that sends `X-Forwarded-Proto: https`. `SER2NET_PUBLIC_URL` / `SER2NET_TRUSTED_PROXIES` set
+them for one run instead; `FORWARDED_ALLOW_IPS` still works. Examples for nginx, Apache,
+Caddy, Traefik and IIS, and what all.log says when something is missing:
+[docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md).
 
 **Passwords** of local accounts are stored as scrypt hashes (N=2^14, r=8, p=5, OWASP's
 minimum; the hash names its cost, so the cost can be raised later). A hash made by 2.8.1 or
@@ -465,7 +479,8 @@ ends every session at once, the admin's own excepted — use it when a copy of
 LDAP or OIDC is switched off, its accounts' sessions don't count.
 
 **Failed sign-ins** are limited to 8 per address in 5 minutes (an IPv6 address counts by
-its /64; behind a reverse proxy all clients share the proxy's address) and to 10 per user
+its /64; behind a reverse proxy, each client's own address once the proxy is a trusted
+proxy, else the proxy's, shared by all) and to 10 per user
 name in 15 minutes, from any address and letter case aside; past either limit that address
 or that name gets HTTP 429 until its oldest failures are older than that — nothing is locked
 for good, and with LDAP the directory is asked no more often, which keeps such attempts
@@ -552,9 +567,11 @@ provider's.
 
 **SSO redirect URI:** **Settings → Single sign-on (OIDC)** shows the redirect URI to register
 at the provider: the *Redirect URI* you set or, while it is blank, the one made from the
-page's request (`X-Forwarded-Proto` or the request's scheme, `X-Forwarded-Host` or `Host`,
-then `/auth/oidc/callback`; `Forwarded` and `X-Forwarded-Port` are not read, so the address
-working installs registered stays the same). When it is http:// for a host other than
+page's request, or from the public URL when one is set (Settings → Reverse proxy:
+`<public URL>/auth/oidc/callback`); from the request: `X-Forwarded-Proto` or the request's
+scheme, `X-Forwarded-Host` or `Host` (of a list, the first), then `/auth/oidc/callback`;
+`Forwarded` and `X-Forwarded-Port` are not read, so the address
+working installs registered stays the same. When it is http:// for a host other than
 loopback, or differs from the browser's address (a reverse proxy in between changed the
 address), the page warns and shows the value for the browser's address: enter that as
 *Redirect URI*. Every SSO sign-in start writes the redirect URI it sends to all.log.
