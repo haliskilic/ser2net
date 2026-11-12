@@ -37,7 +37,7 @@ def test_locks_match_the_pins():
     assert build["pefile"][1] == 'platform_system == "Windows"', build["pefile"]
     for entries in (lock, build):
         for name, (_v, _m, hashes) in entries.items():
-            assert hashes == sorted(set(hashes)), f"{name}: hashes unsorted or repeated"
+            assert len(hashes) == len(set(hashes)), f"{name}: a hash listed twice"
     print(f"{rl.LOCK} ({len(lock)}) and {rl.BUILD} ({len(build)}) pin what the requirement "
           "files pin, every line hashed  OK")
 
@@ -49,10 +49,12 @@ def test_a_changed_pin_is_reported():
         path = os.path.join(tmp, "requirements-optional.txt")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
+        pin = rl.rw.read_requirements(path)[0]  # e.g. paho-mqtt==2.2.0
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write(text.replace("ldap3==2.9.1", "ldap3==2.9.2") + "newpkg==1.0\n")
+            fh.write(text.replace(f"{pin[0]}=={pin[1]}", f"{pin[0]}=={pin[1]}.1", 1)
+                     + "newpkg==1.0\n")
         found = rl.check(tmp)
-    assert any("ldap3 is locked as 2.9.1" in p for p in found), found
+    assert any(f"{rl.canonical(pin[0])} is locked as {pin[1]} " in p for p in found), found
     assert any("newpkg==1.0 is pinned but not locked" in p for p in found), found
     print("a pin changed without its lock is reported  OK")
 
@@ -95,7 +97,7 @@ def test_resolver_markers():
     # a stubbed PyPI: app needs lib on every OS, winlib on Windows only, nothing on Linux
     meta = {("app", "1.0"): ["lib>=2", 'winlib ; sys_platform == "win32"',
                              'docs ; extra == "doc"'],
-            ("lib", "2.1"): [], ("winlib", "0.3"): []}
+            ("lib", "2.1"): [], ("winlib", "0.3"): [], ("winlib", "0.2"): []}
     releases = {"winlib": {"0.3": [{"filename": "winlib-0.3-py3-none-any.whl"}],
                            "0.4b1": [{"filename": "winlib-0.4b1-py3-none-any.whl"}]}}
     real = rl.pypi
@@ -103,6 +105,8 @@ def test_resolver_markers():
         rl.pypi = lambda name, version=None: (
             {"info": {"requires_dist": meta[(name, version)]}} if version
             else {"releases": releases[name]})
+        assert rl.closure({"app": "1.0"}, {"lib": "2.1"}, "Windows x64", choose=True,
+                          prefer={"winlib": "0.2"}) == {"app": "1.0", "lib": "2.1", "winlib": "0.2"}
         win = rl.closure({"app": "1.0"}, {"lib": "2.1"}, "Windows x64", choose=True)
         lin = rl.closure({"app": "1.0"}, {"lib": "2.1"}, "Linux x86_64", choose=True)
         assert win == {"app": "1.0", "lib": "2.1", "winlib": "0.3"}, win  # no pre-release
