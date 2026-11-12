@@ -454,11 +454,12 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         # and it can be fixed, instead of keeping the UI from starting.
         if admin.tls_enabled:
             try:
-                guard.ssl = httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig)
-            except (OSError, ValueError) as e:  # ssl.SSLError is an OSError
+                guard.ssl = httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig,
+                                                  admin.tls_key_password)
+            except (OSError, ValueError) as e:  # (tls.TlsFileError is a ValueError)
                 state.log(f"admin UI: the TLS certificate could not be loaded: {e} — "
                           "ser2net stops (no mapping was started); fix admin_ui.tls_cert / "
-                          "tls_key in config.json")
+                          "tls_key (an encrypted key: tls_key_password) in config.json")
                 raise SystemExit(1) from None
         sockets, ui_error = await _admin_sockets(admin, uconfig.backlog)
         if ui_error:

@@ -395,6 +395,9 @@
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label>{{ _("Certificate path") }} <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>
     <label>{{ _("Key path") }} <input type="text" name="tls_key" value="{{ admin.tls_key }}" placeholder="/path/key.pem"></label>
+    <label>{{ _("Key password") }} <span class="muted">({{ _("only for an encrypted key") }})</span>
+      <input type="password" name="tls_key_password" autocomplete="new-password" placeholder="{% if admin.tls_key_password %}{{ unchanged }}{% else %}{{ _('optional') }}{% endif %}"></label>
+    {% if admin.tls_key_password %}<label class="chk"><input type="checkbox" name="tls_key_password_clear"> {{ _("Remove the stored password") }}</label>{% endif %}
     <button class="btn primary" type="submit">{{ _("Save TLS") }}</button>
   </form>
   <form method="post" action="/settings/tls/generate" class="inline mt-sm">

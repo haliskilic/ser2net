@@ -41,7 +41,7 @@ from typing import Any, Callable, Optional
 import h11
 from uvicorn.protocols.http.h11_impl import H11Protocol
 
-from ..engine import netguard
+from ..engine import netguard, tls
 
 # a request's body has admin_ui.request_timeout_s from the end of its head, and one second
 # more for each BODY_MIN_RATE bytes of it that came in: a client that sends it slower than
@@ -270,14 +270,19 @@ def protocol_class(guard: AdminGuard) -> type[GuardedH11Protocol]:
     return type("AdminH11Protocol", (GuardedH11Protocol,), {"guard": guard})
 
 
-def ssl_context(certfile: str, keyfile: str, config: Any) -> ssl.SSLContext:
+def ssl_context(certfile: str, keyfile: str, config: Any, password: str = "") -> ssl.SSLContext:
     """The admin UI's TLS context, made as uvicorn makes it from ssl_certfile/ssl_keyfile
-    (its defaults, read from ``config``, a uvicorn.Config, for the rest)."""
-    from uvicorn.config import create_ssl_context
-    return create_ssl_context(certfile=certfile, keyfile=keyfile,
-                              password=config.ssl_keyfile_password,
-                              ssl_version=config.ssl_version, cert_reqs=config.ssl_cert_reqs,
-                              ca_certs=config.ssl_ca_certs, ciphers=config.ssl_ciphers)
+    (its defaults, read from ``config``, a uvicorn.Config, for the rest), except that an
+    encrypted key is decrypted with ``password`` and never asked for on a terminal (uvicorn
+    leaves OpenSSL to prompt when it has no password): raises engine.tls.TlsFileError."""
+    ctx = ssl.SSLContext(config.ssl_version)
+    tls.load_cert_chain(ctx, certfile, keyfile, password)
+    ctx.verify_mode = ssl.VerifyMode(config.ssl_cert_reqs)
+    if config.ssl_ca_certs:
+        ctx.load_verify_locations(config.ssl_ca_certs)
+    if config.ssl_ciphers:
+        ctx.set_ciphers(config.ssl_ciphers)
+    return ctx
 
 
 async def listen(host: str, port: int, backlog: int) -> list[socket.socket]:

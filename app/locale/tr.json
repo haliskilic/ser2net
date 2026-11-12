@@ -917,5 +917,6 @@
   "Mapping #{0} ({1}): {2} It can't start until that is fixed.": "Eşleme #{0} ({1}): {2} Bu düzeltilene kadar başlatılamaz.",
   "TLS key password": "TLS anahtar parolası",
   "only for an encrypted key": "yalnızca şifreli bir anahtar için",
-  "Remove the stored password": "Kayıtlı parolayı sil"
+  "Remove the stored password": "Kayıtlı parolayı sil",
+  "Key password": "Anahtar parolası"
 }
