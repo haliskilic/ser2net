@@ -47,6 +47,16 @@ PW = "modbus-points-pass-1"
 TOKEN = "s2n_modbus-points-token"
 
 
+def parser_at(text: str) -> str:
+    """Where this Python's JSON parser says ``text`` goes wrong ("line 2, column 15"): since
+    3.13 at a trailing comma itself, before that at the character after it."""
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as e:
+        return f"line {e.lineno}, column {e.colno}"
+    raise AssertionError(f"valid JSON: {text!r}")
+
+
 def gateway(points, **extra):
     return MappingConfig.from_dict({
         "name": "PLC", "serial": {"port": "/dev/ser2net-test-plc"},
@@ -153,8 +163,9 @@ def test_points_json_parse():
         except ValueError as e:
             return str(e)
         raise AssertionError(f"took {raw!r}")
-    msg = err('[\n  {"name": "a",}\n]')
-    assert msg.startswith("Modbus poll points: the JSON is not valid at line 2, column 15:"), msg
+    trailing = '[\n  {"name": "a",}\n]'
+    msg = err(trailing)
+    assert msg.startswith(f"Modbus poll points: the JSON is not valid at {parser_at(trailing)}:"), msg
     for raw in ("5", "null", '"temp"', "true"):
         assert err(raw) == "Modbus poll points must be a valid JSON array of objects.", raw
     assert err('[{"name": "a"}, "hum"]') == "Modbus poll point #2 is not an object."
@@ -437,7 +448,7 @@ def test_server():
 
         edit = dict(form_of(""), id="aaaaaaaaaaa1", network_port=str(port), name="PLC")
         edit.pop("enabled")
-        for text, words in (('[{"name": "a",}]', "line 1, column 14"),
+        for text, words in (('[{"name": "a",}]', parser_at('[{"name": "a",}]')),
                             ('{"name": "x"} junk', "line 1, column 15"),
                             ("5", "valid JSON array"),
                             ('["temp", "hum"]', "#1 is not an object"),
