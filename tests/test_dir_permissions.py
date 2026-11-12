@@ -181,21 +181,27 @@ def test_windows_admin_owned_folders():
 
 def test_own_names():
     """The names ser2net puts in its data directory are the ones the code uses."""
-    from app import state
+    from app import state, watchdog
+    from app.engine import sparkplug_node
 
     for name in (datalock.LOCK_NAME, accounts.REQUEST_DIR, state.SETUP_CODE_FILE,
+                 sparkplug_node.BDSEQ_FILE, watchdog.HANG_LOG, winservice.SERVICE_LOG,
                  "backups", "logs", "traces", "tls"):
         assert name in OWN_NAMES, name
     with tempfile.TemporaryDirectory() as d:
+        # with the older copies and temporary files they leave (a log trim's <log>.tmp)
         touch(d, "config.json", "all.log", "all.log.1", "all.log.5", "audit.log",
-              "audit.log.1", ".cfg.x1y2.tmp", "setup-code.txt.tmp", *sorted(OWN_NAMES))
+              "audit.log.1", "all.log.tmp", "audit.log.tmp", ".cfg.x1y2.tmp",
+              "setup-code.txt.tmp", watchdog.HANG_LOG + ".1", winservice.SERVICE_LOG + ".1",
+              sparkplug_node.BDSEQ_FILE + ".tmp", *sorted(OWN_NAMES))
         assert foreign_entries(d) == [], foreign_entries(d)
         touch(d, "all.log.bak", "config.json.old", "passwd", "my.json")
         assert foreign_entries(d) == ["all.log.bak", "config.json.old", "my.json", "passwd"]
         assert foreign_entries(d, "my.json") == ["all.log.bak", "config.json", "config.json.old",
                                                  "passwd"]
     assert foreign_entries(os.path.join(ROOT, "no-such-folder")) is None
-    print("ser2net's own names: the lock, admin-requests/, setup-code.txt, rotated logs  OK")
+    print("ser2net's own names: the lock, admin-requests/, setup-code.txt, the bdSeq file, "
+          "hang.log, service.log, rotated logs and temporary files  OK")
 
 
 def test_posix_own_folder_locked():

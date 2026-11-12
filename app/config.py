@@ -214,11 +214,16 @@ def _icacls_private(path: str, grants: list[str]) -> None:
 # What ser2net itself puts in its data directory (the folder of config.json, which may have
 # another name with --config): all.log and audit.log with their rotated copies, logs/,
 # traces/, backups/, tls/ (a generated certificate), admin-requests/ (app/accounts.py), the
-# instance lock (app/datalock.py), setup-code.txt (app/state.py) and the temporary files of
-# its atomic writes; and what a file system or a desktop adds to any folder.
+# instance lock (app/datalock.py), setup-code.txt (app/state.py), the Sparkplug B bdSeq
+# file (app/engine/sparkplug_node.py), hang.log of the loop watchdog (app/watchdog.py), the
+# Windows service's service.log (app/winservice.py), each with a kept older copy, and the
+# temporary files of its atomic writes and log trims; and what a file system or a desktop
+# adds to any folder.
 OWN_NAMES = frozenset({"backups", "logs", "traces", "tls", "admin-requests", "ser2net.lock",
-                       "setup-code.txt", "lost+found", ".DS_Store", "Thumbs.db", "desktop.ini"})
-_OWN_NAME = re.compile(r"(?:all|audit)\.log(?:\.\d+)?|\.cfg\..+\.tmp|setup-code\.txt\.tmp")
+                       "setup-code.txt", "sparkplug-bdseq.json", "hang.log", "service.log",
+                       "lost+found", ".DS_Store", "Thumbs.db", "desktop.ini"})
+_OWN_NAME = re.compile(r"(?:all|audit)\.log(?:\.\d+|\.tmp)?|(?:hang|service)\.log\.1|"
+                       r"\.cfg\..+\.tmp|setup-code\.txt\.tmp|sparkplug-bdseq\.json\.tmp")
 
 
 def foreign_entries(directory: str, config_name: str = "config.json") -> Optional[list[str]]:
