@@ -3,8 +3,8 @@
 {% block main %}
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Two-factor sign-in") }}</h2><a class="btn sm" href="{{ base }}/settings">{{ _("← Settings") }}</a></div>
-  {% if ok %}<div class="banner ok">{{ ok }}</div>{% endif %}
-  {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+  {% if ok %}<div class="banner ok" role="status" tabindex="-1" data-feedback>{{ ok }}</div>{% endif %}
+  {% if error %}<div class="banner error" role="alert" tabindex="-1" data-feedback>{{ error }}</div>{% endif %}
   {% if refusal %}
   <p>{{ refusal }}</p>
   {% elif enabled %}

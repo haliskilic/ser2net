@@ -174,10 +174,15 @@ def test_live():
                               "This setup has expired")):
             st, _, page = op.post("/settings/totp/enable", fields)
             assert st == 400 and want in page, (fields, st)
+            # the refused form's page names the page's own address (TR / EN, reload)
+            assert '<main data-page-url="/settings/totp">' in page
         assert "totp_secret" not in next(u for u in srv.saved_config()["users"] if u["username"] == "op")
-        st, _, page = op.post("/settings/totp/enable", {"enrol": enrol, "password": PW,
-                                                        "code": code(secret)})
+        st, h, _ = op.post("/settings/totp/enable", {"enrol": enrol, "password": PW,
+                                                     "code": code(secret)}, follow=False)
+        assert st == 303 and h["Location"] == "/settings/totp", (st, h.get("Location"))
+        st, _, page = op.get("/settings/totp")   # the page the redirect leads to says so, once
         assert st == 200 and "Two-factor sign-in is on" in page, page[:300]
+        assert "Two-factor sign-in is on" not in op.get("/settings/totp")[2]
         saved = next(u for u in srv.saved_config()["users"] if u["username"] == "op")
         assert saved["totp_secret"] == secret and saved["pwd_version"] == 2
         assert op.get("/")[0] == 200, "this session stays"
@@ -196,7 +201,7 @@ def test_live():
         st, _, page = op.post("/settings/totp/disable", {"password": "nope-nope", "code": code(secret, 1)})
         assert st == 400 and "Current password is incorrect." in page
         st, _, page = op.post("/settings/totp/disable", {"password": PW, "code": code(secret, 1)})
-        assert st == 200 and "Two-factor sign-in is off" in page, page[:300]
+        assert st == 200 and "Two-factor sign-in is off" in page, page[:300]   # (after its 303)
         assert "totp_secret" not in next(u for u in srv.saved_config()["users"] if u["username"] == "op")
         assert op.get("/")[0] == 200
         print("settings: turned off with the password and a code  OK")
