@@ -424,6 +424,16 @@ LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve 
 erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
 gösterilir ve açılışta loga yazılır.
 
+**Başka sitelerden gelen istekler:** tarayıcı bir değişikliği (web arayüzüne giden her
+POST, PUT, PATCH ya da DELETE) başka bir sitenin sayfasının gönderdiğini söylüyorsa istek
+403 ile reddedilir: `Sec-Fetch-Site` `same-origin` değilse ya da `Origin` arayüze gelinen
+adres değilse — aynı host'un başka bir portu ve kardeş bir alt alan adı da başka site
+sayılır. Bu, CSRF token'ına ek bir kontroldür; token her giriş ve çıkıştan sonra yenilenir
+ve oturum kadar geçerli kalır. Ters proxy arkasında proxy, tarayıcının kullandığı adresi
+port dahil `Host` ya da `X-Forwarded-Host` olarak iletmelidir (all.log reddedilen `Origin`'i
+ve arayüzün gördüğü adresi yazar). `Origin` başlığı göndermeyen betikler, REST API ve
+cluster eşleri bundan etkilenmez.
+
 **Parolalar:** yerel hesapların parolaları scrypt hash'i olarak saklanır (N=2^14, r=8, p=5,
 OWASP'ın en düşük önerisi; hash maliyetini kendisi taşır, böylece maliyet ileride
 artırılabilir). 2.8.1 ya da daha eski bir sürümün yaptığı hash çalışmaya devam eder ve o

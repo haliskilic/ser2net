@@ -856,6 +856,7 @@ def test_signed_legacy_and_mismatch():
             f"http://127.0.0.1:{ui_a}/login", method="POST",
             data=urllib.parse.urlencode({"username": "admin", "password": "clusteradmin1",
                                          "_csrf": csrf}).encode()), timeout=10)
+        csrf = next(c.value for c in jar if c.name == "ser2net_csrf")  # new after signing in
 
         def status_html():
             return op.open(f"http://127.0.0.1:{ui_a}/api/cluster/status", timeout=15).read().decode()

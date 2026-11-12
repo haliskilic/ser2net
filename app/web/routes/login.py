@@ -287,6 +287,7 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "oidc_login", user.username, user=user.username)
         resp = RedirectResponse("/", status_code=303)
         set_session(resp, request, user)
+        ctx.new_csrf_token(request)
         resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
         return resp
 
@@ -414,6 +415,7 @@ def routes(ctx: Ctx) -> list:
             ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=authed.username)
             resp = RedirectResponse("/", status_code=303)
             set_session(resp, request, authed)
+            ctx.new_csrf_token(request)
             return resp
         return _login_failed(request, ip, username)
 
@@ -447,6 +449,7 @@ def routes(ctx: Ctx) -> list:
             ctx.audit(request, "logout")
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(auth.SESSION_COOKIE, path="/")
+        ctx.new_csrf_token(request)
         return resp
 
     # ---------------- first-run setup ----------------
@@ -510,6 +513,7 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "first_run_setup", username, user=username)
         resp = RedirectResponse("/", status_code=303)
         set_session(resp, request, user)
+        ctx.new_csrf_token(request)
         return resp
 
     return [

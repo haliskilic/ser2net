@@ -78,6 +78,14 @@ class Ctx:
             max_age=ttl, httponly=True, samesite="lax",
             secure=cfg.admin_ui.tls_enabled, path="/",
         )
+        request.state.csrf_renew = True  # the CSRF cookie lasts as long (GuardMiddleware)
+
+    @staticmethod
+    def new_csrf_token(request) -> None:
+        """Give this browser a new CSRF token with this response (GuardMiddleware sets the
+        cookie), at a sign-in or a sign-out: a token that got into the browser before is
+        not accepted after it. Only for a response that renders no form (a redirect)."""
+        request.state.csrf_token = auth.new_csrf_token()
 
     @staticmethod
     def require_role(request, role):

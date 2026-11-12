@@ -22,6 +22,7 @@ from starlette.templating import Jinja2Templates
 
 from .. import i18n
 from ..config import ROLE_RANK
+from ..engine import netguard
 from . import auth
 from .routes import build_routes
 
@@ -61,7 +62,16 @@ def _wants_json(request) -> bool:
 
 
 class GuardMiddleware(BaseHTTPMiddleware):
-    """Single gate: CSRF + setup-redirect + session auth + security headers + csrf cookie."""
+    """Single gate: cross-site refusal + CSRF + setup-redirect + session auth + security
+    headers + csrf cookie."""
+
+    _cross_site_log: netguard.LogEvery | None = None
+
+    def _cross_site_note(self, state):
+        """Refused cross-site requests are logged at most once a minute."""
+        if self._cross_site_log is None:
+            self._cross_site_log = netguard.LogEvery(lambda msg: state.log(msg))
+        return self._cross_site_log
 
     async def dispatch(self, request, call_next):
         state = request.app.state.appstate
@@ -90,12 +100,26 @@ class GuardMiddleware(BaseHTTPMiddleware):
 
         is_public = path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES)
 
-        # ensure a CSRF token exists for this request/response
+        # A state-changing request that a page of another site made the browser send is
+        # refused before anything else (auth.cross_site): another port of this host or a
+        # sibling subdomain can put a CSRF cookie of its own into the browser, so the token
+        # alone doesn't prove the request came from this UI. Cluster peers call from their
+        # server, not a browser, and are checked by the key.
+        if request.method not in auth.SAFE_METHODS and path not in _CLUSTER_PEER_PATHS:
+            if why := auth.cross_site(request.headers):
+                ip = request.client.host if request.client else "?"
+                self._cross_site_note(state)(f"refused {request.method} {path} from {ip}: "
+                                             f"sent by a page of another site ({why})")
+                return PlainTextResponse(i18n.gettext(
+                    "Refused: this request was sent by a page of another web site. If you used "
+                    "ser2net’s own page, its address must reach ser2net unchanged (behind a "
+                    "reverse proxy: as Host or X-Forwarded-Host)."), status_code=403)
+
+        # the CSRF token of this browser: its cookie's, or a new one. A handler may issue a
+        # new one (Ctx.new_csrf_token: a sign-in, a sign-out) or renew the cookie's lifetime
+        # with a session's (Ctx.set_session); the cookie is set below.
         csrf_cookie = request.cookies.get(auth.CSRF_COOKIE)
-        set_csrf = csrf_cookie is None
-        if set_csrf:
-            csrf_cookie = auth.new_csrf_token()
-        request.state.csrf_token = csrf_cookie
+        request.state.csrf_token = csrf_cookie or auth.new_csrf_token()
 
         # CSRF: API/HTMX endpoints must carry a matching X-CSRF-Token header.
         # Plain HTML form posts (login/setup/settings/logout) carry _csrf in the
@@ -136,10 +160,14 @@ class GuardMiddleware(BaseHTTPMiddleware):
             ip = request.client.host if request.client else "?"
             state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
 
-        if set_csrf:
+        # The CSRF cookie lasts as long as a session: a browser restart that keeps the
+        # session cookie keeps it too, so there is no time without one in which a page of
+        # another site could put its own token into the browser.
+        if (request.state.csrf_token != csrf_cookie
+                or getattr(request.state, "csrf_renew", False)):
             response.set_cookie(
-                auth.CSRF_COOKIE, csrf_cookie, samesite="lax",
-                httponly=True, secure=cfg.admin_ui.tls_enabled, path="/",
+                auth.CSRF_COOKIE, request.state.csrf_token, max_age=cfg.session_timeout_s,
+                samesite="lax", httponly=True, secure=cfg.admin_ui.tls_enabled, path="/",
             )
         return response
 
