@@ -151,7 +151,8 @@ def test_server():
                               "Authorization": "Bearer s2n_not_a_session"})
         assert st == 401, "credentials sent: 401, not the sign-in page"
         st, h, _ = anonymous({"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
-        assert st == 303 and h["Location"] == "/login", (st, dict(h))
+        # (to the sign-in page, which leads back to the page asked for)
+        assert st == 303 and h["Location"] == "/login?next=%2Fmetrics", (st, dict(h))
         st, h, _ = anonymous({"Accept": "*/*"})
         assert st == 401, st
         print("no session: scraper 401 + WWW-Authenticate, browser 303 to /login  OK")
