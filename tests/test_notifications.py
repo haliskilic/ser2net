@@ -161,6 +161,13 @@ async def test_delivery(hook_port, smtp_port):
     s.webhook_url = f"http://127.0.0.1:{hook_port}/fail"
     errors = await n.deliver("device_lost", "PLC", "gone")
     assert errors and "HTTP 500" in errors[0], errors
+    # a URL that isn't http(s) (a config.json tolerated on load) is never opened
+    sent = len(RECEIVED)
+    for url in (f"file://{os.path.abspath(__file__)}", "ftp://127.0.0.1/x"):
+        s.webhook_url = url
+        errors = await n.deliver("device_lost", "PLC", "gone")
+        assert errors and "https://" in errors[0], errors
+    assert len(RECEIVED) == sent
     print("delivery: webhook + SMTP received (Turkish, 7-bit e-mail); a failing webhook is "
           "reported, not raised  OK")
 
