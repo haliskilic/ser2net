@@ -106,7 +106,7 @@ PORTABLE = [
     "test_admin_ui_first.py",
     "test_connect_out_link.py",
     "test_serial_diagnostics.py",  # PTY parts POSIX / Linux only; the rest runs on Windows too
-    "test_serial_retries.py",      # POSIX PTYs (os.openpty); skips on Windows
+    "test_serial_retries.py",      # PTY parts POSIX only; the rest runs on Windows too
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

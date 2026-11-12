@@ -128,6 +128,11 @@ class ModbusGatewayRunner:
         for mon in list(self._traffic):
             mon.feed_traffic(direction, data)
 
+    def wake_serial(self) -> None:
+        """A serial device was plugged in (PortWatcher): try the port now if it is waiting
+        to be opened again."""
+        self._link.wake()
+
     async def serial_write(self, data: bytes) -> bool:
         # the modbus console is observe-only (injecting raw bytes would corrupt
         # the request/response framing on the shared bus)

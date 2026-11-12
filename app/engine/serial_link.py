@@ -34,7 +34,7 @@ import contextlib
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional
 
-from . import portdiag, serial_io
+from . import portdiag, portlist, serial_io
 
 if TYPE_CHECKING:
     from ..config import SerialSettings
@@ -114,12 +114,14 @@ class FailureLog:
 class Backoff:
     """The pause between reconnect attempts: 0.5 s doubling up to ``cap`` (10 s), plus up
     to 0.4 s of jitter derived from the attempt number (not an RNG). ``attempt`` counts the
-    attempts since the last success; reset() after one."""
+    attempts since the last success; reset() after one. wake() ends a pause under way (a
+    serial device just appeared: no need to wait up to 10 s for it)."""
 
     def __init__(self, cap: float = 10.0) -> None:
         self.cap = cap
         self.attempt = 0
         self._delay = 0.5
+        self._woken: Optional[asyncio.Event] = None  # set by wake() while wait() sleeps
 
     def reset(self) -> None:
         self.attempt, self._delay = 0, 0.5
@@ -132,12 +134,23 @@ class Backoff:
         return pause
 
     async def wait(self, stop: asyncio.Event) -> bool:
-        """Sleep before the next attempt; False when ``stop`` was set meanwhile."""
+        """Sleep before the next attempt (or until wake()); False when ``stop`` was set
+        meanwhile."""
+        pause = self.pause()
+        woken = self._woken = asyncio.Event()
+        waits = (asyncio.ensure_future(stop.wait()), asyncio.ensure_future(woken.wait()))
         try:
-            await asyncio.wait_for(stop.wait(), timeout=self.pause())
-            return False
-        except asyncio.TimeoutError:
-            return True
+            await asyncio.wait(waits, timeout=pause, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waits:
+                w.cancel()
+            self._woken = None
+        return not stop.is_set()
+
+    def wake(self) -> None:
+        """End the pause wait() is in, if any: try again now."""
+        if self._woken is not None:
+            self._woken.set()
 
 
 class SerialLink:
@@ -158,6 +171,7 @@ class SerialLink:
         self.down = False
         self._notes = NoteLog(log)
         self._failures = FailureLog(log, "serial error")
+        self._backoff: Optional[Backoff] = None  # run()'s, while it runs
 
     @property
     def is_open(self) -> bool:
@@ -166,7 +180,7 @@ class SerialLink:
     async def run(self, session: Session) -> None:
         """Keep the port open until ``stop`` is set: open it, run ``session`` while it is
         open, close it once the session ends, and try again after a backoff."""
-        backoff = Backoff()
+        backoff = self._backoff = Backoff()
         self.down = False  # the first attempt is under way
         while not self._stop.is_set():
             was_open = False
@@ -190,6 +204,12 @@ class SerialLink:
             self.status.reconnects += 1
             if not await backoff.wait(self._stop):
                 break
+
+    def wake(self) -> None:
+        """Try to open the port now if run() is waiting to try again (a serial device was
+        plugged in, PortWatcher saw it)."""
+        if self._backoff is not None and not self.is_open:
+            self._backoff.wake()
 
     async def _failed(self, e: Exception, was_open: bool) -> None:
         """The port could not be opened, or went away (``was_open``): say why in the status
@@ -266,7 +286,7 @@ class SerialLink:
 
 def explain(e: BaseException, settings: SerialSettings) -> Optional[portdiag.Note]:
     """portdiag.explain for the device ``settings`` opens (blocking: run it in a thread)."""
-    return portdiag.explain(e, serial_io.resolve_device(settings))
+    return portdiag.explain(e, serial_io.resolve_device(settings, portlist.recent()))
 
 
 class NoteLog:

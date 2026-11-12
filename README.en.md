@@ -116,7 +116,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **A missing or busy serial device:** the mapping shows `device missing` while the
   device isn't there (unplugged, not enumerated yet) and `reconnecting` right after an open
   port went away or when it can't be opened for another reason; it is tried again every
-  few seconds (at most about 10 s apart). The log says the first failure and each change
+  few seconds (at most about 10 s apart), and at once when the port list sees a new device
+  (a re-plugged adapter is used within about 2 s). A mapping bound to a USB identity finds
+  its device in that list instead of enumerating the ports at every retry. The log says the first failure and each change
   of the error, then the same error only every 15 minutes with how many attempts failed
   since when, and once the port opens again how long it was down, instead of a line at
   every attempt (the same for a connect-out that keeps failing). `/api/v1/status` counts
