@@ -146,7 +146,10 @@ docker run -d --name ser2net --restart unless-stopped \
   with crun, to keep your serial device group); ser2net then runs as you.
 - **Persistence.** `config.json`, its automatic backups (`backups/`), logs, traces
   (`traces/`) and any generated TLS material live in the `/data` volume; back that up to
-  preserve mappings and the admin password. `/data` must be writable: mount the whole
+  preserve mappings and the admin password. `config.json` and `backups/` hold secrets in
+  plain text (the LDAP, OIDC, SMTP and MQTT passwords, the webhook URL, the cluster key and
+  the session key; see the README's *Configuration & state files*), so keep a copy of
+  `/data` like a password vault. `/data` must be writable: mount the whole
   directory, not `config.json` on its own (it is replaced atomically, which a single-file
   mount doesn't allow). A start rewrites `config.json` only when something changed (the
   `SER2NET_*` address, an upgrade).

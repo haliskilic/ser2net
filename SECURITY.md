@@ -40,6 +40,26 @@ connection): ser2net does not authenticate MQTT commands itself. On a UDP mappin
 access list checks a source address that can be forged: set a reply address, and on
 untrusted networks prefer TCP with TLS, or a firewall.
 
+### Stored secrets
+`config.json` keeps in plain text what ser2net has to use itself: the LDAP bind password,
+the OIDC client secret, the SMTP password, the webhook URL, each mapping's MQTT broker
+password, the cluster key and the session key (`secret_key`) that signs sign-ins. Local
+passwords are scrypt hashes; the REST API token is stored only as a hash. `backups/` holds
+earlier copies of the file (a downloaded backup leaves out the session key), and the
+mappings export (operator role) holds the MQTT passwords. On the host the data folder is
+owner-only (POSIX `0700`, files `0600`; Windows: owner, SYSTEM and Administrators), so what
+needs care are the copies: a copied data folder or Docker volume, a disk or VM image, a
+downloaded backup, an export. Keep them like a password vault. If one leaked:
+- change the third-party credentials where they are issued — the LDAP service account's
+  password, the OIDC client secret, the SMTP password, the webhook URL (a new one from the
+  chat service), the MQTT broker accounts — and enter the new ones in ser2net;
+- set a new cluster key on every node (Settings → LAN cluster → *Generate a new key and
+  save*, with "keep accepting the current one for 7 days" unticked);
+- Settings → Web UI access → *Sign out everyone*: a new session key, so a sign-in made
+  with the old one stops working;
+- change the passwords of local accounts that could be guessed (their hashes are in the
+  copy).
+
 ### Browser protections
 The web UI sends a Content-Security-Policy that allows scripts only from its own files
 (no inline scripts or event handlers, no `eval`), no `<base>`, no plugins, no framing, and
@@ -93,6 +113,26 @@ ACL'leri; broker bağlantısı için TLS ve kimlik bilgisi): ser2net MQTT komutl
 kimliğini kendisi doğrulamaz. UDP eşlemelerinde erişim listesi taklit edilebilen bir kaynak
 adresine bakar: bir yanıt adresi girin, güvenilmeyen ağlarda TLS'li TCP'yi ya da bir
 güvenlik duvarını tercih edin.
+
+### Saklanan gizli değerler
+`config.json`, ser2net'in kendisinin kullanması gereken gizli değerleri açık metin tutar:
+LDAP bind parolası, OIDC client secret, SMTP parolası, webhook URL'si, her eşlemenin MQTT
+broker parolası, cluster anahtarı ve oturumları imzalayan oturum anahtarı (`secret_key`).
+Yerel parolalar scrypt hash'i olarak, REST API token'ı yalnızca hash'i olarak saklanır.
+`backups/` dosyanın önceki kopyalarını tutar (indirilen bir yedekte oturum anahtarı yoktur),
+eşleme dışa aktarımı (operator rolü) da MQTT parolalarını içerir. Makinede veri klasörü
+yalnızca sahibine açıktır (POSIX `0700`, dosyalar `0600`; Windows: sahip, SYSTEM ve
+Administrators), bu yüzden dikkat isteyen kopyalardır: kopyalanan bir veri klasörü ya da
+Docker volume'u, bir disk ya da VM imajı, indirilen bir yedek, bir dışa aktarım. Bunları
+bir parola kasası gibi koruyun. Biri sızarsa:
+- üçüncü taraf kimlik bilgilerini verildikleri yerde değiştirin — LDAP servis hesabının
+  parolası, OIDC client secret, SMTP parolası, webhook URL'si (sohbet servisinden yenisi),
+  MQTT broker hesapları — ve yenilerini ser2net'e girin;
+- her düğümde yeni bir cluster anahtarı ayarlayın (Ayarlar → LAN cluster → *Yeni anahtar
+  üret ve kaydet*; "mevcut anahtarı 7 gün daha kabul et" kutusu işaretsiz);
+- Ayarlar → Web arayüzü erişimi → *Herkesin oturumunu kapat*: yeni bir oturum anahtarı
+  üretir, eskisiyle açılmış oturumlar çalışmaz olur;
+- tahmin edilebilecek yerel hesap parolalarını değiştirin (hash'leri kopyada).
 
 ### Tarayıcı tarafı korumalar
 Web arayüzü, betiklere yalnızca kendi dosyalarından izin veren bir Content-Security-Policy

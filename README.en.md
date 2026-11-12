@@ -652,7 +652,8 @@ is no account at all; later starts ignore it.
 All state lives in the **data dir** (default `data/`). The data directory is locked to
 owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the files
 inside aren't readable by other users:
-- `config.json` — admin IP, password hash, all mappings (atomic write).
+- `config.json` — admin IP, password hashes, all mappings (atomic write), and the secrets
+  ser2net has to use itself, in plain text (see *Secrets* below).
 - `backups/` — the previous `config.json` before every change (newest 50). Download or
   restore one under Settings → *Configuration backups*. A restore first shows what changes
   for sign-in and access, then brings back the mappings and settings; the user accounts
@@ -670,6 +671,17 @@ inside aren't readable by other users:
 - `tls/` — certificate/key if self-signed is generated.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
+
+**Secrets:** `config.json` holds, in plain text, the LDAP bind password, the OIDC client
+secret, the SMTP password, the webhook URL (which often carries a token), each mapping's
+MQTT broker password, the cluster key (enough to read and change the mappings of every
+node) and the session key `secret_key` (with the accounts in the same file, enough to make
+a valid sign-in). Local passwords are kept as scrypt hashes and the REST API token only as a
+hash. `backups/` holds earlier copies of the same file (a downloaded backup leaves out the
+session key), and the mappings export holds the MQTT passwords. On this machine only the
+account ser2net runs as can read them; treat every copy — a copied data folder or Docker
+volume, a disk or VM image, a downloaded backup, an export — like a password vault.
+[SECURITY.md](SECURITY.md) (*Stored secrets*) lists what to change after such a copy leaked.
 
 Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is

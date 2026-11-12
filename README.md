@@ -670,7 +670,8 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 Tüm durum **veri dizininde** (varsayılan `data/`). Veri dizini yalnızca sahibe açık
 kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), böylece
 içindeki dosyalar başka kullanıcılarca okunamaz:
-- `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
+- `config.json` — admin IP, parola hash'leri, tüm eşlemeler (atomik yazım) ve ser2net'in
+  kendisinin kullanması gereken gizli değerler, açık metin olarak (aşağıda *Gizli değerler*).
 - `backups/` — her değişiklikten önce `config.json`'un önceki hâli (son 50). Ayarlar →
   *Yapılandırma yedekleri*'nden indirilir ya da geri yüklenir. Geri yükleme önce giriş ve
   erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
@@ -688,6 +689,18 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `tls/` — self-signed üretilirse sertifika/anahtar.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
+
+**Gizli değerler:** `config.json` LDAP bind parolasını, OIDC client secret'ı, SMTP
+parolasını, webhook URL'sini (çoğu zaman içinde bir token vardır), her eşlemenin MQTT broker
+parolasını, cluster anahtarını (tüm düğümlerin eşlemelerini okumaya ve değiştirmeye yeter)
+ve oturum anahtarı `secret_key`'i (aynı dosyadaki hesaplarla birlikte geçerli bir oturum
+üretmeye yeter) açık metin olarak tutar. Yerel parolalar scrypt hash'i, REST API token'ı da
+yalnızca hash'i olarak saklanır. `backups/` aynı dosyanın önceki kopyalarını tutar (indirilen
+bir yedekte oturum anahtarı yoktur), eşleme dışa aktarımı da MQTT parolalarını içerir. Bu
+makinede bunları yalnızca ser2net'in çalıştığı hesap okuyabilir; her kopyayı — kopyalanan
+bir veri klasörünü ya da Docker volume'unu, bir disk ya da VM imajını, indirilen bir yedeği,
+bir dışa aktarımı — bir parola kasası gibi koruyun. Böyle bir kopya sızarsa neyin
+değiştirileceği [SECURITY.md](SECURITY.md)'de (*Saklanan gizli değerler*) yazar.
 
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
 içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
