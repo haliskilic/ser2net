@@ -120,10 +120,13 @@ async def open_serial(settings: SerialSettings):
     set again once it is open (pyserial skips them quietly when the port has no modem
     lines, a PTY for one). A setting the port did not take (that, or RS-485 mode) does not
     fail the open: open_notes(serial_instance) has it (portdiag.Note) for the caller to
-    report. A refused RS-485 mode is also taken back, as pyserial keeps it and would fail
-    every later change of the port's settings with it (an RFC 2217 client's baud rate)."""
+    report, with what else may use the port (portdiag.port_notes: the kernel console, a
+    login prompt). A refused RS-485 mode is also taken back, as pyserial keeps it and would
+    fail every later change of the port's settings with it (an RFC 2217 client's baud
+    rate)."""
     device = await _resolve(settings)
     refuse_url(device)  # the one place every serial port is opened
+    found: list[portdiag.Note] = await portdiag.about_port(device)
     kwargs: dict[str, Any] = port_settings(settings)
     # `exclusive` is POSIX-only in pyserial; Windows ports are exclusive anyway.
     if sys.platform != "win32":
@@ -139,7 +142,6 @@ async def open_serial(settings: SerialSettings):
     transport: Any = writer.transport  # serial_compat.Transport
     ser = transport.serial
 
-    found: list[portdiag.Note] = []
     for line, want in (("RTS", rts), ("DTR", dtr)):
         if want is not None:
             try:
@@ -167,7 +169,7 @@ async def open_serial(settings: SerialSettings):
     return reader, writer, ser, device
 
 
-# what open_serial found about a port it opened (a setting it did not take), by port
+# what open_serial found about a port it opened (a setting it did not take, ...), by port
 _NOTES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 

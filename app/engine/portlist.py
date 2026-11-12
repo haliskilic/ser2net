@@ -73,9 +73,12 @@ def has_hardware(device: str, sys_class: str = "/sys/class/tty") -> Optional[boo
 
 def snapshot() -> list[dict[str, Any]]:
     """Synchronous one-shot enumeration (blocking; call via executor in async code).
-    Each port also gets ``by_id`` (Linux udev stable name, else None) and ``hardware``
-    (see has_hardware)."""
+    Each port also gets ``by_id`` (Linux udev stable name, else None), ``hardware``
+    (see has_hardware), ``warnings`` (what else may use it: portdiag.port_warnings) and
+    ``access`` (whether this process may open it; None: can't tell, Windows)."""
     from serial.tools import list_ports
+
+    from . import portdiag
 
     links = _by_id_links() if sys.platform.startswith("linux") else {}
     ports = []
@@ -83,6 +86,8 @@ def snapshot() -> list[dict[str, Any]]:
         d = _normalize(p)
         d["by_id"] = links.get(os.path.realpath(d["device"]))
         d["hardware"] = has_hardware(d["device"])
+        d["warnings"] = portdiag.port_warnings(d["device"])
+        d["access"] = portdiag.access(d["device"])
         ports.append(d)
     ports.sort(key=lambda d: d["device"])
     return ports

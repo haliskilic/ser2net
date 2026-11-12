@@ -363,6 +363,29 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   the connections refused right after accept (`ser2net_connections_refused_total`, by
   reason).
 
+### Serial ports shared with other programs (Linux)
+
+Nothing keeps other programs off a serial port unless all of them lock it, and the kernel
+console, a login prompt and ModemManager use a port without asking. ser2net then shares
+the port's bytes with them (stray characters, Modbus timeouts), and a login prompt hangs
+the port up whenever it restarts. The Ports page marks such ports (**kernel console**,
+**login prompt**, **ModemManager**, and **no access** for a port ser2net may not open), and
+a mapping that has one open says so under its state (a port hung up and reopened at once
+is counted there as well).
+- **Kernel console, login prompt** (a Raspberry Pi's GPIO UART, a VM's serial console): on
+  a Raspberry Pi run `sudo raspi-config` → Interface Options → Serial Port, and answer *No*
+  to the login shell and *Yes* to the serial hardware. Elsewhere remove `console=ttyS0`
+  from the kernel command line, and turn the login prompt off:
+  `sudo systemctl mask --now serial-getty@ttyS0.service`.
+- **ModemManager** (desktop Ubuntu / Fedora; USB CDC `ttyACM*` devices such as an Arduino):
+  tell it to leave the device alone with a udev rule, for example
+  `/etc/udev/rules.d/99-ser2net.rules` with
+  `ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"`, then
+  `sudo udevadm control --reload && sudo udevadm trigger`.
+- **Permission denied:** the dashboard names the group the device belongs to and what is
+  missing (see Requirements); **busy:** the mapping of this ser2net that has the port open,
+  or the kind of lock another program holds.
+
 ---
 
 ## 🔌 REST API

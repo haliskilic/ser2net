@@ -20,7 +20,9 @@ The link's state, for the runner and anything built on it:
     ``device-missing`` when the last open found no such device (portdiag.missing),
     ``reconnecting`` otherwise (the port went away, or can't be opened for another reason);
     ``status.open_failures`` / ``status.device_lost`` count failed opens and losses of the
-    open port (``reconnects`` both, as before);
+    open port (``reconnects`` both, as before); ``status.hangups`` the losses after which
+    the first try opened the same device again (POSIX: a hang-up, by a login prompt on
+    the port for one, not an unplug);
     ``status.hint``: what the error of a failed open means (portdiag.explain);
     ``status.warnings``: a setting the open port did not take (serial_io.open_notes),
     logged when it differs from the last open's.
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional
 
@@ -172,6 +175,10 @@ class SerialLink:
         self._notes = NoteLog(log)
         self._failures = FailureLog(log, "serial error")
         self._backoff: Optional[Backoff] = None  # run()'s, while it runs
+        # POSIX: the open port's device number, and that of a port that went away while
+        # no open has failed since (a hang-up, if the first try opens the same device)
+        self._rdev: Optional[int] = None
+        self._lost_rdev: Optional[int] = None
 
     @property
     def is_open(self) -> bool:
@@ -219,9 +226,11 @@ class SerialLink:
         if was_open:
             st.device_lost += 1
             st.state = "reconnecting"
+            self._lost_rdev = self._rdev  # (no stat now: an unplug may still be under way)
         else:
             st.open_failures += 1
             st.state = "device-missing" if portdiag.missing(e) else "reconnecting"
+            self._lost_rdev = None
         if self._failures.failed(str(e)):
             st.hint = None if was_open else await asyncio.to_thread(explain, e, self.settings)
 
@@ -231,7 +240,17 @@ class SerialLink:
         use it to wire up a stand-in stream pair)."""
         changed = serial is not self.serial
         self.reader, self.writer, self.serial, self.device = reader, writer, serial, device
+        self._rdev = _rdev(serial)
+        if self._lost_rdev is not None and self._lost_rdev == self._rdev:
+            # the port went away and the very next try opened the same device: hung up
+            # (a login prompt's vhangup, another program), not unplugged
+            self.status.hangups += 1
+            self._log("serial port was hung up while open and could be reopened at once: "
+                      "another program may be using it (a login prompt on it?)")
+        self._lost_rdev = None
         notes = serial_io.open_notes(serial)
+        if self.status.hangups:
+            notes.append(portdiag.Note("hangups", (self.status.hangups,)))
         self.status.device = device
         self.status.devices = (device,) if device else ()
         self.status.last_error = ""
@@ -282,6 +301,14 @@ class SerialLink:
         closed.add_done_callback(_consume_error)
         await asyncio.wait((closed,))
         raise closed.exception() or ConnectionError("serial EOF / device removed")
+
+
+def _rdev(ser: Any) -> Optional[int]:
+    """The device number of an open POSIX port (None elsewhere, or for a stand-in)."""
+    try:
+        return os.fstat(ser.fileno()).st_rdev or None
+    except (AttributeError, OSError, ValueError, TypeError):
+        return None
 
 
 def explain(e: BaseException, settings: SerialSettings) -> Optional[portdiag.Note]:

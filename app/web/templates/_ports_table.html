@@ -1,3 +1,8 @@
+{% set port_warnings = {
+  "console": (_("kernel console"), _("The kernel writes its messages to this port. Remove console= with this port from the kernel command line (Raspberry Pi: raspi-config, Interface Options, Serial Port).")),
+  "getty": (_("login prompt"), _("A login prompt (serial-getty) runs on this port: it reads from it, and hangs it up when it restarts. Turn it off with systemctl mask and its unit, e.g. serial-getty@ttyS0.service.")),
+  "modemmanager": (_("ModemManager"), _("ModemManager may probe this port with AT commands. A udev rule that sets ID_MM_DEVICE_IGNORE=1 for it keeps it away.")),
+} %}
 {% if ports %}
 <div class="table-scroll">
 <table class="grid ports stackable">
@@ -6,6 +11,8 @@
   {% for p in ports %}
     <tr>
       <td class="mono col-name">{{ p.device|softbreak }}{% if p.hardware is false %} <span class="tag">{{ _("no hardware") }}</span>{% endif %}
+        {%- for w in p.warnings or [] if w in port_warnings %} <span class="tag tag-warn" title="{{ port_warnings[w][1] }}">{{ port_warnings[w][0] }}</span>{% endfor %}
+        {%- if p.access is false %} <span class="tag tag-warn" title="{{ _('ser2net may not open this port: the account it runs as is not in the group the device belongs to (see Requirements in the README).') }}">{{ _("no access") }}</span>{% endif %}
         {% if p.by_id %}<div class="sub mono" title="{{ _('stable name: survives re-plugging') }}">{{ p.by_id|softbreak }}</div>{% endif %}</td>
       <td data-label="{{ _('Description') }}">{{ p.description or '—' }}</td>
       <td class="mono" data-label="VID:PID">{% if p.vid %}{{ p.vid }}:{{ p.pid }}{% else %}—{% endif %}</td>

@@ -863,5 +863,17 @@
   "mapping '{0}' has this port open": "bu portu '{0}' eşlemesi açık tutuyor",
   "another program has this port open (Windows lets one program at a time open a COM port)": "bu portu başka bir program açık tutuyor (Windows bir COM portunu aynı anda yalnızca tek bir programın açmasına izin verir)",
   "another program has locked this port (flock): another ser2net, or a terminal program such as picocom, tio or miniterm": "bu portu başka bir program kilitlemiş (flock): başka bir ser2net ya da picocom, tio, miniterm gibi bir terminal programı",
-  "another program keeps other programs out of this port (TIOCEXCL), for example ModemManager or a classic ser2net": "bu portu başka bir program diğer programlara kapatmış (TIOCEXCL), örneğin ModemManager ya da klasik ser2net"
+  "another program keeps other programs out of this port (TIOCEXCL), for example ModemManager or a classic ser2net": "bu portu başka bir program diğer programlara kapatmış (TIOCEXCL), örneğin ModemManager ya da klasik ser2net",
+  "{0} is also the kernel console: the kernel writes its messages to it (remove console={0} from the kernel command line; Raspberry Pi: raspi-config, Interface Options, Serial Port)": "{0} aynı zamanda çekirdek konsolu: çekirdek mesajlarını bu porta yazıyor (console={0} değerini çekirdek komut satırından kaldır; Raspberry Pi: raspi-config, Interface Options, Serial Port)",
+  "a login prompt runs on this port ({0}): it reads from the port and hangs it up when it restarts (systemctl disable --now {0}, or systemctl mask {0})": "bu portta bir oturum açma istemi çalışıyor ({0}): porttan okuyor ve yeniden başladığında portu kapatıyor (hang-up) (systemctl disable --now {0} ya da systemctl mask {0})",
+  "ModemManager may probe {0} (it sends AT commands to new ttyACM devices): a udev rule that sets ID_MM_DEVICE_IGNORE=1 for it keeps it away": "ModemManager {0} portunu yoklayabilir (yeni ttyACM cihazlarına AT komutları gönderir): ID_MM_DEVICE_IGNORE=1 ayarlayan bir udev kuralı onu uzak tutar",
+  "hung up {0} time(s) while open, and could be reopened at once: another program may be using this port (a login prompt on it?)": "açıkken {0} kez kapatıldı (hang-up) ve hemen yeniden açılabildi: bu portu başka bir program kullanıyor olabilir (üzerinde bir oturum açma istemi mi var?)",
+  "kernel console": "çekirdek konsolu",
+  "The kernel writes its messages to this port. Remove console= with this port from the kernel command line (Raspberry Pi: raspi-config, Interface Options, Serial Port).": "Çekirdek mesajlarını bu porta yazıyor. Bu portu gösteren console= değerini çekirdek komut satırından kaldır (Raspberry Pi: raspi-config, Interface Options, Serial Port).",
+  "login prompt": "oturum açma istemi",
+  "A login prompt (serial-getty) runs on this port: it reads from it, and hangs it up when it restarts. Turn it off with systemctl mask and its unit, e.g. serial-getty@ttyS0.service.": "Bu portta bir oturum açma istemi (serial-getty) çalışıyor: porttan okuyor ve yeniden başladığında portu kapatıyor (hang-up). systemctl mask ve unit adıyla kapat, ör. serial-getty@ttyS0.service.",
+  "ModemManager": "ModemManager",
+  "ModemManager may probe this port with AT commands. A udev rule that sets ID_MM_DEVICE_IGNORE=1 for it keeps it away.": "ModemManager bu portu AT komutlarıyla yoklayabilir. Bu port için ID_MM_DEVICE_IGNORE=1 ayarlayan bir udev kuralı onu uzak tutar.",
+  "ser2net may not open this port: the account it runs as is not in the group the device belongs to (see Requirements in the README).": "ser2net bu portu açamaz: çalıştığı hesap, cihazın ait olduğu grupta değil (README'deki Gereklilikler bölümüne bak).",
+  "no access": "erişim yok"
 }

@@ -10,6 +10,15 @@ port did not take.
     EAGAIN, Windows' "Access is denied") names the mapping of this process that has it open
     under any of its names (by device number: a symlink counts), else the kind of lock
     another program holds. Two exclusive mappings on one PTY: the second says which has it;
+  - what else may use a port (Linux, from stand-in /sys, /run/systemd and /run/udev
+    folders): the kernel console, a login prompt (serial-getty / getty unit running), and
+    ModemManager for a ttyACM port unless udev tells it to ignore the port; /dev/serial0
+    style links resolve to their tty. The ports page shows them as badges (plus "no
+    access" for a port this process may not open), and a mapping that has such a port open
+    has them in its warnings (logged once);
+  - a port that went away and opened again on the very next try with the same device
+    number was hung up (a login prompt's vhangup), not unplugged: counted (`hangups`),
+    logged and shown; a real unplug (the next open fails) is not;
 
   - RTS / DTR set to on or off are given to pyserial before the port opens (so pyserial
     opens the port with them, instead of switching both on first), and set again once it is
@@ -415,6 +424,192 @@ def test_windows_in_use_hint():
           "open; FileNotFoundError is a missing device  OK")
 
 
+# ------------------------------------------------------------------ what else uses a port
+@contextlib.contextmanager
+def _system(folder, consoles="tty1", units=(), udev=None):
+    """Stand-in /sys/class/tty/console/active, /run/systemd/units and /run/udev/data."""
+    run = os.path.join(folder, "units")
+    data = os.path.join(folder, "udev")
+    os.makedirs(run, exist_ok=True)
+    os.makedirs(data, exist_ok=True)
+    active = os.path.join(folder, "console-active")
+    with open(active, "w") as fh:
+        fh.write(consoles + "\n")
+    for unit in units:
+        os.symlink("/dev/null", os.path.join(run, f"invocation:{unit}"))
+    for name, text in (udev or {}).items():
+        with open(os.path.join(data, name), "w") as fh:
+            fh.write(text)
+    with mock.patch.object(portdiag, "CONSOLE_ACTIVE", active), \
+            mock.patch.object(portdiag, "SYSTEMD_UNITS", run), \
+            mock.patch.object(portdiag, "UDEV_DATA", data):
+        yield
+
+
+def test_port_warnings():
+    if not sys.platform.startswith("linux"):
+        assert portdiag.port_warnings("/dev/ttyS0") == []
+        print("SKIP (part): console / login prompt / ModemManager are looked for on Linux only")
+        return
+    folder = tempfile.mkdtemp(prefix="s2n_diag_")
+    try:
+        dev = os.path.join(folder, "dev")
+        os.makedirs(dev)
+        for name in ("ttyS0", "ttyAMA0", "ttyACM0", "ttyACM1", "ttyUSB0"):
+            open(os.path.join(dev, name), "w").close()
+        os.symlink(os.path.join(dev, "ttyAMA0"), os.path.join(dev, "serial0"))
+        sys_ = os.path.join(folder, "sys")
+        with _system(sys_, consoles="tty1 ttyAMA0",
+                     units=("serial-getty@ttyAMA0.service", "getty@ttyS0.service",
+                            "ModemManager.service"),
+                     udev={"c0:0": "E:ID_VENDOR=x\n"}):
+            w = portdiag.port_warnings
+            assert w(os.path.join(dev, "serial0")) == ["console", "getty"]  # its ttyAMA0
+            assert w(os.path.join(dev, "ttyS0")) == ["getty"]
+            assert w(os.path.join(dev, "ttyACM0")) == ["modemmanager"]
+            assert w(os.path.join(dev, "ttyUSB0")) == [], "ModemManager: ttyACM only"
+            notes = portdiag.port_notes(os.path.join(dev, "serial0"))
+            assert [n.text() for n in notes] == [
+                "ttyAMA0 is also the kernel console: the kernel writes its messages to it "
+                "(remove console=ttyAMA0 from the kernel command line; Raspberry Pi: "
+                "raspi-config, Interface Options, Serial Port)",
+                "a login prompt runs on this port (serial-getty@ttyAMA0.service): it reads from "
+                "the port and hangs it up when it restarts (systemctl disable --now "
+                "serial-getty@ttyAMA0.service, or systemctl mask serial-getty@ttyAMA0.service)"]
+        with _system(os.path.join(folder, "sys2"), units=("ModemManager.service",),
+                     udev={"c0:0": "E:ID_MM_DEVICE_IGNORE=1\n"}):
+            assert portdiag.port_warnings(os.path.join(dev, "ttyACM1")) == [], "ignored"
+        with _system(os.path.join(folder, "sys3")):  # nothing runs: nothing to say
+            assert portdiag.port_warnings(os.path.join(dev, "ttyAMA0")) == []
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+    print("Linux: the kernel console, a login prompt, ModemManager on ttyACM (unless udev "
+          "says to ignore it) are found, /dev/serial0 resolved to its tty  OK")
+
+
+def test_ports_page():
+    from serial.tools import list_ports
+
+    from app.engine import portlist
+    from app.web.server import make_templates
+    port = types.SimpleNamespace(device="/dev/ttyAMA0", name="ttyAMA0", description="UART",
+                                 hwid="", vid=None, pid=None, serial_number=None,
+                                 manufacturer=None, product=None, location=None)
+    with mock.patch.object(list_ports, "comports", lambda: [port]), \
+            mock.patch.object(portdiag, "port_warnings", lambda d: ["console", "getty"]), \
+            mock.patch.object(portdiag, "access", lambda d: False):
+        ports = portlist.snapshot()
+    assert ports[0]["warnings"] == ["console", "getty"] and ports[0]["access"] is False, ports
+    tpl = make_templates().env.get_template("_ports_table.html")
+    html = tpl.render(ports=ports, show_all=False, hidden=0, in_use=set())
+    for label in ("kernel console", "login prompt", "no access"):
+        assert f">{label}</span>" in html, (label, html)
+    assert "ModemManager</span>" not in html
+    tok = i18n.set_language("tr")
+    try:
+        html = tpl.render(ports=ports, show_all=False, hidden=0, in_use=set())
+    finally:
+        i18n.reset(tok)
+    assert f">{TR['kernel console']}</span>" in html and f">{TR['no access']}</span>" in html
+    ports[0].pop("warnings")  # a port list without them (an older peer's): no badges
+    ports[0].pop("access")
+    html = tpl.render(ports=ports, show_all=False, hidden=0, in_use=set())
+    assert "tag-warn" not in html
+    print("ports page: what else uses a port and a port ser2net may not open are shown as "
+          "badges (TR too)  OK")
+
+
+async def _open_port_notes(path, folder):
+    logs = []
+    status = RunnerStatus()
+    stop = asyncio.Event()
+    link = SerialLink(SerialSettings(port=path), status, stop, logs.append, owner="console")
+    name = os.path.basename(os.path.realpath(path))
+    with _system(folder, consoles=f"tty0 {name}"):
+        task = asyncio.ensure_future(link.run(link.hold_open))
+        try:
+            await _until(lambda: status.state == "running")
+            assert [n.kind for n in status.warnings] == ["console"], status.warnings
+            assert status.as_dict()["warnings"][0].startswith(f"{name} is also the kernel "
+                                                              "console"), status.as_dict()
+            assert sum(m.startswith(f"serial warning: {name} is also the kernel console")
+                       for m in logs) == 1, logs
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await link.close()
+
+
+def test_open_port_says_what_else_uses_it():
+    if not sys.platform.startswith("linux"):
+        print("SKIP (part): the open port's console check is Linux only")
+        return
+    pty = Pty()
+    folder = tempfile.mkdtemp(prefix="s2n_diag_")
+    try:
+        asyncio.run(_open_port_notes(pty.path, folder))
+    finally:
+        pty.close()
+        shutil.rmtree(folder, ignore_errors=True)
+    print("a mapping that has the kernel console open: in its warnings, logged once  OK")
+
+
+async def _hangup(pty):
+    from app.engine import serial_link
+    logs = []
+    status = RunnerStatus()
+    stop = asyncio.Event()
+    link = SerialLink(SerialSettings(port=pty.path), status, stop, logs.append)
+    sessions = []
+
+    async def session(reader, writer):  # hung up once: the port reads as gone
+        sessions.append(1)
+        if len(sessions) == 1:
+            raise serial.SerialException("device reports readiness to read but returned no "
+                                         "data (device disconnected or multiple access on "
+                                         "port?)")
+        await link.hold_open(reader, writer)
+
+    def fast(self):
+        self.attempt += 1
+        return 0.05
+
+    with mock.patch.object(serial_link.Backoff, "pause", fast):
+        task = asyncio.ensure_future(link.run(session))
+        try:
+            await _until(lambda: len(sessions) == 2 and status.state == "running")
+            assert (status.device_lost, status.hangups) == (1, 1), status
+            assert any("was hung up while open and could be reopened at once" in m
+                       for m in logs), logs
+            assert status.as_dict()["hangups"] == 1
+            assert status.as_dict()["warnings"] == [
+                "hung up 1 time(s) while open, and could be reopened at once: another program "
+                "may be using this port (a login prompt on it?)"], status.as_dict()
+            pty.close()  # now unplugged for real: the next open fails, no hang-up
+            await _until(lambda: status.device_lost == 2 and status.open_failures >= 1)
+            assert status.hangups == 1, status
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await link.close()
+
+
+def test_hangup_told_from_an_unplug():
+    if os.name != "posix":
+        print("SKIP (part): the hang-up check is POSIX only (device numbers)")
+        return
+    pty = Pty()
+    try:
+        asyncio.run(_hangup(pty))
+    finally:
+        with contextlib.suppress(OSError):
+            pty.close()
+    print("a port lost and opened again at once with the same device number: a hang-up "
+          "(counted, logged, shown); a real unplug is not  OK")
+
+
 if __name__ == "__main__":
     test_lines_set_before_open()
     test_refused_settings_stand_in()
@@ -424,4 +619,8 @@ if __name__ == "__main__":
     test_no_access_hints()
     test_port_in_use_hints()
     test_windows_in_use_hint()
+    test_port_warnings()
+    test_ports_page()
+    test_open_port_says_what_else_uses_it()
+    test_hangup_told_from_an_unplug()
     print("\nPASS: what ser2net tells about a mapping's serial port")
