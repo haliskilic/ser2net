@@ -771,7 +771,11 @@ inside aren't readable by other users:
   and passwords, the REST API token and the cluster key stay as they are unless you tick
   the box to restore them too (that also signs everyone else out). *Only its mappings*
   goes through the import preview. A restore can be undone too; a downloaded backup
-  leaves out the session key.
+  leaves out the session key. The list names each backup's accounts; an admin can delete
+  one backup or all of them there. Deleting a user leaves the account (with its password
+  hash) in the backups made before — a restore with accounts would bring it back — so
+  *Remove it from the backups* takes an account that no longer exists out of every backup
+  that has it (the rest of each backup stays as it was). All of it is audited.
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
   under Settings → *Audit log*, CSV export. Every `all.log` line is also written to stdout,

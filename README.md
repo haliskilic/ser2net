@@ -790,7 +790,12 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   kullanıcı hesapları ve parolaları, REST API token'ı ve cluster anahtarı, onları da geri
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
   oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
-  de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
+  de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz. Liste her yedeğin
+  hesaplarını gösterir; admin orada tek bir yedeği ya da hepsini silebilir. Bir kullanıcıyı
+  silmek, hesabı (parola hash'iyle) daha önce alınmış yedeklerde bırakır — hesaplarıyla
+  birlikte geri yükleme onu geri getirir —, bu yüzden *Yedeklerden çıkar* artık olmayan bir
+  hesabı onu içeren her yedekten çıkarır (yedeklerin geri kalanı olduğu gibi kalır). Hepsi
+  denetim kaydına yazılır.
 - `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
   konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
   *Audit log*'da aranabilir, CSV olarak indirilebilir. `all.log`'un her satırı stdout'a da

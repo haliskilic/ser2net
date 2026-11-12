@@ -1927,8 +1927,10 @@ class ConfigStore:
 
     Every save that changes config.json first copies the version it replaces to
     <data>/backups/config-<UTC time>.json (identical content is not copied twice; the
-    newest BACKUPS_KEPT are kept). Backups are never read back on their own: deleting
-    config.json still resets the system; restoring one is an explicit admin action."""
+    newest BACKUPS_KEPT are kept). Backups are never read back on their own: restoring one
+    is an explicit admin action (deleting config.json alone leaves them, and the next admin
+    sees them in Settings). An admin can delete backups, or remove a deleted account from
+    every backup (remove_account), in Settings -> Configuration backups."""
 
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
@@ -2033,30 +2035,110 @@ class ConfigStore:
         return sorted(names, key=_backup_order, reverse=True)
 
     def backups(self) -> list[dict]:
-        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users}], newest first."""
+        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users, accounts:
+        [{username, role, source}]}], newest first."""
         out = []
         for name in self.backup_names():
             path = os.path.join(self.backup_dir, name)
             info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
-                                    "time": backup_time(name)}
+                                    "accounts": [], "time": backup_time(name)}
             try:
                 info["size"] = os.path.getsize(path)
                 with open(path, encoding="utf-8") as fh:
                     doc = json.load(fh)
                 info["mappings"] = len(doc.get("mappings") or [])
-                info["users"] = len(doc.get("users") or [])
-            except (OSError, ValueError, AttributeError):
+                info["accounts"] = _backup_accounts(doc)
+                info["users"] = len(info["accounts"])
+            except (OSError, ValueError, AttributeError, TypeError):
                 pass
             out.append(info)
         return out
 
+    def _known_backup(self, name: str) -> str:
+        """The path of the backup `name`; ConfigError for an unknown / invalid name."""
+        if not _BACKUP_NAME.match(name or "") or name not in self.backup_names():
+            raise ConfigError(_("No such backup."))
+        return os.path.join(self.backup_dir, name)
+
+    def delete_backup(self, name: str) -> None:
+        """Delete one backup (ConfigError for an unknown name)."""
+        os.remove(self._known_backup(name))
+
+    def delete_backups(self) -> int:
+        """Delete every backup; how many were deleted."""
+        gone = 0
+        for name in self.backup_names():
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(os.path.join(self.backup_dir, name))
+                gone += 1
+        return gone
+
+    def remove_account(self, username: str) -> int:
+        """Take the account named exactly `username` out of every backup that has it (in
+        a backup from before accounts existed, the top-level password_hash is the 'admin'
+        account), rewriting each one atomically under its name with everything else as
+        it was: restoring those backups can't bring the account back. Returns how many
+        backups were changed."""
+        changed = 0
+        for name in self.backup_names():
+            path = os.path.join(self.backup_dir, name)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    doc = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if isinstance(doc, dict) and _drop_backup_account(doc, username):
+                _replace_file(self.backup_dir, path, json.dumps(doc, indent=2, ensure_ascii=False))
+                changed += 1
+        return changed
+
     def read_backup(self, name: str) -> str:
         """The text of one backup. Raises ConfigError for an unknown / invalid name
         (only names this store generated are accepted: no path tricks)."""
-        if not _BACKUP_NAME.match(name or "") or name not in self.backup_names():
-            raise ConfigError(_("No such backup."))
-        with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
+        with open(self._known_backup(name), encoding="utf-8") as fh:
             return fh.read()
+
+
+def _backup_accounts(doc: dict) -> list[dict]:
+    """The accounts in a backup's JSON: [{username, role, source}] (a config from before
+    accounts existed has one, 'admin', as its top-level password_hash)."""
+    users = doc.get("users")
+    if isinstance(users, list) and users:
+        return [{"username": str(u.get("username", "")), "role": str(u.get("role", "")),
+                 "source": str(u.get("source") or "local")} for u in users if isinstance(u, dict)]
+    if doc.get("password_hash"):
+        return [{"username": "admin", "role": "admin", "source": "local"}]
+    return []
+
+
+def _drop_backup_account(doc: dict, username: str) -> bool:
+    """Take the account named `username` out of a backup's JSON; True if it was there."""
+    users = doc.get("users")
+    if isinstance(users, list) and users:
+        kept = [u for u in users if not (isinstance(u, dict) and u.get("username") == username)]
+        if len(kept) == len(users):
+            return False
+        doc["users"] = kept
+        return True
+    if username == "admin" and doc.get("password_hash"):
+        doc.pop("password_hash", None)
+        doc.pop("pwd_version", None)
+        return True
+    return False
+
+
+def _replace_file(directory: str, path: str, text: str) -> None:
+    """Write `text` to `path` atomically (a temp file in `directory`, fsync, rename)."""
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".bak.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def backup_time(name: str) -> str:

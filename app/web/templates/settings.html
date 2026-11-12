@@ -149,7 +149,8 @@
               <input type="hidden" name="username" value="{{ u.username }}">
               <button class="btn sm" type="submit">{{ _("Sign out") }}</button>
             </form>
-            <form method="post" action="{{ base }}/settings/users/delete" class="inline">
+            <form method="post" action="{{ base }}/settings/users/delete" class="inline"
+                  data-confirm="{{ _('Delete the account %(user)s?', user=u.username) }}">
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
               <input type="hidden" name="username" value="{{ u.username }}">
               <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
@@ -586,11 +587,18 @@
     {% for bk in backups %}
       <tr>
         <td class="mono">{{ bk.time }}</td>
-        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}</td>
+        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}
+          {% if bk.accounts %}<details class="muted"><summary>{{ _("Accounts") }}</summary><span class="mono">{% for a in bk.accounts %}{{ a.username }} ({{ a.role }}{% if a.source != 'local' %}, {{ a.source|upper }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}</span></details>{% endif %}</td>
         <td class="col-actions">
           <div class="row-actions">
             <a class="btn sm" href="{{ base }}/settings/backups/{{ bk.name }}">{{ _("Download") }}</a>
             <a class="btn sm" href="{{ base }}/settings?restore={{ bk.name }}#backups">{{ _("Restore…") }}</a>
+            <form method="post" action="{{ base }}/settings/backups/delete" class="inline"
+                  data-confirm="{{ _('Delete the backup of %(time)s UTC? This can’t be undone.', time=bk.time) }}">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="name" value="{{ bk.name }}">
+              <button class="btn sm danger" type="submit">{{ _("Delete") }}</button>
+            </form>
           </div>
         </td>
       </tr>
@@ -598,6 +606,23 @@
     </tbody>
   </table>
   </div>
+  {% if backup_gone_accounts %}
+  <form method="post" action="{{ base }}/settings/backups/remove-account" class="authform mt-sm"
+        data-confirm="{{ _('Remove this account from every backup that has it? A restore can then no longer bring it back, and this can’t be undone.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <p class="muted mb-sm">{{ _("Deleting a user leaves the account, with its password hash, in the backups made before. These backups hold accounts that no longer exist; removing one from them leaves everything else in each backup as it was.") }}</p>
+    <label>{{ _("Account no longer in use") }}
+      <select name="username">{% for name in backup_gone_accounts %}<option value="{{ name }}">{{ name }}</option>{% endfor %}</select>
+    </label>
+    <button class="btn" type="submit">{{ _("Remove it from the backups") }}</button>
+  </form>
+  {% endif %}
+  <form method="post" action="{{ base }}/settings/backups/delete" class="authform mt-sm"
+        data-confirm="{{ _('Delete every configuration backup? This can’t be undone.') }}">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <input type="hidden" name="all" value="on">
+    <button class="btn danger" type="submit">{{ _("Delete all backups") }}</button>
+  </form>
   {% else %}
   <p class="muted">{{ _("No backups yet — the first one is made at the next configuration change.") }}</p>
   {% endif %}
