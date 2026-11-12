@@ -294,8 +294,28 @@ def test_swap_failures():
         def delete_meanwhile(src, dst, length=0):
             real_copy(src, dst, length)
             os.remove(p)
-        with mock.patch.object(state_mod.shutil, "copyfileobj", delete_meanwhile):
-            assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+        if os.name != "nt":  # deleted while the trim reads it (Windows refuses that)
+            with mock.patch.object(state_mod.shutil, "copyfileobj", delete_meanwhile):
+                assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024)
+            assert os.listdir(d) == [], os.listdir(d)
+
+        class DeletedBeforeTheSwap:
+            """The mapping's deletion (delete_mapping_log: its handler closed, the file
+            removed) done just as the trim takes the handler's lock for the swap, when the
+            trim holds the file open no more (also on Windows)."""
+            def acquire(self):
+                if os.path.exists(p):
+                    os.remove(p)
+
+            def release(self):
+                pass
+
+            def setStream(self, stream):  # (logging.Handler's name)
+                raise AssertionError("the swap went on with the file deleted")
+        with open(p, "w") as fh:
+            fh.write(text)
+        assert not _trim_log_file(p, _cutoff(), 100 * 1024 * 1024,
+                                  handlers=[DeletedBeforeTheSwap()])
         assert os.listdir(d) == [], os.listdir(d)
         print("failed swap: file unchanged, no .tmp; deleted meanwhile: not made again  OK")
     finally:
