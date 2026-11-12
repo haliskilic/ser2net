@@ -11,13 +11,19 @@ Checks:
     "Save and send a test" delivers; a failed sign-in is notified;
   * with Turkish as the UI's default language the messages are Turkish, the test message
     wholly (title and text), and an e-mail with non-ASCII text stays 7-bit
-    (quoted-printable, encoded subject).
+    (quoted-printable, encoded subject);
+  * a channel that failed is logged in English and shown in the page's language;
+  * an SMTP user name or password with Turkish letters signs in (UTF-8 AUTH PLAIN, LOGIN
+    or CRAM-MD5; smtplib alone fails before sending anything), ASCII ones as before; a
+    webhook URL with Turkish letters is sent IDNA / percent-encoded.
 
 Run: python3 tests/test_notifications.py
 """
 import asyncio
+import base64
 import email
 import email.policy
+import hmac
 import json
 import os
 import socketserver
@@ -26,12 +32,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from _server import ROOT, Browser, Server
 
-from app import notify
+from app import i18n, notify
 from app.config import AdminUI, ConfigError, NotificationSettings
 from app.web.auth import hash_password
 
 RECEIVED: list = []
 MAILS: list = []
+LOGINS: list = []   # (mechanism, user, password) the SMTP stub accepted
+TR = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))
 
 
 class Hook(BaseHTTPRequestHandler):
@@ -46,17 +54,39 @@ class Hook(BaseHTTPRequestHandler):
 
 
 class Smtp(socketserver.StreamRequestHandler):
-    """Just enough SMTP (no TLS, no auth) to receive one message."""
+    """Just enough SMTP (no TLS) to receive one message; AUTH with the mechanisms the
+    server's `auth` attribute names (none: no AUTH), credentials decoded as UTF-8."""
 
     def handle(self):
         w = lambda s: self.wfile.write(s.encode() + b"\r\n")  # noqa: E731
+        r = lambda: self.rfile.readline().decode().strip()  # noqa: E731
+        b64 = lambda s: base64.b64decode(s).decode("utf-8")  # noqa: E731
         w("220 test ESMTP")
         rcpt, data = [], None
+        mechs = getattr(self.server, "auth", "")
         while True:
             line = self.rfile.readline().decode(errors="replace").strip()
             cmd = line.upper()
             if cmd.startswith(("EHLO", "HELO")):
-                w("250 test")
+                w(f"250-test\r\n250 AUTH {mechs}" if mechs else "250 test")
+            elif cmd.startswith("AUTH ") and line.split()[1].upper() in mechs.split():
+                mech, arg = line.split()[1].upper(), (line.split() + [""])[2]
+                if mech == "PLAIN":
+                    _authz, user, pw = b64(arg).split("\0")
+                elif mech == "LOGIN":
+                    user = b64(arg) if arg else (w("334 VXNlcm5hbWU6") or b64(r()))
+                    w("334 UGFzc3dvcmQ6")
+                    pw = b64(r())
+                else:   # CRAM-MD5: the stub knows one password
+                    challenge = b"<1.2@test>"
+                    w("334 " + base64.b64encode(challenge).decode())
+                    user, digest = b64(r()).rsplit(" ", 1)
+                    pw = self.server.password
+                    if digest != hmac.HMAC(pw.encode(), challenge, "md5").hexdigest():
+                        w("535 bad digest")
+                        continue
+                LOGINS.append((mech, user, pw))
+                w("235 ok")
             elif cmd.startswith("MAIL FROM"):
                 w("250 ok")
             elif cmd.startswith("RCPT TO"):
@@ -161,17 +191,69 @@ async def test_delivery(hook_port, smtp_port):
     # the test message wholly in the notification language: its title and its text
     errors = await n.deliver("test", "", "")
     text = RECEIVED[-1][1]["text"]
-    tr = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))
-    assert errors == [] and tr["test notification"] in text and \
-        tr["If you can read this, ser2net can reach you."] in text, text
+    assert errors == [] and TR["test notification"] in text and \
+        TR["If you can read this, ser2net can reach you."] in text, text
     st.config.admin_ui.language = "auto"
     errors = await n.deliver("test", "", "")
     assert "test notification" in RECEIVED[-1][1]["text"] and "If you can read this" in RECEIVED[-1][1]["text"]
     s.webhook_url = f"http://127.0.0.1:{hook_port}/fail"
     errors = await n.deliver("device_lost", "PLC", "gone")
-    assert errors and "HTTP 500" in errors[0], errors
-    print("delivery: webhook + SMTP received (Turkish, 7-bit e-mail); a failing webhook is "
-          "reported, not raised  OK")
+    assert errors and str(errors[0]) == "webhook (json) failed: HTTP 500 Internal Server Error", \
+        "the log line stays English"
+    tok = i18n.set_language("tr")
+    try:
+        shown = errors[0].shown()
+    finally:
+        i18n.reset(tok)
+    assert shown == TR["Webhook ({0}) failed: {1}"].format("json", "HTTP 500 Internal Server Error"), shown
+    print("delivery: webhook + SMTP received (Turkish, 7-bit e-mail; the test message in the "
+          "notification language); a failing webhook is reported (log English, page Turkish), "
+          "not raised  OK")
+
+
+async def test_non_ascii(hook_port, smtp):
+    """Turkish letters in the SMTP user name / password and in the webhook URL."""
+    class State:
+        def log(self, m):
+            pass
+    st = State()
+    s = NotificationSettings.from_dict({
+        "enabled": True, "events": ["device_lost"],
+        "webhook_url": f"http://127.0.0.1:{hook_port}/kanal/bakım-ğüşıöç?ad=İstanbul&x=%C3%A7",
+        "email_to": "ops@example.com", "smtp_host": "127.0.0.1",
+        "smtp_port": smtp.server_address[1], "smtp_security": "none",
+        "smtp_username": "operatör", "smtp_password": "Güvenli1!ş"})
+    st.config = type("C", (), {"notifications": s, "mappings": [], "admin_ui": AdminUI()})()
+    n = notify.Notifier(st)
+    for mechs in ("PLAIN LOGIN", "LOGIN", "CRAM-MD5"):
+        smtp.auth, smtp.password = mechs, s.smtp_password
+        errors = await n.deliver("device_lost", "PLC", "gone")
+        assert errors == [], [str(e) for e in errors]
+        assert LOGINS[-1] == (mechs.split()[0], "operatör", "Güvenli1!ş"), LOGINS[-1:]
+    path = RECEIVED[-1][0]
+    assert path == "/kanal/bak%C4%B1m-%C4%9F%C3%BC%C5%9F%C4%B1%C3%B6%C3%A7?ad=%C4%B0stanbul&x=%C3%A7", path
+    smtp.auth = "PLAIN"
+    s.smtp_username, s.smtp_password = "ops", "ascii-pass"   # smtplib's own login, as before
+    assert await n.deliver("device_lost", "PLC", "gone") == [] and LOGINS[-1] == ("PLAIN", "ops", "ascii-pass")
+    smtp.auth, smtp.password = "CRAM-MD5", "another"   # refused: said so, in the page's language
+    s.smtp_username, s.smtp_password = "operatör", "Güvenli1!ş"
+    errors = await n.deliver("device_lost", "PLC", "gone")
+    tok = i18n.set_language("tr")
+    try:
+        shown = errors[-1].shown()
+    finally:
+        i18n.reset(tok)
+    assert str(errors[-1]).startswith("e-mail via 127.0.0.1:") and "535" in str(errors[-1])
+    assert TR["the server did not accept the user name or password (SMTP {0})"].format(535) in shown \
+        and TR["— they have letters outside ASCII, which some servers don't take"] in shown, shown
+
+    u = notify.ascii_url
+    assert u("https://hooks.example.com/a%20b?x=1") == "https://hooks.example.com/a%20b?x=1", "ASCII as it is"
+    assert u("https://Bücher.example:8443/şş?q=İ#frag") == "https://xn--bcher-kva.example:8443/%C5%9F%C5%9F?q=%C4%B0"
+    assert u("http://[::1]:8080/ş") == "http://[::1]:8080/%C5%9F"
+    assert u(u("https://ışık.example/ğ?a=b&c=%41")) == u("https://ışık.example/ğ?a=b&c=%41"), "idempotent"
+    print("non-ASCII: SMTP sign-in with Turkish letters (PLAIN, LOGIN, CRAM-MD5; ASCII via "
+          "smtplib), refused sign-in explained; webhook URL IDNA / percent-encoded  OK")
 
 
 def test_settings_ui(hook_port):
@@ -198,6 +280,13 @@ def test_settings_ui(hook_port):
         assert srv.saved_config()["notifications"]["webhook_url"].endswith("/ui"), "blank URL must keep the stored one"
         st, _, page = b.post("/settings/notifications", {**form, "notify_webhook_url": "ftp://x"})
         assert "must start with https://" in page
+        # a failed test, on a Turkish page: the channel's failure in Turkish
+        b.op.addheaders = [("Accept-Language", "tr")]
+        st, _, page = b.post("/settings/notifications", {
+            **form, "notify_webhook_url": f"http://127.0.0.1:{hook_port}/fail", "then": "test"})
+        b.op.addheaders = []
+        want = TR["Webhook ({0}) failed: {1}"].format("slack", "HTTP 500 Internal Server Error")
+        assert want in page, page[page.find("banner"):][:300]
         before = len(RECEIVED)
         Browser(srv.base).post("/login", {"username": "admin", "password": "wrong"})
         for _ in range(50):
@@ -216,6 +305,7 @@ def main():
     smtp = serve(socketserver.ThreadingTCPServer, Smtp)
     try:
         asyncio.run(test_delivery(hook.server_address[1], smtp.server_address[1]))
+        asyncio.run(test_non_ascii(hook.server_address[1], smtp))
         test_settings_ui(hook.server_address[1])
     finally:
         hook.shutdown()

@@ -140,6 +140,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
+  Messages are in the default language set under *Web UI access*. SMTP user names and
+  passwords and webhook URLs may contain Turkish (any non-ASCII) letters: the credentials
+  are sent UTF-8 encoded (SMTP AUTH PLAIN / LOGIN / CRAM-MD5), the URL IDNA- and
+  percent-encoded.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with
