@@ -165,14 +165,17 @@ class GuardMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _security_headers(response, cfg) -> None:
         # script-src stays 'self' (no inline JS — the important XSS guard). style-src
-        # allows 'unsafe-inline' because xterm.js injects a <style> element at runtime.
+        # allows 'unsafe-inline' because the console's xterm.js DOM renderer adds <style>
+        # elements and style attributes at runtime, without a nonce (xtermjs/xterm.js#4445).
+        # No <base>, no plugins, and forms only post to this UI.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'self'; object-src 'none'",
         )
         if cfg.admin_ui.tls_enabled:
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")

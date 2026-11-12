@@ -40,6 +40,15 @@ connection): ser2net does not authenticate MQTT commands itself. On a UDP mappin
 access list checks a source address that can be forged: set a reply address, and on
 untrusted networks prefer TCP with TLS, or a firewall.
 
+### Browser protections
+The web UI sends a Content-Security-Policy that allows scripts only from its own files
+(no inline scripts or event handlers, no `eval`), no `<base>`, no plugins, no framing, and
+forms that post only to the UI itself. Inline *styles* are allowed (`style-src
+'unsafe-inline'`): the console's xterm.js renderer adds `<style>` elements and style
+attributes at runtime and has no nonce support (upstream issue xtermjs/xterm.js#4445);
+this goes back to a strict `style-src` once a vendored xterm.js no longer needs it. htmx
+runs with `eval`, `<script>` elements in fragments and its injected indicator styles off.
+
 ## Türkçe
 
 ### Desteklenen sürümler
@@ -78,3 +87,13 @@ ACL'leri; broker bağlantısı için TLS ve kimlik bilgisi): ser2net MQTT komutl
 kimliğini kendisi doğrulamaz. UDP eşlemelerinde erişim listesi taklit edilebilen bir kaynak
 adresine bakar: bir yanıt adresi girin, güvenilmeyen ağlarda TLS'li TCP'yi ya da bir
 güvenlik duvarını tercih edin.
+
+### Tarayıcı tarafı korumalar
+Web arayüzü, betiklere yalnızca kendi dosyalarından izin veren bir Content-Security-Policy
+gönderir (satır içi betik ya da olay işleyici yok, `eval` yok); `<base>`, eklenti ve
+çerçeveleme yasaktır, formlar yalnızca arayüzün kendisine gönderilebilir. Satır içi
+*stillere* izin verilir (`style-src 'unsafe-inline'`): konsoldaki xterm.js çizicisi
+çalışırken `<style>` öğeleri ve style öznitelikleri ekliyor ve nonce desteği yok (upstream
+sorunu xtermjs/xterm.js#4445); gömülü xterm.js buna ihtiyaç duymadığında katı `style-src`'ye
+dönülecek. htmx'te `eval`, parçalardaki `<script>` öğeleri ve kendi eklediği gösterge
+stilleri kapalıdır.

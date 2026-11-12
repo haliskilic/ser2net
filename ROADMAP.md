@@ -19,7 +19,8 @@
 ### v1.1 — hardening & ops
 - config_lock released before supervisor calls; status snapshot reads
 - Session revocation on password change (`pwd_version`); IPv4-mapped IPv6 normalization
-- Tight CSP (no `unsafe-inline`); data/logs dirs `0700`; expanded systemd hardening
+- Tight CSP (no `unsafe-inline`; inline *styles* are allowed again since v2.2 for the
+  console, see v2.1a); data/logs dirs `0700`; expanded systemd hardening
 - `closeon`; narrowed serial_io exceptions
 
 ### v1.2 — scale & perf
@@ -40,6 +41,9 @@
 - xterm.js terminal over an authenticated WebSocket (`/api/mappings/{id}/console`):
   read live traffic, or type to the device (net mappings, not read-only)
 - Per-mapping monitor sink in the engine; session-cookie auth + Origin/Host CSWSH guard
+- CSP `style-src` allows `'unsafe-inline'` (v2.2): xterm.js's DOM renderer adds `<style>`
+  elements and style attributes without a nonce (xtermjs/xterm.js#4445); scripts stay
+  `'self'` only
 
 ### v2.1b — hardening, REST API, Docker & CI
 - **Security/correctness fixes:** UDP `allowed_client_ips` enforcement; read-only
