@@ -641,6 +641,29 @@ Change the bind IP later:
 python3 ser2net.py --reconfigure
 ```
 
+### Command-line options
+`python3 ser2net.py [options]`, `ser2net-linux-x64 [options]`, `ser2net-windows-x64.exe
+[options]` (`--help` lists them):
+
+| Option | What it does |
+|---|---|
+| `--data-dir DIR` | where `config.json`, its backups, the logs and traces live (default: `data/` next to `ser2net.py` or the binary); give ser2net a folder of its own |
+| `--config FILE` | a `config.json` elsewhere; its folder is the data directory then |
+| `--reconfigure` | ask again for the admin UI's address and port on the console, then start |
+| `--online` | let the dependency bootstrap fall back to PyPI for a wheel `vendor/wheels/` lacks (source installs) |
+| `--no-bootstrap` | skip the dependency bootstrap (the packages are importable already) |
+| `--version` | print the version and exit |
+| `--about` | print the versions of Python, OpenSSL and the components, and where each is loaded from |
+| `--licenses` | print the licence texts of ser2net and every bundled component |
+| `--healthcheck` | exit 0 when this data directory's running instance answers on `/healthz`, else 1 |
+| `--set-password USER` | set a local account's password (making it an admin account if it doesn't exist), sign its sessions out and turn its two-factor sign-in off; also while ser2net runs |
+| `--sign-out-all` | end every web UI session (a new session key) |
+| `--reload` | have the running ser2net of this data directory apply `config.json` again (SIGHUP and `systemctl reload` do the same) |
+| `--install-service`, `--uninstall-service`, `--service-name NAME`, `--allow-unsafe-location` | the Windows service ([`docs/WINDOWS.md`](docs/WINDOWS.md)) |
+
+`--set-password`, `--sign-out-all`, `--reload`, `--about`, `--licenses`, `--version` and
+`--healthcheck` do their work and exit; the others start ser2net.
+
 ### Offline install (no-internet machine)
 Dependencies live in `vendor/wheels/`; `ser2net.py` installs them to `./lib` on first
 launch (`pip install --no-index`). No internet needed. The set covers Python 3.10–3.14 on
