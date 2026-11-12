@@ -769,8 +769,8 @@ class AppState:
     @property
     def serving_tls(self) -> bool:
         """Whether the admin UI's new connections get TLS: what the cookies' Secure flag,
-        HSTS and the cluster's beacons go by. A TLS change in Settings applies at once; one
-        that can't (a key with a passphrase) waits for the next start meanwhile."""
+        HSTS and the cluster's beacons go by. A TLS change in Settings or a reload applies
+        at once (a process without a listener: from the next start)."""
         guard = self.admin_guard
         return self.config.admin_ui.tls_enabled if guard is None else guard.ssl is not None
 
@@ -802,6 +802,9 @@ class AppState:
         if guard.ssl is not None:
             self.log("admin UI: TLS certificate loaded, new connections use it"
                      + ("" if was else " (TLS is on now)"))
+            from .runtime import tls_certificate_note  # (runtime imports this module)
+            if note := tls_certificate_note(self.config.admin_ui.tls_cert):
+                self.log(note)  # its subject and validity, a WARNING when it ends soon
         elif was:
             self.log("admin UI: TLS is off now, new connections use plain HTTP")
             if self.admin_serving()[0] not in ("127.0.0.1", "::1", "localhost"):

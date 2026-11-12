@@ -80,9 +80,9 @@ def keep_env_address(admin) -> None:
 
 
 def _listener_tls(net):
-    """A mapping listener's TLS context as its runner makes it (access.server_ssl), except
-    that a key with a passphrase waits for the mapping's next start."""
-    tlsreload.refuse_passphrase(net.tls_key)
+    """A mapping listener's TLS context as its runner makes it (access.server_ssl: engine/
+    tls.py, the key decrypted with tls_key_password, the client CA): raises
+    tls.TlsFileError when its files can't be used."""
     return server_ssl(net)
 
 
@@ -161,10 +161,18 @@ def _refusals(cur: AppConfig, new: AppConfig) -> tuple[list[str], dict[str, Any]
     for m in new.mappings:
         old = cur.get_mapping(m.id)
         if old is None or old.to_dict() != m.to_dict():
+            # what an edit of the mapping is held to as well: its own rules, its TLS files
+            # (they must load), and nothing that clashes with ser2net's own ports, a serial
+            # port another mapping uses or the admin UI's TLS key
             try:
-                m.validate_input()  # what an edit of the mapping is held to as well
+                m.validate_input()
+                m.check_tls_files()
             except Exception as e:
                 problems.append(f"mapping '{m.name}': {e}")
+                continue
+            if clash := (new.own_port_conflict(m) or new.serial_conflict(m)
+                         or new.admin_key_reuse(m)):
+                problems.append(clash)
     return problems, still
 
 
@@ -233,13 +241,18 @@ async def _reload(state) -> tuple[bool, str]:
             new.secret_key = cur.secret_key
         if not raw.get("instance_id"):
             new.instance_id = cur.instance_id
-        problems, still = _refusals(cur, new)
+        # TLS files of a data directory that moved are taken from this one's tls folder, as
+        # at start-up (runtime.prepare_config)
+        new.load_notes += new.find_moved_tls_files(state.data_dir)
+        # (it loads TLS files: not on the event loop)
+        problems, still = await asyncio.to_thread(_refusals, cur, new)
         if problems:
             return False, "; ".join(problems)
         # the admin UI's TLS: its files are read again (a renewed certificate); settings
         # that changed must be usable, as Settings -> Admin TLS requires
-        old_tls = (cur.admin_ui.tls_cert, cur.admin_ui.tls_key)
-        tls_changed = old_tls != (new.admin_ui.tls_cert, new.admin_ui.tls_key)
+        def tls_of(admin):
+            return admin.tls_cert, admin.tls_key, admin.tls_key_password
+        tls_changed = tls_of(cur.admin_ui) != tls_of(new.admin_ui)
         prepared: Optional[tlsreload.Prepared] = None
         if tls_changed or new.admin_ui.tls_enabled:
             prepared = await state.prepare_admin_tls(new.admin_ui)
@@ -259,7 +272,7 @@ async def _reload(state) -> tuple[bool, str]:
         guard.use_limits(cur.admin_ui)
     if prepared is not None:
         if prepared.usable or tls_changed:
-            if not state.use_admin_tls(prepared):  # (a key with a passphrase: noted)
+            if not state.use_admin_tls(prepared):  # (no admin UI listener here: noted)
                 notes.append(f"the admin UI TLS settings are used from the next start "
                              f"({prepared.later})")
         else:  # the same settings, files that no longer load: the certificate in use stays
