@@ -54,6 +54,9 @@ class App:
         return self
 
     def __exit__(self, *exc) -> None:
+        # the mappings a test saved, and their bind retries (a port that was taken), end
+        # on this loop instead of being destroyed with it
+        self.loop.run_until_complete(self.state.supervisor.stop_all())
         self.loop.close()
         _close_loggers()
         shutil.rmtree(self.tmp, ignore_errors=True)
