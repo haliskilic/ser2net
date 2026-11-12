@@ -4,7 +4,9 @@ a fake RTU slave. paho's network thread, its callbacks and the hand-off to the e
 the Will, retained messages and reconnects all run as they do in service. Checks:
   * plain: the retained <topic>/status "online" after the connect (QoS 0), each writable
     point's /set subscribed, polled values published; a /set published by another client
-    is written (FC6 / FC5), answered "ok" on .../set/result and read back; the broker
+    is written (FC6 / FC5), answered "ok" on .../set/result (at QoS 1, as the /set is
+    subscribed, though the mapping publishes at QoS 0) and read back, a JSON one answered
+    with its id and the value read back; the broker
     drops the link: its Will "offline", paho reconnects, "online" again, the subscriptions
     are renewed, the retained /set the broker sends again is not written again, and a live
     one is; stop: "offline";
@@ -14,7 +16,8 @@ the Will, retained messages and reconnects all run as they do in service. Checks
     waiting ones are written in order; a /set over 64 KiB gets error: too large, a DCMD
     over 256 KiB is ignored (logged);
   * Sparkplug B: the NDEATH Will (bdSeq 0, QoS 1), NBIRTH (bdSeq 0) and a DBIRTH per unit;
-    a DCMD from the broker writes its point and the new value comes back in a DDATA; the
+    a DCMD from the broker writes its point and the new value comes back in a DDATA, as
+    does the value of a DCMD that changes nothing; the
     link dropped: the broker publishes the NDEATH Will, the next session's Will and NBIRTH
     carry bdSeq 1; an NCMD rebirth gives a new NBIRTH; stop: NDEATH with the session's
     bdSeq.
@@ -161,10 +164,15 @@ async def plain_checks(broker):
         print("plain: retained 'online' after the connect (QoS 0), /set subscribed for the "
               "writable points, polled values published  OK")
 
+        result = "plant/a/setpoint/set/result"
         broker.publish("plant/a/setpoint/set", b"42")
-        assert await until(lambda: broker.payloads("plant/a/setpoint/set/result") == [b"ok"])
+        assert await until(lambda: broker.topics(result) == [(b"ok", 1, False)]), \
+            broker.topics(result)
         assert slave.regs[10] == 42 and await until(
             lambda: b"42" in broker.payloads("plant/a/setpoint"))
+        broker.publish("plant/a/setpoint/set", b'{"value": 43, "id": "j1"}')
+        assert await until(lambda: broker.payloads(result)[-1:] == [
+            b'{"id":"j1","ok":true,"value":43}']), broker.payloads(result)
         broker.publish("plant/a/pump/set", b"on", retain=True)
         assert await until(lambda: slave.coils[0] is True
                            and broker.payloads("plant/a/pump/set/result") == [b"ok"])
@@ -209,7 +217,7 @@ async def stop_checks(broker):
     with broker._lock:
         order = [t for t, _p, _q, _r in broker.messages if t in (result, status)]
     got = broker.payloads(result)
-    assert len(got) == 3 and got[0].startswith(b"error: ") and got[1:] == [
+    assert got == [b"error: no reply from unit 1 within 0.3 s"] + [
         b"error: cancelled: mapping stopped"] * 2, got
     assert order[-4:] == [result] * 3 + [status], order
     assert len([pdu for _u, pdu in slave.requests if pdu[0] == 6]) == 1
@@ -285,9 +293,15 @@ async def sparkplug_checks(broker):
         broker.publish(node_topic("DCMD", "unit1"), command(sparkplug.Metric(
             name="setpoint", datatype=sparkplug.DataType.Int16, value=9)))
         assert await until(lambda: slave.regs[10] == 9)
-        assert await until(lambda: any(m.name == "setpoint" and m.value == 9
-                                       for d in decoded(broker, "DDATA", "unit1")
-                                       for m in d.metrics))
+        def setpoints():
+            return [m.value for d in decoded(broker, "DDATA", "unit1") for m in d.metrics
+                    if m.name == "setpoint"]
+        assert await until(lambda: setpoints()[-1:] == [9]), setpoints()
+        reported = len(setpoints())
+        broker.publish(node_topic("DCMD", "unit1"), command(sparkplug.Metric(
+            name="setpoint", datatype=sparkplug.DataType.Int16, value=9)))  # no change
+        assert await until(lambda: len(setpoints()) == reported + 1), setpoints()
+        assert setpoints()[-1] == 9
         print("sparkplug: a DCMD through paho's on_message writes the point, DDATA brings "
               "the new value  OK")
 

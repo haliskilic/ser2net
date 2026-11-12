@@ -32,6 +32,11 @@ anywhere without a broker or hardware. Checks:
     finish (else it is cancelled, and the answer says whether it was sent), the ones still
     waiting get error: cancelled: mapping stopped, a command that comes meanwhile error:
     mapping stopped;
+  * a JSON /set {"value", "id"} gets a JSON answer with its id and the value read back
+    ({"id", "ok": true, "value"} / {"id", "ok": false, "error"}); a plain one still "ok";
+  * Sparkplug B: every DCMD to a writable point is followed by a DDATA with the point's
+    value read back, changed or not: a write of the current value, a refused value, a
+    read-only mapping;
   * a write that comes while a poll is reading the unit's points (the slave sends it when
     the poll asks for the setpoint) is not followed by the value the poll read before it:
     plain and Sparkplug B report new, then new again, never new, old, new.
@@ -781,6 +786,108 @@ async def test_write_queue(slave_port):
         sw.close()
 
 
+async def test_json_requests(slave_port):
+    """A JSON /set carries an id: the answer echoes it, with ok and the value read back
+    from the device (or ok false and the error). A request refused before the bus still
+    gets its id back when it could be read. Plain text payloads are answered as before."""
+    import json
+    fake = FakeMqtt()
+    r, sw = await gateway("plain", slave_port, fake)
+
+    async def ask(point, payload):
+        topic = f"plant/a/{point}/set/result"
+        before = len([t for t, _p in fake.published if t == topic])
+        r._mqtt.handle_message(f"plant/a/{point}/set", payload)
+        assert await wait(lambda: len([t for t, _p in fake.published if t == topic]) > before)
+        got = last(fake, topic)
+        return json.loads(got) if got.startswith(b"{") else got
+    try:
+        REGS[10], COILS[0] = 0, False
+        assert await ask("setpoint", b'{"value": 25, "id": "abc"}') == {
+            "id": "abc", "ok": True, "value": 25}
+        assert REGS[10] == 25
+        # the value read back: 12.6 is written (and read back) as 13
+        assert await ask("setpoint", b' {"id": 7, "value": 12.6}') == {
+            "id": 7, "ok": True, "value": 13}
+        assert await ask("pump", b'{"value": true}') == {"ok": True, "value": True}
+        assert await ask("pump", b'{"value": 0, "id": "p"}') == {"id": "p", "ok": True,
+                                                               "value": False}
+        assert COILS[0] is False
+        assert await ask("setpoint", b"30") == b"ok", "plain text: answered as before"
+        for payload, rid, error in (
+                (b'{"value": "x", "id": "e1"}', "e1", "'setpoint' takes a number, not 'x'"),
+                (b'{"value": 40000, "id": "e2"}', "e2", "out of range"),
+                (b'{"value": NaN, "id": "e3"}', None, "not a JSON request"),
+                (b'{"id": "e4"}', "e4", 'the request has no "value"'),
+                (b'{"value": 1, "id": "e5", "pulse": 2}', "e5", "unknown key(s)"),
+                (b'{"value": 1, "id": "' + b"i" * 65 + b'"}', None, "the id must be"),
+                (b'{"value": 1, "id": true}', None, "the id must be"),
+                (b"{", None, "not a JSON request"),
+                # nested deeper than the parser may go (or not, by Python version): refused
+                (b'{"value": ' + b"[" * 20000 + b"]" * 20000 + b"}", None, ""),
+                (b"[1]", None, None)):
+            got = await ask("setpoint", payload)
+            if error is None:  # not a JSON object: the plain grammar's answer
+                assert got.startswith(b"error: not a number"), got
+                continue
+            assert got.get("ok") is False and error in got.get("error", "") \
+                and got.get("id") == rid and len(json.dumps(got)) < 200, (payload[:30], got)
+        assert (await ask("pump", b'{"value": 2, "id": 1}'))["error"].startswith(
+            "a coil takes true / false or 1 / 0"), "a coil: one state"
+        assert REGS[10] == 30 and COILS[0] is False
+        print("plain: a JSON /set gets its id back with ok and the value read back, or the "
+              "error; plain text answered as before  OK")
+    finally:
+        sw.close()
+
+
+async def test_sparkplug_read_back(slave_port):
+    """Sparkplug B reports by exception, so a DCMD that changes nothing would go
+    unanswered: after every DCMD to a writable point the point is read back and sent in a
+    DDATA, changed or not (a write of the current value, a value the gateway or the slave
+    refused, a read-only mapping)."""
+    t = lambda kind, dev=None: sparkplug.topic("ser2net", kind, "Line_3_PLC", dev)  # noqa: E731
+    for read_only in (False, True):
+        REGS[10], COILS[0] = 5, False
+        fake = FakeMqtt()
+        r, sw = await gateway("sparkplug_b", slave_port, fake, SP_POINTS,
+                              network={"read_only": read_only})
+        poll = asyncio.create_task(r._poll_loop())
+
+        def reported(name):
+            return [m.value for tp, p in fake.published if tp == t("DDATA", "unit1")
+                    for m in sparkplug.decode_payload(p).metrics if m.name == name]
+
+        def dcmd(*metrics):
+            r._mqtt.handle_message(t("DCMD", "unit1"), sparkplug.encode_payload(
+                sparkplug.Payload(0, list(metrics), None)))
+        try:
+            assert await wait(lambda: reported("setpoint") == [5])
+            await asyncio.sleep(0.3)
+            assert reported("setpoint") == [5], "no DDATA when nothing changed"
+            SEEN.clear()
+            checks = [(sparkplug.Metric("setpoint", sparkplug.DataType.Int16, 5), "setpoint"),
+                      (sparkplug.Metric("setpoint", sparkplug.DataType.Int32, 99999), "setpoint"),
+                      (sparkplug.Metric("pump", sparkplug.DataType.Int32, 1), "pump")]
+            for n, (metric, name) in enumerate(checks):
+                before = len(reported(name))
+                dcmd(metric)
+                assert await wait(lambda: len(reported(name)) == before + 1), (n, metric.value)
+                assert reported(name)[-1] == (5 if name == "setpoint" else False)
+            writes = [p for p in SEEN if p[0] in (5, 6, 15, 16)]
+            assert writes == ([] if read_only else [modbus.write_single_register_pdu(10, 5)]), \
+                writes
+            assert COILS[0] is False and REGS[10] == 5
+        finally:
+            r._stop.set()
+            poll.cancel()
+            with suppress(BaseException):
+                await poll
+            sw.close()
+    print("sparkplug: every DCMD to a writable point gets a DDATA with the value read back "
+          "(the current value written, a refused value, read-only)  OK")
+
+
 async def test_stop_with_writes(slave_port):
     """stop() answers every write, in order, before the MQTT connection closes (its
     "offline"): the write on the bus may finish; if it takes too long it is cancelled, and
@@ -931,6 +1038,8 @@ async def main():
         await test_broadcast_point(port)
         await test_sparkplug(port)
         await test_write_queue(port)
+        await test_json_requests(port)
+        await test_sparkplug_read_back(port)
         await test_stop_with_writes(port)
         await test_no_stale_value_after_write(port)
     finally:

@@ -20,7 +20,9 @@ metrics are that unit's poll points:
     until it reads again). Unit 0 (broadcast, write-only) is always born, with nulls;
   * DCMD: a metric named like a writable point of that device is written to the bus
     (through the gateway's write_point), unless the mapping is read-only (then the
-    command is logged and refused); NCMD: "Node Control/Rebirth" = true
+    command is logged and refused). Either way the point is read back and sent in a DDATA,
+    changed or not, so the host learns the outcome (not when the unit did not answer: it
+    goes offline, with a DDEATH); NCMD: "Node Control/Rebirth" = true
     republishes NBIRTH and the DBIRTHs, at most once every REBIRTH_EVERY_S (a request
     that comes sooner is carried out then). Commands are never retained (Sparkplug 3.0), so
     a retained NCMD / DCMD the broker replays on subscribe is dropped (MqttPublisher). A
@@ -156,7 +158,7 @@ class SparkplugNode:
         self.stamps: dict = {}       # when each of those was read (ms since the epoch)
         self.dead: set[str] = set()  # devices whose unit stopped answering (DDEATH)
         self._log = log
-        self._write = write          # gateway._write_soon(point, value)
+        self._write = write          # gateway._write_soon(point, value, refused=None)
         self._pub: MqttPublisher | None = None
         self._bdseq_file = os.path.join(state_dir, BDSEQ_FILE) if state_dir else None
         self._bdseq_saved = True     # False once storing it failed (logged once)
@@ -335,17 +337,18 @@ class SparkplugNode:
             self.values.pop(n, None)
             self.stamps.pop(n, None)
 
-    def update(self, values: dict, stamps: dict | None = None) -> None:
+    def update(self, values: dict, stamps: dict | None = None, force=()) -> None:
         """A DDATA per device with the metrics whose value changed since the last report
-        (a point read again after a failed read counts as changed); ``stamps``: when each
-        value was read (ms since the epoch; now if not given). Before the session's births
-        the values are only kept: the births carry them."""
+        (a point read again after a failed read counts as changed), and those in ``force``
+        whether they changed or not (the value read back after a DCMD); ``stamps``: when
+        each value was read (ms since the epoch; now if not given). Before the session's
+        births the values are only kept: the births carry them."""
         now = _now_ms()
         changed = set()
         for n, v in values.items():
             if n not in self.points or device_id(self.points[n].unit) in self.dead:
                 continue  # an offline unit's values come with its next DBIRTH
-            if _changed(self.values.get(n), v):
+            if _changed(self.values.get(n), v) or n in force:
                 changed.add(n)
                 self.values[n] = v
             # read again, changed or not: a birth reports when the value was last seen
@@ -492,6 +495,7 @@ class SparkplugNode:
                 continue
             if self.mapping.network.read_only:  # checked per command, not at subscribe time
                 refused.append(m.name)
+                self._write(point, m.value, refused="mapping is read-only")  # (a read-back)
                 continue
             value = m.value
             # Sparkplug 3.0 lets a host leave the datatype off a command; the value then
