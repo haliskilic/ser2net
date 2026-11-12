@@ -37,7 +37,9 @@ from app import notify
 from app.config import MappingConfig
 from app.engine import modbus, serial_io
 from app.engine.bridge import FROM_DEVICE, open_tracer
-from app.engine.modbus_gateway import GUARD_S, SILENCE_S, TURNAROUND_S, ModbusGatewayRunner
+from app.engine.modbus_gateway import (
+    GUARD_S, SILENCE_S, TURNAROUND_S, ModbusGatewayRunner, NoReply,
+)
 
 RESPONSIVE_UNIT = 1
 SILENT_UNIT = 9
@@ -426,8 +428,8 @@ async def test_late_reply_dropped():
     for p in points:
         try:
             value = await runner._read_point(p)
-        except ValueError as e:
-            assert "0x0b" in str(e), e
+        except NoReply as e:  # what the gateway makes of 0x0B for a poll point
+            assert str(e) == "no reply from unit 1 within 0.3 s", e
             continue
         assert value == (p.address << 16) | (p.address + 1), (p.name, value)
     print("queueing slave: every poll point gets its own value or 0x0B, never a neighbour's  OK")
@@ -466,8 +468,8 @@ async def test_reply_must_answer_request():
     try:
         value = await runner._read_point(point)
         raise AssertionError(f"a 10-register reply was decoded as {value}")
-    except ValueError as e:
-        assert "0x0b" in str(e), e
+    except NoReply as e:
+        assert str(e).startswith("no reply from unit 1 within "), e
     assert any("20 data bytes for 2 register(s)" in m for m in logs), logs
     print("no reply: a wrong function, a write echo that differs, a 10-register reply to a "
           "uint32 point -> 0x0B and a log line  OK")

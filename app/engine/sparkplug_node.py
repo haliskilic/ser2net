@@ -13,6 +13,11 @@ metrics are that unit's poll points:
     by exception); seq counts on across NBIRTH, DBIRTH and DDATA: 0…255, 0, …. Data is
     published only once the session's NBIRTH and DBIRTHs are out: a poll that ends
     between a (re)connect and the births only updates the values the births carry;
+  * a unit that stops answering (the gateway's poll loop decides, see
+    ModbusGatewayRunner._poll_unit) gets a DDEATH, its values are dropped and the births
+    leave it out; when it answers again it gets a DBIRTH with the values just read. A point
+    whose read fails is not reported with its old value again (a birth sends it as null
+    until it reads again). Unit 0 (broadcast, write-only) is always born, with nulls;
   * DCMD: a metric named like a writable point of that device is written to the bus
     (through the gateway's write_point), unless the mapping is read-only (then the
     command is logged and refused); NCMD: "Node Control/Rebirth" = true
@@ -122,6 +127,7 @@ class SparkplugNode:
             self.devices.setdefault(device_id(p.unit), []).append(p.name)
         self.values: dict = {}       # last value sent per metric
         self.stamps: dict = {}       # when each of those was read (ms since the epoch)
+        self.dead: set[str] = set()  # devices whose unit stopped answering (DDEATH)
         self._log = log
         self._write = write          # gateway._write_soon(point, value)
         self._pub: MqttPublisher | None = None
@@ -225,22 +231,60 @@ class SparkplugNode:
         self._publish(self.topic("NBIRTH"), [
             sparkplug.Metric(name=sparkplug.BDSEQ, datatype=INT64, value=self.bdseq),
             sparkplug.Metric(name=sparkplug.REBIRTH, datatype=BOOLEAN, value=False)])
-        for dev, names in self.devices.items():
-            self.seq = sparkplug.next_seq(self.seq)
-            now = _now_ms()
-            metrics = sorted((self._metric(n, now) for n in names), key=_stamp)
-            self._publish(self.topic("DBIRTH", dev), metrics)
+        for dev in self.devices:
+            if dev not in self.dead:
+                self._dbirth(dev)
         self._born = True
 
+    def _dbirth(self, dev: str) -> None:
+        self.seq = sparkplug.next_seq(self.seq)
+        now = _now_ms()
+        metrics = sorted((self._metric(n, now) for n in self.devices[dev]), key=_stamp)
+        self._publish(self.topic("DBIRTH", dev), metrics)
+
+    def device_offline(self, unit: int) -> None:
+        """The unit stopped answering: a DDEATH for its device (once the session is born),
+        whose values are dropped; births leave it out until device_online()."""
+        dev = device_id(unit)
+        if dev not in self.devices or dev in self.dead:
+            return
+        self.dead.add(dev)
+        self.forget(self.devices[dev])
+        if self._born:
+            self.seq = sparkplug.next_seq(self.seq)
+            self._publish(self.topic("DDEATH", dev), [])
+
+    def device_online(self, unit: int, values: dict, stamps: dict) -> None:
+        """The unit answers again: a DBIRTH with the values just read (once the session is
+        born; else the next birth carries them)."""
+        dev = device_id(unit)
+        if dev not in self.devices:
+            return
+        self.dead.discard(dev)
+        self.forget(self.devices[dev])
+        for n, v in values.items():
+            if n in self.points:
+                self.values[n], self.stamps[n] = v, stamps.get(n, _now_ms())
+        if self._born:
+            self._dbirth(dev)
+
+    def forget(self, names) -> None:
+        """Points whose read failed (or whose unit is offline): their last value is not
+        reported again; a birth sends them as null until they are read again."""
+        for n in names:
+            self.values.pop(n, None)
+            self.stamps.pop(n, None)
+
     def update(self, values: dict, stamps: dict | None = None) -> None:
-        """A DDATA per device with the metrics whose value changed since the last report;
-        ``stamps``: when each value was read (ms since the epoch; now if not given). Before
-        the session's births the values are only kept: the births carry them."""
+        """A DDATA per device with the metrics whose value changed since the last report
+        (a point read again after a failed read counts as changed); ``stamps``: when each
+        value was read (ms since the epoch; now if not given). Before the session's births
+        the values are only kept: the births carry them."""
         now = _now_ms()
         changed = set()
         for n, v in values.items():
-            if n not in self.points:
-                continue
+            if n not in self.points or device_id(self.points[n].unit) in self.dead:
+                continue  # an offline unit's values come with its next DBIRTH
             if _changed(self.values.get(n), v):
                 changed.add(n)
                 self.values[n] = v
