@@ -1,4 +1,4 @@
-"""The browser libraries vendored in app/web/static/, from their npm releases.
+"""The browser libraries vendored in ser2netweb/web/static/, from their npm releases.
 
     python tools/refresh_assets.py            # copy them from the npm packages (network)
     python tools/refresh_assets.py --check    # the files are the ones vendor/npm/package.json records
@@ -172,7 +172,7 @@ def main(argv: list[str]) -> int:
         for p in found:
             print(f"error: {p}")
         if not found:
-            print("app/web/static matches vendor/npm/package.json"
+            print("ser2netweb/web/static matches vendor/npm/package.json"
                   + (" and the npm packages" if "--verify" in argv else ""))
         return 1 if found else 0
     return refresh()

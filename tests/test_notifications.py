@@ -45,16 +45,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from _server import ROOT, Browser, Server
 
-from app import i18n, notify
-from app.config import (
+from ser2netweb import i18n, notify
+from ser2netweb.config import (
     NOTIFY_DEFAULT_EVENTS, NOTIFY_EVENTS, AdminUI, ConfigError, NotificationSettings,
 )
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 RECEIVED: list = []
 MAILS: list = []
 LOGINS: list = []   # (mechanism, user, password) the SMTP stub accepted
-TR = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))
+TR = json.load(open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8"))
 
 
 class Hook(BaseHTTPRequestHandler):
@@ -370,7 +370,7 @@ async def test_delivery(hook_port, smtp_port):
     s.email_separately = False
     st.config.admin_ui.language = "tr"
     errors = await n.deliver("device_lost", "Kazan dairesi ğüşıöç", "gone")
-    lost = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))["serial device lost"]
+    lost = json.load(open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8"))["serial device lost"]
     assert errors == [] and lost in RECEIVED[-1][1]["text"], RECEIVED[-1:]
     raw = MAILS[-1][1]
     mail = email.message_from_string(raw, policy=email.policy.default)

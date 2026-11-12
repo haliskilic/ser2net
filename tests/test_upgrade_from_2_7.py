@@ -27,7 +27,7 @@ import urllib.request
 from _formsubmit import browser_post
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigStore
+from ser2netweb.config import AppConfig, ConfigStore
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
 # what 2.8 changes in a 2.7.1 config on purpose (path -> file name; see config.trace_file_name)

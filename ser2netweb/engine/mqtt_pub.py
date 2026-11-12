@@ -9,7 +9,7 @@ close and as the MQTT Last-Will) lets subscribers see link state.
 
 paho-mqtt is an OPTIONAL dependency (not in the offline bootstrap): if it isn't
 installed or fails to import, publishing is disabled with a log line saying which
-(app.optional) and the bridge runs normally.
+(ser2netweb.optional) and the bridge runs normally.
 The paho client runs its own network thread (loop_start) and ``publish()`` is
 thread-safe, so feeding it from the asyncio serial loop never blocks the loop; a mapping's
 stop closes it with aclose(), which waits for that thread off the loop (at most

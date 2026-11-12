@@ -13,7 +13,7 @@ with its clients (one that should run but doesn't is started); one that changed 
 and started with its new settings, one that is gone is removed, a new one started; the
 cluster is restarted only when its settings changed. The admin UI's certificate files, and
 those of the TLS listeners of unchanged mappings, are read again for new connections
-(app/tlsreload.py). The admin UI's address can't move while it listens: a changed one is
+(ser2netweb/tlsreload.py). The admin UI's address can't move while it listens: a changed one is
 reported, and used from the next start.
 """
 from __future__ import annotations

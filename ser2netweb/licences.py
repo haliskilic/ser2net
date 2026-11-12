@@ -21,7 +21,7 @@ from . import SOURCE_URL
 SOURCE_URL_ENV = "SER2NET_SOURCE_URL"
 # an http(s) address without spaces, quotes or angle brackets (it goes into an href)
 _URL = re.compile(r"https?://[^\s\"'<>`]{1,2000}", re.I)
-# the folder that holds app/ (a source tree, the Docker image's /app; a standalone
+# the folder that holds ser2netweb/ (a source tree, the Docker image's /app; a standalone
 # executable's unpack folder)
 _ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

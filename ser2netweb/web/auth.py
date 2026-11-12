@@ -537,7 +537,7 @@ def is_https(request, cfg) -> bool:
     """Did the browser use HTTPS for this request? With admin TLS as the UI's listener
     serves it (AppState.serving_tls: a TLS change applies to new connections at once;
     without the app's state, as config.json sets it); when the request's scheme is https
-    (uvicorn's TLS, or X-Forwarded-Proto from a trusted proxy: app/web/proxy.py); or when
+    (uvicorn's TLS, or X-Forwarded-Proto from a trusted proxy: ser2netweb/web/proxy.py); or when
     the first X-Forwarded-Proto or Forwarded proto= says so, whoever sent it: it only makes
     cookies stricter (Secure) and adds HSTS, which browsers take only over HTTPS, and a
     page can't add those headers to the browser's requests - so a TLS proxy needs no

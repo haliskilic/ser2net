@@ -44,11 +44,11 @@ import time
 
 from _asgi import App, cookies, header
 
-from app import notify, runtime
-from app.config import (
+from ser2netweb import notify, runtime
+from ser2netweb.config import (
     RESERVED_PATHS, AdminUI, AppConfig, normalize_public_url, public_url_problem,
 )
-from app.web import auth, oidc_auth, proxy, totp
+from ser2netweb.web import auth, oidc_auth, proxy, totp
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 PW = "public-url-pass-1"
@@ -436,18 +436,18 @@ def test_no_root_relative_addresses() -> None:
     expression = re.compile(names + r'\s*=\s*"\{\{(?!\s*base\b)[^}]*[\'"]/')
     linked = re.compile(r"""href=\\?["']/""")   # a link in a translated text
     literal = re.compile(r"""['"]/(?:api|auth|settings|login|logout|setup|static|lang)\b""")
-    for path in sorted(glob.glob(os.path.join(ROOT, "app", "web", "templates", "*.html"))):
+    for path in sorted(glob.glob(os.path.join(ROOT, "ser2netweb", "web", "templates", "*.html"))):
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         for rx in (attr, expression, linked):
             assert not rx.search(text), (os.path.basename(path), rx.search(text))
-    with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as fh:
         assert not linked.search(fh.read()), "a translated link with a root-relative address"
-    for path in glob.glob(os.path.join(ROOT, "app", "web", "**", "*.py"), recursive=True):
+    for path in glob.glob(os.path.join(ROOT, "ser2netweb", "web", "**", "*.py"), recursive=True):
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
         assert not re.search(r'RedirectResponse\(\s*["\']/', text), path
-    with open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8") as fh:
         js = fh.read()
     for m in literal.finditer(js):
         assert js[max(0, m.start() - 13):m.start()] == "basePath() + ", js[m.start() - 40:m.end()]

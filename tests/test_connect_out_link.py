@@ -28,11 +28,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import Browser, Server, free_port
 
-from app import notify
-from app.config import NOTIFY_DEFAULT_EVENTS, MappingConfig, NotificationSettings
-from app.engine import serial_io
-from app.engine.bridge import MappingRunner
-from app.web.auth import hash_password
+from ser2netweb import notify
+from ser2netweb.config import NOTIFY_DEFAULT_EVENTS, MappingConfig, NotificationSettings
+from ser2netweb.engine import serial_io
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.web.auth import hash_password
 
 
 def remote():
@@ -162,7 +162,7 @@ def test_notifications():
 
 
 def test_dashboard_markup():
-    from app.web.server import make_templates
+    from ser2netweb.web.server import make_templates
 
     env = make_templates().env
     m = client_mapping(5000)

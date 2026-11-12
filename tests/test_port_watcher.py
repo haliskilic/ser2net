@@ -22,7 +22,7 @@ from unittest import mock
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
-from app.engine import portlist
+from ser2netweb.engine import portlist
 
 
 def test_signature_linux_tree():

@@ -28,8 +28,8 @@ import time
 
 from _server import Browser, Server, free_port
 
-from app.config import ConfigStore
-from app.web.auth import hash_password
+from ser2netweb.config import ConfigStore
+from ser2netweb.web.auth import hash_password
 
 PW = "trace-pass-1"
 A, B = "aaaaaaaaaaa1", "aaaaaaaaaaa2"

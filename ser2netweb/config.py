@@ -37,7 +37,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable, Optional, Union
 from . import __version__, i18n
 from .i18n import LANGUAGES, _
-from .textfold import fold  # how names compare; still importable as app.config.fold
+from .textfold import fold  # how names compare; still importable as ser2netweb.config.fold
 
 # ---------------------------------------------------------------------------
 # Allowed value sets (mirror pyserial; kept here so config validation has no
@@ -70,7 +70,7 @@ SESSION_TIMEOUT_MAX_S = 30 * 86400
 HSTS_MAX_AGE_DEFAULT = 365 * 86400
 HSTS_MAX_AGE_MAX = 2 * 365 * 86400
 # LDAP/OIDC accounts not signed in for this many days are removed (AppConfig
-# .external_users_expire_days, app/signins.py); 0 = never, the default: an admin turns it
+# .external_users_expire_days, ser2netweb/signins.py); 0 = never, the default: an admin turns it
 # on. At least the longest session lifetime, so no live session ends that way.
 EXPIRE_DAYS_DEFAULT = 0
 EXPIRE_DAYS_MIN = SESSION_TIMEOUT_MAX_S // 86400
@@ -213,10 +213,10 @@ def _icacls_private(path: str, grants: list[str]) -> None:
 
 # What ser2net itself puts in its data directory (the folder of config.json, which may have
 # another name with --config): all.log and audit.log with their rotated copies, logs/,
-# traces/, backups/, tls/ (a generated certificate), admin-requests/ (app/accounts.py), the
-# instance lock (app/datalock.py), setup-code.txt (app/state.py), the Sparkplug B bdSeq
-# file (app/engine/sparkplug_node.py), hang.log of the loop watchdog (app/watchdog.py), the
-# Windows service's service.log (app/winservice.py), each with a kept older copy, and the
+# traces/, backups/, tls/ (a generated certificate), admin-requests/ (ser2netweb/accounts.py), the
+# instance lock (ser2netweb/datalock.py), setup-code.txt (ser2netweb/state.py), the Sparkplug B bdSeq
+# file (ser2netweb/engine/sparkplug_node.py), hang.log of the loop watchdog (ser2netweb/watchdog.py), the
+# Windows service's service.log (ser2netweb/winservice.py), each with a kept older copy, and the
 # temporary files of its atomic writes and log trims; and what a file system or a desktop
 # adds to any folder.
 OWN_NAMES = frozenset({"backups", "logs", "traces", "tls", "admin-requests", "ser2net.lock",
@@ -2471,7 +2471,7 @@ class AdminUI:
     # 0 sends max-age=0, which turns that off and makes browsers forget it. Settings ->
     # Admin TLS.
     hsts_max_age: int = HSTS_MAX_AGE_DEFAULT
-    # Behind a reverse proxy (Settings -> Reverse proxy; app/web/proxy.py). public_url: the
+    # Behind a reverse proxy (Settings -> Reverse proxy; ser2netweb/web/proxy.py). public_url: the
     # address users open, such as https://ser2net.example.com, or with a path the UI is then
     # also served under (https://gw.example.com/ser2net); '' = none. trusted_proxies: the
     # addresses / networks whose X-Forwarded-For and X-Forwarded-Proto are believed; none by
@@ -2639,7 +2639,7 @@ def _normalize_node_name(admin: "AdminUI", notes: list[str]) -> None:
 
 
 # The first path segments of the UI's own pages: a public URL's path can't start with one,
-# or a page asked for without the path would be taken for one under it (app/web/proxy.py).
+# or a page asked for without the path would be taken for one under it (ser2netweb/web/proxy.py).
 RESERVED_PATHS = frozenset({"api", "auth", "favicon.ico", "healthz", "lang", "licenses",
                             "login", "logout", "metrics", "settings", "setup", "static"})
 _URL_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._~-]+")
@@ -2786,7 +2786,7 @@ def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
                      f"to {HSTS_MAX_AGE_MAX}; using {HSTS_MAX_AGE_DEFAULT} (one year)")
 
 
-# the languages the UI offers are listed once, in app/i18n.py ("auto": the browser's)
+# the languages the UI offers are listed once, in ser2netweb/i18n.py ("auto": the browser's)
 UI_LANGUAGES = ("auto", *LANGUAGES)
 ROLES = ("admin", "operator", "viewer")
 # higher rank = more privilege; a route requires >= some rank
@@ -3034,7 +3034,7 @@ SMTP_SECURITY = ("starttls", "ssl", "none")
 
 @dataclass
 class NotificationSettings:
-    """Event notifications (app/notify.py): a webhook and/or e-mail when a serial
+    """Event notifications (ser2netweb/notify.py): a webhook and/or e-mail when a serial
     device disappears or comes back, a mapping fails to start, clients connect or
     disconnect, a sign-in fails, the data disk is almost full, a device sends nothing
     (a mapping's no-data alarm), a cluster node goes offline, a polled Modbus unit stops or
@@ -3146,7 +3146,7 @@ class User:
     account starts at a random value, see new_pwd_version).
     `source` is 'local' (password in password_hash) or 'ldap' (a shadow account whose
     role is derived from LDAP groups on each login; no local password).
-    `totp_secret` (base32, app/web/totp.py): a local account that set up two-factor
+    `totp_secret` (base32, ser2netweb/web/totp.py): a local account that set up two-factor
     sign-in also gives a code from its authenticator app; "" = off (the default). Written
     to config.json only when set."""
     username: str = ""
@@ -4161,7 +4161,7 @@ class ConfigStore:
         version being replaced is kept in backups/ first, the new one after (see the class
         docstring). Content config.json holds already is not written again.
         validate=False is for a change the caller checked itself and that must not
-        fail on an unrelated setting (account recovery, app/accounts.py; start-up right
+        fail on an unrelated setting (account recovery, ser2netweb/accounts.py; start-up right
         after tolerate_problems(), runtime.prepare_config).
         backup=False: a change only of which mappings run (start / stop). It takes no backup
         of its own: when the newest backup is the file it replaces, the new file takes its

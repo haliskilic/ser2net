@@ -26,7 +26,7 @@ def routes(ctx: Ctx) -> list:
         return PlainTextResponse("ok")
 
     async def licenses_page(request):
-        """The licence texts this copy carries (app/licences.py), for any signed-in role."""
+        """The licence texts this copy carries (ser2netweb/licences.py), for any signed-in role."""
         texts = await asyncio.to_thread(licences.texts)
         return render(request, "licenses.html", texts=texts)
 
@@ -243,7 +243,7 @@ def process_metrics(state) -> list[str]:
     started = getattr(state, "started_at", None)
     if started is not None:
         lines.append(f"ser2net_start_time_seconds {started:.3f}")
-    dog = getattr(state, "loop_watchdog", None)  # (app/watchdog.py)
+    dog = getattr(state, "loop_watchdog", None)  # (ser2netweb/watchdog.py)
     if dog is not None:
         lines.append(f"ser2net_event_loop_lag_seconds {dog.lag:.3f}")
         lines.append(f"ser2net_event_loop_stalls_total {dog.slow_beats}")

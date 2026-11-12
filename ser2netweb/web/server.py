@@ -376,7 +376,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
 
 def _page_context(request) -> dict:
     """What every template gets: base, the path prefix of the request, which its links go
-    under (app/web/proxy.py); node_name, this instance's name ('' = none: Settings -> Admin
+    under (ser2netweb/web/proxy.py); node_name, this instance's name ('' = none: Settings -> Admin
     interface), which the signed-in pages (_shell.html) show in the title and the top bar;
     login_notice / login_notice_url, the notice the sign-in and setup pages show (every one
     of their renders, also a refusal's) and open-access visitors get a link to (Settings ->
@@ -446,7 +446,7 @@ def make_templates() -> Jinja2Templates:
     templates.env.filters["in_text_box"] = in_text_box   # a value as a text box sends it
     from ..notify import no_data_for
     templates.env.globals["no_data_for"] = no_data_for  # a mapping's no-data alarm, now
-    # _("...") in every template, translated for the request's language (app/i18n.py);
+    # _("...") in every template, translated for the request's language (ser2netweb/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")
     templates.env.install_gettext_callables(i18n.gettext, i18n.ngettext, newstyle=True)  # type: ignore[attr-defined]

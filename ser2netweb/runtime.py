@@ -133,7 +133,7 @@ _shutdown_hooks: list = []
 _ready_hooks: list[Callable[[], None]] = []
 
 
-# SIGHUP (POSIX) has ser2net read config.json again (app/reload.py). One that comes before
+# SIGHUP (POSIX) has ser2net read config.json again (ser2netweb/reload.py). One that comes before
 # the event loop handles it (while config.json is loaded at start-up) is noted here instead
 # of ending the process, its default, and handled once the server runs.
 _hangups: list[float] = []
@@ -332,7 +332,7 @@ def admin_tls_builder(uconfig) -> Callable:
 
 
 def hold_data_dir(config_path: str) -> str | None:
-    """Take the data directory's single-instance lock (app.datalock) before anything is
+    """Take the data directory's single-instance lock (ser2netweb.datalock) before anything is
     written there: a second ser2net on the same directory stops here with one line; a
     --set-password / --sign-out-all that is changing config.json is waited for.
     Returns a warning for the start-up log when the lock can't be taken (the start goes
@@ -534,7 +534,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     _log_loop_errors(asyncio.get_running_loop(), state.log)
     use_worker_threads(asyncio.get_running_loop())
     _log_thread_errors(state.log)
-    # a stuck event loop ends the process (to be started again): app/watchdog.py
+    # a stuck event loop ends the process (to be started again): ser2netweb/watchdog.py
     if hang := watchdog.previous_hang(state.data_dir):
         state.log(hang)
         state.previous_hang = hang
@@ -641,7 +641,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
             # at a stop, a response still under way (a large trace download) gets this
             # long; the WebSockets (console, hex view) are closed at once
             timeout_graceful_shutdown=SHUTDOWN_HTTP_TIMEOUT_S,
-            # X-Forwarded-For / -Proto are taken by app/web/proxy.py, from trusted proxies
+            # X-Forwarded-For / -Proto are taken by ser2netweb/web/proxy.py, from trusted proxies
             # only (uvicorn's own would believe them from 127.0.0.1 and ::1, and any text as
             # an address)
             proxy_headers=False,

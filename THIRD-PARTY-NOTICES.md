@@ -73,7 +73,7 @@ per platform so Windows and Linux ship the same CPython and a supported OpenSSL 
 Each native library's own license text is included in `ser2net --licenses` and in the
 `*.THIRD-PARTY-LICENSES.txt` attached to the release.
 
-## Browser assets (`app/web/static/`)
+## Browser assets (`ser2netweb/web/static/`)
 
 Copied unmodified from their npm releases; `vendor/npm/package.json` records the versions,
 the files and their sha256, and the license texts are in `tools/licenses/npm/` (and in

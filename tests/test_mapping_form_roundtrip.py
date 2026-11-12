@@ -2,7 +2,7 @@
 
 The form doesn't show (or post) every setting, and an edit rebuilds the mapping from
 what was posted: a setting survives only when the form shows it or the parsing keeps
-the stored value (app/web/routes/forms.py: _OPTIONAL_FORM_FIELDS, _UNMANAGED_FIELDS,
+the stored value (ser2netweb/web/routes/forms.py: _OPTIONAL_FORM_FIELDS, _UNMANAGED_FIELDS,
 ...). This test makes sure no setting falls between the two, now or when one is added:
 
   * the settings are found by walking MappingConfig's dataclasses; between them, the
@@ -34,10 +34,10 @@ from _formsubmit import Form, browser_post
 from _server import ROOT  # noqa: F401  (sys.path setup)
 from starlette.datastructures import FormData
 
-from app.config import MappingConfig
-from app.web.routes import forms
-from app.web.routes.cluster import _peer_save_fields, _remote
-from app.web.server import make_templates
+from ser2netweb.config import MappingConfig
+from ser2netweb.web.routes import forms
+from ser2netweb.web.routes.cluster import _peer_save_fields, _remote
+from ser2netweb.web.server import make_templates
 
 TEMPLATE = make_templates().get_template("_mapping_form.html")
 REQUEST = SimpleNamespace(state=SimpleNamespace(csrf_token="t0ken"))

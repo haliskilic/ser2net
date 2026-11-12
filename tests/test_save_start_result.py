@@ -21,8 +21,8 @@ import urllib.parse
 
 from _asgi import App, cookies, header
 
-from app.web import auth
-from app.web.routes.mappings import _port_taken
+from ser2netweb.web import auth
+from ser2netweb.web.routes.mappings import _port_taken
 
 PW = "save-start-pass-1"
 CSRF = "save-start-csrf"

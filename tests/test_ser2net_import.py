@@ -1,6 +1,6 @@
 """Migrating from the classic (C) ser2net: importing ser2net.yaml / ser2net.conf.
 
-app/ser2net_import.py turns a ser2net 4.x YAML file or a 3.x ser2net.conf into mapping
+ser2netweb/ser2net_import.py turns a ser2net 4.x YAML file or a 3.x ser2net.conf into mapping
 dicts plus warnings. Checks:
   * the default ser2net.yaml Debian ships (define: &banner, multi-line connectors,
     *banner aliases): 4 mappings; the two that share a device with an earlier one come
@@ -45,8 +45,8 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import AppConfig, ConfigError, MappingConfig
-from app.ser2net_import import parse_ser2net_config
+from ser2netweb.config import AppConfig, ConfigError, MappingConfig
+from ser2netweb.ser2net_import import parse_ser2net_config
 
 # /etc/ser2net/ser2net.yaml as the Debian ser2net 4.x package ships it
 DEBIAN_DEFAULT = r"""%YAML 1.1
@@ -611,7 +611,7 @@ connection: &yaml
 
 
 def test_high_bytes():
-    from app.engine.bridge import _render_banner
+    from ser2netweb.engine.bridge import _render_banner
     maps, warns = parse(HIGH_BYTES)
     init, close, yaml = maps["init"], maps["close"], maps["yaml"]
     # what the bridge would send: \377 as c3 bf, not ff: the device gets other bytes
@@ -657,7 +657,7 @@ connection: &esc
 
 
 def test_escapes():
-    from app.engine.bridge import _render_banner
+    from ser2netweb.engine.bridge import _render_banner
     maps, warns = parse(ESCAPES)
     e = maps["esc"]
     o = e["options"]
@@ -1334,8 +1334,8 @@ def test_migration_notes():
     """What changes for a mapping moved from the classic ser2net: an openstr goes out once
     the port opens (not per client), and a port below 1024 that this process may not use
     (Linux without root or CAP_NET_BIND_SERVICE) is named before the mapping is applied."""
-    from app import ser2net_import
-    from app.engine import bindhint
+    from ser2netweb import ser2net_import
+    from ser2netweb.engine import bindhint
     saved = bindhint.may_bind_low_ports, bindhint.unprivileged_port_start
     try:
         bindhint.unprivileged_port_start = lambda: 1024

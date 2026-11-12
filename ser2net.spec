@@ -12,8 +12,8 @@ import sys
 from PyInstaller.utils.hooks import collect_all
 
 # the files the app reads at run time: page templates, static assets, UI translations
-# (tests/test_standalone.py fails when a data file under app/ is left out)
-datas = [(d, d) for d in ("app/web/templates", "app/web/static", "app/locale")]
+# (tests/test_standalone.py fails when a data file under ser2netweb/ is left out)
+datas = [(d, d) for d in ("ser2netweb/web/templates", "ser2netweb/web/static", "ser2netweb/locale")]
 # every bundled component's license (tools/third_party.py; `ser2net --licenses` prints it).
 # The build scripts write it first; a plain `pyinstaller ser2net.spec` gets it written here,
 # from this environment (the interpreter's native libraries' own texts only come with the
@@ -28,7 +28,7 @@ if BUILDING and not os.path.isfile(LICENSES):
 if os.path.isfile(LICENSES):
     datas.append((LICENSES, "."))
 binaries = []
-hiddenimports = ["app", "app.runtime"]
+hiddenimports = ["ser2netweb", "ser2netweb.runtime"]
 
 # uvicorn/starlette load submodules dynamically; the optional deps (paho/ldap3/
 # authlib/cryptography) are bundled so the binary supports MQTT/LDAP/OIDC out of
@@ -68,7 +68,7 @@ if BUILDING:
         fh.write("".join(f"{b[0]}\n" for b in a.binaries))
 pyz = PYZ(a.pure)
 # Windows: stamp the exe with a version resource (tools/win_version_info.py writes
-# build/win_version.txt from app.__version__ at build time) and the ser2net icon, so
+# build/win_version.txt from ser2netweb.__version__ at build time) and the ser2net icon, so
 # Explorer's Details tab shows the version/publisher and the exe no longer carries
 # PyInstaller's default console icon. Both are ignored on other platforms.
 version_file = os.path.join("build", "win_version.txt")

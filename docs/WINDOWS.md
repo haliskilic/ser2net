@@ -109,7 +109,7 @@ current one has one is refused, so an upgrade can't start over empty.)
 
 A source checkout can't copy itself to an admin-only folder, so `--install-service`
 refuses while an account other than SYSTEM and Administrators can change the interpreter,
-the checkout, `app\` or `lib\` — your own account included when it owns the folder. Put
+the checkout, `ser2netweb\` or `lib\` — your own account included when it owns the folder. Put
 the checkout and Python under `C:\Program Files\` (or another admin-only folder) owned by
 Administrators; for a folder you already have, from an elevated prompt:
 

@@ -19,7 +19,7 @@ import tempfile
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path[:0] = [os.path.join(ROOT, "lib"), ROOT]
 
-from app.engine import cluster, netinfo  # (after the path above)
+from ser2netweb.engine import cluster, netinfo  # (after the path above)
 
 
 def main() -> int:

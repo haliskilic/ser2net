@@ -4,7 +4,7 @@
 Entry point. Responsibilities kept deliberately thin:
   1. Make bundled dependencies importable (offline bootstrap into ./lib).
   2. Parse CLI args and locate the config/data directory.
-  3. Hand off to app.runtime, which owns the event loop and orchestration.
+  3. Hand off to ser2netweb.runtime, which owns the event loop and orchestration.
 
 Run:
     python3 ser2net.py                 # normal start (first run asks bind IP on console)
@@ -16,7 +16,7 @@ Run:
 """
 # No `from __future__ import annotations` and nothing newer than Python 3.6 syntax in this
 # file: an old python3 (RHEL 8's 3.6, RHEL 9's 3.9) gets the message below instead of a
-# SyntaxError or a TypeError. app/ is imported only after it.
+# SyntaxError or a TypeError. ser2netweb/ is imported only after it.
 import argparse
 import contextlib
 import os
@@ -30,7 +30,7 @@ if sys.version_info < (3, 10):
 
 # The script's own directory is on sys.path, so the `app` package imports here even
 # before the explicit sys.path setup below (and PyInstaller bundles it in frozen builds).
-from app import __version__
+from ser2netweb import __version__
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)  # True inside a PyInstaller build
@@ -215,7 +215,7 @@ def print_about() -> int:
     import ssl
     from importlib import metadata
 
-    from app import optional
+    from ser2netweb import optional
 
     roots, used = _known_roots(), set()
     lines = [f"ser2net {__version__}",
@@ -261,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.uninstall_service:
         return _service_call(lambda ws: ws.uninstall(args.service_name))
     if args.healthcheck:  # stdlib only: no bootstrap needed
-        from app import healthcheck
+        from ser2netweb import healthcheck
 
         ok, msg = healthcheck.check(args.config or os.path.join(args.data_dir, "config.json"))
         print(msg)
@@ -271,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     split = split_layout_note(args)
     if split:
         print(f"ser2net: {split}", file=sys.stderr)
-        from app import standalone  # (its notes are the lines all.log gets at start-up)
+        from ser2netweb import standalone  # (its notes are the lines all.log gets at start-up)
 
         standalone.notes.append(split)
     if args.service:
@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         return print_about()
 
     if args.set_password is not None or args.sign_out_all or args.reload:
-        from app import accounts
+        from ser2netweb import accounts
 
         return accounts.main(args, config_path)
 
@@ -341,7 +341,7 @@ def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
     pins (an upgrade) is brought up to date too. Its warnings go to the start-up log."""
     if FROZEN:
         return
-    sys.path.insert(0, ROOT)  # ensure local packages (app/, bootstrap) import first
+    sys.path.insert(0, ROOT)  # ensure local packages (ser2netweb/, bootstrap) import first
     if not args.no_bootstrap:
         import bootstrap
 
@@ -356,17 +356,17 @@ def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
             return
         bootstrap.warn_if_stale()
     if bootstrap.notes:
-        from app import standalone  # (its notes are the lines all.log gets at start-up)
+        from ser2netweb import standalone  # (its notes are the lines all.log gets at start-up)
 
         standalone.notes.extend(bootstrap.notes)
 
 
 def _import_runtime():
-    """app.runtime, which imports the dependencies. When they come from a ./lib an older
+    """ser2netweb.runtime, which imports the dependencies. When they come from a ./lib an older
     release installed that could not be refreshed (the bootstrap said why) and lack what
     this version needs, the start stops with that instead of a traceback."""
     try:
-        from app import runtime
+        from ser2netweb import runtime
     except ImportError as e:
         bootstrap = sys.modules.get("bootstrap")
         if bootstrap is None or not bootstrap.lib_is_stale():
@@ -385,7 +385,7 @@ def _service(args: argparse.Namespace, config_path: str) -> int:
     thread, once it is connected."""
     import threading
 
-    from app import winservice
+    from ser2netweb import winservice
 
     stop_asked = threading.Event()
     data_dir = os.path.dirname(os.path.abspath(config_path))
@@ -397,7 +397,7 @@ def _service(args: argparse.Namespace, config_path: str) -> int:
             runtime = _import_runtime()
         except SystemExit as e:  # a service has no console: all.log and the event log
             if isinstance(e.code, str):
-                from app import clock
+                from ser2netweb import clock
 
                 log = os.path.join(data_dir, "all.log")
                 with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
@@ -414,7 +414,7 @@ def _service(args: argparse.Namespace, config_path: str) -> int:
 
     def stop() -> None:
         stop_asked.set()
-        runtime = sys.modules.get("app.runtime")
+        runtime = sys.modules.get("ser2netweb.runtime")
         if runtime is not None and hasattr(runtime, "request_shutdown"):
             runtime.request_shutdown()
 
@@ -434,7 +434,7 @@ def _print_firewall_hint(config, service_name: str) -> None:
         and m.network.bind_ip not in ("127.0.0.1", "::1") for m in config.mappings)
     if not beyond_loopback:
         return
-    from app import winservice
+    from ser2netweb import winservice
 
     _write_utf8(
         "\nWindows Firewall: this service listens for other hosts, which the firewall "
@@ -445,7 +445,7 @@ def _print_firewall_hint(config, service_name: str) -> None:
 
 
 def _service_call(fn) -> int:
-    from app import winservice
+    from ser2netweb import winservice
 
     try:
         fn(winservice)

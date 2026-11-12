@@ -31,8 +31,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _mqtt_broker import MqttBroker
 from _optional import need
 
-from app.config import MappingConfig, MqttSettings
-from app.engine.mqtt_pub import MqttPublisher
+from ser2netweb.config import MappingConfig, MqttSettings
+from ser2netweb.engine.mqtt_pub import MqttPublisher
 
 
 class Code:
@@ -288,8 +288,8 @@ def test_paho():
 
 
 async def metrics_of(mapping, status):
-    from app.config import AppConfig
-    from app.web.routes import system
+    from ser2netweb.config import AppConfig
+    from ser2netweb.web.routes import system
 
     class State:
         config = AppConfig(mappings=[mapping])
@@ -307,7 +307,7 @@ async def metrics_of(mapping, status):
 
 
 async def runner_checks():
-    from app.engine.bridge import MappingRunner
+    from ser2netweb.engine.bridge import MappingRunner
 
     with MqttBroker() as broker:
         m = MappingConfig.from_dict({

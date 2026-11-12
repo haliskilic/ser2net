@@ -36,9 +36,9 @@ from _server import ROOT, free_port  # noqa: F401  (sys.path setup)
 from _mqtt_broker import MqttBroker
 from _optional import need
 
-from app.config import MappingConfig
-from app.engine import modbus, serial_io, sparkplug
-from app.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import modbus, serial_io, sparkplug
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
 
 POINTS = [
     {"name": "temp", "unit": 1, "fn": 4, "address": 0, "dtype": "float32"},
@@ -231,8 +231,8 @@ async def stop_checks(broker):
 
 
 async def flood_checks(broker):
-    from app.engine.modbus_gateway import SET_MAX_BYTES, WRITE_QUEUE_MAX
-    from app.engine.sparkplug_node import CMD_MAX_BYTES
+    from ser2netweb.engine.modbus_gateway import SET_MAX_BYTES, WRITE_QUEUE_MAX
+    from ser2netweb.engine.sparkplug_node import CMD_MAX_BYTES
     result = "plant/a/setpoint/set/result"
     async with Slave() as slave, gateway(broker, slave, timeout=5.0):
         assert await until(lambda: "plant/a/setpoint/set" in broker.subscriptions)

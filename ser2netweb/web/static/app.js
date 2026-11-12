@@ -169,7 +169,7 @@ document.addEventListener("htmx:beforeSwap", function (e) {
 // 1e) Connection times in the mappings table count on in the browser, from when each
 //     client connected (data-since, by the server's clock, which each answer of the table
 //     gives in X-Server-Time): the table is not sent again every second for them. As the
-//     duration filter in app/web/routes/common.py.
+//     duration filter in ser2netweb/web/routes/common.py.
 var serverSkew = 0;
 document.addEventListener("htmx:afterRequest", function (e) {
   var xhr = e.detail.xhr, t = xhr && xhr.status ? xhr.getResponseHeader("X-Server-Time") : null;
@@ -631,7 +631,7 @@ document.addEventListener("htmx:beforeSwap", function (e) {
   var KEY = "ser2net-dashboard";     // per-browser filter memory
 
   // What is typed is folded as the rows' data-search is on the server (search_key in
-  // app/textfold.py): accents and compatibility forms left off (NFKD without combining
+  // ser2netweb/textfold.py): accents and compatibility forms left off (NFKD without combining
   // marks), Turkish İ/I/ı/i as one letter, letter case and runs of spaces ignored — so
   // "istanbul" finds "İstanbul Depo" and "corlu" "Çorlu". Not toLocaleLowerCase("tr"),
   // which turns I into ı and so breaks searches typed in English.

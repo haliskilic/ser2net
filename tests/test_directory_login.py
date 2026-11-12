@@ -47,8 +47,8 @@ import urllib.parse
 from _optional import need
 from _server import Browser, Server, ui_cookie
 
-from app.web import auth, oidc_auth
-from app.web.auth import hash_password
+from ser2netweb.web import auth, oidc_auth
+from ser2netweb.web.auth import hash_password
 
 PW = "dir-login-pass-1"
 BASE = "DC=corp,DC=local"

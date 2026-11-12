@@ -19,9 +19,9 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app import __version__
-from app.web.auth import hash_password
-from app.web.routes import system
+from ser2netweb import __version__
+from ser2netweb.web.auth import hash_password
+from ser2netweb.web.routes import system
 
 
 def test_exposition():

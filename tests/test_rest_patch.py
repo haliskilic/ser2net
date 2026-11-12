@@ -28,9 +28,9 @@ import urllib.request
 
 from _server import Server, free_port
 
-from app import config
-from app.web.api import API_PREFIX, build_api_routes, mapping_schemas, merge_patch, openapi_spec
-from app.web.auth import hash_password, hash_token
+from ser2netweb import config
+from ser2netweb.web.api import API_PREFIX, build_api_routes, mapping_schemas, merge_patch, openapi_spec
+from ser2netweb.web.auth import hash_password, hash_token
 
 TOKEN = "s2n_rest-patch-operator-token"
 MID = "patchme000001"
@@ -286,7 +286,7 @@ def test_patch_checks():
 
 
 def test_connected_seconds():
-    from app.engine.bridge import RunnerStatus
+    from ser2netweb.engine.bridge import RunnerStatus
 
     st = RunnerStatus()
     st.set_clients([types.SimpleNamespace(peer="10.0.0.5:5000", seq=1, priority=False,

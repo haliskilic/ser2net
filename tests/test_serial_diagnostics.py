@@ -60,15 +60,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import serial
 from serial.serialutil import SerialBase
 
-from app import i18n
-from app.config import MappingConfig, SerialSettings
-from app.engine import portdiag, serial_compat, serial_io
-from app.engine.bridge import RunnerStatus
-from app.engine.protocols.rfc2217 import Rfc2217Session
-from app.engine.serial_link import SerialLink
+from ser2netweb import i18n
+from ser2netweb.config import MappingConfig, SerialSettings
+from ser2netweb.engine import portdiag, serial_compat, serial_io
+from ser2netweb.engine.bridge import RunnerStatus
+from ser2netweb.engine.protocols.rfc2217 import Rfc2217Session
+from ser2netweb.engine.serial_link import SerialLink
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-TR = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8"))
+TR = json.load(open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8"))
 IAC, SB, SE = 255, 250, 240
 
 
@@ -240,7 +240,7 @@ def test_status_and_log():
 
 
 def test_dashboard_shows_warnings():
-    from app.web.server import make_templates
+    from ser2netweb.web.server import make_templates
     env = make_templates().env
     m = MappingConfig.from_dict({"name": "rs", "serial": {"port": "/dev/ttyUSB0"}})
     st = RunnerStatus(state="running", warnings=(portdiag.Note("rs485", ("ENOTTY",)),))
@@ -330,7 +330,7 @@ def test_no_access_hints():
 
 
 async def _two_mappings_one_port(path, alias):
-    from app.engine.bridge import MappingRunner
+    from ser2netweb.engine.bridge import MappingRunner
     logs = []
     first = MappingRunner(MappingConfig.from_dict(
         {"name": "first", "serial": {"port": path},
@@ -371,7 +371,7 @@ async def _until(check, timeout=10.0):
 
 
 async def _hint_follows_the_cause():
-    from app.engine import serial_link
+    from ser2netweb.engine import serial_link
     status = RunnerStatus()
     stop = asyncio.Event()
     logs = []
@@ -442,7 +442,7 @@ def test_port_in_use_hints():
         shutil.rmtree(folder, ignore_errors=True)
 
     m = MappingConfig.from_dict({"name": "second", "serial": {"port": alias}})
-    from app.web.server import make_templates
+    from ser2netweb.web.server import make_templates
     html = make_templates().env.get_template("_mappings_body.html").render(
         mappings=[m], statuses={m.id: st}, can_edit=False)
     assert "Could not exclusively lock port" in html and \
@@ -535,8 +535,8 @@ def test_port_warnings():
 def test_ports_page():
     from serial.tools import list_ports
 
-    from app.engine import portlist
-    from app.web.server import make_templates
+    from ser2netweb.engine import portlist
+    from ser2netweb.web.server import make_templates
     port = types.SimpleNamespace(device="/dev/ttyAMA0", name="ttyAMA0", description="UART",
                                  hwid="", vid=None, pid=None, serial_number=None,
                                  manufacturer=None, product=None, location=None)
@@ -602,7 +602,7 @@ def test_open_port_says_what_else_uses_it():
 
 
 async def _hangup(pty):
-    from app.engine import serial_link
+    from ser2netweb.engine import serial_link
     logs = []
     status = RunnerStatus()
     stop = asyncio.Event()

@@ -54,8 +54,8 @@ import urllib.request
 
 from _server import Browser, Server, _NoRedirect, free_port, ui_cookie
 
-from app.web import server as web_server
-from app.web.auth import hash_password, hash_token
+from ser2netweb.web import server as web_server
+from ser2netweb.web.auth import hash_password, hash_token
 
 PUBLIC, SETUP, VIEWER, ACCOUNT = "public", "setup", "viewer", "account"
 OPERATOR, PEER, ADMIN = "operator", "peer", "admin"
@@ -279,10 +279,10 @@ def test_inventory():
 
 def test_traffic_feed():
     """Who sees what in the console and the hex view (routes/common.py, console.py)."""
-    from app.config import MappingConfig, User
-    from app.engine.bridge import FROM_DEVICE, TO_DEVICE
-    from app.web.routes.common import console_interactive, sees_to_device
-    from app.web.routes.console import _TrafficMonitor
+    from ser2netweb.config import MappingConfig, User
+    from ser2netweb.engine.bridge import FROM_DEVICE, TO_DEVICE
+    from ser2netweb.web.routes.common import console_interactive, sees_to_device
+    from ser2netweb.web.routes.console import _TrafficMonitor
 
     net = MappingConfig.from_dict({"name": "net", "kind": "net"})
     read_only = MappingConfig.from_dict({"name": "ro", "kind": "net", "network": {"read_only": True}})

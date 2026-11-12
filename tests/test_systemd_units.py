@@ -128,7 +128,7 @@ def test_unprivileged():
 
 def test_interfaces_readable():
     # netlink lists the interfaces (psutil.net_if_addrs: the bind-IP pickers, the cluster's
-    # directed broadcasts); ProcSubset=pid stays (it hides /proc/net, which app/engine/
+    # directed broadcasts); ProcSubset=pid stays (it hides /proc/net, which ser2netweb/engine/
     # netinfo.py does without: tests/test_netinfo.py)
     for path in UNITS:
         unit, name = parse(path), os.path.basename(path)

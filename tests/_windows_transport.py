@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import serial  # with the real os.name: it picks its backend by it
 
-import app.engine  # noqa: F401
+import ser2netweb.engine  # noqa: F401
 from _fake_win32 import FakeWin32
 
 SIMULATED = os.name != "nt"
@@ -46,13 +46,13 @@ if SIMULATED:
         os.name = real_name
     sys.platform = "win32"
     try:
-        from app.engine import serial_compat
+        from ser2netweb.engine import serial_compat
     finally:
         sys.platform = real_platform
 else:
     import serial_asyncio_fast as saf
 
-    from app.engine import serial_compat
+    from ser2netweb.engine import serial_compat
 
 assert hasattr(serial_compat.Transport, "_poll_write"), "not the Windows branch"
 HIGH_WATER = 64 * 1024  # the transport's default
@@ -297,7 +297,7 @@ def run(coro):
     """On Windows the selector loop ser2net runs on (runtime.loop_factory)."""
     if SIMULATED:
         return asyncio.run(coro)
-    from app import runtime
+    from ser2netweb import runtime
     choice, _note = runtime.event_loop_choice()
     loop = runtime.loop_factory(choice)()
     try:

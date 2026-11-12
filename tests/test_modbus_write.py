@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.engine import modbus
+from ser2netweb.engine import modbus
 
 
 def expect_value_error(fn, *args, match=""):
@@ -280,8 +280,8 @@ def test_parse_write_payload():
     """What a plain-MQTT <topic>/<point>/set may carry: one coil state, or one number for a
     holding register (encode_value then makes it the point's type). Never a JSON list,
     which would write coils / registers beyond the point."""
-    from app.config import ModbusPoint
-    from app.engine.modbus_gateway import parse_write_payload as parse
+    from ser2netweb.config import ModbusPoint
+    from ser2netweb.engine.modbus_gateway import parse_write_payload as parse
     coil = ModbusPoint(name="pump", fn=1, dtype="bool", writable=True)
     reg = ModbusPoint(name="sp", fn=3, dtype="int16", writable=True)
     for text, state in ((b"1", True), (b"on", True), (b" TRUE \n", True),

@@ -25,9 +25,9 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import app.state as state_mod
-from app.config import AppConfig, ConfigStore, MappingConfig
-from app.state import AppState, RetainingFileHandler, write_audit_record
+import ser2netweb.state as state_mod
+from ser2netweb.config import AppConfig, ConfigStore, MappingConfig
+from ser2netweb.state import AppState, RetainingFileHandler, write_audit_record
 
 DAY = 86400
 

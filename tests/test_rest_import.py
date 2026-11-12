@@ -21,7 +21,7 @@ import urllib.request
 
 from _server import Server, free_port
 
-from app.web.auth import hash_password, hash_token
+from ser2netweb.web.auth import hash_password, hash_token
 
 TOKEN = "s2n_rest-import-operator-token"
 

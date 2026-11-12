@@ -26,10 +26,10 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import AppConfig, ConfigStore, MappingConfig, mapping_file, valid_mapping_id
-from app.importer import parse_mappings_file
-from app.state import AppState
-from app.web.auth import hash_password, hash_token
+from ser2netweb.config import AppConfig, ConfigStore, MappingConfig, mapping_file, valid_mapping_id
+from ser2netweb.importer import parse_mappings_file
+from ser2netweb.state import AppState
+from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "mapping-ids-pass-1"
 TOKEN = "s2n_mapping-ids-token"

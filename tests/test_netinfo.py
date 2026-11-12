@@ -1,5 +1,5 @@
 """The bind-IP pickers and the cluster beacons find this machine's interfaces, also where
-/proc/net is hidden (app/engine/netinfo.py, app/engine/cluster.py).
+/proc/net is hidden (ser2netweb/engine/netinfo.py, ser2netweb/engine/cluster.py).
 
 The systemd unit runs ser2net with ProcSubset=pid, which hides /proc/net: psutil's
 net_if_stats() (it reads /proc/net/dev) then fails, while net_if_addrs() (getifaddrs, over
@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import _server  # noqa: F401  (puts the checkout and ./lib on sys.path)
 
-from app.engine import cluster, netinfo
+from ser2netweb.engine import cluster, netinfo
 
 
 class FakePsutil:

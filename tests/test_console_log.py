@@ -23,8 +23,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from app import logsetup
-from app.state import AppState
+from ser2netweb import logsetup
+from ser2netweb.state import AppState
 
 
 class Console(io.StringIO):

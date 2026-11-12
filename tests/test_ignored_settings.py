@@ -19,10 +19,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import i18n
-from app.config import AppConfig, MappingConfig
-from app.engine.bridge import MappingRunner, log_ignored_settings
-from app.importer import parse_mappings_file
+from ser2netweb import i18n
+from ser2netweb.config import AppConfig, MappingConfig
+from ser2netweb.engine.bridge import MappingRunner, log_ignored_settings
+from ser2netweb.importer import parse_mappings_file
 
 MQTT = {"enabled": True, "host": "broker", "base_topic": "plant"}
 

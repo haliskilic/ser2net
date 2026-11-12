@@ -29,10 +29,10 @@ import urllib.parse
 
 import _server  # noqa: F401  (puts the repo root and lib/ on sys.path)
 
-from app.config import AppConfig, ConfigStore
-from app.state import AppState
-from app.web import auth
-from app.web.server import build_app
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.state import AppState
+from ser2netweb.web import auth
+from ser2netweb.web.server import build_app
 
 PW = "throttle-pass-1"
 CSRF = "throttle-csrf-token"
@@ -239,7 +239,7 @@ def test_per_name_limit():
 
 
 async def _per_name_directory(d: str, config: dict) -> None:
-    from app.web import ldap_auth
+    from ser2netweb.web import ldap_auth
 
     asked = []
 

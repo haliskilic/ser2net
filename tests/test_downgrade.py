@@ -21,9 +21,9 @@ import tempfile
 
 from _server import Browser, Server
 
-from app import __version__
-from app.config import AppConfig, ConfigStore
-from app.web.auth import hash_password
+from ser2netweb import __version__
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.web.auth import hash_password
 
 PW = "downgrade-pass-1"
 

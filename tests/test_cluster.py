@@ -49,13 +49,13 @@ sys.path.insert(0, ROOT)
 import _form_cases as form_cases
 from _formsubmit import browser_post
 
-from app import __version__
-from app.config import AppConfig, ClusterSettings
-from app.engine import netinfo
-from app.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,
+from ser2netweb import __version__
+from ser2netweb.config import AppConfig, ClusterSettings
+from ser2netweb.engine import netinfo
+from ser2netweb.engine.cluster import (AUTH_HEADER, PEER_TTL, ClusterDiscovery, _sign,
                                 canonical_target, format_auth, key_header, parse_auth,
                                 reply_mac, request_mac)
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 from _server import server_log, ui_cookie
 
 

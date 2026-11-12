@@ -20,9 +20,9 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MappingConfig
-from app.engine.bridge import MappingRunner
-from app.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
 
 
 def _free_port() -> int:

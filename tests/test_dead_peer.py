@@ -30,7 +30,7 @@ Two layers:
    silently skipping. Locally it is opt-in because it edits the firewall
    (tip: run it inside a throwaway network namespace on Linux).
 
-Windows production runs the SelectorEventLoop (app/runtime.py), so the scenarios run
+Windows production runs the SelectorEventLoop (ser2netweb/runtime.py), so the scenarios run
 on that loop there; the server-side socket checks also run on the default
 (Proactor) loop. Run: python3 tests/test_dead_peer.py
 """
@@ -48,10 +48,10 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MappingConfig
-from app.engine import sockopts
-from app.engine.bridge import MappingRunner
-from app.engine.modbus_gateway import ModbusGatewayRunner
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine import sockopts
+from ser2netweb.engine.bridge import MappingRunner
+from ser2netweb.engine.modbus_gateway import ModbusGatewayRunner
 
 # Short keepalive so a dead peer is detected in ~3 s (1 s idle + 2 probes x 1 s).
 KA = {"tcp_keepalive": True, "keepalive_idle_s": 1, "keepalive_interval_s": 1,

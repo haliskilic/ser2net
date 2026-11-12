@@ -1749,7 +1749,7 @@ def routes(ctx: Ctx) -> list:
 
     async def config_reload(request):
         """Read config.json again and apply it, as SIGHUP / `ser2net --reload` do
-        (app/reload.py): for an edit made outside the UI (by hand, Ansible ...)."""
+        (ser2netweb/reload.py): for an edit made outside the UI (by hand, Ansible ...)."""
         if deny := require_role(request, "admin"):
             return deny
         form = await read_form(request)

@@ -28,7 +28,7 @@ BASE = f"http://127.0.0.1:{UI}"
 
 from _server import ui_cookie
 
-from app.web import auth
+from ser2netweb.web import auth
 
 # the UI's cookie names at that port
 SESSION, CSRF = ui_cookie("ser2net_session", UI), ui_cookie("ser2net_csrf", UI)

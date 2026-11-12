@@ -1,4 +1,4 @@
-"""Account recovery and the first admin without the web UI (app/accounts.py).
+"""Account recovery and the first admin without the web UI (ser2netweb/accounts.py).
 
   * `ser2net --set-password NAME` on a stopped install changes config.json (backed up,
     audited): the new password works, the old sessions end; NAME is created as an admin
@@ -34,9 +34,9 @@ import types
 
 from _server import ROOT, Browser, Server
 
-from app import accounts, datalock
-from app.config import AppConfig
-from app.web.auth import hash_password, verify_password
+from ser2netweb import accounts, datalock
+from ser2netweb.config import AppConfig
+from ser2netweb.web.auth import hash_password, verify_password
 
 PW = "recovery-pass-1"
 NEW = "brand-new-pass-2"
@@ -135,7 +135,7 @@ def test_request_files():
 # an account command's.
 _HOLDER = (
     "import sys, time; sys.path.insert(0, sys.argv[2])\n"
-    "from app import accounts, datalock\n"
+    "from ser2netweb import accounts, datalock\n"
     "d, kind = sys.argv[1], sys.argv[3]\n"
     "assert datalock.acquire(d, brief=kind == 'brief') is None\n"
     "print('held', flush=True)\n"
@@ -150,7 +150,7 @@ _HOLDER = (
 # account command), then read config.json.
 _START = (
     "import sys, time; sys.path.insert(0, sys.argv[2])\n"
-    "from app import runtime\n"
+    "from ser2netweb import runtime\n"
     "print('starting', flush=True)\n"
     "runtime.hold_data_dir(sys.argv[1])\n"
     "print(open(sys.argv[1], encoding='utf-8').read(), flush=True)\n"
@@ -158,7 +158,7 @@ _START = (
 
 _PROBE = (
     "import sys; sys.path.insert(0, sys.argv[2])\n"
-    "from app import datalock\n"
+    "from ser2netweb import datalock\n"
     "try:\n"
     "    datalock.acquire(sys.argv[1])\n"
     "    print('FREE')\n"

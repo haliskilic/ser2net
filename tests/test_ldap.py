@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _names import OTHER_GROUP, SAME_GROUP
 from _optional import need
 
-from app.config import AccountNameError, AppConfig, LdapSettings, User
-from app.web import ldap_auth
+from ser2netweb.config import AccountNameError, AppConfig, LdapSettings, User
+from ser2netweb.web import ldap_auth
 
 OPER_GROUP = "cn=ser2net-operators,ou=groups,dc=ex,dc=com"
 ADMIN_GROUP = "cn=ser2net-admins,ou=groups,dc=ex,dc=com"

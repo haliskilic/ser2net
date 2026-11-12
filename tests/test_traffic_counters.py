@@ -19,10 +19,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import AppConfig, MappingConfig
-from app.engine import bridge
-from app.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner, _LogEvery
-from app.engine.supervisor import Supervisor
+from ser2netweb.config import AppConfig, MappingConfig
+from ser2netweb.engine import bridge
+from ser2netweb.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner, _LogEvery
+from ser2netweb.engine.supervisor import Supervisor
 
 
 class FakePort:
@@ -195,7 +195,7 @@ def test_log_every():
 
 
 async def test_metrics_line():
-    from app.web.routes import system
+    from ser2netweb.web.routes import system
 
     class State:
         config = AppConfig.from_dict({"mappings": [{"id": "m1", "name": "plc", "serial":

@@ -14,7 +14,7 @@ import struct
 import sys
 
 SIZES = (16, 24, 32, 48, 64, 128, 256)
-# the admin UI's accent blue and panel/background (app/web/static/app.css)
+# the admin UI's accent blue and panel/background (ser2netweb/web/static/app.css)
 ACCENT = (0x2F, 0x81, 0xF7)
 DARK = (0x12, 0x18, 0x1F)
 WHITE = (0xF2, 0xF6, 0xFB)

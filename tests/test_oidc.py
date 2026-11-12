@@ -31,8 +31,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _names import OTHER_GROUP, SAME_GROUP
 from _optional import need
 
-from app.config import OidcSettings
-from app.web import auth, oidc_auth
+from ser2netweb.config import OidcSettings
+from ser2netweb.web import auth, oidc_auth
 
 ISSUER = "https://idp.example.com"
 CLIENT_ID = "ser2net"
@@ -214,8 +214,8 @@ def test_https_only():
 def test_ca_certificates_read_per_request():
     """The provider's certificate is checked against the CA certificates as they are when
     the request is made, not when the module was imported: the standalone Linux binary
-    points OpenSSL at the system's CA bundle (SSL_CERT_FILE, app/standalone.py) after
-    app.web.oidc_auth is imported. Needs cryptography (the test certificates)."""
+    points OpenSSL at the system's CA bundle (SSL_CERT_FILE, ser2netweb/standalone.py) after
+    ser2netweb.web.oidc_auth is imported. Needs cryptography (the test certificates)."""
     import ssl
     import tempfile
 

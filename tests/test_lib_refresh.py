@@ -301,7 +301,7 @@ def test_bootstrap_py_reinstalls():
 
 def test_ser2net_entry_points():
     import ser2net as cli
-    from app import runtime, standalone, winservice
+    from ser2netweb import runtime, standalone, winservice
 
     calls: list = []
     stub = SimpleNamespace(
@@ -339,28 +339,28 @@ def test_ser2net_entry_points():
 
         # dependencies from an old lib/ that couldn't be refreshed and lack what this
         # version imports: one line that says what to do, not a traceback
-        import app
+        import ser2netweb
         stub.lib_is_stale = lambda: True
-        saved_attr, saved_mod = app.runtime, sys.modules["app.runtime"]
-        del app.runtime
-        sys.modules["app.runtime"] = None  # type: ignore[assignment]  (import fails)
+        saved_attr, saved_mod = ser2netweb.runtime, sys.modules["ser2netweb.runtime"]
+        del ser2netweb.runtime
+        sys.modules["ser2netweb.runtime"] = None  # type: ignore[assignment]  (import fails)
         try:
             cli._import_runtime()
             raise AssertionError("no SystemExit")
         except SystemExit as e:
             assert "older release" in str(e.code) and "bootstrap.py" in str(e.code), e.code
         finally:
-            app.runtime, sys.modules["app.runtime"] = saved_attr, saved_mod
+            ser2netweb.runtime, sys.modules["ser2netweb.runtime"] = saved_attr, saved_mod
         stub.lib_is_stale = lambda: False
         try:  # not the old lib/'s fault: the error as it is
-            del app.runtime
-            sys.modules["app.runtime"] = None  # type: ignore[assignment]
+            del ser2netweb.runtime
+            sys.modules["ser2netweb.runtime"] = None  # type: ignore[assignment]
             cli._import_runtime()
             raise AssertionError("no ImportError")
         except ImportError:
             pass
         finally:
-            app.runtime, sys.modules["app.runtime"] = saved_attr, saved_mod
+            ser2netweb.runtime, sys.modules["ser2netweb.runtime"] = saved_attr, saved_mod
 
         calls.clear()
         winservice.run = fake_run

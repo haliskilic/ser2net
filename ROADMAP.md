@@ -73,7 +73,7 @@
 
 ### v2.3 — UX & access polish
 - **OIDC single sign-on** (authorization-code flow + issuer discovery; claim→role
-  mapping, shadow accounts) — `app/web/oidc_auth.py`, optional `authlib`
+  mapping, shadow accounts) — `ser2netweb/web/oidc_auth.py`, optional `authlib`
 - **REST API token roles** (`admin` / `operator` / `viewer`; `viewer` is read-only)
 - **Light / dark theme toggle** (persisted in `localStorage`); xterm fit-to-window addon
 - _(i18n was dropped — the UI stays English by decision.)_

@@ -32,10 +32,10 @@ from _server import ROOT  # noqa: F401  (sys.path setup)
 from starlette.datastructures import FormData
 from test_mapping_form_roundtrip import PEER, assert_kept, render
 
-from app import __version__
-from app.config import MappingConfig
-from app.web.routes import forms
-from app.web.routes.cluster import (
+from ser2netweb import __version__
+from ser2netweb.config import MappingConfig
+from ser2netweb.web.routes import forms
+from ser2netweb.web.routes.cluster import (
     _PEER_FORM_FIELDS,
     _PEER_FORM_PREFIXES,
     _PEER_PASSWORD_FIELDS,

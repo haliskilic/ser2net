@@ -27,9 +27,9 @@ import urllib.parse
 
 from _server import Browser, Server, free_port
 
-from app.config import ConfigError
-from app.importer import MAX_FILE_BYTES, MAX_MAPPINGS, parse_mappings_file
-from app.web.auth import hash_password
+from ser2netweb.config import ConfigError
+from ser2netweb.importer import MAX_FILE_BYTES, MAX_MAPPINGS, parse_mappings_file
+from ser2netweb.web.auth import hash_password
 
 PW = "import-pass-1"
 

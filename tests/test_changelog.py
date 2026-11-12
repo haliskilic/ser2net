@@ -2,7 +2,7 @@
 
   * a version has at most one heading of each type (### Added, ### Fixed, ...), and only
     the types Keep a Changelog defines, so a new group can't be added next to an old one;
-  * the newest released version is the one in app/__init__.py, so a release can't ship
+  * the newest released version is the one in ser2netweb/__init__.py, so a release can't ship
     without its entry (or with a stale version number), and it has a YYYY-MM-DD date;
   * every version has its link line at the bottom of the file.
 
@@ -15,7 +15,7 @@ import sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 
-from app import __version__
+from ser2netweb import __version__
 
 CHANGELOG = os.path.join(ROOT, "CHANGELOG.md")
 TYPES = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
@@ -54,7 +54,7 @@ def problems(text: str, version: str) -> list:
     else:
         newest, date = released[0]
         if newest != version:
-            found.append(f"the newest version is [{newest}], app/__init__.py says {version}")
+            found.append(f"the newest version is [{newest}], ser2netweb/__init__.py says {version}")
         for v, d in released:
             if not (d and _DATE.fullmatch(d)):
                 found.append(f"[{v}] has no YYYY-MM-DD date: {d!r}")
@@ -73,7 +73,7 @@ def test_checker():
     got = problems(bad, "1.2")
     want = ["[1.1]: '### Added' appears 2 times; merge them",
             "[1.0]: '### Docs' is not one of " + ", ".join(TYPES),
-            "the newest version is [1.1], app/__init__.py says 1.2",
+            "the newest version is [1.1], ser2netweb/__init__.py says 1.2",
             "[1.0] has no YYYY-MM-DD date: 'soon'",
             "[1.0] has no link line at the bottom"]
     assert got == want, got

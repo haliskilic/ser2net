@@ -17,8 +17,8 @@ from contextlib import suppress
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.config import MappingConfig
-from app.engine.supervisor import Supervisor
+from ser2netweb.config import MappingConfig
+from ser2netweb.engine.supervisor import Supervisor
 from _server import free_port
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 1

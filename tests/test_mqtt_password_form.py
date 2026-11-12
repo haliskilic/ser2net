@@ -22,7 +22,7 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.web.auth import hash_password
+from ser2netweb.web.auth import hash_password
 
 PW = "mqtt-form-pass-1"
 SECRET = "broker-secret-1"

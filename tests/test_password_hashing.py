@@ -1,4 +1,4 @@
-"""Password hashes (app/web/auth.py).
+"""Password hashes (ser2netweb/web/auth.py).
 
 Checks:
   * new hashes are "scrypt:16384:8:5$<salt>$<hash>" (OWASP's scrypt minimum); a hash in
@@ -28,11 +28,11 @@ import secrets
 
 from test_login_throttle import CountingVerify, call, login, run
 
-from app import accounts
-from app.config import AppConfig, ConfigStore
-from app.state import AppState
-from app.web import auth
-from app.web.server import build_app
+from ser2netweb import accounts
+from ser2netweb.config import AppConfig, ConfigStore
+from ser2netweb.state import AppState
+from ser2netweb.web import auth
+from ser2netweb.web.server import build_app
 
 PW = "hashing-pass-1"
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures",
@@ -232,7 +232,7 @@ async def _renewal(d: str, config: dict) -> None:
 
 
 async def _normalized_sign_in(d: str, config: dict) -> None:
-    from app.web import ldap_auth
+    from ser2netweb.web import ldap_auth
 
     state = _state(d, config)
     app = build_app(state)

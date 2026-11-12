@@ -37,10 +37,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import Browser, Server, ui_cookie
 
-from app.config import EXTERNAL_NAME_MAX, AppConfig, User, external_name, external_name_problem
-from app.signins import SignIns, sign_in_of
-from app.web import auth
-from app.web.auth import hash_password
+from ser2netweb.config import EXTERNAL_NAME_MAX, AppConfig, User, external_name, external_name_problem
+from ser2netweb.signins import SignIns, sign_in_of
+from ser2netweb.web import auth
+from ser2netweb.web.auth import hash_password
 
 PW = "external-pass-1"
 

@@ -23,8 +23,8 @@ import urllib.request
 from _formsubmit import browser_post
 from _server import Browser, Server, free_port
 
-from app.config import MappingConfig, mapping_revision
-from app.web.auth import hash_password, hash_token
+from ser2netweb.config import MappingConfig, mapping_revision
+from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "conflict-pass-1"
 TOKEN = "s2n_conflict-token"

@@ -4,7 +4,8 @@
 
 Run by hand, once per release (not in CI, where an old release's pinned packages and
 Python support drift), from a git checkout with the release tags. For each version it
-unpacks `git archive <tag> app` into a temporary folder and, with that release's code:
+unpacks `git archive <tag> ser2netweb` (`app` up to 2.9.x) into a temporary folder and, with
+that release's code:
 
   * "forms": the fields its fleet view forwards to a peer running the current version
     when a kitchen-sink mapping (tests/_form_cases.py) is saved unchanged: rendered by its
@@ -36,25 +37,39 @@ FIXTURES = os.path.join(HERE, "fixtures")
 LEGACY_TRACE = "data/trace-plc1.log"
 
 
+def package_of(tag: str) -> str:
+    """The name of the release's package: ser2netweb, or app up to 2.9.x."""
+    found = subprocess.run(["git", "cat-file", "-e", f"{tag}:ser2netweb"], cwd=ROOT,
+                           capture_output=True)
+    return "ser2netweb" if found.returncode == 0 else "app"
+
+
 def _inside(root: str, version: str) -> None:
     """Runs in a child process with the old release's code first on sys.path."""
+    import importlib
+
     sys.path.insert(0, root)
     import _form_cases as cases
     from _formsubmit import browser_post
 
-    from app.config import MappingConfig
-    from app.web.server import make_templates
+    package = "ser2netweb" if os.path.isdir(os.path.join(root, "ser2netweb")) else "app"
+
+    def module(name):  # the release's own module (the package was `app` up to 2.9.x)
+        return importlib.import_module(f"{package}.{name}")
+
+    MappingConfig = module("config").MappingConfig
+    make_templates = module("web.server").make_templates
     try:   # 2.8.0+
-        from app.web.routes.forms import _modbus_points_json
-    except ImportError:
-        from app.web.routes import _modbus_points_json
-    from app.engine import portlist
+        _modbus_points_json = module("web.routes.forms")._modbus_points_json
+    except (ImportError, AttributeError):
+        _modbus_points_json = module("web.routes")._modbus_points_json
+    portlist = module("engine.portlist")
 
     def visible(ports):  # 2.8.0+ hide the ports without hardware
         return portlist.visible(ports) if hasattr(portlist, "visible") else ports
     try:   # 2.8.1+: what cluster_peer_save forwards
-        from app.web.routes.cluster import _peer_save_fields
-    except ImportError:
+        _peer_save_fields = module("web.routes.cluster")._peer_save_fields
+    except (ImportError, AttributeError):
         _peer_save_fields = None
     from types import SimpleNamespace
 
@@ -101,8 +116,8 @@ def main(argv) -> int:
     for version in argv:
         tmp = tempfile.mkdtemp(prefix="s2n_fixture_")
         try:
-            archive = subprocess.run(["git", "archive", version, "app"], cwd=ROOT,
-                                     check=True, capture_output=True).stdout
+            archive = subprocess.run(["git", "archive", version, package_of(version)],
+                                     cwd=ROOT, check=True, capture_output=True).stdout
             subprocess.run(["tar", "-x", "-C", tmp], input=archive, check=True)
             res = subprocess.run([sys.executable, os.path.abspath(__file__), "--inside", tmp,
                                   version], cwd=tmp, capture_output=True, text=True,

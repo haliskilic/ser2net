@@ -15,7 +15,7 @@ and a CycloneDX SBOM of the same components. Components:
   * every Python distribution the app imports at run time: the pins in
     requirements.txt + requirements-optional.txt and their dependencies,
   * the PyInstaller bootloader and runtime hooks embedded in the executable,
-  * the browser libraries in app/web/static (vendor/npm/package.json, their license
+  * the browser libraries in ser2netweb/web/static (vendor/npm/package.json, their license
     texts in tools/licenses/npm/),
   * ``--extra DIR``: further license texts (*.txt), e.g. the native libraries
     python-build-standalone links into the interpreter.
@@ -168,7 +168,7 @@ def license_of(dist: metadata.Distribution, warn=None) -> tuple[str, bool]:
 
 
 def npm_packages() -> list[dict]:
-    """The browser libraries vendored in app/web/static (vendor/npm/package.json)."""
+    """The browser libraries vendored in ser2netweb/web/static (vendor/npm/package.json)."""
     import json
 
     if not os.path.isfile(NPM_MANIFEST):
@@ -273,7 +273,7 @@ def _section(title: str, body: str) -> str:
 
 def write_licenses(out_path: str, extra_dirs: list[str], strict: bool = False) -> None:
     sys.path.insert(0, ROOT)
-    from app import __version__
+    from ser2netweb import __version__
 
     import ssl
 
@@ -333,7 +333,7 @@ def write_sbom(out_path: str, strict: bool = False, binaries: list[str] | None =
     import uuid
 
     sys.path.insert(0, ROOT)
-    from app import __version__
+    from ser2netweb import __version__
 
     def lic(dist: metadata.Distribution) -> list:
         text, spdx = license_of(dist)

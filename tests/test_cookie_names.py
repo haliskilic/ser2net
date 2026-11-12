@@ -28,7 +28,7 @@ from _asgi import App, cookies
 from _server import Browser, Server, _NoRedirect, ui_cookie
 from starlette.requests import Request
 
-from app.web import auth, proxy
+from ser2netweb.web import auth, proxy
 
 PW = "cookie-names-pass-1"
 USERS = [{"username": "admin", "password_hash": auth.hash_password(PW), "role": "admin",

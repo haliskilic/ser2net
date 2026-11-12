@@ -1,7 +1,7 @@
 """tools/release_guard.py tag: a release tag must match the version and the CHANGELOG.
 
 release.yml runs it before anything is built, so a tag that is not vX.Y.Z / vX.Y.Z-rc.N,
-differs from app.__version__ or has no dated CHANGELOG section fails the release instead
+differs from ser2netweb.__version__ or has no dated CHANGELOG section fails the release instead
 of shipping binaries, an SBOM and an image with the wrong version. It also decides the
 image tags: a pre-release gets only its own, never X.Y or latest.
 
@@ -23,8 +23,8 @@ DATED = "## [{v}] — 2026-11-20"
 
 
 def _tree(tmp: str, version: str, heading: str = DATED) -> str:
-    os.makedirs(os.path.join(tmp, "app"), exist_ok=True)
-    with open(os.path.join(tmp, "app", "__init__.py"), "w", encoding="utf-8") as fh:
+    os.makedirs(os.path.join(tmp, "ser2netweb"), exist_ok=True)
+    with open(os.path.join(tmp, "ser2netweb", "__init__.py"), "w", encoding="utf-8") as fh:
         fh.write(f'"""ser2net."""\n\n# the version\n__version__ = "{version}"\n')
     with open(os.path.join(tmp, "CHANGELOG.md"), "w", encoding="utf-8") as fh:
         fh.write("# Changelog\n\n## [Unreleased]\n\n" + heading.format(v=version)
@@ -70,10 +70,10 @@ def test_refused_tags():
             assert rc == 1 and "is not vX.Y.Z or vX.Y.Z-rc.N" in text, (tag, text)
             assert written == {}, (tag, written)
         rc, text, _ = _check("v2.9.1", root)
-        assert rc == 1 and "does not match app/__init__.py, which says 2.9.0" in text, text
+        assert rc == 1 and "does not match ser2netweb/__init__.py, which says 2.9.0" in text, text
         rc, text, _ = _check("v2.9.0-rc.1", root)
         assert rc == 1 and "does not match" in text, text
-    print("other tag forms and a tag that isn't app.__version__ are refused  OK")
+    print("other tag forms and a tag that isn't ser2netweb.__version__ are refused  OK")
 
 
 def test_changelog_section_needed():

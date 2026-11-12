@@ -34,12 +34,12 @@ import urllib.request
 
 from _server import ROOT, Browser, Server, free_port
 
-from app.config import ConfigError, MappingConfig, port_problem
-from app.engine import portlist
-from app.web.auth import hash_password, hash_token
-from app.web.routes.cluster import _peer_links
-from app.web.routes.ops import apply_usb_match
-from app.web.server import make_templates
+from ser2netweb.config import ConfigError, MappingConfig, port_problem
+from ser2netweb.engine import portlist
+from ser2netweb.web.auth import hash_password, hash_token
+from ser2netweb.web.routes.cluster import _peer_links
+from ser2netweb.web.routes.ops import apply_usb_match
+from ser2netweb.web.server import make_templates
 
 PW = "port-picker-pass-1"
 TOKEN = "s2n_port-picker-token"
@@ -85,7 +85,7 @@ def test_shared_field():
                                           "addr": "10.0.0.2:8080"})
     assert "data-port-rescan" not in remote, "a peer's form lists the peer's ports: no ↻"
     assert remote.count('class="port-pick"') == 2
-    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     assert "var el = e.detail.target || e.detail.elt;" in js, \
         "show-all must follow the request's target (the Refresh button is its element)"
     print("form: both sides use the shared Device field; ↻ on local forms only  OK")
@@ -175,7 +175,7 @@ def test_typed_path():
     typed = re.search(r"<input[^>]*data-port-typed[^>]*>", out).group(0)
     assert "name=" not in typed and "hidden" in typed and "disabled" in typed, typed
     assert 'data-port-field="serial_port"' in out and "data-required" in out
-    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    js = open(os.path.join(ROOT, "ser2netweb", "web", "static", "app.js"), encoding="utf-8").read()
     assert 'input.setAttribute("name", name)' in js and 'sel.removeAttribute("name")' in js
     for bad in ("socket://10.0.0.1:502", "/dev/ttyUSB0\n", "/dev/tty\tUSB0", "COM3\x00"):
         assert port_problem(bad), bad

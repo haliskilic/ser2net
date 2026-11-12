@@ -35,10 +35,10 @@ import tempfile
 from _optional import need
 from _server import Browser, Server
 
-from app.config import AppConfig, LdapSettings
-from app.web import ldap_auth
-from app.web.auth import hash_password
-from app.web.routes.settings import _setting_changes
+from ser2netweb.config import AppConfig, LdapSettings
+from ser2netweb.web import ldap_auth
+from ser2netweb.web.auth import hash_password
+from ser2netweb.web.routes.settings import _setting_changes
 
 PW = "ldap-tls-pass-1"
 BASE = "DC=corp,DC=local"

@@ -1,4 +1,4 @@
-"""The process's open-file limit: raised at start, counted, reported (app/engine/netguard.py).
+"""The process's open-file limit: raised at start, counted, reported (ser2netweb/engine/netguard.py).
 
 Every serial port, socket and file holds a descriptor, and a process may have at most its
 soft RLIMIT_NOFILE open (1024 under systemd unless the unit raises it). ser2net raises the
@@ -20,9 +20,9 @@ import sys
 
 from _server import Browser, Server
 
-from app.config import AppConfig
-from app.engine import netguard
-from app.web.auth import hash_password
+from ser2netweb.config import AppConfig
+from ser2netweb.engine import netguard
+from ser2netweb.web.auth import hash_password
 
 PW = "fd-limits-pass-1"
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -35,7 +35,7 @@ def _raise_in_child(soft: int, hard: int, target: int) -> list[str]:
         "import resource, sys\n"
         f"resource.setrlimit(resource.RLIMIT_NOFILE, ({soft}, {hard}))\n"
         f"sys.path.insert(0, {ROOT!r})\n"
-        "from app.engine import netguard\n"
+        "from ser2netweb.engine import netguard\n"
         f"print(netguard.raise_fd_limit({target}))\n"
         "print(*resource.getrlimit(resource.RLIMIT_NOFILE), sep='\\n')\n")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
@@ -118,7 +118,7 @@ def test_server_reports_limit():
 def test_loop_errors_reach_the_log():
     import asyncio
 
-    from app import runtime
+    from ser2netweb import runtime
 
     lines = []
 

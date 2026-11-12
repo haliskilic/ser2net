@@ -1,6 +1,6 @@
 """Two-factor sign-in (TOTP) for local accounts.
 
-  * app/web/totp.py gives the RFC 4226 / RFC 6238 test vectors (stdlib only), accepts the
+  * ser2netweb/web/totp.py gives the RFC 4226 / RFC 6238 test vectors (stdlib only), accepts the
     current time step and one either side, never a step at or before the last one accepted
     (replay guard), takes a code typed with spaces, and matches nothing for a bad secret;
   * config: totp_secret is written only when set (a config.json without it stays as it
@@ -29,10 +29,10 @@ import time
 
 from _server import ROOT, Browser, Server
 
-from app import accounts
-from app.config import AppConfig, User
-from app.web import totp
-from app.web.auth import hash_password
+from ser2netweb import accounts
+from ser2netweb.config import AppConfig, User
+from ser2netweb.web import totp
+from ser2netweb.web.auth import hash_password
 
 PW = "totp-pass-1"
 NEW_PW = "totp-pass-2"

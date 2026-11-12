@@ -39,12 +39,12 @@ from _optional import need
 from _pki import TestCA
 from _server import Browser, Server, free_port
 
-import app.config as config_module
-from app.config import (
+import ser2netweb.config as config_module
+from ser2netweb.config import (
     AppConfig, ClusterSettings, ConfigError, ConfigStore, ConfigWriteError, MappingConfig,
 )
-from app.state import AppState
-from app.web.auth import hash_password, hash_token
+from ser2netweb.state import AppState
+from ser2netweb.web.auth import hash_password, hash_token
 
 PW = "edits-pass-1"
 NEW_PW = "edits-pass-2"

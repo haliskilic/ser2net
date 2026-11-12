@@ -38,8 +38,8 @@ from types import SimpleNamespace
 
 from _server import ROOT, Browser, free_port, wait_port
 
-from app import runtime, winservice
-from app.web.auth import hash_password
+from ser2netweb import runtime, winservice
+from ser2netweb.web.auth import hash_password
 
 WINDOWS = os.name == "nt"
 
@@ -654,7 +654,7 @@ def test_cli_leaves_the_choice_to_install():
     d = tempfile.mkdtemp(prefix="s2n_cli_")
     holder = subprocess.Popen(
         [sys.executable, "-c", "import sys,time; sys.path.insert(0, sys.argv[2]); "
-         "from app import datalock; assert datalock.acquire(sys.argv[1]) is None; "
+         "from ser2netweb import datalock; assert datalock.acquire(sys.argv[1]) is None; "
          "print('held', flush=True); time.sleep(60)", d, ROOT],
         stdout=subprocess.PIPE, text=True)
     try:
