@@ -487,7 +487,7 @@ class NetworkSettings:
     protocol: str = "raw"  # raw | telnet | rfc2217
     # A listener on 0.0.0.0 takes IPv4 clients only, one on :: IPv6 clients only. With
     # dual_stack a wildcard bind IP (either of the two) takes both: the picker's "All
-    # interfaces, IPv4 and IPv6". It means nothing with another address (edits refuse
+    # interfaces (IPv4 + IPv6)". It means nothing with another address (edits refuse
     # that); a release without it listens on the bind IP alone.
     bind_ip: str = "0.0.0.0"
     dual_stack: bool = False
@@ -1663,7 +1663,7 @@ class AppConfig:
                     _ip_overlaps(ip, net.bind_ip, b_both=net.both_families) for ip in ips):
                 return _("Mapping '{0}': TCP port {1} on {2} is the admin UI's port ({3}:{4}), "
                          "so the mapping could not listen there. Pick another port.").format(
-                    m.name, net.port, net.bind_ip, admin.bind_ip or "*", admin.port)
+                    m.name, net.port, net.bind_shown, shown_host(admin.bind_ip), admin.port)
             return ""
         cluster = self.cluster
         try:
