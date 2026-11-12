@@ -73,7 +73,9 @@ show a secret (a new API token or cluster key, the mapping form, a backup or the
 are kept neither in the browser's cache nor for its Back button. A change the browser
 says a page of another site sent (`Sec-Fetch-Site`, `Origin`; another port of the same host
 counts) is refused before its CSRF token is looked at, and the token is renewed at every
-sign-in and sign-out.
+sign-in and sign-out. With admin TLS, responses carry `Strict-Transport-Security` for one
+year by default; since it covers every port of the host name, Settings → Admin TLS →
+*HSTS max-age* changes how long (0 sends `max-age=0`, which makes browsers forget it).
 
 ## Türkçe
 
@@ -147,4 +149,7 @@ gönderilir; böylece gizli bir değer gösteren sayfalar (yeni API token'ı ya 
 anahtarı, eşleme formu, bir yedek ya da dışa aktarma) ne tarayıcının önbelleğinde ne de
 Geri tuşu için saklanır. Tarayıcının başka bir sitenin sayfasından geldiğini söylediği bir
 değişiklik (`Sec-Fetch-Site`, `Origin`; aynı host'un başka bir portu da sayılır) CSRF
-token'ına bakılmadan reddedilir; token her giriş ve çıkışta yenilenir.
+token'ına bakılmadan reddedilir; token her giriş ve çıkışta yenilenir. Admin TLS açıkken
+yanıtlar varsayılan olarak bir yıllık `Strict-Transport-Security` taşır; host adının tüm
+portlarını kapsadığı için süresi Ayarlar → Admin TLS → *HSTS max-age* ile değiştirilebilir
+(0, tarayıcıların bunu unutmasını sağlayan `max-age=0` gönderir).

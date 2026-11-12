@@ -50,6 +50,10 @@ MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year
 SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
 SESSION_TIMEOUT_MAX_S = 30 * 86400
+# Strict-Transport-Security max-age with admin TLS (AdminUI.hsts_max_age): one year, as
+# before it could be set; 0 sends max-age=0 (HSTS off, browsers drop what they stored)
+HSTS_MAX_AGE_DEFAULT = 365 * 86400
+HSTS_MAX_AGE_MAX = 2 * 365 * 86400
 # LDAP/OIDC accounts not signed in for this many days are removed (AppConfig
 # .external_users_expire_days, app/signins.py); 0 = never, the default: an admin turns it
 # on. At least the longest session lifetime, so no live session ends that way.
@@ -774,6 +778,11 @@ class AdminUI:
     max_connections: int = 256
     max_connections_per_ip: int = 64
     request_timeout_s: int = 10
+    # With admin TLS, responses tell the browser to use only https:// for this host name
+    # - on every port - for this many seconds after each visit (Strict-Transport-Security);
+    # 0 sends max-age=0, which turns that off and makes browsers forget it. Settings ->
+    # Admin TLS.
+    hsts_max_age: int = HSTS_MAX_AGE_DEFAULT
 
     @property
     def tls_enabled(self) -> bool:
@@ -788,8 +797,9 @@ _ADMIN_LIMITS = {"max_connections": (256, 16, 65535),
 
 def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
     """Put an admin_ui connection limit that is not a usable whole number back to its
-    default (0, no limit, stays 0; a value below the lowest goes up to it), with a load
-    note: a hand-edited config.json must not keep the UI from starting, nor make it unusable."""
+    default (0, no limit, stays 0; a value below the lowest goes up to it), and so an
+    unusable hsts_max_age, with a load note: a hand-edited config.json must not keep the
+    UI from starting, nor make it unusable."""
     for name, (default, low, high) in _ADMIN_LIMITS.items():
         value = getattr(admin, name)
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= high:
@@ -801,6 +811,11 @@ def _normalize_admin_limits(admin: "AdminUI", notes: list[str]) -> None:
         setattr(admin, name, fixed)
         notes.append(f"admin_ui.{name} {value!r} is not usable (0 = no limit, else "
                      f"{low}-{high}); using {fixed}")
+    value = admin.hsts_max_age
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= HSTS_MAX_AGE_MAX:
+        admin.hsts_max_age = HSTS_MAX_AGE_DEFAULT
+        notes.append(f"admin_ui.hsts_max_age {value!r} is not a whole number of seconds from 0 "
+                     f"to {HSTS_MAX_AGE_MAX}; using {HSTS_MAX_AGE_DEFAULT} (one year)")
 
 
 UI_LANGUAGES = ("auto", "en", "tr")

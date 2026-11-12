@@ -213,8 +213,11 @@ class GuardMiddleware(BaseHTTPMiddleware):
             "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
             "base-uri 'none'; form-action 'self'; object-src 'none'",
         )
+        # HSTS covers the host name on every port (Settings -> Admin TLS sets how long; 0
+        # sends max-age=0, which makes browsers forget it)
         if cfg.admin_ui.tls_enabled:
-            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+            response.headers.setdefault("Strict-Transport-Security",
+                                        f"max-age={cfg.admin_ui.hsts_max_age}")
 
 
 def make_templates() -> Jinja2Templates:
