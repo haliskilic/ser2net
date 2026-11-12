@@ -18,6 +18,10 @@ Checks:
     50 in 10 minutes, then summed up;
     directory sign-ins refused for their name (a local account's) count towards the
     same limit;
+  * a REST API request refused for its token (none, wrong, expired): one api_auth_failed
+    record per address a minute (the next says how many there were), at most 20 in 10
+    minutes, then summed up; its all.log line, like any request refused before its
+    handler, once per address and answer a minute, the next saying how many more;
   * the login rate limiter keeps a bounded number of addresses and failure times;
   * logouts: one account's ended cookies are remembered up to its share; past that the
     account is signed out everywhere (one save) instead of anyone's ended cookie being
@@ -43,7 +47,7 @@ from _server import Browser, Server
 
 import app.state as st
 from app.config import AppConfig, ConfigStore, LdapSettings
-from app.state import AppState, FailedLoginRecords, ViewRecords
+from app.state import AppState, FailedLoginRecords, LineLimiter, ViewRecords
 from app.web import auth, ldap_auth
 from app.web.server import MAX_BODY_BYTES, build_app
 
@@ -408,6 +412,87 @@ def test_view_records():
           "keys bounded  OK")
 
 
+def test_line_limiter():
+    lim = LineLimiter(every_s=0.3)
+    assert lim.line(("1.2.3.4", 401), "A") == "A"
+    assert [lim.line(("1.2.3.4", 401), "A") for _ in range(4)] == [None] * 4
+    assert lim.line(("1.2.3.4", 303), "B") == "B" and lim.line(("5.6.7.8", 401), "C") == "C"
+    time.sleep(0.35)
+    again = lim.line(("1.2.3.4", 401), "A")
+    assert again.startswith("A (4 more like it since ") and \
+        again.endswith(", not logged one by one)"), again
+    assert lim.line(("1.2.3.4", 401), "A") is None
+    lim = LineLimiter(every_s=60)
+    lim.MAX_KEYS = 50
+    assert all(lim.line((f"10.0.{i // 256}.{i % 256}", 401), "x") == "x" for i in range(200))
+    assert len(lim._keys) <= lim.MAX_KEYS, "keys bounded (past that: logged, not counted)"
+    print("refused-request lines: once per key in the time, the next one counts the rest; "
+          "keys bounded  OK")
+
+
+async def _api_refusals(d: str) -> None:
+    state = _state(d, {
+        "users": [{"username": "admin", "password_hash": auth.hash_password(PW),
+                   "role": "admin", "pwd_version": 1}],
+        "api_token_hash": auth.hash_token(TOKEN), "api_token_role": "viewer",
+        "api_tokens": [{"id": "0123456789abcdef", "name": "old-ci", "role": "operator",
+                        "sha256": auth.hash_token("s2n_expired"), "expires": 1}]})
+    app = build_app(state)
+    state.api_auth_failures.repeat_s = state.refused_lines.every_s = 0.4
+
+    async def get(path, token=None, client="10.0.0.1", method="GET"):
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        return (await call(app, method, path, headers=headers, client=client))[0]
+
+    def records():
+        return [r for r in _audit_rows(state) if r[2] == "api_auth_failed"]
+
+    assert await get("/api/v1/mappings", "s2n_wrong") == 401
+    for _ in range(3):
+        assert await get("/api/v1/mappings", "s2n_wrong") == 401
+    assert await get("/api/v1/status", None, "10.0.0.2") == 401
+    assert await get("/api/v1/mappings", "s2n_expired", "10.0.0.3") == 401
+    assert [(r[1], r[3], r[4]) for r in records()] == [
+        ("10.0.0.1", "GET /api/v1/mappings: wrong token", ""),
+        ("10.0.0.2", "GET /api/v1/status: no token", ""),
+        ("10.0.0.3", "GET /api/v1/mappings: expired token", "api-token:old-ci")], records()
+    await asyncio.sleep(0.45)
+    assert await get("/api/v1/mappings", "s2n_wrong") == 401
+    assert records()[-1][3] == ("GET /api/v1/mappings: wrong token; 3 more after "
+                                f"{records()[0][0][11:]}, not recorded one by one"), records()[-1]
+    # a viewer token's write, a read and a quiet poll: all.log only (not audited)
+    assert await get("/api/v1/mappings", TOKEN, method="POST") == 403
+    assert await get("/api/v1/mappings", TOKEN) == 200
+    assert await get("/api/v1/status", TOKEN) == 200 and await get("/api/v1/health") == 200
+    assert len(records()) == 4
+    log = _read(state.log_path)
+    assert log.count("HTTP 10.0.0.1 GET /api/v1/mappings -> 401\n") == 1, log
+    assert "HTTP 10.0.0.1 GET /api/v1/mappings -> 401 (3 more like it since " in log, log
+    assert "HTTP 10.0.0.3 GET /api/v1/mappings -> 401 by api-token:old-ci\n" in log, log
+    assert "HTTP 10.0.0.1 POST /api/v1/mappings -> 403 by api-token\n" in log, log
+    assert "HTTP 10.0.0.1 GET /api/v1/mappings -> 200 by api-token\n" in log, log
+    assert "GET /api/v1/status -> 200" not in log and "/api/v1/health" not in log, log
+    # past the limit in the window: counted, then summed up in one record
+    for i in range(st.FAILED_LOGIN_RECORDS + 5):
+        await get("/api/v1/ports", "s2n_wrong", f"10.1.0.{i}")
+    assert len(records()) == st.FAILED_LOGIN_RECORDS, len(records())
+    state.api_auth_failures.flush()
+    last = records()[-1]
+    assert last[3].startswith("9 more refused REST API requests since ") and last[1] == "", last
+
+
+def test_api_refusals():
+    d = tempfile.mkdtemp(prefix="s2n_limits_")
+    try:
+        asyncio.run(_api_refusals(d))
+        print("REST API: a request refused for its token is audited once per address a minute "
+              "(the next counts the rest), bounded; all.log: requests but quiet polls, by "
+              "token, refusals once a minute  OK")
+    finally:
+        _close_loggers()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 async def _directory_refusals(d: str) -> None:
     state = _state(d, {
         "users": [{"username": "admin", "password_hash": auth.hash_password(PW),
@@ -581,6 +666,8 @@ def main():
     test_failed_login_records()
     test_directory_refusals_bounded()
     test_view_records()
+    test_line_limiter()
+    test_api_refusals()
     test_revocation_list_full()
     test_rate_limiter_bounds()
     test_ldap_failure_line()

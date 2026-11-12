@@ -9,7 +9,11 @@ Checks:
     (control characters become spaces, terminal escapes included), a traceback after it
     stays as it is;
   * Settings -> Audit log (admin only): search, action/user filters, paging, CSV
-    export with formula-looking cells neutralised.
+    export with formula-looking cells neutralised;
+  * the mappings export (it holds MQTT passwords) and the audit CSV export are
+    recorded; a request refused before its handler (no session, CSRF) gets an all.log
+    line - one per address and answer a minute, the next says how many more - and the
+    security headers.
 
 Run: python3 tests/test_audit_log.py
 """
@@ -19,6 +23,7 @@ import logging
 import os
 import shutil
 import tempfile
+import urllib.request
 
 from _server import Browser, Server, free_port
 
@@ -124,6 +129,37 @@ def main():
         assert set(acts) >= {"login", "login_failed", "mapping_save"}, acts.keys()
         assert acts["mapping_save"][4].startswith("'="), "formula cell not neutralised"
         print("UI: admin-only page with search / filters, CSV export (formula cells defused)  OK")
+
+        st, h, _ = op.get("/settings/config/export")
+        assert st == 200 and "attachment" in h.get("Content-Disposition", "")
+        st, _, body = admin.get("/settings/audit.csv")
+        rows = {r[3]: r for r in csv.reader(io.StringIO(body))}
+        assert rows["config_export"][2] == "op1" and rows["config_export"][4] == "1 mappings", rows
+        admin.get("/settings/audit.csv?action=login")
+        with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
+            audit = fh.read()
+        assert "\taudit_export\t" in audit and "records (action=login)\tadmin\n" in audit, audit
+        print("exports: the mappings export and the audit CSV export are recorded  OK")
+
+        stranger = Browser(srv.base)
+        for _ in range(3):
+            st, h, _ = stranger.get("/settings")
+            assert st == 303 and h.get("X-Frame-Options") == "DENY", (st, dict(h))
+        st, h, _ = stranger.post("/api/mappings/save", {"name": "x"})
+        assert st == 401 and h.get("X-Content-Type-Options") == "nosniff", st
+        st, _, _ = op.post("/api/mappings/save", {"name": "x"}, htmx=True)
+        assert st == 400, st   # op's request reached its handler (logged as before)
+        csrf = urllib.request.Request(srv.base + "/api/mappings/save", data=b"name=x",
+                                      method="POST", headers={"X-CSRF-Token": "forged"})
+        assert op._open(csrf)[0] == 403
+        with open(os.path.join(srv.data, "all.log"), encoding="utf-8") as fh:
+            log = fh.read()
+        assert log.count("HTTP 127.0.0.1 GET /settings -> 303") == 1, log[-2000:]
+        assert log.count("HTTP 127.0.0.1 POST /api/mappings/save -> 401") == 1, log[-2000:]
+        assert log.count("HTTP 127.0.0.1 POST /api/mappings/save -> 403") == 1, log[-2000:]
+        assert "HTTP 127.0.0.1 POST /api/mappings/save -> 400" in log
+        print("refused before the handler (no session, CSRF): logged once a minute per address "
+              "and answer, with the security headers  OK")
     print("\nPASS: audit log (users, injection-safe, viewer, CSV)")
 
 
