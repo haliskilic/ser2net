@@ -24,7 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _server import Browser, Server, ui_cookie
+from _server import Browser, Server, server_log, show_log_on_failure, ui_cookie
 
 from app.config import AppConfig
 from app.web.auth import hash_password, hash_token
@@ -152,9 +152,11 @@ def main():
     cfg = os.path.join(tmp, "config.json")
     with open(cfg, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
+    out = server_log(tmp)  # the server's output: a file, never an unread pipe
     srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           stdout=out, stderr=subprocess.STDOUT)
+    out.close()  # (the server has its own copy)
     try:
         assert wait_port(UI), "server did not start"
         jar = http.cookiejar.CookieJar()
@@ -216,6 +218,7 @@ def main():
             srv.wait(timeout=5)
         except subprocess.TimeoutExpired:
             srv.kill()
+        show_log_on_failure(tmp)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
