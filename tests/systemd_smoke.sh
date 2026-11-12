@@ -69,7 +69,7 @@ dropin() {  # dropin <name> <lines...>: a [Service] drop-in, then daemon-reload
     sudo systemctl daemon-reload
 }
 restart() {
-    sudo systemctl restart ser2net
+    sudo systemctl restart ser2net || fail "systemctl restart failed"
     wait_healthy
     assert_running
 }
@@ -92,7 +92,7 @@ if [ -n "$BINARY" ]; then
     sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
     sudo cp "$REPO/systemd/ser2net-standalone.service" "$UNIT"
     sudo systemctl daemon-reload
-    sudo systemctl start ser2net
+    sudo systemctl start ser2net || fail "systemctl start failed"
     wait_healthy
     assert_running
     [ "$(sudo stat -c '%U %a' /var/lib/ser2net)" = "ser2net 700" ] \
@@ -114,7 +114,7 @@ git -C "$REPO" archive HEAD | sudo tar -x -C /opt/ser2net
 sudo cp /opt/ser2net/systemd/ser2net.service "$UNIT"
 sudo systemctl daemon-reload
 started=$(date +%s)
-sudo systemctl start ser2net
+sudo systemctl start ser2net || fail "systemctl start failed"
 wait_healthy
 assert_running
 echo "healthy $(( $(date +%s) - started )) s after the start (the first start installs lib/)"
@@ -223,7 +223,7 @@ sudo rm "$LIB/.ser2net-deps.json"
 sudo -u ser2net sh -c "cd $LIB && mkdir starlette-1.2.1.dist-info userpkg &&
     printf 'Name: starlette\nVersion: 1.2.1\n' > starlette-1.2.1.dist-info/METADATA &&
     echo 'X = 1' > userpkg/__init__.py"
-sudo systemctl start ser2net
+sudo systemctl start ser2net || fail "systemctl start failed"
 wait_healthy
 assert_running
 sudo test ! -e "$LIB/starlette-1.2.1.dist-info" || fail "lib/ was not refreshed"

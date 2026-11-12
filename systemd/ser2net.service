@@ -31,7 +31,8 @@ WorkingDirectory=/opt/ser2net
 # longer read it): sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir
 # /opt/ser2net/data --set-password admin
 # The directories ser2net writes to (see ReadWritePaths below) are made for the
-# service user on the first start if they are missing ("+": run without the sandbox).
+# service user on the first start if they are missing ("+": as root, without the
+# sandbox, but with its ReadWritePaths=: see there).
 ExecStartPre=+/bin/sh -c 'test -d /opt/ser2net/data || install -d -o ser2net -g ser2net -m 0700 /opt/ser2net/data'
 ExecStartPre=+/bin/sh -c 'test -d /opt/ser2net/lib || install -d -o ser2net -g ser2net -m 0700 /opt/ser2net/lib'
 # Python 3.10 or newer. Where /usr/bin/python3 is older (RHEL / AlmaLinux / Rocky 8 and 9,
@@ -63,8 +64,10 @@ NoNewPrivileges=true
 #    start fails to install dependencies. If you instead install them at deploy time
 #    and after each upgrade (sudo -u ser2net python3 /opt/ser2net/bootstrap.py) and add
 #    --no-bootstrap to ExecStart, you can drop /opt/ser2net/lib from this list.
-# Both must exist when the service starts: the ExecStartPre= lines above make them.
-ReadWritePaths=/opt/ser2net/data /opt/ser2net/lib
+# The ExecStartPre= lines above make them when they are missing. "-": a missing one is
+# left out instead of stopping the start (status 226/NAMESPACE): systemd applies
+# ReadWritePaths= to the "+" lines too, which run before the directories exist.
+ReadWritePaths=-/opt/ser2net/data -/opt/ser2net/lib
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
