@@ -138,18 +138,18 @@ düzenlemeye gerek yok.
   `yeniden bağlanıyor` gösterir; birkaç saniyede bir (en fazla yaklaşık 10 sn arayla), port
   listesi yeni bir cihaz gördüğünde ise hemen yeniden denenir (yeniden takılan bir adaptör
   yaklaşık 2 sn içinde kullanılır). USB kimliğine bağlı bir eşleme, her denemede portları
-  taramak yerine cihazını bu listede bulur. Log, her denemede bir satır yazmak yerine ilk hatayı ve hatanın her değişmesini,
-  aynı hatayı ise yalnızca 15 dakikada bir, ne zamandan beri kaç denemenin başarısız
-  olduğuyla birlikte yazar; port yeniden açılınca ne kadar süre kapalı kaldığını söyler
-  (başarısız olmayı sürdüren dışa bağlantılar için de aynısı). `/api/v1/status`, açılamayan
-  denemeleri (`open_failures`) ve açık portun kaybedilmesini (`device_lost`) ayrı sayar;
-  `reconnects` eskisi gibi ikisini birden sayar. Pano, söyleyebildiğinde hatanın altında ne
-  anlama geldiğini de yazar (`/api/v1/status` içinde `hint`; `last_error` pyserial'ın metni
-  olarak kalır): "Permission denied" için cihazın ait olduğu grubu, cihazın kendisinden
-  okuyarak (`dialout`, Arch'ta `uucp`, …), ve neyin eksik olduğunu (kullanıcı o grupta
-  değil, ser2net başladıktan sonra eklendi, container'da o grup yok: `--group-add <gid>`);
-  kullanımdaki bir port için onu hangi eşlemenin açık tuttuğunu ya da başka bir programın
-  ne tür bir kilit tuttuğunu.
+  taramak yerine cihazını bu listede bulur. Log, her denemede bir satır yazmak yerine ilk
+  hatayı ve hatanın her değişmesini, aynı hatayı ise yalnızca 15 dakikada bir, ne zamandan
+  beri kaç denemenin başarısız olduğuyla birlikte yazar; port yeniden açılınca ne kadar süre
+  kapalı kaldığını söyler (başarısız olmayı sürdüren dışa bağlantılar için de aynısı).
+  `/api/v1/status`, açılamayan denemeleri (`open_failures`) ve açık portun kaybedilmesini
+  (`device_lost`) ayrı sayar; `reconnects` eskisi gibi ikisini birden sayar. Pano,
+  söyleyebildiğinde hatanın altında ne anlama geldiğini de yazar (`/api/v1/status` içinde
+  `hint`; `last_error` pyserial'ın metni olarak kalır): "Permission denied" için cihazın ait
+  olduğu grubu, cihazın kendisinden okuyarak (`dialout`, Arch'ta `uucp`, …), ve neyin eksik
+  olduğunu (kullanıcı o grupta değil, ser2net başladıktan sonra eklendi, container'da o grup
+  yok: `--group-add <gid>`); kullanımdaki bir port için onu hangi eşlemenin açık tuttuğunu
+  ya da başka bir programın ne tür bir kilit tuttuğunu.
 - **Dinleyiciler kendiliğinden açılır:** başlarken adresini kullanamayan bir eşleme
   (açılışta IP henüz atanmamış ya da port hâlâ dolu) `error` durumunda "N sn sonra yeniden
   denenecek" gösterir ve çalışana kadar en fazla 30 sn arayla yeniden başlatılır (Durdur
