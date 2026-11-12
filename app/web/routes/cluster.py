@@ -17,7 +17,9 @@ import re
 import socket
 import time
 
-from starlette.responses import JSONResponse, PlainTextResponse, Response
+from markupsafe import escape
+from starlette.datastructures import FormData
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
@@ -94,6 +96,32 @@ def _version_label(version) -> str:
     if v is None or mine is None or v == mine:
         return ""
     return "older" if v < mine else "newer"
+
+
+def _leaves(d: dict, path: str = ""):
+    """(path, value) of every setting in a mapping dict: "serial.advanced.nobreak",
+    "modbus_poll.points[2].fn"; a USB identity (match) is one value."""
+    for k, v in d.items():
+        p = path + k
+        if isinstance(v, dict) and k != "match":
+            yield from _leaves(v, p + ".")
+        elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            for i, x in enumerate(v):
+                yield from _leaves(x, f"{p}[{i}].")
+        else:
+            yield p, v
+
+
+def not_kept(sent: MappingConfig, stored: dict) -> list[str]:
+    """The settings of the mapping a peer stores after a fleet-view save (its mapping-data
+    *stored*, in the peer's own schema) that differ from what this node sent (*sent*: the
+    forwarded fields as this node's save parses them). Only settings the peer has are
+    compared; the trace (stored as the peer's own value) and the id are left out."""
+    mine = dict(_leaves(sent.to_dict()))
+    theirs = dict(_leaves(MappingConfig.from_dict(stored).to_dict()))
+    have = {p for p, _v in _leaves(stored)}
+    return [p for p in sorted(have) if p not in ("id", "options.trace_both")
+            and p in mine and mine[p] != theirs.get(p)]
 
 
 def _peer_below_2_8(version: str) -> bool:
@@ -501,9 +529,26 @@ def routes(ctx: Ctx) -> list:
         if res and res.get("ok"):
             state.cluster.forget(target)   # the refresh this triggers shows the change
             addr = peer_addr(target["ip"], target["port"])
-            state.log(f"cluster: edited '{res.get('name', '')}' on {addr}")
-            ctx.audit(request, "cluster_edit", f"{addr}/{res.get('name', '')}")
-            return Response("", headers={"HX-Trigger": "refreshCluster"})
+            name = res.get("name", "")
+            state.log(f"cluster: edited '{name}' on {addr}")
+            ctx.audit(request, "cluster_edit", f"{addr}/{name}")
+            # read it back: what the peer didn't keep of what was sent (an older version)
+            after = await state.cluster.get_peer(target, "/api/cluster/mapping-data",
+                                                 {"mid": form.get("id", "")})
+            lost = []
+            if after and isinstance(after.get("mapping"), dict):
+                stored = MappingConfig.from_dict(data["mapping"])
+                lost = not_kept(mapping_for_rerender(FormData(fields), stored,
+                                                     data.get("ports", [])), after["mapping"])
+            if not lost:
+                return Response("", headers={"HX-Trigger": "refreshCluster"})
+            state.log(f"cluster: {addr} (version {version or '?'}) did not keep "
+                      f"{', '.join(lost)} of '{name}'")
+            note = _("Saved on {0} (version {1}), but it did not keep: {2}.").format(
+                addr, version or "?", ", ".join(lost[:12]) + (" …" if len(lost) > 12 else ""))
+            return HTMLResponse(f'<div class="banner warn">{escape(note)} <button type="button" '
+                                f'class="btn sm" data-cancel>{escape(_("Close"))}</button></div>',
+                                headers={"HX-Trigger": "refreshCluster"})
         return _reload((res or {}).get("error") or _("The peer rejected the change or was "
                                                      "unreachable."))
 

@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from starlette.datastructures import FormData
 
-from app.web.routes.cluster import _peer_below_2_8, _peer_save_fields
+from app.config import MappingConfig
+from app.web.routes.cluster import _peer_below_2_8, _peer_save_fields, not_kept
 
 
 def form(**kw):
@@ -119,6 +120,24 @@ def test_older_peer_keeps_what_the_form_leaves_out():
           "an unchanged close-on keeps its line breaks  OK")
 
 
+def test_not_kept():
+    # what a fleet-view save sent, against what the peer stores afterwards (read back):
+    # only the settings the peer has are compared, the trace and the id never
+    sent = MappingConfig.from_dict({
+        "id": "abc", "name": "m", "serial": {"port": "/dev/ttyS1"},
+        "network": {"mode": "client", "remote_host": "h", "remote_port": 1, "port": 5000},
+        "options": {"trace_both": "plc1.trace", "trace_max_mb": 2.5},
+        "modbus_poll": {"points": [{"name": "p", "fn": 1, "dtype": "bool", "writable": True}]}})
+    assert not_kept(sent, sent.to_dict()) == [], "the same version keeps everything"
+    older = sent.to_dict()   # a 2.7 node: no trace rotation, no "writable"; resets the port
+    del older["options"]["trace_max_mb"], older["modbus_poll"]["points"][0]["writable"]
+    older["options"]["trace_both"] = "data/trace-plc1.log"
+    older["network"]["port"] = 4001
+    older["id"] = "my-port&x"
+    assert not_kept(sent, older) == ["network.port"], not_kept(sent, older)
+    print("read back after a save: names what the peer didn't keep, of the settings it has  OK")
+
+
 def main():
     test_version_gate()
     test_requires_existing_mapping()
@@ -128,6 +147,7 @@ def main():
     test_trace_new_name_refused_pre_2_8()
     test_unchanged_trace_kept_as_stored()
     test_older_peer_keeps_what_the_form_leaves_out()
+    test_not_kept()
     print("\nPASS: fleet-view edit proxy forwards only known, validated fields")
 
 
