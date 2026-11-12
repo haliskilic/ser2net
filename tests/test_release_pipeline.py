@@ -14,12 +14,14 @@
 * the jobs that can mint attestations or write the release run GitHub's own actions only;
   the attest job can't write the release, and the release is created by the runner's gh
   CLI from exactly the attested files (a pre-release marked as one).
+* a manual run (workflow_dispatch) is a dry run: it checks, builds and tests the same way
+  but attests, releases and tags nothing, and neither waits for nor blocks a release.
 
 Run: python3 tests/test_release_pipeline.py   (stdlib only)
 """
 import re
 
-from _workflows import jobs, key, names, needs, permissions, read, transitive_needs, uses
+from _workflows import jobs, key, names, needs, permissions, read, steps, transitive_needs, uses
 
 _PINNED = re.compile(r"[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[0-9a-f]{40}")
 # builds and pushes the image by digest while CI runs: nothing points at it until it
@@ -45,7 +47,8 @@ def test_tag_checked_first():
     release = jobs(read("release.yml"))
     verify = release["verify"]
     assert 'python3 tools/release_guard.py tag "$GITHUB_REF_NAME"' in verify, verify
-    assert 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main' in verify, verify
+    assert 'if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then' in verify, verify
+    assert 'is not a commit of main"; exit 1' in verify, verify
     assert "fetch-depth: 0" in verify, "the ancestry check needs main's history"
     for job in release:
         if job != "verify":
@@ -150,6 +153,27 @@ def test_privileged_jobs_run_only_github_actions():
     print("attest / publish / image run GitHub's own actions; gh uploads the attested files  OK")
 
 
+def test_dry_run_publishes_nothing():
+    text = read("release.yml")
+    assert "\n  workflow_dispatch:\n" in text.split("\npermissions:", 1)[0]
+    release = jobs(text)
+    push_only = "github.event_name == 'push'"
+    for job in ("publish", "image"):
+        assert key(release[job], "if") == push_only, f"{job} must not run in a dry run"
+    attestations = [s for s in steps(release["attest"]) if "uses: actions/attest-" in s]
+    assert len(attestations) == 4, attestations
+    for step in attestations:
+        assert f"\n        if: {push_only}\n" in step, step
+    assert "      publish: ${{ github.event_name == 'push' }}" in release["ci"], "dry runs don't sign"
+    verify = release["verify"]
+    assert 'else  # a dry run: the tag the current version gets\n            python3 ' \
+           'tools/release_guard.py tag\n' in verify, verify
+    group = re.search(r"(?m)^  group: (.*)$", text.split("\nconcurrency:\n", 1)[1]).group(1)
+    assert group == ("${{ github.event_name == 'push' && 'release' || "
+                     "format('release-dry-run-{0}', github.run_id) }}"), group
+    print("a dry run checks, builds and tests, but attests, releases and tags nothing  OK")
+
+
 if __name__ == "__main__":
     test_actions_pinned_by_sha()
     test_tag_checked_first()
@@ -157,4 +181,5 @@ if __name__ == "__main__":
     test_one_release_at_a_time()
     test_image_published_as_tested()
     test_privileged_jobs_run_only_github_actions()
+    test_dry_run_publishes_nothing()
     print("\nPASS: release pipeline")

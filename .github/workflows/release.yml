@@ -12,17 +12,24 @@ name: Release
 # provenance, then the tags of the tested image (X.Y.Z, X.Y and latest; a pre-release,
 # vX.Y.Z-rc.N, only its own and marked as a pre-release). The write permissions belong
 # to the publish jobs alone (and the untagged push).
+#
+# Actions -> Release -> Run workflow is a dry run on any branch: the same jobs check the
+# tag the current version gets, run CI, build, push and test the image, and assemble the
+# release files (artifact "release-files"), but nothing is attested, released or tagged.
+# It leaves one untagged image version in the GHCR package.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 # One release at a time, never cancelled: a second tag waits for the first. A group of
-# its own (ci.yml's runs, also the one this workflow calls, use ci-<run>).
+# its own (ci.yml's runs, also the one this workflow calls, use ci-<run>); a dry run
+# neither waits for a release nor holds one up.
 concurrency:
-  group: release
+  group: ${{ github.event_name == 'push' && 'release' || format('release-dry-run-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -44,12 +51,21 @@ jobs:
       - id: tag
         name: The tag is "v" + app.__version__, with a dated CHANGELOG.md section
         run: |
-          python3 tools/release_guard.py tag "$GITHUB_REF_NAME"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            python3 tools/release_guard.py tag "$GITHUB_REF_NAME"
+          else  # a dry run: the tag the current version gets
+            python3 tools/release_guard.py tag
+          fi
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ser2net" >> "$GITHUB_OUTPUT"
       - name: The tagged commit is on main
         run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
-            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not a commit of main"; exit 1; }
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "$GITHUB_SHA is a commit of main"
+          elif [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not a commit of main"; exit 1
+          else
+            echo "::warning::dry run: $GITHUB_SHA is not on main yet; a release tag has to be"
+          fi
 
   # Every check a pull request gets (what ci-ok gates merges on), on the tagged commit:
   # the checks that don't block a merge (Docker, arm64, the distributions, the audit)
@@ -62,7 +78,7 @@ jobs:
       actions: read       # standalone.yml requests it (SignPath); the caller must grant it
     uses: ./.github/workflows/ci.yml
     with:
-      publish: true
+      publish: ${{ github.event_name == 'push' }}   # a dry run doesn't sign
     secrets:              # the optional code-signing credentials (docs/SIGNING.md), no others
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -160,7 +176,7 @@ jobs:
   # Names and checks the release files, attests them and hands them on as one artifact.
   # It can mint attestations, so only GitHub's own actions run here, and it can't write
   # the release: what publish uploads is what was attested here, or `gh attestation
-  # verify` fails.
+  # verify` fails. A dry run attests nothing: its build would verify like a release's.
   attest:
     name: attest the release files
     needs: [verify, ci, image-test]
@@ -202,6 +218,7 @@ jobs:
       - name: Every platform ships the same supported CPython/OpenSSL
         run: python3 tools/release_guard.py sboms out/*.cdx.json --min-openssl 3.5
       - name: Build provenance attestation (gh attestation verify <file> -R ${{ github.repository }})
+        if: github.event_name == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: |
@@ -209,16 +226,19 @@ jobs:
             out/ser2net-linux-arm64
             out/ser2net-windows-x64.exe
       - name: SBOM attestation (Linux x64)
+        if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-linux-x64
           sbom-path: out/ser2net-linux-x64.cdx.json
       - name: SBOM attestation (Linux arm64)
+        if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-linux-arm64
           sbom-path: out/ser2net-linux-arm64.cdx.json
       - name: SBOM attestation (Windows x64)
+        if: github.event_name == 'push'
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e  # v4.1.0
         with:
           subject-path: out/ser2net-windows-x64.exe
@@ -237,6 +257,7 @@ jobs:
   publish:
     name: publish the release
     needs: [verify, attest]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -264,6 +285,7 @@ jobs:
   image:
     name: tag the tested image on GHCR
     needs: [verify, image-build, publish]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: release
     permissions:
