@@ -4,7 +4,7 @@
   "description": "The browser libraries vendored in app/web/static/ (not installed with npm): tools/refresh_assets.py copies them out of these npm releases, tests/test_vendor_assets.py checks them against the sha256 below, tools/third_party.py lists them in the executables' SBOM and --licenses.",
   "license": "AGPL-3.0-only",
   "dependencies": {
-    "@xterm/addon-fit": "0.10.0",
+    "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "5.5.0",
     "htmx.org": "2.0.11"
   },
