@@ -213,6 +213,8 @@ def exception_pdu(function: int, code: int) -> bytes:
 
 
 ILLEGAL_FUNCTION = 0x01       # exception code: the function is not allowed here
+ILLEGAL_DATA_ADDRESS = 0x02   # exception code: an address the slave does not have
+ILLEGAL_DATA_VALUE = 0x03     # exception code: a value (or quantity) it does not take
 GATEWAY_PATH_UNAVAILABLE = 0x0A  # exception code: no path to the slaves (the port is down)
 GATEWAY_TARGET_FAILED = 0x0B  # exception code for a non-responding RTU slave
 

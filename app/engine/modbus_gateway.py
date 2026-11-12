@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from ..config import (MappingConfig, ModbusPoint, modbus_response_timeout, point_order,
-                      point_scale)
+                      point_scale, poll_block_gap)
 from . import modbus, netguard, sockopts
 from .access import AccessPolicy, server_ssl
 from .bridge import (
@@ -147,11 +147,22 @@ class _Unit:
     since: float = 0.0          # time.time() when it went online / offline
     errors: int = 0             # point reads that failed, in this run
     probe: int = 0              # offline: which point the next probe reads (each in turn)
+    blocks: Optional[list] = None  # block reads: its points as _Blocks (None: one by one)
 
     def as_dict(self) -> dict:
         """For RunnerStatus.units (the dashboard, the REST API, /metrics, notifications)."""
         return {"unit": self.unit, "state": self.state, "cause": self.cause,
                 "since": int(self.since) if self.since else None, "errors": self.errors}
+
+
+@dataclass(eq=False)
+class _Block:
+    """Points of one unit and function read with one request (block reads)."""
+    fn: int
+    start: int                  # the first register (coil, input) read
+    count: int                  # how many
+    points: list = field(default_factory=list)
+    single: bool = False        # its points are read one at a time (the slave refused it)
 
 
 @dataclass
@@ -219,6 +230,10 @@ class ModbusGatewayRunner:
         for p in mapping.modbus_poll.points:
             if p.unit != modbus.BROADCAST and _polled(p):
                 self._units.setdefault(p.unit, _Unit(p.unit)).points.append(p)
+        self._block_gap = poll_block_gap(mapping.modbus_poll)
+        if self._block_gap is not None:
+            for u in self._units.values():
+                u.blocks = plan_blocks(u.points, self._block_gap)
         self._failing: dict[str, bool] = {}
         self._bad: set[str] = set()  # plain JSON values: points last published as "bad"
         self._cycle: Optional[_Reads] = None  # the reads of the unit being polled (see _Reads.drop)
@@ -484,9 +499,9 @@ class ModbusGatewayRunner:
                 u.probe += 1
                 await self._read_points([probe], reads)
                 if reads.answered:
-                    await self._read_points([p for p in u.points if p is not probe], reads)
+                    await self._read_unit(u, reads, done=probe)
             else:
-                await self._read_points(u.points, reads)
+                await self._read_unit(u, reads)
         finally:
             self._cycle = None
         u.errors += len(reads.failed)
@@ -514,6 +529,60 @@ class ModbusGatewayRunner:
         elif reads.values:
             self._publish_values(reads.values, reads.stamps)
         return None
+
+    async def _read_unit(self, u: _Unit, reads: _Reads, done=None) -> None:
+        """Read ``u``'s points (but ``done``, read already): one request per point, or with
+        block reads one per block of neighbouring points (a block holding ``done`` is read
+        all the same)."""
+        if u.blocks is None:
+            await self._read_points([p for p in u.points if p is not done], reads)
+            return
+        for b in u.blocks:
+            if self._stop.is_set():
+                break
+            if b.single or len(b.points) == 1:
+                await self._read_points([p for p in b.points if p is not done], reads)
+            else:
+                await self._read_block(u, b, reads)
+
+    async def _read_block(self, u: _Unit, b: _Block, reads: _Reads) -> None:
+        """One request for the points of block ``b``. No reply is no reply for each of them
+        (the unit's health counts it as for single reads); an exception 02 or 03 (an address
+        or a quantity the slave does not take) makes the block single from now on, and its
+        points are read one at a time right away; another exception fails them all."""
+        bits = b.fn in (modbus.READ_COILS, modbus.READ_DISCRETE_INPUTS)
+        pdu = (modbus.read_bits_pdu(b.fn, b.start, b.count) if bits
+               else modbus.read_pdu(b.fn, b.start, b.count))
+        rpdu = await self._transaction(u.unit, pdu)
+        try:
+            self._check_answered(rpdu, b.points[0])
+            data = modbus.response_data(rpdu, b.fn)
+            states = modbus.decode_bits(data, b.count) if bits else []
+        except NoReply as e:
+            reads.failed += [(p, e) for p in b.points]
+            return
+        except ValueError as e:  # an answer, but not the data asked for
+            reads.answered = True
+            code = rpdu[1] if len(rpdu) == 2 and rpdu[0] & 0x80 else None
+            if code not in (modbus.ILLEGAL_DATA_ADDRESS, modbus.ILLEGAL_DATA_VALUE):
+                reads.failed += [(p, e) for p in b.points]
+                return
+            b.single = True
+            what = "coils or inputs" if bits else "registers"
+            self._log(f"unit {u.unit}: block read of {b.count} {what} from {b.start} (FC{b.fn}) "
+                      f"refused ({e}); its {len(b.points)} points are read one at a time "
+                      "from now on")
+            await self._read_points(b.points, reads)
+            return
+        stamp = _now_ms()
+        reads.answered = True
+        for p in b.points:
+            try:
+                reads.values[p.name] = (states[p.address - b.start] if bits
+                                        else decode_point(p, data, p.address - b.start))
+                reads.stamps[p.name] = stamp
+            except Exception as e:  # (one bad point must not stop the others)
+                reads.failed.append((p, e))
 
     async def _read_points(self, points, reads: _Reads) -> None:
         for p in points:
@@ -958,6 +1027,11 @@ class ModbusGatewayRunner:
         if poll.reserved_unit_points:
             self._log(f"warning: poll point(s) {_names(poll.reserved_unit_points)} on units "
                       "248-255, which a Modbus serial line reserves (slave addresses are 1-247)")
+        if self._block_gap is not None and self.mapping.mqtt.enabled:
+            blocks = [b for u in self._units.values() for b in (u.blocks or [])]
+            self._log(f"block reads: {sum(len(b.points) for b in blocks)} point(s) with "
+                      f"{len(blocks)} request(s) per poll (at most {self._block_gap} unused "
+                      "register(s) or coil(s) within a block)")
         for p in poll.points:
             unusable = [key for key in ("min", "max", "allowed")
                         if getattr(p, key) is not None and _limit(p, key) is None]
@@ -1154,6 +1228,45 @@ def _registers(p) -> int:
     if p.dtype == "bool":
         return 1
     return modbus.dtype_registers(p.dtype)
+
+
+def plan_blocks(points, gap: int) -> list[_Block]:
+    """Block reads: a unit's (polled) points as the requests that read them — per function
+    code, in address order, a point joins the block before it when at most ``gap`` unused
+    registers (coils, inputs) lie between them and the block stays within one read (125
+    registers, 2000 bits); points may overlap. A point whose address or size can't be used
+    (a stored value the edits refuse) is a block of its own, read alone as before."""
+    blocks: list[_Block] = []
+    by_fn: dict[Any, list] = {}
+    for p in points:
+        by_fn.setdefault(p.fn, []).append(p)
+    for fn, pts in by_fn.items():
+        bits = fn in (modbus.READ_COILS, modbus.READ_DISCRETE_INPUTS)
+        cap = modbus.MAX_READ_BITS if bits else modbus.MAX_READ_REGISTERS
+        usable = []
+        for p in pts:
+            try:
+                size = 1 if bits else _registers(p)
+                ok = (isinstance(p.address, int) and not isinstance(p.address, bool)
+                      and 0 <= p.address and p.address + size <= 0x10000
+                      and isinstance(size, int) and 1 <= size <= cap)
+            except (TypeError, ValueError):
+                ok = False
+            if ok:
+                usable.append((p.address, size, p))
+            else:
+                blocks.append(_Block(fn, 0, 0, [p], single=True))
+        current: Optional[_Block] = None
+        for address, size, p in sorted(usable, key=lambda t: t[0]):
+            end = address + size
+            if (current is not None and address <= current.start + current.count + gap
+                    and max(current.count, end - current.start) <= cap):
+                current.count = max(current.count, end - current.start)
+                current.points.append(p)
+            else:
+                current = _Block(fn, address, size, [p])
+                blocks.append(current)
+    return blocks
 
 
 def decode_point(p, data: bytes, offset: int = 0):

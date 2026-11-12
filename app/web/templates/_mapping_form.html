@@ -273,6 +273,12 @@
   <fieldset data-show-when="network_protocol=modbus">
     <legend>{{ _("Modbus register polling → MQTT") }} <span class="muted">({{ _("edge mode; also enable MQTT above") }})</span></legend>
     <label>{{ _("Poll interval (s)") }} <input type="number" name="modbus_poll_interval_s" min="0.1" step="0.1" value="{{ mapping.modbus_poll.interval_s }}"></label>
+    <input type="hidden" name="modbus_block_reads_shown" value="1">
+    <div class="grid2">
+      <label class="chk chk-pad"><input type="checkbox" name="modbus_block_reads" {% if mapping.modbus_poll.block_reads is sameas true %}checked{% endif %}> {{ _("Read neighbouring points with one request") }} <span class="muted">({{ _("per unit and function, up to 125 registers or 2000 coils; a block the slave refuses is read point by point") }})</span></label>
+      <label>{{ _("Unused registers a block may span") }} <span class="muted">({{ _("between two points; 0 = only adjacent ones") }})</span>
+        <input type="number" name="modbus_block_gap" min="0" max="124" step="1" value="{{ mapping.modbus_poll.block_gap }}"></label>
+    </div>
     <label>{{ _("Points — JSON array") }}
       <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|int64|uint64|float64|string|bool","scale","writable":true}] — {{ _('writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug DCMD to their unit’s device (<span class="mono">unit&lt;N&gt;</span>)') }}; {{ _('optional: <span class="mono">"min"</span>, <span class="mono">"max"</span> and <span class="mono">"allowed": [ … ]</span> limit what MQTT may write to a point, <span class="mono">"poll": false</span> makes a writable point write-only (never read)') }}; {{ _('<span class="mono">"word_order"</span>: <span class="mono">"CDAB"</span> (low register first), <span class="mono">"BADC"</span> (bytes swapped) or <span class="mono">"DCBA"</span> for a device that does not send ABCD; <span class="mono">"bit": 0–15</span> with <span class="mono">"dtype": "bool"</span> reads one bit of a register; a <span class="mono">"string"</span> takes <span class="mono">"length"</span> registers') }}</span>
       <input type="hidden" name="modbus_point_options_shown" value="1">

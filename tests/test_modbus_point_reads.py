@@ -8,7 +8,14 @@
     Double, String and Boolean;
   * end to end against a fake RTU slave (TCP loopback): a poll publishes each type's value,
     an MQTT write of a CDAB / 64-bit point sends the registers in the point's order (FC16),
-    and a string or a bit of a register is never written.
+    and a string or a bit of a register is never written;
+  * block reads (off by default): a unit's points of one function that lie close together
+    are read with one request (at most 125 registers / 2000 bits, up to the gap of unused
+    registers), giving the values single reads give; a block the slave refuses with
+    exception 02 is read point by point from then on (logged once); a block without a reply
+    is no reply for each of its points, so the unit goes offline as with single reads; a
+    write from MQTT takes its turn between two blocks, and the value read before it is not
+    published after its read-back.
 Cross-platform (binds 127.0.0.1 only).
 
 Run: python3 tests/test_modbus_point_reads.py
@@ -22,7 +29,8 @@ from _server import ROOT, free_port  # noqa: F401  (sys.path setup)
 
 from app.config import ConfigError, MappingConfig
 from app.engine import modbus, sparkplug
-from app.engine.modbus_gateway import ModbusGatewayRunner, decode_point
+from app.engine.modbus_gateway import (UNIT_OFFLINE_AFTER, ModbusGatewayRunner, decode_point,
+                                       plan_blocks)
 from app.engine.sparkplug_node import SparkplugNode
 
 TIMEOUT = 0.2
@@ -204,11 +212,47 @@ def test_sparkplug_datatypes():
           "untyped int64 DCMD is read as signed  OK")
 
 
-class Slave:
-    """A fake RTU slave on TCP: registers per (unit, address), FC3/4 reads, FC6/16 writes."""
+def test_plan_blocks():
+    def pts(*specs):
+        return MappingConfig.from_dict({"modbus_poll": {"points": [
+            dict({"name": f"p{i}", "fn": 3}, **s) for i, s in enumerate(specs)]}}
+        ).modbus_poll.points
 
-    def __init__(self, regs):
+    def plan(points, gap):
+        return [(b.fn, b.start, b.count, [p.name for p in b.points], b.single)
+                for b in plan_blocks(points, gap)]
+    points = pts({"address": 5}, {"address": 0}, {"address": 1, "dtype": "uint32"},
+                 {"address": 200}, {"address": 3, "dtype": "string", "length": 2},
+                 {"fn": 4, "address": 0}, {"fn": 1, "dtype": "bool", "address": 0},
+                 {"fn": 1, "dtype": "bool", "address": 10})
+    assert plan(points, 0) == [(3, 0, 6, ["p1", "p2", "p4", "p0"], False),
+                               (3, 200, 1, ["p3"], False), (4, 0, 1, ["p5"], False),
+                               (1, 0, 1, ["p6"], False), (1, 10, 1, ["p7"], False)]
+    assert plan(points, 9)[-1] == (1, 0, 11, ["p6", "p7"], False)
+    assert plan(points, 124)[0][:3] == (3, 0, 6), "200 is beyond one read of 125"
+    assert plan(pts({"address": 0}, {"address": 124}), 124) == [(3, 0, 125, ["p0", "p1"], False)]
+    assert len(plan(pts({"address": 0}, {"address": 125}), 124)) == 2
+    assert len(plan(pts({"address": 0}, {"address": 2}), 0)) == 2, "a gap of 1 > 0"
+    assert plan(pts({"address": 0, "dtype": "uint64"}, {"address": 1}), 0) == [
+        (3, 0, 4, ["p0", "p1"], False)], "overlapping points share the block"
+    coils = pts({"fn": 1, "dtype": "bool", "address": 0},
+                {"fn": 1, "dtype": "bool", "address": 1999})
+    assert plan(coils, 124)[0][:3] == (1, 0, 1) and len(plan(coils, 2000)) == 1
+    bits = pts({"dtype": "bool", "bit": 0, "address": 7}, {"dtype": "bool", "bit": 9, "address": 7})
+    assert plan(bits, 0) == [(3, 7, 1, ["p0", "p1"], False)], "two bits of one register"
+    junk = pts({"address": "x"}, {"address": 1})
+    assert plan(junk, 0) == [(3, 0, 0, ["p0"], True), (3, 1, 1, ["p1"], False)]
+    print("block plan: per function, in address order, within the gap and one read  OK")
+
+
+class Slave:
+    """A fake RTU slave on TCP: registers per (unit, address), FC3/4 reads, FC6/16 writes.
+    ``strict``: a read of an address it has no register at gets exception 02; ``silent``:
+    units that never answer; ``delay``: seconds before each reply."""
+
+    def __init__(self, regs, strict=False, delay=0.0):
         self.regs = dict(regs)
+        self.strict, self.delay, self.silent = strict, delay, set()
         self.seen = []  # (unit, pdu)
 
     async def serve(self, reader, writer):
@@ -220,12 +264,21 @@ class Slave:
                     unit, pdu = modbus.rtu_unwrap(bytes(buf))
                     buf.clear()
                     self.seen.append((unit, bytes(pdu)))
+                    if unit in self.silent:
+                        continue
+                    if self.delay:
+                        await asyncio.sleep(self.delay)
                     writer.write(modbus.rtu_wrap(unit, self.answer(unit, pdu)))
                     await writer.drain()
+
+    def reads(self):
+        return [(pdu[0], *struct.unpack(">HH", pdu[1:5])) for _u, pdu in self.seen]
 
     def answer(self, unit, pdu):
         fn, addr, qty = pdu[0], *struct.unpack(">HH", pdu[1:5])
         if fn in (3, 4):
+            if self.strict and any((unit, addr + i) not in self.regs for i in range(qty)):
+                return bytes([fn | 0x80, 2])
             data = regs_bytes(self.regs.get((unit, addr + i), 0) for i in range(qty))
             return bytes([fn, len(data)]) + data
         if fn == 6:
@@ -238,7 +291,22 @@ class Slave:
         return bytes([fn | 0x80, 1])
 
 
-async def runner_for(slave, points, logs):
+class Published(dict):
+    """The plain-MQTT values a runner published: the last one per point, and all in order."""
+
+    def __init__(self):
+        super().__init__()
+        self.order = []
+
+    def publish_value(self, name, payload):
+        self[name] = payload
+        self.order.append((name, payload))
+
+    def publish_raw(self, *_a, **_k):
+        pass
+
+
+async def runner_for(slave, points, logs, **poll):
     server = await asyncio.start_server(slave.serve, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     m = MappingConfig.from_dict({
@@ -246,17 +314,23 @@ async def runner_for(slave, points, logs):
         "network": {"mode": "server", "protocol": "modbus", "bind_ip": "127.0.0.1",
                     "port": free_port()},
         "mqtt": {"enabled": True, "host": "broker", "base_topic": "plant/t"},
-        "modbus_poll": {"interval_s": 0.05, "points": points}})
+        "modbus_poll": dict({"interval_s": 0.05, "points": points}, **poll)})
     m.validate()
     m.validate_input()
     r = ModbusGatewayRunner(m, logger=logs.append)
     r._resp_timeout = TIMEOUT
     sr, sw = await asyncio.open_connection("127.0.0.1", port)
     r._link.attach(sr, sw)
-    published = {}
-    r._mqtt = type("Mqtt", (), {"publish_value": lambda _s, n, v: published.__setitem__(n, v),
-                                "publish_raw": lambda *_a, **_k: None})()
+    published = Published()
+    r._mqtt = published
     return r, server, sw, published
+
+
+async def close(server, sw):
+    sw.close()
+    server.close()
+    with suppress(Exception):
+        await asyncio.wait_for(server.wait_closed(), timeout=2)
 
 
 async def gateway_types():
@@ -305,10 +379,96 @@ async def gateway_types():
         assert len(slave.seen) == 4, "nothing was sent for a string or a register's bit"
         print("a string or a bit of a register is never written  OK")
     finally:
-        sw.close()
-        server.close()
-        with suppress(Exception):
-            await asyncio.wait_for(server.wait_closed(), timeout=2)
+        await close(server, sw)
+
+
+BLOCK_REGS = {(1, a): 100 + a for a in (0, 1, 2, 3, 4, 5, 7, 8)}
+BLOCK_POINTS = [{"name": "a", "fn": 3, "address": 0},
+                {"name": "b", "fn": 3, "address": 1, "dtype": "uint32"},
+                {"name": "c", "fn": 3, "address": 4, "writable": True},
+                {"name": "d", "fn": 3, "address": 7},
+                {"name": "e", "fn": 3, "address": 8, "dtype": "bool", "bit": 2},
+                {"name": "f", "fn": 4, "address": 0}]
+
+
+async def gateway_blocks():
+    singles = Slave(BLOCK_REGS)
+    logs = []
+    r, server, sw, plain = await runner_for(singles, BLOCK_POINTS, logs)
+    await r._poll_unit(r._units[1])
+    await close(server, sw)
+    assert len(singles.seen) == 6, singles.reads()
+
+    slave = Slave(BLOCK_REGS)
+    r, server, sw, published = await runner_for(slave, BLOCK_POINTS, logs, block_reads=True,
+                                                block_gap=1)
+    try:
+        r._log_policy()
+        assert "block reads: 6 point(s) with 3 request(s) per poll (at most 1 unused " \
+               "register(s) or coil(s) within a block)" in logs, logs
+        await r._poll_unit(r._units[1])
+        assert dict(published) == dict(plain), (published, plain)
+        assert slave.reads() == [(3, 0, 5), (3, 7, 2), (4, 0, 1)], slave.reads()
+        print("block reads: 3 requests instead of 6, the same values  OK")
+    finally:
+        await close(server, sw)
+
+    # a block the slave refuses (exception 02): its points one by one, from then on
+    slave = Slave({k: v for k, v in BLOCK_REGS.items() if k != (1, 3)}, strict=True)
+    logs = []
+    r, server, sw, published = await runner_for(slave, BLOCK_POINTS[:4], logs,
+                                                block_reads=True, block_gap=3)
+    try:
+        await r._poll_unit(r._units[1])
+        assert slave.reads() == [(3, 0, 8), (3, 0, 1), (3, 1, 2), (3, 4, 1), (3, 7, 1)], \
+            slave.reads()
+        assert published == {"a": b"100", "b": b"6619238", "c": b"104", "d": b"107"}, published
+        refused = [line for line in logs if "block read" in line]
+        assert refused == ["unit 1: block read of 8 registers from 0 (FC3) refused (modbus "
+                           "exception 0x02); its 4 points are read one at a time from now on"], logs
+        slave.seen.clear()
+        await r._poll_unit(r._units[1])
+        assert len(slave.seen) == 4 and len([x for x in logs if "block read" in x]) == 1
+        assert r._units[1].state == "online"
+        print("block refused with exception 02: read point by point from then on, logged "
+              "once  OK")
+
+        # no reply to a block: no reply for each of its points; the unit goes offline
+        slave.silent.add(1)
+        for _ in range(UNIT_OFFLINE_AFTER):
+            await r._poll_unit(r._units[1])
+        u = r._units[1]
+        assert u.state == "offline" and u.cause == "no reply", (u.state, u.cause)
+        assert u.errors == 4 * UNIT_OFFLINE_AFTER, u.errors
+        print("no reply to a block: each of its points failed, the unit offline after "
+              f"{UNIT_OFFLINE_AFTER} polls  OK")
+    finally:
+        await close(server, sw)
+
+    # a write takes its turn between two blocks; the value read before it is not published
+    slave = Slave(BLOCK_REGS, delay=0.05)
+    logs = []
+    r, server, sw, published = await runner_for(slave, BLOCK_POINTS[:4], logs,
+                                                block_reads=True, block_gap=1)
+    try:
+        poll = asyncio.create_task(r._poll_unit(r._units[1]))
+        while not slave.seen:
+            await asyncio.sleep(0.005)
+        answers = []
+        r._write_soon(r.mapping.modbus_poll.points[2], 9, lambda err, v: answers.append((err, v)))
+        await asyncio.wait_for(poll, timeout=5)
+        for _ in range(200):
+            if answers:
+                break
+            await asyncio.sleep(0.01)
+        assert answers == [(None, 9)], answers
+        fns = [(pdu[0], struct.unpack(">H", pdu[1:3])[0]) for _u, pdu in slave.seen]
+        assert fns == [(3, 0), (6, 4), (3, 7), (3, 4)], fns
+        c = [v for n, v in published.order if n == "c"]
+        assert c == [b"9"], f"the value read before the write was published: {c}"
+        print("a write between two blocks: block, write, block, read-back; no stale value  OK")
+    finally:
+        await close(server, sw)
 
 
 def main():
@@ -317,7 +477,9 @@ def main():
     test_config_rules()
     test_stored_unusable_keys()
     test_sparkplug_datatypes()
+    test_plan_blocks()
     asyncio.run(gateway_types())
+    asyncio.run(gateway_blocks())
     print("\nPASS: Modbus point reads and writes")
 
 

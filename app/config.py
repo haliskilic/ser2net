@@ -616,6 +616,7 @@ MODBUS_DTYPES = ("uint16", "int16", "uint32", "int32", "float32", "bool",
 # BADC each register's bytes swapped, DCBA both
 MODBUS_WORD_ORDERS = ("ABCD", "CDAB", "BADC", "DCBA")
 MODBUS_STRING_MAX_REGS = 125  # a "string" point: at most one read's worth of registers
+MODBUS_BLOCK_GAP_MAX = 124    # block reads: unused registers between two points of a block
 # a point's keys whose type was not checked before 2.9, as ModbusPoint.from_dict reads them
 # (and writable; the keys 2.9 added are typed from the start: validate_input)
 _POINT_INTS = ("unit", "fn", "address")
@@ -727,6 +728,16 @@ def point_order(p: ModbusPoint) -> str:
     return p.word_order if p.word_order in MODBUS_WORD_ORDERS else "ABCD"
 
 
+def poll_block_gap(poll: "ModbusPoll") -> Optional[int]:
+    """Block reads (ModbusPoll.block_reads): how many unused registers (coils) may lie
+    between two points read with one request, or None when block reads are off. A stored
+    gap the edits refuse reads as 0, and anything but true as off."""
+    if poll.block_reads is not True:
+        return None
+    gap = poll.block_gap
+    return gap if _is_int(gap) and 0 <= gap <= MODBUS_BLOCK_GAP_MAX else 0
+
+
 def _register_bit(value: Any) -> bool:
     return _is_int(value) and 0 <= value <= 15
 
@@ -739,6 +750,13 @@ def _string_length(value: Any) -> bool:
 class ModbusPoll:
     interval_s: float = 5.0
     points: list[ModbusPoint] = field(default_factory=list)
+    # Block reads (off: one request per point, as before): a unit's points of one function
+    # that lie close together are read with one request, at most 125 registers (2000 coils
+    # or inputs), with up to block_gap unused registers (coils) between two of them. A
+    # block the slave refuses (exception 02 or 03) has its points read one at a time from
+    # then on. Read through poll_block_gap().
+    block_reads: bool = False
+    block_gap: int = 0
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "ModbusPoll":
@@ -749,7 +767,9 @@ class ModbusPoll:
                 points.append(ModbusPoint.from_dict(p))
             except (TypeError, ValueError):  # (a list or a string where a point belongs)
                 raise ConfigError(_("Modbus poll point #{0} is not an object.").format(i)) from None
-        return ModbusPoll(interval_s=float(d.get("interval_s", 5.0) or 5.0), points=points)
+        return ModbusPoll(interval_s=float(d.get("interval_s", 5.0) or 5.0), points=points,
+                          block_reads=d.get("block_reads", False),
+                          block_gap=d.get("block_gap", 0))
 
     @property
     def broadcast_points(self) -> list[str]:
@@ -810,6 +830,11 @@ class ModbusPoll:
         types of the rest. validate() leaves them alone (a stored config has to keep
         loading); one stored that can't be used is ignored, with a warning in the gateway's
         log at start."""
+        if not isinstance(self.block_reads, bool):
+            raise ConfigError(_("Block reads must be on or off (true or false)."))
+        if not (_is_int(self.block_gap) and 0 <= self.block_gap <= MODBUS_BLOCK_GAP_MAX):
+            raise ConfigError(_("The unused registers a block read may span must be a whole "
+                                "number from 0 to {0}.").format(MODBUS_BLOCK_GAP_MAX))
         for p in self.points:
             name = repr(p.name)
             # the types validate() leaves alone: a stored point loads as it was
