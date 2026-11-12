@@ -610,8 +610,14 @@ def use_poll(paho_client_module) -> bool:
 
 def shown(value, limit: int = 40) -> str:
     """repr() of a value that came in over MQTT, cut to ``limit`` characters: what a log line
-    or a .../set/result answer quotes of it (a payload can be as large as the broker allows)."""
-    text = repr(value)
+    or a .../set/result answer quotes of it (a payload can be as large as the broker allows).
+    A value nested deeper than repr() can follow (a JSON request Python 3.14 and later parse:
+    their parser goes as deep as the stack, repr() hits the stack's end sooner, e.g. on
+    Windows' smaller one) is named, not quoted: the error would end the writer instead."""
+    try:
+        text = repr(value)
+    except RecursionError:
+        text = f"a {type(value).__name__} nested too deeply"
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
