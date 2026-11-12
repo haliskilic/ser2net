@@ -113,11 +113,15 @@ async def backpressure():
     taken = 0
     done = False
 
-    async def device():  # takes 2 KiB every 10 ms
-        nonlocal taken
+    async def device():  # takes 2 KiB every 10 ms, by the clock: on Windows a sleep of
+        nonlocal taken   # 10 ms can end at once (the event loop's coarse clock)
+        start, allowed = time.monotonic(), 0
         while not done:
             await asyncio.sleep(0.01)
-            taken += win32.complete(2048)
+            due = int((time.monotonic() - start) / 0.01) * 2048
+            if due > allowed:  # (what it could not take meanwhile is not made up for)
+                taken += win32.complete(due - allowed)
+                allowed = due
 
     dev = asyncio.ensure_future(device())
     written = ahead = 0

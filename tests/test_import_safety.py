@@ -43,8 +43,15 @@ def mapping(i: int) -> dict:
 
 def test_file_limits():
     many = json.dumps({"mappings": [mapping(i) for i in range(MAX_MAPPINGS + 1)]}).encode()
+
+    def nested(depth: int) -> bytes:  # in a mapping, as an unknown setting's value
+        return (b'{"mappings": [{"name": "a", "later": ' + b"[" * depth + b"]" * depth
+                + b"}]}")
+    # 100000 deep: the parser refuses it, or takes it (how deep it goes depends on the
+    # Python version and the stack); 200 deep: every parser takes it. The same answer
     for raw, want in ((many, f"at most {MAX_MAPPINGS}"),
-                      (b'{"mappings": ' + b"[" * 100000 + b"]" * 100000 + b"}", "not valid JSON"),
+                      (nested(100000), "not valid JSON (nested too deeply)"),
+                      (nested(200), "not valid JSON (nested too deeply)"),
                       (b" " * (MAX_FILE_BYTES + 1), "larger than 16 MB")):
         try:
             parse_mappings_file(raw)
