@@ -19,9 +19,9 @@ from app import config as config_mod
 from app import console
 from app.config import (
     AppConfig, ConfigError, MappingConfig, NetworkSettings, _ip_overlaps, bind_ip_problem,
-    canonical_ip,
+    canonical_ip, host_port,
 )
-from app.engine import netinfo, serial_io
+from app.engine import netguard, netinfo, serial_io
 from app.engine.bridge import MappingRunner
 from app.engine.modbus_gateway import ModbusGatewayRunner
 
@@ -212,6 +212,44 @@ def test_family_aware_overlaps():
           "both; the admin UI and discovery checks use the same rule  OK")
 
 
+class _Peer:
+    def __init__(self, peername):
+        self.peername = peername
+
+    def get_extra_info(self, name):
+        return self.peername if name == "peername" else None
+
+
+def test_labels():
+    assert host_port("::1", 4001) == "[::1]:4001" and host_port("10.0.0.5", 1) == "10.0.0.5:1"
+    assert host_port("", 8080) == "*:8080" and host_port("plc.local", 502) == "plc.local:502"
+    assert host_port("[::1]", 1) == "[::1]:1"
+    for peername, ip, label in (
+            (("2001:db8::7", 50123, 0, 0), "2001:db8::7", "[2001:db8::7]:50123"),
+            (("::ffff:10.0.0.9", 50124, 0, 0), "10.0.0.9", "10.0.0.9:50124"),
+            (("10.0.0.9", 50125), "10.0.0.9", "10.0.0.9:50125"),
+            (("fe80::1%eth0", 7, 0, 2), "fe80::1%eth0", "[fe80::1%eth0]:7"),
+            (None, "?", "?")):
+        peer = _Peer(peername)
+        assert netguard.peer_ip(peer) == ip and netguard.peer_label(peer) == label, peername
+    assert [NetworkSettings(**n).bind_shown for n in (
+        {"bind_ip": "::1"}, {"bind_ip": "10.0.0.5"}, {"bind_ip": "0.0.0.0", "dual_stack": True},
+        {"bind_ip": "::"})] == ["[::1]", "10.0.0.5", "*", "[::]"]
+
+    from app.web.server import make_templates
+    env = make_templates().env
+    maps = [mapping(name="v6", bind_ip="::1", port=4001),
+            mapping(name="both", bind_ip="0.0.0.0", dual_stack=True, port=4002),
+            mapping(name="out", mode="client", remote_host="2001:db8::9", remote_port=4003)]
+    out = env.get_template("_mappings_body.html").render(mappings=maps, statuses={},
+                                                         can_edit=False)
+    assert ">[:<wbr>:<wbr>1]:<wbr>4001<" in out, out
+    assert 'title="All interfaces (IPv4 + IPv6)">*</span>:<wbr>4002' in out, out
+    assert "→ [2001:<wbr>db8:<wbr>:<wbr>9]:<wbr>4003" in out, out
+    print("labels: IPv6 addresses in brackets (logs, clients, dashboard), IPv4-mapped clients "
+          "as IPv4, a dual-stack listener as *  OK")
+
+
 async def _never_opens(_settings):
     await asyncio.Event().wait()
 
@@ -250,6 +288,9 @@ async def _listeners():
                 for host, family in (("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)):
                     _reader, writer = await asyncio.open_connection(host, ports[family])
                     await _wait(lambda: len(r._clients) == 1)
+                    (client,) = r._clients
+                    local = writer.get_extra_info("sockname")
+                    assert client.peer == host_port(host, local[1]), (client.peer, local)
                     writer.close()
                     await _wait(lambda: not r._clients)
             finally:
@@ -279,7 +320,7 @@ async def _listeners():
                 c.sendto(b"x", ("::1", port))
                 await _wait(lambda: r.status.clients)
             await asyncio.sleep(0.1)
-            assert [c["peer"].startswith("::1") for c in r.status.clients] == [True], \
+            assert [c["peer"].startswith("[::1]:") for c in r.status.clients] == [True], \
                 r.status.clients
         finally:
             await r.stop()
@@ -292,12 +333,12 @@ async def _listeners():
             assert sock.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY) == 0
             assert any("UDP on 0.0.0.0:0 and [::]:0, IPv4 and IPv6" in x for x in lines), lines
             port = sock.getsockname()[1]
-            seen = set()
             for host, family in (("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)):
                 with socket.socket(family, socket.SOCK_DGRAM) as c:
+                    c.bind((host, 0))
+                    want = host_port(host, c.getsockname()[1])  # an IPv4 sender as IPv4
                     c.sendto(b"x", (host, port))
-                    await _wait(lambda: r.status.clients and r.status.clients[0]["peer"] not in seen)
-                    seen.add(r.status.clients[0]["peer"])
+                    await _wait(lambda: [p["peer"] for p in r.status.clients] == [want])
         finally:
             await r.stop()
 
@@ -319,6 +360,7 @@ def main():
     test_udp_wildcard_kept()
     test_dual_stack_setting()
     test_family_aware_overlaps()
+    test_labels()
     test_listeners()
     print("\nPASS: IPv6 bind addresses")
 

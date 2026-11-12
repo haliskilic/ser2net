@@ -31,7 +31,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
 from . import accounts, console, datalock, i18n, standalone
-from .config import ConfigError, ConfigStore
+from .config import ConfigError, ConfigStore, host_port
 from .engine import netguard
 from .engine.serial_link import Backoff
 from .state import AppState, write_audit_record
@@ -358,7 +358,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     state = AppState(store, config)
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
-    state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
+    state.log(f"ser2net starting — admin UI on {scheme}://{host_port(admin.bind_ip, admin.port)}")
     for note in standalone.notes + config.load_notes + ([loop_note] if loop_note else []):
         state.log(note)
     from .engine import serial_compat
@@ -468,7 +468,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
                 break
             sockets, error = await _admin_sockets(admin, uconfig.backlog)
             if sockets:
-                state.log(f"admin UI: listening on {admin.bind_ip}:{admin.port} now")
+                state.log(f"admin UI: listening on {host_port(admin.bind_ip, admin.port)} now")
             elif error != ui_error:
                 ui_error = error
                 state.log(f"admin UI: {error} — trying again")

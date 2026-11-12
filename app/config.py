@@ -258,15 +258,18 @@ def _ipv6_takes_ipv4() -> bool:
         return False
 
 
-def host_port(host: Any, port: Any) -> str:
-    """host:port as the log and the UI write it: an IPv6 address in brackets ([::1]:4001),
-    the admin UI's "" (every interface) as *."""
+def shown_host(host: Any) -> str:
+    """A host as host:port writes it: an IPv6 address in brackets, the admin UI's ""
+    (every interface) as *."""
     h = "" if host is None else str(host)
     if not h:
-        h = "*"
-    elif ":" in h and not h.startswith("["):
-        h = f"[{h}]"
-    return f"{h}:{port}"
+        return "*"
+    return f"[{h}]" if ":" in h and not h.startswith("[") else h
+
+
+def host_port(host: Any, port: Any) -> str:
+    """host:port as the log and the UI write it ([::1]:4001; see shown_host)."""
+    return f"{shown_host(host)}:{port}"
 
 
 def bind_ip_problem(value: Any) -> str:
@@ -540,6 +543,12 @@ class NetworkSettings:
         """The listener takes IPv4 and IPv6 clients: dual_stack (true itself, not text
         that reads as true) with a wildcard bind IP."""
         return self.dual_stack is True and canonical_ip(self.bind_ip) in WILDCARDS
+
+    @property
+    def bind_shown(self) -> str:
+        """The bind IP as the UI shows it before the port: * for every interface of both
+        families, an IPv6 address in brackets."""
+        return "*" if self.both_families else shown_host(self.bind_ip)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "NetworkSettings":

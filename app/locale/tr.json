@@ -905,5 +905,6 @@
   "Other device path…": "Başka bir cihaz yolu…",
   "Device path": "Cihaz yolu",
   "Listening for IPv4 and IPv6 clients (dual_stack) needs the bind IP 0.0.0.0 or ::, not {0}.": "IPv4 ve IPv6 istemcileri birlikte dinlemek (dual_stack) için dinleme IP'si 0.0.0.0 ya da :: olmalı, {0} değil.",
-  "The UDP reply address {0} is IPv4, but the mapping listens on an IPv6 address ({1}). To reach IPv4 addresses from :: pick “All interfaces (IPv4 + IPv6)”.": "UDP yanıt adresi {0} bir IPv4 adresi, ama eşleme bir IPv6 adresinde ({1}) dinliyor. ::'dan IPv4 adreslerine ulaşmak için “Tüm arayüzler (IPv4 + IPv6)” seçeneğini seç."
+  "The UDP reply address {0} is IPv4, but the mapping listens on an IPv6 address ({1}). To reach IPv4 addresses from :: pick “All interfaces (IPv4 + IPv6)”.": "UDP yanıt adresi {0} bir IPv4 adresi, ama eşleme bir IPv6 adresinde ({1}) dinliyor. ::'dan IPv4 adreslerine ulaşmak için “Tüm arayüzler (IPv4 + IPv6)” seçeneğini seç.",
+  "All interfaces (IPv4 + IPv6)": "Tüm arayüzler (IPv4 + IPv6)"
 }

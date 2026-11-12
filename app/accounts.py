@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from . import datalock, healthcheck
-from .config import ConfigStore, User, new_pwd_version
+from .config import ConfigStore, User, host_port, new_pwd_version
 from .web import auth
 
 REQUEST_DIR = "admin-requests"     # in the data directory
@@ -337,7 +337,8 @@ def apply_here(request: dict, config_path: str) -> str:
     if created:
         admin = config.admin_ui
         return (f"{change.message}; {config_path} was created — the web UI will listen on "
-                f"{admin.bind_ip}:{admin.port} (change it with --reconfigure or SER2NET_BIND_IP)")
+                f"{host_port(admin.bind_ip, admin.port)} (change it with --reconfigure or "
+                "SER2NET_BIND_IP)")
     return change.message
 
 

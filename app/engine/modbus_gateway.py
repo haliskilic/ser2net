@@ -428,9 +428,8 @@ class ModbusGatewayRunner:
         self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        peername = writer.get_extra_info("peername") or ("?", 0)
-        peer_ip = str(peername[0]) if isinstance(peername, tuple) else str(peername)
-        peer = f"{peer_ip}:{peername[1]}" if isinstance(peername, tuple) and len(peername) > 1 else peer_ip
+        peer_ip, peer_port = netguard.peer_address(writer)
+        peer = netguard.client_label(peer_ip, peer_port)
         net = self.mapping.network
 
         # allow-list, then max connections (a priority master / kick_old_user makes room)

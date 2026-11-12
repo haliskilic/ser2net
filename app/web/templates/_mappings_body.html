@@ -14,7 +14,7 @@
     {% set link_down = st and st.link == 'down' %}
     {% set problem = state in ('error', 'device-missing', 'reconnecting') or link_down %}
     <tr data-mid="{{ m.id }}" data-name="{{ m.name|lower }}" data-state="{{ 'problem' if problem else state }}"
-        data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
+        data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ' ' ~ m.network.bind_shown ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
         data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}">
       <td class="col-name">{% if can_edit %}<input type="checkbox" class="row-select" value="{{ m.id }}" aria-label="{{ _('select %(name)s', name=m.name) }}"> {% endif %}{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">{{ _("disabled") }}</span>{% endif %}</td>
       <td data-label="{{ _('Serial') }}">
@@ -25,8 +25,9 @@
       <td data-label="{{ _('Network') }}">
         <div class="mono">
           {%- if m.kind == 'serialbridge' -%}{{ m.serial_b.port|softbreak }}
-          {%- elif m.network.mode == 'client' -%}→ {{ m.network.remote_host|softbreak }}:<wbr>{{ m.network.remote_port }}
-          {%- else -%}{{ m.network.bind_ip|softbreak }}:<wbr>{{ m.network.port }}{%- endif -%}
+          {%- elif m.network.mode == 'client' -%}→ {{ shown_host(m.network.remote_host)|softbreak }}:<wbr>{{ m.network.remote_port }}
+          {%- elif m.network.both_families -%}<span title="{{ _('All interfaces (IPv4 + IPv6)') }}">*</span>:<wbr>{{ m.network.port }}
+          {%- else -%}{{ m.network.bind_shown|softbreak }}:<wbr>{{ m.network.port }}{%- endif -%}
         </div>
         <div class="sub">
           {%- if m.kind == 'serialbridge' -%}{{ _("serial↔serial") }}
