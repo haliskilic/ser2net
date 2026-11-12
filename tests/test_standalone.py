@@ -905,18 +905,25 @@ def test_binary():
         print(f"{where}: TR / EN -> the Settings page is in Turkish (translations bundled)  OK")
 
         st, headers, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
-        # done: 303 to the Settings page (Post/Redirect/Get), which says so, as a browser
-        # follows it
+        # done, and the UI (plain HTTP until now) takes new connections over HTTPS at once:
+        # the page itself is the answer, over this connection (a redirect would be followed
+        # over HTTP, which the UI serves no more), and it says where to go on
         where_to = headers.get("Location", "") if headers else ""
-        assert st == 303 and where_to.startswith("/settings"), f"generate: {st} {where_to!r}"
-        st, _, page = s.request(where_to.split("#", 1)[0])
-        assert st == 200 and "Self-signed certificate generated" in page, \
-            re.sub(r"\s+", " ", page[page.find("banner"):][:300])
+        assert st == 200 and not where_to, f"generate: {st} {where_to!r}"
+        assert "Self-signed certificate generated" in page and \
+            f"use HTTPS now: continue at https://127.0.0.1:{ui}/settings" in page, \
+            re.sub(r"\s+", " ", page[page.find("banner"):][:400])
         for f in ("cert.pem", "key.pem"):
             assert os.path.getsize(os.path.join(data, "tls", f)) > 0, f
         ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(
             os.path.join(data, "tls", "cert.pem"), os.path.join(data, "tls", "key.pem"))
-        print(f"{where}: Settings -> Generate self-signed certificate, no openssl on PATH  OK")
+        unverified = ssl.create_default_context()
+        unverified.check_hostname, unverified.verify_mode = False, ssl.CERT_NONE
+        with urllib.request.urlopen(f"https://127.0.0.1:{ui}/healthz", timeout=30,
+                                    context=unverified) as r:
+            assert r.status == 200, f"/healthz over HTTPS: {r.status}"
+        print(f"{where}: Settings -> Generate self-signed certificate, no openssl on PATH; the "
+              "UI serves HTTPS at once  OK")
 
 
         with socket.create_connection(("127.0.0.1", raw), timeout=5):

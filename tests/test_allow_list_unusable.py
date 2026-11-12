@@ -105,8 +105,10 @@ def main():
                 "or networks, so they are left out: plc.local.",
         ):
             assert line in log, f"{line!r} not logged:\n{log[-3000:]}"
+        # (the line ends right after the entry; on Windows the server's output has CRLF)
         assert "tcp-partly': network.allowed_client_ips entries that are not IP addresses or " \
-               "networks are left out: 'plc.local'\n" in log, "a partly usable list is not 'none'"
+               "networks are left out: 'plc.local'\n" in log.replace("\r\n", "\n"), \
+            "a partly usable list is not 'none'"
         print("start-up: the unusable entries noted; each runner says what it leaves out  OK")
 
         assert closed_at_once(ports["tcp"]), "the TCP bridge admitted a client"

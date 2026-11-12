@@ -5,8 +5,9 @@ ser2net-standalone.service for the binary, the per-instance template ser2net@.se
 and any other one added later):
 - each writable path the sandbox needs exists when the service starts: a ReadWritePaths=
   entry without '-' that is missing stops the start (status 226/NAMESPACE, again every
-  3 s), so an ExecStartPre=+ line makes it, or it is the unit's StateDirectory=; and the
-  --data-dir it runs with is writable;
+  3 s), also of the ExecStartPre=+ lines (systemd applies ReadWritePaths= to them), so it
+  is the unit's StateDirectory=, or an ExecStartPre=+ line makes it and the entry has '-';
+  and the --data-dir it runs with is writable;
 - the service runs as the unprivileged ser2net user with NoNewPrivileges and no
   capability; CAP_NET_BIND_SERVICE (ports below 1024) is there to uncomment;
 - netlink is allowed, which lists the network interfaces (the bind-IP pickers, the cluster's
@@ -87,15 +88,20 @@ def test_writable_paths_exist_at_start():
         state = ["/var/lib/" + d for v in values(unit, "StateDirectory") for d in v.split()]
         writable = list(state)
         for entry in " ".join(values(unit, "ReadWritePaths")).split():
-            if entry.startswith("-"):
-                continue  # optional: ignored when missing
-            # made before the sandbox is set up ("+": run without it), only when missing
+            path = entry.lstrip("-")
+            # made at the start, only when missing, by a line run as root ("+")
             pre = next((p for p in values(unit, "ExecStartPre")
-                        if p.startswith("+") and f"test -d {entry} ||" in p
-                        and re.search(rf"install -d -o ser2net -g ser2net -m 0700 {entry}'$", p)),
+                        if p.startswith("+") and f"test -d {path} ||" in p
+                        and re.search(rf"install -d -o ser2net -g ser2net -m 0700 {path}'$", p)),
                        None)
-            assert pre or entry in state, f"{name}: {entry} is not made before the start ({made})"
-            writable.append(entry)
+            if pre:  # (that line gets ReadWritePaths= too: before it ran, the path is missing)
+                assert entry.startswith("-"), \
+                    f"{name}: {path} has no '-', so the ExecStartPre=+ line that makes it can't run"
+            elif entry.startswith("-"):
+                continue  # optional: ignored when missing
+            else:
+                assert path in state, f"{name}: {path} is not made before the start ({made})"
+            writable.append(path)
         assert data_dir(unit) in writable, f"{name}: --data-dir {data_dir(unit)} not writable"
         if values(unit, "StateDirectory"):
             assert one(unit, "StateDirectoryMode") == "0700", name
