@@ -548,6 +548,10 @@ class MqttSettings:
     # it is published (Sparkplug NCMD / DCMD are never retained, so a retained one is
     # always ignored).
     apply_retained_set: bool = False
+    # Plain-format Modbus polling: also publish each polled unit's state, retained, to
+    # <base_topic>/unit<N>/status ("online" / "offline"), on every change and after each
+    # (re)connect. Off: nothing beyond the points' values and <base_topic>/status.
+    unit_status: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MqttSettings":

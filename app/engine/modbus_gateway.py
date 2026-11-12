@@ -248,7 +248,8 @@ class ModbusGatewayRunner:
                 self._mqtt = MqttPublisher(
                     mq, logger=self._log,
                     subscriptions=dict.fromkeys(self._set_points, self._on_set_message),
-                    accept_retained=bool(mq.apply_retained_set))
+                    accept_retained=bool(mq.apply_retained_set),
+                    on_connect=self._publish_unit_states if mq.unit_status else None)
             self._mqtt.connect()
             self._report_units()
             self._poll_task = asyncio.create_task(
@@ -432,6 +433,7 @@ class ModbusGatewayRunner:
                 self._log(f"unit {u.unit} answers again (offline for "
                           f"{fmt_duration(time.time() - u.since)})")
             u.state, u.cause, u.since = "online", "", time.time()
+            self._unit_state_changed(u)
         for p, e in reads.failed:
             if p.name not in self._failing:
                 self._failing[p.name] = self._note(f"poll {p.name}", p.unit,
@@ -464,6 +466,22 @@ class ModbusGatewayRunner:
     def _report_units(self) -> None:
         self.status.units = [u.as_dict() for u in self._units.values()]
 
+    def _unit_state_changed(self, u: _Unit) -> None:
+        if self._sparkplug is None and self.mapping.mqtt.unit_status:
+            self._publish_unit_state(u)
+
+    def _publish_unit_state(self, u: _Unit) -> None:
+        """Plain MQTT with unit status on: <base_topic>/unit<N>/status, retained."""
+        if self._mqtt is not None and u.state != "unknown":
+            base = self.mapping.mqtt.base_topic.rstrip("/")
+            self._mqtt.publish_raw(f"{base}/unit{u.unit}/status", u.state.encode(), retain=True)
+
+    def _publish_unit_states(self) -> None:
+        """After each (re)connect: the units' states again (a change while the broker was
+        away was not delivered)."""
+        for u in self._units.values():
+            self._publish_unit_state(u)
+
     def _unit_missed(self, u: _Unit, cause: str) -> Optional[str]:
         """A poll cycle in which ``u`` gave no reply, because of ``cause``; it goes offline
         after UNIT_OFFLINE_AFTER such cycles in a row. A unit that already stopped answering
@@ -480,6 +498,7 @@ class ModbusGatewayRunner:
             u.since = time.time()
             if self._sparkplug is not None:
                 self._sparkplug.device_offline(u.unit)
+            self._unit_state_changed(u)
         if cause == "no reply":
             n = len(u.points)
             self._log(f"unit {u.unit}: offline, no reply to "

@@ -848,5 +848,7 @@
   "Modbus unit(s) not answering: %(units)s": "Yanıt vermeyen Modbus unit'leri: %(units)s",
   "Modbus unit not answering": "Modbus unit'i yanıt vermiyor",
   "Modbus unit answering again": "Modbus unit'i yeniden yanıt veriyor",
-  "Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)": "Modbus unit'i yanıt vermeyi kesti (gateway'in periyodik okuması: art arda 3 okumada noktalarının hiçbiri yanıt vermedi)"
+  "Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)": "Modbus unit'i yanıt vermeyi kesti (gateway'in periyodik okuması: art arda 3 okumada noktalarının hiçbiri yanıt vermedi)",
+  "Publish each unit’s state to <span class=\"mono\">&lt;topic&gt;/unit&lt;N&gt;/status</span>": "Her unit'in durumunu <span class=\"mono\">&lt;topic&gt;/unit&lt;N&gt;/status</span>'a yayınla",
+  "retained online / offline; offline once a unit gave no reply to any of its points in 3 polls in a row. It keeps the last state while the mapping is stopped: read it together with &lt;topic&gt;/status": "retained online / offline; bir unit art arda 3 okumada noktalarının hiçbirine yanıt vermezse offline olur. Eşleme durduğunda son durumu korur: &lt;topic&gt;/status ile birlikte oku"
 }

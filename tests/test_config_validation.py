@@ -452,6 +452,34 @@ def test_form_udp_reply_fields():
     print("form: UDP reply address / peer timeout parsed when shown, kept when absent  OK")
 
 
+def test_form_mqtt_unit_status():
+    """The plain-MQTT unit status option is a checkbox shown for plain-format Modbus points:
+    parsed when its block is posted, kept when the form leaves the block out (Sparkplug B
+    selected, an older cluster peer's form); off for new mappings and older configs."""
+    base = {"name": "gw", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "modbus",
+            "network_bind_ip": "0.0.0.0", "network_port": "502", "mqtt_enabled": "on",
+            "mqtt_host": "b", "mqtt_base_topic": "plant/a", "mqtt_payload_format": "plain"}
+    existing = MappingConfig.from_dict({"name": "gw", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "modbus", "port": 502},
+                                        "mqtt": {"unit_status": True}})
+    assert MappingConfig().mqtt.unit_status is False
+    assert MappingConfig.from_dict({"mqtt": {}}).mqtt.unit_status is False, "older configs: off"
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.mqtt.unit_status
+
+    shown = dict(base, mqtt_unit_status_shown="1")
+    assert parsed(dict(shown, id=existing.id)) is False, "unticked"
+    assert parsed(dict(shown, id=existing.id, mqtt_unit_status="on")) is True
+    assert parsed(dict(base, id=existing.id)) is True, "block not posted: kept"
+    assert parsed(shown) is False and parsed(dict(shown, mqtt_unit_status="on")) is True
+    assert "unit_status" in MappingConfig.from_dict({"mqtt": {"unit_status": True}}).to_dict()["mqtt"]
+    print("form: the MQTT unit status checkbox is parsed when shown, kept when not posted  OK")
+
+
 def test_form_modbus_response_timeout():
     """The Modbus response timeout is in the form for Modbus gateways only (before 2.9 it was
     in config.json only): parsed when posted (blank = the default 1 s), kept when a form
@@ -530,6 +558,7 @@ def main():
     test_form_rfc2217_restore_on_disconnect()
     test_form_udp_reply_fields()
     test_form_modbus_response_timeout()
+    test_form_mqtt_unit_status()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()
     test_modbus_poll_requires_gateway()

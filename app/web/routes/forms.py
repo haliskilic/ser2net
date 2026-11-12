@@ -145,6 +145,7 @@ _OPTIONAL_FORM_FIELDS = {
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
+    "mqtt_unit_status_shown": ("mqtt", ("unit_status",)),
     # not offered for a Modbus gateway, which has no per-client output buffer and can't
     # send a banner or act on a close-on string (bytes outside Modbus frames)
     "network_client_queue_max": ("network", ("client_queue_max",)),
@@ -248,6 +249,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                if "mqtt_payload_format" in form else {}),
             **({"apply_retained_set": _checkbox(form, "mqtt_apply_retained_set")}
                if "mqtt_apply_retained_set_shown" in form else {}),
+            **({"unit_status": _checkbox(form, "mqtt_unit_status")}
+               if "mqtt_unit_status_shown" in form else {}),
         },
         "modbus_poll": {
             "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),
