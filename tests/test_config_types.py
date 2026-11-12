@@ -375,9 +375,11 @@ def test_api_server_error_is_json():
 def test_other_settings_of_this_release():
     """The settings other parts of this release added read through the same reader: named
     API tokens, a one-line trusted-proxy list, a two-factor secret that is no text (it
-    stays on), the dual-stack / port-locking switches and the masking of notifications as
-    true/false, an unknown console encoding as UTF-8; a relative TLS path of a mapping or
-    of the admin UI is a file of the data directory."""
+    stays on), a port-locking switch as true/false, an unknown console encoding as UTF-8;
+    the switches that are on only for JSON true (a listener for both families, MQTT writes
+    to the device, HSTS through a proxy, the masking of notifications ...) stay off for
+    text, with a note, and an edit refuses text for them; a relative TLS path of a mapping
+    or of the admin UI is a file of the data directory."""
     import tempfile
 
     from app.config import AdminUI, console_encoding, set_data_dir, tls_files_missing
@@ -388,7 +390,7 @@ def test_other_settings_of_this_release():
         "admin_ui": {"trusted_proxies": "10.0.0.1, 10.0.0.0/24 ::1"},
         "users": [{"username": "a", "password_hash": "x", "role": "admin", "totp_secret": True},
                   {"username": "b", "password_hash": "x", "totp_secret": None}],
-        "notifications": {"mask_personal_data": "true", "email_separately": "0"},
+        "notifications": {"mask_personal_data": True, "email_separately": "true"},
         "mappings": [{"name": "m", "serial": {"port": "/dev/ser2net-test",
                                               "advanced": {"tiocexcl": "1"}},
                       "network": {"mode": "udp", "bind_ip": "::", "dual_stack": "true",
@@ -402,8 +404,17 @@ def test_other_settings_of_this_release():
     assert cfg.notifications.mask_personal_data is True
     assert cfg.notifications.email_separately is False
     m = cfg.mappings[0]
-    assert m.network.dual_stack is True and m.serial.advanced.tiocexcl is True
+    assert m.network.dual_stack is False and m.serial.advanced.tiocexcl is True
+    assert any("network.dual_stack \"true\" is not true or false: false is used" in n
+               for n in cfg.load_notes), cfg.load_notes
     assert console_encoding(m.options) == "utf-8"
+    for d, path in (({"network": {"mode": "udp", "port": 4000, "udp_broadcast": "yes"}},
+                     "network.udp_broadcast"),
+                    ({"mqtt": {"enabled": True, "host": "b", "tx_enabled": 1}}, "mqtt.tx_enabled"),
+                    ({"options": {"poll_with_clients": "on"}}, "options.poll_with_clients")):
+        refused(MappingConfig.from_dict({"name": "x", "serial": {"port": "/dev/ser2net-test"},
+                                         **d}), path)
+    assert AppConfig.from_dict({"admin_ui": {"proxy_hsts": "yes"}}).admin_ui.proxy_hsts is False
     data = tempfile.mkdtemp(prefix="s2n_types_")
     try:
         os.makedirs(os.path.join(data, "tls"))
