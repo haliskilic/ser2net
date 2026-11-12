@@ -90,7 +90,8 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
 - **Host network** (`--network host`, compose `network_mode: host`, no `-p`): every
   mapping port is reachable as soon as it is created, and the LAN cluster's discovery
   works. Two things change: `SER2NET_BIND_IP` is then an address of the host itself
-  (`0.0.0.0` = all its interfaces; set the LAN address to keep the UI off the others),
+  (`0.0.0.0` = all its IPv4 interfaces, `*` = all of them, IPv4 and IPv6; set the LAN
+  address to keep the UI off the others),
   and the unprivileged process can't open ports below 1024 there (Modbus TCP's 502): use
   1024 or above, or the default network with `-p 502:502`, where Docker allows them.
 - **LAN cluster.** Discovery (UDP broadcast, port 41750) doesn't cross Docker's default

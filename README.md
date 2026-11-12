@@ -155,7 +155,18 @@ düzenlemeye gerek yok.
   USB adaptörü almışsa o açılmaz: bağlı adaptör geri gelene ya da eşleme yeni adaptöre
   bağlanana kadar (kutunun işaretini kaldırıp yeniden işaretleyin, kaydedin) eşleme
   `cihaz yok` gösterir.
-- **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
+- **IP seçici:** makineye atanmış IP'ler (tüm arayüzler, localhost, iki ailenin LAN
+  adresleri) veya custom.
+- **IPv4 ve IPv6:** `0.0.0.0`'daki bir eşleme yalnızca IPv4, `::`'daki yalnızca IPv6
+  istemcileri alır (TCP'de de UDP'de de, Linux'ta da Windows'ta da); **Tüm arayüzler
+  (IPv4 + IPv6)** ikisini birden alır (`config.json`'da ve REST API'de
+  `"bind_ip": "0.0.0.0", "dual_stack": true`; 2.9'dan eski bir sürüm bunu `0.0.0.0` olarak
+  okur). `0.0.0.0` ve `::` birer aileyi aldığından birindeki bir eşlemeyle ötekindeki bir
+  başkası aynı portu paylaşabilir. `::1` (IPv6 localhost) da `127.0.0.1` gibi bir dinleme
+  IP'sidir. IPv6 adresleri port yanında köşeli parantezle yazılır (`[::1]:4001`). Eski bir
+  sürümden gelen, Linux'ta `::`'da dinleyen bir UDP eşlemesi IPv4 datagramlarını da
+  alıyordu: `dual_stack` açık olarak gelir, yani almaya devam eder (açılış log'u bunu bir
+  kez söyler).
 - **Eksik ya da meşgul seri cihaz:** cihaz yokken (çıkarılmış, henüz tanınmamış) eşleme
   `cihaz yok`, açık port az önce kaybolduğunda ya da başka bir nedenle açılamadığında
   `yeniden bağlanıyor` gösterir; birkaç saniyede bir (en fazla yaklaşık 10 sn arayla), port
@@ -346,8 +357,9 @@ Kendin derlemek için:
   `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`
 
 İlk çalıştırmada:
-1. **Konsolda** arayüzün hangi IP'den erişileceği sorulur (makine IP'leri veya custom)
-   ve port (varsayılan 8080). Başsız/servis ortamında güvenli varsayılan **127.0.0.1**.
+1. **Konsolda** arayüzün hangi IP'den erişileceği sorulur (makine IP'leri; IPv4, IPv6 ya
+   da ikisi için tüm arayüzler; veya custom) ve port (varsayılan 8080). Başsız/servis
+   ortamında güvenli varsayılan **127.0.0.1**.
 2. Tarayıcıda açılan adrese gidin; **ilk ekranda admin parolasını belirleyin**. Sayfayı
    makinenin IP adresiyle ya da `localhost` ile açın: başka bir host adıyla (reverse proxy,
    Docker host'unun adı) gelindiğinde kurulum sayfası ayrıca `data/setup-code.txt`
@@ -380,7 +392,8 @@ komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme p
 Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (ya da `:2.8`, `:2.8.1`); `docker-compose.yml` bunu kullanır.
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
-ayarlanır — başsız ortamda interaktif seçici çalışamaz). Her eşlemenin portunu da yayınlayın
+ayarlanır — başsız ortamda interaktif seçici çalışamaz; `SER2NET_BIND_IP=*` IPv4 ve IPv6
+tüm arayüzler demektir). Her eşlemenin portunu da yayınlayın
 (yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
 alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç root olarak değil, `ser2net`
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
