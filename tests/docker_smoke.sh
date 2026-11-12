@@ -26,6 +26,9 @@
 # 12. upgrade: a volume a v2.8.0 image left (owned by uid 10001: config.json, backups with a
 #    -2 name, audit.log, traces) starts as it is, keeps its owner and the 2.8.0 settings, and
 #    the accounts 2.8.0 made sign in.
+# 13. ports below 1024 on the host network: the server has no capability (the admin UI on
+#    502 can't start, and the log says why) unless SER2NET_LOW_PORTS=1 keeps
+#    CAP_NET_BIND_SERVICE for it (then 502 answers); --cap-drop NET_BIND_SERVICE wins.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -37,7 +40,7 @@ fail() { echo "FAIL: $*"; docker logs s2n-smoke 2>&1 | tail -40 || true; exit 1;
 cleanup() {
     docker rm -f s2n-smoke >/dev/null 2>&1 || true
     docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d s2n-smoke-e s2n-smoke-f \
-        >/dev/null 2>&1 || true
+        s2n-smoke-g >/dev/null 2>&1 || true
     for d in "$host_dir" "$dev_dir"; do [ -n "$d" ] && sudo rm -rf "$d"; done
     rm -f "$JAR"
 }
@@ -347,5 +350,35 @@ sys.exit(0 if n["enabled"] and n["smtp_password"] == "dummy-smtp-pass-2.8.0"
 [ "$(sign_in admin old-admin-pass-1)" = 303 ] || fail "the admin password did not sign in"
 docker rm -f s2n-smoke >/dev/null
 echo "v2.8.0 volume: starts as it is, owner kept, 2.8.0 file and its -2 backup kept, settings and accounts work  OK"
+
+echo "== 13. ports below 1024 on the host network (SER2NET_LOW_PORTS)"
+low() { docker run -d --name s2n-smoke --network host --health-interval=1s \
+            -e SER2NET_BIND_IP=127.0.0.1 -e SER2NET_PORT=502 "$@" -v s2n-smoke-g:/data "$IMAGE" >/dev/null; }
+caps() { docker exec s2n-smoke sh -c 'grep -E "^Cap(Eff|Amb):" /proc/1/status' | tr -s '\t ' ' '; }
+low -e SER2NET_LOW_PORTS=1
+wait_healthy
+caps
+caps | grep -q "^CapAmb: 0000000000000400$" || fail "CAP_NET_BIND_SERVICE not kept with SER2NET_LOW_PORTS=1"
+caps | grep -q "^CapEff: 0000000000000400$" || fail "more than CAP_NET_BIND_SERVICE kept"
+curl -fsS "http://127.0.0.1:502/healthz" | grep -q ok || fail "the admin UI on 502 does not answer"
+docker rm -f s2n-smoke >/dev/null
+low
+for _ in $(seq 1 30); do
+    logs=$(docker logs s2n-smoke 2>&1 || true)
+    grep -q "admin UI port 502 is below 1024" <<<"$logs" && break
+    sleep 1
+done
+grep -q "admin UI port 502 is below 1024" <<<"$logs" || fail "no warning for the admin UI on 502"
+grep -q "CAP_NET_BIND_SERVICE" <<<"$logs" || fail "the warning doesn't say what is missing"
+docker rm -f s2n-smoke >/dev/null
+low -e SER2NET_LOW_PORTS=1 --cap-drop NET_BIND_SERVICE
+for _ in $(seq 1 30); do
+    logs=$(docker logs s2n-smoke 2>&1 || true)
+    grep -q "admin UI port 502 is below 1024" <<<"$logs" && break
+    sleep 1
+done
+grep -q "no CAP_NET_BIND_SERVICE to keep" <<<"$logs" || fail "--cap-drop NET_BIND_SERVICE not reported"
+docker rm -f s2n-smoke >/dev/null
+echo "ports below 1024: none without SER2NET_LOW_PORTS=1 (the log says why), 502 answers with it, --cap-drop wins  OK"
 echo
 echo "PASS: Docker image smoke test"
