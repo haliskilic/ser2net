@@ -31,6 +31,7 @@ import http.cookiejar
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -362,7 +363,7 @@ def test_certificate_info():
 
         line = runtime.tls_certificate_note(cert)
         assert line.startswith("admin UI TLS certificate: ser2net, self-signed, valid ") and \
-            "day(s) left" in line, line
+            re.search(r"\b\d+ days left$", line), line
         line = runtime.tls_certificate_note(paths["old"])
         assert line.startswith("WARNING: admin UI TLS certificate: old, self-signed, valid ") \
             and line.endswith(": EXPIRED"), line
@@ -450,7 +451,7 @@ def test_settings_shows_certificate():
         assert "which can’t be right" in page, page[page.find("banner"):][:600]
         assert certinfo.read(cfg.admin_ui.tls_cert).subject == "ser2net"
         page = settings_page()
-        assert "self-signed</span>" in page and "day(s) left" in page, page
+        assert "self-signed</span>" in page and re.search(r">\d+ days left<", page), page
         status, page = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
         assert "Self-signed certificate generated" in page and "can’t be right" not in page
         print("Settings: generating while the clock reads earlier than it can warns (and "
