@@ -300,6 +300,27 @@ def test_mapping_form_modbus_fields():
           "/set option only for plain-format points  OK")
 
 
+def test_mapping_form_hidden_characters():
+    """A banner / close-on string with a NUL, CR or LF can't be shown in its text box (a
+    browser shows U+FFFD and drops the line breaks): the form says so next to it."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+
+    def hint(options):
+        m = MappingConfig.from_dict({"id": "tb1", "name": "plc", "serial": {"port": "COM3"},
+                                     "options": options})
+        page = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                          ports=[], ips=[], error=None)
+        return page.count("control characters (NUL, CR or LF)")
+    assert hint({"closeon": "ctrl-a\x01nil\x00"}) == 1
+    assert hint({"closeon": "\r\n", "banner": "x\ny"}) == 2
+    assert hint({"closeon": "NO CARRIER", "banner": "Port \\N\\r\\n"}) == 0
+    print("mapping form: a banner / close-on string the box can't show is pointed out  OK")
+
+
 def test_mapping_form_udp_fields():
     """The UDP reply address and peer timeout are offered for UDP only, in one block whose
     timeout field is the presence marker (forms.py _OPTIONAL_FORM_FIELDS), next to a note
@@ -742,6 +763,7 @@ def main():
     test_counters_and_empty_state()
     test_ports_table_and_assets()
     test_mapping_form_modbus_fields()
+    test_mapping_form_hidden_characters()
     test_mapping_form_udp_fields()
     test_number_fields_required()
     test_mapping_form_rfc2217_restore()

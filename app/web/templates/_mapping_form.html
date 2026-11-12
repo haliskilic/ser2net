@@ -185,12 +185,15 @@
 
   <fieldset>
     <legend>{{ _("Options") }}</legend>
+    {%- set hidden_chars = _("It holds control characters (NUL, CR or LF) that this box can’t show; they are kept unless you change the text.") %}
     <div class="grid2" data-show-when="network_protocol=raw,telnet,rfc2217">
       <label>{{ _("Connect banner") }} <span class="muted">(\d {{ _("device") }}, \I IP, \N {{ _("name") }}, \p {{ _("port") }})</span>
         <input type="text" name="opt_banner" value="{{ mapping.options.banner }}" placeholder="{{ _('optional') }}">
+        {%- if mapping.options.banner|in_text_box != mapping.options.banner %}<span class="muted">{{ hidden_chars }}</span>{% endif %}
       </label>
       <label>{{ _("Close-on string") }} <span class="muted">({{ _("disconnect clients when the device sends this") }})</span>
         <input type="text" name="opt_closeon" value="{{ mapping.options.closeon }}" placeholder="{{ _('optional') }}">
+        {%- if mapping.options.closeon|in_text_box != mapping.options.closeon %}<span class="muted">{{ hidden_chars }}</span>{% endif %}
       </label>
     </div>
     <div data-show-when="network_protocol=rfc2217">
