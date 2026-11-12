@@ -728,12 +728,12 @@ var feedback = (function () {
   });
 })();
 
-// 7b) Copy a one-time token or key ([data-copy] names the element that holds it). The
-//     clipboard API works only on a secure page (https, localhost): on plain http the
-//     text is selected for Ctrl+C.
+// 7b) Copy a one-time token or key: a [data-copy] button copies the .token-box next to
+//     it. The clipboard API works only on a secure page (https, localhost): on plain
+//     http the text is selected for Ctrl+C.
 document.addEventListener("click", function (e) {
   var b = e.target.closest ? e.target.closest("[data-copy]") : null;
-  var box = b ? document.getElementById(b.getAttribute("data-copy")) : null;
+  var box = b && b.parentNode ? b.parentNode.querySelector(".token-box") : null;
   if (!box) return;
   function byHand() {
     var range = document.createRange(), sel = window.getSelection();
