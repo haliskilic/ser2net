@@ -305,9 +305,13 @@ def routes(ctx: Ctx) -> list:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
         state.log(f"mapping {action}: {name}")
         ctx.audit(request, f"mapping_{action}", name)
-        why, raw = reason(start_failed(state, mid) if action != "stop" else "")
-        note = (notice(_("“{0}” could not start: {1}").format(name, why), "warn", detail=raw) if why
-                else notice(action_done(action, name)))
+        if error := (start_failed(state, mid) if action != "stop" else ""):
+            # as for a save: the reason, and the hints for a taken port and the bind retry
+            retrying = bool((state.supervisor.status(mid) or {}).get("retrying"))
+            why, raw = _start_failure(error, retrying)
+            note = notice(_("“{0}” could not start: {1}").format(name, why), "warn", detail=raw)
+        else:
+            note = notice(action_done(action, name))
         return Response("", headers={**TRIGGER, **note})
 
     return [
