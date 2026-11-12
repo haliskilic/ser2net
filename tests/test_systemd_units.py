@@ -7,6 +7,8 @@ ser2net-standalone.service for the binary, and any other one added later):
   3 s), so an ExecStartPre=+ line makes it, or it is the unit's StateDirectory=; and the
   --data-dir it runs with is writable;
 - the service runs as the unprivileged ser2net user with NoNewPrivileges;
+- netlink is allowed, which lists the network interfaces (the bind-IP pickers, the cluster's
+  directed broadcasts), and ProcSubset=pid stays;
 - systemd-analyze verify accepts the file (Linux, where systemd-analyze is installed);
 - the release attaches the binary's unit.
 What only a real start shows (the sandbox around a running server) is the CI job
@@ -100,6 +102,18 @@ def test_unprivileged():
         print(f"{name}: user ser2net, NoNewPrivileges, no capabilities  OK")
 
 
+def test_interfaces_readable():
+    # netlink lists the interfaces (psutil.net_if_addrs: the bind-IP pickers, the cluster's
+    # directed broadcasts); ProcSubset=pid stays (it hides /proc/net, which app/engine/
+    # netinfo.py does without: tests/test_netinfo.py)
+    for path in UNITS:
+        unit, name = parse(path), os.path.basename(path)
+        families = one(unit, "RestrictAddressFamilies").split()
+        assert "AF_NETLINK" in families, f"{name}: {families}"
+        assert one(unit, "ProcSubset") == "pid", name
+        print(f"{name}: AF_NETLINK allowed, ProcSubset=pid kept  OK")
+
+
 def test_binary_unit():
     unit = parse(os.path.join(ROOT, "systemd", "ser2net-standalone.service"))
     start = one(unit, "ExecStart")
@@ -143,6 +157,7 @@ if __name__ == "__main__":
     test_units_present()
     test_writable_paths_exist_at_start()
     test_unprivileged()
+    test_interfaces_readable()
     test_binary_unit()
     test_systemd_analyze_verify()
     print("\nPASS: systemd units")
