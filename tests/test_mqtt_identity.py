@@ -1,4 +1,5 @@
-"""MQTT topics, client IDs and Sparkplug B edge nodes stay apart where they must.
+"""MQTT topics, client IDs and Sparkplug B edge nodes stay apart where they must, and a
+copied mapping gets an identity of its own.
 
   * an edit (validate_input) refuses '+', '#' or the null character in a plain base topic
     or point name, and a point published where the mapping already publishes or takes
@@ -10,8 +11,12 @@
     client don't count;
   * a stored clash loads with a load note (in English) and is logged in the mapping's log
     at each start, and validate() / save keep passing;
+  * Copy: "(copy)", "(copy 2)", disabled, no client ID, "<topic>-copy", a Sparkplug node
+    ID of its own, the next free port for its transport and address (down from 65535),
+    and a clear error when none is free;
   * end to end: the form, a cluster node's save, the REST API and an import refuse a
-    clash, and a stored one is logged at boot.
+    clash, a stored one is logged at boot, and Copy makes a mapping that can be enabled
+    next to its original.
 Cross-platform (the server part binds 127.0.0.1 only).
 
 Run: python3 tests/test_mqtt_identity.py
@@ -21,6 +26,7 @@ import json
 import os
 import shutil
 import tempfile
+import types
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,6 +37,7 @@ from app import i18n
 from app.config import (AppConfig, ConfigError, ConfigStore, MappingConfig, check_mqtt_clashes,
                         mqtt_clashes, mqtt_warnings, sparkplug_identity)
 from app.web.auth import hash_password, hash_token
+from app.web.routes.ops import copy_of
 
 PUMP = {"name": "pump", "fn": 1, "dtype": "bool", "writable": True}
 TEMP = {"name": "temp", "fn": 3, "address": 1}
@@ -259,6 +266,76 @@ def test_stored_clashes():
           "in its log  OK")
 
 
+def test_copy():
+    a = gw("A", "plant/line3/", client_id="gw-1", mid="aaaaaaaaaaa1")
+    cfg = AppConfig(mappings=[a])
+    c1 = copy_of(cfg, a)
+    assert (c1.name, c1.enabled, c1.mqtt.client_id, c1.mqtt.base_topic, c1.network.port) == (
+        "A (copy)", False, "", "plant/line3-copy", 5021), c1
+    assert c1.id != a.id and c1.mqtt.enabled, "MQTT stays as it was (the copy is disabled)"
+    cfg.mappings.append(c1)
+    c2 = copy_of(cfg, a)
+    assert (c2.name, c2.mqtt.base_topic, c2.network.port) == ("A (copy 2)",
+                                                             "plant/line3-copy-2", 5022), c2
+    cfg.mappings.append(c2)
+    rest = a.to_dict()
+    for c in (c1, c2):
+        d = c.to_dict()
+        for key in ("id", "name", "enabled"):
+            d.pop(key)
+            rest.pop(key, None)
+        for part, key in (("mqtt", "client_id"), ("mqtt", "base_topic"), ("network", "port")):
+            d[part].pop(key)
+            rest[part].pop(key, None)
+        assert d == rest, "nothing else differs"
+    for i, c in enumerate((c1, c2)):
+        c.enabled, c.serial.port = True, f"/dev/ser2net-test-other{i}"
+        c.validate()
+        c.validate_input()
+        check_mqtt_clashes(c, cfg.mappings)
+    cfg.validate()
+    print("copy: '(copy)', '(copy 2)', disabled, no client ID, '<topic>-copy(-2)', next "
+          "port; enabled next to the original nothing clashes  OK")
+
+    sp = gw("plc 1", "x", payload_format="sparkplug_b", sparkplug_node_id="line3")
+    copy = copy_of(AppConfig(mappings=[sp]), sp)
+    assert copy.mqtt.sparkplug_node_id == "" and sparkplug_identity(copy) == (
+        "ser2net", "plc_1_(copy)"), copy.mqtt
+    taken = gw("t", "y", payload_format="sparkplug_b", sparkplug_node_id="plc_1_(copy)", port=6000)
+    copy = copy_of(AppConfig(mappings=[sp, taken]), sp)
+    assert copy.mqtt.sparkplug_node_id == "plc_1_(copy)_2", copy.mqtt
+    print("copy: Sparkplug B edge node made from the new name, numbered when taken  OK")
+
+    def listener(port, bind="127.0.0.1", mode="server"):
+        return MappingConfig.from_dict({"name": f"n{port}{bind}{mode}", "serial": {"port": "x"},
+                                        "network": {"mode": mode, "bind_ip": bind,
+                                                    "port": port, "remote_host": "h",
+                                                    "remote_port": 1}})
+    a = gw("A", port=5020)
+    others = [listener(5021, mode="udp"), listener(5021, "127.0.0.2"),
+              listener(5021, mode="client")]
+    assert copy_of(AppConfig(mappings=[a, *others]), a).network.port == 5021, \
+        "UDP, another address, a connect-out mapping: the port is free for TCP here"
+    assert copy_of(AppConfig(mappings=[a, listener(5021, "0.0.0.0")]), a).network.port == 5022
+    top = gw("A", port=65535)
+    assert copy_of(AppConfig(mappings=[top, listener(65534)]), top).network.port == 65533
+    out = gw("O")
+    out.network.mode = "client"
+    assert copy_of(AppConfig(mappings=[out]), out).network.port == out.network.port
+    full = types.SimpleNamespace(mappings=[a] + [
+        types.SimpleNamespace(name=str(p), kind="net", mqtt=types.SimpleNamespace(base_topic=""),
+                              network=types.SimpleNamespace(listens=True, mode="server", port=p,
+                                                            bind_ip="0.0.0.0"))
+        for p in range(1, 65536)])
+    try:
+        copy_of(full, a)
+        raise AssertionError("a copy without a free port was made")
+    except ConfigError as e:
+        assert str(e) == "No free TCP port is left on 127.0.0.1 for the copy.", e
+    print("copy: port per transport and address, down from 65535, an error when none is "
+          "free  OK")
+
+
 def boot_config(ports, broker):
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
@@ -371,11 +448,27 @@ def test_server():
         assert names() == before
         print("import: the preview shows the clash and applying it is refused  OK")
 
+        st, _, _ = b.post("/api/mappings/aaaaaaaaaaa1/duplicate", {})
+        assert st == 200
+        copy = next(m for m in srv.saved_config()["mappings"] if m["name"] == "A (copy)")
+        orig = srv.saved_config()["mappings"][0]
+        assert (copy["enabled"], copy["mqtt"]["client_id"], copy["mqtt"]["base_topic"]) == (
+            False, "", "plant/line3-copy"), copy["mqtt"]
+        assert copy["network"]["port"] != orig["network"]["port"]
+        enable = form("A2", "plant/line3-copy", [PUMP, TEMP], copy["network"]["port"],
+                      id=copy["id"])
+        st, _, body = b.post("/api/mappings/save", enable)
+        assert st == 200, (st, body[:400])
+        assert next(m for m in srv.saved_config()["mappings"] if m["id"] == copy["id"])["enabled"]
+        print("copy: disabled, no client ID, '-copy' base topic, its own port; enabled next to "
+              "the original after its serial port changed  OK")
+
 
 def main():
     test_topic_rules()
     test_clashes()
     test_stored_clashes()
+    test_copy()
     test_server()
     print("\nPASS: MQTT topics, client IDs and Sparkplug B edge nodes stay apart")
 

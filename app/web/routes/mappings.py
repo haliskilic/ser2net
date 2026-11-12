@@ -41,16 +41,10 @@ def routes(ctx: Ctx) -> list:
             m = state.config.get_mapping(mid)
             if not m:
                 return PlainTextResponse(_("Mapping not found"), status_code=404)
-            d = m.to_dict()
-            d.pop("id", None)
-            d["name"] = f"{m.name} (copy)"
-            d["enabled"] = False  # don't auto-start a duplicate (avoids port clash)
-            dup = MappingConfig.from_dict(d)
-            # bump a listening port to the next free one
-            if dup.kind == "net" and dup.network.listens:
-                used = {mm.network.port for mm in state.config.mappings if mm.kind == "net"}
-                while dup.network.port in used and dup.network.port < 65535:
-                    dup.network.port += 1
+            try:  # disabled, on a free port, with an MQTT identity of its own
+                dup = ops.copy_of(state.config, m)
+            except ConfigError as e:
+                return PlainTextResponse(_("Duplicate failed: {0}").format(e), status_code=400)
             state.config.mappings.append(dup)
             try:
                 await state.asave()
