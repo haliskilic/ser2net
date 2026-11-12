@@ -269,8 +269,19 @@ def response_data(pdu: bytes, function: int) -> bytes:
     return data
 
 
-_DTYPE_REGS = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2}
+_DTYPE_REGS = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2,
+               "int64": 4, "uint64": 4, "float64": 4}
 DTYPES = tuple(_DTYPE_REGS)
+_DTYPE_FMT = {"uint16": ">H", "int16": ">h", "uint32": ">I", "int32": ">i", "float32": ">f",
+              "int64": ">q", "uint64": ">Q", "float64": ">d"}
+MAX_READ_REGISTERS = 125       # FC3/FC4: the most registers one read may ask for
+
+# How a device lays out a value's bytes in its registers, one letter per byte, A the most
+# significant: ABCD is the Modbus convention (each register high byte first, the high
+# register first); CDAB has the registers the other way round ("word swap", common for
+# 32-bit values), BADC the bytes of each register swapped, DCBA both (little-endian). For a
+# 64-bit value the same rule holds for its four registers (CDAB: the lowest one first).
+WORD_ORDERS = ("ABCD", "CDAB", "BADC", "DCBA")
 
 
 def dtype_registers(dtype: str) -> int:
@@ -279,18 +290,48 @@ def dtype_registers(dtype: str) -> int:
     return _DTYPE_REGS[dtype]
 
 
-def decode_value(data: bytes, dtype: str, scale: float = 1.0):
-    """Decode the first `dtype` value from big-endian register bytes, multiplied by
-    `scale`. Integers stay integers when scale is 1; floats/scaled values are floats."""
+def word_order(data: bytes, order: str) -> bytes:
+    """Register bytes laid out as ``order`` (see WORD_ORDERS) rearranged to ABCD, or ABCD
+    bytes to ``order``: the same rearrangement works both ways."""
+    if order == "ABCD":
+        return bytes(data)
+    if order == "DCBA":
+        return bytes(data[::-1])
+    words = [bytes(data[i:i + 2]) for i in range(0, len(data), 2)]
+    if order == "CDAB":
+        return b"".join(reversed(words))
+    if order == "BADC":
+        return b"".join(w[::-1] for w in words)
+    raise ValueError(f"unknown word order {order!r}")
+
+
+def decode_value(data: bytes, dtype: str, scale: float = 1.0, order: str = "ABCD"):
+    """Decode the first `dtype` value from register bytes laid out as `order` (big-endian,
+    high register first by default), multiplied by `scale`. Integers stay integers when
+    scale is 1; floats/scaled values are floats."""
     need = dtype_registers(dtype) * 2
     chunk = data[:need]
     if len(chunk) < need:
         raise ValueError("not enough data for dtype")
-    fmt = {"uint16": ">H", "int16": ">h", "uint32": ">I", "int32": ">i", "float32": ">f"}[dtype]
-    value = struct.unpack(fmt, chunk)[0]
+    value = struct.unpack(_DTYPE_FMT[dtype], word_order(chunk, order))[0]
     if scale and scale != 1.0:
         return value * scale
     return value
+
+
+def decode_string(data: bytes, order: str = "ABCD") -> str:
+    """Text held in registers, two characters each: the first in the high byte (ABCD, CDAB)
+    or in the low byte (BADC, DCBA, as some devices store it). It ends at the first NUL;
+    trailing spaces (padding) are dropped, and bytes that are not UTF-8 read as U+FFFD."""
+    raw = word_order(data, "BADC") if order in ("BADC", "DCBA") else bytes(data)
+    return raw.split(b"\0", 1)[0].decode("utf-8", "replace").rstrip(" ")
+
+
+def register_bit(data: bytes, bit: int) -> bool:
+    """One bit of the first register in ``data`` (0 = the least significant)."""
+    if len(data) < 2:
+        raise ValueError("not enough data for a register")
+    return bool(int.from_bytes(data[:2], "big") >> bit & 1)
 
 
 # ---------------------------------------------------------------------------
@@ -442,19 +483,20 @@ def check_write_response(pdu: bytes, request: bytes) -> None:
                          f"the request ({expected.hex(' ')})")
 
 
-_DTYPE_FMT = {"uint16": ">H", "int16": ">h", "uint32": ">I", "int32": ">i", "float32": ">f"}
 _INT_RANGE = {"uint16": (0, 0xFFFF), "int16": (-0x8000, 0x7FFF),
-              "uint32": (0, 0xFFFFFFFF), "int32": (-0x80000000, 0x7FFFFFFF)}
+              "uint32": (0, 0xFFFFFFFF), "int32": (-0x80000000, 0x7FFFFFFF),
+              "uint64": (0, (1 << 64) - 1), "int64": (-(1 << 63), (1 << 63) - 1)}
 
 
-def encode_value(value: float, dtype: str, scale: float = 1.0) -> list[int]:
-    """Inverse of decode_value: the register words that hold ``value`` as ``dtype``,
-    big-endian with the high word first (the order decode_value reads).
+def encode_value(value: float, dtype: str, scale: float = 1.0,
+                 order: str = "ABCD") -> list[int]:
+    """Inverse of decode_value: the register words that hold ``value`` as ``dtype``, laid
+    out as ``order`` (big-endian with the high word first by default).
 
     The raw value is value / scale (a scale of 0 or 1 means unscaled, exactly as in
-    decode_value). float32 stores it as is; integer dtypes round it to the nearest
-    integer (ties to even, like round()). Raises ValueError for a non-number, NaN or
-    infinity, or a raw value outside the dtype's range."""
+    decode_value). float32 / float64 store it as is; integer dtypes round it to the
+    nearest integer (ties to even, like round()). Raises ValueError for a non-number, NaN
+    or infinity, or a raw value outside the dtype's range."""
     dtype_registers(dtype)  # ValueError for an unknown dtype
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"value must be a number, got {value!r}")
@@ -470,11 +512,11 @@ def encode_value(value: float, dtype: str, scale: float = 1.0) -> list[int]:
             raise ValueError(f"value {value!r} out of range for {dtype}") from None
         if not math.isfinite(raw):
             raise ValueError(f"value {value!r} / scale {scale!r} out of range for {dtype}")
-    if dtype == "float32":
+    if dtype in ("float32", "float64"):
         try:  # float() first: a huge int then fails with OverflowError, not struct.error
-            packed = struct.pack(">f", float(raw))
+            packed = struct.pack(_DTYPE_FMT[dtype], float(raw))
         except OverflowError:
-            raise ValueError(f"value {value!r} out of range for float32") from None
+            raise ValueError(f"value {value!r} out of range for {dtype}") from None
     else:
         lo, hi = _INT_RANGE[dtype]
         number = raw if isinstance(raw, int) else round(raw)
@@ -482,4 +524,5 @@ def encode_value(value: float, dtype: str, scale: float = 1.0) -> list[int]:
             raise ValueError(f"value {value!r} (raw {number}) out of range for {dtype} "
                              f"({lo}..{hi})")
         packed = struct.pack(_DTYPE_FMT[dtype], number)
+    packed = word_order(packed, order)
     return [int.from_bytes(packed[i:i + 2], "big") for i in range(0, len(packed), 2)]
