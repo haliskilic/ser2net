@@ -211,7 +211,7 @@ def test_ports_table_and_assets():
             csrf_token = "t"
             user = None
     page = env.get_template("base.html").render(request=Req)
-    for asset in ("app.css", "app.js", "htmx.min.js", "xterm.js", "xterm.css"):
+    for asset in ("app.css", "app.js", "points.js", "htmx.min.js", "xterm.js", "xterm.css"):
         assert f"/static/{asset}?v={__version__}" in page, f"{asset} lacks the ?v= cache-buster"
     print("ports table contract + versioned static asset URLs  OK")
 

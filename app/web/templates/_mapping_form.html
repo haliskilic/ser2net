@@ -287,6 +287,24 @@
       <textarea name="modbus_points" rows="5" spellcheck="false"
                 placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}, {"name":"setpoint","unit":1,"fn":3,"address":10,"dtype":"int16","writable":true}]'>{{ modbus_points_json }}</textarea>
     </label>
+    <div class="points-editor" data-points-editor data-texts="{{ {
+      'as_table': _('Edit the points as fields'), 'as_json': _('Edit the points as JSON'),
+      'add': _('Add a point'), 'remove': _('Remove'),
+      'more': _('also %(keys)s: edit them as JSON', keys='{0}'),
+      'bad_json': _('The points can’t be shown as fields: %(why)s. Fix the JSON first.', why='{0}'),
+      'long_number': _('a number has more than 15 digits, which the browser would change'),
+      'not_list': _('the JSON is not a list of points'),
+      'not_object': _('point #%(n)s is not an object', n='{0}'),
+      'name': _('Name'), 'unit': _('Unit'), 'fn': _('Function'), 'address': _('Address'),
+      'dtype': _('Type'), 'bit': _('Bit'), 'length': _('Length (registers)'),
+      'word_order': _('Word order'), 'scale': _('Scale'), 'writable': _('Writable'),
+      'fn1': _('1 coils'), 'fn2': _('2 discrete inputs'), 'fn3': _('3 holding registers'),
+      'fn4': _('4 input registers'),
+    } | tojson | forceescape }}">
+      <button type="button" class="btn sm" data-points-mode>{{ _("Edit the points as fields") }}</button>
+      <div class="banner warn" data-points-msg hidden></div>
+      <div class="points-rows" data-points-rows hidden></div>
+    </div>
     {% if not is_new and not remote %}
     <div class="mb-sm">
       <button type="button" class="btn sm" hx-post="/api/mappings/{{ mapping.id }}/modbus-read" hx-include="[name='modbus_points']" hx-target="#modbus-read" hx-swap="innerHTML">{{ _("Read these points now") }}</button>
