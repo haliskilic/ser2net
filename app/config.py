@@ -543,6 +543,9 @@ class MqttSettings:
     payload_format: str = "plain"
     sparkplug_group_id: str = "ser2net"
     sparkplug_node_id: str = ""
+    # Sparkplug B: the primary host application (its host id) whose STATE the node follows,
+    # publishing its births only while that host is online; blank = none (birth at once)
+    sparkplug_primary_host_id: str = ""
     # Plain-format commands: also write a <base_topic>/<point>/set that the broker sends
     # from its retained store after each (re)connect. Off: a command is written once, when
     # it is published (Sparkplug NCMD / DCMD are never retained, so a retained one is
@@ -757,6 +760,11 @@ class MappingConfig:
             if not _is_number(timeout) or not (low <= timeout <= high):
                 raise ConfigError(_("The Modbus response timeout must be between {0} and {1} "
                                     "seconds.").format(f"{low:g}", f"{high:g}"))
+            host = self.mqtt.sparkplug_primary_host_id
+            if self.mqtt.payload_format == "sparkplug_b" and host != "":
+                if not isinstance(host, str) or any(c in host for c in "/+#"):
+                    raise ConfigError(_("Sparkplug {0} must not contain '/', '+' or '#'.").format(
+                        _("primary host ID")))
 
     def _validate_udp_peer(self) -> None:
         """A UDP mapping's reply address and peer timeout (an edit's rules: a stored

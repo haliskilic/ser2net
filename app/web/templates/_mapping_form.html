@@ -248,6 +248,10 @@
       <label>{{ _("Sparkplug edge node ID") }} <span class="muted">({{ _("blank = mapping name") }})</span>
         <input type="text" name="mqtt_sparkplug_node_id" value="{{ mapping.mqtt.sparkplug_node_id }}" placeholder="{{ _('e.g. %(example)s', example='line-3-plc') }}"></label>
     </div>
+    <div data-show-when="network_protocol=modbus"><div class="grid3" data-show-when="mqtt_payload_format=sparkplug_b">
+      <label>{{ _("Sparkplug primary host ID") }} <span class="muted">({{ _("optional: births only while this host application’s STATE says online") }})</span>
+        <input type="text" name="mqtt_sparkplug_primary_host_id" value="{{ mapping.mqtt.sparkplug_primary_host_id }}" placeholder="{{ _('e.g. %(example)s', example='scada-1') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+    </div></div>
   </fieldset>
 
   <fieldset data-show-when="network_protocol=modbus">
