@@ -391,6 +391,9 @@
         <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
         <label>{{ _("Password") }} <input type="password" name="notify_smtp_password" autocomplete="new-password" placeholder="{% if notify.smtp_password %}{{ unchanged }}{% endif %}"></label>
       </div>
+      {% if notify.smtp_security == 'none' and notify.smtp_username %}
+      <div class="banner warn">{{ _("With security “none”, the user name and password go to the mail server unencrypted. Choose STARTTLS or TLS unless the network to it is trusted.") }}</div>
+      {% endif %}
     </fieldset>
     <div class="row-actions start">
       <button class="btn primary" type="submit">{{ _("Save notifications") }}</button>

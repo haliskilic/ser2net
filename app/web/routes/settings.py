@@ -914,11 +914,17 @@ def routes(ctx: Ctx) -> list:
         state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)})")
         ctx.audit(request, "notification_settings", "enabled" if new.enabled else "disabled")
         if form.get("then") == "test":
+            warnings: list[str] = []
             errors = await state.notifier.deliver("test", "", _("If you can read this, "
-                                                    "ser2net can reach you."))
+                                                    "ser2net can reach you."), warnings=warnings)
+            for problem in errors + warnings:
+                state.log(f"notifications: {problem} (test)")
             if errors:
                 return await settings_get(request, error=_("Saved, but the test failed: {0}").format(
-                    "; ".join(errors)))
+                    "; ".join(errors + warnings)))
+            if warnings:
+                return await settings_get(request, error=_("Saved; the test notification was "
+                                                           "sent, but: {0}").format("; ".join(warnings)))
             return await settings_get(request, ok=_("Saved; the test notification was sent."))
         return await settings_get(request, ok=_("Notification settings saved."))
 
