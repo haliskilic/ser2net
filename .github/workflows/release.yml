@@ -226,8 +226,10 @@ jobs:
           cp artifacts/ser2net-windows-x64/ser2net.exe out/ser2net-windows-x64.exe
           cp artifacts/meta-windows-x64/THIRD-PARTY-LICENSES.txt out/ser2net-windows-x64.THIRD-PARTY-LICENSES.txt
           cp artifacts/meta-windows-x64/ser2net.cdx.json out/ser2net-windows-x64.cdx.json
-          # the systemd unit for the Linux binaries (README: Run as a service)
+          # the systemd unit for the Linux binaries and the script that installs one with it
+          # (README: Run as a service)
           cp systemd/ser2net-standalone.service out/ser2net-standalone.service
+          cp systemd/ser2net-install.sh out/ser2net-install.sh
           cd out
           sha256sum * > SHA256SUMS
           cat SHA256SUMS

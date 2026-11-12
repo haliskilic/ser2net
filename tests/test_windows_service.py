@@ -567,6 +567,7 @@ def test_not_windows():
         # the systemd units: the source checkout's and the binary's
         assert "systemd/ser2net.service" in p.stderr, p.stderr
         assert "ser2net-standalone.service" in p.stderr, p.stderr
+        assert "ser2net-install.sh installs" in p.stderr, p.stderr
     assert not os.path.exists(os.path.join(d, "data")), "nothing may be created on Linux"
     print("Linux: --install-service / --uninstall-service refuse with a systemd hint  OK")
 

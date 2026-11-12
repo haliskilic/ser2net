@@ -236,8 +236,8 @@ Diğer platformlar — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateway'ler), m
 *Offline kurulum*). ARM üzerindeki Windows 11 x64 exe'yi de (emülasyonla) çalıştırır.
 
 Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`), lisans
-metinleri ve Linux binary'leri için systemd unit'i `ser2net-standalone.service` (bkz. *Servis
-olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
+metinleri, Linux binary'leri için systemd unit'i `ser2net-standalone.service` ve bir binary'yi
+onunla kuran `ser2net-install.sh` (bkz. *Servis olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
 doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si **henüz
 imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
@@ -255,7 +255,8 @@ Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
 Linux notları:
 - `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
-  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin. Çalıştığı sürece bu kopyayı
+  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin (`ser2net-install.sh` bunu servis
+  için yapar). Çalıştığı sürece bu kopyayı
   kilitli tutar ve erişim zamanlarını tazeler; böylece systemd-tmpfiles, tmpreaper gibi
   geçici dosya temizleyicileri uzun süre çalışan bir binary'nin dosyalarını silmez.
   Öldürülen bir sürecin geride bıraktığı kopya ise her zamanki gibi temizlenir.
@@ -660,7 +661,22 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
     python3.11`, ardından `/usr/bin/python3.11`) ya da binary'yi kullanın.
   - *Standalone binary*: `ser2net-standalone.service` (her release'e eklenir, `systemd/`
     altında da var), `ser2net.service` adıyla kurulur; verisi systemd'nin oluşturduğu
-    `/var/lib/ser2net` içindedir.
+    `/var/lib/ser2net` içindedir. Hepsini `ser2net-install.sh` (o da her release'e eklenir)
+    yapar: `ser2net-linux-x64` (ya da `-arm64`), `ser2net-standalone.service`,
+    `ser2net-install.sh` ve `SHA256SUMS` dosyalarını bir klasöre indirin, sonra
+    ```bash
+    sudo sh ser2net-install.sh                         # web arayüzü 127.0.0.1:8080'de
+    sudo sh ser2net-install.sh --listen 0.0.0.0:8080   # ya da ağda (orada TLS kullanın)
+    ```
+    Dosyaları `SHA256SUMS`'a karşı ve binary'nin bu makinede çalıştığını denetler, `ser2net`
+    kullanıcısını ve `/var/lib/ser2net`'i oluşturur, binary'yi `/usr/local/bin/ser2net`,
+    unit'i `/etc/systemd/system/ser2net.service` olarak kurar, servisi etkinleştirip başlatır
+    ve yanıt verene kadar bekler. Yükseltmek için yeni sürümle yeniden çalıştırın (veri
+    kalır); `--uninstall` servisi ve binary'yi kaldırır (veri ve kullanıcı kalır). Başka bir
+    `ser2net.service`'i (klasik ser2net daemon'unun paketi, `/opt/ser2net`'teki bir kaynak
+    kurulumu) siz onu durdurup `--replace-unit` vermedikçe gizlemez; `/tmp`'nin `noexec` ile
+    bağlı olduğu yerde binary'nin kendini `/var/cache/ser2net`'e açmasını sağlar (bir
+    drop-in). `--root DIR` dosyaları yalnızca DIR altına hazırlar. Elle aynısı:
     ```bash
     sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
     sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net

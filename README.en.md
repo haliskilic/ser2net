@@ -227,8 +227,9 @@ run from source (`python3 ser2net.py`), which works offline there too (see *Offl
 Windows 11 on ARM also runs the x64 exe (emulated).
 
 Every release also publishes `SHA256SUMS`, a CycloneDX SBOM per binary (`*.cdx.json`), the
-license texts and `ser2net-standalone.service`, the systemd unit for the Linux binaries (see
-*Run as a service*), and the binaries carry GitHub build provenance:
+license texts, `ser2net-standalone.service`, the systemd unit for the Linux binaries, and
+`ser2net-install.sh`, which installs a binary with it (see *Run as a service*), and the
+binaries carry GitHub build provenance:
 `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. The Windows exe is **not
 code-signed yet** (it will be once a signing service is configured —
@@ -245,7 +246,8 @@ containers.
 
 Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
 group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
-mounted `noexec`, point `TMPDIR` at a directory that isn't. While it runs it keeps that
+mounted `noexec`, point `TMPDIR` at a directory that isn't (`ser2net-install.sh` does that
+for the service). While it runs it keeps that
 copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
 don't delete it under a long-running instance; a copy left behind by a killed process
 still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS) it
@@ -642,7 +644,23 @@ is no account at all; later starts ignore it.
     `/usr/bin/python3.11`) or use the binary.
   - *Standalone binary*: `ser2net-standalone.service` (attached to every release, and in
     `systemd/`), installed as `ser2net.service`; its data is in `/var/lib/ser2net`, which
-    systemd makes.
+    systemd makes. `ser2net-install.sh` (attached to every release too) does it all:
+    download `ser2net-linux-x64` (or `-arm64`), `ser2net-standalone.service`,
+    `ser2net-install.sh` and `SHA256SUMS` into one folder, then
+    ```bash
+    sudo sh ser2net-install.sh                         # the web UI on 127.0.0.1:8080
+    sudo sh ser2net-install.sh --listen 0.0.0.0:8080   # or on the network (use TLS there)
+    ```
+    It checks the files against `SHA256SUMS` and that the binary runs on this machine,
+    creates the `ser2net` user and `/var/lib/ser2net`, installs the binary as
+    `/usr/local/bin/ser2net` and the unit as `/etc/systemd/system/ser2net.service`, enables
+    and starts the service and waits until it answers. Run it again with a newer release to
+    upgrade (the data stays); `--uninstall` removes the service and the binary (the data
+    and the user stay). It won't hide another `ser2net.service` (the classic ser2net
+    daemon's package, a source install in `/opt/ser2net`) unless you stop that one and pass
+    `--replace-unit`; where `/tmp` is mounted `noexec` it has the binary unpack itself in
+    `/var/cache/ser2net` instead (a drop-in). `--root DIR` only stages the files under DIR.
+    The same by hand:
     ```bash
     sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
     sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net

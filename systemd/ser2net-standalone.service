@@ -1,6 +1,7 @@
 [Unit]
 # The standalone Linux binary (ser2net-linux-x64 / ser2net-linux-arm64 of a release) as a
-# service; a source checkout in /opt/ser2net uses ser2net.service instead. Install it as
+# service; a source checkout in /opt/ser2net uses ser2net.service instead. ser2net-install.sh
+# (attached to every release too) installs it: sudo sh ser2net-install.sh. By hand, as
 # ser2net.service (README: "Run as a service"):
 #   sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
 #   sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
