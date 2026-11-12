@@ -163,7 +163,12 @@ def main():
         with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
             audit = [ln.split("\t") for ln in fh.read().split("\n") if ln]
         detail = next(r[3] for r in reversed(audit) if r[2] == "config_import_merge")
-        assert detail.startswith("2 mappings (ser2net.yaml (ser2net 4.x)); 4 warnings: "), detail
+        # the audit record counts the warnings the log has, one line each (the four above
+        # and the file's note on the port locking)
+        last = log[log.rindex("mappings imported (merge) from ser2net.yaml"):]
+        warned = last.split(" AUDIT ", 1)[0].count("import warning: ")
+        assert warned >= 4 and detail.startswith(
+            f"2 mappings (ser2net.yaml (ser2net 4.x)); {warned} warnings: "), (warned, detail)
         assert "rotator r: not imported" in detail and len(detail) <= 500
         print("preview: each mapping as it will be, its warnings in its row (protection first); "
               "applied from a Turkish page: warnings in all.log and the audit log in English  OK")

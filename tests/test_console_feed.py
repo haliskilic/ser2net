@@ -135,6 +135,9 @@ class FakeSocket:
         self.cookies = {auth.SESSION_COOKIE: cookie}
         self.client = types.SimpleNamespace(host="127.0.0.1", port=40000)
         self.url = types.SimpleNamespace(path=f"/api/mappings/{mid}/console")
+        self.scope = {"type": "websocket", "path": self.url.path, "root_path": "",   # (proxy.py)
+                      "headers": [(k.encode(), v.encode()) for k, v in self.headers.items()],
+                      "client": ("127.0.0.1", 40000)}
         self.state = types.SimpleNamespace()
         self.stuck, self.delay = stuck, delay
         self.accepted, self.closed = False, None

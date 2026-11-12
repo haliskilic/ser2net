@@ -961,8 +961,11 @@ default:
   name: closeon
   value: "NO CARRIER\r\n"
 default:
-  name: signature
+  name: sendon
   value: "line1\r\nline2"
+default:
+  name: signature
+  value: "Rack 3"
 connection: &strings
   accepter: tcp,5109
   connector: serialdev,/dev/ttyS9
@@ -990,8 +993,11 @@ def test_default_classes():
                                                          "NO CARRIER\r\n"), o
     assert "banner" not in maps["baseagain"]["options"]       # only after the default
     assert not any(w.startswith(("default banner", "default openstr")) for w in warns)
-    sig = next(w for w in warns if w.startswith("default signature"))
+    # a default with no equivalent is warned, its value's line breaks escaped; an RFC 2217
+    # signature default is one (for RFC 2217 connections: none here)
+    sig = next(w for w in warns if w.startswith("default sendon"))
     assert "line1\\r\\nline2" in sig and "\r" not in sig and "\n" not in sig, repr(sig)
+    assert not any(w.startswith("default signature") for w in warns), warns
     assert has(warns, "delete_default kickolduser", "class ser2net", "refuses")
     assert has(warns, "delete_default openstr", "no class", "refuses")
     print("defaults: the telnet rfc2217 default (base and class), class values before base "

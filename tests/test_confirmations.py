@@ -23,6 +23,7 @@ import re
 from _server import ROOT, Browser, Server
 
 from app.config import MappingConfig
+from app.web import selfsigned
 from app.web.auth import hash_password
 from app.web.server import make_templates
 
@@ -81,12 +82,18 @@ def test_settings():
         page = b.get("/settings")[2]
         gen = re.search(r'<form method="post" action="/settings/tls/generate"[^>]*>', page).group(0)
         assert "data-confirm" not in gen, "no certificate set: nothing to replace"
-        # a certificate of its own (used from the next start; only checked for being there)
+        # a certificate of its own (used from the next start; a pair that loads: an edit
+        # test-loads it)
         cert, key = os.path.join(srv.data, "ours.pem"), os.path.join(srv.data, "ours.key")
-        for path in (cert, key):
-            open(path, "w").close()
-        st, _, page = b.post("/settings/tls", {"tls_cert": cert, "tls_key": key})
-        assert srv.saved_config()["admin_ui"]["tls_cert"] == cert, page[page.find("banner"):][:200]
+        try:
+            selfsigned.generate(cert, key)
+        except selfsigned.CertError:
+            cert = None
+            print("SKIP (part): neither cryptography nor openssl to make a certificate")
+        if cert:
+            st, _, page = b.post("/settings/tls", {"tls_cert": cert, "tls_key": key})
+            assert srv.saved_config()["admin_ui"]["tls_cert"] == cert, \
+                page[page.find("banner"):][:200]
         st, _, page = b.get("/settings")
         assert st == 200
 
@@ -101,7 +108,7 @@ def test_settings():
         assert f'data-confirm="{want}"' in delete_form("local-op"), delete_form("local-op")[:300]
         assert "data-confirm" not in delete_form("dir-user"), "a directory account comes back"
         gen = re.search(r'<form method="post" action="/settings/tls/generate"[^>]*>', page).group(0)
-        assert "data-confirm=" in gen and "ours.pem" in gen, gen
+        assert not cert or ("data-confirm=" in gen and "ours.pem" in gen), gen
     js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
     assert 'e.submitter' in js and '(b && b.getAttribute("data-confirm"))' in js
     print("settings: local-account delete and replacing a set certificate ask (in Turkish)  OK")

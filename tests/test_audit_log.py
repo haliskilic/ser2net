@@ -181,7 +181,8 @@ def main():
         assert st == 200 and "attachment" in h.get("Content-Disposition", "")
         st, _, body = admin.get("/settings/audit.csv")
         rows = {r[3]: r for r in csv.reader(io.StringIO(body))}
-        assert rows["config_export"][2] == "op1" and rows["config_export"][4] == "1 mappings", rows
+        # (2: the search check above added one)
+        assert rows["config_export"][2] == "op1" and rows["config_export"][4] == "2 mappings", rows
         admin.get("/settings/audit.csv?action=login")
         with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
             audit = fh.read()

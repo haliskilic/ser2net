@@ -430,7 +430,9 @@ def test_number_fields_required():
     m = MappingConfig.from_dict({"id": "n1", "name": "n", "serial": {"port": "COM3"}})
     root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
                             ports=[], ips=[], error=None))
+    # (a blank poll interval: no polling, as 0)
     blank_ok = {"network_udp_peer_port", "network_udp_peer_timeout_s", "modbus_poll_interval_s",
+                "opt_poll_interval_s",
                 "serial_rs485_delay_before_tx_ms", "serial_rs485_delay_after_tx_ms",
                 "serial_b_rs485_delay_before_tx_ms", "serial_b_rs485_delay_after_tx_ms"}
     numbers = [n for n in root.walk() if n.tag == "input" and n.attrs.get("type") == "number"]
@@ -614,6 +616,8 @@ class Page:
     class url:
         path = "/"
         query = ""
+
+    scope = {"type": "http", "path": "/", "root_path": "", "headers": []}   # (app/web/proxy.py)
 
 
 def dashboard(can_edit=True, cluster_on=False):
@@ -884,7 +888,9 @@ def test_app_js_inserts_no_server_html():
     src = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
     writes = re.findall(r"\.innerHTML\s*=(?!=)\s*([^;]*);", src)
     assert writes and all(w.strip() == '""' for w in writes), writes
-    for sink in ("insertAdjacentHTML", "outerHTML", "document.write", "DOMParser", "eval("):
+    # (.outerHTML: the property; htmx.ajax's swap: "outerHTML" is htmx swapping a server
+    # fragment in, as an hx-swap attribute does)
+    for sink in ("insertAdjacentHTML", ".outerHTML", "document.write", "DOMParser", "eval("):
         assert sink not in src, sink
     assert "textContent = text" in src, "feedback messages go in as text"
     print("app.js: server texts as textContent, no HTML sinks  OK")
