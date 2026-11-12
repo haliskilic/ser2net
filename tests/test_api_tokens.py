@@ -17,6 +17,7 @@
 
 Run: python3 tests/test_api_tokens.py
 """
+import html
 import json
 import os
 import re
@@ -156,11 +157,18 @@ def test_tokens():
                              ({"name": "x", "role": "viewer", "expires_days": "1.5"}, "Enter 0")):
             st, _, page = admin.post("/settings/api-tokens", fields)
             assert st == 400 and want in page and "s2n_" not in page, (fields, want)
+            # refused: the form keeps what was sent
+            assert f'name="name" value="{html.escape(fields["name"])}"' in page, fields
         assert srv.saved_config() == before
         print("settings: a bad or taken name, another role, a bad expiry are refused  OK")
 
         # ---- revoke one: the others keep working ----
         mon_id = next(t["id"] for t in before["api_tokens"] if t["name"] == "monitor")
+        page = admin.get("/settings")[2]   # each revoke asks first; so does the first token's
+        assert ("data-confirm=\"Revoke the token “monitor”? Everything that uses it gets 401; "
+                "the other tokens keep working.\"") in page
+        assert "Revoke the REST API token? Everything that uses it gets 401; the other tokens " \
+            "keep working." in page, "named tokens there: the REST API stays on"
         st, _, page = admin.post("/settings/api-tokens/revoke", {"id": mon_id})
         assert st == 200 and "API token &#39;monitor&#39; revoked." in page, page[:300]
         assert call(base, "GET", "/api/v1/status", monitor)[0] == 401
