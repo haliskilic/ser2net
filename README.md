@@ -573,8 +573,8 @@ scrape_configs:
       - targets: ["HOST:8080"]
 ```
 Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
-sırları (MQTT parolası) `********` olarak maskeli görür; bu maskeyi geri gönderen bir `PUT`
-kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
+sırları (MQTT parolası, bir eşlemenin TLS anahtar parolası) `********` olarak maskeli görür;
+bu maskeyi geri gönderen bir `PUT` ya da `PATCH` kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
 ve açılış log'u bunu yazar.
 
 **Her istemciye ayrı token:** **Ayarlar → REST API token → Diğer token'lar**'da bir admin, bu
@@ -1179,9 +1179,9 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 parolasını, webhook URL'sini (çoğu zaman içinde bir token vardır), her eşlemenin MQTT broker
 parolasını, TLS anahtar parolalarını (bir eşlemenin ve yönetim arayüzünün), cluster
 anahtarını (tüm düğümlerin eşlemelerini okumaya ve değiştirmeye yeter) ve oturum anahtarı
-`secret_key`'i (aynı dosyadaki hesaplarla birlikte geçerli bir oturum üretmeye yeter) açık
-metin olarak tutar. Yerel parolalar scrypt hash'i, REST API token'ı da yalnızca hash'i olarak
-saklanır. `backups/` aynı dosyanın önceki kopyalarını tutar (indirilen bir yedekte oturum
+`secret_key`'i (aynı dosyadaki hesaplarla birlikte geçerli bir oturum üretmeye yeter) ve
+iki adımlı giriş kullanan her hesabın anahtarını açık metin olarak tutar. Yerel parolalar
+scrypt hash'i, REST API token'ları da yalnızca hash'leri olarak saklanır. `backups/` aynı dosyanın önceki kopyalarını tutar (indirilen bir yedekte oturum
 anahtarı yoktur), eşleme dışa aktarımı da MQTT ve TLS anahtar parolalarını içerir. Bu
 makinede bunları yalnızca ser2net'in çalıştığı hesap okuyabilir; her kopyayı — kopyalanan bir
 veri klasörünü ya da Docker volume'unu, bir disk ya da VM imajını, indirilen bir yedeği, bir
