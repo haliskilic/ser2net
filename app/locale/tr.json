@@ -905,5 +905,9 @@
   "Delete trace files not written for (days)": "Şu kadar gündür yazılmayan trace dosyalarını sil",
   "0 = keep them, the default · up to %(max)s": "0 = sakla, varsayılan · en fazla %(max)s",
   "Off by default: a trace file stays until an operator deletes it in its mapping’s Trace panel. With a number of days, every trace file not written for that long is deleted at once and then every hour, also the one a mapping is writing (the next traffic begins it again), and the log says how many went.": "Varsayılan olarak kapalı: bir trace dosyası, bir operator onu eşlemesinin Trace panelinde silene kadar kalır. Bir gün sayısı girilirse o kadar süredir yazılmayan her trace dosyası hemen ve sonra her saat silinir; bir eşlemenin yazmakta olduğu dosya da (bir sonraki trafik onu yeniden başlatır). Kaç dosyanın silindiği log'a yazılır.",
-  "Trace files not written for %(days)s days are deleted every hour (Settings → Retention).": "%(days)s gündür yazılmayan trace dosyaları her saat silinir (Ayarlar → Saklama süresi)."
+  "Trace files not written for %(days)s days are deleted every hour (Settings → Retention).": "%(days)s gündür yazılmayan trace dosyaları her saat silinir (Ayarlar → Saklama süresi).",
+  "data disk almost full": "veri diski neredeyse dolu",
+  "Data disk almost full (traces pause)": "Veri diski neredeyse dolu (trace'ler bekler)",
+  "The data disk is almost full: trace files are paused. Delete trace files that are no longer needed, or make room on the disk.": "Veri diski neredeyse dolu: trace dosyaları bekliyor. Artık gerekmeyen trace dosyalarını sil ya da diskte yer aç.",
+  "The data folder’s disk: %(free)s free of %(total)s (trace files pause below %(floor)s free). Traces take %(traces)s, logs %(logs)s.": "Veri klasörünün diski: %(total)s alanın %(free)s kadarı boş (boş alan %(floor)s altına inince trace dosyaları bekler). Trace'ler %(traces)s, log'lar %(logs)s yer kaplıyor."
 }

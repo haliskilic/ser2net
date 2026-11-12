@@ -1,10 +1,12 @@
 """Health, Prometheus metrics and the serial port list."""
 from __future__ import annotations
 
+import asyncio
+
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Route
 
-from ... import i18n
+from ... import i18n, storage
 from ...engine import netguard, portlist
 from .common import Ctx
 
@@ -29,6 +31,14 @@ def routes(ctx: Ctx) -> list:
             lines.append(f"ser2net_open_fds {fds}")
         if fd_limit is not None:
             lines.append(f"ser2net_fd_limit {fd_limit}")
+        # the data folder's disk (traces pause below storage.floor()) and what traces and
+        # logs take there
+        disk = await asyncio.to_thread(storage.usage, state.data_dir)
+        if disk["free"] is not None:
+            lines.append(f"ser2net_data_free_bytes {disk['free']}")
+            lines.append(f"ser2net_data_size_bytes {disk['total']}")
+        lines.append(f"ser2net_traces_bytes {disk['traces']}")
+        lines.append(f"ser2net_logs_bytes {disk['logs']}")
         guard = getattr(state, "admin_guard", None)
         if guard is not None:
             lines.append(f"ser2net_admin_connections {len(guard.connections)}")

@@ -1419,7 +1419,7 @@ class ClusterSettings:
 
 
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed",
-                 "client_connected", "client_disconnected", "login_failed")
+                 "client_connected", "client_disconnected", "login_failed", "disk_low")
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
 SMTP_SECURITY = ("starttls", "ssl", "none")

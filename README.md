@@ -139,8 +139,10 @@ düzenlemeye gerek yok.
   değilken ya da bir UDP datagram'ı kuyruğu dolu bulduğunda) atılmış sayılır
   (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`), panoda işaretlenir ve loglanır.
 - **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
-  bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
-  Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+  bağlanıp düştüğünde, hatalı girişte ya da veri diski neredeyse dolduğunda (trace'lerin
+  beklediği boş alanın altına inince; all.log her durumda uyarır) webhook (JSON, Slack,
+  Microsoft Teams, Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test
+  mesajı gönderilir.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
@@ -336,8 +338,10 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
   düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
   `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren ve sıra bekleyen TLS
-  el sıkışmaları ve kabulden hemen sonra reddedilen bağlantılar
-  (`ser2net_connections_refused_total`, nedene göre).
+  el sıkışmaları, kabulden hemen sonra reddedilen bağlantılar
+  (`ser2net_connections_refused_total`, nedene göre), veri klasörünün diski
+  (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) ve orada trace'lerle log'ların
+  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`).
 
 ---
 
