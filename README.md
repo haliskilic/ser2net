@@ -329,7 +329,10 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak` olarak
   saklanır), **REST API token'ı** üret/iptal et ya da yalnızca rolünü değiştir (tek seferlik
-  token'ın Kopyala düğmesi var), mapping **yedek al/yükle** (JSON), durum.
+  token'ın Kopyala düğmesi var), mapping **yedek al/yükle** (JSON), durum. Kaydedilen bir
+  form sayfaya, kendi bölümüne döner ve sonucu orada yazar; sayfayı yenilemek ya da Geri
+  formu yeniden göndermez (yeni bir token üretmez, yedeği yeniden yüklemez). Reddedilen
+  bir form, nedeniyle birlikte yazılanları korur (parola ve anahtarlar yeniden yazılır).
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
   düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,

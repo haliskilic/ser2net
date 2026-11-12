@@ -153,6 +153,7 @@ class Browser:
 
     def __init__(self, base: str):
         self.base = base
+        self.redirected: str | None = None
         self.jar = http.cookiejar.CookieJar()
         self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar),
                                               _NoRedirect())
@@ -179,7 +180,11 @@ class Browser:
         st, headers, body = self._open(urllib.request.Request(self.base + path))
         return st, headers, (body if raw else body.decode("utf-8", "replace"))
 
-    def post(self, path: str, fields=None, files=None, htmx: bool = False, method: str = "POST"):
+    def post(self, path: str, fields=None, files=None, htmx: bool = False, method: str = "POST",
+             follow: bool = True):
+        """A form post. A Settings form that did its work answers 303 to the Settings page
+        (Post/Redirect/Get): with `follow`, that page is fetched, as a browser does, and its
+        answer returned (`redirected`: the Location followed, else None)."""
         fields = dict(fields or {})
         fields.setdefault("_csrf", self.csrf())
         headers = {"X-CSRF-Token": self.csrf()}
@@ -201,6 +206,11 @@ class Browser:
             headers["Content-Type"] = "application/x-www-form-urlencoded"
         st, h, body = self._open(urllib.request.Request(self.base + path, data=data,
                                                         headers=headers, method=method))
+        self.redirected = None
+        where = h.get("Location") or ""
+        if follow and st == 303 and path.startswith("/settings") and where.startswith("/settings"):
+            self.redirected = where
+            return self.get(where.split("#", 1)[0])
         return st, h, body.decode("utf-8", "replace")
 
     def login(self, username: str, password: str) -> None:

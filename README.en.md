@@ -319,7 +319,10 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed; a previous generated pair is kept
   as `*.bak`), generate/revoke the **REST API token** or change its role only (the
-  one-time token has a Copy button), mappings **backup/restore** (JSON), status.
+  one-time token has a Copy button), mappings **backup/restore** (JSON), status. A saved
+  form returns to the page at its own section, which says what was done; a reload or Back
+  does not post it again (no second token, no second restore). A refused form keeps what
+  was typed, with the reason (passwords and keys are typed again).
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),

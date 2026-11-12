@@ -121,7 +121,7 @@ def main():
         st, _, page = admin.post("/settings/cluster", {"cluster_form": "2", "enabled": "on",
                                                        "clear_key": "on",
                                                        "discovery_port": str(disc)})
-        assert st == 200 and "no shared key is set" in page and cluster()["key"] == gen
+        assert st == 400 and "no shared key is set" in page and cluster()["key"] == gen
         print("generate: a random key shown once; removing the key with the cluster on refused  OK")
 
         # ---- the switches; a form without them leaves them alone ----

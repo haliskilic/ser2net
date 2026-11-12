@@ -133,7 +133,7 @@ def test_unknown_role_in_config():
         admin.login("admin", "tokenpass1")
         for bad in ("superuser", "", "read-only"):
             st, _, page = admin.post("/settings/api-token", {"api_token_role": bad})
-            assert st == 200 and "Invalid role." in page and "s2n_" not in page, (bad, st)
+            assert st == 400 and "Invalid role." in page and "s2n_" not in page, (bad, st)
         saved = srv.saved_config()
         assert (saved["api_token_hash"], saved["api_token_role"]) == (hash_token(secret), "viewer")
         assert call("GET", "/api/v1/status", secret)[0] == 200, "a refused form must keep the token"

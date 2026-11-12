@@ -892,5 +892,6 @@
   "Revoke the REST API token? The REST API is switched off, and everything that uses it gets 401.": "REST API token'ı iptal edilsin mi? REST API kapanır ve onu kullanan her şey 401 alır.",
   "There is no REST API token to give a role: generate one.": "Rol verilecek bir REST API token'ı yok: önce bir tane üret.",
   "The REST API token’s role is now {0}; the token stays the same.": "REST API token'ının rolü artık {0}; token aynı kalıyor.",
-  "The previous certificate and key are kept as {0}.": "Önceki sertifika ve anahtar {0} olarak saklandı."
+  "The previous certificate and key are kept as {0}.": "Önceki sertifika ve anahtar {0} olarak saklandı.",
+  "Passwords and keys you typed are not shown again: type them once more.": "Yazdığın parola ve anahtarlar yeniden gösterilmez: onları bir kez daha yaz."
 }
