@@ -41,7 +41,7 @@ import threading
 import time
 from typing import Callable, Mapping, Optional
 
-from . import sdnotify
+from . import clock, sdnotify
 
 ENV = "SER2NET_LOOP_WATCHDOG"
 DEFAULT_LIMIT_S = 90.0
@@ -167,7 +167,7 @@ class LoopWatchdog:
         backstop = threading.Timer(EXIT_AFTER_S, self._exit, (EXIT_CODE,))
         backstop.daemon = True
         backstop.start()
-        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} the event loop did not run for "
+        line = (f"{clock.stamp()} the event loop did not run for "
                 f"{stuck:.0f} s (limit {self.limit_s:g} s, {ENV})")
         with contextlib.suppress(Exception):
             with open(self.hang_log, "w", encoding="utf-8") as fh:

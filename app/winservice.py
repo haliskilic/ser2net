@@ -31,6 +31,8 @@ import time
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
+from . import clock
+
 # ctypes with its Windows-only parts (WinDLL, WINFUNCTYPE, get_last_error, FormatError)
 _win: Any = ctypes
 
@@ -1499,7 +1501,7 @@ def service_log(path: str) -> Optional[CappedLog]:
     except OSError:
         return None
     log = CappedLog(fh)
-    log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} service start (pid {os.getpid()})\n")
+    log.write(f"{clock.stamp()} service start (pid {os.getpid()})\n")
     with contextlib.suppress(Exception):  # a crash in native code: the threads' stacks
         import faulthandler
         faulthandler.enable(file=fh, all_threads=True)
