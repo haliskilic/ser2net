@@ -35,7 +35,8 @@
   config-change audit log
 - **Event-driven hotplug** (pyudev / WM_DEVICECHANGE) with polling fallback
 - **Admin TLS** via cert/key paths or `openssl` self-signed generation
-- **Mappings export/import** (JSON, no secrets) + duplicate
+- **Mappings export/import** (JSON; no accounts or session key, but each mapping's MQTT
+  broker password, so treat the file as sensitive) + duplicate
 
 ### v2.1a — in-browser serial console
 - xterm.js terminal over an authenticated WebSocket (`/api/mappings/{id}/console`):

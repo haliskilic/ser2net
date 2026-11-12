@@ -343,8 +343,9 @@ Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (unauthenticated), `GET /openapi.json`.
 The token has the role chosen when it was generated: a `viewer` token may only read (GET)
-and gets stored secrets (the MQTT password) masked. An `api_token_role` in `config.json`
-that is not a role counts as `viewer`, and the start-up log says so.
+and gets stored secrets (the MQTT password) masked as `********`; a `PUT` that sends that
+mask back keeps the stored password. An `api_token_role` in `config.json` that is not a
+role counts as `viewer`, and the start-up log says so.
 
 ---
 

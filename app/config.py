@@ -507,6 +507,12 @@ class MappingOptions:
 MQTT_FORMATS = ("plain", "sparkplug_b")
 
 
+# What a read-only REST API token gets instead of a stored secret (the MQTT password).
+# Sent back (a PUT of what such a token read, a form), it keeps the stored password, so it
+# is never stored as one.
+REDACTED = "********"
+
+
 @dataclass
 class MqttSettings:
     enabled: bool = False

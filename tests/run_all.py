@@ -103,6 +103,7 @@ PORTABLE = [
     "test_cluster_settings.py",
     "test_changelog.py",
     "test_browser_hardening.py",  # CSP and the other protections the browser is told to apply
+    "test_mqtt_password_form.py",  # the mapping form never holds the stored MQTT password
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
