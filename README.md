@@ -685,7 +685,11 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   yerinde yükseltir ve servisin kullandığı veri klasörünü korur (2.8.0 servisinde de).
   Başka hostlardan erişmek için gereken güvenlik duvarı kuralı, adres
   değişimi, yükseltme ve imzasız derlemelerdeki SmartScreen uyarısı için
-  **[`docs/WINDOWS.md`](docs/WINDOWS.md)**.
+  **[`docs/WINDOWS.md`](docs/WINDOWS.md)**. Üretimde servisi kullanın: konsol penceresi
+  kapatılabilir ya da oturum kapanabilir. Konsol penceresine tıklamak (QuickEdit) çıktıyı
+  Esc ya da Enter'a basılana kadar duraklatır; ser2net bu sırada iletmeye devam eder,
+  yalnızca konsol satırları bekler (bir sınırdan sonra düşürülür ve sayılır; `all.log`
+  hepsini tutar).
 - **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
   dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
   açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar

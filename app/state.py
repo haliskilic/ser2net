@@ -29,7 +29,7 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from . import accounts, storage
+from . import accounts, logsetup, storage
 from .config import (
     AppConfig, ConfigStore, ConfigWriteError, User, lock_down_dir, mapping_file, valid_mapping_id,
 )
@@ -586,13 +586,14 @@ class AppState:
     def _setup_logging(log_path: str) -> logging.Logger:
         logger = logging.getLogger("ser2net")
         logger.setLevel(logging.INFO)
+        logsetup.close_console(logger)
         logger.handlers.clear()
         logger.propagate = False
         fmt = logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S")
 
-        console = logging.StreamHandler(sys.stdout)
-        console.setFormatter(fmt)
-        logger.addHandler(console)
+        # the console copy is written by a thread of its own, never on the event loop (a
+        # paused console must not hold up the bridges); `fmt` is all.log's format
+        logger.addHandler(logsetup.console_handler(sys.stdout, fmt))
 
         try:
             os.makedirs(os.path.dirname(log_path), exist_ok=True)

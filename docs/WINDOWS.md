@@ -33,6 +33,15 @@ leaves the folder's permissions as they are. A new service won't take over a dat
 that holds files owned by another account (a standard user can create folders in
 `C:\ProgramData`): check and delete it, or take it over, and install again.
 
+## In a console window or as a service
+
+The exe also runs in a console window (double-click, or from a prompt), which is handy to
+try it out. For production install the service: it starts at boot and needs nobody signed
+in. In a console window, a click into it (QuickEdit mode, on by default) or *Edit → Mark*
+pauses the window's output until you press Esc or Enter; ser2net keeps forwarding
+meanwhile, only its console lines wait (and past a limit are dropped and counted, the next
+line says how many); `all.log` in the data directory has every line.
+
 ## Install
 
 From an elevated (**Run as administrator**) Command Prompt or PowerShell:
