@@ -1036,15 +1036,25 @@ class MappingRunner:
 
     # ---------------- serial <-> serial bridge ----------------
     async def _serialbridge_supervisor(self) -> None:
-        # both ports open and close together, so this keeps its own loop (SerialLink
-        # supervises one port)
+        """Both ports open and close together, so this keeps its own loop (SerialLink
+        supervises one port). The side that could not be opened last time is opened first:
+        while one port is missing, the other one is not opened and closed again at every
+        retry (each open pulses its DTR and RTS: a board that resets on DTR would reset
+        every few seconds)."""
         backoff = Backoff()
         notes = NoteLog(self._log)
+        sides = (self.mapping.serial, self.mapping.serial_b)
+        first = 0  # the side opened first: 0 = A, 1 = B
         while not self._stop.is_set():
-            wa = wb = None
+            opened: list = [None, None]  # (reader, writer, serial, device) of each side
             try:
-                ra, wa, sa, da = await serial_io.open_serial(self.mapping.serial)
-                rb, wb, sb, db = await serial_io.open_serial(self.mapping.serial_b)
+                for side in (first, 1 - first):
+                    try:
+                        opened[side] = await serial_io.open_serial(sides[side])
+                    except Exception:
+                        first = side
+                        raise
+                (ra, wa, sa, da), (rb, wb, sb, db) = opened
                 self.status.device = f"{da} <-> {db}"
                 self.status.devices = (da, db)
                 self.status.last_error = ""
@@ -1069,8 +1079,8 @@ class MappingRunner:
                 self._log(f"serial bridge error: {self.status.last_error}")
             finally:
                 self.status.warnings = ()
-                await asyncio.gather(*(close_stream(w, self._log)
-                                       for w in (wa, wb) if w is not None))
+                await asyncio.gather(*(close_stream(port[1], self._log)
+                                       for port in opened if port is not None))
             if self._stop.is_set():
                 break
             self.status.reconnects += 1
