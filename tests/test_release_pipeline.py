@@ -8,14 +8,20 @@
 * it runs the whole CI (ci.yml, the checks ci-ok gates merges on) on the tagged commit,
   and nothing that writes (assets, attestations, the image) starts before all of it
   passed; its standalone job builds the released files. One release runs at a time.
+* the image is pushed by digest only, that digest is smoke-tested natively on amd64 and
+  arm64, and only then (after the release files) does it get its tags, unchanged. The
+  tags come from the tag check: a pre-release never moves X.Y or latest.
 
 Run: python3 tests/test_release_pipeline.py   (stdlib only)
 """
 import re
 
-from _workflows import jobs, key, names, permissions, read, transitive_needs, uses
+from _workflows import jobs, key, names, needs, permissions, read, transitive_needs, uses
 
 _PINNED = re.compile(r"[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[0-9a-f]{40}")
+# builds and pushes the image by digest while CI runs: nothing points at it until it
+# passed its own test, CI and the release files are out
+UNTAGGED_PUSH = "image-build"
 
 
 def test_actions_pinned_by_sha():
@@ -56,7 +62,8 @@ def test_release_runs_the_whole_ci():
     for other in ("standalone.yml", "docker.yml", "audit.yml"):
         # through ci.yml only, so the release can't skip a check CI has
         assert f"uses: ./.github/workflows/{other}" not in text, other
-    writers = [job for job, block in release.items() if _writes(block)]
+    writers = [job for job, block in release.items()
+               if _writes(block) and job != UNTAGGED_PUSH]
     assert writers, "no publishing job found"
     for job in writers:
         assert "ci" in transitive_needs(release, job), f"{job} publishes before CI passed"
@@ -85,9 +92,40 @@ def test_one_release_at_a_time():
     print(f"release concurrency group {group}, never cancelled  OK")
 
 
+def test_image_published_as_tested():
+    text = read("release.yml")
+    release = jobs(text)
+    build = release[UNTAGGED_PUSH]
+    assert permissions(build) == {"contents": "read", "packages": "write"}, permissions(build)
+    assert ("outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,"
+            "name-canonical=true,push=true") in build, build
+    assert "\n          tags: ${{" not in build and "\n          push: true" not in build, \
+        "the build pushes no tag"
+    # before anything is published: tagging won't push another manifest
+    assert 'docker buildx imagetools create --dry-run "$IMAGE@$DIGEST"' in build, build
+    assert "value=latest" not in text and "{{major}}" not in text, \
+        "image tags come from the tag check, not metadata-action"
+    test = release["image-test"]
+    assert "REF: ${{ needs.image-build.outputs.image }}@${{ needs.image-build.outputs.digest }}" \
+        in test, test
+    assert 'tests/docker_smoke.sh "$REF"' in test, test
+    assert "{ arch: amd64, runner: ubuntu-latest }" in test
+    assert "{ arch: arm64, runner: ubuntu-24.04-arm }" in test
+    for job, block in release.items():
+        if _writes(block) and job != UNTAGGED_PUSH:
+            assert "image-test" in transitive_needs(release, job), f"{job} before image-test"
+    tag = release["image"]
+    assert {"image-test", "publish"} <= transitive_needs(release, "image"), needs(tag)
+    assert "TAGS: ${{ needs.verify.outputs.image-tags }}" in tag, tag
+    assert 'docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"' in tag, tag
+    assert '[ "$got" = "$DIGEST" ]' in tag, "the tags must point at the tested digest"
+    print("the pushed digest is tested on amd64 + arm64, then tagged unchanged  OK")
+
+
 if __name__ == "__main__":
     test_actions_pinned_by_sha()
     test_tag_checked_first()
     test_release_runs_the_whole_ci()
     test_one_release_at_a_time()
+    test_image_published_as_tested()
     print("\nPASS: release pipeline")

@@ -6,9 +6,12 @@ name: Release
 # test suites, the dependency audit, the Docker image and the standalone executables for
 # Linux x86_64 + arm64 and Windows x64 with every check on them — bundle contents,
 # empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers, the Windows
-# service), and only when all of it passed publish: the release assets with SHA256SUMS,
-# SBOMs, license texts and build provenance, and the image on GHCR. The write
-# permissions belong to the publish jobs alone.
+# service) and push the Docker image (amd64 + arm64) to GHCR by digest only, without a
+# tag, and smoke-test that digest natively on both architectures. Only when all of it
+# passed publish: the release assets with SHA256SUMS, SBOMs, license texts and build
+# provenance, then the tags of the tested image (X.Y.Z, X.Y and latest; a pre-release,
+# vX.Y.Z-rc.N, only its own and marked as a pre-release). The write permissions belong
+# to the publish jobs alone (and the untagged push).
 on:
   push:
     tags: ["v*"]
@@ -28,13 +31,21 @@ jobs:
   verify:
     name: check the tag (version, CHANGELOG, on main)
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+      image-tags: ${{ steps.tag.outputs.image-tags }}
+      image: ${{ steps.tag.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0          # main's history, for the ancestry check
           persist-credentials: false
-      - name: The tag is "v" + app.__version__, with a dated CHANGELOG.md section
-        run: python3 tools/release_guard.py tag "$GITHUB_REF_NAME"
+      - id: tag
+        name: The tag is "v" + app.__version__, with a dated CHANGELOG.md section
+        run: |
+          python3 tools/release_guard.py tag "$GITHUB_REF_NAME"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ser2net" >> "$GITHUB_OUTPUT"
       - name: The tagged commit is on main
         run: |
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
@@ -58,9 +69,97 @@ jobs:
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
+  # The image to publish, built once for both architectures (arm64 under QEMU) and pushed
+  # to GHCR by digest only: no tag points at it until it passed image-test and the
+  # release files are out. A re-run of a later job reuses this digest, never a rebuild
+  # from a newer base image.
+  image-build:
+    name: build the image (amd64 + arm64), push it untagged
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ needs.verify.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        with:
+          images: ${{ needs.verify.outputs.image }}
+          # for the version label only: the tags are added once the digest passed its tests
+          tags: type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.title=ser2net
+            org.opencontainers.image.description=Serial-to-network bridge with a web UI
+            org.opencontainers.image.licenses=AGPL-3.0-only
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+      # What the tag job will push, worked out now, before anything is published: with one
+      # image index as its source, imagetools copies it byte for byte (the same digest).
+      - name: Tagging keeps this digest (imagetools create --dry-run)
+        env:
+          IMAGE: ${{ needs.verify.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker buildx imagetools create --dry-run "$IMAGE@$DIGEST" > index.json
+          got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
+          [ "$got" = "$DIGEST" ] || { echo "::error::tagging would push $got, not $DIGEST"; exit 1; }
+
+  # The image exactly as pushed, natively on each architecture, with the smoke test CI
+  # runs on its local build (non-root, HEALTHCHECK, upgrades, device groups, contents)
+  image-test:
+    name: test the pushed image (${{ matrix.arch }})
+    needs: image-build
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    env:
+      REF: ${{ needs.image-build.outputs.image }}@${{ needs.image-build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sign in to GHCR (read)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Pull the pushed digest, its ${{ matrix.arch }} image
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker pull "$REF"
+          test "$(docker image inspect -f '{{.Architecture}}' "$REF")" = "$ARCH"
+      - run: tests/docker_smoke.sh "$REF"
+
   publish:
     name: attach to the release
-    needs: [verify, ci]
+    needs: [verify, ci, image-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write        # the release assets
@@ -124,51 +223,42 @@ jobs:
         with:
           files: out/*
           fail_on_unmatched_files: true
+          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
 
+  # Last, once the release files are out: the tested digest gets its tags, unchanged (no
+  # rebuild, no new manifest), and its build provenance. Only GitHub's own action and the
+  # runner's docker CLI run here.
   image:
-    name: push the image to GHCR (amd64 + arm64)
-    needs: [verify, ci]
+    name: tag the tested image on GHCR
+    needs: [verify, image-build, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
       attestations: write
+    env:
+      IMAGE: ${{ needs.image-build.outputs.image }}
+      DIGEST: ${{ needs.image-build.outputs.digest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
-      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/ser2net
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-          labels: |
-            org.opencontainers.image.title=ser2net
-            org.opencontainers.image.description=Serial-to-network bridge with a web UI
-            org.opencontainers.image.licenses=AGPL-3.0-only
-      - id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: mode=max
-          sbom: true
+      - name: Sign in to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/ser2net
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-name: ${{ needs.image-build.outputs.image }}
+          subject-digest: ${{ needs.image-build.outputs.digest }}
           push-to-registry: true
+      - name: Tag it ${{ needs.verify.outputs.image-tags }}
+        env:
+          TAGS: ${{ needs.verify.outputs.image-tags }}
+        run: |
+          refs=()
+          for tag in $TAGS; do refs+=(--tag "$IMAGE:$tag"); done
+          docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"
+          for tag in $TAGS; do
+            got=$(docker buildx imagetools inspect "$IMAGE:$tag" | awk '$1 == "Digest:" {print $2; exit}')
+            echo "$IMAGE:$tag -> $got"
+            [ "$got" = "$DIGEST" ] || { echo "::error::$IMAGE:$tag is $got, not the tested $DIGEST"; exit 1; }
+          done

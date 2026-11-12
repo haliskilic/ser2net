@@ -3,9 +3,10 @@ name: Docker image
 # Builds the image for linux/amd64 and linux/arm64 and smoke-tests each natively
 # (tests/docker_smoke.sh: non-root, HEALTHCHECK, upgrades from a root-owned volume and a
 # bind mount, a config.json with a rejected setting, serial device groups, image contents).
-# Called by ci.yml (also when release.yml runs it on a v* tag) and scheduled.yml;
-# release.yml then pushes the multi-arch image to GHCR (its own job, with the write
-# permissions this one doesn't need).
+# Called by ci.yml (also when release.yml runs it on a v* tag) and scheduled.yml. The
+# image a release publishes is built in release.yml's own job (with the write permissions
+# this one doesn't need), pushed to GHCR by digest, and that digest runs the same smoke
+# test on both architectures before it gets a tag.
 on:
   workflow_call:
 
