@@ -291,8 +291,11 @@ async def listen(host: str, port: int, backlog: int) -> list[socket.socket]:
     resolves to; SO_REUSEADDR on POSIX only, IPV6_V6ONLY on IPv6; an address the machine
     has no such family for is skipped). Made before the mappings start, and listening at
     once: on Linux two SO_REUSEADDR sockets can share a port until one of them listens, so
-    a mapping on the same address and port then fails instead of taking it. Raises
-    OSError when the address can't be used."""
+    a mapping on the same address and port then fails instead of taking it. On Windows,
+    where a socket on a specific address may otherwise share the port of one on the
+    wildcard address (and take that address's connections), SO_EXCLUSIVEADDRUSE keeps
+    other programs off an overlapping address; netguard.reserve keeps this process's
+    mappings off it on every OS. Raises OSError when the address can't be used."""
     loop = asyncio.get_running_loop()
     infos = await loop.getaddrinfo(host or None, port, family=socket.AF_UNSPEC,
                                    type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
@@ -306,6 +309,11 @@ async def listen(host: str, port: int, backlog: int) -> list[socket.socket]:
             sockets.append(sock)
             if os.name == "posix" and sys.platform != "cygwin":
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            elif sys.platform == "win32":
+                # (connections in TIME_WAIT don't keep a restart from taking the port
+                # again; ones of an earlier run still open or closing do, until they are
+                # gone: the start-up then retries as for a port another program holds)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             try:
@@ -322,6 +330,7 @@ async def listen(host: str, port: int, backlog: int) -> list[socket.socket]:
         for sock in sockets:
             sock.listen(backlog)
             sock.setblocking(False)
+        netguard.reserve(sockets, "the admin UI")
     except BaseException:
         for sock in sockets:
             sock.close()
