@@ -70,7 +70,7 @@ def routes(ctx: Ctx) -> list:
         state.log(f"[{mapping.name}] console opened by {ws_user.username} ({peer})")
         _record_open(websocket, "console_open", mapping,
                      "interactive" if interactive else "read-only")
-        written = [0]  # bytes typed to the device (what, is never recorded)
+        written = [0]  # how many bytes were typed to the device (never what)
 
         async def sender():
             while True:
