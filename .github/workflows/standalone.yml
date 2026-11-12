@@ -14,6 +14,15 @@ on:
         description: A release build (sign the Windows exe when configured)
         type: boolean
         default: false
+    secrets:  # code signing (docs/SIGNING.md); release.yml passes these, ci.yml none
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_CLIENT_SECRET:
+        required: false
+      SIGNPATH_API_TOKEN:
+        required: false
   workflow_dispatch:
     inputs:
       sign_dry_run:
@@ -41,6 +50,8 @@ jobs:
           - { arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Build inside AlmaLinux 8 (glibc 2.28) with python-build-standalone
         run: |
           docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh
@@ -90,6 +101,8 @@ jobs:
           - { image: "fedora:latest", ca: /etc/pki/tls/certs/ca-bundle.crt }
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           name: ser2net-linux-${{ matrix.arch }}
@@ -111,6 +124,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7   # runs the tests; the exe itself bundles PBS CPython
         with:
           python-version: "3.12"

@@ -23,7 +23,11 @@ Standalone → Run workflow**, with **sign_dry_run** ticked. It signs the exe wi
 throwaway self-signed certificate on the runner and checks the signature is valid. It does
 not exercise the provider, so it is only a smoke test of the steps, not of your account.
 
-Pick one and set **Settings → Secrets and variables → Actions** of the repository:
+Pick one and set **Settings → Secrets and variables → Actions** of the repository.
+`release.yml` hands the standalone workflow these four secrets by name and no others
+(`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `SIGNPATH_API_TOKEN`); a
+signing setup that needs another secret has to be added there and to the `secrets:` that
+`standalone.yml` declares.
 
 ## Option A — SignPath (SignPath Foundation offers free signing to open-source projects)
 
