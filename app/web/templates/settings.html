@@ -86,6 +86,15 @@
     </label>
     <button class="btn primary" type="submit">{{ _("Save access") }}</button>
   </form>
+  <form method="post" action="{{ base }}/settings/login-notice" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Sign-in notice") }} <span class="muted">({{ _("shown on the sign-in page before anyone signs in, such as a privacy notice or a system-use warning · plain text, at most %(max)s characters · blank: none", max=login_notice_max) }})</span>
+      <textarea name="login_notice" rows="4" maxlength="{{ login_notice_max }}">{{ admin.login_notice }}</textarea></label>
+    <label>{{ _("Link to the full notice") }} <span class="muted">({{ _("optional · an http:// or https:// address") }})</span>
+      <input type="url" name="login_notice_url" value="{{ admin.login_notice_url }}" maxlength="{{ login_notice_url_max }}" placeholder="https://example.com/privacy" autocomplete="off" spellcheck="false"></label>
+    {% if not admin.require_login %}<p class="muted">{{ _("With open access, visitors who don’t sign in find it under “Notice” in the top bar.") }}</p>{% endif %}
+    <button class="btn" type="submit">{{ _("Save notice") }}</button>
+  </form>
   <form method="post" action="{{ base }}/settings/sessions/revoke-all" class="authform mt-sm"
         data-confirm="{{ _('Sign everyone out of this web UI, on every device? You stay signed in here.') }}">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">

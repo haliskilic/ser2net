@@ -189,8 +189,14 @@ def main():
     others = [{"username": "night-shift.operator.building-b.east", "role": "operator",
                "password_hash": hash_password(PASSWORD), "pwd_version": 1}]
     # a long instance name: the top bar, the tab title and the fleet view's row
+    # a long sign-in notice (an unbroken word in it) with a link: the sign-in page
+    notice = ("Bu sistem Örnek Sanayi A.Ş. bilgi işlem birimine aittir.\n"
+              "Girişler, IP adresleri ve kullanıcı adları denetim için kaydedilir.\n"
+              "https://intranet.example-industries.internal/kvkk/aydinlatma-metni/" + "x" * 80)
     node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a,
-                           "node_name": "Production line 1 · Hall B · east wing · cabinet 4"},
+                           "node_name": "Production line 1 · Hall B · east wing · cabinet 4",
+                           "login_notice": notice,
+                           "login_notice_url": "https://intranet.example.internal/kvkk"},
               "users": users + others,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "peers": [f"127.0.0.1:{ui_b}"]},
@@ -212,6 +218,20 @@ def main():
             page.on("console", lambda m: m.type == "error" and browser_errors.append(m.text))
             page.on("pageerror", lambda e: browser_errors.append(str(e)))
 
+            for w in (1280, 390):
+                page.set_viewport_size({"width": w, "height": 900})
+                page.goto(f"{base}/login")
+                page.wait_for_selector("#notice .notice-text")
+                bad = page.evaluate(CHECK_JS)
+                if not page.evaluate(
+                        "() => { const n = document.querySelector('#notice'), "
+                        "p = n.closest('.panel').getBoundingClientRect(), "
+                        "r = n.getBoundingClientRect(); return n.scrollWidth <= n.clientWidth + 1 "
+                        "&& r.left >= p.left - 1 && r.right <= p.right + 1; }"):
+                    bad.append("the notice sticks out of its panel")
+                problems.extend(f"sign-in page with a notice @{w}: {b}" for b in bad)
+                print(f"sign-in page with a notice @{w}: {'OK' if not bad else 'problems'}")
+            page.set_viewport_size({"width": 1280, "height": 900})
             page.goto(f"{base}/login")
             page.fill("input[name=username]", USER)
             page.fill("input[name=password]", PASSWORD)

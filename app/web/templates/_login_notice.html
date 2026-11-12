@@ -1,0 +1,8 @@
+{# the notice an admin set for the sign-in and setup pages (Settings -> Web UI access): plain
+   text, escaped, line breaks kept (.notice-text); its link opens on its own #}
+{% if login_notice or login_notice_url %}
+<div class="banner notice" id="notice">
+  {%- if login_notice %}<p class="notice-text">{{ login_notice }}</p>{% endif -%}
+  {%- if login_notice_url %}<p><a href="{{ login_notice_url }}" target="_blank" rel="noopener noreferrer">{{ _("Read the full notice") }}</a></p>{% endif -%}
+</div>
+{% endif %}

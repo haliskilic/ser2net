@@ -896,5 +896,19 @@
   "Web UI requests in all.log": "all.log'daki web arayüzü istekleri",
   "one line each, with the client’s IP address; sign-ins and the audit log’s records are written either way": "her biri için istemcinin IP adresiyle bir satır; girişler ve denetim kaydının kayıtları her durumda yazılır",
   "Every page and change (the default)": "Her sayfa ve değişiklik (varsayılan)",
-  "Only changes, and refused or failed requests": "Yalnızca değişiklikler ile reddedilen ya da hata veren istekler"
+  "Only changes, and refused or failed requests": "Yalnızca değişiklikler ile reddedilen ya da hata veren istekler",
+  "The sign-in notice must be text.": "Giriş bilgilendirmesi metin olmalı.",
+  "The sign-in notice can have at most {0} characters.": "Giriş bilgilendirmesi en fazla {0} karakter olabilir.",
+  "The notice’s link must be an http:// or https:// address, such as https://example.com/privacy.": "Bilgilendirmenin bağlantısı http:// ya da https:// ile başlayan bir adres olmalı, ör. https://example.com/privacy.",
+  "The notice’s link can have at most {0} characters.": "Bilgilendirmenin bağlantısı en fazla {0} karakter olabilir.",
+  "Sign-in notice saved.": "Giriş bilgilendirmesi kaydedildi.",
+  "Sign-in notice removed.": "Giriş bilgilendirmesi kaldırıldı.",
+  "Read the full notice": "Bilgilendirmenin tamamını oku",
+  "Notice": "Bilgilendirme",
+  "Sign-in notice": "Giriş bilgilendirmesi",
+  "shown on the sign-in page before anyone signs in, such as a privacy notice or a system-use warning · plain text, at most %(max)s characters · blank: none": "giriş sayfasında, giriş yapılmadan önce gösterilir; ör. bir aydınlatma metni ya da sistem kullanım uyarısı · düz metin, en fazla %(max)s karakter · boş: yok",
+  "Link to the full notice": "Bilgilendirmenin tamamına bağlantı",
+  "optional · an http:// or https:// address": "isteğe bağlı · http:// ya da https:// ile başlayan bir adres",
+  "With open access, visitors who don’t sign in find it under “Notice” in the top bar.": "Açık erişimde giriş yapmayan ziyaretçiler bunu üst bardaki “Bilgilendirme” bağlantısında bulur.",
+  "Save notice": "Bilgilendirmeyi kaydet"
 }

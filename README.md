@@ -447,6 +447,15 @@ LAN cluster'daki **diğer düğümler** yalnızca oturum açınca görünür ve 
 erişim kapatılınca/rol değişince açık konsollar da kapanır. Açıkken arayüzde uyarı
 gösterilir ve açılışta loga yazılır.
 
+**Giriş bilgilendirmesi (isteğe bağlı):** **Ayarlar → Web arayüzü erişimi → Giriş
+bilgilendirmesi**, giriş ve ilk kurulum sayfalarının giriş yapılmadan önce göstereceği bir
+metin belirler — bir aydınlatma metni ya da IEC 62443 (SR 1.12) ve NIST SP 800-53'ün (AC-8)
+istediği sistem kullanım uyarısı — ve metnin tamamına isteğe bağlı bir http(s) bağlantısı.
+Düz metindir (satır sonları korunur, en fazla 2000 karakter, HTML olmaz;
+`admin_ui.login_notice`, `admin_ui.login_notice_url`); açık erişimde giriş yapmayan
+ziyaretçiler onu üst bardaki *Bilgilendirme* bağlantısında bulur. Değişiklikler denetim
+kaydına yazılır (`login_notice_set`). Varsayılan olarak hiçbiri yoktur.
+
 **Başka sitelerden gelen istekler:** tarayıcı bir değişikliği (web arayüzüne giden her
 POST, PUT, PATCH ya da DELETE) başka bir sitenin sayfasının gönderdiğini söylüyorsa istek
 403 ile reddedilir: `Sec-Fetch-Site` `same-origin` değilse ya da `Origin` arayüze gelinen

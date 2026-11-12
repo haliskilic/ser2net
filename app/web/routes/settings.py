@@ -22,9 +22,11 @@ from ... import i18n, importer, optional
 from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, NODE_NAME_ENV, NODE_NAME_MAX,
     NOTIFY_EVENTS, REQUEST_LOG_MODES, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS,
-    AppConfig, ClusterSettings, ConfigError, NotificationSettings, User, backup_time,
-    new_pwd_version, node_name_from_env, node_name_problem, normalize_public_url, parse_cluster_peer,
-    proxy_entry_problem, public_url_problem, split_proxy_entries,
+    LOGIN_NOTICE_MAX, LOGIN_NOTICE_URL_MAX, AppConfig, ClusterSettings, ConfigError,
+    NotificationSettings, User, backup_time, clean_login_notice, login_notice_problem,
+    login_notice_url_problem, new_pwd_version, node_name_from_env, node_name_problem,
+    normalize_public_url, parse_cluster_peer, proxy_entry_problem, public_url_problem,
+    split_proxy_entries,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -80,7 +82,8 @@ def routes(ctx: Ctx) -> list:
                       backups=backups,
                       admin=state.config.admin_ui, hsts_max=HSTS_MAX_AGE_MAX,
                       hostname=socket.gethostname(), node_name_max=NODE_NAME_MAX,
-                      request_log_modes=REQUEST_LOG_MODES,
+                      request_log_modes=REQUEST_LOG_MODES, login_notice_max=LOGIN_NOTICE_MAX,
+                      login_notice_url_max=LOGIN_NOTICE_URL_MAX,
                       node_name_env=NODE_NAME_ENV if node_name_from_env() else "",
                       public_url=published, public_url_env=bool(proxy.public_url_from_env()),
                       trusted=proxy.trusted_entries(state.config.admin_ui),
@@ -311,6 +314,34 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "web_access",
                     "login-required" if require_login else f"open:{role}")
         return await settings_get(request, ok=ok)
+
+    # ---------------- the notice on the sign-in page ----------------
+    async def settings_login_notice_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        ui = state.config.admin_ui
+        text = str(form.get("login_notice", ui.login_notice))
+        url = str(form.get("login_notice_url", ui.login_notice_url)).strip()
+        if problem := login_notice_problem(text) or login_notice_url_problem(url):
+            return await settings_get(request, error=problem)
+        text = clean_login_notice(text)
+        async with state.config_lock:
+            old = (ui.login_notice, ui.login_notice_url)
+            ui.login_notice, ui.login_notice_url = text, url
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.login_notice, ui.login_notice_url = old
+                return await settings_get(request, error=str(e))
+        what = (f"{len(text)} characters" if text else "none") + f", link {url or 'none'}"
+        if (text, url) != old:
+            state.log(f"sign-in notice set: {what}")
+        ctx.audit(request, "login_notice_set", what)
+        return await settings_get(request, ok=_("Sign-in notice saved.") if text or url else
+                                  _("Sign-in notice removed."))
 
     # ---------------- this instance's name ----------------
     async def settings_node_name_post(request):
@@ -1252,6 +1283,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/proxy", settings_proxy_post, methods=["POST"]),
         Route("/settings/node-name", settings_node_name_post, methods=["POST"]),
         Route("/settings/request-log", settings_request_log_post, methods=["POST"]),
+        Route("/settings/login-notice", settings_login_notice_post, methods=["POST"]),
         Route("/settings/sessions/revoke-all", settings_sessions_revoke_all, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
