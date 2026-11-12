@@ -17,10 +17,31 @@ from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
 from .common import (
-    TRIGGER, Ctx, action_done, bytesize, console_interactive, notice, sees_to_device,
-    start_failed, unchanged_or,
+    TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice,
+    sees_to_device, start_failed,
 )
 from .forms import _form_error, _modbus_points_json
+
+
+# what _mappings_body.html shows of a mapping's status (st.*), apart from the counters and
+# the clients (tests/test_live_table.py checks the template uses no other field)
+_SHOWN = ("state", "device", "last_error", "client_count", "dropped_clients", "bytes_dropped")
+
+
+def _steady(st):
+    """What the table shows of a mapping's status, minus what changes all the time: the
+    In / Out counters (patched on their own) and the clients' connection times (the
+    browser counts them on from connected_at). Not what it doesn't show (the reconnect
+    count of a mapping whose device is missing goes up every few seconds)."""
+    if not st:
+        return None
+    return (tuple(st.get(k) for k in _SHOWN),
+            [(c.get("peer"), c.get("priority"), c.get("connected_at")) for c in st.get("clients") or ()])
+
+
+def _in_out(st) -> str:
+    """The text of a row's In / Out cell, as _mappings_body.html renders it."""
+    return f"{bytesize(st.get('bytes_in', 0) if st else 0)} / {bytesize(st.get('bytes_out', 0) if st else 0)}"
 
 
 def routes(ctx: Ctx) -> list:
@@ -65,12 +86,21 @@ def routes(ctx: Ctx) -> list:
         return Response("", headers={**TRIGGER, **notice(
             _("Copied as “{0}” (disabled: it uses the same serial port).").format(dup.name))})
 
+    table = LiveTable(ctx, "_mappings_body.html")
+
     async def api_status(request):
-        # polled every 2 s: 204 when nothing changed since the browser's copy
-        return unchanged_or(request, render(request, "_mappings_body.html",
-                                            mappings=state.config.mappings,
-                                            statuses=state.supervisor.all_status(),
-                                            can_edit=can_edit(request)))
+        # polled every 2 s: 204 while unchanged, only the In / Out counters when only they
+        # changed, else the table rendered off the event loop (see LiveTable). On a
+        # snapshot: an edit replaces a mapping object, a delete removes it from the list.
+        mappings, statuses = list(state.config.mappings), state.supervisor.all_status()
+        edit = can_edit(request)
+
+        def snapshot():
+            return ((edit, [(repr(m), _steady(statuses.get(m.id))) for m in mappings]),
+                    {f"m-{m.id}-bytes": _in_out(statuses.get(m.id)) for m in mappings})
+        # the server's clock: the browser counts the clients' connection times on from it
+        return await table.answer(request, snapshot, headers={"X-Server-Time": f"{time.time():.3f}"},
+                                  mappings=mappings, statuses=statuses, can_edit=edit)
 
     async def mapping_bulk(request):
         """Start / stop / restart several mappings at once (the dashboard's selection)."""
@@ -139,8 +169,8 @@ def routes(ctx: Ctx) -> list:
                                 .encode()).hexdigest()[:16]
         if request.headers.get("x-content-hash") == digest:
             return Response(status_code=204)
-        return render(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
-                      lines=lines, content_hash=digest)
+        return await ctx.arender(request, "_mapping_log.html", mid=mid, mapping_name=m.name,
+                                 lines=lines, content_hash=digest)
 
     def _trace_files(mid):
         out = []

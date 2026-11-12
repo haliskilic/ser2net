@@ -27,7 +27,7 @@ from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_
 from ...i18n import _
 from .. import auth
 from . import ops
-from .common import Ctx, csrf_failed, notice, start_failed, unchanged_or
+from .common import Ctx, LiveTable, bytesize, csrf_failed, domid, notice, start_failed
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -132,6 +132,25 @@ def _peer_done(action: str, name: str, addr: str) -> str:
     return _("“{0}” restarted on {1}.").format(name, addr)
 
 
+def _fleet_snapshot(view: dict):
+    """(shape, counter spans) of the fleet view for LiveTable: the spans by the ids
+    _cluster_body.html gives them. Without them (two rows with one id: a peer's odd
+    mapping ids), the counters stay part of the shape."""
+    spans: dict[str, str] | None = {}
+    for n in view["nodes"]:
+        for m in n.get("mappings") or ():
+            key = "c-" + domid(f"{n.get('addr', '')}-{m.get('id', '')}") + "-bytes"
+            if spans is None or key in spans:
+                spans = None
+                continue
+            spans[key] = f"{bytesize(m.get('bytes_in', ''))} / {bytesize(m.get('bytes_out', ''))}"
+    counters = ("bytes_in", "bytes_out") if spans is not None else ()
+    nodes = [({k: v for k, v in n.items() if k not in ("uptime_s", "mappings")},   # (shown: uptime)
+              [{k: v for k, v in m.items() if k not in counters} for m in n.get("mappings") or ()])
+             for n in view["nodes"]]
+    return (nodes, {k: v for k, v in view.items() if k != "nodes"}), spans
+
+
 def routes(ctx: Ctx) -> list:
     state, render, client_ip = ctx.state, ctx.render, ctx.client_ip
     can_edit, is_anonymous = ctx.can_edit, ctx.is_anonymous
@@ -233,20 +252,23 @@ def routes(ctx: Ctx) -> list:
                 "mapping_count": data.get("mapping_count", len(maps)),
                 "running_count": data.get("running_count", 0), "mappings": maps}
 
+    fleet = LiveTable(ctx, "_cluster_body.html")
+
     async def cluster_status(request):
         """Aggregated view for the browser: local node + every discovered/manual peer,
         fetched server-side with the shared key. Renders the unified table."""
         if not state.config.cluster.active:
-            return render(request, "_cluster_body.html", nodes=[], can_edit=can_edit(request),
-                          discovery_error="")
+            return await ctx.arender(request, "_cluster_body.html", nodes=[],
+                                     can_edit=can_edit(request), discovery_error="")
         local = local_node_payload()
         nodes = [{**local, "self": True, "online": True, "source": "self",
                   "addr": peer_addr(local["ip"], local["port"]),
                   "uptime": _fmt_uptime(local["uptime_s"])}]
+        # refreshed every 5 s: 204 while the fleet view is what the browser shows already,
+        # only the In / Out counters when only they changed (see LiveTable)
         if is_anonymous(request):  # other nodes' data needs a real login here
-            return unchanged_or(request, render(request, "_cluster_body.html", nodes=nodes,
-                                                can_edit=False, discovery_error="",
-                                                peers_hidden=True))
+            view = {"nodes": nodes, "can_edit": False, "discovery_error": "", "peers_hidden": True}
+            return await fleet.answer(request, lambda: _fleet_snapshot(view), **view)
         targets = state.cluster.all_targets()
         results = await asyncio.gather(*[state.cluster.fetch_peer(t) for t in targets]) \
             if targets else []
@@ -255,11 +277,9 @@ def routes(ctx: Ctx) -> list:
         c = state.cluster
         notes = {"copies": c.copies(), "shared": c.shared_ids(), "other_key": c.other_key_nodes(),
                  "legacy": c.legacy_nodes()}
-        # refreshed every 5 s: 204 when the fleet view is what the browser shows already
-        return unchanged_or(request, render(request, "_cluster_body.html", nodes=nodes,
-                                            can_edit=can_edit(request),
-                                            discovery_error=state.cluster.discovery_error,
-                                            notes=notes))
+        view = {"nodes": nodes, "can_edit": can_edit(request),
+                "discovery_error": state.cluster.discovery_error, "notes": notes}
+        return await fleet.answer(request, lambda: _fleet_snapshot(view), **view)
 
     async def cluster_control(request):
         """Peer-facing remote control: another cluster node (presenting the shared key)

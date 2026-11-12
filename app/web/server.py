@@ -25,22 +25,12 @@ from .. import i18n
 from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
-from .routes.common import bytesize
+from .routes.common import bytesize, domid
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 _SOFT_BREAK_AFTER = re.compile(r"([/\\_.:@-])")
-
-
-_NOT_ID_CHAR = re.compile(r"[^A-Za-z0-9_-]")
-
-
-def domid(value) -> str:
-    """*value* as part of an HTML id: other characters than letters, digits, _ and -
-    become _. (htmx keeps the keyboard focus on a polled table's buttons across a
-    refresh by their ids; a peer's address and mapping id are part of them.)"""
-    return _NOT_ID_CHAR.sub("_", str(value))
 
 
 def softbreak(value) -> Markup:
@@ -66,6 +56,8 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 # the audit trail (the user actions that drive them ARE logged).
 QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
                "/api/ports/table", "/api/ports.json", "/healthz", "/favicon.ico"}
+# ... and an open log panel's, every 5 s
+QUIET_PATTERN = re.compile(r"/api/mappings/[^/]+/log")
 
 
 def _wants_json(request) -> bool:
@@ -150,7 +142,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # audit log: every state-changing request, plus meaningful page loads
         # (skip the static assets and the periodic poll endpoints)
         if not path.startswith("/static") and not (
-            request.method == "GET" and path in QUIET_PATHS
+            request.method == "GET" and (path in QUIET_PATHS or QUIET_PATTERN.fullmatch(path))
         ):
             ip = request.client.host if request.client else "?"
             state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
