@@ -39,6 +39,10 @@ MODES = ("merge", "replace")
 # limits far above any real export or config.json (and the classic parser has its own).
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_MAPPINGS = 1000
+# An export or config.json nests about 6 deep. Deeper files are refused right after
+# parsing: how deep the parser itself goes depends on the Python version and the stack
+# (3.14 takes far deeper files), and reading a mapping recurses into its values.
+MAX_DEPTH = 64
 
 
 @dataclass
@@ -80,6 +84,22 @@ def parse_for_preview(raw: bytes, filename: str = "") -> ImportPlan:
     return plan
 
 
+def _deeper_than(doc, limit: int) -> bool:
+    """Whether a parsed JSON document nests lists / objects more than ``limit`` deep.
+    Without recursion, in memory for ``limit`` levels: one iterator per open level."""
+    levels = [iter((doc,))]
+    while levels:
+        for value in levels[-1]:
+            if isinstance(value, (dict, list)):
+                if len(levels) > limit:
+                    return True
+                levels.append(iter(value.values() if isinstance(value, dict) else value))
+                break
+        else:
+            levels.pop()
+    return False
+
+
 def _in_english(raw: bytes, filename: str) -> ImportPlan:
     i18n.set_language(i18n.DEFAULT)  # (in a copy of the context: for this call only)
     return parse_mappings_file(raw, filename)
@@ -105,6 +125,9 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
                  if isinstance(e, json.JSONDecodeError) else
                  _("nested too deeply") if isinstance(e, RecursionError) else str(e))
         raise ConfigError(_("The file is not valid JSON ({0}).").format(where)) from None
+    if _deeper_than(doc, MAX_DEPTH):
+        raise ConfigError(_("The file is not valid JSON ({0}).").format(
+            _("nested too deeply")))
     if not isinstance(doc, dict) or not isinstance(doc.get("mappings"), list):
         raise ConfigError(_('Expected a ser2net export: a JSON object with a "mappings" list.'))
     if len(doc["mappings"]) > MAX_MAPPINGS:
