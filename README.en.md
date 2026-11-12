@@ -608,6 +608,13 @@ is no account at all; later starts ignore it.
   service too). **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
   firewall rule you need to reach it from other hosts, changing the address, upgrading and
   the SmartScreen warning on unsigned builds.
+- **Start order:** the admin UI comes first. Its TLS pair must load, or the start stops
+  (with the reason in `all.log`) before any serial port is opened, so a restart policy
+  can't reset DTR-sensitive boards in a loop. Its port is taken before the mappings start:
+  a mapping on the UI's address and port shows `error` instead of keeping the UI out. When
+  the UI's own address can't be used (another program has the port, or the IP is not
+  assigned yet at boot), the mappings start anyway and the UI tries again, at most 30 s
+  apart (`all.log` says so).
 - **Many mappings:** a running mapping keeps about three files open (its serial port, its
   listener and its log), plus one per connected client. At start ser2net raises its soft
   open-file limit toward the hard limit (at most 65536) and logs the result (`open files:

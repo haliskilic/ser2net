@@ -23,12 +23,19 @@ holds what its connections share:
     admin_ui.request_timeout_s is aborted (also while it closes after a response);
   - a connection that runs out of time is aborted, not closed (a TLS close would wait for
     the client). A WebSocket (the console) is not timed once it is upgraded.
+
+``listen`` makes the listener's sockets (listening already) before the mappings start,
+for uvicorn.Server.serve(sockets=...).
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
+import os
+import socket
 import ssl
+import sys
 from typing import Any, Callable, Optional
 
 import h11
@@ -271,3 +278,47 @@ def ssl_context(certfile: str, keyfile: str, config: Any) -> ssl.SSLContext:
                               password=config.ssl_keyfile_password,
                               ssl_version=config.ssl_version, cert_reqs=config.ssl_cert_reqs,
                               ca_certs=config.ssl_ca_certs, ciphers=config.ssl_ciphers)
+
+
+async def listen(host: str, port: int, backlog: int) -> list[socket.socket]:
+    """The admin UI's sockets for ``host``:``port``, bound and listening, as asyncio's
+    create_server makes them for uvicorn ("" = every interface; every address ``host``
+    resolves to; SO_REUSEADDR on POSIX only, IPV6_V6ONLY on IPv6; an address the machine
+    has no such family for is skipped). Made before the mappings start, and listening at
+    once: on Linux two SO_REUSEADDR sockets can share a port until one of them listens, so
+    a mapping on the same address and port then fails instead of taking it. Raises
+    OSError when the address can't be used."""
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(host or None, port, family=socket.AF_UNSPEC,
+                                   type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+    sockets: list[socket.socket] = []
+    try:
+        for family, kind, proto, _name, address in dict.fromkeys(infos):
+            try:
+                sock = socket.socket(family, kind, proto)
+            except OSError:  # a family this machine has no support for
+                continue
+            sockets.append(sock)
+            if os.name == "posix" and sys.platform != "cygwin":
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            try:
+                sock.bind(address)
+            except OSError as e:
+                if e.errno == errno.EADDRNOTAVAIL and len(infos) > 1:
+                    sockets.pop().close()  # e.g. "localhost" -> ::1 without IPv6
+                    continue
+                raise OSError(e.errno, f"cannot listen on {address[0]} port {address[1]}: "
+                                       f"{e.strerror or e}") from None
+        if not sockets:
+            raise OSError(f"cannot listen on {host or '*'} port {port}: none of its addresses "
+                          "is on this machine")
+        for sock in sockets:
+            sock.listen(backlog)
+            sock.setblocking(False)
+    except BaseException:
+        for sock in sockets:
+            sock.close()
+        raise
+    return sockets

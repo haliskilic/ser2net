@@ -195,6 +195,13 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
+        if cert and key:
+            # a pair that exists but doesn't load would stop the next start (runtime._serve)
+            try:
+                await asyncio.to_thread(_load_tls_pair, cert, key)
+            except (OSError, ValueError) as e:  # ssl.SSLError is an OSError
+                return await settings_get(request, error=_(
+                    "The TLS certificate and key could not be loaded: {0}").format(e))
         async with state.config_lock:
             old = (state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key)
             state.config.admin_ui.tls_cert = cert
@@ -1138,6 +1145,16 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/backups/restore-mappings", backup_restore_mappings, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
+
+
+def _load_tls_pair(cert: str, key: str) -> None:
+    """Load a certificate and key as the admin UI will (raises what loading raises). A key
+    that needs a passphrase fails here: the admin UI has no way to be given one. A file
+    that is missing is left to the save, which says which one."""
+    import ssl
+    if not (os.path.isfile(cert) and os.path.isfile(key)):
+        return
+    ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(cert, key, password=lambda: "")
 
 
 def _key_hint(key: str) -> str:
