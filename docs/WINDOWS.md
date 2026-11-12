@@ -63,6 +63,12 @@ ser2net-windows-x64.exe --uninstall-service
 
 ### When the service doesn't start
 
+The service is *Starting* until its mappings were started and its admin UI listens, and
+*Running* from then on, so `--install-service` waits for that and reports a service that
+stops while it starts (its exit code, and where to look) instead of success. A service
+whose event loop is stuck for 90 s writes `hang.log` and exits, and is started again 5 s
+later (`SER2NET_LOOP_WATCHDOG`, a system environment variable, sets the limit; `0` = off).
+
 Look in the data directory (`C:\ProgramData\ser2net\` by default):
 
 - `all.log` — ser2net's log, with the reason a start failed (a `config.json` that can't be

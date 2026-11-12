@@ -665,7 +665,9 @@ is no account at all; later starts ignore it.
   run several instances via `--service-name`. Stop/start: `sc stop ser2net` /
   `sc start ser2net` or *Services* (services.msc). Re-running `--install-service` from a
   newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
-  service too). **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
+  service too). The service is *Running* once its UI listens (*Starting* until then), so
+  `--install-service` reports a service that stops while it starts (with its exit code and
+  where to look) instead of success. **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
   firewall rule you need to reach it from other hosts, changing the address, upgrading and
   the SmartScreen warning on unsigned builds. Use the service for production: a console
   window can be closed or signed out of. A click into a console window (QuickEdit) pauses

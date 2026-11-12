@@ -687,6 +687,9 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   `--service-name`. Durdur/başlat: `sc stop ser2net` / `sc start ser2net` ya da *Hizmetler*
   (services.msc). Yeni bir exe ile `--install-service`'i yeniden çalıştırmak servisi
   yerinde yükseltir ve servisin kullandığı veri klasörünü korur (2.8.0 servisinde de).
+  Servis arayüzü dinlemeye başlayınca *Çalışıyor* durumuna geçer (o zamana kadar
+  *Başlatılıyor*); böylece `--install-service`, başlarken duran bir servisi başarılı
+  saymaz, çıkış kodunu ve nereye bakılacağını yazar.
   Başka hostlardan erişmek için gereken güvenlik duvarı kuralı, adres
   değişimi, yükseltme ve imzasız derlemelerdeki SmartScreen uyarısı için
   **[`docs/WINDOWS.md`](docs/WINDOWS.md)**. Üretimde servisi kullanın: konsol penceresi

@@ -26,6 +26,7 @@ import functools
 import os
 import re
 import sys
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
@@ -1152,14 +1153,78 @@ def _roll_back(api, svc, previous, done, name: str) -> str:
         return f"putting the previous version back failed too: {e}; check it with sc qc {name}"
 
 
+START_TIMEOUT_S = 90.0  # how long --install-service waits for the service to be running
+
+
+def _wait_started(api, svc, timeout: float = START_TIMEOUT_S) -> tuple[int, int]:
+    """Wait while a service starts: (its state then, its exit code). It is RUNNING once
+    its admin UI listens (run), STOPPED when the start failed, still START_PENDING after
+    ``timeout``."""
+    st = api.SERVICE_STATUS()
+    end = time.monotonic() + timeout
+    while True:
+        if not api.dll.QueryServiceStatus(svc, ctypes.byref(st)):
+            raise _fail("QueryServiceStatus")
+        if st.dwCurrentState in (SERVICE_RUNNING, SERVICE_STOPPED) or time.monotonic() > end:
+            code = (st.dwServiceSpecificExitCode
+                    if st.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR else st.dwWin32ExitCode)
+            return st.dwCurrentState, code
+        time.sleep(0.3)
+
+
 def _start_and_wait(api, svc, name: str, data_dir: str, log: Callable[[str], None]) -> None:
     if not api.dll.StartServiceW(svc, 0, None):
         raise _fail("Starting the service")
-    state = _wait_state(api, svc, SERVICE_RUNNING)
+    state, code = _wait_started(api, svc)
     if state != SERVICE_RUNNING:
-        raise ServiceError(f"The service did not reach RUNNING (state {state}); "
-                           f"see {os.path.join(data_dir, 'all.log')}.")
+        logs = (f"see {os.path.join(data_dir, 'all.log')} and {SERVICE_LOG} there, or the "
+                "Application event log")
+        if state == SERVICE_STOPPED:
+            raise ServiceError(f"The service did not reach RUNNING: it stopped while starting "
+                               f"(exit code {code}); {logs}.")
+        raise ServiceError(f"The service did not reach RUNNING within {START_TIMEOUT_S:g} s "
+                           f"(state {state}); {logs}.")
     log(f"service '{name}' is running")
+
+
+START_WAIT_HINT_MS = 30000  # what a START_PENDING report tells the SCM to allow for
+START_PROGRESS_S = 5.0      # how often a start under way is reported again
+
+
+class StartProgress:
+    """While the server starts, ``report`` START_PENDING again every ``every`` seconds
+    (run()'s report() counts the checkpoint up), so the SCM doesn't take a slow start
+    (many serial ports to open) for a hung one. start() when the start begins, finish()
+    once it is over (ready, or failed); finish() is True the first time only."""
+
+    def __init__(self, report: Callable[[], None], every: Optional[float] = None) -> None:
+        self._report = report
+        self._every = START_PROGRESS_S if every is None else every
+        self._done = threading.Event()
+        self._finished = False
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None or self._finished:
+                return
+            self._thread = threading.Thread(target=self._run, name="service-start-progress",
+                                            daemon=True)
+            self._thread.start()
+
+    def _run(self) -> None:
+        while not self._done.wait(self._every):
+            self._report()
+
+    def finish(self) -> bool:
+        with self._lock:
+            first, self._finished = not self._finished, True
+            thread = self._thread
+        self._done.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(self._every + 1)
+        return first
 
 
 def uninstall(name: str, log: Callable[[str], None] = print) -> None:
@@ -1199,11 +1264,15 @@ def uninstall(name: str, log: Callable[[str], None] = print) -> None:
 
 
 def run(name: str, main: Callable[[], int], stop: Callable[[], None],
-        log_path: Optional[str] = None) -> int:
+        log_path: Optional[str] = None,
+        on_ready: Optional[Callable[[Callable[[], None]], None]] = None) -> int:
     """For --service: hand the process to the SCM dispatcher (blocks until the service
     has stopped). ``main`` runs the server in the service thread; ``stop`` is called
     (from the SCM's thread) on a stop or shutdown request. ``log_path``: where stderr goes
-    (service_log)."""
+    (service_log). ``on_ready(callback)`` (runtime.when_ready) has the server call back
+    once it is ready: the service is START_PENDING until then (StartProgress) and RUNNING
+    from then on, so a start that fails is seen as one; without it, RUNNING is reported
+    before main() runs."""
     api = _advapi()
     name = check_name(name)
     redirect_missing_stdio(log_path)
@@ -1235,8 +1304,18 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None],
 
     def service_main(_argc, _argv):
         handle["h"] = api.dll.RegisterServiceCtrlHandlerExW(name, handler, None)
-        report(SERVICE_START_PENDING, wait_hint=30000)
-        report(SERVICE_RUNNING)
+        report(SERVICE_START_PENDING, wait_hint=START_WAIT_HINT_MS)
+        starting = StartProgress(lambda: report(SERVICE_START_PENDING,
+                                                wait_hint=START_WAIT_HINT_MS))
+
+        def running() -> None:
+            if starting.finish():
+                report(SERVICE_RUNNING)
+        if on_ready is None:
+            running()
+        else:
+            on_ready(running)
+            starting.start()
         code = 1
         try:
             code = int(main() or 0)
@@ -1245,6 +1324,7 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None],
         except BaseException:  # whatever happens, the SCM must still be told STOPPED
             import traceback
             traceback.print_exc()
+        starting.finish()
         result["code"] = code
         report(SERVICE_STOPPED, code=code)
 
