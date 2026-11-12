@@ -167,6 +167,7 @@ def test_cross_site(srv) -> None:
     assert len(lines) == 1, lines
     assert "Origin " + repr(neighbour) in lines[0] and repr(f"127.0.0.1:{srv.port}") in lines[0], \
         lines[0]
+    assert "proxy_set_header Host $http_host" in lines[0] and "X-Forwarded-Host" in lines[0]
     print("cross-site requests: refused (another port, null, another host, Sec-Fetch-Site "
           "cross-site / same-site) with a valid CSRF token too; own pages, a reverse proxy's "
           "host name, scripts, GETs and cluster peers unaffected  OK")

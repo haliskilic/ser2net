@@ -109,7 +109,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
             if why := auth.cross_site(request.headers):
                 ip = request.client.host if request.client else "?"
                 self._cross_site_note(state)(f"refused {request.method} {path} from {ip}: "
-                                             f"sent by a page of another site ({why})")
+                                             f"sent by a page of another site ({why}); "
+                                             f"{auth.PROXY_HINT}")
                 return PlainTextResponse(i18n.gettext(
                     "Refused: this request was sent by a page of another web site. If you used "
                     "ser2net’s own page, its address must reach ser2net unchanged (behind a "

@@ -411,26 +411,44 @@ def _host_port(netloc: str, scheme: str) -> tuple[str, str] | None:
     return host, str(int(rest[1:])) if rest else _DEFAULT_PORTS.get(scheme, "")
 
 
-def cross_site(headers) -> str:
+def _origin(value: str) -> tuple[str, str, str] | None:
+    """(scheme, host, port) of an http(s) origin 'scheme://host[:port]' (no path), the
+    scheme's port when none is given; None when it is not such a value."""
+    scheme, sep, netloc = value.strip().partition("://")
+    scheme = scheme.lower()
+    if not sep or scheme not in _DEFAULT_PORTS:
+        return None
+    hp = _host_port(netloc, scheme)
+    return (scheme, *hp) if hp else None
+
+
+# What a refusal of a page's own request behind a reverse proxy usually needs (all.log).
+PROXY_HINT = ("behind a reverse proxy, pass the browser's address on as Host (nginx: "
+              "proxy_set_header Host $http_host; Apache: ProxyPreserveHost On) or as "
+              "X-Forwarded-Host")
+
+
+def cross_site(headers, also=()) -> str:
     """Why the browser says a request was made by a page of another site, or '' when it
-    doesn't. Sec-Fetch-Site (sent to HTTPS and localhost) must be same-origin or none;
+    doesn't: the forms and changes of the web UI, and its WebSockets (the console, the
+    hex view). Sec-Fetch-Site (sent to HTTPS and localhost) must be same-origin or none;
     without it, an Origin must be one of the hosts the request claims (Host, and
     X-Forwarded-Host / Forwarded host= from a reverse proxy, which a page can't set),
-    port included: another port of the same host or a sibling subdomain is another site,
-    and its pages can put a CSRF cookie of their own into the browser. A request with
-    neither header (a script, a very old browser) is left to the CSRF token. The model of
-    Go's net/http CrossOriginProtection."""
+    port included, or one of the origins in `also` ('scheme://host[:port]', an address
+    the UI is published under): another port of the same host or a sibling subdomain is
+    another site, and its pages can put a CSRF cookie of their own into the browser. A
+    request with neither header (a script, a very old browser) is left to the CSRF token
+    and the session. The model of Go's net/http CrossOriginProtection."""
     site = (headers.get("sec-fetch-site") or "").strip().lower()
     if site:
         return "" if site in ("same-origin", "none") else f"Sec-Fetch-Site {site!r}"
     origin = headers.get("origin")
     if origin is None:
         return ""
-    scheme, sep, netloc = origin.strip().partition("://")
-    scheme = scheme.lower()
-    ours = _host_port(netloc, scheme) if sep and scheme in _DEFAULT_PORTS else None
+    ours = _origin(origin)
     claimed = _claimed_hosts(headers)
-    if ours is not None and any(_host_port(h, scheme) == ours for h in claimed):
+    if ours is not None and (any(_host_port(h, ours[0]) == ours[1:] for h in claimed)
+                             or any(_origin(o) == ours for o in also)):
         return ""
     return (f"Origin {origin[:200]!r}; this UI was addressed as "
             + ", ".join(repr(h[:100]) for h in claimed))
