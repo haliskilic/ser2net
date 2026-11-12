@@ -27,7 +27,7 @@ from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_
 from ...i18n import _
 from .. import auth
 from . import ops
-from .common import Ctx, LiveTable, bytesize, csrf_failed, domid, notice, start_failed
+from .common import Ctx, LiveTable, bytesize, csrf_failed, domid, notice, reason, start_failed
 from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
@@ -325,8 +325,10 @@ def routes(ctx: Ctx) -> list:
         state.log(f"cluster: sent {action} to {addr} for '{name}'")
         ctx.audit(request, f"cluster_control_{action}", f"{addr}/{name}")
         why = res.get("start_error")   # from a 2.9+ peer
-        note = (notice(_("“{0}” on {1} could not start: {2}").format(name, addr, why), "warn")
-                if why and isinstance(why, str) else notice(_peer_done(action, name, addr)))
+        why, raw = reason(why) if isinstance(why, str) else ("", "")
+        note = (notice(_("“{0}” on {1} could not start: {2}").format(name, addr, why), "warn",
+                       detail=raw)
+                if why else notice(_peer_done(action, name, addr)))
         return Response("", headers={"HX-Trigger": "refreshCluster", **note})
 
     # ---- remote EDIT: peer renders no UI; THIS node renders the form (so the CSRF
@@ -444,8 +446,9 @@ def routes(ctx: Ctx) -> list:
             state.log(f"cluster: edited '{name}' on {addr}")
             ctx.audit(request, "cluster_edit", f"{addr}/{name}")
             why = res.get("start_error")   # from a 2.9+ peer
+            why, raw = reason(why) if isinstance(why, str) else ("", "")
             note = (notice(_("“{0}” saved on {1}, but it could not start: {2}").format(
-                        name, addr, why), "warn") if why and isinstance(why, str)
+                        name, addr, why), "warn", detail=raw) if why
                     else notice(_("“{0}” saved on {1}.").format(name, addr)))
             return Response("", headers={"HX-Trigger": "refreshCluster", **note})
         return _reload((res or {}).get("error") or _("The peer rejected the change or was "

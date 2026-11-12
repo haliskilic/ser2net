@@ -22,6 +22,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, RedirectRespons
 from starlette.templating import Jinja2Templates
 
 from .. import i18n
+from ..explain import explain
 from ..textfold import search_key
 from ..config import ROLE_RANK
 from . import auth
@@ -217,6 +218,8 @@ def make_templates() -> Jinja2Templates:
     templates.env.filters["bytesize"] = bytesize
     templates.env.filters["duration"] = duration   # seconds, in the page's language
     templates.env.filters["since"] = since         # a Unix time until now, as duration
+    # what a raw OS / network error means, in the page's language (None: show it as it is)
+    templates.env.filters["explain"] = explain
     # data-search of the dashboard rows: app.js folds what is typed the same way
     templates.env.filters["searchkey"] = search_key
     # _("...") in every template, translated for the request's language (app/i18n.py);

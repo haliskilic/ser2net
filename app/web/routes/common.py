@@ -20,6 +20,7 @@ from markupsafe import escape
 from starlette.responses import HTMLResponse, PlainTextResponse, Response
 
 from ...config import ROLE_RANK
+from ...explain import explain
 from ...i18n import _
 from .. import auth
 
@@ -158,14 +159,23 @@ def since(unix_time) -> str:
         return ""
 
 
-def notice(text: str, kind: str = "ok", focus: str = "") -> dict:
+def notice(text: str, kind: str = "ok", focus: str = "", detail: str = "") -> dict:
     """The response header that has the dashboard (app.js, its feedback area) tell the
     user what an action did: "ok" as a status message, "warn" as an alert; `focus`: the
-    id of the element that gets the keyboard focus when the form panel closes. A header,
+    id of the element that gets the keyboard focus when the form panel closes; `detail`:
+    the message's tooltip (the raw error a translated reason stands for). A header,
     so the action's answer and its status stay what they are; JSON, percent-encoded (a
     header value is Latin-1 only)."""
-    d = {"kind": kind, "text": text, **({"focus": focus} if focus else {})}
+    d = {"kind": kind, "text": text, **({"focus": focus} if focus else {}),
+         **({"detail": detail} if detail else {})}
     return {"X-Notice": urllib.parse.quote(json.dumps(d, ensure_ascii=False))}
+
+
+def reason(error: str) -> tuple[str, str]:
+    """Why a mapping did not start, for a notice: (what it means in the page's language,
+    the error itself for the tooltip), or (the error, "") when explain() doesn't know it."""
+    short = explain(error)
+    return (short, error) if short else (error, "")
 
 
 def action_done(action: str, name: str) -> str:

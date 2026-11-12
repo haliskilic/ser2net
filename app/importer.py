@@ -45,8 +45,12 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
         return _classic_ser2net(text, filename)
     try:
         doc = json.loads(text)
-    except (ValueError, RecursionError) as e:  # RecursionError: nested too deeply
-        raise ConfigError(_("The file is not valid JSON ({0}).").format(e)) from None
+    except (ValueError, RecursionError) as e:
+        # where, not the parser's English words ("Expecting ',' delimiter: ...")
+        where = (_("line {0}, column {1}").format(e.lineno, e.colno)
+                 if isinstance(e, json.JSONDecodeError) else
+                 _("nested too deeply") if isinstance(e, RecursionError) else str(e))
+        raise ConfigError(_("The file is not valid JSON ({0}).").format(where)) from None
     if not isinstance(doc, dict) or not isinstance(doc.get("mappings"), list):
         raise ConfigError(_('Expected a ser2net export: a JSON object with a "mappings" list.'))
     if len(doc["mappings"]) > MAX_MAPPINGS:

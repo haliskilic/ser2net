@@ -17,7 +17,7 @@ from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
 from .common import (
-    TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice,
+    TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice, reason,
     sees_to_device, start_failed,
 )
 from .forms import _form_error, _modbus_points_json
@@ -236,8 +236,9 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "mapping_save", msg)
         # the focus then: the mapping's Edit button (a new one's, once the table shows it)
         focus = f"m-{saved.id}-edit"
-        note = (notice(_("“{0}” saved, but it could not start: {1}").format(msg, saved.start_error),
-                       "warn", focus) if saved.start_error
+        why, raw = reason(saved.start_error)
+        note = (notice(_("“{0}” saved, but it could not start: {1}").format(msg, why),
+                       "warn", focus, raw) if saved.start_error
                 else notice(_("“{0}” saved.").format(msg), focus=focus))
         return Response("", headers={**TRIGGER, **note})
 
@@ -263,8 +264,8 @@ def routes(ctx: Ctx) -> list:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
         state.log(f"mapping {action}: {name}")
         ctx.audit(request, f"mapping_{action}", name)
-        why = start_failed(state, mid) if action != "stop" else ""
-        note = (notice(_("“{0}” could not start: {1}").format(name, why), "warn") if why
+        why, raw = reason(start_failed(state, mid) if action != "stop" else "")
+        note = (notice(_("“{0}” could not start: {1}").format(name, why), "warn", detail=raw) if why
                 else notice(action_done(action, name)))
         return Response("", headers={**TRIGGER, **note})
 
