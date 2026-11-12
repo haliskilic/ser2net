@@ -17,7 +17,7 @@ decide who qualifies.
 The workflow (`standalone.yml`, at its top level) and the jobs that call it in `ci.yml` and
 `release.yml` already grant `actions: read` — the SignPath action hands `GITHUB_TOKEN` to its connector
 to download the build artifact, which needs that scope even on a public repo. The exe
-carries a version resource and the ser2net icon, so Explorer's *Details* tab shows the
+carries a version resource and the ser2netweb icon, so Explorer's *Details* tab shows the
 product, publisher and version (SmartScreen and UAC still say "Unknown publisher" until it
 is signed). You can rehearse the signing *plumbing* (version resource + the
 verify/copy steps) without an account by running the workflow by hand: **Actions →

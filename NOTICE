@@ -1,5 +1,10 @@
-ser2net
+ser2netweb (named ser2net up to version 2.9.x)
 Copyright (C) 2026 Halis KILIÇ <mail@haliskilic.com.tr>
+
+ser2netweb is an independent Python project. It is not affiliated with or derived
+from Corey Minyard's ser2net (GPL-2.0, https://github.com/cminyard/ser2net), whose
+classic configuration files it can import. The commercial license offered for
+ser2netweb covers only this project.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU Affero General Public License, version 3 only

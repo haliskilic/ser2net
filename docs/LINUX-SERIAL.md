@@ -1,6 +1,6 @@
 # Serial ports on Linux: troubleshooting
 
-Most problems with a serial port on Linux are not ser2net's: the account has no access to
+Most problems with a serial port on Linux are not ser2netweb's: the account has no access to
 the device, another program uses the port, or the port has another name than expected.
 Each is fixed with one group change, one udev rule or one setting. Start from what the
 dashboard shows under the mapping's state.
@@ -12,11 +12,11 @@ the mapping's log) say what went wrong; `last_error` is pyserial's own text.
 
 | Shown | Cause | Fix |
 |---|---|---|
-| `[Errno 13] Permission denied`, with *… belongs to group dialout (gid 20), and user ser2net is not in it* | the account ser2net runs as is not in the device's group | [Groups](#groups) |
-| … *was added to group … after ser2net started* | the group was given while ser2net ran | restart ser2net (`sudo systemctl restart ser2net`) |
+| `[Errno 13] Permission denied`, with *… belongs to group dialout (gid 20), and user ser2net is not in it* | the account ser2netweb runs as is not in the device's group | [Groups](#groups) |
+| … *was added to group … after ser2netweb started* | the group was given while ser2netweb ran | restart ser2netweb (`sudo systemctl restart ser2net`) |
 | … *only root may open …* | the device belongs to root's group | a udev rule that gives it the serial group ([udev](#udev-rules)) |
 | `[Errno 16] Device or resource busy`, or *another program keeps other programs out of this port (TIOCEXCL)* | another program opened it exclusively: ModemManager, the classic ser2net, brltty | [Who has the port](#who-has-the-port) |
-| `Could not exclusively lock port …`, *another program has locked this port (flock)* | another ser2net mapping or instance, picocom, tio, miniterm | stop that program; *mapping '…' has this port open* names this ser2net's own |
+| `Could not exclusively lock port …`, *another program has locked this port (flock)* | another ser2netweb mapping or instance, picocom, tio, miniterm | stop that program; *mapping '…' has this port open* names this ser2netweb's own |
 | *… (PID …) is using this port: it holds a UUCP lock file on it* | minicom, cu (with **Don't open a port another program has locked with a UUCP lock file** on) | close that program |
 | state `device missing`, `[Errno 2] No such file or directory` | the device is not there: unplugged, not enumerated yet, another name after re-plugging | [Device names](#device-names) |
 | *is also the kernel console*, *a login prompt runs on this port* | the kernel or a getty uses the port | [Console and login prompt](#console-and-login-prompt) |
@@ -47,12 +47,12 @@ sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"     # then sign out and
   SupplementaryGroups=
   SupplementaryGroups=uucp
   ```
-- **Docker:** the entrypoint gives ser2net the group of each device passed with `--device`
+- **Docker:** the entrypoint gives ser2netweb the group of each device passed with `--device`
   under a usual serial name, from the device itself, so no `--group-add` is needed; a device
   mapped to another name inside the container needs
   `--group-add "$(stat -L -c %g /dev/ttyUSB0)"` (the numeric GID: the name `dialout`
   resolves to the image's 20, not the host's). See [`DOCKER.md`](DOCKER.md).
-- Never run ser2net as root to get around a missing group.
+- Never run ser2netweb as root to get around a missing group.
 
 ## udev rules
 
@@ -81,7 +81,7 @@ Then `sudo udevadm control --reload && sudo udevadm trigger`. A `SYMLINK` name
   - **`/dev/serial/by-path/…`** (*By USB socket*): right while the adapter stays in the
     same socket;
   - **Find this device by its USB identity if its name changes** (VID, PID and serial
-    number): ser2net re-finds the adapter after renumbering, and shows `device missing`
+    number): ser2netweb re-finds the adapter after renumbering, and shows `device missing`
     instead of opening another adapter that took its name.
 - On-board UARTs are `ttyS*` (PC), `ttyAMA*` (Raspberry Pi, other ARM boards),
   `ttymxc*` (i.MX), `ttyTHS*` (Jetson), `ttyPS*` (Zynq): the Device list shows every port a
@@ -96,13 +96,13 @@ ls -l /run/lock/LCK..* /var/lock/LCK..* 2>/dev/null   # UUCP lock files (minicom
 cat /proc/locks                      # flock()s; the inode is in `stat -L -c %i /dev/ttyUSB0`
 ```
 
-What ser2net's own locking does (mapping form → *Keeping other programs off the port*):
-**Lock the port (flock)**, on by default, keeps out other ser2net mappings and programs
+What ser2netweb's own locking does (mapping form → *Keeping other programs off the port*):
+**Lock the port (flock)**, on by default, keeps out other ser2netweb mappings and programs
 that lock the same way (picocom, tio, miniterm), not minicom, `cat`, `stty`, scripts, a
 login prompt or ModemManager. **Keep other programs out while the port is open**
 (`TIOCEXCL`) makes any other program's open fail as busy, except root's. **Don't open a
 port another program has locked with a UUCP lock file** honours minicom's and cu's `LCK..`
-files (ser2net makes none). Inside a container a `--device` port is a device node of its
+files (ser2netweb makes none). Inside a container a `--device` port is a device node of its
 own, so a lock there may not keep host programs out.
 
 ## Console and login prompt
@@ -161,6 +161,6 @@ re-plug the adapter. `journalctl -k` shows `usbfs: interface 0 claimed by ch341 
 ## Still stuck
 
 Open an issue with the mapping's state and hint from the dashboard, the lines of the
-mapping's log around the error, `ser2net --about`, and the output of
+mapping's log around the error, `ser2netweb --about`, and the output of
 `ls -l /dev/serial/by-id/ /dev/ttyUSB* /dev/ttyACM* 2>/dev/null` and `id ser2net` (mask
 serial numbers you don't want to publish).
