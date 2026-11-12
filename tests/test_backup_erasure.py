@@ -117,7 +117,9 @@ def test_settings():
         b.post("/settings/node-name", {"node_name": "line-2"})
         _, _, page = b.get("/settings")
         assert "<summary>Accounts</summary>" in page and "bob (viewer)" in page, "accounts"
-        assert 'data-confirm="Delete the account bob?"' in page
+        # (asked for a local account: its password goes with it, a backup can bring it back)
+        assert ('data-confirm="Delete the user “bob”? The password goes with it: only restoring '
+                'a configuration backup brings it back."') in page
         assert 'name="username"><option value="bob">' not in page, "bob exists: not offered"
         st, _, page = b.post("/settings/users/delete", {"username": "bob"})
         held = sum("bob" in u for u in _backup_users(srv))

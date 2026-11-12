@@ -630,7 +630,7 @@ async def _hangup(pty):
                        for m in logs), logs
             assert status.as_dict()["hangups"] == 1
             assert status.as_dict()["warnings"] == [
-                "hung up 1 time(s) while open, and could be reopened at once: another program "
+                "hung up 1 time while open, and could be reopened at once: another program "
                 "may be using this port (a login prompt on it?)"], status.as_dict()
             pty.close()  # now unplugged for real: the next open fails, no hang-up
             await _until(lambda: status.device_lost == 2 and status.open_failures >= 1)

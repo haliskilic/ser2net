@@ -1018,7 +1018,7 @@ def routes(ctx: Ctx) -> list:
             ok += " " + ngettext(
                 "{0} configuration backup still holds it (made before the deletion; a restore "
                 "with accounts would bring it back): Configuration backups below can remove it "
-                "from it.",
+                "from that backup.",
                 "{0} configuration backups still hold it (made before the deletion; a restore "
                 "with accounts would bring it back): Configuration backups below can remove it "
                 "from them.", kept).format(kept)

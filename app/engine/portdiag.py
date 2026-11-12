@@ -383,9 +383,12 @@ _TEXTS: dict[str, Callable[..., str]] = {
         "configured port is not one of them: {2} was opened. Identical adapters without a "
         "serial number of their own can't be told apart by it: set the port to the "
         "adapter's name under “By USB socket” (/dev/serial/by-path)").format(ident, n, device),
-    "hangups": lambda _, n: _(
-        "hung up {0} time(s) while open, and could be reopened at once: another program may "
-        "be using this port (a login prompt on it?)").format(n),
+    # (a count: the form for 1 or for other numbers, as i18n.ngettext picks them)
+    "hangups": lambda _, n: (_(
+        "hung up {0} time while open, and could be reopened at once: another program may "
+        "be using this port (a login prompt on it?)") if n == 1 else _(
+        "hung up {0} times while open, and could be reopened at once: another program may "
+        "be using this port (a login prompt on it?)")).format(n),
 }
 
 
