@@ -23,7 +23,7 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 | What | Command |
 |---|---|
 | Lint | `ruff check .` |
-| Types | `mypy` and `mypy --platform win32` (settings in `mypy.ini`) |
+| Types | `pip install mypy types-pyserial -r requirements-optional.txt`, then `mypy` and `mypy --platform win32` (settings in `mypy.ini`) |
 | Tests (any OS) | `python tests/run_all.py -v` |
 | + serial data path (Linux, needs `socat`) | `python tests/run_all.py --socat -v` |
 | Coverage | `pip install coverage && python tests/coverage_run.py && coverage report` |
