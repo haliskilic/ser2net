@@ -16,7 +16,7 @@ from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
 from .common import TRIGGER, Ctx, console_interactive, sees_to_device
-from .forms import _form_error, _modbus_points_json
+from .forms import _form_error, _modbus_points_json, mqtt_password_view
 
 
 def routes(ctx: Ctx) -> list:
@@ -94,8 +94,8 @@ def routes(ctx: Ctx) -> list:
         return Response("", headers=TRIGGER)
 
     # ---------------- mapping form ----------------
-    # The form is for editing (operator+), and it renders stored secrets (the MQTT
-    # password) into the page, so viewers get 403 — the UI never offers it to them.
+    # The form is for editing (operator+), so viewers get 403 — the UI never offers it to
+    # them. It shows every setting but the MQTT password, which it only says is stored.
     async def mapping_form_new(request):
         if deny := require_role(request, "operator"):
             return deny
@@ -114,7 +114,7 @@ def routes(ctx: Ctx) -> list:
         return render(request, "_mapping_form.html",
                       mapping=m, is_new=False, modbus_points_json=_modbus_points_json(m),
                       ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
-                      error=None)
+                      error=None, **mqtt_password_view(m.mqtt.password))
 
     async def mapping_log(request):
         mid = request.path_params["mid"]

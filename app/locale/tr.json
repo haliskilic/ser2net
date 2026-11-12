@@ -840,5 +840,6 @@
   "An account named {0} here signs in another way (through the directory or SSO), so you can't sign in under that name like this. Ask an admin to delete that account first.": "Burada {0} adında başka bir yolla (dizin ya da SSO ile) giriş yapan bir hesap var; bu yüzden bu adla bu şekilde giriş yapamazsın. Bir admin'den önce o hesabı silmesini iste.",
   "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış.",
   "Too many sign-ins at the same time. Try again in a moment.": "Aynı anda çok fazla giriş deneniyor. Biraz sonra tekrar dene.",
-  "Refused: this request was sent by a page of another web site. If you used ser2net’s own page, its address must reach ser2net unchanged (behind a reverse proxy: as Host or X-Forwarded-Host).": "Reddedildi: bu isteği başka bir web sitesinin sayfası gönderdi. ser2net'in kendi sayfasını kullandıysan, sayfanın adresi ser2net'e değişmeden ulaşmalı (reverse proxy arkasında: Host ya da X-Forwarded-Host olarak)."
+  "Refused: this request was sent by a page of another web site. If you used ser2net’s own page, its address must reach ser2net unchanged (behind a reverse proxy: as Host or X-Forwarded-Host).": "Reddedildi: bu isteği başka bir web sitesinin sayfası gönderdi. ser2net'in kendi sayfasını kullandıysan, sayfanın adresi ser2net'e değişmeden ulaşmalı (reverse proxy arkasında: Host ya da X-Forwarded-Host olarak).",
+  "Remove the stored password": "Kayıtlı parolayı sil"
 }

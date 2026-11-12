@@ -12,13 +12,11 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ..config import ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
+from ..config import REDACTED, ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
 API_PREFIX = "/api/v1"
-
-REDACTED = "********"
 
 
 def _mapping_view(mapping, state) -> dict:
@@ -97,6 +95,8 @@ def build_api_routes(state):
             existing = state.config.get_mapping(mid)
             if not existing:
                 return JSONResponse({"error": "not_found"}, status_code=404)
+            if mapping.mqtt.password == REDACTED:  # what a viewer token reads: keep it
+                mapping.mqtt.password = existing.mqtt.password
             backup = list(state.config.mappings)
             state.config.mappings[state.config.mappings.index(existing)] = mapping
             try:

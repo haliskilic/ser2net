@@ -352,8 +352,9 @@ Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
 Token, üretilirken seçilen rolü taşır: `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
-sırları (MQTT parolası) maskeli görür. `config.json`'daki `api_token_role` bir rol değilse
-`viewer` sayılır ve açılış log'u bunu yazar.
+sırları (MQTT parolası) `********` olarak maskeli görür; bu maskeyi geri gönderen bir `PUT`
+kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
+ve açılış log'u bunu yazar.
 
 ---
 

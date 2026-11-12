@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 
-from ...config import LdapSettings, MappingConfig, OidcSettings
+from ...config import REDACTED, LdapSettings, MappingConfig, OidcSettings
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -158,6 +158,34 @@ _OPTIONAL_FORM_FIELDS = {
 }
 
 
+# The mapping form never shows the stored MQTT password: a form with this marker posts a
+# blank field to keep it, and MQTT_PASSWORD_CLEAR to remove it. A form without the marker
+# (an older node's remote-edit form, an open tab from before the upgrade, a script) sets
+# the password it posts, as before.
+MQTT_PASSWORD_WRITE_ONLY = "mqtt_password_write_only"
+MQTT_PASSWORD_CLEAR = "mqtt_password_clear"
+
+
+def mqtt_password_from_form(form, stored: str) -> str:
+    """The MQTT password a mapping form sets, given the stored one: the posted value, except
+    that a write-only form's blank field keeps the stored password (or, with the remove box,
+    clears it), and so does the REST API's REDACTED mask."""
+    typed = form.get("mqtt_password", "")
+    if typed == REDACTED:
+        return stored
+    if not typed and MQTT_PASSWORD_WRITE_ONLY in form:
+        return "" if _checkbox(form, MQTT_PASSWORD_CLEAR) else stored
+    return typed
+
+
+def mqtt_password_view(stored: str, form=None) -> dict:
+    """What _mapping_form.html shows of the MQTT password: whether one is stored, never
+    the password itself; re-drawn after an error, what was typed and the remove box."""
+    return {"mqtt_password_stored": bool(stored),
+            "mqtt_password_typed": form.get("mqtt_password", "") if form is not None else "",
+            "mqtt_password_clear": form is not None and _checkbox(form, MQTT_PASSWORD_CLEAR)}
+
+
 def _build_mapping_dict(form, strict: bool) -> dict:
     bind = form.get("network_bind_ip", "0.0.0.0")
     if bind == "custom":
@@ -281,7 +309,8 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     strings, the trace-timestamp flag and the RFC2217 interop knobs. The RS-485 fields
     ARE in the form now, so they're taken from the submission. Given the submitted
     `form`, the not-always-posted fields (_OPTIONAL_FORM_FIELDS) are kept too when
-    absent. No-op when creating."""
+    absent, and the stored MQTT password when the form keeps it (mqtt_password_from_form).
+    No-op when creating."""
     if existing is None:
         return
     if form is not None:
@@ -290,6 +319,7 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
                 for attr in attrs:
                     setattr(getattr(new_map, section), attr,
                             getattr(getattr(existing, section), attr))
+        new_map.mqtt.password = mqtt_password_from_form(form, existing.mqtt.password)
     for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
                              ("serial_b_", new_map.serial_b, existing.serial_b)):
         # the USB-identity binding is in the form now (ops.apply_usb_match); a form
@@ -317,8 +347,10 @@ def _form_error(render, request, state, form, message: str):
     except Exception:
         mapping = MappingConfig(name=form.get("name", ""))
     is_new = not form.get("id")
+    existing = None if is_new else state.config.get_mapping(form.get("id"))
     return render(request, "_mapping_form.html", status_code=400,
                   mapping=mapping, is_new=is_new,
                   modbus_points_json=_modbus_points_json(mapping),
                   ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
-                  error=message)
+                  error=message,
+                  **mqtt_password_view(existing.mqtt.password if existing else "", form))
