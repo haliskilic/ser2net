@@ -205,12 +205,13 @@ class SparkplugNode:
             last = load_bdseq(self._bdseq_file, self._bdseq_key)
         except (OSError, ValueError) as e:
             last, problem = None, f"can't be read ({e})"
-        first = random.randrange(256) if problem else 0 if last is None else (last + 1) % 256
+        # (S311: a sequence number a host application compares, not a secret)
+        first = random.randrange(256) if problem else 0 if last is None else (last + 1) % 256  # noqa: S311
         try:
             save_bdseq(self._bdseq_file, self._bdseq_key, first)
         except OSError as e:
             if not problem:
-                first = random.randrange(256)
+                first = random.randrange(256)  # noqa: S311 - as above
             problem = problem or f"can't be stored ({e})"
             self._bdseq_saved = False
         if problem:

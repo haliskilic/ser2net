@@ -38,7 +38,7 @@ from . import (
 )
 from .config import (NODE_NAME_ENV, ConfigError, ConfigStore, data_path, host_port, node_name,
                      node_name_problem)
-from .engine import netguard
+from .engine import bindhint, netguard
 from .engine.serial_link import Backoff
 from .state import AppState, write_audit_record
 from .web import certinfo, httpguard, proxy
@@ -105,6 +105,8 @@ def _os_error(e: OSError, data_dir: str | None = None) -> str:
 def _access_hint(path: str, data_dir: str | None) -> str:
     """The usual cause of a permission error on ser2net's files: another account left
     them behind (a run with sudo, or a Docker image before v2.8, which ran as root)."""
+    if sys.platform == "win32":  # POSIX owners only (the caller checks os.name)
+        return ""
     me = f"{os.getuid()}:{os.getgid()}"
     owner = "it can't be inspected"
     for target, label in ((path, "it"), (os.path.dirname(path), "its folder")):
@@ -524,7 +526,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         state.log(note)
     from .engine import serial_compat
     for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config),
-                 serial_compat.unverified_note()):
+                 serial_compat.unverified_note(), bindhint.admin_port_note(admin.port)):
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)

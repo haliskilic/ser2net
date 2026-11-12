@@ -32,12 +32,12 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app.config import MappingConfig  # noqa: E402
-from app.engine.bridge import RunnerStatus  # noqa: E402
-from app.web.routes.cluster import _fleet_snapshot  # noqa: E402
-from app.web.routes.common import Ctx, LiveTable  # noqa: E402
-from app.web.routes.mappings import _SHOWN, _in_out, _row_shape, _steady  # noqa: E402
-from app.web.server import make_templates  # noqa: E402
+from app.config import MappingConfig
+from app.engine.bridge import RunnerStatus
+from app.web.routes.cluster import _fleet_snapshot
+from app.web.routes.common import Ctx, LiveTable
+from app.web.routes.mappings import _SHOWN, _in_out, _row_shape, _steady
+from app.web.server import make_templates
 
 
 class Request:

@@ -54,7 +54,7 @@ def answer(code: int, value: bytes) -> bytes:
     return bytes([IAC, SB]) + body + bytes([IAC, SE])
 
 
-CONTROL = lambda n: answer(105, bytes([n]))  # noqa: E731
+CONTROL = lambda n: answer(105, bytes([n]))
 
 
 class FakeSerial:

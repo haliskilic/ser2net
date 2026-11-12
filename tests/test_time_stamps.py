@@ -35,13 +35,13 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import clock                                            # noqa: E402
-from app.config import AppConfig, ConfigStore                    # noqa: E402
-from app.engine.bridge import Tracer                             # noqa: E402
-from app.signins import SignIns                                  # noqa: E402
-from app.state import AppState, _trim_log_file, write_audit_record  # noqa: E402
-from app.web import auth                                         # noqa: E402
-from app.web.server import build_app                             # noqa: E402
+from app import clock
+from app.config import AppConfig, ConfigStore
+from app.engine.bridge import Tracer
+from app.signins import SignIns
+from app.state import AppState, _trim_log_file, write_audit_record
+from app.web import auth
+from app.web.server import build_app
 
 STAMP = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[+-]\d\d:\d\d")
 OLD = "%Y-%m-%d %H:%M:%S"

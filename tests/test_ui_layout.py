@@ -75,10 +75,10 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-import _form_cases as form_cases  # noqa: E402
-from _formsubmit import browser_post  # noqa: E402
+import _form_cases as form_cases
+from _formsubmit import browser_post
 
-from app.web.auth import hash_password  # noqa: E402
+from app.web.auth import hash_password
 
 REQUIRED = os.environ.get("SER2NET_UI_TESTS") == "1"
 ARTIFACTS = os.environ.get("SER2NET_UI_ARTIFACTS", "")
@@ -875,6 +875,11 @@ def main():
                     for view in ("Log", "Monitor", "Edit", "Trace"):
                         dashboard()
                         open_view(TR[view] if lang == "tr" else view)
+                        if view == "Monitor":  # xterm.js opened the console and FitAddon sized it
+                            page.wait_for_selector("#term .xterm-screen")
+                            cols = page.evaluate("() => document.getElementById('term')._term.cols")
+                            if not cols or cols < 20:
+                                problems.append(f"{lang} console @{w}: {cols} columns")
                         check(f"{lang} {view.lower()} view @{w}")
                     dashboard()  # the points editor's fields, and a test read's answer
                     open_view(TR["Edit"] if lang == "tr" else "Edit", MODBUS_NAME)
@@ -913,6 +918,8 @@ def main():
                               "JSON stays in the box with a note")
                     page.goto(f"{base}/settings")
                     page.wait_for_selector("section.panel")
+                    if page.evaluate("() => typeof Terminal !== 'undefined'"):
+                        problems.append("xterm.js loaded on the settings page")
                     check(f"{lang} settings @{w}")
                     page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
                     page.wait_for_selector("#backups h3")

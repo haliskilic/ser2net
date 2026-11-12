@@ -15,7 +15,7 @@ import sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 
-from app import __version__  # noqa: E402
+from app import __version__
 
 CHANGELOG = os.path.join(ROOT, "CHANGELOG.md")
 TYPES = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")

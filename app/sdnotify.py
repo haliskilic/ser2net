@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import socket
+import sys
 import time
 from typing import Mapping, Optional
 
@@ -29,7 +30,7 @@ def notify(*fields: str, env: Optional[Mapping[str, str]] = None) -> bool:
     runs on the event loop, and a socket whose queue is full (nobody reads it) would hold
     it up; that message is lost instead."""
     addr = _address(os.environ if env is None else env)
-    if addr is None:
+    if addr is None or sys.platform == "win32":  # (no systemd there)
         return False
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
@@ -50,10 +51,11 @@ def reloading(env: Optional[Mapping[str, str]] = None) -> bool:
     """ser2net reads config.json again (systemctl reload, SIGHUP); ready() follows when it
     is done (also what Type=notify-reload waits for)."""
     fields = ["RELOADING=1"]
-    try:
-        fields.append(f"MONOTONIC_USEC={time.clock_gettime_ns(time.CLOCK_MONOTONIC) // 1000}")
-    except (AttributeError, OSError):  # (no CLOCK_MONOTONIC: Windows, which has no systemd)
-        pass
+    if sys.platform != "win32":  # (no CLOCK_MONOTONIC on Windows, which has no systemd)
+        try:
+            fields.append(f"MONOTONIC_USEC={time.clock_gettime_ns(time.CLOCK_MONOTONIC) // 1000}")
+        except (AttributeError, OSError):
+            pass
     return notify(*fields, env=env)
 
 

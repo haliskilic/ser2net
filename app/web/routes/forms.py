@@ -314,8 +314,8 @@ def _section(mapping, path: str):
 # blank field to keep it, and MQTT_PASSWORD_CLEAR to remove it. A form without the marker
 # (an older node's remote-edit form, an open tab from before the upgrade, a script) sets
 # the password it posts, as before.
-MQTT_PASSWORD_WRITE_ONLY = "mqtt_password_write_only"
-MQTT_PASSWORD_CLEAR = "mqtt_password_clear"
+MQTT_PASSWORD_WRITE_ONLY = "mqtt_password_write_only"  # noqa: S105 - a form field name
+MQTT_PASSWORD_CLEAR = "mqtt_password_clear"  # noqa: S105 - a form field name
 
 
 def mqtt_password_from_form(form, stored: str) -> str:

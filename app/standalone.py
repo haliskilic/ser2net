@@ -89,6 +89,8 @@ def touch_tree(root: str, now_ns: int | None = None) -> int:
 def _lock_shared(path: str) -> int:
     """An fd on path that holds flock(LOCK_SH). Waits up to 5 s for an exclusive holder
     (systemd-tmpfiles locks a directory only while it scans it) rather than hang."""
+    if sys.platform == "win32":  # keep_unpacked locks on POSIX only
+        raise OSError("flock() is POSIX only")
     import fcntl
 
     fd = os.open(path, os.O_RDONLY)

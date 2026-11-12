@@ -22,7 +22,7 @@ import socket
 import sys
 
 from .config import AdminUI, host_port, shown_host
-from .engine import netinfo
+from .engine import bindhint, netinfo
 
 # how far past a taken port the picker looks for a free one
 _FREE_PORT_TRIES = 50
@@ -166,6 +166,8 @@ def choose_admin_bind(current: AdminUI | None = None,
         if notes is not None:
             notes.append(in_use_warning(ip, port))
 
+    if note := bindhint.admin_port_note(port):
+        print(f"  NOTE: {note.removeprefix('WARNING: ')}")
     print(f"\n[ser2net] Configuration UI will listen on  http://{host_port(ip, port)}")
     if ip not in ("127.0.0.1", "localhost", "::1"):
         print("[ser2net] NOTE: this is reachable from the network. You will set an "

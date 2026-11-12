@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import sys
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional
 
@@ -308,6 +309,8 @@ class SerialLink:
 
 def _rdev(ser: Any) -> Optional[int]:
     """The device number of an open POSIX port (None elsewhere, or for a stand-in)."""
+    if sys.platform == "win32":
+        return None
     try:
         return os.fstat(ser.fileno()).st_rdev or None
     except (AttributeError, OSError, ValueError, TypeError):

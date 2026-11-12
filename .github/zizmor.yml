@@ -1,0 +1,18 @@
+# zizmor: the GitHub Actions security linter (CI job "workflow lint (zizmor)").
+# https://docs.zizmor.sh/configuration/
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # every action by full commit SHA, GitHub's own too, with the version in a
+        # comment (Dependabot updates both); the repository's "require full-length SHA
+        # pins" Actions policy would refuse a tag reference at run time anyway
+        "*": hash-pin
+  # suggests '$/' for this repository's own reusable workflows; './' is the same
+  # commit's file either way
+  self-repository:
+    disable: true
+  # a cooldown (days before Dependabot proposes a new release) is a Dependabot policy
+  # decision, not made here yet
+  dependabot-cooldown:
+    disable: true

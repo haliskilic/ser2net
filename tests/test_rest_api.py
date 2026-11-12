@@ -20,16 +20,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _server import server_log, show_log_on_failure
+from _server import free_port, server_log, show_log_on_failure
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
-from app import __version__  # noqa: E402
+from app import __version__
 
-UI = 8095
+UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
-from _server import ui_cookie  # noqa: E402
+from _server import ui_cookie
 
 
 def wait_port(port, timeout=15):
@@ -41,14 +41,6 @@ def wait_port(port, timeout=15):
                 return True
         time.sleep(0.2)
     return False
-
-
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
 
 
 def api(method, path, token=None, body=None, expect=None):

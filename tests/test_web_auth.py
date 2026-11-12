@@ -19,14 +19,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _server import Server, free_port, server_log, show_log_on_failure
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
-UI = 8087
+UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
-from _server import Server, server_log, show_log_on_failure, ui_cookie  # noqa: E402
+from _server import ui_cookie
 
-from app.web import auth  # noqa: E402
+from app.web import auth
 
 # the UI's cookie names at that port
 SESSION, CSRF = ui_cookie("ser2net_session", UI), ui_cookie("ser2net_csrf", UI)

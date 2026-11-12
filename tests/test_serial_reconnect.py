@@ -9,16 +9,23 @@ supervision (serial_link.SerialLink), so both must report the outage and reopen:
     it is back the same Modbus/TCP master connection is served again;
   - raw bridge: a connected TCP client gets the device's data again after it returns,
     and its bytes reach the device; what it sends meanwhile is counted as dropped, not as
-    written to the device.
+    written to the device;
+  - serial<->serial bridge (its own supervision: both ports open and close together): with
+    the B device gone the mapping is lost (device_lost), once it is back both ports are
+    open again (device_back) and data passes both ways. Port A is a plain PTY the test
+    holds open (os.openpty), which a close by the bridge doesn't take away, as a real
+    adapter's port stays when its peer goes away.
 
 Run: python3 tests/test_serial_reconnect.py
 """
 import asyncio
 import os
+import select
 import shutil
 import socket
 import sys
 import tempfile
+import time
 from contextlib import suppress
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -231,6 +238,90 @@ async def test_bridge_device_returns(folder):
             await dev.unplug()
 
 
+class HeldPty:
+    """A PTY whose device side the test holds open: ``path`` is the port for the mapping,
+    the master end is the device. Its port can be closed and opened again by the bridge."""
+
+    def __init__(self):
+        self.master, self._slave = os.openpty()
+        self.path = os.ttyname(self._slave)
+
+    def send(self, data: bytes) -> None:
+        os.write(self.master, data)
+
+    def _recv(self, n: int, timeout: float) -> bytes:
+        got, end = b"", time.monotonic() + timeout
+        while len(got) < n:
+            left = end - time.monotonic()
+            if left <= 0 or not select.select([self.master], [], [], left)[0]:
+                break
+            got += os.read(self.master, n - len(got))
+        return got
+
+    async def recv(self, n: int, timeout: float = 5.0) -> bytes:
+        return await asyncio.to_thread(self._recv, n, timeout)
+
+    def close(self) -> None:
+        for fd in (self.master, self._slave):
+            with suppress(OSError):
+                os.close(fd)
+
+
+async def test_serial_bridge_device_returns(folder):
+    a = HeldPty()
+    b = Device(folder)
+    await b.plug()
+    sup = Supervisor(logger=lambda _m: None)
+    m = MappingConfig.from_dict({
+        "name": "pair", "enabled": True, "kind": "serialbridge",
+        "serial": {"port": a.path, "baudrate": 9600},
+        "serial_b": {"port": b.port, "baudrate": 9600}})
+    names = {m.id: m.name}
+    end_w = None
+    try:
+        ok, msg = await sup.apply_mapping(m)
+        assert ok, msg
+        assert await wait_for(lambda: sup.status(m.id)["state"] == "running"), sup.status(m.id)
+        end_r, end_w = await b.open_end()
+        await asyncio.sleep(0.2)
+        a.send(b"a-to-b")
+        assert await asyncio.wait_for(end_r.readexactly(6), timeout=5) == b"a-to-b"
+        end_w.write(b"b-to-a")
+        await end_w.drain()
+        assert await a.recv(6) == b"b-to-a"
+        before = notify.snapshot(sup.all_status())
+        print("serial bridge: A <-> B over a PTY and a socat pair  OK")
+
+        await b.unplug()
+        assert await wait_for(lambda: sup.status(m.id)["state"] in LOST
+                              and sup.status(m.id)["reconnects"] >= 1), sup.status(m.id)
+        end_w.close()
+        lost = sup.all_status()
+        assert [e[0] for e in notify.status_events(before, lost, names)] == ["device_lost"]
+        print(f"serial bridge: B gone -> {sup.status(m.id)['state']}, device_lost  OK")
+
+        await b.plug()
+        assert await wait_for(lambda: sup.status(m.id)["state"] == "running", timeout=25), \
+            sup.status(m.id)
+        events = notify.status_events(notify.snapshot(lost), sup.all_status(), names)
+        assert [e[0] for e in events] == ["device_back"], events
+        end_r, end_w = await b.open_end()
+        await asyncio.sleep(0.2)
+        a.send(b"again-a")
+        assert await asyncio.wait_for(end_r.readexactly(7), timeout=5) == b"again-a"
+        end_w.write(b"again-b")
+        await end_w.drain()
+        assert await a.recv(7) == b"again-b"
+        print("serial bridge: B back -> both ports reopened, data both ways, device_back  OK")
+    finally:
+        await sup.stop_all()
+        if end_w is not None:
+            end_w.close()
+        if b.proc is not None:
+            await b.unplug()
+        a.close()
+
+
 async def main():
     if not shutil.which("socat"):
         print("SKIP: socat not found")
@@ -239,9 +330,11 @@ async def main():
     try:
         await test_gateway_device_returns(folder)
         await test_bridge_device_returns(folder)
+        await test_serial_bridge_device_returns(folder)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
-    print("\nPASS: serial device lost and back (Modbus gateway + raw bridge)")
+    print("\nPASS: serial device lost and back (Modbus gateway, raw and serial<->serial "
+          "bridges)")
 
 
 if __name__ == "__main__":

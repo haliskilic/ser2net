@@ -186,6 +186,8 @@ def test_points_json_parse():
 
 
 def form_of(points_text, **extra):
+    # fixed port: read in-process (forms, the fleet view's checks); the server parts below
+    # take free ports
     return {"id": "abcdef012345", "name": "PLC-9", "kind": "net", "enabled": "on",
             "serial_port": "/dev/ser2net-test-plc", "network_protocol": "modbus",
             "network_port": "5021", "mqtt_enabled": "on", "mqtt_host": "broker.lan",

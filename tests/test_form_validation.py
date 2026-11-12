@@ -22,13 +22,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _server import server_log, show_log_on_failure
+from _server import free_port, server_log, show_log_on_failure
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-UI = 8089
+UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
-from _server import ui_cookie  # noqa: E402
+from _server import ui_cookie
 
 
 def wait_port(port, timeout=15):
@@ -78,7 +78,7 @@ def main():
         r = post("/api/mappings/save", {
             "name": "Bad", "kind": "net", "enabled": "on",
             "network_mode": "server", "network_protocol": "raw",
-            "network_bind_ip": "127.0.0.1", "network_port": "4099",
+            "network_bind_ip": "127.0.0.1", "network_port": str(free_port()),
             "serial_port": "",  # <-- missing required device
         })
         status = getattr(r, "code", getattr(r, "status", None))
@@ -93,7 +93,7 @@ def main():
         # the Modbus points field is raw JSON: a value of the wrong type is named, not a 500
         gateway = {"name": "GW", "kind": "net", "network_mode": "server",
                    "network_protocol": "modbus", "network_bind_ip": "127.0.0.1",
-                   "network_port": "5099", "serial_port": "/dev/ttyUSB-gw",
+                   "network_port": str(free_port()), "serial_port": "/dev/ttyUSB-gw",
                    "serial_baudrate": "9600"}
         for points, needle in (
                 ('[{"name":"t","unit":"one","fn":3,"address":0,"dtype":"uint16"}]',
@@ -111,7 +111,7 @@ def main():
         r2 = post("/api/mappings/save", {
             "name": "Good", "kind": "net", "enabled": "",
             "network_mode": "server", "network_protocol": "raw",
-            "network_bind_ip": "127.0.0.1", "network_port": "4100",
+            "network_bind_ip": "127.0.0.1", "network_port": str(free_port()),
             "serial_port": "/dev/ttyUSB-test", "serial_baudrate": "9600",
         })
         s2 = getattr(r2, "code", getattr(r2, "status", 200))

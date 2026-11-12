@@ -79,11 +79,10 @@ import os
 import sys
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import serial
 import serial_asyncio_fast as _saf
-from serial import serialutil
 
 _PIPES = ("pipe_abort_read_r", "pipe_abort_read_w", "pipe_abort_write_r", "pipe_abort_write_w")
 # what pyserial's own read() says when a port reads empty although it was ready
@@ -101,13 +100,27 @@ POLL_IDLE_WAIT_S = 0.01  # ... this instead of every 0.5 ms
 WINDOWS_SERIAL_ENV = "SER2NET_WINDOWS_SERIAL"
 
 
-if os.name == "posix":
+# (sys.platform too, which mypy --platform reads; os.name alone decides at run time, as
+# tests/_windows_transport.py relies on: it imports this module with sys.platform "win32")
+if os.name == "posix" and sys.platform != "win32":
     import fcntl
     import termios
 
     from serial import serialposix
 
-    class PosixSerial(serialposix.Serial):
+    if TYPE_CHECKING:
+        class _PosixBase(serialposix.Serial):
+            # pyserial's private parts PosixSerial uses; its type stubs leave them out
+            _bytesize: Any
+            _parity: Any
+            _stopbits: Any
+
+            def _reconfigure_port(self, force_update: bool = False) -> None: ...
+            def _set_special_baudrate(self, baudrate: int) -> None: ...
+    else:
+        _PosixBase = serialposix.Serial
+
+    class PosixSerial(_PosixBase):
         """pyserial's POSIX port without select() and without the abort pipes, for a
         non-blocking transport only: a read or write timeout other than 0 is refused
         (nothing could cancel a read or write that waits).
@@ -127,7 +140,7 @@ if os.name == "posix":
         _excl = False  # TIOCEXCL is set on the open port
 
         def open(self) -> None:
-            if self.respect_uucp_locks:
+            if self.respect_uucp_locks and self.portstr:
                 from . import portdiag
                 held = portdiag.uucp_lock(self.portstr)
                 if held is not None:
@@ -194,7 +207,7 @@ if os.name == "posix":
         def read(self, size: int = 1) -> bytes:
             if not self.is_open:
                 raise serial.PortNotOpenError()
-            if self._timeout != 0:
+            if self.timeout != 0:
                 raise serial.SerialException("this port reads non-blocking only (timeout=0)")
             try:
                 data = os.read(self.fd, size)
@@ -219,11 +232,11 @@ if os.name == "posix":
             until the port is writable again."""
             if not self.is_open:
                 raise serial.PortNotOpenError()
-            if self._write_timeout != 0:
+            if self.write_timeout != 0:
                 raise serial.SerialException("this port writes non-blocking only "
                                              "(write_timeout=0)")
             try:
-                return os.write(self.fd, serialutil.to_bytes(data))
+                return os.write(self.fd, bytes(data))
             except BlockingIOError:
                 raise
             except OSError as e:
@@ -353,11 +366,20 @@ class OverlappedWrites:
                 _ABANDONED.append((ov, chunk))
 
 
-if os.name == "nt":
+if os.name == "nt" and sys.platform == "win32":
     from serial import serialwin32
     from serial import win32 as _win32
 
-    class WindowsSerial(serialwin32.Serial):
+    if TYPE_CHECKING:
+        class _WindowsBase(serialwin32.Serial):
+            # pyserial's private parts WindowsSerial uses; its type stubs leave them out
+            _port_handle: Any
+
+            def _close(self) -> None: ...
+    else:
+        _WindowsBase = serialwin32.Serial
+
+    class WindowsSerial(_WindowsBase):
         """pyserial's Windows port, whose non-blocking writes are tracked (OverlappedWrites)
         instead of reported done at once on one shared OVERLAPPED; for a non-blocking
         transport only (a write timeout other than 0 is refused)."""
@@ -373,17 +395,17 @@ if os.name == "nt":
         def write(self, data: Any) -> int:
             if not self.is_open or self._writes is None:
                 raise serial.PortNotOpenError()
-            if self._write_timeout != 0:
+            if self.write_timeout != 0:
                 raise serial.SerialException("this port writes non-blocking only "
                                              "(write_timeout=0)")
-            data = serialutil.to_bytes(data)
+            data = bytes(data)
             return self._writes.write(data) if data else 0
 
         @property
         def out_waiting(self) -> int:
             """What is still to go out: the driver's queue, or the writes in flight (some
             drivers report no queue)."""
-            queued = serialwin32.Serial.out_waiting.fget(self)
+            queued = super().out_waiting
             writes = self._writes
             return max(queued, writes.pending()) if writes is not None else queued
 
@@ -407,15 +429,20 @@ if os.name == "nt":
 
 def serial_class() -> type:
     """The pyserial class a device is opened with on this OS."""
-    if os.name == "posix":
+    if os.name == "posix" and sys.platform != "win32":
         return PosixSerial
-    if os.name == "nt" and (os.environ.get(WINDOWS_SERIAL_ENV) or "").strip().lower() != "pyserial":
-        return WindowsSerial
+    if os.name == "nt" and sys.platform == "win32":
+        if (os.environ.get(WINDOWS_SERIAL_ENV) or "").strip().lower() != "pyserial":
+            return WindowsSerial
     return serial.Serial
 
 
 class Transport(_saf.SerialTransport):
     """pyserial-asyncio-fast's transport with ser2net's fixes (see the module docstring)."""
+
+    # upstream's: False, or (Windows) the TimerHandle of the next poll; typed bool there
+    _has_reader: Any
+    _has_writer: Any
 
     def __init__(self, loop: asyncio.AbstractEventLoop, protocol: asyncio.Protocol,
                  serial_instance: Any) -> None:

@@ -137,18 +137,18 @@ def _opener() -> urllib.request.OpenerDirector:
 
 
 def _get_json(url: str, timeout: float = 8):
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with _opener().open(req, timeout=timeout) as r:  # noqa: S310 (secure_url checked it)
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})  # noqa: S310 - https (secure_url)
+    with _opener().open(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
 def _post_form(url: str, data: dict, timeout: float = 8):
     body = urllib.parse.urlencode(data).encode()
-    req = urllib.request.Request(url, data=body, method="POST",
+    req = urllib.request.Request(url, data=body, method="POST",  # noqa: S310 - https (secure_url)
                                  headers={"Content-Type": "application/x-www-form-urlencoded",
                                           "Accept": "application/json"})
     try:
-        with _opener().open(req, timeout=timeout) as r:  # noqa: S310
+        with _opener().open(req, timeout=timeout) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:   # an OAuth error answer: say what it was
         raise TokenEndpointError(f"the token endpoint refused the code: HTTP {e.code} "

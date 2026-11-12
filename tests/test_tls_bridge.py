@@ -8,7 +8,6 @@ Run: python3 tests/test_tls_bridge.py
 """
 import asyncio
 import os
-import re
 import shutil
 import ssl
 import subprocess
@@ -20,18 +19,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
-
-
-async def socat():
-    p = await asyncio.create_subprocess_exec(
-        "socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    devs = []
-    while len(devs) < 2:
-        m = re.search(rb"PTY is (\S+)", await p.stderr.readline())
-        if m:
-            devs.append(m.group(1).decode())
-    return p, devs[0], devs[1]
+from _server import free_port
+from _socat import pty_pair as socat
 
 
 def gen_cert(tmp):
@@ -52,7 +41,7 @@ async def main():
     cert, key = gen_cert(tmp)
     p, dev_a, dev_b = await socat()
     sup = Supervisor(logger=lambda s: None)
-    port = 47360
+    port = free_port()
     m = MappingConfig.from_dict({
         "name": "tls", "enabled": True, "serial": {"port": dev_a, "baudrate": 115200},
         "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",

@@ -392,14 +392,20 @@ def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "",
     """POST the message to the webhook. Returns a warning, or "". A redirect (301/302/303)
     is followed, as a GET without the message: some receivers answer a POST they handled
     that way, others moved (http:// to https://, a new path) and never got the message, so
-    the 2xx at the end of it doesn't tell whether it arrived."""
+    the 2xx at the end of it doesn't tell whether it arrived. (``url``: the link to this
+    ser2net that the message carries, not the webhook's address.)"""
+    target = settings.webhook_url.strip()
+    # http(s) only, also when a config.json with another URL was tolerated on load
+    # (NotificationSettings.validate refuses it when settings are saved)
+    if not target.lower().startswith(("https://", "http://")):
+        raise OSError("the webhook URL must start with https:// (or http://)")
     body = json.dumps(webhook_body(settings.webhook_format, event, mapping, detail,
                                    str(settings.telegram_chat_id), url, name,
                                    instance_id)).encode()
-    req = urllib.request.Request(ascii_url(settings.webhook_url.strip()), data=body, method="POST",
-                                 headers={"Content-Type": "application/json",
-                                          "User-Agent": f"ser2net/{__version__}"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+    req = urllib.request.Request(  # noqa: S310 (http(s) only)
+        ascii_url(target), data=body, method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": f"ser2net/{__version__}"})
+    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 (http(s) only)
         if r.status >= 300:
             raise OSError(f"webhook answered HTTP {r.status}")
         final = r.geturl()

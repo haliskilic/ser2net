@@ -31,14 +31,14 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from _clock import WallClock                                     # noqa: E402
+from _clock import WallClock
 
-from app import clock, runtime                                   # noqa: E402
-from app.config import AppConfig, ConfigStore                    # noqa: E402
-from app.state import AppState                                   # noqa: E402
-from app.web import auth                                         # noqa: E402
-from app.web.routes import settings as settings_routes           # noqa: E402
-from app.web.server import build_app                             # noqa: E402
+from app import clock, runtime
+from app.config import AppConfig, ConfigStore
+from app.state import AppState
+from app.web import auth
+from app.web.routes import settings as settings_routes
+from app.web.server import build_app
 
 DAY = 86400.0
 PW = "clock-check-1"
