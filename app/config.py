@@ -549,6 +549,11 @@ class NetworkSettings:
     # without a datagram from it (the output then goes nowhere until someone sends);
     # 0 = never.
     udp_peer_timeout_s: int = 0
+    # UDP: more destinations that always get the device's output too (whoever sends, and
+    # before anyone has), each "IP:port" ("[IPv6]:port"): e.g. an NMEA 0183 feed to a LAN's
+    # broadcast address. Sending to a broadcast address needs udp_broadcast (SO_BROADCAST).
+    udp_targets: list[str] = field(default_factory=list)
+    udp_broadcast: bool = False
     max_connections: int = 1
     kick_old_user: bool = False
     # TCP (raw / telnet / rfc2217, server and connect-out): while the serial port is not
@@ -700,6 +705,43 @@ def udp_peer_address(net: NetworkSettings) -> Optional[tuple[str, int]]:
     if not _is_int(port) or not 1 <= port <= 65535:
         raise ValueError(f"UDP reply port {port!r} is not between 1 and 65535")
     return host, port
+
+
+UDP_TARGETS_MAX = 32
+
+
+def udp_target(entry: Any) -> tuple[str, int]:
+    """One UDP target, "IP:port" or "[IPv6]:port", as (IP, port). Raises ValueError when it
+    is not a host's IP address (or a broadcast / multicast one) and a port."""
+    text = str(entry).strip() if isinstance(entry, str) else ""
+    host, sep, port = text.rpartition(":")
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    elif ":" in host:  # an IPv6 address needs its brackets ([fd00::1]:5000)
+        sep = ""
+    try:
+        if not sep:
+            raise ValueError
+        ip = ipaddress.ip_address(host)
+        number = int(port)
+    except ValueError:
+        raise ValueError(f"UDP target {entry!r} is not an IP address and a port "
+                         "(IP:port, [IPv6]:port)") from None
+    if ip.is_unspecified:
+        raise ValueError(f"UDP target {entry!r} is not a host's address")
+    if not 1 <= number <= 65535:
+        raise ValueError(f"UDP target {entry!r}: the port is not between 1 and 65535")
+    return str(ip), number
+
+
+def udp_targets(net: NetworkSettings) -> list[tuple[str, int]]:
+    """A UDP mapping's targets (udp_targets), each once. Raises ValueError for a stored one
+    that is malformed (edits refuse it: MappingConfig.validate_input), so the mapping fails
+    to start rather than leaving a destination out without a word."""
+    entries = net.udp_targets
+    if not isinstance(entries, list):
+        raise ValueError("udp_targets is not a list of IP:port entries")
+    return list(dict.fromkeys(udp_target(e) for e in entries))
 
 
 def udp_peer_timeout(net: NetworkSettings) -> float:
@@ -1056,6 +1098,34 @@ class MappingConfig:
         if not _is_number(timeout) or not (0 <= timeout <= MAX_TIMER_S):
             raise ConfigError(_("{0} must be between 0 (off) and {1} seconds.").format(
                 _("Peer timeout"), MAX_TIMER_S))
+        self._validate_udp_targets()
+
+    def _validate_udp_targets(self) -> None:
+        """A UDP mapping's targets: IP:port entries of the family the mapping listens on, at
+        most UDP_TARGETS_MAX; 255.255.255.255 needs udp_broadcast (an edit's rules: a stored
+        malformed one makes the mapping fail to start, see udp_targets)."""
+        net = self.network
+        if not isinstance(net.udp_targets, list):
+            raise ConfigError(_("The UDP targets must be a list of IP:port entries."))
+        if len(net.udp_targets) > UDP_TARGETS_MAX:
+            raise ConfigError(_("At most {0} UDP targets can be set.").format(UDP_TARGETS_MAX))
+        try:
+            bind_v4 = ipaddress.ip_address(net.bind_ip).version == 4
+        except ValueError:
+            bind_v4 = False  # validate() reports a bad bind IP
+        for entry in net.udp_targets:
+            try:
+                host, _port = udp_target(entry)
+            except ValueError:
+                raise ConfigError(_("UDP target {0} is not an IP address and a port (IP:port, "
+                                    "[IPv6]:port).").format(repr(entry))) from None
+            ip = ipaddress.ip_address(host)
+            if not net.both_families and (ip.version == 6) == bind_v4:
+                raise ConfigError(_("UDP target {0} is IPv{1}, but the mapping listens on {2}.")
+                                  .format(entry, ip.version, net.bind_ip))
+            if host == "255.255.255.255" and net.udp_broadcast is not True:
+                raise ConfigError(_("UDP target {0} is the broadcast address: tick “Allow "
+                                    "broadcast”.").format(entry))
 
 
 def tls_file_message(e: Any) -> str:

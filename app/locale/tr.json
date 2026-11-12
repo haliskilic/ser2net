@@ -944,5 +944,14 @@
   "The mapping is read-only: no serial BREAK is sent.": "Eşleme salt okunur: seri BREAK gönderilmez.",
   "No serial BREAK was sent: the serial port is not open, or it can't send one (see the mapping's log).": "Seri BREAK gönderilmedi: seri port açık değil ya da BREAK gönderemiyor (eşlemenin log'una bakın).",
   "Disconnect clients while the serial device is unavailable": "Seri cihaz yokken istemcilerin bağlantısını kes",
-  "and refuse new ones until it is back; connect-out connects only while the port is open. Off: clients stay connected and what they send meanwhile is dropped": "cihaz geri gelene kadar yenilerini de reddet; dışarı bağlanan eşleme yalnızca port açıkken bağlanır. Kapalıyken istemciler bağlı kalır, bu arada gönderdikleri atılır"
+  "and refuse new ones until it is back; connect-out connects only while the port is open. Off: clients stay connected and what they send meanwhile is dropped": "cihaz geri gelene kadar yenilerini de reddet; dışarı bağlanan eşleme yalnızca port açıkken bağlanır. Kapalıyken istemciler bağlı kalır, bu arada gönderdikleri atılır",
+  "The UDP targets must be a list of IP:port entries.": "UDP hedefleri IP:port girdilerinden oluşan bir liste olmalı.",
+  "At most {0} UDP targets can be set.": "En fazla {0} UDP hedefi ayarlanabilir.",
+  "UDP target {0} is not an IP address and a port (IP:port, [IPv6]:port).": "UDP hedefi {0} bir IP adresi ve port değil (IP:port, [IPv6]:port).",
+  "UDP target {0} is IPv{1}, but the mapping listens on {2}.": "UDP hedefi {0} IPv{1}, ama eşleme {2} adresinde dinliyor.",
+  "UDP target {0} is the broadcast address: tick “Allow broadcast”.": "UDP hedefi {0} yayın (broadcast) adresi: “Broadcast'e izin ver”i işaretleyin.",
+  "Also send the device’s output to": "Cihazın çıktısını ayrıca şuraya gönder",
+  "IP:port, always, whoever sends; several separated by spaces; e.g. an NMEA feed to a broadcast address": "IP:port; kim gönderirse göndersin her zaman; birden fazlası boşlukla ayrılır; ör. bir yayın adresine NMEA akışı",
+  "Allow broadcast": "Broadcast'e izin ver",
+  "needed to send to a broadcast address": "bir yayın adresine göndermek için gerekir"
 }

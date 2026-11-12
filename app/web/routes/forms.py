@@ -167,6 +167,7 @@ _OPTIONAL_FORM_FIELDS = {
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
+    "network_udp_targets_shown": ("network", ("udp_targets", "udp_broadcast")),
     # the bind IP choice "All interfaces (IPv4 + IPv6)": an older node's form doesn't
     # offer it (_preserve_unmanaged_fields keeps it only while the bind IP is a wildcard)
     "network_dual_stack_shown": ("network", ("dual_stack",)),
@@ -234,6 +235,9 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             udp_peer_timeout_s=(_num(form, "network_udp_peer_timeout_s", 0, strict=strict)
                                 if form.get("network_udp_peer_timeout_s") else 0),
         )
+    if "network_udp_targets_shown" in form:
+        network.update(udp_targets=_split(form.get("network_udp_targets", "")),
+                       udp_broadcast=_checkbox(form, "network_udp_broadcast"))
     options = {
         "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
         "trace_both": form.get("opt_trace_both", "").strip(),

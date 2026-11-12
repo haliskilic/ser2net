@@ -160,6 +160,12 @@
         <label>{{ _("Peer timeout (s)") }} <span class="muted">({{ _("forget the last sender after this long without a datagram · 0 = never") }})</span>
           <input type="number" name="network_udp_peer_timeout_s" min="0" value="{{ mapping.network.udp_peer_timeout_s }}"></label>
       </div>
+      <input type="hidden" name="network_udp_targets_shown" value="1">
+      <div class="grid2">
+        <label>{{ _("Also send the device’s output to") }} <span class="muted">({{ _("IP:port, always, whoever sends; several separated by spaces; e.g. an NMEA feed to a broadcast address") }})</span>
+          <input type="text" name="network_udp_targets" value="{{ mapping.network.udp_targets | join(' ') }}" placeholder="{{ _('e.g. %(example)s', example='192.168.1.255:10110') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+        <label class="chk chk-pad"><input type="checkbox" name="network_udp_broadcast" {% if mapping.network.udp_broadcast %}checked{% endif %}> {{ _("Allow broadcast") }} <span class="muted">({{ _("needed to send to a broadcast address") }})</span></label>
+      </div>
       <p class="sub mb-sm">{{ _("The device’s output goes to the sender of the last datagram from an allowed IP, so any of them can take it over; with a reply address it always goes there. The allow-list checks a datagram’s source address, which can be forged: on an untrusted network use TCP with TLS, or a firewall.") }}</p>
     </div>
 
