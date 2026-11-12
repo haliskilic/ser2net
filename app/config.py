@@ -238,6 +238,8 @@ def data_path(path: Any, data_dir: Optional[str] = None) -> str:
     if not path or os.path.isabs(path) or ntpath.isabs(path) or not base:
         return path  # (a Windows path is no file in the data directory elsewhere either)
     inside = os.path.join(base, path)
+    if os.name == "nt":  # "tls/cert.pem" -> <data>\tls\cert.pem (the way Windows reads it)
+        inside = os.path.normpath(inside)
     if not os.path.exists(inside) and os.path.exists(path):
         return path
     return inside
