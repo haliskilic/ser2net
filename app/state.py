@@ -62,11 +62,11 @@ VIEW_RECORDS = 50
 # never what): at most VIEW_RECORDS of them in FAILED_LOGIN_WINDOW_S, then summed up.
 # A request to the REST API refused for its token (none, a wrong or an expired one): one
 # api_auth_failed record per address in API_AUTH_REPEAT_S seconds, at most
-# FAILED_LOGIN_RECORDS in FAILED_LOGIN_WINDOW_S (all.log has a line for each, see below).
+# FAILED_LOGIN_RECORDS in FAILED_LOGIN_WINDOW_S (its all.log line: REFUSED_LOG_S).
 API_AUTH_REPEAT_S = 60
 # A request refused before it reached a handler (CSRF, no session, a bad API token, a
-# console WebSocket without a session): one all.log line per address and kind in
-# REFUSED_LOG_S seconds, the next one says how many there were in between.
+# console WebSocket without a session or from another site): one all.log line per
+# address and kind in REFUSED_LOG_S seconds, the next one says how many there were.
 REFUSED_LOG_S = 60
 # first-run setup through a host name that isn't this machine's needs this file's code
 SETUP_CODE_FILE = "setup-code.txt"
