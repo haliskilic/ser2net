@@ -329,7 +329,7 @@
       </label>
     </div>
     <div class="grid2">
-      <label>{{ _("Base topic") }} <span class="muted">({{ _("lines publish here; status at &lt;topic&gt;/status") }})</span>
+      <label>{{ _("Base topic") }} <span class="muted" data-show-when="network_protocol=raw,telnet,rfc2217">({{ _("lines publish here; status at &lt;topic&gt;/status") }})</span><span class="muted" data-show-when="network_protocol=modbus"><span data-show-when="mqtt_payload_format=plain">({{ _("points publish to &lt;topic&gt;/&lt;point&gt;; status at &lt;topic&gt;/status") }})</span>{% if 'payload_format' not in hide %}<span data-show-when="mqtt_payload_format=sparkplug_b">({{ _("required, but Sparkplug B doesn’t use it: its topics are spBv1.0/&lt;group ID&gt;/…") }})</span>{% endif %}</span>
         <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
       </label>
       <label>{{ _("Client ID") }} <span class="muted">({{ _("blank = auto") }})</span>
@@ -407,6 +407,7 @@
 
   <fieldset data-show-when="network_protocol=modbus">
     <legend>{{ _("Modbus register polling → MQTT") }} <span class="muted">({{ _("edge mode; also enable MQTT above") }})</span></legend>
+    <p class="muted mb-sm">{{ _('Every topic, payload and write, and the Sparkplug B model: <span class="mono">docs/MODBUS-MQTT.md</span>.') }}</p>
     <label>{{ _("Poll interval (s)") }} <input type="number" name="modbus_poll_interval_s" min="0.1" step="any" value="{{ mapping.modbus_poll.interval_s }}"></label>
     {% if 'block_reads' not in hide %}
     <input type="hidden" name="modbus_block_reads_shown" value="1">
