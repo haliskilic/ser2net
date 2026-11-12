@@ -6,8 +6,8 @@ the Will, retained messages and reconnects all run as they do in service. Checks
     point's /set subscribed, polled values published; a /set published by another client
     is written (FC6 / FC5), answered "ok" on .../set/result (at QoS 1, as the /set is
     subscribed, though the mapping publishes at QoS 0) and read back, a JSON one answered
-    with its id and the value read back; the broker
-    drops the link: its Will "offline", paho reconnects, "online" again, the subscriptions
+    with its id and the value read back, a list refused; the broker drops the link: its
+    Will "offline", paho reconnects, "online" again, the subscriptions
     are renewed, the retained /set the broker sends again is not written again, and a live
     one is; stop: "offline";
   * stop with writes waiting (a silent slave): every one is answered, in order, and the
@@ -173,6 +173,10 @@ async def plain_checks(broker):
         broker.publish("plant/a/setpoint/set", b'{"value": 43, "id": "j1"}')
         assert await until(lambda: broker.payloads(result)[-1:] == [
             b'{"id":"j1","ok":true,"value":43}']), broker.payloads(result)
+        broker.publish("plant/a/setpoint/set", b"[1, 2]")  # one point, one value
+        assert await until(lambda: broker.payloads(result)[-1].startswith(
+            b"error: not a number")), broker.payloads(result)
+        assert slave.regs[10] == 43 and slave.regs.get(11, 0) == 0
         broker.publish("plant/a/pump/set", b"on", retain=True)
         assert await until(lambda: slave.coils[0] is True
                            and broker.payloads("plant/a/pump/set/result") == [b"ok"])
