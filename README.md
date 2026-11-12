@@ -114,9 +114,10 @@ düzenlemeye gerek yok.
   durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat.
   Tablo yalnızca değiştiğinde yenilenir (titreme yok, seçimler korunur).
 - **Erişim kontrolü (eşleme başına):** izinli IP/CIDR listesi, **yüksek-öncelikli**
-  istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at,
-  salt-okunur, banner, open/close string, `closeon` (Modbus gateway banner, open/close
-  string ve `closeon` kullanmaz).
+  istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at (yeni
+  istemci öncelikli olmayan en eskiyi atar, öncelikli bir istemciyi asla: yalnızca
+  öncelikli istemciler bağlıyken reddedilir), salt-okunur, banner, open/close string,
+  `closeon` (Modbus gateway banner, open/close string ve `closeon` kullanmaz).
 - **Bağlantı yaşam döngüsü (eşleme başına, TCP):** **TCP keepalive ile ölü bağlantı
   tespiti** — FIN/RST göndermeden kaybolan istemci ya da uzak sunucu (elektrik kesintisi,
   kablo çekilmesi, Wi-Fi/VPN/NAT düşmesi) artık sonsuza dek `ESTABLISHED` kalmaz:
