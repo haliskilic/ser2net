@@ -1122,6 +1122,9 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         wanted: dict[str, int] = {}
+        # refused: the form again with what was sent (a field not sent: as it is)
+        shown = {key: form.get(key, getattr(state.config, key))
+                 for key in ("trace_max_age_days", "log_max_age_days")}
         for key, top, problem in (
                 ("trace_max_age_days", TRACE_DAYS_MAX,
                  _("Enter 0 (keep them) or a number of days from 1 to {0}.")),
@@ -1134,7 +1137,7 @@ def routes(ctx: Ctx) -> list:
             except ValueError:
                 days = -1
             if not 0 <= days <= top:
-                return await settings_get(request, error=problem.format(top))
+                return await _failed(request, "retention", problem.format(top), retention=shown)
             wanted[key] = days
         before = {key: getattr(state.config, key) for key in wanted}
         try:
@@ -1142,7 +1145,7 @@ def routes(ctx: Ctx) -> list:
                 for key, days in wanted.items():
                     setattr(state.config, key, days)
         except ConfigError as e:
-            return await settings_get(request, error=str(e))
+            return await _failed(request, "retention", str(e), retention=shown)
         parts = []
         if "trace_max_age_days" in wanted:
             days = wanted["trace_max_age_days"]
@@ -1175,7 +1178,7 @@ def routes(ctx: Ctx) -> list:
             if gone:
                 parts.append(ngettext("Deleted now: {0} log file or backup.",
                                       "Deleted now: {0} log files and backups.", gone).format(gone))
-        return await settings_get(request, ok=" ".join(parts) or _("Saved."))
+        return _done(request, "retention", ok=" ".join(parts) or _("Saved."))
 
     async def settings_users_signout(request):
         if deny := require_role(request, "admin"):

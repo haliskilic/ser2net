@@ -216,11 +216,13 @@ def retention_setting():
         assert op.post("/settings/retention", {"trace_max_age_days": "7"})[0] == 403
         for bad in ("-1", "99999", "soon"):
             st, _, page = admin.post("/settings/retention", {"trace_max_age_days": bad})
-            assert "Enter 0 (keep them) or a number of days" in page, (bad, page[:300])
+            assert st == 400 and "Enter 0 (keep them) or a number of days" in page, (bad, page[:300])
+            assert f'name="trace_max_age_days" min="0" max="3650" value="{bad}"' in page, \
+                "the refused form keeps what was typed"
         assert srv.saved_config().get("trace_max_age_days", 0) == 0 and os.path.isfile(old)
         st, _, page = admin.post("/settings/retention", {"trace_max_age_days": "7"})
         assert "trace files not written for 7 days are deleted" in page and \
-            "Deleted now: 1 trace file(s)." in page, page[page.find("banner"):][:300]
+            "Deleted now: 1 trace file." in page, page[page.find("banner"):][:300]
         assert srv.saved_config()["trace_max_age_days"] == 7
         assert not os.path.exists(old) and os.path.isfile(new)
         assert "trace maintenance: deleted 1 trace file(s) not written for 7 days" in srv.output()
@@ -242,12 +244,13 @@ def retention_setting():
         for bad in ("-1", "3651", "a month"):
             st, _, page = admin.post("/settings/retention", {"trace_max_age_days": "0",
                                                              "log_max_age_days": bad})
-            assert "Enter 0 (only the size limits) or a number of days" in page, (bad, page[:300])
+            assert st == 400 and "Enter 0 (only the size limits) or a number of days" in page, \
+                (bad, page[:300])
         assert srv.saved_config()["log_max_age_days"] == 0 and os.path.isfile(old_log)
         st, _, page = admin.post("/settings/retention", {"trace_max_age_days": "0",
                                                          "log_max_age_days": "30"})
         assert "configuration backups older than 30 days are deleted" in page and \
-            "Deleted now: 1 log file(s) and backup(s)." in page, page[page.find("banner"):][:400]
+            "Deleted now: 1 log file or backup." in page, page[page.find("banner"):][:400]
         assert srv.saved_config()["log_max_age_days"] == 30 and not os.path.exists(old_log)
         assert "retention: deleted 1 log file(s) (all.log.3)" in srv.output()
         st, _, page = admin.get("/settings/audit")
