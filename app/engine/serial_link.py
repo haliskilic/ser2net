@@ -21,6 +21,7 @@ The link's state, for the runner and anything built on it:
     ``reconnecting`` otherwise (the port went away, or can't be opened for another reason);
     ``status.open_failures`` / ``status.device_lost`` count failed opens and losses of the
     open port (``reconnects`` both, as before);
+    ``status.hint``: what the error of a failed open means (portdiag.explain);
     ``status.warnings``: a setting the open port did not take (serial_io.open_notes),
     logged when it differs from the last open's.
 While the port can't be opened, the log says so once, again only when the error changes or
@@ -142,8 +143,9 @@ class Backoff:
 class SerialLink:
     def __init__(self, settings: SerialSettings, status: RunnerStatus, stop: asyncio.Event,
                  log: Callable[[str], None],
-                 on_change: Optional[Callable[[Any], None]] = None) -> None:
+                 on_change: Optional[Callable[[Any], None]] = None, owner: str = "") -> None:
         self.settings = settings
+        self.owner = owner  # the mapping's name ("mapping X has this port open")
         self.status = status
         self._stop = stop
         self._log = log
@@ -180,7 +182,7 @@ class SerialLink:
                 raise
             except Exception as e:  # SerialException, OSError, the port went away
                 if not self._stop.is_set():
-                    self._failed(e, was_open)
+                    await self._failed(e, was_open)
             finally:
                 await self.close()
             if self._stop.is_set():
@@ -189,9 +191,9 @@ class SerialLink:
             if not await backoff.wait(self._stop):
                 break
 
-    def _failed(self, e: Exception, was_open: bool) -> None:
+    async def _failed(self, e: Exception, was_open: bool) -> None:
         """The port could not be opened, or went away (``was_open``): say why in the status
-        and the log (FailureLog)."""
+        and the log (FailureLog), and what that means (a new error only)."""
         st = self.status
         st.last_error = str(e)
         if was_open:
@@ -200,7 +202,8 @@ class SerialLink:
         else:
             st.open_failures += 1
             st.state = "device-missing" if portdiag.missing(e) else "reconnecting"
-        self._failures.failed(str(e))
+        if self._failures.failed(str(e)):
+            st.hint = None if was_open else await asyncio.to_thread(explain, e, self.settings)
 
     def attach(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                serial: Any = None, device: str = "") -> None:
@@ -212,10 +215,12 @@ class SerialLink:
         self.status.device = device
         self.status.devices = (device,) if device else ()
         self.status.last_error = ""
+        self.status.hint = None
         self.status.warnings = tuple(notes)
         self.status.state = "running"
         self.down = False
         self.ready.set()
+        portdiag.opened(serial, self.owner, device)
         self._log(f"serial open: {device} @ {self.settings.compact()}"
                   f"{self._failures.recovered()}")
         self._notes(notes)
@@ -257,6 +262,11 @@ class SerialLink:
         closed.add_done_callback(_consume_error)
         await asyncio.wait((closed,))
         raise closed.exception() or ConnectionError("serial EOF / device removed")
+
+
+def explain(e: BaseException, settings: SerialSettings) -> Optional[portdiag.Note]:
+    """portdiag.explain for the device ``settings`` opens (blocking: run it in a thread)."""
+    return portdiag.explain(e, serial_io.resolve_device(settings))
 
 
 class NoteLog:

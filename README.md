@@ -127,7 +127,13 @@ düzenlemeye gerek yok.
   olduğuyla birlikte yazar; port yeniden açılınca ne kadar süre kapalı kaldığını söyler
   (başarısız olmayı sürdüren dışa bağlantılar için de aynısı). `/api/v1/status`, açılamayan
   denemeleri (`open_failures`) ve açık portun kaybedilmesini (`device_lost`) ayrı sayar;
-  `reconnects` eskisi gibi ikisini birden sayar.
+  `reconnects` eskisi gibi ikisini birden sayar. Pano, söyleyebildiğinde hatanın altında ne
+  anlama geldiğini de yazar (`/api/v1/status` içinde `hint`; `last_error` pyserial'ın metni
+  olarak kalır): "Permission denied" için cihazın ait olduğu grubu, cihazın kendisinden
+  okuyarak (`dialout`, Arch'ta `uucp`, …), ve neyin eksik olduğunu (kullanıcı o grupta
+  değil, ser2net başladıktan sonra eklendi, container'da o grup yok: `--group-add <gid>`);
+  kullanımdaki bir port için onu hangi eşlemenin açık tuttuğunu ya da başka bir programın
+  ne tür bir kilit tuttuğunu.
 - **Dinleyiciler kendiliğinden açılır:** başlarken adresini kullanamayan bir eşleme
   (açılışta IP henüz atanmamış ya da port hâlâ dolu) `error` durumunda "N sn sonra yeniden
   denenecek" gösterir ve çalışana kadar en fazla 30 sn arayla yeniden başlatılır (Durdur

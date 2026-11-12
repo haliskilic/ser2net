@@ -854,5 +854,14 @@
   "{0} could not be switched on: {1}": "{0} açık konuma alınamadı: {1}",
   "{0} could not be switched off: {1}": "{0} kapalı konuma alınamadı: {1}",
   "RS-485 mode is off: the port did not take it ({0})": "RS-485 modu kapalı: port bunu kabul etmedi ({0})",
-  "port {0}: {1}": "port {0}: {1}"
+  "port {0}: {1}": "port {0}: {1}",
+  "{0} belongs to group {1} (gid {2}), and user {3} is not in it: add the user to the group (usermod -aG {1} {3}; the systemd unit: SupplementaryGroups={1}), then restart ser2net": "{0}, {1} grubuna (gid {2}) ait ve {3} kullanıcısı bu grupta değil: kullanıcıyı gruba ekle (usermod -aG {1} {3}; systemd unit'inde: SupplementaryGroups={1}), ardından ser2net'i yeniden başlat",
+  "{0} belongs to group {1} (gid {2}), which this container doesn't have: start it with --group-add {2} (compose: group_add)": "{0}, {1} grubuna (gid {2}) ait ve bu container bu gruba sahip değil: container'ı --group-add {2} ile başlat (compose: group_add)",
+  "user {0} was added to group {1} after ser2net started: restart ser2net (or sign in again) to use it": "{0} kullanıcısı ser2net başladıktan sonra {1} grubuna eklendi: bunu kullanmak için ser2net'i yeniden başlat (ya da yeniden oturum aç)",
+  "{0} is {1} (group {2}): this process is in that group, but the device's permissions don't let the group open it": "{0} {1} (grup {2}): bu süreç o grupta, ancak cihazın izinleri grubun onu açmasına izin vermiyor",
+  "only root may open {0} (its group is root): a udev rule can give it the serial group (dialout, or uucp on Arch)": "{0} cihazını yalnızca root açabilir (grubu root): bir udev kuralı ona seri port grubunu verebilir (dialout ya da Arch'ta uucp)",
+  "mapping '{0}' has this port open": "bu portu '{0}' eşlemesi açık tutuyor",
+  "another program has this port open (Windows lets one program at a time open a COM port)": "bu portu başka bir program açık tutuyor (Windows bir COM portunu aynı anda yalnızca tek bir programın açmasına izin verir)",
+  "another program has locked this port (flock): another ser2net, or a terminal program such as picocom, tio or miniterm": "bu portu başka bir program kilitlemiş (flock): başka bir ser2net ya da picocom, tio, miniterm gibi bir terminal programı",
+  "another program keeps other programs out of this port (TIOCEXCL), for example ModemManager or a classic ser2net": "bu portu başka bir program diğer programlara kapatmış (TIOCEXCL), örneğin ModemManager ya da klasik ser2net"
 }

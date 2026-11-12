@@ -121,7 +121,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   since when, and once the port opens again how long it was down, instead of a line at
   every attempt (the same for a connect-out that keeps failing). `/api/v1/status` counts
   failed opens (`open_failures`) and losses of the open port (`device_lost`) apart;
-  `reconnects` counts both, as before.
+  `reconnects` counts both, as before. Under the error the dashboard says what it means
+  when it can (`hint` in `/api/v1/status`; `last_error` stays pyserial's text): for
+  "Permission denied" the group the device belongs to, read from the device itself
+  (`dialout`, `uucp` on Arch, …), and what is missing (the user is not in it, was added
+  after ser2net started, the container lacks it: `--group-add <gid>`); for a port in use,
+  which mapping has it open, or what kind of lock another program holds.
 - **Listeners come up on their own:** a mapping whose address can't be used when it
   starts (its IP is not assigned yet at boot, or the port is still taken) shows `error`
   with "retrying in N s" and is started again, at most 30 s apart, until it works (a Stop
