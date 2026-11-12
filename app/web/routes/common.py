@@ -5,26 +5,27 @@ the helpers that used to be closures inside one big ``build_routes()`` live here
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping
 
 from starlette.datastructures import ImmutableMultiDict
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 
 from ...config import ROLE_RANK
 from ...i18n import _
 from .. import auth
 
 if TYPE_CHECKING:
-    from starlette.requests import Request
+    from starlette.requests import HTTPConnection, Request
     from starlette.templating import Jinja2Templates
 
+    from ...config import MappingConfig, User
     from ...state import AppState
 
 # HTMX response header: tells the dashboard to re-fetch the mappings table now
 TRIGGER = {"HX-Trigger": "refreshMappings"}
 
 
-def client_ip(request) -> str:
+def client_ip(request: HTTPConnection) -> str:
     ip = request.client.host if request.client else "?"
     # normalize IPv4-mapped IPv6 (::ffff:1.2.3.4 -> 1.2.3.4) so the rate-limit
     # key is consistent on dual-stack listeners
@@ -42,7 +43,7 @@ async def read_form(request: Request) -> ImmutableMultiDict[str, str]:
     return ImmutableMultiDict([(k, v) for k, v in form.multi_items() if isinstance(v, str)])
 
 
-def current_user(request):
+def current_user(request: HTTPConnection) -> User | None:
     return getattr(request.state, "user", None)
 
 
@@ -50,18 +51,18 @@ def csrf_failed() -> PlainTextResponse:
     return PlainTextResponse(_("CSRF validation failed. Reload the page."), status_code=403)
 
 
-def has_role(user, role: str) -> bool:
+def has_role(user: User | None, role: str) -> bool:
     """`user` (an account, the open-access pseudo-user or None) has `role` or a higher one."""
     return user is not None and ROLE_RANK.get(user.role, 0) >= ROLE_RANK[role]
 
 
-def console_interactive(user, mapping) -> bool:
+def console_interactive(user: User | None, mapping: MappingConfig) -> bool:
     """Does what `user` types in the console of `mapping` go to the device? Only on a
     network mapping that isn't read-only, and only for operators and admins."""
     return mapping.kind == "net" and not mapping.network.read_only and has_role(user, "operator")
 
 
-def sees_to_device(user, mapping) -> bool:
+def sees_to_device(user: User | None, mapping: MappingConfig) -> bool:
     """Does `user`'s hex view of `mapping` show what is sent TO the device? On a network
     mapping that is what clients and web-console users type, passwords at a prompt the
     device doesn't echo included (trace files record it too), so a viewer's hex view shows
@@ -80,11 +81,12 @@ class Ctx:
         self.templates = templates
         self.state = state
 
-    def render(self, request, name, status_code=200, headers=None, **ctx):
+    def render(self, request: Request, name: str, status_code: int = 200,
+               headers: Mapping[str, str] | None = None, **ctx: Any) -> Response:
         return self.templates.TemplateResponse(request, name, ctx,
                                                status_code=status_code, headers=headers)
 
-    def set_session(self, response, request, user) -> None:
+    def set_session(self, response: Response, request: Request, user: User) -> None:
         cfg = self.state.config
         ttl = cfg.session_timeout_s  # Settings -> Web UI access -> session lifetime
         self.state.signins.note(user.username, user.source)   # its last sign-in
@@ -98,35 +100,36 @@ class Ctx:
         )
 
     @staticmethod
-    def require_role(request, role):
+    def require_role(request: HTTPConnection, role: str) -> PlainTextResponse | None:
         """Return a 403 response if the session user's role is below `role`, else None."""
         if not has_role(current_user(request), role):
             return PlainTextResponse(_("Forbidden: requires the {0} role.").format(role), status_code=403)
         return None
 
     @staticmethod
-    def can_edit(request) -> bool:
+    def can_edit(request: HTTPConnection) -> bool:
         return has_role(current_user(request), "operator")
 
     @staticmethod
-    def is_anonymous(request) -> bool:
+    def is_anonymous(request: HTTPConnection) -> bool:
         u = current_user(request)
         return u is not None and u.source == "anonymous"
 
     @staticmethod
-    def actor(request) -> str:
+    def actor(request: HTTPConnection) -> str:
         """Who acts, for the audit log: the signed-in user, "(no login)" for an
         open-access visitor."""
         u = current_user(request)
         return (u.username if u.source != "anonymous" else "(no login)") if u is not None else ""
 
-    def audit(self, request, action: str, detail: str = "", user: str | None = None) -> None:
+    def audit(self, request: HTTPConnection, action: str, detail: str = "",
+              user: str | None = None) -> None:
         """An audit record for this request: client IP plus the acting user (the
         signed-in user unless given)."""
         self.state.audit(client_ip(request), action, detail,
                          user=self.actor(request) if user is None else user)
 
-    def require_peer_access(self, request):
+    def require_peer_access(self, request: HTTPConnection) -> PlainTextResponse | None:
         """Cluster peer actions act on OTHER nodes with the shared key, so they need a
         signed-in operator: open access on this node must not open every peer (which
         may well require a login of its own)."""
