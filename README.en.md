@@ -696,9 +696,25 @@ inside aren't readable by other users:
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
   under Settings → *Audit log*, CSV export.
+- **Retention.** By default the logs keep their size limits however old the records are
+  (all.log 10 MB × 6 files, audit.log 5 MB × 2, the newest 50 backups; a mapping log 15
+  days). Logs hold IP addresses, user names and raw serial data, so a period can be set
+  under Settings → *Retention* (admins): then all.log and audit.log begin a new file once
+  their first record is a fifth of that many days old and delete a file once its first
+  record is older — nothing older is kept, and at least four fifths of the period stay as
+  far as the sizes allow (audit.log then keeps up to 6 files) — the mapping logs keep at
+  most that many of their 15 days, and configuration backups named for an older time go,
+  never the newest 5. Checked at once and every hour; a clock set ahead while ser2net
+  runs deletes nothing early (ages count from the clock at start-up plus the time it has
+  run). Restoring a backup from before 2.9 resets the period to 0 (off). The copy of every
+  log line on the standard output is kept by whatever collects it: Docker caps it with the
+  `logging:` options of `docker-compose.yml` (or the `local` driver), systemd's journal with
+  `MaxRetentionSec=` / `SystemMaxUse=` in `/etc/systemd/journald.conf`.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: lines older than 15 days are
   dropped, but never the last 1000 the Log panel shows, so a clock that jumps ahead or a
-  corrected date doesn't empty it; a log over 100 MB is cut to 90 MB).
+  corrected date doesn't empty it; with a shorter period set under Settings → *Retention*,
+  nothing older than that stays, however few lines are left; a log over 100 MB is cut to
+  90 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
   are reduced to the file name, which is logged at start-up. A trace that can't be written

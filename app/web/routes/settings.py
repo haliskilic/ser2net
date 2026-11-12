@@ -19,8 +19,8 @@ from starlette.routing import Route
 
 from ... import i18n, importer, optional, storage
 from ...config import (
-    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, TRACE_DAYS_MAX,
-    UI_LANGUAGES,
+    BACKUPS_MIN_KEPT, EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, LOG_DAYS_MAX, NOTIFY_EVENTS, ROLES,
+    SMTP_SECURITY, TRACE_DAYS_MAX, UI_LANGUAGES,
     WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
     backup_time, new_pwd_version, parse_cluster_peer,
 )
@@ -85,7 +85,8 @@ def routes(ctx: Ctx) -> list:
                       expire_days=state.config.external_users_expire_days,
                       expire_min=EXPIRE_DAYS_MIN, expire_max=EXPIRE_DAYS_MAX,
                       trace_days=state.config.trace_max_age_days, trace_days_max=TRACE_DAYS_MAX,
-                      disk=disk, size_text=storage.size_text,
+                      log_days=state.config.log_max_age_days, log_days_max=LOG_DAYS_MAX,
+                      backups_min=BACKUPS_MIN_KEPT, disk=disk, size_text=storage.size_text,
                       ldap=state.config.ldap, ldap_problem=ldap_problem,
                       ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,
@@ -584,35 +585,67 @@ def routes(ctx: Ctx) -> list:
 
     async def settings_retention(request):
         """How many days a trace file is kept after it was last written (0: until it is
-        deleted in its mapping's Trace panel, the default)."""
+        deleted in its mapping's Trace panel, the default), and how many days log and audit
+        records and configuration backups are kept (0: only their size and count limits,
+        the default). A setting the form doesn't send (a page of an older version) stays."""
         if deny := require_role(request, "admin"):
             return deny
         form = await request.form()
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
-        try:
-            days = int(str(form.get("trace_max_age_days", "")).strip())
-        except ValueError:
-            days = -1
-        if not 0 <= days <= TRACE_DAYS_MAX:
-            return await settings_get(request, error=_(
-                "Enter 0 (keep them) or a number of days from 1 to {0}.").format(TRACE_DAYS_MAX))
+        wanted: dict[str, int] = {}
+        for key, top, problem in (
+                ("trace_max_age_days", TRACE_DAYS_MAX,
+                 _("Enter 0 (keep them) or a number of days from 1 to {0}.")),
+                ("log_max_age_days", LOG_DAYS_MAX,
+                 _("Enter 0 (only the size limits) or a number of days from 1 to {0}."))):
+            if key not in form:
+                continue
+            try:
+                days = int(str(form.get(key, "")).strip())
+            except ValueError:
+                days = -1
+            if not 0 <= days <= top:
+                return await settings_get(request, error=problem.format(top))
+            wanted[key] = days
+        before = {key: getattr(state.config, key) for key in wanted}
         try:
             async with state.edit_config():
-                state.config.trace_max_age_days = days
+                for key, days in wanted.items():
+                    setattr(state.config, key, days)
         except ConfigError as e:
             return await settings_get(request, error=str(e))
-        state.log(f"trace files not written for {days} days are deleted every hour" if days
-                  else "trace files are kept until they are deleted by hand")
-        ctx.audit(request, "trace_retention", str(days))
-        gone = await state.run_trace_maintenance()
-        ok = (_("Saved: trace files not written for {0} days are deleted (checked every "
-                "hour).").format(days) if days else
-              _("Saved: trace files are kept until they are deleted in a mapping’s Trace "
-                "panel."))
-        if gone:
-            ok += " " + _("Deleted now: {0} trace file(s).").format(gone)
-        return await settings_get(request, ok=ok)
+        parts = []
+        if "trace_max_age_days" in wanted:
+            days = wanted["trace_max_age_days"]
+            if days != before["trace_max_age_days"]:
+                state.log(f"trace files not written for {days} days are deleted every hour"
+                          if days else "trace files are kept until they are deleted by hand")
+                ctx.audit(request, "trace_retention", str(days))
+            gone = await state.run_trace_maintenance()
+            parts.append(_("Saved: trace files not written for {0} days are deleted (checked "
+                           "every hour).").format(days) if days else
+                         _("Saved: trace files are kept until they are deleted in a mapping’s "
+                           "Trace panel."))
+            if gone:
+                parts.append(_("Deleted now: {0} trace file(s).").format(gone))
+        if "log_max_age_days" in wanted:
+            days = wanted["log_max_age_days"]
+            if days != before["log_max_age_days"]:
+                state.log(f"log and audit records and configuration backups older than {days} "
+                          "days are deleted every hour" if days else
+                          "log and audit records and configuration backups are kept within "
+                          "their size and count limits")
+                ctx.audit(request, "log_retention", str(days))
+            gone = await state.run_retention()
+            parts.append(_("Log and audit records and configuration backups older than {0} "
+                           "days are deleted (checked every hour; the newest {1} backups stay)."
+                           ).format(days, BACKUPS_MIN_KEPT) if days else
+                         _("Logs, the audit log and the configuration backups are kept within "
+                           "their size and count limits."))
+            if gone:
+                parts.append(_("Deleted now: {0} log file(s) and backup(s).").format(gone))
+        return await settings_get(request, ok=" ".join(parts) or _("Saved."))
 
     async def settings_users_signout(request):
         if deny := require_role(request, "admin"):
@@ -872,6 +905,7 @@ def routes(ctx: Ctx) -> list:
         pages = max(1, -(-len(records) // AUDIT_PAGE))
         page = min(page, pages)
         return render(request, "audit.html", rows=records[(page - 1) * AUDIT_PAGE:page * AUDIT_PAGE],
+                      log_days=state.config.log_max_age_days,
                       total=len(records), page=page, pages=pages, filters=filters,
                       actions=actions, users=users, me=current_user(request),
                       qs=urlencode({k: v for k, v in filters.items() if v}))
