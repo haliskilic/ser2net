@@ -116,6 +116,11 @@ class _Unit:
     errors: int = 0             # point reads that failed, in this run
     probe: int = 0              # offline: which point the next probe reads (each in turn)
 
+    def as_dict(self) -> dict:
+        """For RunnerStatus.units (the dashboard, the REST API, /metrics, notifications)."""
+        return {"unit": self.unit, "state": self.state, "cause": self.cause,
+                "since": int(self.since) if self.since else None, "errors": self.errors}
+
 
 @dataclass
 class _Reads:
@@ -245,6 +250,7 @@ class ModbusGatewayRunner:
                     subscriptions=dict.fromkeys(self._set_points, self._on_set_message),
                     accept_retained=bool(mq.apply_retained_set))
             self._mqtt.connect()
+            self._report_units()
             self._poll_task = asyncio.create_task(
                 self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
         if self.status.state == "stopped":  # the serial side has not reported yet
@@ -290,6 +296,7 @@ class ModbusGatewayRunner:
         self.status.state = "stopped"
         self.status.client_count = 0
         self.status.clients = []
+        self.status.units = []
         self._log("modbus gateway stopped")
 
     # ---------------- one RTU transaction on the shared bus ----------------
@@ -383,6 +390,7 @@ class ModbusGatewayRunner:
                     break
                 if await self._poll_unit(u) == "port down":
                     lost.append(u.unit)
+                self._report_units()
             if lost:
                 self._log(f"{_units_text(lost)}: offline, the serial port has been down for "
                           f"{UNIT_OFFLINE_AFTER} polls")
@@ -452,6 +460,9 @@ class ModbusGatewayRunner:
                 reads.failed.append((p, e))
                 reads.answered = True
         return reads
+
+    def _report_units(self) -> None:
+        self.status.units = [u.as_dict() for u in self._units.values()]
 
     def _unit_missed(self, u: _Unit, cause: str) -> Optional[str]:
         """A poll cycle in which ``u`` gave no reply, because of ``cause``; it goes offline

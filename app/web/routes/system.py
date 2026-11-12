@@ -55,6 +55,17 @@ def routes(ctx: Ctx) -> list:
                 f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
                 f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
             ]
+        # Modbus gateways in edge mode: each polled unit, up = it answers (left out until it
+        # has been polled), and its failed point reads
+        units = [(m, u) for m in state.config.mappings
+                 for u in (statuses.get(m.id) or {}).get("units") or []]
+        for m, u in units:
+            if u.get("state") in ("online", "offline"):
+                lines.append(f"ser2net_modbus_unit_up{{{_unit_label(m, u)}}} "
+                             f"{1 if u['state'] == 'online' else 0}")
+        for m, u in units:
+            lines.append(f"ser2net_modbus_unit_poll_errors_total{{{_unit_label(m, u)}}} "
+                         f"{u.get('errors', 0)}")
         return PlainTextResponse("\n".join(lines) + "\n",
                                  media_type="text/plain; version=0.0.4")
 
@@ -95,6 +106,11 @@ def routes(ctx: Ctx) -> list:
         Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
         Route("/api/ports/table", api_ports_table),
     ]
+
+
+def _unit_label(mapping, unit: dict) -> str:
+    return (f'mapping="{_metric_label(mapping.name)}",id="{_metric_label(mapping.id)}",'
+            f'unit="{unit.get("unit")}"')
 
 
 def _metric_label(name: str) -> str:

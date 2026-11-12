@@ -21,7 +21,10 @@ MQTT client is a stand-in that records what is published. Checks:
     stamped that much later;
   * plain MQTT: an offline unit is polled once per cycle, nothing is published for it, and
     its values are published again when it answers;
-  * Modbus/TCP masters are not affected: a request to an offline unit still goes out.
+  * Modbus/TCP masters are not affected: a request to an offline unit still goes out;
+  * the status lists each unit (state, cause, failed reads) and /metrics has
+    ser2net_modbus_unit_up and ser2net_modbus_unit_poll_errors_total per unit; a unit not
+    polled yet has no _up line.
 
 Run: python3 tests/test_modbus_unit_health.py
 """
@@ -160,6 +163,26 @@ def requests_to(unit):
     return [p for u, p in SEEN if u == unit]
 
 
+async def metrics_of(runner):
+    """/metrics, for a node that runs this one gateway."""
+    from app.config import AppConfig
+    from app.web.routes import system
+
+    class State:
+        config = AppConfig(mappings=[runner.mapping])
+
+        class supervisor:
+            @staticmethod
+            def all_status():
+                return {runner.mapping.id: runner.status.as_dict()}
+
+    class Ctx:
+        state = State
+        render = None
+    endpoint = next(r.endpoint for r in system.routes(Ctx) if r.path == "/metrics")
+    return (await endpoint(None)).body.decode()
+
+
 async def stop(r, sw, poll):
     r._stop.set()
     poll.cancel()
@@ -176,6 +199,10 @@ async def test_sparkplug_unit_health(slave_port):
     SILENT_ADDRS.add((1, 99))           # 'ghost': the slave ignores that register
     EXCEPTIONS[(3, 40)] = 0x02          # 'bad': illegal data address, every time
     r, sw, fake = await gateway(slave_port, "sparkplug_b", logs)
+    r._report_units()  # what start() does
+    assert [(u["unit"], u["state"]) for u in r.status.as_dict()["units"]] == [
+        (1, "unknown"), (2, "unknown"), (3, "unknown")], "unit 0 is not polled"
+    assert "ser2net_modbus_unit_up" not in await metrics_of(r)
     births = {d: sent(fake, "DBIRTH", d) for d in ("unit0", "unit1", "unit2", "unit3")}
     assert all(len(b) == 1 for b in births.values()), births
     poll = asyncio.create_task(r._poll_loop())
@@ -221,6 +248,23 @@ async def test_sparkplug_unit_health(slave_port):
         assert sent(fake, "DDATA", "unit2")[-1].seq < death.seq, "no DDATA after the DDEATH"
         print(f"unit 2 silent: DDEATH after {UNIT_OFFLINE_AFTER} polls, one log line, then "
               "one probe per cycle (its points in turn)  OK")
+
+        # the status (dashboard, REST API) and /metrics say so
+        units = {u["unit"]: u for u in r.status.as_dict()["units"]}
+        assert sorted(units) == [1, 2, 3], units
+        assert (units[2]["state"], units[2]["cause"]) == ("offline", "no reply"), units[2]
+        assert units[2]["errors"] >= 2 * UNIT_OFFLINE_AFTER and units[2]["since"] > 0
+        assert units[1]["state"] == units[3]["state"] == "online", units
+        assert units[3]["errors"] >= 1 and units[1]["errors"] >= 1, units
+        body = await metrics_of(r)
+        lbl = 'mapping="Line 3 PLC",id="{}",unit="{}"'
+        for unit, up in ((1, 1), (2, 0), (3, 1)):
+            assert f"ser2net_modbus_unit_up{{{lbl.format(r.mapping.id, unit)}}} {up}" in body, body
+            assert any(line.startswith("ser2net_modbus_unit_poll_errors_total{"
+                                       + lbl.format(r.mapping.id, unit) + "} ")
+                       for line in body.splitlines()), body
+        print("status units (state, cause, errors) and /metrics ser2net_modbus_unit_up / "
+              "_poll_errors_total  OK")
 
         # a rebirth and a reconnect leave it out
         r._sparkplug.birth()
@@ -276,12 +320,14 @@ async def test_sparkplug_unit_health(slave_port):
         assert (r._units[1].cause, r._units[2].cause, r._units[3].cause) == \
             ("port down", "port down", "no reply")
         assert len(sent(fake, "DDEATH", "unit3")) == 1 and not sent(fake, "DDEATH", "unit0")
+        births = [len(sent(fake, "DBIRTH", d)) for d in ("unit0", "unit1", "unit2", "unit3")]
         r._sparkplug.birth()
-        assert len(sent(fake, "DBIRTH", "unit0")) == 5 and len(sent(fake, "DBIRTH", "unit1")) == 4
+        assert [len(sent(fake, "DBIRTH", d)) for d in ("unit0", "unit1", "unit2", "unit3")] == \
+            [births[0] + 1] + births[1:], "a birth while the port is down: unit 0 only"
         # back: units 1 and 2 answer and are born again; unit 3 stays silent
         r._link.down = False
-        assert await wait(lambda: len(sent(fake, "DBIRTH", "unit1")) == 5
-                          and len(sent(fake, "DBIRTH", "unit2")) == 3)
+        assert await wait(lambda: len(sent(fake, "DBIRTH", "unit1")) == births[1] + 1
+                          and len(sent(fake, "DBIRTH", "unit2")) == births[2] + 1), births
         await asyncio.sleep(0.6)
         assert r._units[3].state == "offline" and r._units[3].cause == "no reply"
         assert not any("unit 3" in m for m in logs[seen:]), logs[seen:]
