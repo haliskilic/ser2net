@@ -2982,7 +2982,8 @@ class NotificationSettings:
     # mask_personal_data, an address only as its network (IPv4 /24, IPv6 /48) and no
     # account name. email_separately: each recipient gets a message of their own, so the
     # recipients don't see each other's addresses. Both off by default (as up to 2.8).
-    mask_personal_data: bool = field(default=False, metadata=_ONLY_TRUE)
+    # mask_personal_data protects: text in a hand-edited one keeps it on (_PROTECTIVE)
+    mask_personal_data: bool = field(default=False, metadata=_PROTECTIVE)
     email_separately: bool = field(default=False, metadata=_ONLY_TRUE)
 
     @staticmethod
@@ -2992,8 +2993,7 @@ class NotificationSettings:
         notes = [] if notes is None else notes
         n = NotificationSettings(**_read_fields(NotificationSettings, d, notes, path))
         n.events = [e for e in (n.events or []) if e in NOTIFY_EVENTS]
-        # a hand-edited value other than true is off, as before these settings existed
-        n.mask_personal_data = n.mask_personal_data is True
+        # a hand-edited value other than true is off, as before the setting existed
         n.email_separately = n.email_separately is True
         return n
 

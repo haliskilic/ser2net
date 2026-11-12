@@ -311,10 +311,21 @@ def test_personal_data():
     s.mask_personal_data = False
     assert n.emit("client_connected", "m1:10.0.0.7", "PLC", "10.0.0.7:5000")
     assert n._queue.get_nowait()[2] == "10.0.0.7:5000", "off: the address as it is"
-    # older configs (and hand-edited values other than true) keep today's payloads
-    for raw in ({}, {"mask_personal_data": "yes", "email_separately": 1}):
-        loaded = NotificationSettings.from_dict(raw)
-        assert loaded.mask_personal_data is False and loaded.email_separately is False, raw
+    # older configs keep today's payloads; text in a hand-edited privacy switch keeps it on
+    # (a protective switch: on unless empty, with a load note; an edit refuses it), the
+    # e-mail switch takes only JSON true
+    loaded = NotificationSettings.from_dict({})
+    assert loaded.mask_personal_data is False and loaded.email_separately is False
+    for raw, masked in (("yes", True), ("false", True), ("", False)):
+        notes = []
+        loaded = NotificationSettings.from_dict(
+            {"mask_personal_data": raw, "email_separately": "yes"}, notes, "notifications.")
+        assert loaded.mask_personal_data is masked and loaded.email_separately is False, raw
+        kinds = {n.path: n.kind for n in notes}
+        assert kinds == {"notifications.mask_personal_data": "switch_text",
+                         "notifications.email_separately": "invalid"}, notes
+        assert "use true or false" in notes[0].error(), notes[0].error()
+    assert NotificationSettings.from_dict({"email_separately": 1}).email_separately is False
     body = notify.webhook_body("discord", "start_failed", "@everyone", "x")
     assert body["allowed_mentions"] == {"parse": []} and "@everyone" in body["content"], body
     print("personal data: addresses as their network (IPv4 /24, IPv6 /48, repeat key "
