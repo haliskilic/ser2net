@@ -729,6 +729,17 @@ inside aren't readable by other users:
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
 
+**Times** in `all.log`, stdout, `logs/<id>.log` and `audit.log` (also its viewer and CSV
+export) are the server's local time with its offset from UTC: `2026-11-06 12:00:00+03:00`,
+so the hour repeated when daylight saving time ends stays apart and a container's UTC lines
+can't pass for local time. Lines written before 2.9 have no offset; the first 19 characters
+are the same, so old and new lines in one file read alike (in older versions too). Lines in
+trace files keep `YYYY-MM-DD HH:MM:SS` in the server's local time (the panels name its
+zone), backups are named in UTC, and the live hex view shows the browser's time and says
+which zone. A log shipper that matches the old format with a regular expression needs
+the optional offset (`[+-]HH:MM`) after the seconds. In Docker the zone is UTC unless `TZ`
+is set ([`docs/DOCKER.md`](docs/DOCKER.md)).
+
 Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, digits or `_`;
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
 replaced when the config is loaded or the file is imported; the start-up log or the import

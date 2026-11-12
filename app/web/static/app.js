@@ -206,9 +206,23 @@ function connectTerm(el, mode) {
   };
   var btn = el.closest("#form-panel") ? el.closest("#form-panel").querySelector("[data-term-mode]") : null;
   if (btn) btn.textContent = mode === "hex" ? tr("text_view", "Text view") : tr("hex_view", "Hex view");
-  if (mode === "hex")
-    term.write("\x1b[90m " + tr("hex_header", "time          direction   offset  bytes" +
+  if (mode === "hex") {
+    // the times below are the browser's, not the server's (logs, traces): say which zone
+    term.write("\x1b[90m " + tr("hex_zone", "times in this browser’s time zone: {0}", browserZone()) +
+               "\r\n " + tr("hex_header", "time          direction   offset  bytes" +
                "                                            text") + "\x1b[0m\r\n");
+  }
+}
+
+// "Europe/Istanbul, UTC+03:00" (the zone name where the browser knows it)
+function browserZone() {
+  var name = "";
+  try { name = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+  var off = -new Date().getTimezoneOffset();
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  var utc = off === 0 ? "UTC" : "UTC" + (off > 0 ? "+" : "-") + pad(Math.floor(Math.abs(off) / 60)) +
+            ":" + pad(Math.abs(off) % 60);
+  return name && name !== "UTC" ? name + ", " + utc : utc;
 }
 
 function hexLines(dir, ts, bytes, bridge) {

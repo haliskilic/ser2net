@@ -21,7 +21,7 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
-from .. import i18n
+from .. import clock, i18n
 from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
@@ -253,6 +253,8 @@ def make_templates() -> Jinja2Templates:
         # ?v=<version> on the static URLs: browsers fetch the new CSS/JS right after an
         # upgrade instead of reusing a heuristically cached copy with the new templates
         asset_version=__version__,
+        # the server's time zone now ("UTC+03:00"), next to the times it shows
+        server_zone=clock.zone,
     )
     templates.env.filters["softbreak"] = softbreak
     # _("...") in every template, translated for the request's language (app/i18n.py);

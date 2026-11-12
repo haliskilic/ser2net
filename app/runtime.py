@@ -20,7 +20,6 @@ import signal
 import stat
 import sys
 import threading
-import time
 from typing import Callable, Mapping, Optional
 
 # asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
@@ -30,7 +29,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, console, datalock, i18n, standalone
+from . import accounts, clock, console, datalock, i18n, standalone
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
@@ -326,7 +325,7 @@ def service_main(config_path: str) -> int:
         if isinstance(e.code, str):
             log = os.path.join(os.path.dirname(os.path.abspath(config_path)), "all.log")
             with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
-                fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {e.code}\n")
+                fh.write(f"{clock.stamp()} {e.code}\n")
         raise
 
 

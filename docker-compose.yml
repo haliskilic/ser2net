@@ -26,6 +26,7 @@ services:
     environment:
       SER2NET_BIND_IP: "0.0.0.0"
       SER2NET_PORT: "8080"
+      # TZ: "Europe/Istanbul"   # the zone of log, audit and trace times (default: UTC)
     # ser2net also writes its log to /data/all.log (rotated); cap Docker's own copy
     logging:
       driver: json-file

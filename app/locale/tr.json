@@ -480,7 +480,6 @@
   "Sign in to manage other cluster nodes.": "Diğer cluster düğümlerini yönetmek için giriş yap.",
   "Sign in to manage serial-to-network mappings.": "Seri-ağ eşlemelerini yönetmek için giriş yap.",
   "Sign in with SSO": "SSO ile giriş yap",
-  "Sign-ins and every change to the configuration, newest first: who (user), from where (IP), what (action) and on what (detail). Times are the server’s local time. Kept in the data folder’s <span class=\"mono\">audit.log</span> (rotated at 5 MB, one older file kept).": "Girişler ve yapılandırmadaki her değişiklik, en yenisi üstte: kim (kullanıcı), nereden (IP), ne (işlem) ve ne üzerinde (ayrıntı). Saatler sunucunun yerel saatidir. Veri klasöründeki <span class=\"mono\">audit.log</span> dosyasında tutulur (dosya 5 MB olunca yenisine geçilir, bir eski dosya saklanır).",
   "Sign-ins and every configuration change: who, from where, what — with search, filters and CSV export.": "Girişler ve her yapılandırma değişikliği: kim, nereden, ne — arama, filtreler ve CSV dışa aktarma ile.",
   "signed in as %(user)s · %(role)s": "%(user)s olarak giriş yapıldı · %(role)s",
   "Signed out (open access)": "Giriş yapılmamış (açık erişim)",
@@ -897,5 +896,9 @@
   "expires %(date)s": "bitiş: %(date)s",
   "never expires": "süresiz",
   "Saved; the test notification was sent, but: {0}": "Kaydedildi; test bildirimi gönderildi, ama: {0}",
-  "With security “none”, the user name and password go to the mail server unencrypted. Choose STARTTLS or TLS unless the network to it is trusted.": "Güvenlik “yok” iken kullanıcı adı ve parola e-posta sunucusuna şifrelenmeden gider. Oraya giden ağ güvenilir değilse STARTTLS ya da TLS seç."
+  "With security “none”, the user name and password go to the mail server unencrypted. Choose STARTTLS or TLS unless the network to it is trusted.": "Güvenlik “yok” iken kullanıcı adı ve parola e-posta sunucusuna şifrelenmeden gider. Oraya giden ağ güvenilir değilse STARTTLS ya da TLS seç.",
+  "Sign-ins and every change to the configuration, newest first: who (user), from where (IP), what (action) and on what (detail). Times are the server’s local time with its offset from UTC (the server is at %(zone)s now; records written before version 2.9 have no offset). Kept in the data folder’s <span class=\"mono\">audit.log</span> (rotated at 5 MB, one older file kept).": "Girişler ve yapılandırmadaki her değişiklik, en yenisi üstte: kim (kullanıcı), nereden (IP), ne (işlem) ve ne üzerinde (ayrıntı). Saatler sunucunun yerel saatidir ve UTC farkını da gösterir (sunucu şu an %(zone)s diliminde; 2.9 sürümünden önce yazılan kayıtlarda bu fark yok). Veri klasöründeki <span class=\"mono\">audit.log</span> dosyasında tutulur (dosya 5 MB olunca yenisine geçilir, bir eski dosya saklanır).",
+  "Times are the server’s local time (now %(zone)s).": "Saatler sunucunun yerel saatidir (şu an %(zone)s).",
+  "Times in trace files are the server’s local time (now %(zone)s).": "Trace dosyalarındaki saatler sunucunun yerel saatidir (şu an %(zone)s).",
+  "times in this browser’s time zone: {0}": "saatler bu tarayıcının saat dilimine göre: {0}"
 }

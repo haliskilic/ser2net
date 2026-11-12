@@ -105,6 +105,7 @@ PORTABLE = [
     "test_cluster_settings.py",
     "test_changelog.py",
     "test_clock_ages.py",     # ages and client order by the monotonic clock (no wall clock)
+    "test_time_stamps.py",    # log/audit times with their UTC offset; old lines still read
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

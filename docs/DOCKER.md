@@ -125,6 +125,11 @@ docker run -d --name ser2net --restart unless-stopped \
   container's output, which Docker keeps without a limit by default: cap it with
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
   container in `/etc/docker/daemon.json`.
+- **Time zone.** The container runs in UTC unless `TZ` is set, so its log, audit and trace
+  times are UTC, while the live hex view shows the browser's local time. Log and audit
+  lines say so with their offset (`2026-11-06 12:00:00+00:00`), trace lines don't. For the
+  local time, set `TZ` (`-e TZ=Europe/Istanbul`, or under `environment:` in compose) or
+  mount the host's zone (`-v /etc/localtime:/etc/localtime:ro`).
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to

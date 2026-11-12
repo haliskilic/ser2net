@@ -22,7 +22,7 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from . import accounts
+from . import accounts, clock
 from .config import AppConfig, ConfigStore, User, lock_down_dir, mapping_file, valid_mapping_id
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
@@ -73,13 +73,17 @@ SETUP_CODE_FILE = "setup-code.txt"
 
 
 class LineFormatter(logging.Formatter):
-    """The format of all.log, stdout and the mapping logs: time and message, the message
-    on one line (logtext.one_line: a line break or another control character in a name or
-    a device's text becomes a space, so it can't start a line of its own or reach a
-    terminal as an escape sequence). A traceback after it is left as it is."""
+    """The format of all.log, stdout and the mapping logs: time (clock.stamp: local time
+    with its UTC offset) and message, the message on one line (logtext.one_line: a line
+    break or another control character in a name or a device's text becomes a space, so it
+    can't start a line of its own or reach a terminal as an escape sequence). A traceback
+    after it is left as it is."""
 
     def __init__(self) -> None:
-        super().__init__("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S")
+        super().__init__("%(asctime)s %(message)s")
+
+    def formatTime(self, record, datefmt=None) -> str:  # noqa: N802 (logging API)
+        return clock.stamp(record.created)
 
     def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802 (logging API)
         record.message = one_line(record.message)
@@ -88,14 +92,14 @@ class LineFormatter(logging.Formatter):
 
 def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
                        user: str = "") -> list[str]:
-    """Append one record to the audit log at `path`: one line, tab-separated: time,
-    client IP, action, detail, user (the user column was added in v2.8 — older lines
-    have four fields). Each field is cut to its AUDIT_FIELD_MAX, and control characters
-    in it become spaces (logtext.one_line), so a crafted mapping name can't forge an extra
-    record or cut one short. Rotated
-    past AUDIT_LOG_MAX_BYTES (one backup kept). Best effort: never raises. Returns the
-    fields as written."""
-    fields = [time.strftime("%Y-%m-%d %H:%M:%S")] + [
+    """Append one record to the audit log at `path`: one line, tab-separated: time
+    (clock.stamp: local time with its UTC offset; before 2.9 without the offset), client
+    IP, action, detail, user (the user column was added in v2.8 — older lines have four
+    fields). Each field is cut to its AUDIT_FIELD_MAX, and control characters in it become
+    spaces (logtext.one_line), so a crafted mapping name can't forge an extra record or cut
+    one short. Rotated past AUDIT_LOG_MAX_BYTES (one backup kept). Best effort: never
+    raises. Returns the fields as written."""
+    fields = [clock.stamp()] + [
         one_line(str(value)[:limit])
         for value, limit in zip((actor_ip, action, detail, user), AUDIT_FIELD_MAX, strict=True)]
     line = "\t".join(fields)
@@ -264,11 +268,9 @@ class LineLimiter:
 
 
 def _parse_log_ts(line: str) -> float | None:
-    """Parse the 'YYYY-MM-DD HH:MM:SS' prefix of a log line into an epoch time."""
-    try:
-        return time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
-    except (ValueError, IndexError):
-        return None
+    """The epoch time a log line starts with: 'YYYY-MM-DD HH:MM:SS' with its UTC offset,
+    or without one (a line written before 2.9) - clock.parse_stamp."""
+    return clock.parse_stamp(line)
 
 
 def _lines(text: str) -> list[str]:
