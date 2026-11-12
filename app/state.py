@@ -32,6 +32,7 @@ from .config import (
     AppConfig, ConfigStore, ConfigWriteError, User, lock_down_dir, mapping_file, valid_mapping_id,
 )
 from .i18n import _
+from .engine.bridge import remove_files
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
@@ -560,6 +561,46 @@ class AppState:
             with _suppress(OSError):
                 os.remove(path)
 
+    def _traces_older_than(self, cutoff: float) -> dict[str, list[str]]:
+        """The trace files last written before `cutoff`, by the id their name begins with
+        ("" for a name with no "-"). Blocking."""
+        try:
+            names = os.listdir(self.traces_dir)
+        except OSError:
+            return {}
+        old: dict[str, list[str]] = {}
+        for fn in names:
+            with _suppress(OSError):
+                st = os.stat(os.path.join(self.traces_dir, fn))
+                if stat.S_ISREG(st.st_mode) and st.st_mtime < cutoff:
+                    mid, dash, _rest = fn.partition("-")
+                    old.setdefault(mid if dash else "", []).append(fn)
+        return old
+
+    async def run_trace_maintenance(self) -> int:
+        """With trace_max_age_days set (0, the default, keeps every trace): delete the
+        trace files not written for that many days (their modification time), a running
+        trace's through its writer (delete_trace_files), the file it writes included. Logged
+        when it deleted something; returns how many went."""
+        days = self.config.trace_max_age_days
+        if not days:
+            return 0
+        old = await asyncio.to_thread(self._traces_older_than, time.time() - days * 86400)
+        deleted, kept = 0, 0
+        for mid, names in old.items():
+            if self.config.get_mapping(mid) is not None:
+                gone, failed = await self.delete_trace_files(mid, names)
+                deleted, kept = deleted + len(gone), kept + len(failed)
+            else:  # no mapping writes it (the start-up prunes these anyway)
+                result = await asyncio.to_thread(
+                    remove_files, [os.path.join(self.traces_dir, n) for n in names])
+                deleted += sum(e is None for e in result.values())
+                kept += sum(e is not None for e in result.values())
+        if deleted or kept:
+            self.log(f"trace maintenance: deleted {deleted} trace file(s) not written for "
+                     f"{days:g} days" + (f"; {kept} could not be deleted" if kept else ""))
+        return deleted
+
     def prune_orphan_traces(self) -> None:
         """Delete the files in data/traces that belong to no configured mapping: left by a
         replace import, a backup restore or a deleted config.json, and shown in no panel.
@@ -632,6 +673,10 @@ class AppState:
         await self.load_sign_ins()
         while True:
             await self.run_log_maintenance()
+            try:
+                await self.run_trace_maintenance()
+            except Exception as e:  # never let maintenance crash the loop
+                self.log(f"trace maintenance failed: {e}")
             try:
                 await self.expire_external_accounts()
             except Exception as e:  # never let maintenance crash the loop

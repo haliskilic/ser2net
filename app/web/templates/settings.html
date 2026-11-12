@@ -88,6 +88,18 @@
   <p class="muted">{{ _("Sign-ins and every configuration change: who, from where, what — with search, filters and CSV export.") }}</p>
 </section>
 
+<section class="panel panel-narrow" id="retention">
+  <div class="panel-head"><h2>{{ _("Retention") }}</h2></div>
+  <form method="post" action="/settings/retention" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Delete trace files not written for (days)") }} <span class="muted">({{ _("0 = keep them, the default · up to %(max)s", max=trace_days_max) }})</span>
+      <input type="number" name="trace_max_age_days" min="0" max="{{ trace_days_max }}" value="{{ trace_days }}" required>
+    </label>
+    <p class="muted">{{ _("Off by default: a trace file stays until an operator deletes it in its mapping’s Trace panel. With a number of days, every trace file not written for that long is deleted at once and then every hour, also the one a mapping is writing (the next traffic begins it again), and the log says how many went.") }}</p>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
+</section>
+
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Users") }}</h2></div>
   <div class="table-scroll">

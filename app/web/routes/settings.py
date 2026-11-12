@@ -19,7 +19,8 @@ from starlette.routing import Route
 
 from ... import i18n, importer, optional
 from ...config import (
-    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
+    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, TRACE_DAYS_MAX,
+    UI_LANGUAGES,
     WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
     backup_time, new_pwd_version, parse_cluster_peer,
 )
@@ -81,6 +82,7 @@ def routes(ctx: Ctx) -> list:
                       last_sign_in={u.username: _sign_in_time(u) for u in state.config.users},
                       expire_days=state.config.external_users_expire_days,
                       expire_min=EXPIRE_DAYS_MIN, expire_max=EXPIRE_DAYS_MAX,
+                      trace_days=state.config.trace_max_age_days, trace_days_max=TRACE_DAYS_MAX,
                       ldap=state.config.ldap, ldap_problem=ldap_problem,
                       ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,
@@ -575,6 +577,38 @@ def routes(ctx: Ctx) -> list:
               _("Saved: LDAP / OIDC accounts are never removed for not signing in."))
         if gone:
             ok += " " + _("Removed now: {0}.").format(", ".join(u.username for u in gone))
+        return await settings_get(request, ok=ok)
+
+    async def settings_retention(request):
+        """How many days a trace file is kept after it was last written (0: until it is
+        deleted in its mapping's Trace panel, the default)."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        try:
+            days = int(str(form.get("trace_max_age_days", "")).strip())
+        except ValueError:
+            days = -1
+        if not 0 <= days <= TRACE_DAYS_MAX:
+            return await settings_get(request, error=_(
+                "Enter 0 (keep them) or a number of days from 1 to {0}.").format(TRACE_DAYS_MAX))
+        try:
+            async with state.edit_config():
+                state.config.trace_max_age_days = days
+        except ConfigError as e:
+            return await settings_get(request, error=str(e))
+        state.log(f"trace files not written for {days} days are deleted every hour" if days
+                  else "trace files are kept until they are deleted by hand")
+        ctx.audit(request, "trace_retention", str(days))
+        gone = await state.run_trace_maintenance()
+        ok = (_("Saved: trace files not written for {0} days are deleted (checked every "
+                "hour).").format(days) if days else
+              _("Saved: trace files are kept until they are deleted in a mapping’s Trace "
+                "panel."))
+        if gone:
+            ok += " " + _("Deleted now: {0} trace file(s).").format(gone)
         return await settings_get(request, ok=ok)
 
     async def settings_users_signout(request):
@@ -1109,6 +1143,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/users/delete", settings_users_delete, methods=["POST"]),
         Route("/settings/users/signout", settings_users_signout, methods=["POST"]),
         Route("/settings/users/expiry", settings_users_expiry, methods=["POST"]),
+        Route("/settings/retention", settings_retention, methods=["POST"]),
         # the user name in the URL: older pages and scripts (only names without /)
         Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),

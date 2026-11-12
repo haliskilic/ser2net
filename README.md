@@ -724,7 +724,9 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yeniden oluşturur) ve trace sonra kaç baytın eksik olduğunu yazar. Trace'ler iki yöndeki
   ham trafiği, kişisel veriler ve cihaza yazılan parolalar dahil, olduğu gibi tutar: artık
   gerekmediklerinde Trace panelinden silin (yazılmakta olan dosya bir sonraki trafikle
-  yeniden başlar). Bir eşleme silinince trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
+  yeniden başlar) ya da Ayarlar → *Saklama süresi* ile belli bir gün sayısı boyunca
+  yazılmayanların silinmesini sağlayın (varsayılan olarak kapalı; her saat kontrol edilir).
+  Bir eşleme silinince trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
   eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
   açılış onları siler ve kaç dosya olduğunu log'a yazar.
 - `tls/` — self-signed üretilirse sertifika/anahtar.

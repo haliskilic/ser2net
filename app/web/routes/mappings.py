@@ -196,7 +196,8 @@ def routes(ctx: Ctx) -> list:
                       mid=m.id, mapping_name=m.name, files=files,
                       tracing=bool(o.trace_both), current=f"{m.id}-{o.trace_both}",
                       max_mb="%g" % o.trace_max_mb, keep=o.trace_keep, hexdump=o.trace_hexdump,
-                      trace_error=st.get("trace_error", ""), ok=ok, error=error)
+                      trace_error=st.get("trace_error", ""), ok=ok, error=error,
+                      trace_days=state.config.trace_max_age_days)
 
     # Traces record both directions, what clients type to the device included (see
     # common.sees_to_device): listing, downloading and deleting them needs operator+.

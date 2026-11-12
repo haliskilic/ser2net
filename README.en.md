@@ -702,7 +702,9 @@ inside aren't readable by other users:
   the folder again) and the trace then notes how many bytes are missing. Traces hold the
   raw traffic in both directions, personal data and passwords typed to a device included:
   delete them in the Trace panel once they are no longer needed (the file being written
-  begins again with the next traffic). Deleting a mapping deletes its traces; those of mappings a replace import or a restore removed stay until
+  begins again with the next traffic), or have them deleted after a number of days without
+  writes under Settings → *Retention* (off by default; checked every hour). Deleting a
+  mapping deletes its traces; those of mappings a replace import or a restore removed stay until
   the next start (an undone restore finds them), which deletes them and logs how many.
 - `tls/` — certificate/key if self-signed is generated.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists

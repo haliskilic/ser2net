@@ -60,6 +60,9 @@ SESSION_TIMEOUT_MAX_S = 30 * 86400
 EXPIRE_DAYS_DEFAULT = 0
 EXPIRE_DAYS_MIN = SESSION_TIMEOUT_MAX_S // 86400
 EXPIRE_DAYS_MAX = 3650
+# trace files not written for this many days are deleted by the hourly maintenance
+# (AppConfig.trace_max_age_days, AppState.run_trace_maintenance); 0 = kept, the default
+TRACE_DAYS_MAX = 3650
 
 
 class ConfigError(ValueError):
@@ -1579,6 +1582,9 @@ class AppConfig:
     # LDAP/OIDC accounts not signed in for this many days are removed (0: never, the
     # default); Settings -> Users
     external_users_expire_days: int = EXPIRE_DAYS_DEFAULT
+    # trace files (data/traces) not written for this many days are deleted every hour (0:
+    # kept until deleted by hand, the default); Settings -> Retention
+    trace_max_age_days: int = 0
     # Web-UI accounts. Empty => first-run setup pending. A legacy single-password
     # config (top-level password_hash) is migrated to one 'admin' user on load.
     users: list[User] = field(default_factory=list)
@@ -1662,6 +1668,11 @@ class AppConfig:
         cfg.unknown_keys[:0] = [n.path for n in notes if n.kind == "unknown"]
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
+        days = cfg.trace_max_age_days
+        if not 0 <= days <= TRACE_DAYS_MAX:  # a hand-edited value must not stop a start
+            cfg.trace_max_age_days = 0 if days < 0 else TRACE_DAYS_MAX
+            cfg.load_notes.append(f"trace_max_age_days {days} is not 0 (keep) or 1..{TRACE_DAYS_MAX} "
+                                  f"days: {cfg.trace_max_age_days} is used")
         raw_days = d.get("external_users_expire_days")
         if raw_days is not None and raw_days != cfg.external_users_expire_days:
             cfg.load_notes.append(
@@ -1744,6 +1755,7 @@ class AppConfig:
             "api_token_role": self.api_token_role,
             "session_timeout_s": self.session_timeout_s,
             "external_users_expire_days": self.external_users_expire_days,
+            "trace_max_age_days": self.trace_max_age_days,
             "users": [asdict(u) for u in self.users],
             "ldap": asdict(self.ldap),
             "oidc": asdict(self.oidc),

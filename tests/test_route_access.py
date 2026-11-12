@@ -84,6 +84,7 @@ ROUTES = {
     ("POST", "/settings/users/delete"): (ADMIN, FORM),
     ("POST", "/settings/users/signout"): (ADMIN, FORM),
     ("POST", "/settings/users/expiry"): (ADMIN, FORM),
+    ("POST", "/settings/retention"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/role"): (ADMIN, FORM),  # the same, by path
     ("POST", "/settings/users/{username}/delete"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/signout"): (ADMIN, FORM),
