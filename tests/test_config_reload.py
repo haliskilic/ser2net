@@ -16,7 +16,8 @@ Settings -> Configuration backups -> Reload config.json.
     (cryptography makes them);
   * an edit made outside ser2net is noticed (all.log, Settings); a save made before it is
     reloaded goes ahead (never refused), keeps the edited file in backups/ and names it
-    (all.log, the audit log, Settings with a restore link).
+    (all.log, the audit log, Settings with a restore link);
+  * a backup restore is applied the same way (an unchanged mapping keeps its client).
 
 Run: python3 tests/test_config_reload.py
 """
@@ -456,7 +457,39 @@ def test_outside_edit_server() -> None:
         srv.stop()
 
 
+def test_restore_applies_changes() -> None:
+    """A backup restore is applied like a reload: a mapping it leaves as it is keeps its
+    client, one it changes restarts."""
+    pa, pb = free_port(), free_port()
+    srv = server({"mappings": [mapping("a1", "A", pa), mapping("b1", "B", pb)]})
+    try:
+        srv.start()
+        ca = socket.create_connection(("127.0.0.1", pa), timeout=5)
+        wait(lambda: clients(srv, "a1") == 1, "the client")
+        code, view = api(srv, "GET", "/mappings/b1")
+        code, out = api(srv, "PUT", "/mappings/b1", dict(view, name="B2"))
+        assert code == 200, out
+        cb = socket.create_connection(("127.0.0.1", pb), timeout=5)
+        wait(lambda: clients(srv, "b1") == 1, "B2's client")
+        from app.config import ConfigStore
+        backups = ConfigStore(srv.config_path).backup_names()  # newest (in use) first
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        st, _, page = b.post("/settings/backups/restore", {"name": backups[1]})
+        assert f"Restored {backups[1]}" in page and "Mappings it leaves as they are kept " \
+            "running." in page, page[-1500:]
+        assert names(srv) == ["A", "B"]
+        assert still_connected(ca), "a mapping the restore leaves as it is keeps its client"
+        assert not still_connected(cb), "a mapping the restore changes restarts"
+        wait(lambda: listens(pb), "B")
+        print("backup restore: an unchanged mapping keeps its client, a changed one "
+              "restarts  OK")
+    finally:
+        srv.stop()
+
+
 def main() -> None:
+    test_restore_applies_changes()
     test_outside_edit_store()
     test_outside_edit_server()
     test_reload()

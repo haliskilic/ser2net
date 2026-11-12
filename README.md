@@ -759,8 +759,12 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
   kullanıcı hesapları ve parolaları, REST API token'ı ve cluster anahtarı, onları da geri
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
-  oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
-  de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
+  oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme,
+  `config.json`'un yeniden yüklenmesi gibi uygulanır (aşağıya bakın): değiştirmediği
+  eşlemeler istemcileriyle çalışmayı sürdürür, yönetim arayüzü TLS ayarı hemen kullanılır
+  (yüklenemeyen dosyalar geri yüklemeyi reddettirir), yönetim arayüzü adresi bir sonraki
+  açılışta geçerli olur. Geri yükleme de geri alınabilir; indirilen yedekte oturum anahtarı
+  yer almaz.
 - `all.log` — global etkinlik (boyutla döner); web sunucusunun ve diğer kütüphanelerin
   uyarı ve hataları da (yönetim arayüzünün kullanamadığı bir adres, çözemediği bir istek,
   başarısız bir isteğin traceback'i; her mesaj dakikada en fazla bir kez). Windows'ta başka

@@ -73,6 +73,12 @@ class Applied:
         return "; ".join(parts)
 
 
+def keep_env_address(admin) -> None:
+    """SER2NET_BIND_IP / SER2NET_PORT win over config.json (and a backup), as at start-up."""
+    from .runtime import _env_bind_override  # (runtime imports this module's users)
+    _env_bind_override(admin)
+
+
 def _listener_tls(net):
     """A mapping listener's TLS context as its runner makes it (access.server_ssl), except
     that a key with a passphrase waits for the mapping's next start."""
@@ -203,8 +209,6 @@ async def reload_config(state, source: str, actor_ip: str = "local",
 
 
 async def _reload(state) -> tuple[bool, str]:
-    from .runtime import _env_bind_override  # (runtime imports this module's users)
-
     cur = state.config
     async with state.config_lock:
         try:
@@ -213,7 +217,7 @@ async def _reload(state) -> tuple[bool, str]:
             if not isinstance(raw, dict):
                 raise ValueError("not a JSON object")
             new = AppConfig.from_dict(raw)
-            _env_bind_override(new.admin_ui)  # the environment wins, as at start-up
+            keep_env_address(new.admin_ui)
         except FileNotFoundError:
             return False, f"{state.store.path} is missing"
         except OSError as e:
