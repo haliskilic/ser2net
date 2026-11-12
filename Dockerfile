@@ -8,11 +8,12 @@ WORKDIR /app
 
 # Install dependencies first for better layer caching. We install straight from
 # PyPI (the bundled vendor/wheels offline path is for air-gapped hosts, not the
-# image build), so the app runs with --no-bootstrap. The optional feature deps
-# (MQTT / LDAP / OIDC, requirements-optional.txt) are included so those work in the
-# container out of the box.
-COPY requirements.txt requirements-optional.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-optional.txt
+# image build), so the app runs with --no-bootstrap. requirements-lock.txt holds the
+# pins of requirements.txt and of the optional feature packages (MQTT / LDAP / OIDC,
+# requirements-optional.txt), so those work in the container out of the box, each with
+# the sha256 of its files: pip refuses any other file and any unlocked dependency.
+COPY requirements-lock.txt ./
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-lock.txt
 
 # ser2net runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
 # it also takes over a /data volume that an older, root-running image wrote).
