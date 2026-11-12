@@ -18,7 +18,10 @@ dicts plus warnings. Checks:
     an escape for a byte of 0x80 or more (sent as two UTF-8 bytes here) holds an open or
     close string's mapping and is noted for a close-on string or banner;
   * the default remaddr only for a connection without addresses of its own (4.x / 3.x);
-  * *(name), $(name), =(name) and *alias substitution; defaults by position and class
+  * escapes: \\o, \\s, \\\\ (a backslash, also in the rendered banner), trace modifiers in
+    order;
+  * *(name), =(name) and *alias substitution ($(name) left as written); defaults by
+    position and class
     (rfc2217, banner/openstr/closeon too), delete_default; version 2 files;
   * YAML subset details: quotes, comments, flow [..]/{..}, block scalars, documents;
   * a 3.x ser2net.conf with BANNER/TRACEFILE/OPENSTR/CLOSESTR/CLOSEON/DEVICE/DEFAULT/
@@ -498,7 +501,9 @@ def test_options():
     assert (n["kick_old_user"], n["max_connections"], n["read_only"]) == (True, 3, True), n
     assert n["allowed_client_ips"] == ["192.168.33.0/24", "10.0.0.5"], n
     assert o["idle_timeout_s"] == 600
-    assert o["banner"] == "Hi \\I, this is \\N on \\d:\\p\tA at :\\r\\n", repr(o["banner"])
+    # ser2net 4.3+ (ser2net_str.c process_str): \o prints orig_devname, which 4.x never
+    # sets, so the connection's name (port->name): \N here
+    assert o["banner"] == "Hi \\I, this is \\N on \\N:\\p\tA at :\\r\\n", repr(o["banner"])
     assert has(warns, "opts:", "banner:", r"\H \i", "left out")
     assert (o["openstr"], o["closestr"], o["closeon"]) == ("AT\r\n", "ATH\r", "ctrl-a\x01nil\x00")
     assert o["trace_both"] == "/var/log/trace-4001-opts" and o["trace_hexdump"] is True
@@ -564,6 +569,55 @@ def test_high_bytes():
     assert maps["ser2net-3001"]["enabled"] is False and has(warns, "\\x80", "0x80")
     print("escapes for bytes 0x80-0xFF: an open/close string comes in disabled, a close-on "
           "string or banner with a note; YAML escapes and bytes below 0x80 as they are  OK")
+
+
+# the escapes as ser2net (ser2net_str.c process_str) prints them: \o is the connection's
+# name in 4.3+ and the DEVICE alias as the port line names it in 3.x; \\ is a backslash
+# (the banner renderer here reads \\ as one, so C:\\data does not turn into C:<device>ata);
+# 4.1+ has no \s (a plain 's'). Trace modifiers apply in the file's order (portconfig.c
+# myconfig: trace-hexdump sets every trace file when it is read, trace-both-hexdump only
+# its own).
+ESCAPES = r"""
+connection: &esc
+  accepter: tcp,5301
+  connector: serialdev,/dev/ttyUSB3
+  options:
+    banner: 'C:\\data \\\\N \o [\s]'
+    openstr: 'at \o'
+    trace-both: /var/log/\o.log
+    trace-both-hexdump: false
+    trace-hexdump: true
+    trace-timestamp: true
+    trace-both-timestamp: false
+"""
+
+
+def test_escapes():
+    from app.engine.bridge import _render_banner
+    maps, warns = parse(ESCAPES)
+    e = maps["esc"]
+    o = e["options"]
+    assert o["banner"] == "C:\\\\data \\\\\\\\N \\N [9600N81]", repr(o["banner"])
+    sent = _render_banner(o["banner"], MappingConfig.from_dict(e), "/dev/ttyUSB3", "")
+    assert sent == b"C:\\data \\\\N esc [9600N81]", sent
+    # what an escape puts in is not read again (a device or name with a backslash in it)
+    m = MappingConfig.from_dict({"name": "a\\N", "serial": {"port": "COM1"}})
+    assert _render_banner("\\d \\N \\x", m, "C:\\New", "") == b"C:\\New a\\N \\x"
+    assert o["openstr"] == "at esc" and o["trace_both"] == "/var/log/esc.log"
+    assert (o["trace_hexdump"], o["trace_timestamp"]) == (True, False), o
+    assert has(warns, "esc:", "banner", "4.1 and later", "plain 's'")
+    conf = "\n".join(["DEVICE:usb:/dev/serial/by-id/usb-FTDI_1-if00",
+                      "BANNER:b1:\\o on \\d [\\s]\\r\\n",
+                      "TRACEFILE:t1:/var/log/t1",
+                      "3001:raw:0:usb:b1 tb=t1 tb-hexdump -hexdump",
+                      "3002:raw:0:/dev/ttyS2:b1"])
+    maps, warns = parse(conf, "ser2net.conf")
+    assert maps["ser2net-3001"]["options"]["banner"] == "usb on \\d [9600N81]\\r\\n"
+    assert maps["ser2net-3001"]["options"]["trace_hexdump"] is False  # the later -hexdump
+    assert maps["ser2net-3002"]["options"]["banner"] == "\\d on \\d [9600N81]\\r\\n"
+    assert not has(warns, "plain 's'")  # 3.x: \s is the serial parameters
+    print("escapes: \\o the name (4.x) / the DEVICE alias (3.x), \\\\ a backslash, \\s noted "
+          "for 4.x, trace modifiers in the file's order  OK")
 
 
 REMADDR = r"""
@@ -708,12 +762,16 @@ def test_substitution():
     assert c1["serial"]["port"] == "/dev/ttyUSB7" and c1["network"]["bind_ip"] == "192.168.10.1"
     o = c1["options"]
     assert o["banner"] == "Hello from /dev/ttyUSB7", o
-    assert o["openstr"] == "/dev/ttyUSB7 is open" and o["closestr"] == "two *stars and *( paren"
+    # yamlconf.c process_scalar replaces only *( / *{ (version 1) or =( / ={ (version 2):
+    # no ser2net version reads $(name), so it reaches the device as written
+    assert o["openstr"] == "$(dev) is open" and o["closestr"] == "two *stars and *( paren"
     assert o["closeon"] == "x*(nope)yz", o
     assert has(warns, "c1:", "unknown reference *(nope)")
     assert has(warns, "c1:", "*{/etc/ser2net/pw}")
     assert maps["c2"]["options"]["banner"] == "see c1"  # *(connection) is its name, as in ser2net
-    print("version 1: *alias, *(name), $(name), ** and *(* escapes, *{file} left out  OK")
+    assert not has(warns, "$(dev)")
+    print("version 1: *alias, *(name), ** and *(* escapes, $(name) as written, *{file} left "
+          "out  OK")
 
     maps, warns = parse(VERSION2)
     assert list(maps) == ["ttyUSB0", "ttyUSB1", "second"], list(maps)
@@ -1125,6 +1183,7 @@ def main():
     test_options()
     test_remaddr_default()
     test_high_bytes()
+    test_escapes()
     test_substitution()
     test_defaults()
     test_default_classes()
