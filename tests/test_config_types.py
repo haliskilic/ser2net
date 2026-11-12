@@ -372,6 +372,62 @@ def test_api_server_error_is_json():
     print("unexpected error: JSON 500 under /api/v1, plain text elsewhere  OK")
 
 
+def test_other_settings_of_this_release():
+    """The settings other parts of this release added read through the same reader: named
+    API tokens, a one-line trusted-proxy list, a two-factor secret that is no text (it
+    stays on), the dual-stack / port-locking switches and the masking of notifications as
+    true/false, an unknown console encoding as UTF-8; a relative TLS path of a mapping or
+    of the admin UI is a file of the data directory."""
+    import tempfile
+
+    from app.config import AdminUI, console_encoding, set_data_dir, tls_files_missing
+    tokens = [{"id": "0123456789abcdef", "name": "grafana", "sha256": "a" * 64,
+               "role": "viewer", "created": 1.0, "expires": 0.0}]
+    cfg = AppConfig.from_dict({
+        "api_tokens": tokens,
+        "admin_ui": {"trusted_proxies": "10.0.0.1, 10.0.0.0/24 ::1"},
+        "users": [{"username": "a", "password_hash": "x", "role": "admin", "totp_secret": True},
+                  {"username": "b", "password_hash": "x", "totp_secret": None}],
+        "notifications": {"mask_personal_data": "true", "email_separately": "0"},
+        "mappings": [{"name": "m", "serial": {"port": "/dev/ser2net-test",
+                                              "advanced": {"tiocexcl": "1"}},
+                      "network": {"mode": "udp", "bind_ip": "::", "dual_stack": "true",
+                                  "port": 4000},
+                      "options": {"console_encoding": "klingon"}}]})
+    assert [t.name for t in cfg.api_tokens] == ["grafana"], cfg.api_tokens
+    assert cfg.admin_ui.trusted_proxies == ["10.0.0.1", "10.0.0.0/24", "::1"], cfg.admin_ui
+    a, b = cfg.users
+    assert a.totp_on and a.totp_secret == "TRUE" and not b.totp_on, (a, b)
+    assert any("totp_secret is not a base32 secret" in n for n in cfg.load_notes), cfg.load_notes
+    assert cfg.notifications.mask_personal_data is True
+    assert cfg.notifications.email_separately is False
+    m = cfg.mappings[0]
+    assert m.network.dual_stack is True and m.serial.advanced.tiocexcl is True
+    assert console_encoding(m.options) == "utf-8"
+    data = tempfile.mkdtemp(prefix="s2n_types_")
+    try:
+        os.makedirs(os.path.join(data, "tls"))
+        for name in ("cert.pem", "key.pem"):
+            with open(os.path.join(data, "tls", name), "w") as fh:
+                fh.write("x")
+        set_data_dir(data)
+        tls = MappingConfig.from_dict({"name": "t", "serial": {"port": "/dev/ser2net-test"},
+                                       "network": {"mode": "server", "port": 4001, "tls": True,
+                                                   "tls_cert": "tls/cert.pem",
+                                                   "tls_key": "tls/key.pem"}})
+        assert tls_files_missing(tls.network) == [], "a relative path: in the data directory"
+        AdminUI(tls_cert="tls/cert.pem", tls_key="tls/key.pem").check_tls_files()
+        tls.network.tls_key = "tls/gone.pem"
+        assert tls_files_missing(tls.network) == ["TLS file not found: tls/gone.pem"]
+    finally:
+        set_data_dir(None)
+        import shutil
+        shutil.rmtree(data, ignore_errors=True)
+    print("this release's other settings: named tokens, one-line trusted proxies, a two-factor "
+          "secret that is no text stays on, true/false switches, relative TLS paths in the "
+          "data directory  OK")
+
+
 def main():
     test_text_values_read_as_meant()
     test_protective_switches_need_false()
@@ -385,6 +441,7 @@ def main():
     test_cluster_flags()
     asyncio.run(test_poll_loop_survives())
     test_api_server_error_is_json()
+    test_other_settings_of_this_release()
     print("\nPASS: config value types")
 
 

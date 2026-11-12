@@ -1000,7 +1000,8 @@ def tls_files_missing(net: NetworkSettings) -> list[str]:
     if not net.tls or net.mode == "udp":
         return []
     return [_("TLS file not found: {0}").format(p)
-            for p in dict.fromkeys((net.tls_cert, net.tls_key)) if p and not os.path.isfile(p)]
+            for p in dict.fromkeys((net.tls_cert, net.tls_key))
+            if p and not os.path.isfile(data_path(p))]
 
 
 def udp_peer_address(net: NetworkSettings) -> Optional[tuple[str, int]]:
@@ -1768,7 +1769,7 @@ class AdminUI:
         are set in Settings, and at start-up (runtime.require_admin_tls), not by every save
         — a file that goes missing later must not block every other change."""
         for path in (p for p in (self.tls_cert, self.tls_key) if p):
-            if not os.path.isfile(path):
+            if not os.path.isfile(data_path(path)):
                 raise ConfigError(_("TLS file not found or not readable: {0}").format(path))
 
 
@@ -2439,7 +2440,9 @@ class User:
                   path: str = "") -> "User":
         d = dict(d or {})
         notes = [] if notes is None else notes
-        u = User(**_read_fields(User, d, notes, path))
+        # a hand-edited totp_secret that is no text stays on (and matches no code), as text
+        u = User(**_read_fields(User, d, notes, path,
+                                fallback={"totp_secret": str(d.get("totp_secret") or "")}))
         if u.role not in ROLES:
             u.role = "viewer"
         if u.source not in ("local", "ldap", "oidc"):
@@ -2595,12 +2598,16 @@ class AppConfig:
         d = dict(d or {})
         notes: list[FieldNote] = []
         # read elsewhere: the sections, the values with their own rules, what is never stored
-        own = ("admin_ui", "api_token_role", "session_timeout_s", "external_users_expire_days",
-               "users", "ldap", "oidc", "cluster", "notifications", "mappings", "load_notes",
-               "ids_created", "tolerated", "unknown_keys", "newer_writer")
+        own = ("admin_ui", "api_token_role", "api_tokens", "session_timeout_s",
+               "external_users_expire_days", "users", "ldap", "oidc", "cluster",
+               "notifications", "mappings", "load_notes", "ids_created", "tolerated",
+               "unknown_keys", "newer_writer")
         top = _read_fields(AppConfig, d, notes, skip=own,
                            keep=("password_hash", "pwd_version", "written_by"))
-        admin_ui = AdminUI(**_read_fields(AdminUI, _section(d, "admin_ui"), notes, "admin_ui."))
+        admin = dict(_section(d, "admin_ui"))
+        if isinstance(admin.get("trusted_proxies"), str):  # one line (spaces or commas)
+            admin["trusted_proxies"] = split_proxy_entries(admin["trusted_proxies"])
+        admin_ui = AdminUI(**_read_fields(AdminUI, admin, notes, "admin_ui."))
         if not isinstance(d.get("users", []), list):  # never read as "no accounts yet"
             raise ConfigError(_("{0} must be a JSON list, not {1}.").format(
                 "users", _shown(d["users"])))
