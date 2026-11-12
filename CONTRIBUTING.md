@@ -30,6 +30,13 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 | Browser layout | `pip install playwright && python -m playwright install chromium`, then `SER2NET_UI_TESTS=1 python tests/test_ui_layout.py` |
 | Offline wheels | `python tests/test_vendor_wheels.py` |
 | Known vulnerabilities | `pip install pip-audit && pip-audit -r requirements.txt` |
+| Workflow lint | `pip install zizmor && zizmor --offline .` (settings in `.github/zizmor.yml`) |
+
+The `ci-ok` job passes only when every other CI job passed (the not-required newest-Python
+leg aside); it is the check a merge waits for, so a new job in `ci.yml` goes into its
+`needs` (`tests/test_ci_gate.py` checks that). Between pull requests,
+`.github/workflows/scheduled.yml` re-runs the dependency audit daily and the Docker image
+build weekly.
 
 `tests/test_dead_peer.py` blackholes a loopback flow with iptables; run it with
 `SER2NET_BLACKHOLE_TESTS=1` only in a throwaway network namespace or VM, never on a
@@ -105,10 +112,19 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 
 ### Kontroller
 Yukarıdaki tablodaki komutların hepsi her pull request'te CI'da çalışır: `ruff check .`,
-`mypy` (ayrıca `--platform win32` ile), `python tests/run_all.py -v` (Linux'ta `socat` ile `--socat`), coverage, tarayıcı
-yerleşim testi, çevrimdışı wheel kontrolü ve `pip-audit`. `tests/test_dead_peer.py`
-iptables ile loopback trafiği kestiği için `SER2NET_BLACKHOLE_TESTS=1` ile yalnızca
-silinebilir bir ağ ad alanında (network namespace) ya da sanal makinede çalıştırın.
+`mypy` (ayrıca `--platform win32` ile), `python tests/run_all.py -v` (Linux'ta `socat` ile
+`--socat`), coverage, tarayıcı yerleşim testi, çevrimdışı wheel kontrolü, `pip-audit` ve
+workflow denetimi (`zizmor`).
+
+`ci-ok` işi ancak diğer bütün CI işleri geçince geçer (zorunlu olmayan en yeni Python leg'i
+hariç); birleştirme onu bekler, bu yüzden `ci.yml`'ye eklenen her iş onun `needs` listesine
+de girer (`tests/test_ci_gate.py` bunu denetler). Pull request'ler arasında
+`.github/workflows/scheduled.yml` bağımlılık denetimini her gün, Docker imajını her hafta
+yeniden çalıştırır.
+
+`tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
+`SER2NET_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
+ya da sanal makinede çalıştırın.
 
 ### Yükseltmeleri sorunsuz tutan kurallar
 - **Eski `config.json` dosyaları çalışmaya devam etmeli.** Her yeni ayarın varsayılanı

@@ -66,27 +66,9 @@ jobs:
       - run: pip install zizmor==1.32.0
       - run: zizmor --offline --format=github .
 
+  # pip-audit on Python 3.10 and 3.12 (the same workflow release.yml and scheduled.yml use)
   audit:
-    name: dependency audit py${{ matrix.python-version }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.10 resolves the older pins its markers select; 3.12 the current ones
-        python-version: ["3.10", "3.12"]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python-version }}
-      - run: pip install pip-audit==2.10.1
-      - name: Known vulnerabilities in the pinned runtime dependencies
-        run: pip-audit --strict -r requirements.txt
-      - name: Known vulnerabilities in the optional packages the binaries / image bundle (3.12)
-        if: matrix.python-version == '3.12'
-        run: pip-audit --strict -r requirements-optional.txt
+    uses: ./.github/workflows/audit.yml
 
   vendor:
     name: offline wheels match requirements.txt
@@ -276,3 +258,21 @@ jobs:
       contents: read
       actions: read   # the reusable workflow requests it (SignPath); the caller must grant it
     uses: ./.github/workflows/standalone.yml
+
+  # The one check for branch protection to require (with license/cla): it passes only when
+  # every job above passed, so jobs added to or renamed in this workflow need no settings
+  # change. A needed job that failed, was cancelled or was skipped fails it (GitHub would
+  # count a skipped required check as passed, hence if: always() and the explicit check).
+  # test-next is left out on purpose: it may fail.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [lint, typecheck, workflows, audit, vendor, ui, test, coverage, docker, standalone]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null

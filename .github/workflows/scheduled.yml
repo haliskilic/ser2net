@@ -1,0 +1,27 @@
+name: Scheduled
+
+# Between pull requests: every day the dependency audit (audit.yml), so a new advisory
+# against a pin the binaries and the image ship is reported within a day, not at the next
+# pull request or release; on Mondays the Docker image (docker.yml), built from the
+# current python:3.12-slim and smoke-tested on amd64 and arm64, so a change of the
+# floating base image shows before the next release. A workflow of its own: it never
+# shares (or cancels) ci.yml's concurrency group.
+# GitHub turns scheduled workflows off after 60 days without activity in the repository;
+# Actions -> Scheduled -> "Enable workflow" turns it back on.
+on:
+  schedule:
+    - cron: "17 5 * * *"    # daily 05:17 UTC: dependency audit
+    - cron: "43 5 * * 1"    # Mondays 05:43 UTC: Docker image
+  workflow_dispatch:        # both
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.event.schedule != '43 5 * * 1'
+    uses: ./.github/workflows/audit.yml
+
+  docker:
+    if: github.event.schedule == '43 5 * * 1' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/docker.yml

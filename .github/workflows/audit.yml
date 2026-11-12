@@ -1,0 +1,34 @@
+name: Dependency audit
+
+# pip-audit over the pinned dependencies: requirements.txt on Python 3.10 (the older pins
+# its markers select there) and 3.12 (the current ones), plus requirements-optional.txt,
+# which the binaries and the image bundle. Called by ci.yml (pull requests, main),
+# release.yml (nothing is published with a known vulnerability in what it ships) and
+# scheduled.yml (daily: an advisory published between pull requests shows up then).
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: dependency audit py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pip-audit==2.10.1
+      - name: Known vulnerabilities in the pinned runtime dependencies
+        run: pip-audit --strict -r requirements.txt
+      - name: Known vulnerabilities in the optional packages the binaries / image bundle (3.12)
+        if: matrix.python-version == '3.12'
+        run: pip-audit --strict -r requirements-optional.txt

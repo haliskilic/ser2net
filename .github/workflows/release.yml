@@ -4,10 +4,10 @@ name: Release
 # standalone executables (Linux x86_64 + arm64, Windows x64; no Python or anything else
 # needed) and the Docker image (amd64 + arm64), run every check on them — bundle
 # contents, empty-PATH run, clean AlmaLinux/Debian/Ubuntu/Fedora/openSUSE containers,
-# the Windows service, the image's non-root / upgrade smoke test — and only then
-# publish: the release assets with SHA256SUMS, SBOMs, license texts and build
-# provenance, and the image on GHCR. The write permissions belong to the two publish
-# jobs alone.
+# the Windows service, the image's non-root / upgrade smoke test — audit the pinned
+# dependencies (audit.yml), and only then publish: the release assets with SHA256SUMS,
+# SBOMs, license texts and build provenance, and the image on GHCR. The write
+# permissions belong to the two publish jobs alone.
 on:
   push:
     tags: ["v*"]
@@ -32,9 +32,13 @@ jobs:
   docker-test:
     uses: ./.github/workflows/docker.yml
 
+  # no release with a known vulnerability in a pin the binaries or the image ship
+  audit:
+    uses: ./.github/workflows/audit.yml
+
   publish:
     name: attach to the release
-    needs: standalone
+    needs: [standalone, audit]
     runs-on: ubuntu-latest
     permissions:
       contents: write        # the release assets
@@ -96,7 +100,7 @@ jobs:
     name: push the image to GHCR (amd64 + arm64)
     # also needs the standalone build (incl. Windows signing) to pass, so a failed exe
     # release doesn't still push the image and leave a split release
-    needs: [docker-test, standalone]
+    needs: [docker-test, standalone, audit]
     runs-on: ubuntu-latest
     permissions:
       contents: read
