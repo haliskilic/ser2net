@@ -227,8 +227,9 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 | `ser2net-linux-x64` | glibc ≥ 2.28 olan x86_64 Linux: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (musl/Alpine değil — orada Docker kullanın) |
 | `ser2net-linux-arm64` | glibc ≥ 2.28 olan 64-bit ARM Linux: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ veya Ubuntu), ARM endüstriyel gateway'ler, AWS Graviton, aynı dağıtımlar |
 
-Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`) ve lisans
-metinleri yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
+Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`), lisans
+metinleri ve Linux binary'leri için systemd unit'i `ser2net-standalone.service` (bkz. *Servis
+olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
 doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si **henüz
 imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
@@ -552,7 +553,7 @@ sahibine geçer):
 
 | Kurulum | Komut |
 |---|---|
-| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
+| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (`ser2net-standalone.service` ile binary: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; elle başlatılan: `./ser2net-linux-x64 --set-password admin`) |
 | Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (servisin veri klasörü: `sc qc ser2net` gösterir) |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
@@ -605,9 +606,42 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. Düz
   `docker run` ile çalıştırıyorsanız `--restart unless-stopped` ekleyin (var olan bir
   container için: `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
-  **root ile çalıştırmayın.**
+- **Linux (systemd):** iki unit var. İkisi de ser2net'i ayrı, yetkisiz bir kullanıcıyla
+  (`ser2net`; seri portlar için `dialout` grubunda) çalıştırır, hata durumunda 3 sn sonra
+  yeniden başlatır ve sandbox içinde tutar (salt okunur sistem, kendine ait `/tmp`, sistem
+  çağrısı filtresi). **root ile çalıştırmayın.**
+  - `/opt/ser2net` altında *kaynak kurulum*: `systemd/ser2net.service`.
+    ```bash
+    sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
+    sudo git clone https://github.com/haliskilic/ser2net.git /opt/ser2net
+    sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    ```
+    İlk açılış `data/` ve `lib/` dizinlerini `ser2net` kullanıcısı için oluşturur ve
+    paketlenmiş bağımlılıkları `lib/` içine kurar (çevrimdışı). `/usr/bin/python3` olarak
+    Python 3.10 ya da daha yenisi gerekir: RHEL / AlmaLinux / Rocky 8 ve 9 ile Debian 11'de
+    `ExecStart=` satırını daha yeni bir yorumlayıcıya yönlendirin (RHEL: `dnf install
+    python3.11`, ardından `/usr/bin/python3.11`) ya da binary'yi kullanın.
+  - *Standalone binary*: `ser2net-standalone.service` (her release'e eklenir, `systemd/`
+    altında da var), `ser2net.service` adıyla kurulur; verisi systemd'nin oluşturduğu
+    `/var/lib/ser2net` içindedir.
+    ```bash
+    sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
+    sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
+    sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    ```
+  - Web arayüzü, aksi söylenmedikçe `127.0.0.1:8080`'de dinler. Ağdan erişmek için
+    `sudo systemctl edit ser2net` çalıştırıp aşağıdaki satırları ekleyin (ağ adresinde TLS
+    kullanın, bkz. Güvenlik) ve `sudo systemctl restart ser2net` yapın:
+    ```ini
+    [Service]
+    Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+    ```
+    İlk parolayı tarayıcıda ya da `--set-password` ile belirleyin (Güvenlik altındaki
+    tablo). Bu tür komutları `ser2net` kullanıcısıyla çalıştırın (`sudo -u ser2net …`),
+    düz root ile değil; root, servisin okuyamayacağı dosyalar bırakır. Log'lar:
+    `journalctl -u ser2net` ve veri dizinindeki `all.log`.
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
   ser2net-windows-x64.exe --install-service
