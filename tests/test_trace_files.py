@@ -6,6 +6,8 @@ Checks:
     trace_delete); the file being written is closed by the trace writer, not left open
     deleted, and tracing goes on; a mapping without tracing whose files are all gone no
     longer offers Trace;
+  * Settings -> Retention (admin): trace files not written for N days are deleted at once
+    and then every hour (0, the default, keeps them); a value out of range is refused;
   * a replace import and a backup restore that remove a mapping close what the server
     kept open for it at once (its runner with the trace writer, its log file; before,
     the log file stayed open until a restart) and keep its files, so restoring a backup
@@ -192,11 +194,52 @@ def removed_mappings():
               + ("" if fds is not None else " (open files not checked: no /proc)") + "  OK")
 
 
+def retention_setting():
+    srv = Server({"users": USERS, "mappings": [mapping(A, "A", "a.log")]})
+    traces = os.path.join(srv.data, "traces")
+    os.makedirs(traces)
+    old, new = os.path.join(traces, f"{A}-old.log"), os.path.join(traces, f"{A}-new.log")
+    for path in (old, new):
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("x\n")
+    when = time.time() - 10 * 86400
+    os.utime(old, (when, when))
+    with srv:
+        op, admin = Browser(srv.base), Browser(srv.base)
+        op.login("op", PW)
+        admin.login("admin", PW)
+        assert srv.saved_config().get("trace_max_age_days", 0) == 0
+        st, _, page = admin.get("/settings")
+        assert 'name="trace_max_age_days"' in page and 'value="0"' in page
+        assert op.post("/settings/retention", {"trace_max_age_days": "7"})[0] == 403
+        for bad in ("-1", "99999", "soon"):
+            st, _, page = admin.post("/settings/retention", {"trace_max_age_days": bad})
+            assert "Enter 0 (keep them) or a number of days" in page, (bad, page[:300])
+        assert srv.saved_config().get("trace_max_age_days", 0) == 0 and os.path.isfile(old)
+        st, _, page = admin.post("/settings/retention", {"trace_max_age_days": "7"})
+        assert "trace files not written for 7 days are deleted" in page and \
+            "Deleted now: 1 trace file(s)." in page, page[page.find("banner"):][:300]
+        assert srv.saved_config()["trace_max_age_days"] == 7
+        assert not os.path.exists(old) and os.path.isfile(new)
+        assert "trace maintenance: deleted 1 trace file(s) not written for 7 days" in srv.output()
+        st, _, page = op.get(f"/api/mappings/{A}/traces")
+        assert "not written for 7 days are deleted every hour" in page
+        st, _, page = admin.post("/settings/retention", {"trace_max_age_days": "0"})
+        assert "trace files are kept until they are deleted" in page
+        assert srv.saved_config()["trace_max_age_days"] == 0
+        with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
+            got = [ln.split("\t")[3] for ln in fh if "\ttrace_retention\t" in ln]
+        assert got == ["7", "0"], got
+    print("retention: off by default; an admin sets N days, older traces go at once and "
+          "every hour; out-of-range values refused, operators 403, audited  OK")
+
+
 def main():
     delete_traces()
+    retention_setting()
     removed_mappings()
-    print("\nPASS: trace files deleted from the panel; those of removed mappings closed at "
-          "once and pruned at the next start")
+    print("\nPASS: trace files deleted from the panel or after N days (off by default); those "
+          "of removed mappings closed at once and pruned at the next start")
 
 
 if __name__ == "__main__":

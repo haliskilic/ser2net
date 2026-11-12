@@ -896,5 +896,14 @@
   "Delete all %(n)s trace file(s) of “%(name)s”?": "“%(name)s” eşlemesinin %(n)s trace dosyasının hepsi silinsin mi?",
   "Delete all": "Tümünü sil",
   "Traces hold the raw traffic in both directions, personal data and passwords typed to the device included: delete them once they are no longer needed.": "Trace'ler iki yöndeki ham trafiği, kişisel veriler ve cihaza yazılan parolalar dahil, olduğu gibi tutar: artık gerekmediklerinde sil.",
-  "Delete the trace file “%(name)s”?": "“%(name)s” trace dosyası silinsin mi?"
+  "Delete the trace file “%(name)s”?": "“%(name)s” trace dosyası silinsin mi?",
+  "Enter 0 (keep them) or a number of days from 1 to {0}.": "0 (saklansın) ya da 1 ile {0} arasında bir gün sayısı gir.",
+  "Saved: trace files not written for {0} days are deleted (checked every hour).": "Kaydedildi: {0} gündür yazılmayan trace dosyaları silinir (her saat kontrol edilir).",
+  "Saved: trace files are kept until they are deleted in a mapping’s Trace panel.": "Kaydedildi: trace dosyaları, bir eşlemenin Trace panelinde silinene kadar saklanır.",
+  "Deleted now: {0} trace file(s).": "Şimdi silinen: {0} trace dosyası.",
+  "Retention": "Saklama süresi",
+  "Delete trace files not written for (days)": "Şu kadar gündür yazılmayan trace dosyalarını sil",
+  "0 = keep them, the default · up to %(max)s": "0 = sakla, varsayılan · en fazla %(max)s",
+  "Off by default: a trace file stays until an operator deletes it in its mapping’s Trace panel. With a number of days, every trace file not written for that long is deleted at once and then every hour, also the one a mapping is writing (the next traffic begins it again), and the log says how many went.": "Varsayılan olarak kapalı: bir trace dosyası, bir operator onu eşlemesinin Trace panelinde silene kadar kalır. Bir gün sayısı girilirse o kadar süredir yazılmayan her trace dosyası hemen ve sonra her saat silinir; bir eşlemenin yazmakta olduğu dosya da (bir sonraki trafik onu yeniden başlatır). Kaç dosyanın silindiği log'a yazılır.",
+  "Trace files not written for %(days)s days are deleted every hour (Settings → Retention).": "%(days)s gündür yazılmayan trace dosyaları her saat silinir (Ayarlar → Saklama süresi)."
 }

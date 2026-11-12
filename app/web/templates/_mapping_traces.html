@@ -17,7 +17,7 @@
 {% else %}
 <p class="muted mb-sm">{{ _("Tracing is off for this mapping (set a trace file name in its options). Files recorded earlier are listed below.") }}</p>
 {% endif %}
-<p class="muted mb-sm">{{ _("Traces hold the raw traffic in both directions, personal data and passwords typed to the device included: delete them once they are no longer needed.") }}</p>
+<p class="muted mb-sm">{{ _("Traces hold the raw traffic in both directions, personal data and passwords typed to the device included: delete them once they are no longer needed.") }}{% if trace_days %} {{ _("Trace files not written for %(days)s days are deleted every hour (Settings → Retention).", days=trace_days) }}{% endif %}</p>
 {% if files %}
 <div class="table-scroll">
 <table class="grid">

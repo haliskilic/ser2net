@@ -20,6 +20,9 @@ network bytes appended to it. Checks:
   * a trace's files are deleted by its writer thread, in turn with what it writes: the
     file it writes is closed first (no deleted file is kept open) and begun again with
     the next traffic;
+  * with trace_max_age_days set (0, the default, keeps them), the hourly maintenance
+    deletes the trace files not written for that long, a running trace's through its
+    writer; a hand-edited value out of range is read as 0 or the maximum, with a note;
   * deleting a mapping deletes its traces; the start-up prunes the traces of mappings
     that no longer exist (a replace import or a restore leaves them), and those removals
     close the gone mappings' runners and log files at once.
@@ -477,6 +480,59 @@ def test_state_files(tmp):
     print("state: start-up prunes the traces no configured mapping owns, logged  OK")
 
 
+def test_retention_setting():
+    from app.config import TRACE_DAYS_MAX
+    assert AppConfig().trace_max_age_days == 0 and AppConfig.from_dict({}).trace_max_age_days == 0
+    assert AppConfig.from_dict({"trace_max_age_days": 30}).to_dict()["trace_max_age_days"] == 30
+    for raw, used in ((-1, 0), (TRACE_DAYS_MAX + 1, TRACE_DAYS_MAX), ("nope", 0)):
+        cfg = AppConfig.from_dict({"trace_max_age_days": raw})
+        assert cfg.trace_max_age_days == used and cfg.load_notes, (raw, cfg.load_notes)
+        cfg.validate()
+    print("trace_max_age_days: 0 (keep) by default; a stored value out of range is read as 0 "
+          "or the maximum, with a note  OK")
+
+
+async def test_retention(tmp):
+    from app.config import ConfigStore
+    from app.state import AppState
+    data = os.path.join(tmp, "data")
+    st = AppState(ConfigStore(os.path.join(data, "config.json")), AppConfig())
+    logs = []
+    st.log = logs.append
+    m = MappingConfig.from_dict({
+        "id": "ret001", "name": "r", "serial": {"port": "/dev/ser2net-no-such-port"
+                                                if os.name != "nt" else "COM250"},
+        "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
+                    "port": free_port()},
+        "options": {"trace_both": "t.log"}})
+    st.config.mappings = [m]
+    await st.supervisor.apply_mapping(m)
+    tracer = st.supervisor.get_runner("ret001").tracer
+    try:
+        week, now = time.time() - 8 * 86400, time.time()
+        for name, when in (("ret001-t.log", week), ("ret001-t.log.1", week),
+                           ("ret001-recent.log", now), ("gone01-x.log", week)):
+            path = os.path.join(st.traces_dir, name)
+            if not os.path.exists(path):
+                with open(path, "wb") as fh:
+                    fh.write(b"x")
+            os.utime(path, (when, when))
+        assert await st.run_trace_maintenance() == 0 and len(os.listdir(st.traces_dir)) == 4
+        st.config.trace_max_age_days = 7
+        assert await st.run_trace_maintenance() == 3
+        assert os.listdir(st.traces_dir) == ["ret001-recent.log"], os.listdir(st.traces_dir)
+        assert logs[-1] == "trace maintenance: deleted 3 trace file(s) not written for 7 days"
+        assert not _deleted_but_open(tracer.path), "the file being written was left open"
+        assert tracer.active and not tracer.error
+        assert await st.run_trace_maintenance() == 0
+        assert sum("trace maintenance" in ln for ln in logs) == 1, logs
+    finally:
+        await st.supervisor.stop_all()
+        st.delete_mapping_log("ret001")
+    print("retention: trace files not written for N days are deleted (the one being written "
+          "by its writer), recent ones kept; 0 keeps all  OK")
+
+
 async def test_forget_mappings(tmp):
     """A replace import / restore removes mappings without deleting them one by one: their
     runner (with its trace writer) and log file are closed at once, their files stay."""
@@ -541,6 +597,9 @@ async def main():
         test_state_files(tmp)
         os.makedirs(os.path.join(tmp, "h"))
         await test_forget_mappings(os.path.join(tmp, "h"))
+        test_retention_setting()
+        os.makedirs(os.path.join(tmp, "j"))
+        await test_retention(os.path.join(tmp, "j"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\nPASS: traces confined to data/traces, off-loop writer, rotation, failures")
