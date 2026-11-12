@@ -311,16 +311,23 @@ def test_send_deadline():
             await asyncio.sleep(0.05)
         try:
             stall = asyncio.ensure_future(asyncio.to_thread(stalled, port))
-            # before the deadline: what the server still holds of the response. Nothing when
-            # the kernel took all of it (Windows may, also after writing paused for a while):
-            # then there is nothing left to cut off
-            await asyncio.sleep(1.0)
-            held = transports[-1].get_write_buffer_size() if transports else 0
+            # from the pause until the deadline's abort: does the server still hold some of
+            # the response? Not once the kernel took all of it (Windows may, a while after
+            # writing paused, into buffers of its own): then there is nothing to cut off
+            loop = asyncio.get_running_loop()
+            end = loop.time() + admin.request_timeout_s + 1.0
+            while not (paused and transports) and loop.time() < end:
+                await asyncio.sleep(0.01)
+            held = bool(paused and transports)
+            while held and loop.time() < end and not transports[-1].is_closing():
+                held = transports[-1].get_write_buffer_size() > 0
+                await asyncio.sleep(0.02)
             got = await stall
             if not paused or not held:
                 print("  (SKIP the stalled client: the kernel took the whole response here)")
             else:
-                assert got < len(payload), "a client that takes nothing kept its response"
+                assert got < len(payload), ("a client that takes nothing kept its response "
+                                            f"(connections aborted: {guard.timeouts})")
                 assert guard.timeouts >= 1
             got, took = await asyncio.to_thread(slow_reader, port)
             assert got == len(payload), f"a slow reader was cut off after {got} bytes"
