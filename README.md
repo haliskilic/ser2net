@@ -195,7 +195,11 @@ düzenlemeye gerek yok.
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
   olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
   istemci sertifikası, sertifikası bu makinede olmayan TLS, yalnızca yazılan cihaz) kapalı
-  olarak gelir.
+  olarak gelir. Aynı dosya sonradan yeniden birleştirilirse yalnızca dosyanın söyledikleri
+  alınır, eşlemelerde burada ayarlananlar korunur (TLS, bind IP, izinli istemciler, USB
+  kimliği, RS-485, MQTT, Modbus noktaları; kapalı bir eşleme kapalı kalır); hiçbir eşleme
+  daha açık hale gelmez ve önizleme her güncellemenin neyi değiştirip neyi koruduğunu
+  listeler.
 - **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.

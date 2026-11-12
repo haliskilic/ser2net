@@ -987,5 +987,9 @@
   "closeon: {0} is a byte of 0x80 or more, which is matched here as two bytes (strings are sent as UTF-8), so this close-on string won't match what the device sends; change it on the mapping": "closeon: {0}, 0x80 ya da daha büyük bir bayt; burada iki bayt olarak aranır (metinler UTF-8 olarak gönderilir), bu yüzden bu close-on metni cihazın gönderdiğiyle eşleşmez; eşlemede değiştir",
   "banner: {0} is a byte of 0x80 or more, which is sent here as two bytes (strings are sent as UTF-8)": "banner: {0}, 0x80 ya da daha büyük bir bayt; burada iki bayt olarak gönderilir (metinler UTF-8 olarak gönderilir)",
   "It holds control characters (NUL, CR or LF) that this box can’t show; they are kept unless you change the text.": "Bu kutunun gösteremediği kontrol karakterleri (NUL, CR ya da LF) içeriyor; metni değiştirmedikçe korunurlar.",
-  "{0}: \\s stood for the serial parameters in ser2net 3.x and 4.0; ser2net 4.1 and later print a plain 's' instead": "{0}: \\s, ser2net 3.x ve 4.0'da seri parametreler anlamına geliyordu; ser2net 4.1 ve sonrası bunun yerine düz bir 's' yazar"
+  "{0}: \\s stood for the serial parameters in ser2net 3.x and 4.0; ser2net 4.1 and later print a plain 's' instead": "{0}: \\s, ser2net 3.x ve 4.0'da seri parametreler anlamına geliyordu; ser2net 4.1 ve sonrası bunun yerine düz bir 's' yazar",
+  "on": "açık",
+  "off": "kapalı",
+  "any client": "her istemci",
+  "%(what)s: %(value)s is kept (the file has %(file)s)": "%(what)s: %(value)s korunur (dosyada %(file)s)"
 }

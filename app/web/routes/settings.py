@@ -862,8 +862,8 @@ def routes(ctx: Ctx) -> list:
         """What importing a pending plan would change, against the mappings as they are now."""
         plan, mode = item["plan"], item["mode"]
         current = state.config.mappings
-        rows = importer.plan_rows(current, plan.mappings, mode)
-        candidate, _touched = importer.apply_import(current, plan.mappings, mode)
+        rows = importer.plan_rows(current, plan.mappings, mode, plan.classic)
+        candidate, _touched = importer.apply_import(current, plan.mappings, mode, plan.classic)
         problem = None
         try:
             dataclasses.replace(state.config, mappings=candidate).validate_for_save()
@@ -891,10 +891,10 @@ def routes(ctx: Ctx) -> list:
 
     async def _apply_import(request, plan, mode, legacy=False):
         """`legacy`: the one-step import of 2.7 scripts, answered with the page as before."""
-        rows = importer.plan_rows(state.config.mappings, plan.mappings, mode)
+        rows = importer.plan_rows(state.config.mappings, plan.mappings, mode, plan.classic)
         async with state.config_lock:
             old = state.config.mappings
-            new_maps, touched = importer.apply_import(old, plan.mappings, mode)
+            new_maps, touched = importer.apply_import(old, plan.mappings, mode, plan.classic)
             state.config.mappings = new_maps
             try:
                 await state.asave()
