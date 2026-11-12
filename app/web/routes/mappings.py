@@ -265,7 +265,7 @@ def routes(ctx: Ctx) -> list:
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
-        form = await request.form()
+        form = await read_form(request)
         try:
             poll = ModbusPoll.from_dict(
                 {"points": _parse_modbus_points(form.get("modbus_points", ""), strict=True)})
