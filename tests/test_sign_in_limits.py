@@ -221,9 +221,10 @@ async def _in_process(d: str) -> None:
     assert s in (400, 413) and read <= MAX_BODY_BYTES + 64 * KB, (s, read)  # 400: a 1 MB field
     big = b'{"mappings": []}' + b" " * (3 * MB)
     body, ctype = multipart({"step": "preview", "mode": "merge"}, {"file": ("big.json", big)})
-    s, _h, text, read = await call(app, "POST", "/settings/config/import", body,
-                                   headers={**admin, "Content-Type": ctype})
-    assert s == 200 and read == len(body) and "Import preview" in text, (s, read)
+    s, h, text, read = await call(app, "POST", "/settings/config/import", body,
+                                  headers={**admin, "Content-Type": ctype})
+    # read and kept: the page with its preview is where the redirect leads
+    assert s == 303 and read == len(body) and h["location"].startswith("/settings?import="), (s, read)
     s, _h, _t, read = await call(app, "POST", "/settings/config/import", b"",
                                  headers={**admin, "Content-Type": ctype}, declared=17 * MB)
     assert s == 413 and read == 0, (s, read)

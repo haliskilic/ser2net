@@ -16,7 +16,9 @@ Standard library only (urllib, smtplib).
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hmac
 import ipaddress
 import json
 import smtplib
@@ -32,6 +34,7 @@ from typing import Optional
 
 from . import __version__, i18n
 from .config import node_name as configured_name
+from .explain import explain
 from .i18n import _
 from .logtext import one_line
 from .web import proxy
@@ -196,6 +199,36 @@ def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str =
     return body
 
 
+# what quote() leaves of a URL's path and query: RFC 3986's delimiters and "%", so an
+# already percent-encoded URL stays as it is (quote() never touches letters, digits, _.-~)
+_URL_SAFE = "/%:@!$&'()*+,;="
+
+
+def ascii_url(url: str) -> str:
+    """`url` as a request can carry it, what a browser makes of one typed with letters
+    outside ASCII: the host IDNA-encoded (xn--...; DNS and TLS do that themselves, but
+    the Host header would go out as Latin-1 or fail), the path and query percent-encoded
+    as UTF-8 (http.client sends the request line as ASCII). An ASCII URL stays as it is.
+    Done when sending: the stored URL stays as it was typed."""
+    if url.isascii():
+        return url
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    if not host.isascii():
+        host = host.encode("idna").decode("ascii")   # UnicodeError: not a host name
+    netloc = f"[{host}]" if ":" in host else host     # (IPv6)
+    if parts.port is not None:
+        netloc += f":{parts.port}"
+    if parts.username is not None:
+        user = urllib.parse.quote(parts.username, safe=_URL_SAFE)
+        if parts.password is not None:
+            user += ":" + urllib.parse.quote(parts.password, safe=_URL_SAFE)
+        netloc = f"{user}@{netloc}"
+    return urllib.parse.urlunsplit((parts.scheme, netloc,
+                                    urllib.parse.quote(parts.path, safe=_URL_SAFE),
+                                    urllib.parse.quote(parts.query, safe=_URL_SAFE + "?"), ""))
+
+
 def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "",
                  name: str = "", instance_id: str = "") -> str:
     """POST the message to the webhook. Returns a warning, or "". A redirect (301/302/303)
@@ -205,7 +238,7 @@ def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "",
     body = json.dumps(webhook_body(settings.webhook_format, event, mapping, detail,
                                    str(settings.telegram_chat_id), url, name,
                                    instance_id)).encode()
-    req = urllib.request.Request(settings.webhook_url.strip(), data=body, method="POST",
+    req = urllib.request.Request(ascii_url(settings.webhook_url.strip()), data=body, method="POST",
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": f"ser2net/{__version__}"})
     with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
@@ -260,7 +293,7 @@ def send_email(settings, event: str, mapping: str, detail: str, url: str = "",
         if settings.smtp_security == "starttls":
             smtp.starttls(context=ctx)
         if settings.smtp_username:
-            smtp.login(settings.smtp_username, settings.smtp_password)
+            login(smtp, settings.smtp_username, settings.smtp_password)
         if not getattr(settings, "email_separately", False):  # (settings made before it)
             smtp.send_message(msg)
             return
@@ -268,6 +301,42 @@ def send_email(settings, event: str, mapping: str, detail: str, url: str = "",
             del msg["To"]
             msg["To"] = rcpt
             smtp.send_message(msg, to_addrs=[rcpt])
+
+
+def login(smtp: smtplib.SMTP, user: str, password: str) -> None:
+    """smtp.login(user, password), also for a user name or password with letters outside
+    ASCII: smtplib encodes those as ASCII and fails before it sends anything, so they go
+    UTF-8 encoded here — AUTH PLAIN (RFC 4616), else LOGIN, else CRAM-MD5, as the server
+    offers them. ASCII credentials take smtplib's own way, as before."""
+    if user.isascii() and password.isascii():
+        smtp.login(user, password)
+        return
+    smtp.ehlo_or_helo_if_needed()
+    if not smtp.has_extn("auth"):
+        raise smtplib.SMTPNotSupportedError("SMTP AUTH extension not supported by server.")
+    offered = smtp.esmtp_features["auth"].upper().split()
+
+    def b64(data: bytes) -> str:
+        return base64.b64encode(data).decode("ascii")
+    error: Optional[Exception] = None
+    for mech in ("PLAIN", "LOGIN", "CRAM-MD5"):
+        if mech not in offered:
+            continue
+        if mech == "PLAIN":
+            code, resp = smtp.docmd("AUTH", "PLAIN " + b64(f"\0{user}\0{password}".encode()))
+        elif mech == "LOGIN":
+            code, resp = smtp.docmd("AUTH", "LOGIN " + b64(user.encode()))
+            if code == 334:
+                code, resp = smtp.docmd(b64(password.encode()))
+        else:
+            code, resp = smtp.docmd("AUTH", "CRAM-MD5")
+            if code == 334:
+                digest = hmac.HMAC(password.encode(), base64.b64decode(resp), "md5").hexdigest()
+                code, resp = smtp.docmd(b64(f"{user} {digest}".encode()))
+        if code in (235, 503):   # 503: already signed in
+            return
+        error = smtplib.SMTPAuthenticationError(code, resp)
+    raise error or smtplib.SMTPException("No suitable authentication method found.")
 
 
 class Notifier:
@@ -356,27 +425,30 @@ class Notifier:
             warnings: list[str] = []
             errors = await self.deliver(event, mapping, detail, warnings=warnings)
             what = f"{event}, mapping {mapping!r}" if mapping else event
-            for err in errors + warnings:
+            for err in [str(e) for e in errors] + warnings:
                 self.state.log(f"notifications: {err} ({what})")
 
     async def deliver(self, event: str, mapping: str, detail: str,
-                      settings=None, warnings: Optional[list] = None) -> list[str]:
-        """Send to every configured channel now; returns the errors (empty = all sent),
-        and adds to *warnings* what was sent but may not have arrived (a redirected
-        webhook). Messages are in the UI's default language (Settings -> Web UI access),
-        or English when that is "the browser's", name the instance by its name (Settings ->
+                      settings=None, warnings: Optional[list] = None) -> list["Failure"]:
+        """Send to every configured channel now; returns the channels that failed (empty
+        = all sent), and adds to *warnings* what was sent but may not have arrived (a
+        redirected webhook). Messages are in the UI's default language (Settings -> Web UI
+        access), or English when that is "the browser's" (the test message too: an empty
+        detail gives its text in that language), name the instance by its name (Settings ->
         Admin interface) or else the host name, and end with the UI's public URL when one is
         set (Settings -> Reverse proxy)."""
         s = settings or self.settings
         token = i18n.set_language(self.state.config.admin_ui.language)
         try:
+            if event == "test" and not detail:
+                detail = _("If you can read this, ser2net can reach you.")
             return await self._deliver(s, event, mapping, detail,
                                        [] if warnings is None else warnings)
         finally:
             i18n.reset(token)
 
     async def _deliver(self, s, event: str, mapping: str, detail: str,
-                       warnings: list) -> list[str]:
+                       warnings: list) -> list["Failure"]:
         errors = []
         cfg = self.state.config
         url = proxy.public_url(cfg.admin_ui)
@@ -388,13 +460,48 @@ class Notifier:
                                                       instance_id=cfg.instance_id):
                     warnings.append(warning)
             except Exception as e:
-                errors.append(f"webhook ({s.webhook_format}) failed: {_reason(e)}")
+                errors.append(Failure("webhook", s.webhook_format, e, s.webhook_url.strip()))
         if s.recipients:
             try:
                 await asyncio.to_thread(send_email, s, event, mapping, detail, url, name=name)
             except Exception as e:
-                errors.append(f"e-mail via {s.smtp_host}:{s.smtp_port} failed: {_reason(e)}")
+                errors.append(Failure("e-mail", f"{s.smtp_host}:{s.smtp_port}", e,
+                                      s.smtp_username + s.smtp_password))
         return errors
+
+
+class Failure:
+    """A channel a notification did not reach: str() is the English line for the log,
+    shown() the message for the page, in its language."""
+
+    def __init__(self, channel: str, where: str, error: BaseException, sent: str = ""):
+        self.channel, self.where, self.error = channel, where, error
+        self.non_ascii = not sent.isascii()   # in the URL / the user name or password
+
+    def __str__(self) -> str:
+        if self.channel == "webhook":
+            return f"webhook ({self.where}) failed: {_reason(self.error)}"
+        return f"e-mail via {self.where} failed: {_reason(self.error)}"
+
+    def shown(self) -> str:
+        e = self.error
+        if isinstance(e, UnicodeError):   # (what is still left: a host name IDNA refuses ...)
+            why = (_("the webhook URL has characters that can't be sent") if self.channel == "webhook"
+                   else _("the user name or password has characters that can't be sent"))
+        elif isinstance(e, smtplib.SMTPAuthenticationError):
+            why = _("the server did not accept the user name or password (SMTP {0})").format(
+                e.smtp_code)
+            if self.non_ascii:
+                why += " " + _("— they have letters outside ASCII, which some servers don't take")
+        elif isinstance(e, smtplib.SMTPNotSupportedError) and "AUTH" in str(e):
+            why = _("the server offers no sign-in (SMTP AUTH): leave the user name empty")
+        elif isinstance(e, smtplib.SMTPNotSupportedError) and "STARTTLS" in str(e):
+            why = _("the server does not offer STARTTLS: choose another security setting")
+        else:
+            why = explain(e, "net") or _reason(e)
+        if self.channel == "webhook":
+            return _("Webhook ({0}) failed: {1}").format(self.where, why)
+        return _("E-mail via {0} failed: {1}").format(self.where, why)
 
 
 def _reason(e: BaseException) -> str:

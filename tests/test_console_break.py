@@ -4,17 +4,22 @@
     log says so, with who sent it) and audited as mapping_break;
   - refused, with nothing sent or audited: a viewer (requires the operator role), no
     X-CSRF-Token header, a read-only mapping (400), a Modbus gateway (400), a mapping
-    whose port is not open (409), a mapping that doesn't exist (404).
+    whose port is not open (409), a mapping that doesn't exist (404);
+  - the console panel has the Send BREAK button where the console is interactive (an
+    operator's, not read-only, not a Modbus gateway), the answer's X-Notice says it was
+    sent (the dashboard's feedback area shows it; a refusal's text too).
 The serial ports are pseudo-terminals (POSIX; skipped on Windows), on which the break
 ioctl does nothing but succeed.
 
 Run: python3 tests/test_console_break.py
 """
+import json
 import os
 import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -75,8 +80,17 @@ def test_console_break():
                          and "serial open: " + maps[1]["serial"]["port"] in srv.output()), \
                 srv.output()[-2000:]
 
-            st, _h, body = op.post("/api/mappings/open00000001/break", htmx=True)
+            def has_button(b, mid):
+                page = b.get(f"/api/mappings/{mid}/console-view")[2]
+                return f'hx-post="/api/mappings/{mid}/break"' in page and "Send BREAK" in page
+            assert has_button(op, "open00000001"), "an operator's interactive console"
+            assert not has_button(view, "open00000001"), "a viewer's console is read-only"
+            assert not has_button(op, "ro0000000001") and not has_button(op, "modbus000001")
+
+            st, h, body = op.post("/api/mappings/open00000001/break", htmx=True)
             assert st == 204, (st, body)
+            note = json.loads(urllib.parse.unquote(h["X-Notice"]))
+            assert note == {"kind": "ok", "text": "A serial BREAK was sent on “Console”."}, note
             assert _wait(lambda: "serial BREAK sent (web console, op)" in srv.output()), \
                 srv.output()[-2000:]
 

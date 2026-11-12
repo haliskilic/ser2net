@@ -154,8 +154,8 @@ def test_cross_site(srv) -> None:
                                                       "proto=https", "Cookie": over_https}),
                           ("script", {})):
         st, _, body = create(f"ok-{name}", headers)
-        assert st == 200 and f"User &#39;ok-{name}&#39; created." in body, (name, st, body[:300])
-        assert f"ok-{name}" in users(), name
+        # done: back to the page (303, Post/Redirect/Get), the account made
+        assert st == 303 and f"ok-{name}" in users(), (name, st, body[:300])
     # a GET is never refused for its Origin (links from other sites work as before)
     req = urllib.request.Request(b.base + "/settings", headers={"Origin": neighbour,
                                                                 "Sec-Fetch-Site": "cross-site"})
@@ -197,18 +197,24 @@ def test_csrf_token(srv) -> None:
     after, age = csrf_cookie(h, srv)
     assert after != before and age == 8 * 3600, (before, after, age)
     assert b.csrf() == after
+    # a page still holding the token from before (the sign-in was in another tab) gets the
+    # current one with the answer to its next htmx request; an up-to-date page doesn't
+    for sent, want in ((before, after), (after, None)):
+        _st, h, _ = b._open(urllib.request.Request(b.base + "/api/status", headers={
+            "HX-Request": "true", "X-CSRF-Token": sent}))
+        assert h.get("X-CSRF-Token") == want, (sent, h.get("X-CSRF-Token"))
     # a token from before the sign-in is refused (as one a page of another site set
     # while the browser had none would be)
     st, _, body = send(b, "/settings/access", {"require_login": "on"}, token=before)
     assert st == 403 and "CSRF" in body, st
     # a renewed session keeps the token the page was drawn with, for as long as it lasts
-    st, h, page = b.post("/settings/sessions/signout-others", {})
-    assert st == 200 and csrf_cookie(h, srv) == (after, 8 * 3600), csrf_cookie(h, srv)
-    assert f'name="_csrf" value="{after}"' in page
+    st, h, _ = b.post("/settings/sessions/signout-others", {}, follow=False)
+    assert st == 303 and csrf_cookie(h, srv) == (after, 8 * 3600), csrf_cookie(h, srv)
+    assert f'name="_csrf" value="{after}"' in b.get("/settings")[2]
     st, h, _ = b.post("/logout", {})
     assert st == 303 and csrf_cookie(h, srv)[0] not in (before, after), csrf_cookie(h, srv)
     print("CSRF token: new at sign-in and sign-out, its cookie lasts as long as a session, "
-          "a renewed session keeps it  OK")
+          "a renewed session keeps it, a page with the old one is given the new one  OK")
 
 
 def main():

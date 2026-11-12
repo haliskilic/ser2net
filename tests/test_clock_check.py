@@ -209,7 +209,7 @@ def test_settings():
 
     js = open(os.path.join(os.path.dirname(__file__), "..", "app", "web", "static", "app.js"),
               encoding="utf-8").read()
-    check = js[js.index("// 7) Clock check"):]
+    check = js[js.index(") Clock check: the server's clock"):]
     assert "data-server-time" in check and "[data-clock-skew]" in check and "<= 120" in check
     print("app.js: compares the browser's clock with data-server-time (2 minutes)  OK")
 

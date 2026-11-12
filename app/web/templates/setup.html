@@ -8,10 +8,10 @@
     <h1>{{ _("Welcome to ser2net") }}</h1>
     {% include "_login_notice.html" %}
     {% if locked %}
-    <div class="banner error">{{ _('Setup in the browser is closed: <span class="mono">SER2NET_ADMIN_PASSWORD_FILE</span> / <span class="mono">SER2NET_ADMIN_USER</span> is set, but no admin account could be created from it (the log says why). Fix it and restart, or create the admin on the server with <span class="mono">ser2net --set-password admin</span>.') }}</div>
+    <div class="banner error" role="alert">{{ _('Setup in the browser is closed: <span class="mono">SER2NET_ADMIN_PASSWORD_FILE</span> / <span class="mono">SER2NET_ADMIN_USER</span> is set, but no admin account could be created from it (the log says why). Fix it and restart, or create the admin on the server with <span class="mono">ser2net --set-password admin</span>.') }}</div>
     {% else %}
     <p class="muted">{{ _('Set an admin password to protect this interface. The admin UI is reachable at <span class="mono">%(address)s</span> from the network.', address=host_port(admin.bind_ip, admin.port)) }}</p>
-    {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
+    {% if error %}<div class="banner error" role="alert">{{ error }}</div>{% endif %}
     {% if need_code %}
     <div class="banner warn">{{ _('You opened this page as <span class="mono">%(host)s</span>, not by this machine’s IP address or <span class="mono">localhost</span>. So that no other web page can take over a new install, setting it up through that name needs the one-time code from the file <span class="mono">setup-code.txt</span> in ser2net’s data folder (Docker: <span class="mono">/data</span>). Or open the page by IP address, or create the admin on the server with <span class="mono">ser2net --set-password admin</span>.', host=host) }}</div>
     {% endif %}
@@ -24,7 +24,7 @@
       </label>
       {% endif %}
       <label>{{ _("Admin username") }}
-        <input type="text" name="username" value="admin" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
+        <input type="text" name="username" value="{{ username or 'admin' }}" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
                maxlength="32" pattern="[A-Za-z0-9._\-]{1,32}" title="{{ _("Username must be 1-32 characters: English letters (a-z, A-Z), digits, '.', '_' or '-'.") }}" autofocus required>
       </label>
       <label>{{ _("New password (min 8 chars)") }}

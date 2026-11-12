@@ -1,15 +1,21 @@
 <div class="form-head">
-  <h3>{{ _("Console — %(name)s", name=mapping_name|softbreak) }}</h3>
+  <h3 id="panel-title" tabindex="-1">{{ _("Console — %(name)s", name=mapping_name|softbreak) }}</h3>
   <div class="actions">
     {% if interactive %}<span class="muted" data-text-only>{{ _("type to send to the device") }}</span>
+    <span class="muted">{{ _("Shift+Tab leaves the console") }}</span>
+    {#- a serial BREAK on the device's port (audited): the answer says it in the feedback
+        area, as a refusal (read-only, port not open) does #}
+    <button type="button" class="btn sm" id="console-break" hx-post="{{ base }}/api/mappings/{{ mid }}/break" hx-swap="none" hx-disabled-elt="this">{{ _("Send BREAK") }}</button>
     {% else %}<span class="muted">{{ _("read-only") }}</span>{% endif %}
     <button type="button" class="btn sm" data-term-mode>{{ _("Hex view") }}</button>
-    <button type="button" class="btn sm" data-cancel>{{ _("Close") }}</button>
+    <button type="button" class="btn sm" id="console-close" data-cancel>{{ _("Close") }}</button>
   </div>
 </div>
-<p class="muted mb-sm" data-mode-help>{% if interactive %}{{ _("Text view: what the device sends; what you type goes to the device.") }}{% else %}{{ _("Text view: what the device sends.") }}{% endif %} {% if bridge %}{{ _("Hex view: both directions with timestamps (A → B / B → A).") }}{% elif to_device %}{{ _("Hex view: both directions with timestamps (from / to the device).") }}{% else %}{{ _("Hex view: what the device sends, with timestamps.") }}{% endif %}</p>
+<p class="muted mb-sm" data-mode-help>{% if interactive %}{{ _("Text view: what the device sends; what you type goes to the device.") }}{% else %}{{ _("Text view: what the device sends.") }}{% endif %} {% if bridge %}{{ _("Hex view: both directions with timestamps (A → B / B → A).") }}{% elif to_device %}{{ _("Hex view: both directions with timestamps (from / to the device).") }}{% else %}{{ _("Hex view: what the device sends, with timestamps.") }}{% endif %}{% if encoding and encoding != 'utf-8' %} {{ _("Text encoding: %(encoding)s.", encoding=encoding|upper) }}{% endif %}</p>
 <div id="term" class="term"
      data-ws="{{ base }}/api/mappings/{{ mid }}/console"
      data-ws-hex="{{ base }}/api/mappings/{{ mid }}/traffic"
      data-bridge="{{ '1' if bridge else '0' }}"
-     data-interactive="{{ '1' if interactive else '0' }}"></div>
+     data-interactive="{{ '1' if interactive else '0' }}"
+     data-mode="{{ 'hex' if hex_first else 'text' }}"
+     data-charset="{{ charset or '' }}"></div>

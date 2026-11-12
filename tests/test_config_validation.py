@@ -361,6 +361,37 @@ def test_form_modbus_fields_not_offered():
     print("form: banner/close-on/client buffer kept when a Modbus form leaves them out  OK")
 
 
+def test_form_text_box_round_trip():
+    """The banner and close-on string are <input type=text>: an HTML parser reads a NUL in
+    the value as U+FFFD, and a text box's value has its CR/LF taken out (HTML's value
+    sanitization), so that is what saving the form sends back. Such a value is the stored
+    one (upstream's sample close-on string ctrl-a\\001nil\\000, a CR/LF-only one); a value
+    that was changed, or one without those characters, is taken as sent."""
+    def browser(value):
+        return value.replace("\0", "\ufffd").replace("\r", "").replace("\n", "")
+    stored = {"closeon": "ctrl-a\x01nil\x00", "banner": "Port \\N\r\n"}
+    base = {"name": "plc", "kind": "net", "enabled": "on", "serial_port": "COM4",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "raw",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+
+    def saved(existing_opts, **posted):
+        existing = MappingConfig.from_dict({"name": "plc", "serial": {"port": "COM4"},
+                                            "options": existing_opts})
+        form = dict(base, id=existing.id, **posted)
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing, form)
+        return m.options.closeon, m.options.banner
+
+    sent = {"opt_closeon": browser(stored["closeon"]), "opt_banner": browser(stored["banner"])}
+    assert sent["opt_closeon"] == "ctrl-a\x01nil\ufffd"     # what a save used to store
+    assert saved(stored, **sent) == (stored["closeon"], stored["banner"])
+    assert saved({"closeon": "\r\n"}, opt_closeon="", opt_banner="") == ("\r\n", "")
+    assert saved(stored, opt_closeon="NO CARRIER", opt_banner="hi") == ("NO CARRIER", "hi")
+    assert saved({"closeon": "x\ufffd"}, opt_closeon="x\ufffd", opt_banner="") == ("x\ufffd", "")
+    print("form: a banner / close-on string the text box can't show (NUL, CR/LF) survives a "
+          "save; a changed one is taken  OK")
+
+
 def test_form_apply_retained_set():
     """'Re-apply a retained /set' is a checkbox (absent when unticked) shown only for
     plain-format Modbus points, so its hidden marker says whether the form had it: without
@@ -531,6 +562,7 @@ def main():
     test_connection_lifecycle_validation()
     test_form_conn_options_parse_and_preserve()
     test_form_modbus_fields_not_offered()
+    test_form_text_box_round_trip()
     test_form_apply_retained_set()
     test_form_rfc2217_restore_on_disconnect()
     test_form_rfc2217_signature()

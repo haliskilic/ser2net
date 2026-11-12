@@ -137,10 +137,11 @@ def test_proxy_hsts() -> None:
         assert "Send HSTS on HTTPS through the proxy" in page
         st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},   # (off: saved)
                           headers={"Cookie": jar})
-        assert st == 200 and a.state.config.admin_ui.proxy_hsts is False
-        st, _, page = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF, "proxy_hsts": "on"},
-                             headers={"Cookie": jar})
-        assert st == 200 and a.state.config.admin_ui.proxy_hsts is True, st
+        assert st == 303 and a.state.config.admin_ui.proxy_hsts is False
+        st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF, "proxy_hsts": "on"},
+                          headers={"Cookie": jar})
+        assert st == 303 and a.state.config.admin_ui.proxy_hsts is True, st
+        st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
         assert a.state.store.load().admin_ui.proxy_hsts is True
         assert 'name="proxy_hsts" checked>' in page
         assert "reverse proxy settings: HSTS through the proxy on" in a.lines

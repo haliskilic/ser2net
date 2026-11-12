@@ -23,6 +23,7 @@ import glob
 import html.parser
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -165,6 +166,33 @@ def test_mappings_table():
     print("mappings table: wrapper, card labels, buttons in their cell, escaping  OK")
 
 
+def test_durations_translated():
+    """Connection times and a node's uptime are written with the page's units (the REST
+    API's duration stays as the engine writes it); a client without connected_at (an
+    older peer's payload) shows the duration it came with."""
+    import time
+
+    from app import i18n
+    from app.web.routes.cluster import _fmt_uptime
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    clients = [{"peer": "10.0.0.5:5000", "duration": "1h 02m", "connected_at": time.time() - 3725},
+               {"peer": "10.0.0.6:5000", "duration": "7m 01s"}]
+    statuses = {"m1": {"state": "running", "client_count": 2, "clients": clients}}
+    tok = i18n.set_language("tr")
+    try:
+        out = tpl.render(mappings=mappings(), statuses=statuses, can_edit=False)
+        uptime = (_fmt_uptime(90000), _fmt_uptime(3725), _fmt_uptime(59))
+    finally:
+        i18n.reset(tok)
+    assert '<span class="dur">1 sa 02 dk</span>' in out and "1h 02m" not in out, out[out.find("peer mono"):][:300]
+    assert '<span class="dur">7m 01s</span>' in out, "without connected_at: the text it came with"
+    assert uptime == ("1 gün 1 sa", "1 sa 2 dk", "0 dk"), uptime
+    assert _fmt_uptime(90000) == "1d 1h", "English outside a Turkish request"
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert 'tr("dur_hm", "{0}h {1}m"' in js and '"h "' not in js, "app.js counts on with the same units"
+    print("durations: connection times and uptime in the page's units, older payloads as sent  OK")
+
+
 def test_cluster_table():
     tpl = make_templates().env.get_template("_cluster_body.html")
     node_maps = [{"id": "x1", "name": EVIL, "enabled": True, "kind": "server/raw",
@@ -202,6 +230,32 @@ def test_cluster_table():
     print("cluster table: wrapper, card labels, buttons in their cell, escaping  OK")
 
 
+def test_counters_and_empty_state():
+    """In / Out in B / KB / MB / GB in both tables (the exact counts stay in the REST API
+    and /metrics); a dashboard without mappings tells viewers nothing about an "Add
+    mapping" button they don't have."""
+    from app.web.routes.common import bytesize
+    assert [bytesize(n) for n in (0, 1023, 1024, 1536, 10 * 1048576 + 1, 5 << 30, 3 << 40)] == \
+        ["0 B", "1023 B", "1.0 KB", "1.5 KB", "10.0 MB", "5.0 GB", "3.0 TB"]
+    assert bytesize("junk") == "junk" and bytesize(None) == "None", "a peer's odd value as is"
+    env = make_templates().env
+    rows = env.get_template("_mappings_body.html").render(
+        mappings=mappings(), can_edit=True,
+        statuses={"m1": {"state": "running", "bytes_in": 2048, "bytes_out": 5 * 1048576}})
+    assert '<span id="m-m1-bytes">2.0 KB / 5.0 MB</span>' in rows, rows
+    nodes = [{"name": "n", "self": True, "source": "self", "ip": "10.0.0.1", "port": 8080,
+              "addr": "10.0.0.1:8080", "online": True,
+              "mappings": [{"id": "x1", "name": "a", "enabled": True, "bytes_in": 512,
+                            "bytes_out": 3 << 30, "state": "running"}]}]
+    cluster = env.get_template("_cluster_body.html").render(can_edit=True, nodes=nodes)
+    assert '<span id="c-10_0_0_1_8080-x1-bytes">512 B / 3.0 GB</span>' in cluster, cluster
+    tpl = env.get_template("_mappings_body.html")
+    assert "Click “Add mapping”" in tpl.render(mappings=[], statuses={}, can_edit=True)
+    viewer = tpl.render(mappings=[], statuses={}, can_edit=False)
+    assert "No mappings yet." in viewer and "Add mapping" not in viewer, viewer
+    print("counters in B/KB/MB/GB (both tables); viewers' empty table without the Add hint  OK")
+
+
 def test_ports_table_and_assets():
     env = make_templates().env
     ports = [{"device": BY_ID, "description": "FT232R USB UART", "vid": "0403", "pid": "6001",
@@ -214,7 +268,7 @@ def test_ports_table_and_assets():
             csrf_token = "t"
             user = None
     page = env.get_template("base.html").render(request=Req)
-    for asset in ("app.css", "app.js", "htmx.min.js", "xterm.js", "xterm.css"):
+    for asset in ("app.css", "app.js", "theme.js", "htmx.min.js", "xterm.js", "xterm.css"):
         assert f"/static/{asset}?v={__version__}" in page, f"{asset} lacks the ?v= cache-buster"
     print("ports table contract + versioned static asset URLs  OK")
 
@@ -313,6 +367,27 @@ def test_mapping_form_modbus_fields():
           "/set option only for plain-format points  OK")
 
 
+def test_mapping_form_hidden_characters():
+    """A banner / close-on string with a NUL, CR or LF can't be shown in its text box (a
+    browser shows U+FFFD and drops the line breaks): the form says so next to it."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+
+    def hint(options):
+        m = MappingConfig.from_dict({"id": "tb1", "name": "plc", "serial": {"port": "COM3"},
+                                     "options": options})
+        page = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                          ports=[], ips=[], error=None)
+        return page.count("control characters (NUL, CR or LF)")
+    assert hint({"closeon": "ctrl-a\x01nil\x00"}) == 1
+    assert hint({"closeon": "\r\n", "banner": "x\ny"}) == 2
+    assert hint({"closeon": "NO CARRIER", "banner": "Port \\N\\r\\n"}) == 0
+    print("mapping form: a banner / close-on string the box can't show is pointed out  OK")
+
+
 def test_mapping_form_udp_fields():
     """The UDP reply address and peer timeout are offered for UDP only, in one block whose
     timeout field is the presence marker (forms.py _OPTIONAL_FORM_FIELDS), next to a note
@@ -341,6 +416,30 @@ def test_mapping_form_udp_fields():
     assert any(n.tag == "p" for n in block.walk()), "the note belongs to the UDP block"
     assert "source address, which can be forged" in out
     print("mapping form: UDP reply address / peer timeout in one UDP-only block  OK")
+
+
+def test_number_fields_required():
+    """A number field whose blank value the server refuses is `required`, so the browser
+    says what is missing before the form is sent (hidden blocks are disabled by app.js,
+    so they don't hold the form up); the ones a blank value is fine for are not."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig.from_dict({"id": "n1", "name": "n", "serial": {"port": "COM3"}})
+    root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                            ports=[], ips=[], error=None))
+    # (a blank poll interval: no polling, as 0)
+    blank_ok = {"network_udp_peer_port", "network_udp_peer_timeout_s", "modbus_poll_interval_s",
+                "opt_poll_interval_s",
+                "serial_rs485_delay_before_tx_ms", "serial_rs485_delay_after_tx_ms",
+                "serial_b_rs485_delay_before_tx_ms", "serial_b_rs485_delay_after_tx_ms"}
+    numbers = [n for n in root.walk() if n.tag == "input" and n.attrs.get("type") == "number"]
+    bad = [n.attrs["name"] for n in numbers if ("required" in n.attrs) == (n.attrs["name"] in blank_ok)]
+    assert numbers and not bad, bad
+    assert {"serial_custom_baud", "network_port", "opt_trace_keep"} <= {n.attrs["name"] for n in numbers}
+    print(f"mapping form: {len(numbers) - len(blank_ok)} number fields required, the optional ones not  OK")
 
 
 def test_mapping_form_rfc2217_restore():
@@ -507,20 +606,323 @@ def test_mapping_form_kick_hint():
     print("mapping form: kick_old_user without an allow-list is pointed out (server mode)  OK")
 
 
+class Page:
+    """The `request` a full page (_shell.html) renders with."""
+    class state:
+        csrf_token = "t"
+        user = None
+        lang = "en"
+
+    class url:
+        path = "/"
+        query = ""
+
+    scope = {"type": "http", "path": "/", "root_path": "", "headers": []}   # (app/web/proxy.py)
+
+
+def dashboard(can_edit=True, cluster_on=False):
+    return make_templates().env.get_template("dashboard.html").render(
+        request=Page, can_edit=can_edit, cluster_on=cluster_on)
+
+
+def test_feedback_area():
+    """Every page of the shell has the two live regions app.js reports into (status for
+    what an action did, alert for what failed), outside <main> so they float over it, and
+    the page carries the texts app.js needs for them."""
+    root = parse(dashboard())
+    region = {n.attrs.get("id"): n for n in root.walk() if n.attrs.get("id") in ("ui-alert", "ui-status")}
+    assert region["ui-alert"].attrs.get("role") == "alert", region["ui-alert"].attrs
+    assert region["ui-status"].attrs.get("role") == "status", region["ui-status"].attrs
+    for n in region.values():
+        anc = list(n.ancestors())
+        assert any("feedback" in a.classes() for a in anc) and not any(a.tag == "main" for a in anc)
+    body = next(n for n in root.walk() if n.tag == "body")
+    texts = json.loads(body.attrs["data-i18n"])
+    for key in ("dismiss", "stale", "failed", "server_error", "offline", "session_ended", "sign_in"):
+        assert texts.get(key), key
+    assert "{0}" in texts["failed"] and "{0}" in texts["server_error"], "the status goes in"
+    print("feedback area: alert + status live regions on every shell page, texts for app.js  OK")
+
+
+def test_select_all_shown():
+    """"Select all shown" sits in the toolbar, which is always there - not in the table's
+    head (hidden on narrow screens, replaced at every refresh) nor in the bulk bar (hidden
+    while nothing is ticked) - and only for those who may act; the rows carry their client
+    count for the bulk action's question; app.js acts on the rows shown only."""
+    root = parse(dashboard())
+    box = [n for n in root.walk() if "data-select-shown" in n.attrs]
+    assert len(box) == 1 and box[0].attrs.get("type") == "checkbox", box
+    anc = list(box[0].ancestors())
+    assert any("data-mapping-tools" in a.attrs for a in anc), "in the toolbar"
+    assert not any("data-bulk" in a.attrs or a.tag == "thead" for a in anc)
+    assert not any("data-select-shown" in n.attrs for n in parse(dashboard(can_edit=False)).walk())
+    rows = make_templates().env.get_template("_mappings_body.html").render(
+        mappings=mappings(), can_edit=True, statuses={"m1": {"state": "running", "client_count": 3}})
+    assert 'data-mid="m1"' in rows and 'data-clients="3"' in rows and 'data-clients="0"' in rows
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert "ids: rows.map(" in js and "Array.from(selected)" not in js, "only the rows shown"
+    assert "window.confirm(q)" in js, "a bulk action asks first"
+    texts = json.loads(next(n for n in root.walk() if n.tag == "body").attrs["data-i18n"])
+    for key in ("selected_hidden", "bulk_start", "bulk_stop", "bulk_restart", "bulk_clients",
+                "bulk_hidden", "no_match", "show_all"):
+        assert texts.get(key), key
+    print("select all shown: in the toolbar for operators; rows carry their clients  OK")
+
+
+def test_actions_hold_a_second_click():
+    """A state-changing button is disabled while its request runs (hx-disabled-elt), so a
+    second click is not queued and sent afterwards (a second copy, a second restart)."""
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    rows = parse(tpl.render(mappings=mappings(), statuses={}, can_edit=True))
+    cluster = make_templates().env.get_template("_cluster_body.html").render(
+        can_edit=True, nodes=[{"name": "peer", "self": False, "source": "auto", "ip": "10.0.0.2",
+                               "port": 8080, "addr": "10.0.0.2:8080", "online": True,
+                               "mappings": [{"id": "x1", "name": "a", "enabled": True},
+                                            {"id": "x2", "name": "b", "enabled": False}]}])
+    acting = [n for root in (rows, parse(cluster)) for n in root.walk()
+              if n.tag == "button" and ("hx-post" in n.attrs or "hx-delete" in n.attrs)]
+    assert len(acting) == 4 + 3 + 4 + 3, len(acting)   # Stop Restart Copy Delete / Start Copy Delete
+    for b in acting:
+        assert b.attrs.get("hx-disabled-elt") == "this", b.attrs
+    root = parse(dashboard())
+    bulk = [n for n in root.walk() if "data-bulk-action" in n.attrs]
+    assert len(bulk) == 3 and all(b.attrs.get("hx-disabled-elt") == "this" for b in bulk)
+    form = parse(make_templates().env.get_template("_mapping_form.html").render(
+        request=Page, mapping=MappingConfig(name=""), is_new=True, modbus_points_json="",
+        ports=[], ips=[], error=None))
+    f = next(n for n in form.walk() if n.tag == "form")
+    assert f.attrs.get("hx-disabled-elt") == "find button[type=submit]", f.attrs
+    print("row, peer, bulk and form actions: disabled while their request runs  OK")
+
+
+def test_polled_controls_keep_their_ids():
+    """htmx 2 puts the keyboard focus back after a swap only on an element with an id: every
+    control of the polled tables (mappings, fleet view, ports) and of the self-refreshing
+    log panel has one, the same in every refresh, unique in the page (the fleet view's are
+    prefixed: this node's mappings are listed there too). Each row button is described by
+    the mapping's name, so "Stop" says which mapping it stops."""
+    env = make_templates().env
+    tpl = env.get_template("_mappings_body.html")
+    out = tpl.render(mappings=mappings(), statuses={}, can_edit=True)
+    assert out == tpl.render(mappings=mappings(), statuses={}, can_edit=True)
+    nodes = [{"name": "peer", "self": False, "source": "auto", "ip": "fd00::2", "port": 8443,
+              "addr": "[fd00::2]:8443", "online": True,
+              "mappings": [{"id": "m1", "name": "same id as here", "enabled": True},
+                           {"id": "x 2", "name": "odd id", "enabled": False}]}]
+    cluster = env.get_template("_cluster_body.html").render(can_edit=True, nodes=nodes)
+    ports = env.get_template("_ports_table.html").render(ports=[], hidden=2, show_all=False)
+    log = env.get_template("_mapping_log.html").render(mid="m1", mapping_name="a",
+                                                      lines=["x"], content_hash="0123")
+    ids = []
+    for markup in (out, cluster, ports, log):
+        root = parse(markup)
+        named = {n.attrs["id"] for n in root.walk() if n.attrs.get("id", "").endswith("-name")}
+        for n in root.walk():
+            if n.tag in ("button", "input") and n.attrs.get("type") != "hidden":
+                assert n.attrs.get("id"), f"no id: {n.tag} {n.attrs}"
+                assert re.fullmatch(r"[A-Za-z0-9_-]+", n.attrs["id"]), n.attrs["id"]
+                ids.append(n.attrs["id"])
+                if n.attrs["id"].startswith(("m-", "c-")) and n.tag == "button":
+                    assert n.attrs.get("aria-describedby") in named, n.attrs
+    assert len(ids) == len(set(ids)), sorted(i for i in ids if ids.count(i) > 1)
+    assert "m-m1-run" in ids and "m-m1-edit" in ids and "c-_fd00__2__8443-m1-run" in ids, ids
+    print("polled tables and the log panel: stable, unique ids; row buttons name their mapping  OK")
+
+
+def test_panel_openers_scroll_it_into_view():
+    """The form panel sits above the table: every button that opens it (Add, a row's Edit /
+    Log / Monitor / Trace, a peer's Edit) and the form itself (an error re-render) scroll
+    it into view (show:top); the log's and the traces' own refreshes don't (no jumping).
+    Each panel has a heading app.js can focus, and the form's error banner is an alert."""
+    env = make_templates().env
+    rows = parse(env.get_template("_mappings_body.html").render(
+        mappings=[MappingConfig.from_dict({"id": "t1", "name": "t", "serial": {"port": "COM3"},
+                                           "options": {"trace_both": "t.log"}})],
+        statuses={}, can_edit=True))
+    cluster = parse(env.get_template("_cluster_body.html").render(
+        can_edit=True, nodes=[{"name": "p", "self": False, "ip": "10.0.0.2", "port": 8080,
+                               "addr": "10.0.0.2:8080", "online": True,
+                               "mappings": [{"id": "x1", "name": "a", "enabled": True}]}]))
+    openers = [n for root in (rows, cluster, parse(dashboard())) for n in root.walk()
+               if n.attrs.get("hx-target") == "#form-panel"]
+    assert len(openers) == 4 + 1 + 1, [o.attrs for o in openers]   # Edit Log Monitor Trace / Edit / Add
+    for o in openers:
+        assert o.attrs.get("hx-swap") == "innerHTML show:top", o.attrs
+    form = parse(env.get_template("_mapping_form.html").render(
+        request=Page, mapping=MappingConfig(name="x"), is_new=False, modbus_points_json="",
+        ports=[], ips=[], error="Port 4001 is in use"))
+    f = next(n for n in form.walk() if n.tag == "form")
+    assert f.attrs["hx-swap"] == "innerHTML show:top", f.attrs
+    banner = next(n for n in form.walk() if "error" in n.classes())
+    assert banner.attrs.get("role") == "alert" and banner.attrs.get("tabindex") == "-1"
+    log = parse(env.get_template("_mapping_log.html").render(mid="t1", mapping_name="t",
+                                                            lines=[], content_hash="0"))
+    traces = parse(env.get_template("_mapping_traces.html").render(mid="t1", mapping_name="t",
+                                                                  files=[]))
+    console = parse(env.get_template("_console.html").render(mid="t1", mapping_name="t",
+                                                            interactive=True))
+    gone = parse(env.get_template("_mapping_log.html").render(gone=True))
+    for root in (form, log, traces, console, gone):
+        title = [n for n in root.walk() if n.attrs.get("id") == "panel-title"]
+        assert len(title) == 1 and title[0].tag == "h3" and title[0].attrs.get("tabindex") == "-1"
+    for root in (log, traces):
+        for n in root.walk():
+            if "hx-get" in n.attrs:
+                assert n.attrs.get("hx-swap") == "innerHTML", n.attrs
+    print("panel openers and the form scroll the panel into view, its own refreshes don't; "
+          "each panel has a focusable heading  OK")
+
+
+def test_keyboard_and_screen_readers():
+    """A checkbox, radio button or file picker shows where the focus is (the border colour
+    the other fields get does nothing there); the console can be left with the keyboard
+    (xterm keeps Tab and Shift+Tab: app.js lets Shift+Tab go, Tab too in a read-only
+    console) and an operator's console says how; the dashboard's counts are live regions;
+    the audit log's filters have names; error banners are alerts."""
+    env = make_templates().env
+    css = open(os.path.join(ROOT, "app", "web", "static", "app.css"), encoding="utf-8").read()
+    rule = re.search(r"input\[type=checkbox\]:focus-visible[^{]*\{([^}]*)\}", css)
+    assert rule and "outline: 2px solid" in rule.group(1), "checkboxes need a focus outline"
+    for kind in ("radio", "file"):
+        assert f"input[type={kind}]:focus-visible" in css, kind
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert "attachCustomKeyEventHandler" in js and 'ev.key === "Tab"' in js and "ev.shiftKey" in js
+    assert 'promptLabel = tr("terminal_input"' in js, "the console's input has a translated name"
+    console = env.get_template("_console.html")
+    assert "Shift+Tab leaves the console" in console.render(mid="a", mapping_name="a", interactive=True)
+    assert "Shift+Tab" not in console.render(mid="a", mapping_name="a", interactive=False), \
+        "a read-only console: Tab leaves it as anywhere else"
+    root = parse(dashboard())
+    count = next(n for n in root.walk() if "data-filter-count" in n.attrs)
+    assert count.attrs.get("role") == "status", count.attrs
+    assert next(n for n in root.walk() if "data-bulk-count" in n.attrs).attrs.get("aria-live") == "polite"
+    audit = parse(env.get_template("audit.html").render(
+        request=Page, filters={"q": "", "action": "", "user": ""}, actions=["login"],
+        users=["admin"], qs="", total=0, pages=1, page=1, rows=[]))
+    form = next(n for n in audit.walk() if n.tag == "form" and n.attrs.get("action") == "/settings/audit")
+    for n in form.walk():
+        if n.tag in ("input", "select"):
+            assert n.attrs.get("aria-label"), n.attrs
+    for name in ("login.html", "setup.html"):
+        src = open(os.path.join(ROOT, "app", "web", "templates", name), encoding="utf-8").read()
+        assert 'class="banner error">' not in src and 'class="banner error" role="alert"' in src, name
+    print("focus outlines on checkboxes, a way out of the console, live counts, named audit "
+          "filters, error banners as alerts  OK")
+
+
+def test_console_says_why():
+    """The console panel: a Modbus gateway's opens in the hex view (data-mode); the typing
+    hint is for the text view only (app.js hides [data-text-only] in the hex view); a
+    console that ends says why — a refused handshake (the browser only sees 1006), each
+    close code routes/console.py sends — and connects again after a restart; its notices
+    (dropped bytes, mapping not running) and those texts are translated (base.html)."""
+    from app.web.routes import console as routes_console
+
+    tpl = make_templates().env.get_template("_console.html")
+    term = next(n for n in parse(tpl.render(mid="a", mapping_name="a", hex_first=True)).walk()
+                if n.attrs.get("id") == "term")
+    assert term.attrs.get("data-mode") == "hex", term.attrs
+    term = next(n for n in parse(tpl.render(mid="a", mapping_name="a", interactive=True)).walk()
+                if n.attrs.get("id") == "term")
+    assert term.attrs.get("data-mode") == "text", term.attrs
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert '"[data-text-only]"' in js and 'n.hidden = mode === "hex"' in js
+    assert 'path + "?v=2"' in js, "the page asks for protocol 2"
+    for name in ("CLOSE_BUSY", "CLOSE_STOPPED", "CLOSE_ACCESS", "CLOSE_SLOW", "CLOSE_GONE"):
+        assert f"case {getattr(routes_console, name)}:" in js, f"app.js does not explain {name}"
+    assert "ev.code === %d" % routes_console.CLOSE_STOPPED in js, "connects again after a restart"
+    base = open(os.path.join(ROOT, "app", "web", "templates", "base.html"), encoding="utf-8").read()
+    for key in ("dropped", "ws_not_running", "ws_reconnected", "ws_reconnecting", "ws_refused",
+                "ws_busy", "ws_stopped", "ws_access", "ws_slow", "ws_gone"):
+        # (a text with a count: a pair of forms, picked by trn)
+        assert (f"'{key}': _(" in base and f'tr("{key}"' in js
+                or f"'{key}': [_(" in base and f'trn("{key}"' in js), key
+    # the console text encoding: the form offers exactly config.CONSOLE_ENCODINGS, for every
+    # kind and protocol (no data-show-when), and the panel carries the code page's table
+    from app.config import CONSOLE_ENCODINGS, console_charset
+
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    m = MappingConfig.from_dict({"id": "e1", "name": "e", "serial": {"port": "COM3"},
+                                 "options": {"console_encoding": "cp857"}})
+    form = parse(make_templates().env.get_template("_mapping_form.html").render(
+        request=Req, mapping=m, is_new=False, modbus_points_json="", ports=[], ips=[], error=None))
+    select = next(n for n in form.walk() if n.attrs.get("name") == "opt_console_encoding")
+    options = [n for n in select.walk() if n.tag == "option"]
+    assert tuple(n.attrs["value"] for n in options) == CONSOLE_ENCODINGS
+    assert [n.attrs["value"] for n in options if "selected" in n.attrs] == ["cp857"]
+    assert not any("data-show-when" in a.attrs for a in select.ancestors())
+    page = tpl.render(mid="a", mapping_name="a", encoding="cp857", charset=console_charset("cp857"))
+    term = next(n for n in parse(page).walk() if n.attrs.get("id") == "term")
+    assert term.attrs["data-charset"] == console_charset("cp857") and "Text encoding: CP857." in page
+    print("console: a Modbus gateway's opens in hex, the typing hint only in the text view, "
+          "every close says why (translated), connects again after a restart; the form offers "
+          "the text encodings, the panel carries the code page  OK")
+
+
+def test_unsaved_form_is_guarded():
+    """A form shown again after a failed save holds values that are not saved: it comes
+    marked dirty (data-dirty), so app.js asks before Cancel, another panel or leaving the
+    page throws them away; a fresh form is not (it only gets dirty by being edited)."""
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    m = MappingConfig(name="x")
+
+    def form(error):
+        root = parse(tpl.render(request=Page, mapping=m, is_new=False, modbus_points_json="",
+                                ports=[], ips=[], error=error))
+        return next(n for n in root.walk() if n.tag == "form")
+    assert form("Port 4001 is in use").attrs.get("data-dirty") == "1"
+    assert "data-dirty" not in form(None).attrs
+    texts = json.loads(next(n for n in parse(dashboard()).walk() if n.tag == "body").attrs["data-i18n"])
+    assert texts.get("discard_changes") and texts.get("sign_in_tab")
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert '"beforeunload"' in js and 'tr("discard_changes"' in js
+    print("mapping form: re-shown after a failed save it counts as unsaved; the guard's texts  OK")
+
+
+def test_app_js_inserts_no_server_html():
+    """app.js puts server texts into the page with textContent: the only innerHTML it
+    writes is the empty string (closing a panel), and nothing else parses HTML."""
+    src = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    writes = re.findall(r"\.innerHTML\s*=(?!=)\s*([^;]*);", src)
+    assert writes and all(w.strip() == '""' for w in writes), writes
+    # (.outerHTML: the property; htmx.ajax's swap: "outerHTML" is htmx swapping a server
+    # fragment in, as an hx-swap attribute does)
+    for sink in ("insertAdjacentHTML", ".outerHTML", "document.write", "DOMParser", "eval("):
+        assert sink not in src, sink
+    assert "textContent = text" in src, "feedback messages go in as text"
+    print("app.js: server texts as textContent, no HTML sinks  OK")
+
+
 def main():
     test_softbreak()
     test_mappings_table()
+    test_durations_translated()
     test_cluster_table()
+    test_counters_and_empty_state()
     test_ports_table_and_assets()
     test_htmx_config()
     test_secret_fields()
     test_mapping_form_modbus_fields()
+    test_mapping_form_hidden_characters()
     test_mapping_form_udp_fields()
+    test_number_fields_required()
     test_mapping_form_rfc2217_restore()
     test_mapping_form_port_lock()
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()
     test_mqtt_tx_tags()
+    test_feedback_area()
+    test_select_all_shown()
+    test_actions_hold_a_second_click()
+    test_polled_controls_keep_their_ids()
+    test_panel_openers_scroll_it_into_view()
+    test_keyboard_and_screen_readers()
+    test_console_says_why()
+    test_unsaved_form_is_guarded()
+    test_app_js_inserts_no_server_html()
     print("\nPASS: UI markup contract")
 
 

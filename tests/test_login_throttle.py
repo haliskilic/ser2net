@@ -280,7 +280,7 @@ async def _password_change(d: str, config: dict) -> None:
 
     for _ in range(state.name_limiter.max_attempts):
         s, _h, text = await change("wrong-current")
-        assert s == 200 and "Current password is incorrect." in text
+        assert s == 400 and "Current password is incorrect." in text
     s, _h, text = await change(PW)
     assert "Too many attempts" in text and auth.verify_password(PW, user.password_hash)
     failed = [r for r in _audit(state) if r[2] == "password_change_failed"]
@@ -291,8 +291,7 @@ async def _password_change(d: str, config: dict) -> None:
     assert (await login(app, "admin", PW, client="10.6.0.2"))[0] == 429, "the same name's limit"
     state.name_limiter.reset("admin")
     s, _h, text = await change(PW)
-    assert "Password updated." in text and auth.verify_password("brand-new-pass-1",
-                                                                user.password_hash)
+    assert s == 303 and auth.verify_password("brand-new-pass-1", user.password_hash), s
     print("password change: a wrong current password is logged, audited and counted under "
           "that name; past the limit the right one is refused too  OK")
 

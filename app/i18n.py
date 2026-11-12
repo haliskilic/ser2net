@@ -3,7 +3,8 @@
 Every user-facing string is written in English and wrapped: ``_("Mappings")`` in
 templates and Python; strings with values use numbered placeholders —
 ``_("Port {0} is in use.").format(port)`` — so a translation may put them in another
-order. The language of the current request lives in a context variable that
+order. A text with a count is ``ngettext(singular, plural, n)`` (templates: its
+``%(num)s``), never "record(s)": both forms are catalog keys. The language of the current request lives in a context variable that
 GuardMiddleware sets for the web UI only; everything else (logs, the audit log, the
 REST API, start-up messages) runs with the default and stays English.
 
@@ -18,6 +19,10 @@ import json
 import os
 from functools import lru_cache
 
+# The languages the UI offers, the one list of them (config.UI_LANGUAGES, the TR / EN
+# switch and the Settings list come from it). Fixed here, not found in locale/: save()
+# checks admin_ui.language against it, so a build without a catalog must not lose a
+# language from it (that is reported at start-up: missing_catalogs).
 LANGUAGES = {"en": "English", "tr": "Türkçe"}
 DEFAULT = "en"
 COOKIE = "ser2net_lang"
@@ -62,6 +67,9 @@ def gettext(message: str) -> str:
 
 
 def ngettext(singular: str, plural: str, n: int) -> str:
+    """A text with a count: `singular` for 1, `plural` for any other number (English),
+    each a catalog key of its own. Turkish has one form after a number: its catalog has
+    the same text for both. (A language with more forms would need more than this.)"""
     return gettext(singular if n == 1 else plural)
 
 

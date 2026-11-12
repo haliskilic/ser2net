@@ -148,6 +148,27 @@ def main():
                 assert b"from-dev" in seen.get(0, b""), seen   # from the device
                 w.close()
             print("hex view: both directions over the traffic WS, timestamped  OK")
+            # protocol 2 (what app.js asks for): records [dir][time][length][bytes] packed
+            async with websockets.connect(uri + "?v=2", additional_headers={
+                    "Cookie": f"ser2net_session={session}"}) as ws:
+                _r, w = await asyncio.open_connection("127.0.0.1", 47350)
+                await asyncio.sleep(0.3)
+                w.write(b"net-v2"); await w.drain()
+                await asyncio.sleep(0.3)
+                await asyncio.to_thread(device.write, b"dev-v2"); await asyncio.to_thread(device.flush)
+                seen, t0 = {}, time.time()
+                while len(seen) < 2 and time.time() - t0 < 10:
+                    frame = await asyncio.wait_for(ws.recv(), timeout=10)
+                    assert isinstance(frame, bytes), frame  # no notice: nothing was dropped
+                    off = 0
+                    while off < len(frame):
+                        d, ts, n = struct.unpack_from(">BdI", frame, off)
+                        assert abs(ts - time.time()) < 30, ts
+                        seen[d] = seen.get(d, b"") + frame[off + 13:off + 13 + n]
+                        off += 13 + n
+                assert b"net-v2" in seen.get(1, b"") and b"dev-v2" in seen.get(0, b""), seen
+                w.close()
+            print("hex view, protocol 2: packed records of both directions  OK")
             try:
                 async with websockets.connect(uri) as ws:
                     await asyncio.wait_for(ws.recv(), timeout=2)
