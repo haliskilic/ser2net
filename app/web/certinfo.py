@@ -1,6 +1,7 @@
 """What a TLS certificate file says about itself - its subject, names and validity - for
 Settings → Admin TLS and the start-up log, for a self-signed certificate and a CA-issued
-one alike. Only reads the file.
+one alike. Only reads the file, found as every TLS file of the configuration is
+(engine/tls.py: a relative path is one in the data directory).
 
 Read with the optional `cryptography` package when it is there (the standalone executables
 and the Docker image have it), otherwise with the decoder in Python's ssl module.
@@ -13,6 +14,9 @@ import datetime
 import ipaddress
 import ssl
 import time
+
+from ..config import data_path
+from ..engine import tls
 
 SOON_DAYS = 30            # a certificate that ends sooner than this is flagged
 _MAX_BYTES = 1024 * 1024  # a certificate file larger than this is not read
@@ -63,8 +67,10 @@ class CertReadError(Exception):
 
 
 def read(path: str) -> CertInfo:
-    """The first certificate in the PEM file at *path*. Raises CertReadError. Blocking
-    file I/O: call via asyncio.to_thread from the event loop."""
+    """The first certificate in the PEM file at *path* (a path from the configuration:
+    config.data_path). Raises CertReadError. Blocking file I/O: call via
+    asyncio.to_thread from the event loop."""
+    path = data_path(path)
     try:
         with open(path, "rb") as fh:
             data = fh.read(_MAX_BYTES + 1)
@@ -121,7 +127,7 @@ def _with_ssl(path: str) -> CertInfo:
         cn = [v for k, v in subject if k == "commonName"]
         names = [_ip(v) if k == "IP Address" else str(v) for k, v in d.get("subjectAltName", ())
                  if k in ("DNS", "IP Address")]
-        return CertInfo(subject=cn[0] if cn else ", ".join(f"{k}={v}" for k, v in subject),
+        return CertInfo(subject=cn[0] if cn else tls.subject(d),
                         names=names, not_before=float(ssl.cert_time_to_seconds(d["notBefore"])),
                         not_after=float(ssl.cert_time_to_seconds(d["notAfter"])),
                         self_signed=subject == issuer)
