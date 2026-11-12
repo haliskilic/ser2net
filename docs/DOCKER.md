@@ -176,7 +176,10 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   saved — a save is refused only for what it changes or adds — so sign in and fix or
   remove that part when you can. An unusable `SER2NET_BIND_IP` / `SER2NET_PORT`, an
   unreadable or broken `config.json` and a missing admin UI certificate still stop the
-  start, with a one-line message.
+  start, with a one-line message. Moving a native install's data directory to `/data`: a
+  certificate generated in its `tls/` folder is found in `/data/tls/` (the log says so and
+  `config.json` is updated); TLS paths written relative (`tls/cert.pem`) are files in
+  `/data`.
 - **TLS.** Put a reverse proxy (or set `admin_ui.tls_*`) in front for LAN/Internet
   exposure; raw data bridges are plaintext unless per-mapping TLS is enabled.
 - **Dependencies** are installed from PyPI into the image, so the container runs with

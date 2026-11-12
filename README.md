@@ -55,7 +55,8 @@ düzenlemeye gerek yok.
 ## ✨ Özellikler
 
 - **Taşıma modları:** TCP **sunucu** (dinleme), TCP **istemci** (dışarı bağlanma),
-  **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**. UDP,
+  **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**
+  (istemci sertifikaları, CA dosyası ya da parmak iziyle sunucu denetimi: bkz. Güvenlik). UDP,
   cihazın çıktısını izinli bir IP'den gelen son datagram'ın göndericisine ya da her zaman
   sabit bir **yanıt adresine** (IP + port) gönderir; **karşı uç zaman aşımı** sessiz kalan
   göndericiyi unutturur. Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler:
@@ -498,6 +499,27 @@ Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde
 eşlediği IPv4 adreslerine uyar. Bir eşlemenin seri portu yalnızca cihaz yolu ya da COM
 adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
 port olarak kabul edilmez.
+
+**Eşleme başına TLS:** TLS'li bir dinleyici (TCP sunucu, Modbus gateway) kendi sertifikasını
+ve anahtarını sunar; **İstemci CA sertifika dosyası** (`network.tls_client_ca`) verilirse
+yalnızca sertifikası bu dosyadaki bir sertifikaya zincirlenen istemcileri alır (stunnel
+`verify` ya da Modbus/TCP Security istemcilerinin beklediği karşılıklı TLS) ve her istemcinin
+sertifika konusunu loglar; izin listesi yine önce denetlenir. Dışarı bağlanan bir eşleme her
+bağlantıda sunucu sertifikasının SHA-256 parmak izini loglar ve onu bir **CA sertifika
+dosyasıyla** (`network.tls_ca`: sertifika ona zincirlenmeli ve uzak sunucunun adını
+taşımalı) ve/veya bir **sunucu sertifikası parmak iziyle** (`network.tls_fingerprint`;
+sertifika değişmeden önce yenisini de listeye ekleyin) denetler; sertifikası ve anahtarı
+isteğe bağlıdır ve istemci sertifikası isteyen bir sunucuya sunulur. **CA dosyası ya da
+parmak izi olmadan dışarı bağlanan TLS yalnızca şifreler:** ağ yolundaki herkes kendini
+sunucu gibi gösterebilir. CA dosyası PEM (bir ya da daha çok sertifika) ya da DER olabilir
+ve içindeki her sertifikaya güvenilir, kendinden imzalı bir sunucunun kendi sertifikası da.
+Şifreli bir anahtar parolasını ister (**TLS anahtar parolası**, `network.tls_key_password`;
+yönetim arayüzü için Ayarlar → Admin TLS altında `admin_ui.tls_key_password`): ser2net
+konsolda asla parola sormaz; parola yoksa eşleme, yönetim arayüzünün anahtarındaysa açılış,
+bunu söyleyen bir hatayla durur. Form ve REST API bir eşlemenin dosyalarını kaydederken
+yükler, kayıtlı anahtar parolasını hiç göstermez (viewer API token'ı maskeli alır) ve
+yönetim arayüzünün kendi anahtarını reddeder. Sertifika yönetilemeyen yerlerde güvenilmeyen
+ağın önünde bir VPN (WireGuard) ya da stunnel seçenektir.
 
 **Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
