@@ -119,7 +119,10 @@ def main():
         assert names["alpha"]["id"] == "alpha0000001", "a merge keeps the id of what it updates"
         assert backup_count() == n_backups + 1, "an import must be one save (one backup)"
         with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
-            assert "\tapi_config_import_merge\t3 mappings (ser2net export)\tapi-token" in fh.read()
+            rec = next(ln.rstrip("\n").split("\t") for ln in fh
+                       if "\tapi_config_import_merge\t" in ln)
+        # (with what the import left as it was: the settings the body doesn't have)
+        assert rec[3].startswith("3 mappings (ser2net export)") and rec[4] == "api-token", rec
         print("import merge: added + updated in one save (one backup), ids kept, audited  OK")
 
         # ---- replace with a clash: refused as a whole ----

@@ -59,6 +59,9 @@ def _data(backup: str | None = None, config_time: float | None = None) -> str:
                   {"username": "watcher", "password_hash": auth.hash_password(PW),
                    "role": "viewer", "pwd_version": 1}]})
     ConfigStore(path).save(cfg, validate=False)
+    # (that save kept a backup of what it wrote, named with this clock's time: only the
+    # given one is wanted)
+    shutil.rmtree(os.path.join(d, "backups"), ignore_errors=True)
     if backup:
         os.makedirs(os.path.join(d, "backups"), exist_ok=True)
         with open(os.path.join(d, "backups", backup), "w", encoding="utf-8") as fh:

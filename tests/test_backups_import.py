@@ -453,21 +453,23 @@ def test_planner_keeps_absent_settings():
     assert {"options.trace_max_mb", "modbus_poll.points[0].writable"} <= set(plan.absent[0])
     assert "mqtt.payload_format" in plan.absent[0], plan.absent
     note = next(w for w in plan.warnings if "the file has no" in w)
-    assert "options.trace_max_mb" in note, note  # (the note names the first 8)
-    assert [r["action"] for r in plan_rows([now], plan.mappings, "merge", plan.absent)] == ["same"]
-    merged, touched = apply_import([now], plan.mappings, "merge", plan.absent)
+    # (the note names the first 8: settings this release added to every section come first)
+    named = note.split("the file has no ", 1)[1].split(" … ", 1)[0].split(", ")
+    assert len(named) == 8 and " … (an export of an older version?)" in note, note
+    assert [r["action"] for r in plan_rows([now], plan.mappings, "merge", absent=plan.absent)] == ["same"]
+    merged, touched = apply_import([now], plan.mappings, "merge", absent=plan.absent)
     assert merged[0].to_dict() == now.to_dict() and not touched, "nothing the file has changed"
     # what the file has still wins
     old2 = json.loads(json.dumps(old))
     old2["modbus_poll"]["points"][0]["address"] += 1
     old2["modbus_poll"]["points"][1]["fn"] = 4   # an input register now: can't be written
     plan = parse_mappings_file(json.dumps({"mappings": [old2]}).encode())
-    merged, touched = apply_import([now], plan.mappings, "merge", plan.absent)
+    merged, touched = apply_import([now], plan.mappings, "merge", absent=plan.absent)
     got = merged[0].modbus_poll.points
     assert got[0].address == now.modbus_poll.points[0].address + 1 and touched
     assert got[0].writable == now.modbus_poll.points[0].writable and not got[1].writable
     assert merged[0].options.trace_max_mb == 2.5 and merged[0].mqtt.payload_format == "sparkplug_b"
-    replaced, _ = apply_import([now], plan.mappings, "replace", plan.absent)
+    replaced, _ = apply_import([now], plan.mappings, "replace", absent=plan.absent)
     assert replaced[0].options.trace_max_mb == 10.0 and not any(
         p.writable for p in replaced[0].modbus_poll.points), "replace: the defaults"
     print("planner: a merge keeps the settings an older export doesn't have (points by name); "

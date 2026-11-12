@@ -144,9 +144,10 @@ def test_proxy_hsts() -> None:
         st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
         assert st == 200 and 'name="proxy_hsts" >' in page, st
         assert "Send HSTS on HTTPS through the proxy" in page
-        st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},   # (off: saved)
+        st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},   # (off: unchanged)
                           headers={"Cookie": jar})
         assert st == 303 and a.state.config.admin_ui.proxy_hsts is False
+        a.state.store.save(a.state.config)   # (a backup with it off, for the preview below)
         st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF, "proxy_hsts": "on"},
                           headers={"Cookie": jar})
         assert st == 303 and a.state.config.admin_ui.proxy_hsts is True, st
@@ -162,8 +163,8 @@ def test_proxy_hsts() -> None:
             for path in ("/login", "/api/v1/health"):
                 st, h, _ = a.call("GET", path, headers=headers)
                 assert header(h, "strict-transport-security") == want, (path, headers)
-        backups = sorted(os.listdir(os.path.join(a.tmp, "backups")))
-        st, _, page = a.call("GET", f"/settings?restore={backups[-1]}", headers={"Cookie": jar})
+        oldest = a.state.store.backup_names()[-1]   # (the newest is what config.json holds)
+        st, _, page = a.call("GET", f"/settings?restore={oldest}", headers={"Cookie": jar})
         assert st == 200 and "HSTS through the reverse proxy: enabled → disabled" in page
     print("HSTS through a TLS proxy: off by default; when switched on, the Admin TLS max-age "
           "on HTTPS requests only  OK")

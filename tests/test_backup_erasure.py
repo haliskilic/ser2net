@@ -35,11 +35,11 @@ def test_store():
     try:
         store = ConfigStore(os.path.join(d, "config.json"))
         cfg = AppConfig(users=[_user("admin", "admin"), _user("bob")])
-        store.save(cfg, validate=False)
-        cfg.users.append(_user("carol@example.com", "operator", "oidc"))
-        store.save(cfg, validate=False)       # backup 1: admin, bob
+        store.save(cfg, validate=False)       # backup: admin, bob (each save keeps what it
+        cfg.users.append(_user("carol@example.com", "operator", "oidc"))   # writes)
+        store.save(cfg, validate=False)       # backup: admin, bob, carol
         cfg.users = [u for u in cfg.users if u.username != "bob"]
-        store.save(cfg, validate=False)       # backup 2: admin, bob, carol
+        store.save(cfg, validate=False)       # backup: admin, carol (config.json now)
         # a config.json from before accounts existed, kept as a backup by the first save
         legacy = {"password_hash": "scrypt$legacy$hash", "pwd_version": 3,
                   "mappings": [{"id": "m1", "name": "PLC"}]}
@@ -47,12 +47,13 @@ def test_store():
                   encoding="utf-8") as fh:
             json.dump(legacy, fh)
         listed = store.backups()
-        assert [b["users"] for b in listed] == [3, 2, 1], listed
-        assert listed[0]["accounts"] == [
+        assert [b["users"] for b in listed] == [2, 3, 2, 1], listed
+        assert listed[0]["current"] and not any(b["current"] for b in listed[1:]), listed
+        assert listed[1]["accounts"] == [
             {"username": "admin", "role": "admin", "source": "local"},
             {"username": "bob", "role": "viewer", "source": "local"},
-            {"username": "carol@example.com", "role": "operator", "source": "oidc"}], listed[0]
-        assert listed[2]["accounts"] == [{"username": "admin", "role": "admin", "source": "local"}]
+            {"username": "carol@example.com", "role": "operator", "source": "oidc"}], listed[1]
+        assert listed[3]["accounts"] == [{"username": "admin", "role": "admin", "source": "local"}]
 
         names = store.backup_names()
         before = {n: open(os.path.join(store.backup_dir, n), encoding="utf-8").read() for n in names}
@@ -71,7 +72,7 @@ def test_store():
         assert store.remove_account("Bob") == 0, "the exact name only"
         assert not [f for f in os.listdir(store.backup_dir) if f.endswith(".tmp")]
         # the legacy one: its password_hash is the admin account
-        assert store.remove_account("admin") == 3
+        assert store.remove_account("admin") == 4
         doc = json.load(open(os.path.join(store.backup_dir, names[-1]), encoding="utf-8"))
         assert "password_hash" not in doc and "pwd_version" not in doc and doc["mappings"], doc
         assert AppConfig.from_dict(doc).users == []
@@ -85,7 +86,7 @@ def test_store():
                 raise AssertionError(f"deleted {bad!r}")
         store.delete_backup(names[0])
         assert store.backup_names() == names[1:]
-        assert store.delete_backups() == 2 and store.backup_names() == []
+        assert store.delete_backups() == 3 and store.backup_names() == []
         assert os.path.isfile(store.path), "config.json itself stays"
     finally:
         shutil.rmtree(d, ignore_errors=True)
