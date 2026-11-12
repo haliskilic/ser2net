@@ -195,7 +195,14 @@ async def main():
         t = time.monotonic()
         await asyncio.gather(*(sup.apply_mapping(m) for m in mappings))
         await wait_all(sup, mappings, ("running",), 10)
-        running = sum(1 for m in mappings if (sup.status(m.id) or {}).get("state") == "running")
+        # and each serial port open: a bridge takes clients from its bind on, before it has
+        # opened its port, and what they send meanwhile is dropped (as while it reconnects)
+        end = time.monotonic() + 10
+        while time.monotonic() < end and not all((sup.status(m.id) or {}).get("device")
+                                                 for m in mappings):
+            await asyncio.sleep(0.05)
+        running = sum(1 for m in mappings if (sup.status(m.id) or {}).get("state") == "running"
+                      and (sup.status(m.id) or {}).get("device"))
         print(f"started {running}/{N} bridges in {time.monotonic()-t:.2f}s")
 
         devices.echo()
