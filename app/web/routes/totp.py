@@ -24,7 +24,9 @@ from ...i18n import _
 from .. import auth, proxy, totp
 from ..auth import LoginRateLimiter
 from .common import Ctx, csrf_failed, local_path
+from .settings import _Flash
 
+PAGE = "/settings/totp"          # Settings → Two-factor sign-in
 PENDING_COOKIE = "ser2net_2fa"   # its name for a request: auth.set_cookie (proxy.cookie_name)
 PENDING_PATH = "/auth/totp"      # also its Path (under the public URL's path)
 PENDING_TTL_S = 300          # from the password to the code
@@ -60,6 +62,9 @@ def routes(ctx: Ctx) -> list:
     state, render, client_ip = ctx.state, ctx.render, ctx.client_ip
     current_user, set_session = ctx.current_user, ctx.set_session
     code_limiter = LoginRateLimiter(CODE_ATTEMPTS, CODE_WINDOW_S)   # per account
+    # what turning it on or off said, for the page its redirect leads to (as Settings does:
+    # Post/Redirect/Get), by the browser's CSRF token and the account
+    flash = _Flash()
     last_step: dict[str, int] = {}   # account -> the time step of its last accepted code
 
     def _check(user, code) -> bool:
@@ -148,10 +153,26 @@ def routes(ctx: Ctx) -> list:
         return resp
 
     # ---------------- setting it up / turning it off (Settings) ----------------
+    def _browser(request) -> str:
+        return getattr(request.state, "csrf_token", None) or ""
+
+    def _done(request, me, ok: str):
+        """A form that did its work: back to the page (a reload doesn't post it again, the
+        TR / EN switch has a page to go back to), which says `ok`; the session renewed
+        (it ended the account's other sessions)."""
+        flash.put(_browser(request), me.username, ok=ok)
+        resp = proxy.redirect(request, PAGE)
+        set_session(resp, request, me)
+        return resp
+
     def _page(request, status_code=200, ok=None, error=None, secret=None):
         """Settings → Two-factor sign-in: a new key to set up (or `secret`, the one being
-        set up), or, while it is on, the form to turn it off."""
+        set up), or, while it is on, the form to turn it off. A page answered to a form
+        (refused) names the page's own address (page_url)."""
         me = current_user(request)
+        if request.method == "GET" and me is not None and (
+                done := flash.take(_browser(request), me.username)):
+            ok = done["ok"]
         refusal = None
         if me is None or me.source == "anonymous":
             refusal = _("Sign in to set up two-factor sign-in.")
@@ -169,7 +190,7 @@ def routes(ctx: Ctx) -> list:
                                                     {"p": "totp-enrol", "u": me.username,
                                                      "s": secret}, ttl_seconds=ENROL_TTL_S))
         return render(request, "totp.html", status_code=status_code, headers=NO_STORE,
-                      **ctx_vars)
+                      page_url=None if request.method == "GET" else PAGE, **ctx_vars)
 
     async def settings_page(request):
         return _page(request)
@@ -201,8 +222,10 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         me = current_user(request)
-        if me is None or me.source != "local" or me.totp_on:
-            return _page(request)  # the refusal, or: it is on already
+        if me is None or me.source != "local":
+            return _page(request, 400)  # the refusal
+        if me.totp_on:
+            return proxy.redirect(request, PAGE)  # on already: the page says so
         data = auth.read_payload(state.config.secret_key, form.get("enrol"))
         if (not data or data.get("p") != "totp-enrol" or data.get("u") != me.username
                 or not totp.is_secret(data.get("s"))):
@@ -222,18 +245,18 @@ def routes(ctx: Ctx) -> list:
         state.log(f"two-factor sign-in turned on for {me.username}; their other sessions "
                   "were signed out")
         ctx.audit(request, "totp_enable", me.username)
-        resp = _page(request, ok=_("Two-factor sign-in is on: signing in now takes a code from "
-                                   "your app too. Your other sessions were signed out."))
-        set_session(resp, request, me)
-        return resp
+        return _done(request, me, _("Two-factor sign-in is on: signing in now takes a code from "
+                                    "your app too. Your other sessions were signed out."))
 
     async def disable_post(request):
         form = await request.form(**FORM_LIMITS)
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         me = current_user(request)
-        if me is None or not me.totp_on:
-            return _page(request)  # the refusal, or: it is off already
+        if me is None or me.source != "local":
+            return _page(request, 400)  # the refusal
+        if not me.totp_on:
+            return proxy.redirect(request, PAGE)  # off already: the page says so
         if not await _password_ok(me, form.get("password")):
             return _page(request, 400, error=_("Current password is incorrect."))
         if code_limiter.blocked(me.username):
@@ -248,15 +271,13 @@ def routes(ctx: Ctx) -> list:
         state.log(f"two-factor sign-in turned off for {me.username}; their other sessions "
                   "were signed out")
         ctx.audit(request, "totp_disable", me.username)
-        resp = _page(request, ok=_("Two-factor sign-in is off: your password alone signs you "
-                                   "in. Your other sessions were signed out."))
-        set_session(resp, request, me)
-        return resp
+        return _done(request, me, _("Two-factor sign-in is off: your password alone signs you "
+                                    "in. Your other sessions were signed out."))
 
     return [
         Route(PENDING_PATH, code_get, methods=["GET"]),
         Route(PENDING_PATH, code_post, methods=["POST"], max_body_size=FORM_MAX_BYTES),
-        Route("/settings/totp", settings_page, methods=["GET"]),
+        Route(PAGE, settings_page, methods=["GET"]),
         Route("/settings/totp/enable", enable_post, methods=["POST"],
               max_body_size=FORM_MAX_BYTES),
         Route("/settings/totp/disable", disable_post, methods=["POST"],

@@ -171,7 +171,8 @@ ROUTES = {
     ("MOUNT", "/static"): (PUBLIC, NONE),
 }
 
-# what the handler of an "account" route answers an open-access visitor (400, no change)
+# what the handler of an "account" route answers an open-access visitor (a form: 400, no
+# change; the page itself: 200, with the reason)
 ACCOUNT_REFUSALS = {
     "/settings/password": "Sign in to change your password.",
     "/settings/sessions/signout-others": "Sign in to manage your sessions.",
@@ -414,7 +415,7 @@ def check_session_route(who: Client, method: str, path: str, access: str, csrf: 
         elif want == "peer":
             ok = st == 403 and body.strip() == PEER_DENIED
         elif want == "account":
-            ok = st == 400 and ACCOUNT_REFUSALS[path] in body
+            ok = st == (200 if method == "GET" else 400) and ACCOUNT_REFUSALS[path] in body
         else:
             ok = st == 403 and body.strip() == ROLE_DENIED.format(want)
     if want != "allowed":
