@@ -132,7 +132,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
-- **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
+- **Security:** password (set on first access, scrypt), optional two-factor sign-in
+  (TOTP codes from an authenticator app) per local account, CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with
   `ser2net --set-password` (see Security).
@@ -309,9 +310,9 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   device on network mappings. The hex view shows both directions; viewers see only what
   the device sends.
 - **Trace** (operators): the mapping's trace files, to list and download.
-- **Settings:** change password, **web UI access** (login required / open access with a
-  role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
-  token**, mappings **backup/restore** (JSON), status.
+- **Settings:** change password, **two-factor sign-in**, **web UI access** (login required /
+  open access with a role), admin TLS (provide paths or generate self-signed),
+  generate/revoke **REST API tokens**, mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (a web UI session; with the REST API token:
   `/api/v1/metrics`, see REST API): per mapping whether it runs,
   its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
@@ -567,10 +568,29 @@ older**, LDAP sign-in stops if the certificate isn't trusted: set the CA certifi
 (local accounts keep working; without a local admin, create one with
 `ser2net --set-password NAME`).
 
+**Two-factor sign-in (TOTP):** off unless an account turns it on. A local account sets it
+up under **Settings → Two-factor sign-in**: it adds the key shown there to an authenticator
+app (Google or Microsoft Authenticator, Aegis, FreeOTP, KeePassXC, … — typed in, or the
+`otpauth://` link pasted or turned into a QR code with any QR maker; ser2net adds no
+dependency for it) and confirms with a code and its password. From then on, signing in takes
+the password and the app's 6-digit code; its other sessions end at that moment. A code is
+accepted for its 30-second step and one step either side (a clock a little off), and only
+once; wrong codes count against the address together with wrong passwords, and five for one
+account in 5 minutes block it for a while. The codes follow the clock: keep the server's
+time right (NTP). Turning it off takes the password and a code. **Lost authenticator:** an
+admin turns it off for that account under **Settings → Users** (*Turn off 2FA*, which signs
+it out); for the only admin, `ser2net --set-password NAME` on the server sets a new password
+and turns it off (see below). LDAP and OIDC accounts get a second factor from the directory
+or the identity provider: MFA is available today through OIDC with an IdP that enforces it
+(Keycloak, Entra ID, Google, …) or an authenticating reverse proxy in front of the UI. The
+REST API tokens, the cluster key and open access are not affected. The secret is kept in
+`config.json` (`users[].totp_secret`, only while it is on); 2.8 and older drop it, and the
+account then signs in with its password alone.
+
 **Lost password, locked out, no browser (account recovery):**
 `ser2net --set-password NAME` sets a new password for the local account `NAME` (asked
-twice on the terminal; piped, the first line of stdin) and signs that account out
-everywhere. A name that doesn't exist yet is created as an **admin** — the way back in
+twice on the terminal; piped, the first line of stdin), turns its two-factor sign-in off
+(for a lost authenticator) and signs that account out everywhere. A name that doesn't exist yet is created as an **admin** — the way back in
 when the only admin is an LDAP/OIDC account and the directory is unreachable.
 `ser2net --sign-out-all` ends every web UI session. Both work with ser2net stopped or
 running: a running instance applies the change at once, no restart needed. Nothing else
