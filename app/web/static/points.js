@@ -147,6 +147,7 @@
         ed._points = parse(box, T);
       } catch (e) {
         msg.textContent = t(T, "bad_json", e.message);
+        msg.className = "points-msg banner warn";  // (a warning only once there is one)
         msg.hidden = false;
         return;
       }

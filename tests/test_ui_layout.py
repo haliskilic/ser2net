@@ -298,7 +298,13 @@ def main():
                         page.click("#form-panel [data-points-mode]")
                         if not page.locator(box).is_visible():
                             problems.append("points editor: the JSON box is not shown again")
-                        print("points editor: fields rewrite the JSON, other keys kept")
+                        page.fill(box, '[{"name": "a",')  # invalid: stays JSON, says why
+                        page.click("#form-panel [data-points-mode]")
+                        note = page.locator("#form-panel [data-points-msg].banner")
+                        if not (note.is_visible() and page.locator(box).is_visible()):
+                            problems.append("points editor: invalid JSON gave no note")
+                        print("points editor: fields rewrite the JSON, other keys kept; invalid "
+                              "JSON stays in the box with a note")
                     page.goto(f"{base}/settings")
                     page.wait_for_selector("section.panel")
                     check(f"{lang} settings @{w}")
