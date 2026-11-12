@@ -34,6 +34,8 @@ import time
 import unicodedata
 from collections import OrderedDict, deque
 
+from . import proxy
+
 SESSION_COOKIE = "ser2net_session"
 CSRF_COOKIE = "ser2net_csrf"
 
@@ -532,14 +534,21 @@ def is_https(request, cfg) -> bool:
 def set_cookie(response, request, cfg, name: str, value: str, max_age: int,
                path: str = "/") -> None:
     """One of the UI's cookies: HttpOnly, SameSite=Lax, Secure whenever the browser used
-    HTTPS (is_https)."""
-    response.set_cookie(name, value, max_age=max_age, path=path, httponly=True,
-                        samesite="lax", secure=is_https(request, cfg))
+    HTTPS (is_https), under the request's path prefix and with its name for it
+    (proxy.cookie_name / cookie_path: '/' and the name itself without one)."""
+    response.set_cookie(proxy.cookie_name(request, name), value, max_age=max_age,
+                        path=proxy.cookie_path(request, path), httponly=True, samesite="lax",
+                        secure=is_https(request, cfg))
 
 
 def delete_cookie(response, request, cfg, name: str, path: str = "/") -> None:
-    response.delete_cookie(name, path=path, httponly=True, samesite="lax",
-                           secure=is_https(request, cfg))
+    response.delete_cookie(proxy.cookie_name(request, name), path=proxy.cookie_path(request, path),
+                           httponly=True, samesite="lax", secure=is_https(request, cfg))
+
+
+def cookie(request, name: str) -> str | None:
+    """The value of one of the UI's cookies (its name for this request: set_cookie)."""
+    return request.cookies.get(proxy.cookie_name(request, name))
 
 
 # --------------------------------------------------------------------------
@@ -550,7 +559,7 @@ def new_csrf_token() -> str:
 
 
 def csrf_from_request(request) -> str:
-    return request.cookies.get(CSRF_COOKIE, "")
+    return request.cookies.get(proxy.cookie_name(request, CSRF_COOKIE), "")
 
 
 def csrf_token_matches(request, token) -> bool:
@@ -562,7 +571,7 @@ def csrf_token_matches(request, token) -> bool:
     (checked in middleware); plain HTML form posts pass _csrf in the body and are
     validated by their handlers, which read the form exactly once.
     """
-    cookie = request.cookies.get(CSRF_COOKIE)
+    cookie = request.cookies.get(proxy.cookie_name(request, CSRF_COOKIE))
     if not cookie or not token:
         return False
     token = str(token)

@@ -21,8 +21,8 @@ from ... import i18n, importer, optional
 from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, NOTIFY_EVENTS, ROLES, SMTP_SECURITY,
     UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError,
-    NotificationSettings, User, backup_time, new_pwd_version, parse_cluster_peer,
-    proxy_entry_problem, split_proxy_entries,
+    NotificationSettings, User, backup_time, new_pwd_version, normalize_public_url,
+    parse_cluster_peer, proxy_entry_problem, public_url_problem, split_proxy_entries,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -71,11 +71,13 @@ def routes(ctx: Ctx) -> list:
         backups = state.store.backups() if me is not None and me.role == "admin" else []
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
         # the redirect URI a sign-in started from this page's address would send
-        oidc_redirect = oidc_auth.redirect_uri(state.config.oidc, request)
+        published = proxy.public_url(state.config.admin_ui)
+        oidc_redirect = oidc_auth.redirect_uri(state.config.oidc, request, published)
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups,
                       admin=state.config.admin_ui, hsts_max=HSTS_MAX_AGE_MAX,
+                      public_url=published, public_url_env=bool(proxy.public_url_from_env()),
                       trusted=proxy.trusted_entries(state.config.admin_ui),
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
@@ -88,7 +90,8 @@ def routes(ctx: Ctx) -> list:
                       ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,
                       oidc_redirect_uri=oidc_redirect,
-                      oidc_redirect_auto=not state.config.oidc.redirect_uri.strip(),
+                      oidc_redirect_auto=not state.config.oidc.redirect_uri.strip() and not published,
+                      oidc_redirect_public=not state.config.oidc.redirect_uri.strip() and bool(published),
                       oidc_redirect_http=oidc_auth.redirect_uri_is_plain_http(oidc_redirect),
                       group_warnings={src: [w for (s, _k), w in sorted(state.group_warnings.items())
                                             if s == src] for src in ("ldap", "oidc")},
@@ -313,23 +316,29 @@ def routes(ctx: Ctx) -> list:
             return csrf_failed()
         ui = state.config.admin_ui
         # a field the form doesn't have (disabled: the environment sets it) keeps its value
-        entries = list(ui.trusted_proxies)
+        url, entries = ui.public_url, list(ui.trusted_proxies)
+        if "public_url" in form:
+            raw = str(form.get("public_url") or "").strip()
+            if problem := public_url_problem(raw):
+                return await settings_get(request, error=problem)
+            url = normalize_public_url(raw)
         if "trusted_proxies" in form:
             entries = list(dict.fromkeys(split_proxy_entries(str(form.get("trusted_proxies") or ""))))
             if problem := next(filter(None, map(proxy_entry_problem, entries)), None):
                 return await settings_get(request, error=problem)
         hsts = _checkbox(form, "proxy_hsts")
         async with state.config_lock:
-            old = (list(ui.trusted_proxies), ui.proxy_hsts)
-            ui.trusted_proxies, ui.proxy_hsts = entries, hsts
+            old = (ui.public_url, list(ui.trusted_proxies), ui.proxy_hsts)
+            ui.public_url, ui.trusted_proxies, ui.proxy_hsts = url, entries, hsts
             try:
                 await state.asave()
             except ConfigError as e:
-                ui.trusted_proxies, ui.proxy_hsts = old
+                ui.public_url, ui.trusted_proxies, ui.proxy_hsts = old
                 return await settings_get(request, error=str(e))
         changes = [what for what, changed in (
-            (f"trusted proxies {' '.join(entries) or '(none)'}", entries != old[0]),
-            (f"HSTS through the proxy {'on' if hsts else 'off'}", hsts != old[1])) if changed]
+            (f"public URL {url or '(none)'}", url != old[0]),
+            (f"trusted proxies {' '.join(entries) or '(none)'}", entries != old[1]),
+            (f"HSTS through the proxy {'on' if hsts else 'off'}", hsts != old[2])) if changed]
         if changes:
             state.log(f"reverse proxy settings: {'; '.join(changes)}")
         ctx.audit(request, "reverse_proxy_set", "; ".join(changes) or "unchanged")
@@ -1238,6 +1247,7 @@ def _setting_changes(old, new) -> list[str]:
     diff(_("Admin UI address"), f"{o.bind_ip}:{o.port}", f"{n.bind_ip}:{n.port}")
     diff(_("Admin TLS (HTTPS)"), onoff(o.tls_enabled), onoff(n.tls_enabled))
     diff(_("HSTS max-age (seconds)"), o.hsts_max_age, n.hsts_max_age)
+    diff(_("Public URL"), o.public_url or "—", n.public_url or "—")
     diff(_("Trusted proxies"), " ".join(o.trusted_proxies) or "—",
          " ".join(n.trusted_proxies) or "—")
     diff(_("HSTS through the reverse proxy"), onoff(o.proxy_hsts), onoff(n.proxy_hsts))

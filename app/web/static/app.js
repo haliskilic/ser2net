@@ -9,6 +9,11 @@ function tr(key, fallback) {
   for (var i = 2; i < arguments.length; i++) s = s.replace("{" + (i - 2) + "}", arguments[i]);
   return s;
 }
+// the path prefix the page came under ("" at "/"; a public URL's path, base.html)
+function basePath() {
+  var m = document.querySelector('meta[name="ser2net-base"]');
+  return m ? m.getAttribute("content") : "";
+}
 
 // 0) Theme: apply the saved light/dark preference as early as possible, and toggle
 //    it (persisted in localStorage) when a [data-theme-toggle] control is clicked.
@@ -131,7 +136,7 @@ document.addEventListener("DOMContentLoaded", function () {
   var shown = document.querySelector("#oidc-redirect[data-auto]");
   var warn = document.getElementById("oidc-redirect-mismatch");
   if (!shown || !warn) return;
-  var mine = location.origin + "/auth/oidc/callback";
+  var mine = location.origin + basePath() + "/auth/oidc/callback";
   if (shown.getAttribute("data-uri") === mine) return;
   warn.querySelector("[data-browser-uri]").textContent = mine;
   warn.hidden = false;
@@ -339,7 +344,7 @@ document.addEventListener("htmx:beforeSwap", function (e) {
     if (!b) return;
     if (b.hasAttribute("data-bulk-clear")) { selected.clear(); apply(); return; }
     if (!selected.size || !window.htmx) return;
-    htmx.ajax("POST", "/api/mappings/bulk", { swap: "none", values: {
+    htmx.ajax("POST", basePath() + "/api/mappings/bulk", { swap: "none", values: {
       action: b.getAttribute("data-bulk-action"), ids: Array.from(selected) } });
   });
 

@@ -15,7 +15,7 @@ from ...config import (
 )
 from ...engine import netguard, netinfo
 from ...i18n import _
-from .. import auth, ldap_auth, oidc_auth
+from .. import auth, ldap_auth, oidc_auth, proxy
 from .common import Ctx, csrf_failed
 from .forms import _password_problem, _username_problem
 
@@ -185,8 +185,9 @@ def routes(ctx: Ctx) -> list:
     async def oidc_login(request):
         oidc = state.config.oidc
         if not oidc.enabled:
-            return RedirectResponse("/login", status_code=303)
-        redirect_uri = oidc_auth.redirect_uri(oidc, request)
+            return proxy.redirect(request, "/login")
+        redirect_uri = oidc_auth.redirect_uri(oidc, request,
+                                              proxy.public_url(state.config.admin_ui))
         st, nonce = secrets.token_urlsafe(16), secrets.token_urlsafe(16)
         verifier = oidc_auth.new_code_verifier()   # PKCE
         try:
@@ -246,8 +247,8 @@ def routes(ctx: Ctx) -> list:
     async def oidc_callback(request):
         oidc = state.config.oidc
         if not oidc.enabled:
-            return RedirectResponse("/login", status_code=303)
-        data = auth.read_payload(state.config.secret_key, request.cookies.get(OIDC_COOKIE))
+            return proxy.redirect(request, "/login")
+        data = auth.read_payload(state.config.secret_key, auth.cookie(request, OIDC_COOKIE))
         if (error := request.query_params.get("error")) is not None:
             return _provider_error(request, data, error)
         code = request.query_params.get("code", "")
@@ -280,7 +281,7 @@ def routes(ctx: Ctx) -> list:
         refused.discard(_person("oidc", username))
         state.log(f"login: {user.username} ({role}, oidc) from {client_ip(request)}")
         ctx.audit(request, "oidc_login", user.username, user=user.username)
-        resp = RedirectResponse("/", status_code=303)
+        resp = proxy.redirect(request, "/")
         set_session(resp, request, user)
         ctx.new_csrf_token(request)
         auth.delete_cookie(resp, request, state.config, OIDC_COOKIE, path="/auth/oidc")
@@ -408,7 +409,7 @@ def routes(ctx: Ctx) -> list:
                 await _renew_hash(authed, password)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
             ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=authed.username)
-            resp = RedirectResponse("/", status_code=303)
+            resp = proxy.redirect(request, "/")
             set_session(resp, request, authed)
             ctx.new_csrf_token(request)
             return resp
@@ -436,13 +437,13 @@ def routes(ctx: Ctx) -> list:
             return csrf_failed()
         # the cookie is a signed token: end it on the server too, so a copy of it is
         # refused from now on (not just deleted in this browser)
-        token = request.cookies.get(auth.SESSION_COOKIE)
+        token = auth.cookie(request, auth.SESSION_COOKIE)
         full = state.revoked_sessions.add(state.config.secret_key, token)
         if full is not None and auth.session_user(state.config, token) is not None:
             await _sign_out_everywhere(full)
         if not ctx.is_anonymous(request):  # an open-access visitor had no session to end
             ctx.audit(request, "logout")
-        resp = RedirectResponse("/login", status_code=303)
+        resp = proxy.redirect(request, "/login")
         auth.delete_cookie(resp, request, state.config, auth.SESSION_COOKIE)
         ctx.new_csrf_token(request)
         return resp
@@ -501,12 +502,12 @@ def routes(ctx: Ctx) -> list:
                     return setup_page(request, 400, str(e))
         if claimed:
             state.log(f"first-run setup from {ip} ignored: the admin account exists already")
-            return RedirectResponse("/login", status_code=303)
+            return proxy.redirect(request, "/login")
         state.first_run_done()
         user = state.config.get_user(username)
         state.log(f"first-run setup complete; admin user '{username}' created")
         ctx.audit(request, "first_run_setup", username, user=username)
-        resp = RedirectResponse("/", status_code=303)
+        resp = proxy.redirect(request, "/")
         set_session(resp, request, user)
         ctx.new_csrf_token(request)
         return resp

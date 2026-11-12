@@ -329,6 +329,24 @@ def use_worker_threads(loop: asyncio.AbstractEventLoop) -> None:
         max_workers=WORKER_THREADS, thread_name_prefix="ser2net"))
 
 
+def plain_http_warning(admin, published: str = "") -> str:
+    """The start-up warning for an admin UI that answers plain HTTP on a network address
+    ('' when there is none), behind a TLS reverse proxy (`published`: the public URL) too:
+    the port itself is still plain HTTP."""
+    if admin.bind_ip in ("127.0.0.1", "::1", "localhost") or admin.tls_enabled:
+        return ""
+    if published.startswith("https://"):
+        return (f"WARNING: the admin UI is published as {published} through a TLS reverse "
+                f"proxy, but it also answers plain HTTP on {admin.bind_ip}:{admin.port} — "
+                "passwords and session cookies sent there travel unencrypted. Let only the "
+                "proxy reach that port (Docker: publish it as 127.0.0.1:8080:8080, or not "
+                "at all).")
+    return ("WARNING: admin UI is bound to a network address over plain HTTP — the password "
+            "and session cookies travel unencrypted. Configure TLS (admin_ui.tls_cert/"
+            "tls_key), or bind to 127.0.0.1 (in Docker: publish the port to this host only) "
+            "and put a TLS reverse proxy in front (docs/REVERSE-PROXY.md).")
+
+
 _as_service = False  # set by service_main so _serve can log the service-only warnings
 
 
@@ -354,7 +372,11 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     state = AppState(store, config)
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
-    state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
+    published = proxy.public_url(admin)
+    state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}"
+              + (f", published as {published} "
+                 f"({proxy.PUBLIC_URL_ENV if proxy.public_url_from_env() else 'admin_ui.public_url'})"
+                 if published else ""))
     for note in (standalone.notes + config.load_notes + ([loop_note] if loop_note else [])
                  + proxy.start_notes(admin)):
         state.log(note)
@@ -371,10 +393,8 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if warning := winservice.location_warning():
             state.log(warning)
     state.prepare_first_run()
-    if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:
-        state.log("WARNING: admin UI is bound to a network address over plain HTTP — "
-                  "the password and session cookies travel unencrypted. Configure TLS "
-                  "(admin_ui.tls_cert/tls_key) or bind to 127.0.0.1.")
+    if warning := plain_http_warning(admin, published):
+        state.log(warning)
     if config.password_set and not admin.require_login:
         state.log(f"WARNING: web UI login is switched off — visitors without a session get "
                   f"the '{admin.anonymous_role}' role (Settings → Web UI access).")

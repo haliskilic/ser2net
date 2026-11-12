@@ -58,21 +58,21 @@
           {% if can_edit %}
           <div class="btn-group">
             {% if m.enabled %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/stop" hx-swap="none">{{ _("Stop") }}</button>
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/restart" hx-swap="none">{{ _("Restart") }}</button>
+            <button class="btn sm" hx-post="{{ base }}/api/mappings/{{ m.id }}/stop" hx-swap="none">{{ _("Stop") }}</button>
+            <button class="btn sm" hx-post="{{ base }}/api/mappings/{{ m.id }}/restart" hx-swap="none">{{ _("Restart") }}</button>
             {% else %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/start" hx-swap="none">{{ _("Start") }}</button>
+            <button class="btn sm" hx-post="{{ base }}/api/mappings/{{ m.id }}/start" hx-swap="none">{{ _("Start") }}</button>
             {% endif %}
-            <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/form" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
+            <button class="btn sm" hx-get="{{ base }}/api/mappings/{{ m.id }}/form" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Edit") }}</button>
           </div>
           {% endif %}
           <div class="btn-group">
-            <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Log") }}</button>
-            <button class="btn sm" hx-get="/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Monitor") }}</button>
-            {% if can_edit and m.options.trace_both %}<button class="btn sm" hx-get="/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Trace") }}</button>{% endif %}
+            <button class="btn sm" hx-get="{{ base }}/api/mappings/{{ m.id }}/log" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Log") }}</button>
+            <button class="btn sm" hx-get="{{ base }}/api/mappings/{{ m.id }}/console-view" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Monitor") }}</button>
+            {% if can_edit and m.options.trace_both %}<button class="btn sm" hx-get="{{ base }}/api/mappings/{{ m.id }}/traces" hx-target="#form-panel" hx-swap="innerHTML">{{ _("Trace") }}</button>{% endif %}
             {% if can_edit %}
-            <button class="btn sm" hx-post="/api/mappings/{{ m.id }}/duplicate" hx-swap="none">{{ _("Copy") }}</button>
-            <button class="btn sm danger" hx-delete="/api/mappings/{{ m.id }}"
+            <button class="btn sm" hx-post="{{ base }}/api/mappings/{{ m.id }}/duplicate" hx-swap="none">{{ _("Copy") }}</button>
+            <button class="btn sm danger" hx-delete="{{ base }}/api/mappings/{{ m.id }}"
                     hx-confirm="{{ _('Delete mapping “%(name)s”?', name=m.name) }}" hx-swap="none">{{ _("Delete") }}</button>
             {% endif %}
           </div>
