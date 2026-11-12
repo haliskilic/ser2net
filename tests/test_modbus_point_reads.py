@@ -172,17 +172,26 @@ def test_config_rules():
 
 def test_stored_unusable_keys():
     """A stored word order or scale the edits refuse (hand-edited config.json): the point is
-    read as ABCD / unscaled, with a warning at start."""
+    read as ABCD / unscaled, with a warning at start (a scale that is no number is read as
+    the default by the config itself, with a load note; one in a model built in code is
+    ignored by the gateway, with a warning)."""
     m = MappingConfig.from_dict({
         "name": "gw", "serial": {"port": "fake"}, "network": {"protocol": "modbus"},
         "mqtt": {"enabled": True, "host": "b", "base_topic": "plant/gw"},
         "modbus_poll": {"points": [{"name": "v", "fn": 3, "dtype": "uint32",
                                     "word_order": "XYZW", "scale": "x"}]}})
     m.validate()
+    assert m.modbus_poll.points[0].scale == 1.0
+    assert [n.text() for n in m.input_notes] == [
+        'modbus_poll.points[0].scale "x" is not a finite number: 1.0 is used'], m.input_notes
     logs = []
     ModbusGatewayRunner(m, logger=logs.append)._log_policy()
     assert "warning: point 'v': word_order 'XYZW' ignored (not ABCD, CDAB, BADC or DCBA): " \
            "read as ABCD" in logs, logs
+    assert decode_point(m.modbus_poll.points[0], regs_bytes([1, 2])) == 0x10002
+    m.modbus_poll.points[0].scale = "x"  # type: ignore[assignment]
+    logs.clear()
+    ModbusGatewayRunner(m, logger=logs.append)._log_policy()
     assert "warning: point 'v': scale 'x' ignored (not a number): its values are not scaled" \
            in logs, logs
     assert decode_point(m.modbus_poll.points[0], regs_bytes([1, 2])) == 0x10002
@@ -247,7 +256,8 @@ def test_plan_blocks():
     assert plan(coils, 124)[0][:3] == (1, 0, 1) and len(plan(coils, 2000)) == 1
     bits = pts({"dtype": "bool", "bit": 0, "address": 7}, {"dtype": "bool", "bit": 9, "address": 7})
     assert plan(bits, 0) == [(3, 7, 1, ["p0", "p1"], False)], "two bits of one register"
-    junk = pts({"address": "x"}, {"address": 1})
+    junk = pts({"address": 0}, {"address": 1})
+    junk[0].address = "x"  # type: ignore[assignment]  # (a model built in code)
     assert plan(junk, 0) == [(3, 0, 0, ["p0"], True), (3, 1, 1, ["p1"], False)]
     print("block plan: per function, in address order, within the gap and one read  OK")
 

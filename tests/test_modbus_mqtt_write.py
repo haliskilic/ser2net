@@ -503,8 +503,8 @@ async def test_broadcast_point(slave_port):
         await asyncio.sleep(0.35)  # a few more poll cycles
         assert last(fake, "plant/a/all") is None, "a broadcast point is not read back or polled"
         assert [p[0] for p in SEEN if p[0] != 4] == [6], SEEN  # the write; no FC3 read
-        assert any(m == "wrote 'all' = 7 (broadcast to unit 0, FC6; not read back)"
-                   for m in logs), logs
+        assert any(m == "wrote 'all' = 7 (broadcast to unit 0, FC6, from MQTT plant/a/all/set; "
+                        "not read back)" for m in logs), logs
         assert not any(m.startswith("poll 'all'") or "failed" in m for m in logs), logs
         print("unit 0 point: an MQTT write is broadcast (ok, no read-back), never polled  OK")
     finally:
@@ -951,7 +951,8 @@ async def test_point_limits(slave_port):
         assert await answer_of("cmd", b'{"value": 7, "id": 1}') == b'{"id":1,"ok":true,"value":null}'
         assert REGS[22] == 7 and last(fake, "plant/a/cmd") is None
         assert not [p for p in SEEN if p[0] == 3 and p[1:3] == b"\x00\x16"], "read 'cmd' back"
-        assert "wrote 'cmd' = 7 (unit 1, FC6; write-only, not read back)" in logs, logs
+        assert "wrote 'cmd' = 7 (unit 1, FC6, from MQTT plant/a/cmd/set; write-only, not read " \
+            "back)" in logs, logs
         assert r._units[1].points == [p for p in r.mapping.modbus_poll.points
                                       if p.name != "cmd"]
         print("write-only point (poll false): never polled, a write not read back  OK")
@@ -960,9 +961,12 @@ async def test_point_limits(slave_port):
         assert await answer_of("setpoint", b"12.6") == b"ok"
         assert await answer_of("flow", b"21.5") == b"ok"
         assert REGS[10] == 13 and REGS[23] == 215
-        assert "wrote 'setpoint' = 12.6 (unit 1, FC6, raw value 13)" in logs, logs
-        assert "wrote 'flow' = 21.5 (unit 1, FC6, raw value 215)" in logs, logs
-        assert "wrote 'mode' = 2 (unit 1, FC6)" in logs, "raw value only when it differs"
+        assert ("wrote 'setpoint' = 12.6 (unit 1, FC6, raw value 13, from MQTT "
+                "plant/a/setpoint/set)") in logs, logs
+        assert ("wrote 'flow' = 21.5 (unit 1, FC6, raw value 215, from MQTT plant/a/flow/set)"
+                in logs), logs
+        assert "wrote 'mode' = 2 (unit 1, FC6, from MQTT plant/a/mode/set)" in logs, \
+            "raw value only when it differs"
         print("the log names the raw register value a fraction or a scale became  OK")
 
         # a stored limit that can't be used (not refused when it was stored by hand):

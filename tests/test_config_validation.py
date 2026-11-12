@@ -858,14 +858,20 @@ def test_form_modbus_response_timeout():
         return MappingConfig.from_dict({"name": "gw", "serial": {"port": "COM7"},
                                         "network": {"protocol": protocol, "port": 502},
                                         "options": {"modbus_response_timeout_s": timeout}})
-    for ok in (0.01, 0.4, 1, 60):
+    for ok in (0.01, 0.4, 1, 60, "1.5", None):  # (text read as its number, null the default)
         gateway(ok).validate_input()
-    for bad in (0.005, 0, -1, 61, "1.5", True, None):
+    for bad in (0.005, 0, -1, 61):
         try:
             gateway(bad).validate_input()
             raise AssertionError(f"an edit must refuse a response timeout of {bad!r}")
         except ConfigError as e:
             assert "between 0.01 and 60 seconds" in str(e), e
+    for bad in (True, "soon"):  # (not a number at all: the typed reader's refusal)
+        try:
+            gateway(bad).validate_input()
+            raise AssertionError(f"an edit must refuse a response timeout of {bad!r}")
+        except ConfigError as e:
+            assert "modbus_response_timeout_s" in str(e) and "is not a finite number" in str(e), e
     gateway(-1, protocol="raw").validate_input()  # not a gateway: not its setting
     # stored values from before 2.9 (config.json only, unchecked) still load and save, and
     # read as their number or the default; nothing past the timers' upper bound

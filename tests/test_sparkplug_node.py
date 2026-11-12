@@ -380,7 +380,9 @@ async def test_primary_host():
     print("no primary host (or a bad stored one, logged): births at once  OK")
 
     # edits refuse an id with '/', '+' or '#'; a stored one still loads and saves
-    for bad in ("a/b", "x+", "#", 5):
+    assert mapping(sparkplug_primary_host_id=5).mqtt.sparkplug_primary_host_id == "5", \
+        "a number is read as its text (config._read_fields)"
+    for bad in ("a/b", "x+", "#"):
         m = MappingConfig.from_dict(mapping(sparkplug_primary_host_id=bad).to_dict())
         m.validate()
         AppConfig.from_dict({"mappings": [m.to_dict()]}).validate()
