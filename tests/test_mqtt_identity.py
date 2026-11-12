@@ -426,6 +426,16 @@ def test_server():
         edit.pop("enabled")
         st, _, _ = b.post("/api/mappings/save", edit)
         assert st == 200 and names()[1] == "B renamed", "disabling it is an edit that fixes it"
+        # ...and starting it again is refused like a shared serial port (REST, the UI's
+        # Start and bulk start): it stays off
+        st, out = api("POST", f"/api/v1/mappings/{stored_b['id']}/start", {})
+        assert st == 400 and "takes writes from it" in json.dumps(out), (st, out)
+        st, _, body = b.post(f"/api/mappings/{stored_b['id']}/start", htmx=True)
+        assert st == 400 and "takes writes from it" in body, (st, body[:300])
+        st, _, _ = b.post("/api/mappings/bulk", {"action": "start", "ids": [stored_b["id"]]},
+                          htmx=True)
+        assert st == 400, st
+        assert srv.saved_config()["mappings"][1]["enabled"] is False
         print("form: a /set topic shared with an enabled mapping and a reserved point name "
               "refused; another base topic, or the clashing one disabled, saved  OK")
 
