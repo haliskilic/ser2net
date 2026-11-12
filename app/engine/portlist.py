@@ -125,6 +125,12 @@ def find(ports: list[dict[str, Any]], device: str,
     return None
 
 
+def used(ports: list[dict[str, Any]], devices: Any) -> set[str]:
+    """The device paths of the listed ``ports`` that one of ``devices`` (the ports running
+    mappings have open, under the names they were set as) names (find)."""
+    return {p["device"] for d in devices if (p := find(ports, d)) is not None}
+
+
 def same_port(a: str, b: str) -> bool:
     """Whether the port names ``a`` and ``b`` open the same port on this machine: equal in
     the canonical spelling (canonical_device), or POSIX paths that lead to one device (a

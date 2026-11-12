@@ -21,7 +21,7 @@ from ... import i18n, importer, optional
 from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
     WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
-    backup_time, new_pwd_version, parse_cluster_peer,
+    backup_time, new_pwd_version, parse_cluster_peer, serial_conflict,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -716,7 +716,7 @@ def routes(ctx: Ctx) -> list:
             dataclasses.replace(state.config, mappings=candidate).validate_for_save()
         except ConfigError as e:
             problem = str(e)
-        problem = problem or _own_port_conflict(state.config, touched)
+        problem = problem or _own_port_conflict(state.config, touched, candidate)
         preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
                    "source": plan.source, "warnings": plan.warnings, "problem": problem,
                    "count": len(plan.mappings)}
@@ -744,7 +744,7 @@ def routes(ctx: Ctx) -> list:
         async with state.config_lock:
             old = state.config.mappings
             new_maps, touched = importer.apply_import(old, plan.mappings, mode)
-            if conflict := _own_port_conflict(state.config, touched):  # the admin UI's port
+            if conflict := _own_port_conflict(state.config, touched, new_maps):  # UI's port, ...
                 return await settings_get(request, error=_("Import rejected: {0}").format(conflict))
             state.config.mappings = new_maps
             try:
@@ -1150,10 +1150,13 @@ def routes(ctx: Ctx) -> list:
     ]
 
 
-def _own_port_conflict(config, mappings) -> str:
+def _own_port_conflict(config, mappings, result) -> str:
     """The first of ``mappings`` (an import's new and changed ones) that can't listen next
-    to ser2net's own listeners (AppConfig.own_port_conflict), "" when none."""
-    return next((c for m in mappings if (c := config.own_port_conflict(m))), "")
+    to ser2net's own listeners (AppConfig.own_port_conflict) or would share a serial port
+    with another enabled one of ``result`` (the mappings after the import; serial_conflict),
+    "" when none."""
+    return next((c for m in mappings
+                 if (c := config.own_port_conflict(m) or serial_conflict(m, result))), "")
 
 
 def _load_tls_pair(cert: str, key: str) -> None:

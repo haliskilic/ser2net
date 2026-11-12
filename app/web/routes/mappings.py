@@ -87,7 +87,11 @@ def routes(ctx: Ctx) -> list:
             return PlainTextResponse(_("Select one or more mappings."), status_code=400)
         done = []
         for mid in ids:
-            ok, name = await ops.apply_action(state, mid, action)
+            try:
+                ok, name = await ops.apply_action(state, mid, action)
+            except ConfigError as e:  # this one can't be started; the others go on
+                state.log(f"bulk {action}: {e}")
+                continue
             if ok:
                 done.append(name)
                 ctx.audit(request, f"mapping_{action}", name)
@@ -204,7 +208,10 @@ def routes(ctx: Ctx) -> list:
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
-        ok, name = await ops.apply_action(state, mid, action)
+        try:
+            ok, name = await ops.apply_action(state, mid, action)
+        except ConfigError as e:  # it can't be started (a serial port in use, ...)
+            return PlainTextResponse(str(e), status_code=400)
         if not ok:
             return PlainTextResponse(name, status_code=404)
         state.log(f"mapping {action}: {name}")

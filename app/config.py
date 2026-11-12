@@ -335,6 +335,53 @@ def canonical_device(name: Any) -> Any:
     return m.group(1).upper() if m else name
 
 
+def _serial_clash(m: "MappingConfig", mappings: list["MappingConfig"]) -> Optional[tuple]:
+    """The first serial port enabled mapping ``m`` shares with another enabled one of
+    ``mappings``: (other mapping, m's side, the other's side), None when none. Shared means
+    the same port in the canonical spelling (canonical_device) with the same USB identity
+    binding (none, or the same one: both would open the same device)."""
+    if not m.enabled:
+        return None
+
+    def uses(mapping):
+        return [(canonical_device(s.port),
+                 sorted((k, str(v).casefold()) for k, v in s.identity.items()), s)
+                for s in mapping.serial_sides() if s.port]
+
+    mine = uses(m)
+    for other in mappings:
+        if other.id == m.id or not other.enabled:
+            continue
+        for key, ident, side in mine:
+            for okey, oident, oside in uses(other):
+                if key == okey and ident == oident:
+                    return other, side, oside
+    return None
+
+
+def serial_conflict(m: "MappingConfig", mappings: list["MappingConfig"]) -> str:
+    """Why mapping ``m`` can't be enabled as it is next to ``mappings`` ("" when it can): an
+    enabled one uses the same serial port, in any spelling Windows opens alike ('com3' is
+    'COM3'), bound to no USB identity or to the same one. Checked where a mapping is created,
+    changed or started (the form, the REST API, a cluster peer, an import), never by
+    validate(): a stored pair must not stop a start or another save (from_dict notes it)."""
+    clash = _serial_clash(m, mappings)
+    if clash is None:
+        return ""
+    other, side, oside = clash
+    if side.identity:
+        return _("Mappings '{0}' and '{1}' are both bound to the USB identity {2} on serial "
+                 "port {3}: they would open the same device, and a serial port can only be "
+                 "opened by one mapping.").format(other.name, m.name, identity_text(side.match),
+                                                  side.port)
+    if side.port != oside.port:
+        return _("Mappings '{0}' and '{1}' both use serial port {2} (written {3} in '{1}') — a "
+                 "serial port can only be opened by one mapping.").format(
+            other.name, m.name, oside.port, side.port)
+    return _("Mappings '{0}' and '{1}' both use serial port {2} — a serial "
+             "port can only be opened by one mapping.").format(other.name, m.name, side.port)
+
+
 def url_port(port: Any) -> bool:
     """True for a serial port value that pyserial would open with a URL handler instead
     of as a device: anything with "://" (socket://, rfc2217://, spy://, loop://, alt://,
@@ -761,6 +808,9 @@ class MappingConfig:
                 raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "
                                     "devices only (URLs such as socket:// or spy:// are not "
                                     "supported).").format(side.port))
+        if (self.kind == "serialbridge" and self.serial.port
+                and canonical_device(self.serial.port) == canonical_device(self.serial_b.port)):
+            raise ConfigError(_("Serial-to-serial bridge needs two different ports."))
         if self.kind == "net" and self.network.mode == "udp":
             self._validate_udp_peer()
 
@@ -1341,7 +1391,28 @@ class AppConfig:
                         f"not used; it knows {', '.join(MATCH_KEYS)}"
                         + ("" if side.identity else ", and none of them is set, so the port "
                            "is opened by its name"))
+        enabled: list[MappingConfig] = []
+        for m in cfg.mappings:
+            clash = _serial_clash(m, enabled)
+            if clash is not None:
+                other, side, oside = clash
+                if side.identity:
+                    cfg.load_notes.append(
+                        f"mappings '{other.name}' and '{m.name}' are both bound to the USB "
+                        f"identity {identity_text(side.match)} on serial port {side.port!r}: "
+                        "only one of them can open it")
+                elif side.port != oside.port:  # (the same name is a problem validate() reports)
+                    cfg.load_notes.append(
+                        f"mappings '{other.name}' and '{m.name}' both use serial port "
+                        f"{oside.port!r} (written {side.port!r} in '{m.name}'): only one of "
+                        "them can open it")
+            if m.enabled:
+                enabled.append(m)
         return cfg
+
+    def serial_conflict(self, m: MappingConfig) -> str:
+        """serial_conflict of ``m`` next to this config's mappings."""
+        return serial_conflict(m, self.mappings)
 
     def to_dict(self) -> dict[str, Any]:
         return {

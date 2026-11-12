@@ -84,7 +84,7 @@ def routes(ctx: Ctx) -> list:
         shown = portlist.visible(ports, show_all)
         return render(request, "_ports_table.html", ports=shown, show_all=show_all,
                       hidden=len(ports) - len(portlist.visible(ports)),
-                      in_use=state.supervisor.devices_in_use())
+                      in_use=portlist.used(shown, state.supervisor.devices_in_use()))
 
     async def set_language(request):
         """/lang/tr?next=/settings: remember the visitor's UI language (a cookie), then
