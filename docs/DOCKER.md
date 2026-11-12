@@ -2,7 +2,9 @@
 
 ser2net ships an official `Dockerfile`, an example `docker-compose.yml` and a published
 image for amd64 + arm64 with every release: `ghcr.io/haliskilic/ser2net` (`:latest` or a
-release tag).
+release tag). The published image is the very build the release smoke-tested on both
+architectures (same digest); its tags `:X.Y.Z`, `:X.Y` and `:latest` are added only after
+that. A pre-release (`X.Y.Z-rc.N`) gets only its own tag, never `:X.Y` or `:latest`.
 
 ## Quick start (compose)
 
