@@ -326,7 +326,7 @@ def tls_clients(port: int, n: int, request: bytes = b"", timeout: float = 5.0,
                     s.sendall(request)
                     reply = s.recv(256)
                 results[i] = ("ok", reply)
-        except Exception as e:  # noqa: BLE001 - reported per client
+        except Exception as e:  # reported per client
             results[i] = ("failed", f"{type(e).__name__}: {e}")
 
     if barrier is None:

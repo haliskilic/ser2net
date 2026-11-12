@@ -30,7 +30,7 @@ from typing import Any, Callable, Optional, Protocol
 
 from .. import tlsreload
 from ..config import AppConfig, MappingConfig, mqtt_start_warnings, mqtt_warnings
-from . import portlist, serial_io
+from . import bindhint, portlist, serial_io
 from .bridge import MappingRunner, RunnerStatus, remove_files
 from .netguard import BindError
 from .serial_link import Backoff
@@ -313,6 +313,9 @@ class Supervisor:
         except Exception as e:
             runner.status.state = "error"
             runner.status.last_error = str(e)
+            # why the system refused a listener's port, and what to do (None otherwise)
+            hint = bindhint.for_mapping(e, mapping)
+            runner.status.hint = bindhint.note(hint)
             # all.log ("[name] ...") and the mapping's own log
             if isinstance(e, BindError):
                 log(f"start failed: {e} — trying again until the address can be used "
@@ -320,6 +323,8 @@ class Supervisor:
                 self._retry_later(mapping, runner, str(e))
             else:
                 log(f"start failed: {e}")
+            if hint:
+                log(bindhint.explain(hint))
             return False, str(e)
 
     def _retry_later(self, mapping: MappingConfig, runner: Runner, error: str) -> None:
@@ -362,12 +367,16 @@ class Supervisor:
                             f"retr{'y' if backoff.attempt == 1 else 'ies'}")
                         return
                     st.state, st.last_error = "error", str(e)
+                    hint = bindhint.for_mapping(e, mapping)
+                    st.hint = bindhint.note(hint)
                     if not isinstance(e, BindError):
                         log(f"start failed: {e}")
                         return
                     if str(e) != error:
                         error = str(e)
                         log(f"start failed again: {e}")
+                        if hint:
+                            log(bindhint.explain(hint))
                 pause = backoff.pause()
         finally:
             st.retry_at = 0.0

@@ -3,7 +3,6 @@ Run: python3 tests/test_options_engine.py
 """
 import asyncio
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -11,18 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
-
-
-async def socat():
-    p = await asyncio.create_subprocess_exec(
-        "socat", "-d", "-d", "pty,raw,echo=0", "pty,raw,echo=0",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    devs = []
-    while len(devs) < 2:
-        m = re.search(rb"PTY is (\S+)", await p.stderr.readline())
-        if m:
-            devs.append(m.group(1).decode())
-    return p, devs[0], devs[1]
+from _server import free_port
+from _socat import pty_pair as socat
 
 
 async def start(dev, port, network=None, options=None, name="m", trace_dir=None):
@@ -41,18 +30,18 @@ async def start(dev, port, network=None, options=None, name="m", trace_dir=None)
 
 async def test_banner():
     p, a, b = await socat()
-    sup, m = await start(a, 47301, options={"banner": "Hi \\N \\p\\r\\n"}, name="bantest")
-    r, w = await asyncio.open_connection("127.0.0.1", 47301)
+    sup, m = await start(a, port := free_port(), options={"banner": "Hi \\N \\p\\r\\n"}, name="bantest")
+    r, w = await asyncio.open_connection("127.0.0.1", port)
     data = await asyncio.wait_for(r.read(64), timeout=2)
-    assert data == b"Hi bantest 47301\r\n", data
+    assert data == f"Hi bantest {port}\r\n".encode(), data
     print("banner: substitutions + sent on connect  OK")
     w.close(); await sup.stop_all(); p.terminate(); await p.wait()
 
 
 async def test_idle_timeout():
     p, a, b = await socat()
-    sup, m = await start(a, 47302, options={"idle_timeout_s": 1})
-    r, w = await asyncio.open_connection("127.0.0.1", 47302)
+    sup, m = await start(a, port := free_port(), options={"idle_timeout_s": 1})
+    r, w = await asyncio.open_connection("127.0.0.1", port)
     # no traffic -> should be disconnected within a few seconds
     data = await asyncio.wait_for(r.read(64), timeout=5)
     assert data == b"", f"expected EOF (idle disconnect), got {data!r}"
@@ -63,9 +52,9 @@ async def test_idle_timeout():
 async def test_closeon():
     import serial
     p, a, b = await socat()
-    sup, m = await start(a, 47303, options={"closeon": "BYE"})
+    sup, m = await start(a, port := free_port(), options={"closeon": "BYE"})
     dev = serial.Serial(b, 115200, timeout=0)
-    r, w = await asyncio.open_connection("127.0.0.1", 47303)
+    r, w = await asyncio.open_connection("127.0.0.1", port)
     await asyncio.sleep(0.2)
     await asyncio.to_thread(dev.write, b"hello BYE bye")
     await asyncio.to_thread(dev.flush)
@@ -80,6 +69,11 @@ async def test_closeon():
     except asyncio.TimeoutError:
         pass
     assert b"BYE" in got, got
+    # the client sees the close as the runner closes it; the runner forgets it right after
+    for _ in range(100):
+        if (sup.status(m.id) or {})["client_count"] == 0:
+            break
+        await asyncio.sleep(0.05)
     assert (sup.status(m.id) or {})["client_count"] == 0, "client should be kicked by closeon"
     print("closeon: clients closed when device emits the string  OK")
     w.close(); dev.close(); await sup.stop_all(); p.terminate(); await p.wait()
@@ -89,10 +83,10 @@ async def test_trace():
     import serial, tempfile
     p, a, b = await socat()
     tdir = tempfile.mkdtemp(prefix="trace_")
-    sup, m = await start(a, 47305, options={"trace_both": "trace.log", "trace_hexdump": True},
+    sup, m = await start(a, port := free_port(), options={"trace_both": "trace.log", "trace_hexdump": True},
                          trace_dir=tdir)
     dev = serial.Serial(b, 115200, timeout=0)
-    r, w = await asyncio.open_connection("127.0.0.1", 47305)
+    r, w = await asyncio.open_connection("127.0.0.1", port)
     await asyncio.sleep(0.2)
     w.write(b"hello"); await w.drain()
     await asyncio.sleep(0.2)
@@ -114,7 +108,7 @@ async def test_trace():
 
 async def test_reconnect():
     p, a, b = await socat()
-    sup, m = await start(a, 47304)
+    sup, m = await start(a, port := free_port())
     assert (sup.status(m.id) or {})["state"] == "running"
     # device disappears -> serial read hits EOF -> supervised reconnect kicks in
     p.terminate(); await p.wait()

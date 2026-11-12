@@ -9,10 +9,13 @@ anonymous pseudo-user (see auth.anonymous_user) and role checks still apply.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import os
 import re
 import time
 import urllib.parse
+from typing import TYPE_CHECKING
 
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
@@ -32,6 +35,9 @@ from .routes import build_routes
 from .routes.common import bytesize, client_ip, domid, duration, since
 from .routes.forms import in_text_box
 
+if TYPE_CHECKING:
+    from ..state import AppState
+
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -42,7 +48,7 @@ def softbreak(value) -> Markup:
     """Escape *value* and allow a line break after / \\ _ . : @ - so a long device
     path or name wraps at a separator instead of mid-word (<wbr> adds no text,
     so copy/paste is unchanged). Safe: the separators never occur in entities."""
-    return Markup(_SOFT_BREAK_AFTER.sub(r"\1<wbr>", str(escape(value))))
+    return Markup(_SOFT_BREAK_AFTER.sub(r"\1<wbr>", str(escape(value))))  # noqa: S704 - escaped
 
 
 PUBLIC_PREFIXES = ("/static", "/auth/", "/lang/")  # /auth/oidc/*: the SSO flow; /lang/xx: UI language
@@ -383,6 +389,21 @@ def _page_context(request) -> dict:
             "login_notice_url": ui.login_notice_url if ui is not None else ""}
 
 
+@functools.lru_cache(maxsize=None)
+def asset_version(static_dir: str = STATIC_DIR) -> str:
+    """A short hash of every file under static/ (names and contents)."""
+    h = hashlib.sha256()
+    for root, dirs, files in os.walk(static_dir):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            h.update(os.path.relpath(path, static_dir).replace(os.sep, "/").encode() + b"\0")
+            with open(path, "rb") as fh:
+                h.update(fh.read())
+            h.update(b"\0")
+    return h.hexdigest()[:12]
+
+
 def make_templates() -> Jinja2Templates:
     """The Jinja environment every page is rendered with (globals + filters)."""
     # _page_context for every page; base_path(request) / route_path(request) for macros
@@ -394,15 +415,15 @@ def make_templates() -> Jinja2Templates:
         COMMON_BAUDRATES, BYTESIZES, PARITIES, PARITY_LABELS, STOPBITS,
         FLOWCONTROLS, PROTOCOLS, LINE_STATES, host_port, identity_text, shown_host,
     )
-    from .. import __version__
     templates.env.globals.update(
         baudrates=COMMON_BAUDRATES, bytesizes=BYTESIZES, parities=PARITIES,
         parity_labels=PARITY_LABELS, stopbits=STOPBITS, flowcontrols=FLOWCONTROLS,
         protocols=PROTOCOLS, line_states=LINE_STATES, identity_text=identity_text,
         host_port=host_port, shown_host=shown_host,
-        # ?v=<version> on the static URLs: browsers fetch the new CSS/JS right after an
-        # upgrade instead of reusing a heuristically cached copy with the new templates
-        asset_version=__version__,
+        # ?v=<hash of the static files> on the asset URLs: browsers fetch the new CSS/JS as
+        # soon as an asset changes (an upgrade, a build from main) and may keep it for good
+        # until then (StaticAssets), also across restarts of the one-file executable
+        asset_version=asset_version(),
         # the server's time zone now ("UTC+03:00"), next to the times it shows
         server_zone=clock.zone,
         # the server's clock when it rendered the page (<body data-server-time>): app.js
@@ -442,7 +463,7 @@ async def server_error(request, exc) -> PlainTextResponse | JSONResponse:
     return PlainTextResponse("Internal Server Error", status_code=500)
 
 
-def build_app(state) -> Starlette:
+def build_app(state: AppState) -> Starlette:
     templates = make_templates()
     routes = build_routes(templates, state, STATIC_DIR)
     # The body limit holds for every route, and sits inside GuardMiddleware: in front of

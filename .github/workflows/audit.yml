@@ -1,0 +1,39 @@
+name: Dependency audit
+
+# pip-audit over the pinned dependencies: requirements.txt on Python 3.10 (the older pins
+# its markers select there) and 3.12 (the current ones), on Linux and on Windows (pip-audit
+# resolves for the platform it runs on, so only a Windows leg audits the Windows-only pins),
+# plus the hash-locked sets the image and the binaries install (requirements-lock.txt: the
+# optional packages too; requirements-build.txt: PyInstaller, whose runtime hooks the
+# executables embed). Called by ci.yml
+# (pull requests, main, and a release tag through release.yml: nothing is published with
+# a known vulnerability in what it ships) and scheduled.yml (daily: an advisory published
+# between pull requests shows up then).
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: dependency audit ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pip-audit==2.10.1
+      - name: Known vulnerabilities in the pinned runtime dependencies
+        run: pip-audit --strict -r requirements.txt
+      - name: Known vulnerabilities in what the image and the binaries install (3.12)
+        if: matrix.python-version == '3.12'
+        run: pip-audit --strict -r requirements-lock.txt -r requirements-build.txt

@@ -23,7 +23,7 @@ from _server import ROOT, free_port, wait_port
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from app import datalock, runtime  # noqa: E402
+from app import datalock, runtime
 
 # A subprocess that tries to take the lock and reports what happened, so the holder is a
 # different process (an flock is per-process: the same process would re-lock its own fd).

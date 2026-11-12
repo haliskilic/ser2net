@@ -14,11 +14,19 @@ Run:
     python3 ser2net.py --reload        # the running ser2net reads config.json again
     python3 ser2net.py --help
 """
-from __future__ import annotations
-
+# No `from __future__ import annotations` and nothing newer than Python 3.6 syntax in this
+# file: an old python3 (RHEL 8's 3.6, RHEL 9's 3.9) gets the message below instead of a
+# SyntaxError or a TypeError. app/ is imported only after it.
 import argparse
+import contextlib
 import os
 import sys
+
+if sys.version_info < (3, 10):
+    sys.exit("ser2net needs Python 3.10 or newer; this is Python {} ({}). Run it with a "
+             "newer one (e.g. python3.11 ser2net.py; RHEL / AlmaLinux / Rocky: sudo dnf "
+             "install python3.11), or use the standalone binary or the Docker image "
+             "(README.md > Install & run).".format(sys.version.split()[0], sys.executable))
 
 # The script's own directory is on sys.path, so the `app` package imports here even
 # before the explicit sys.path setup below (and PyInstaller bundles it in frozen builds).
@@ -43,14 +51,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--data-dir",
         default=None,  # see below: whether it was given matters to --install-service
-        help="Directory for config.json, backups and logs (default: ./data; for "
-             "--install-service: the data directory the service already uses, or for a "
-             "new service from the standalone exe %%ProgramData%%\\ser2net).",
+        help="Directory for config.json, its backups, the logs and traces (default: ./data; "
+             "for --install-service: the data directory the service already uses, or for a "
+             "new service from the standalone exe %%ProgramData%%\\ser2net). Give ser2net "
+             "a folder of its own: it makes it private to the account it runs as.",
     )
     p.add_argument(
         "--config",
         default=None,
-        help="Path to config.json (default: <data-dir>/config.json).",
+        help="Path to config.json (default: <data-dir>/config.json). Its folder is the data "
+             "directory then: the backups, logs and traces are kept next to it.",
     )
     p.add_argument(
         "--reconfigure",
@@ -149,10 +159,13 @@ def print_licenses() -> int:
         with open(bundled, encoding="utf-8") as fh:
             _write_utf8(fh.read())
         return 0
+    # an executable built without the license file has no THIRD-PARTY-NOTICES.md next to
+    # it either (ROOT is its temporary unpack folder): name this version's copy online
+    notices = (f"https://github.com/haliskilic/ser2net/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
+               if FROZEN else os.path.join(ROOT, "THIRD-PARTY-NOTICES.md"))
     _write_utf8(
         f"ser2net {__version__} is licensed under the GNU AGPL-3.0-only (LICENSE) or a "
-        "commercial license (COMMERCIAL_LICENSE.md).\nThird-party components: "
-        f"{os.path.join(ROOT, 'THIRD-PARTY-NOTICES.md')}\n")
+        f"commercial license (COMMERCIAL_LICENSE.md).\nThird-party components: {notices}\n")
     return 0
 
 
@@ -211,8 +224,8 @@ def print_about() -> int:
              f"Platform: {platform.platform()} ({platform.machine()})",
              f"Build: {'standalone executable' if FROZEN else 'source'}"]
     components = (("pyserial", "serial"), ("pyserial-asyncio-fast", "serial_asyncio_fast"),
-                  ("starlette", "starlette"), ("uvicorn", "uvicorn"),
-                  ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),
+                  ("starlette", "starlette"), ("uvicorn", "uvicorn"), ("anyio", "anyio"),
+                  ("psutil", "psutil"), ("paho-mqtt", "paho.mqtt"), ("ldap3", "ldap3"), ("pyasn1", "pyasn1"),
                   ("authlib", "authlib"), ("cryptography", "cryptography"))
     width = max(len(dist) for dist, _module in components)
     for dist, module in components:
@@ -253,23 +266,24 @@ def main(argv: list[str] | None = None) -> int:
         print(msg)
         return 0 if ok else 1
 
-    # 1. dependencies — a frozen build has everything bundled, so skip the bootstrap
-    if not FROZEN:
-        sys.path.insert(0, ROOT)  # ensure local packages (app/, bootstrap) import first
-        if not args.no_bootstrap:
-            import bootstrap
+    config_path = args.config or os.path.join(args.data_dir, "config.json")
+    split = split_layout_note(args)
+    if split:
+        print(f"ser2net: {split}", file=sys.stderr)
+        from app import standalone  # (its notes are the lines all.log gets at start-up)
 
-            bootstrap.ensure(online=args.online)
-        else:
-            lib = os.path.join(ROOT, "lib")
-            if os.path.isdir(lib):
-                sys.path.insert(0, lib)
+        standalone.notes.append(split)
+    if args.service:
+        return _service(args, config_path)
+
+    # 1. dependencies. The one-off commands may run beside a running ser2net, so they
+    # leave an out-of-date ./lib as it is (with a warning); a server start refreshes it.
+    one_off = (args.about or args.set_password is not None or args.sign_out_all
+               or args.reload or args.install_service)
+    load_dependencies(args, refresh=not one_off)
 
     if args.about:
         return print_about()
-
-    # 2. resolve config path
-    config_path = args.config or os.path.join(args.data_dir, "config.json")
 
     if args.set_password is not None or args.sign_out_all or args.reload:
         from app import accounts
@@ -277,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         return accounts.main(args, config_path)
 
     # 3. hand off
-    from app import runtime
+    runtime = _import_runtime()
 
     if args.install_service:
         if _service_call(lambda ws: ws.require_windows()):
@@ -301,16 +315,111 @@ def main(argv: list[str] | None = None) -> int:
         if rc == 0 and done.get("config") is not None:
             _print_firewall_hint(done["config"], args.service_name)
         return rc
-    if args.service:
-        from app import winservice
-
-        return winservice.run(args.service_name,
-                              lambda: runtime.service_main(config_path, args.service_name),
-                              runtime.request_shutdown,
-                              log_path=os.path.join(os.path.dirname(os.path.abspath(config_path)),
-                                                    winservice.SERVICE_LOG),
-                              on_ready=runtime.when_ready)
+    if os.name == "posix":
+        # what the server creates (all.log, audit.log, traces, a mapping's log, tls/) is
+        # for this account only, also in a data directory it doesn't make private
+        os.umask(0o077)
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
+
+
+def split_layout_note(args: argparse.Namespace) -> str:
+    """A warning when both --data-dir and --config are given and the config file is not in
+    that directory: ser2net keeps its state next to the config file, not in --data-dir."""
+    if not (args.config and args.data_dir_given):
+        return ""
+    folder = os.path.dirname(os.path.abspath(args.config))
+    if os.path.normcase(os.path.abspath(args.data_dir)) == os.path.normcase(folder):
+        return ""
+    return (f"WARNING: --config {args.config} is not in --data-dir {args.data_dir}: ser2net "
+            f"keeps the backups, logs and traces next to the config file, in {folder}")
+
+
+def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
+    """Make the bundled dependencies importable: the offline bootstrap into ./lib (a
+    frozen build has everything inside). With ``refresh``, a ./lib installed for other
+    pins (an upgrade) is brought up to date too. Its warnings go to the start-up log."""
+    if FROZEN:
+        return
+    sys.path.insert(0, ROOT)  # ensure local packages (app/, bootstrap) import first
+    if not args.no_bootstrap:
+        import bootstrap
+
+        bootstrap.ensure(online=args.online, refresh_lib=refresh)
+    else:
+        lib = os.path.join(ROOT, "lib")
+        if os.path.isdir(lib):
+            sys.path.insert(0, lib)
+        try:
+            import bootstrap
+        except ImportError:  # a package of ser2net without it: nothing to check
+            return
+        bootstrap.warn_if_stale()
+    if bootstrap.notes:
+        from app import standalone  # (its notes are the lines all.log gets at start-up)
+
+        standalone.notes.extend(bootstrap.notes)
+
+
+def _import_runtime():
+    """app.runtime, which imports the dependencies. When they come from a ./lib an older
+    release installed that could not be refreshed (the bootstrap said why) and lack what
+    this version needs, the start stops with that instead of a traceback."""
+    try:
+        from app import runtime
+    except ImportError as e:
+        bootstrap = sys.modules.get("bootstrap")
+        if bootstrap is None or not bootstrap.lib_is_stale():
+            raise
+        raise SystemExit(f"ser2net: {e} — ./lib holds the dependencies of an older release, "
+                         "and they could not be updated (see the warning before): run "
+                         f"python3 bootstrap.py in {ROOT} as the account ser2net runs "
+                         "as") from None
+    return runtime
+
+
+def _service(args: argparse.Namespace, config_path: str) -> int:
+    """--service, as the Windows Service Control Manager starts it. The SCM waits about
+    30 s for the process to connect (winservice.run), and refreshing ./lib after an
+    upgrade can take longer, so the dependencies and the server load in the service's
+    thread, once it is connected."""
+    import threading
+
+    from app import winservice
+
+    stop_asked = threading.Event()
+    data_dir = os.path.dirname(os.path.abspath(config_path))
+    ready_hooks: list = []  # winservice.run's on_ready: runtime.when_ready, once imported
+
+    def serve() -> int:
+        try:
+            load_dependencies(args, refresh=True)
+            runtime = _import_runtime()
+        except SystemExit as e:  # a service has no console: all.log and the event log
+            if isinstance(e.code, str):
+                from app import clock
+
+                log = os.path.join(data_dir, "all.log")
+                with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
+                    fh.write(f"{clock.stamp()} {e.code}\n")
+                winservice.report_event(args.service_name, (
+                    f"The ser2net service '{args.service_name}' stopped: {e.code}\n\n"
+                    f"Details: {log}"))
+            raise
+        for hook in ready_hooks:  # RUNNING once the server is ready
+            runtime.when_ready(hook)
+        if stop_asked.is_set():  # the SCM asked to stop while they loaded
+            runtime.request_shutdown()
+        return runtime.service_main(config_path, args.service_name)
+
+    def stop() -> None:
+        stop_asked.set()
+        runtime = sys.modules.get("app.runtime")
+        if runtime is not None and hasattr(runtime, "request_shutdown"):
+            runtime.request_shutdown()
+
+    return winservice.run(args.service_name, serve, stop,
+                          log_path=os.path.join(data_dir, winservice.SERVICE_LOG),
+                          on_ready=ready_hooks.append)
 
 
 def _print_firewall_hint(config, service_name: str) -> None:

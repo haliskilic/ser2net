@@ -7,7 +7,11 @@ components are not covered by ser2net's license.
 **Full license texts:** every standalone executable carries the texts of everything it
 contains — run `ser2net --licenses` — and each release attaches the same file as
 `ser2net-<platform>.THIRD-PARTY-LICENSES.txt`. It is generated at build time from the
-build environment (`tools/third_party.py`), so it always matches the bundled versions.
+build environment (`tools/third_party.py`), so it always matches the bundled versions. The
+release's SBOMs (`ser2net-<platform>.cdx.json`, CycloneDX) list the same components with SPDX
+license ids, the interpreter's native libraries (OpenSSL, zlib, expat, mpdecimal, SQLite as
+bundled) with their versions and CPEs, the OpenSSL that cryptography links in, and the
+browser libraries below.
 
 ## Python dependencies (`requirements.txt`, wheels in `vendor/wheels/`)
 
@@ -42,7 +46,7 @@ Docker image. Used unmodified, through their public APIs.
 | pyasn1 (ldap3 dependency) | LDAP / AD sign-in | BSD-2-Clause |
 | Authlib | OIDC single sign-on | BSD-3-Clause |
 | joserfc (Authlib dependency) | OIDC single sign-on | BSD-3-Clause |
-| cryptography | OIDC, self-signed certificates | Apache-2.0 OR BSD-3-Clause |
+| cryptography (links its own OpenSSL, Apache-2.0, into its module) | OIDC, self-signed certificates | Apache-2.0 OR BSD-3-Clause |
 | cffi, pycparser (cryptography dependencies) | | MIT-0 / BSD-3-Clause |
 
 ## Inside the standalone executables
@@ -71,11 +75,15 @@ Each native library's own license text is included in `ser2net --licenses` and i
 
 ## Browser assets (`app/web/static/`)
 
-| Component | License |
-|---|---|
-| htmx | 0BSD |
-| xterm.js (xterm.js, xterm.css) | MIT |
-| xterm-addon-fit | MIT |
+Copied unmodified from their npm releases; `vendor/npm/package.json` records the versions,
+the files and their sha256, and the license texts are in `tools/licenses/npm/` (and in
+`ser2net --licenses`).
+
+| Component | npm package | License |
+|---|---|---|
+| htmx (`htmx.min.js`) | `htmx.org` | 0BSD |
+| xterm.js (`xterm.js`, `xterm.css`) | `@xterm/xterm` | MIT |
+| xterm.js fit addon (`xterm-addon-fit.js`) | `@xterm/addon-fit` | MIT |
 
 ## LGPL components
 

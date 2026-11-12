@@ -17,6 +17,7 @@ import contextlib
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -44,6 +45,7 @@ PORTABLE = [
     "test_web_auth.py",
     "test_open_access.py",
     "test_form_validation.py",
+    "test_form_uploads.py",    # form posts refuse file parts (400, not 500)
     "test_rest_api.py",
     "test_api_token_role.py",
     "test_rest_patch.py",     # PATCH /api/v1/mappings/{id} (JSON merge patch)
@@ -69,6 +71,8 @@ PORTABLE = [
     "test_ldap_tls.py",       # LDAPS / StartTLS certificate checks; TLS parts need ldap3
     "test_optional_packages.py",
     "test_cluster.py",
+    "test_netinfo.py",        # interface lists also where /proc/net is hidden (systemd unit)
+    "test_bind_hint.py",      # a refused low port says why (CAP_NET_BIND_SERVICE), UI + log
     "test_ui_markup.py",
     "test_ui_layout.py",      # browser layout check; skips without Playwright (CI 'ui' job runs it)
     "test_ui_feedback.py",    # what the dashboard's htmx requests answer (notices, 286, next=)
@@ -79,6 +83,11 @@ PORTABLE = [
     "test_tls_selfsigned.py",
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",
+    "test_lib_refresh.py",    # ./lib follows the pins after an upgrade (real pip, vendor/wheels)
+    "test_bootstrap_offline.py",  # offline first run without psutil's wheel, pip/Python checks
+    "test_build_lock.py",     # requirements-lock/-build.txt (hashes) match the pins
+    "test_vendor_assets.py",  # htmx / xterm.js recorded (vendor/npm), cached by content hash
+    "test_third_party.py",    # SBOM / --licenses: SPDX ids, native libs + CPEs, npm packages
     "test_trace.py",
     "test_trace_files.py",
     "test_session_timeout.py",
@@ -93,7 +102,10 @@ PORTABLE = [
     "test_password_hashing.py",  # hash format and cost, older hashes, renewal at sign-in
     "test_healthcheck.py",
     "test_upgrade_from_2_7.py",
+    "test_upgrade_from_2_8.py",  # a 2.8.0 config.json (tests/make_config_fixture.py) and data/
     "test_windows_service.py",  # real service part: Windows + SER2NET_SERVICE_TESTS=1 (CI)
+    "test_systemd_units.py",    # systemd/*.service (also ser2net@.service): paths, sandbox, verify
+    "test_install_script.py",   # systemd/ser2net-install.sh, staged under a scratch root
     "test_single_instance.py",
     "test_notifications.py",
     "test_ports_usb_identity.py",
@@ -122,6 +134,7 @@ PORTABLE = [
     "test_rfc2217_settings.py",
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
     "test_serial_compat.py",      # PTY parts POSIX only; the transport parts run on Windows too
+    "test_blocked_output.py",   # a device that takes no data stalls nothing (POSIX PTYs)
     "test_fd_limits.py",
     "test_tls_admission.py",
     "test_admin_limits.py",
@@ -149,7 +162,6 @@ PORTABLE = [
     "test_node_name.py",       # Settings -> Admin interface -> Name of this instance
     "test_console_port_picker.py",  # the console picker tries the admin UI port it offers
     "test_save_start_result.py",  # a mapping save says when the mapping didn't start
-    "test_systemd_units.py",   # ser2net.service and the per-instance ser2net@.service
     "test_activity_log.py",    # SER2NET_LOG_STDOUT, admin_ui.request_log
     "test_login_notice.py",    # Settings -> Web UI access -> Sign-in notice
     "test_backup_erasure.py",  # deleting backups, a deleted account out of every backup
@@ -178,6 +190,13 @@ PORTABLE = [
     "test_health_events.py",   # no-data alarm, offline cluster nodes, start-up summary
     "test_tls_live.py",        # admin UI TLS applied to new connections, served-state cookies
     "test_config_reload.py",   # SIGHUP / --reload / Settings: config.json applied part by part
+    "test_ci_gate.py",          # ci.yml: ci-ok needs every job; required names kept
+    "test_harness.py",          # run_all itself: every test listed, timeouts kill what tests start
+    "test_release_pipeline.py",  # release.yml gates, SHA-pinned actions
+    "test_release_guard.py",    # release tag = version, CHANGELOG section, image tags
+    "test_dependency_snapshot.py",  # the Python 3.10 pins go to the dependency graph
+    "test_pin_workflows.py",    # a pin bump fails one job; Dependabot branches get wheels
+    "test_image_refresh.py",    # weekly image scan; rebuild on a moved base image
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
@@ -199,37 +218,69 @@ SOCAT = [
 ]
 
 
-def run_one(name: str, verbose: bool = False, skipped: list | None = None) -> bool:
-    path = os.path.join(HERE, name)
-    if not os.path.exists(path):
-        print(f"SKIP  {name} (missing)")
-        return True
-    t0 = time.time()
-    # Per-test wall-clock cap: a wedged test must fail loudly (with its partial
-    # output) rather than hang the whole CI job until the 6-hour runner limit.
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill a test and everything it started (servers, socat), which a kill of the test
+    alone would leave running, holding their ports, devices and its output pipes."""
+    if os.name == "posix":
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)  # its own process group (start_new_session)
+    else:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def run_test(path: str, timeout: float = TEST_TIMEOUT) -> tuple[int | None, str, str]:
+    """Run one test file: (exit code, stdout, stderr); exit code None when it ran past
+    ``timeout`` seconds and was killed, with everything it started (then the output is
+    what it wrote until then)."""
     # Children write UTF-8 regardless of the console code page (Windows: cp1252),
     # and undecodable bytes never crash the runner.
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    proc = subprocess.Popen([sys.executable, path], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                            encoding="utf-8", errors="replace",
+                            start_new_session=os.name == "posix")
     try:
-        proc = subprocess.run([sys.executable, path], capture_output=True, env=env,
-                              encoding="utf-8", errors="replace", timeout=TEST_TIMEOUT)
-    except subprocess.TimeoutExpired as e:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out, err
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:  # what it wrote until then (the pipes close once the whole tree is gone)
+            out, err = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:  # something it started left the process group
+            out, err = "", "(no output: a process the test started still holds its pipes)"
+        return None, out or "", err or ""
+    except BaseException:  # Ctrl+C: the test runs in a session of its own, take it along
+        _kill_tree(proc)
+        raise
+
+
+def run_one(name: str, verbose: bool = False, skipped: list | None = None) -> bool:
+    path = os.path.join(HERE, name)
+    if not os.path.exists(path):  # listed above but gone: a test that never runs
+        print(f"FAIL  {name}  (missing: remove it from tests/run_all.py or restore it)")
+        return False
+    t0 = time.time()
+    # Per-test wall-clock cap: a wedged test must fail loudly (with its partial
+    # output) rather than hang the whole CI job until the 6-hour runner limit.
+    code, stdout, stderr = run_test(path)
+    if code is None:
         dt = time.time() - t0
         print(f"FAIL  {name}  ({dt:.1f}s, TIMED OUT after {TEST_TIMEOUT}s)")
-        out = (e.stdout or "") if isinstance(e.stdout, str) else (e.stdout or b"").decode("utf-8", "replace")
-        err = (e.stderr or "") if isinstance(e.stderr, str) else (e.stderr or b"").decode("utf-8", "replace")
-        sys.stdout.write(out[-2000:])
-        sys.stderr.write(err[-2000:])
+        sys.stdout.write(stdout[-2000:])
+        sys.stderr.write(stderr[-2000:])
         return False
     dt = time.time() - t0
-    ok = proc.returncode == 0
+    ok = code == 0
     print(f"{'PASS' if ok else 'FAIL'}  {name}  ({dt:.1f}s)")
     if not ok:
-        sys.stdout.write(proc.stdout[-2000:])
-        sys.stderr.write(proc.stderr[-2000:])
+        sys.stdout.write(stdout[-2000:])
+        sys.stderr.write(stderr[-2000:])
         return ok
-    tail = proc.stdout[-4000:] if verbose else ""
-    skips = [ln.strip() for ln in proc.stdout.splitlines() if _SKIP_LINE.match(ln)]
+    tail = stdout[-4000:] if verbose else ""
+    skips = [ln.strip() for ln in stdout.splitlines() if _SKIP_LINE.match(ln)]
     shown = tail.splitlines() + [ln for ln in skips if ln not in tail]
     sys.stdout.write("".join(f"      {ln}\n" for ln in shown))
     if skips and skipped is not None:

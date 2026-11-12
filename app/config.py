@@ -166,8 +166,6 @@ def lock_down_dir(directory: str) -> None:
         user = os.environ.get("USERNAME") or ""
         if not user or _service_folder(directory):
             return
-        import subprocess
-
         # Set the ACL on the directory only (NOT /T): /inheritance:r drops inherited
         # ACEs, and the (OI)(CI) grants both protect the dir and propagate to child
         # files/dirs, so config.json + the atomic temp files + per-mapping logs are
@@ -175,18 +173,84 @@ def lock_down_dir(directory: str) -> None:
         # corrupts their ACL (inheritance flags are meaningless on a leaf and left the
         # owner unable to read config.json), so we rely on inheritance instead.
         # SIDs are locale-independent: *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administrators.
-        grants = [f"{user}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
-        # by full path: Windows searches an unqualified name in the program's own
-        # folder and the current directory before System32, so an icacls.exe planted
-        # next to ser2net.exe (e.g. in Downloads) would otherwise run instead
-        root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
-        icacls = os.path.join(root, "System32", "icacls.exe")
-        cmd = [icacls if os.path.isfile(icacls) else "icacls", directory, "/inheritance:r"]
-        for g in grants:
-            cmd += ["/grant:r", g]
-        cmd += ["/C", "/Q"]
-        with contextlib.suppress(Exception):
-            subprocess.run(cmd, capture_output=True, timeout=15, check=False)
+        _icacls_private(directory, [f"{user}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
+                                    "*S-1-5-32-544:(OI)(CI)F"])
+
+
+def lock_down_file(path: str) -> None:
+    """Restrict one file to its owner, for config.json in a folder lock_down_dir() is not
+    applied to (ConfigStore: a folder that isn't ser2net's own). POSIX: chmod 0600.
+    Windows: inherited ACEs removed, Full for the current user, SYSTEM and Administrators.
+    Best effort, as lock_down_dir(); a file a service's --install-service left admin-only
+    is left as it is."""
+    if os.name == "posix":
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o600)
+        return
+    if os.name == "nt":
+        user = os.environ.get("USERNAME") or ""
+        if not user or _service_folder(path):
+            return
+        _icacls_private(path, [f"{user}:F", "*S-1-5-18:F", "*S-1-5-32-544:F"])
+
+
+def _icacls_private(path: str, grants: list[str]) -> None:
+    """icacls <path> /inheritance:r with these grants (Windows; errors are ignored)."""
+    import subprocess
+
+    # by full path: Windows searches an unqualified name in the program's own
+    # folder and the current directory before System32, so an icacls.exe planted
+    # next to ser2net.exe (e.g. in Downloads) would otherwise run instead
+    root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    icacls = os.path.join(root, "System32", "icacls.exe")
+    cmd = [icacls if os.path.isfile(icacls) else "icacls", path, "/inheritance:r"]
+    for g in grants:
+        cmd += ["/grant:r", g]
+    cmd += ["/C", "/Q"]
+    with contextlib.suppress(Exception):
+        subprocess.run(cmd, capture_output=True, timeout=15, check=False)
+
+
+# What ser2net itself puts in its data directory (the folder of config.json, which may have
+# another name with --config): all.log and audit.log with their rotated copies, logs/,
+# traces/, backups/, tls/ (a generated certificate), admin-requests/ (app/accounts.py), the
+# instance lock (app/datalock.py), setup-code.txt (app/state.py) and the temporary files of
+# its atomic writes; and what a file system or a desktop adds to any folder.
+OWN_NAMES = frozenset({"backups", "logs", "traces", "tls", "admin-requests", "ser2net.lock",
+                       "setup-code.txt", "lost+found", ".DS_Store", "Thumbs.db", "desktop.ini"})
+_OWN_NAME = re.compile(r"(?:all|audit)\.log(?:\.\d+)?|\.cfg\..+\.tmp|setup-code\.txt\.tmp")
+
+
+def foreign_entries(directory: str, config_name: str = "config.json") -> Optional[list[str]]:
+    """The names in `directory` that ser2net doesn't put there itself (sorted; [] for a data
+    directory of its own), or None when it can't be listed."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return None
+    return sorted(n for n in names
+                  if n != config_name and n not in OWN_NAMES and not _OWN_NAME.fullmatch(n))
+
+
+def others_can_use(directory: str) -> bool:
+    """Accounts other than this one (and, on Windows, SYSTEM / Administrators) have some
+    access to `directory` (True when that can't be told)."""
+    if os.name == "posix":
+        try:
+            return bool(os.stat(directory).st_mode & 0o077)
+        except OSError:
+            return True
+    from . import winservice  # the Windows API through ctypes
+
+    try:
+        sec = winservice.read_security(directory)
+        me = winservice._current_user_sid()
+    except Exception:
+        return True
+    if sec is None:
+        return True
+    return any(sid != me for sid in winservice.acl_offenders(sec[1], None,
+                                                             rights=winservice.ANY_ACCESS))
 
 
 def _service_folder(directory: str) -> bool:
@@ -3214,7 +3278,7 @@ class AppConfig:
     admin_ui: AdminUI = field(default_factory=AdminUI)
     secret_key: str = field(default_factory=lambda: secrets.token_hex(32))
     api_token_hash: str = ""  # sha256 of the REST API bearer token (empty => API disabled)
-    api_token_role: str = "admin"  # role granted by the API token (viewer = read-only)
+    api_token_role: str = "admin"  # noqa: S105 - role granted by the API token (viewer = read-only)
     # named API tokens besides that one (optional; written only when there are any)
     api_tokens: list[ApiToken] = field(default_factory=list)
     # lifetime of a web-UI sign-in (cookie + signed token); Settings -> Web UI access
@@ -3976,10 +4040,32 @@ class ConfigStore:
         self.path = os.path.abspath(path)
         directory = os.path.dirname(self.path)
         set_data_dir(directory)  # (relative TLS paths: data_path)
+        created = not os.path.isdir(directory)
         os.makedirs(directory, exist_ok=True)
         # config.json holds the password hash + secret_key; keep the dir private on
-        # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).
-        lock_down_dir(directory)
+        # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance), when
+        # it is ser2net's own: just made, or holding only what ser2net puts there. Any
+        # other folder (sudo ser2net --config /etc/ser2net.json) keeps its permissions:
+        # only the config file is made private (on every save), and the start-up log
+        # warns when other accounts can use the folder.
+        self.notes: list[str] = []  # for the start-up log, with the config's load_notes
+        other = [] if created else foreign_entries(directory, os.path.basename(self.path))
+        self.own_dir = other == []
+        if self.own_dir:
+            lock_down_dir(directory)
+        else:
+            if self.exists():
+                lock_down_file(self.path)
+            if others_can_use(directory):
+                what = ("can't be listed" if other is None else "holds files ser2net didn't "
+                        f"put there ({', '.join(other[:3])}{', ...' if len(other) > 3 else ''})")
+                self.notes.append(
+                    f"WARNING: {directory}, the folder of {os.path.basename(self.path)}, "
+                    f"{what}, so its permissions are left as they are instead of making it "
+                    "private to this account, and other accounts can use it. The "
+                    "configuration file, backups/, logs/ and traces/ are kept private; give "
+                    "ser2net a folder of its own for the rest (--data-dir <folder> without "
+                    "--config; README: Configuration & state files)")
         self.backup_dir = os.path.join(directory, "backups")
         # what each backup holds, by name: ((size, mtime_ns), _backup_summary()) - see backups()
         self._backup_summaries: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
@@ -3999,10 +4085,12 @@ class ConfigStore:
 
     def load(self) -> AppConfig:
         if not self.exists():
-            return AppConfig()
-        text, seen = self.read_current()
-        config = AppConfig.from_dict(json.loads(text))
-        self.note_read(seen)
+            config = AppConfig()
+        else:
+            text, seen = self.read_current()
+            config = AppConfig.from_dict(json.loads(text))
+            self.note_read(seen)
+        config.load_notes.extend(self.notes)
         return config
 
     def read_current(self) -> tuple[str, _Seen]:
@@ -4098,6 +4186,8 @@ class ConfigStore:
 
         fd, tmp = tempfile.mkstemp(dir=directory, prefix=".cfg.", suffix=".tmp")
         try:
+            if not self.own_dir:  # (Windows: it got the folder's permissions; POSIX: 0600)
+                lock_down_file(tmp)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(data)
                 fh.flush()

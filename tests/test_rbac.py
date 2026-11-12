@@ -19,8 +19,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _server import free_port, server_log, show_log_on_failure
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-UI = 8096
+UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
 from _server import ui_cookie  # noqa: E402
@@ -35,14 +37,6 @@ def wait_port(port, timeout=15):
                 return True
         time.sleep(0.2)
     return False
-
-
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
 
 
 class Session:
@@ -95,9 +89,11 @@ def main():
     cfg = os.path.join(tmp, "config.json")
     with open(cfg, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
+    out = server_log(tmp)  # the server's output: a file, never an unread pipe
     srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           stdout=out, stderr=subprocess.STDOUT)
+    out.close()  # (the server has its own copy)
     try:
         assert wait_port(UI), "server did not start"
 
@@ -169,6 +165,7 @@ def main():
             srv.wait(timeout=5)
         except subprocess.TimeoutExpired:
             srv.kill()
+        show_log_on_failure(tmp)
         shutil.rmtree(tmp, ignore_errors=True)
 
 

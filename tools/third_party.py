@@ -1,24 +1,35 @@
 """Third-party component inventory of a ser2net build, from the build environment.
 
     python tools/third_party.py licenses OUT.txt [--extra DIR]... [--strict]
-    python tools/third_party.py sbom OUT.cdx.json [--strict]
+    python tools/third_party.py sbom OUT.cdx.json [--binaries LIST] [--strict]
 
 Run it with the interpreter that builds the standalone executable (PyInstaller). It
 writes every bundled component's license text into one file, which ser2net.spec
-packs into the executable (``ser2net --licenses`` prints it) and the release attaches.
-Components:
+packs into the executable (``ser2net --licenses`` prints it) and the release attaches,
+and a CycloneDX SBOM of the same components. Components:
   * ser2net itself (AGPL-3.0-only, or a commercial license),
-  * CPython (its LICENSE.txt — on Windows it also covers the bundled OpenSSL, libffi,
-    bzip2, xz, zlib, SQLite, Tcl/Tk… of the python.org build),
+  * CPython and the native libraries in it: OpenSSL, zlib, and — when the executable
+    carries their extension modules (``--binaries``: the list ser2net.spec writes) —
+    expat, mpdecimal and SQLite, each with the version the interpreter reports and a CPE
+    where NVD has one; the OpenSSL that cryptography links into its own module too,
   * every Python distribution the app imports at run time: the pins in
     requirements.txt + requirements-optional.txt and their dependencies,
   * the PyInstaller bootloader and runtime hooks embedded in the executable,
+  * the browser libraries in app/web/static (vendor/npm/package.json, their license
+    texts in tools/licenses/npm/),
   * ``--extra DIR``: further license texts (*.txt), e.g. the native libraries
-    python-build-standalone links into the Linux interpreter.
+    python-build-standalone links into the interpreter.
+
+Licenses are SPDX expressions where the package's metadata gives one (License-Expression,
+or a License field that is one); for the packages whose metadata doesn't, LICENSE_OVERRIDES
+names it, tied to the version it was checked at: a newer version falls back to the
+metadata's wording (and a warning) until the entry is checked again
+(tests/test_third_party.py fails in CI's vendor job while one is out of date).
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import platform
 import re
@@ -35,6 +46,24 @@ _LICENSE_FILE = re.compile(r"(^|/)(LICEN[CS]E|COPYING|NOTICE|AUTHORS)[^/]*$", re
 # license texts for distributions whose wheels ship none (tools/licenses/<name>.txt,
 # copied from the project's source tree at the pinned version)
 FALLBACK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "licenses")
+NPM_MANIFEST = os.path.join(ROOT, "vendor", "npm", "package.json")
+# SPDX license expressions for the distributions whose metadata has none (no
+# License-Expression, a License field that isn't one), checked against their license
+# files at this version: {canonical name: (version, expression)}
+LICENSE_OVERRIDES = {
+    "jinja2": ("3.1.6", "BSD-3-Clause"),            # classifier "BSD License" only
+    "ldap3": ("2.9.1", "LGPL-3.0-or-later"),        # "LGPL v3"; its sources say "or later"
+    "pyserial": ("3.5", "BSD-3-Clause"),            # "BSD"
+    # the bootloader and the pyimod modules: GPL with the bootloader exception (any
+    # license for the program it builds); the runtime hooks: Apache-2.0
+    "pyinstaller": ("6.22.3", "GPL-2.0-or-later WITH Bootloader-exception AND Apache-2.0"),
+    # the part in the executable: its runtime hooks (the build-time hooks are GPL-2.0+)
+    "pyinstaller-hooks-contrib": ("2026.10", "Apache-2.0"),
+}
+# the SPDX ids a License field may consist of to count as an expression
+_SPDX_IDS = {"0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "EPL-2.0", "ISC",
+             "LGPL-2.1-or-later", "LGPL-3.0-or-later", "GPL-2.0-or-later", "MIT", "MIT-0",
+             "MPL-2.0", "PSF-2.0", "Unlicense", "Zlib", "Bootloader-exception"}
 
 
 def canonical(name: str) -> str:
@@ -42,13 +71,20 @@ def canonical(name: str) -> str:
 
 
 def _packaging():
+    """packaging's Marker and Requirement: the installed package, else pip's copy."""
     try:
-        from packaging.markers import Marker
-        from packaging.requirements import Requirement
+        markers = importlib.import_module("packaging.markers")
+        requirements = importlib.import_module("packaging.requirements")
     except ImportError:  # pip always vendors it
-        from pip._vendor.packaging.markers import Marker  # type: ignore[no-redef]
-        from pip._vendor.packaging.requirements import Requirement  # type: ignore[no-redef]
-    return Marker, Requirement
+        markers = importlib.import_module("pip._vendor.packaging.markers")
+        requirements = importlib.import_module("pip._vendor.packaging.requirements")
+    return markers.Marker, requirements.Requirement
+
+
+def _field(md, name: str) -> str | None:
+    """A metadata field's first value, None when it is missing."""
+    values = md.get_all(name)
+    return values[0] if values else None
 
 
 def top_level_names() -> list[str]:
@@ -96,17 +132,109 @@ def runtime_distributions(strict: bool = False) -> list[metadata.Distribution]:
     return sorted(seen.values(), key=lambda d: canonical(d.metadata["Name"]))
 
 
-def license_of(dist: metadata.Distribution) -> str:
+def is_spdx(text: str) -> bool:
+    """Whether text is an SPDX expression made of the ids this tool knows."""
+    tokens = text.replace("(", " ( ").replace(")", " ) ").split()
+    words = [t for t in tokens if t not in ("(", ")", "AND", "OR", "WITH")]
+    return bool(words) and all(w in _SPDX_IDS for w in words)
+
+
+def license_of(dist: metadata.Distribution, warn=None) -> tuple[str, bool]:
+    """(license, whether it is an SPDX expression): the metadata's License-Expression, else
+    the checked override for this version, else a License field that is an SPDX
+    expression, else the License field's first line, else the trove classifiers."""
     md = dist.metadata
-    expr = md.get("License-Expression")
+    expr = _field(md, "License-Expression")
     if expr:
-        return expr
+        return expr, True
+    name = canonical(md["Name"])
+    if name in LICENSE_OVERRIDES:
+        checked, override = LICENSE_OVERRIDES[name]
+        if dist.version == checked:
+            return override, True
+        (warn or (lambda m: print(m, file=sys.stderr)))(
+            f"warning: {name} {dist.version}: its license override was checked at {checked}; "
+            "check the license and update LICENSE_OVERRIDES in tools/third_party.py")
+    lic = (_field(md, "License") or "").strip()
+    if lic and is_spdx(lic):
+        return lic, True
+    if lic and "\n" not in lic and len(lic) <= 120:
+        return lic, False
     classifiers = [c.split("::")[-1].strip() for c in md.get_all("Classifier") or []
                    if c.startswith("License ::")]
     if classifiers:
-        return "; ".join(classifiers)
-    lic = (md.get("License") or "").strip()
-    return lic.splitlines()[0][:120] if lic else "see license text"
+        return "; ".join(classifiers), False
+    return (lic.splitlines()[0][:120] if lic else "see license text"), False
+
+
+def npm_packages() -> list[dict]:
+    """The browser libraries vendored in app/web/static (vendor/npm/package.json)."""
+    import json
+
+    if not os.path.isfile(NPM_MANIFEST):
+        return []
+    with open(NPM_MANIFEST, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    out = []
+    for name, version in sorted(doc["dependencies"].items()):
+        meta = doc["ser2net"]["packages"][name]
+        files = sorted(os.path.basename(d) for d, f in doc["ser2net"]["files"].items()
+                       if f["package"] == name)
+        scoped = name.replace("@", "%40", 1) if name.startswith("@") else name
+        out.append({"name": name, "version": version, "license": meta["license"],
+                    "license_file": os.path.join(ROOT, meta["license_file"]),
+                    "purl": f"pkg:npm/{scoped}@{version}", "files": files})
+    return out
+
+
+def native_libraries(binaries: list[str] | None) -> list[dict]:
+    """The native libraries in the interpreter (and cryptography) that the executable
+    carries, with the versions they report. binaries: the executable's binary entries
+    (ser2net.spec's list); None: only what every build has (OpenSSL, zlib)."""
+    import ssl
+    import zlib
+
+    def carried(module: str) -> bool:
+        # built into libpython (python-build-standalone on Linux), or a bundled extension
+        return binaries is not None and (module in sys.builtin_module_names or any(
+            os.path.basename(b).split(".")[0] == module for b in binaries))
+
+    libs = []
+    m = re.search(r"OpenSSL (\S+)", ssl.OPENSSL_VERSION)
+    if m:
+        libs.append({"name": "openssl", "version": m.group(1), "license": "Apache-2.0",
+                     "cpe": "cpe:2.3:a:openssl:openssl:{v}:*:*:*:*:*:*:*",
+                     "description": "linked into the bundled interpreter (ssl, hashlib)"})
+    libs.append({"name": "zlib", "version": zlib.ZLIB_RUNTIME_VERSION, "license": "Zlib",
+                 "cpe": "cpe:2.3:a:zlib:zlib:{v}:*:*:*:*:*:*:*",
+                 "description": "linked into the bundled interpreter"})
+    if carried("pyexpat"):
+        import pyexpat
+        libs.append({"name": "expat", "version": pyexpat.EXPAT_VERSION.split("_")[-1],
+                     "license": "MIT", "cpe": "cpe:2.3:a:libexpat_project:libexpat:{v}:*:*:*:*:*:*:*",
+                     "description": "the interpreter's pyexpat module"})
+    if carried("_decimal"):
+        import decimal
+        libs.append({"name": "mpdecimal", "version": getattr(decimal, "__libmpdec_version__", ""),
+                     "license": "BSD-2-Clause", "cpe": "",
+                     "description": "the interpreter's _decimal module"})
+    if carried("_sqlite3"):
+        import sqlite3
+        libs.append({"name": "sqlite", "version": sqlite3.sqlite_version, "license": "blessing",
+                     "cpe": "cpe:2.3:a:sqlite:sqlite:{v}:*:*:*:*:*:*:*",
+                     "description": "the interpreter's _sqlite3 module"})
+    try:
+        crypto = metadata.distribution("cryptography")
+        from cryptography.hazmat.backends.openssl import backend
+        m = re.search(r"OpenSSL (\S+)", backend.openssl_version_text())
+        if m:
+            libs.append({"name": "openssl", "version": m.group(1), "license": "Apache-2.0",
+                         "cpe": "cpe:2.3:a:openssl:openssl:{v}:*:*:*:*:*:*:*",
+                         "description": f"statically linked into cryptography {crypto.version}",
+                         "ref": f"pkg:generic/openssl@{m.group(1)}?package=cryptography"})
+    except Exception:  # not installed or not importable: not in the build
+        pass
+    return [lib for lib in libs if lib["version"]]
 
 
 def license_texts(dist: metadata.Distribution) -> list[tuple[str, str]]:
@@ -163,19 +291,26 @@ def write_licenses(out_path: str, extra_dirs: list[str], strict: bool = False) -
         f"CPython {platform.python_version()} — PSF-2.0 (bundled interpreter; "
         f"{ssl.OPENSSL_VERSION})", cpython_license()))
     dists = runtime_distributions(strict)
-    for name, role in BUILD_EMBEDDED.items():
+    for name, what in BUILD_EMBEDDED.items():
         try:
             dists.append(metadata.distribution(name))
         except metadata.PackageNotFoundError:
-            print(f"note: {name} not installed ({role} not covered)", file=sys.stderr)
+            print(f"note: {name} not installed ({what} not covered)", file=sys.stderr)
     for dist in dists:
         name, version = dist.metadata["Name"], dist.version
         role = BUILD_EMBEDDED.get(canonical(name))
-        title = f"{name} {version} — {license_of(dist)}" + (f" ({role})" if role else "")
+        title = f"{name} {version} — {license_of(dist)[0]}" + (f" ({role})" if role else "")
         texts = license_texts(dist)
         if not texts:
             raise SystemExit(f"no license file in the {name} {version} distribution")
         parts.append(_section(title, "\n\n".join(f"--- {fn} ---\n{t}" for fn, t in texts)))
+    npm = npm_packages()
+    for pkg in npm:
+        if not os.path.isfile(pkg["license_file"]):
+            raise SystemExit(f"no license text for {pkg['name']}: {pkg['license_file']}")
+        with open(pkg["license_file"], encoding="utf-8") as fh:
+            parts.append(_section(f"{pkg['name']} {pkg['version']} — {pkg['license']} "
+                                  f"(browser library: {', '.join(pkg['files'])})", fh.read()))
     for d in extra_dirs:
         for fn in sorted(os.listdir(d)):
             if fn.endswith(".txt"):
@@ -185,42 +320,43 @@ def write_licenses(out_path: str, extra_dirs: list[str], strict: bool = False) -
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("".join(parts))
-    print(f"wrote {out_path}: {len(dists)} Python distributions, "
+    print(f"wrote {out_path}: {len(dists)} Python distributions, {len(npm)} browser libraries, "
           f"{sum(len(os.listdir(d)) for d in extra_dirs)} extra license files")
 
 
-def write_sbom(out_path: str, strict: bool = False) -> None:
-    """A CycloneDX 1.5 SBOM of the executable: ser2net, the interpreter (CPython +
-    OpenSSL), every bundled Python distribution and the PyInstaller bootloader."""
+def write_sbom(out_path: str, strict: bool = False, binaries: list[str] | None = None) -> None:
+    """A CycloneDX 1.5 SBOM of the executable: ser2net, the interpreter (CPython) and the
+    native libraries in it, every bundled Python distribution, the PyInstaller bootloader
+    and the browser libraries."""
     import datetime
     import json
-    import ssl
     import uuid
 
     sys.path.insert(0, ROOT)
     from app import __version__
 
     def lic(dist: metadata.Distribution) -> list:
-        expr = dist.metadata.get("License-Expression")
-        return [{"expression": expr}] if expr else [{"license": {"name": license_of(dist)}}]
+        text, spdx = license_of(dist)
+        return [{"expression": text}] if spdx else [{"license": {"name": text}}]
 
     components = []
     py = platform.python_version()
     # CPE ids as well as the purl: CPE-based vulnerability scanners don't match pkg:generic
-    # purls, so without these they would miss the interpreter and OpenSSL entirely.
+    # purls, so without these they would miss the interpreter and its libraries entirely.
     components.append({"type": "library", "bom-ref": f"pkg:generic/cpython@{py}", "name": "cpython",
                        "version": py, "purl": f"pkg:generic/cpython@{py}",
                        "cpe": f"cpe:2.3:a:python:python:{py}:*:*:*:*:*:*:*",
                        "licenses": [{"expression": "PSF-2.0"}],
                        "description": "bundled Python interpreter and standard library"})
-    m = re.search(r"OpenSSL (\S+)", ssl.OPENSSL_VERSION)
-    if m:
-        components.append({"type": "library", "bom-ref": f"pkg:generic/openssl@{m.group(1)}",
-                           "name": "openssl", "version": m.group(1),
-                           "purl": f"pkg:generic/openssl@{m.group(1)}",
-                           "cpe": f"cpe:2.3:a:openssl:openssl:{m.group(1)}:*:*:*:*:*:*:*",
-                           "licenses": [{"expression": "Apache-2.0"}],
-                           "description": "linked into the bundled interpreter"})
+    for native in native_libraries(binaries):
+        purl = f"pkg:generic/{native['name']}@{native['version']}"
+        comp = {"type": "library", "bom-ref": native.get("ref", purl), "name": native["name"],
+                "version": native["version"], "purl": purl,
+                "licenses": [{"expression": native["license"]}],
+                "description": native["description"]}
+        if native["cpe"]:
+            comp["cpe"] = native["cpe"].format(v=native["version"])
+        components.append(comp)
     dists = runtime_distributions(strict)
     for name in BUILD_EMBEDDED:
         try:
@@ -235,6 +371,12 @@ def write_sbom(out_path: str, strict: bool = False) -> None:
         if name in BUILD_EMBEDDED:
             comp["description"] = BUILD_EMBEDDED[name] + " embedded in the executable"
         components.append(comp)
+    for pkg in npm_packages():
+        components.append({"type": "library", "bom-ref": pkg["purl"], "name": pkg["name"],
+                           "version": pkg["version"], "purl": pkg["purl"],
+                           "licenses": [{"expression": pkg["license"]}],
+                           "description": "browser library in the admin UI: "
+                                          + ", ".join(pkg["files"])})
     root = f"pkg:github/haliskilic/ser2net@v{__version__}"
     bom = {
         "bomFormat": "CycloneDX", "specVersion": "1.5",
@@ -269,11 +411,18 @@ def main(argv: list[str]) -> int:
     bom = sub.add_parser("sbom", help="write a CycloneDX SBOM")
     bom.add_argument("out")
     bom.add_argument("--strict", action="store_true")
+    bom.add_argument("--binaries", metavar="LIST",
+                     help="the executable's binaries, one per line (ser2net.spec writes "
+                          "build/bundled-binaries.txt): which native libraries it carries")
     args = ap.parse_args(argv)
     if args.cmd == "licenses":
         write_licenses(args.out, args.extra, args.strict)
     else:
-        write_sbom(args.out, args.strict)
+        binaries = None
+        if args.binaries:
+            with open(args.binaries, encoding="utf-8") as fh:
+                binaries = [line.strip() for line in fh if line.strip()]
+        write_sbom(args.out, args.strict, binaries)
     return 0
 
 

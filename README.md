@@ -432,7 +432,7 @@ düzenlemeye gerek yok.
   proxy üzerinden bağlanılmaz (`HTTP(S)_PROXY` / `ALL_PROXY` yalnızca webhook ve SSO için
   geçerlidir).
 - **Dağıtım:** resmi **Docker** imajı + `docker-compose`; **systemd** birimi;
-  Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
+  Linux+Windows × Python 3.10–3.14 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
   yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla:
   `<topic>/status` broker'a her bağlanışta (yeniden bağlanınca da) `online`, eşleme
@@ -540,8 +540,12 @@ düzenlemeye gerek yok.
 
 ## 🧰 Gereklilikler
 
-- **Python 3.10+** (sistemde kurulu). Başka hiçbir şey gerekmez — bağımlılıklar
-  `vendor/wheels/` içinde gelir ve ilk çalıştırmada `./lib`'e kurulur (offline).
+- **Python 3.10+** (sistemde kurulu) ve pip (Debian / Ubuntu / Raspberry Pi OS'ta ayrı
+  paket: `sudo apt install python3-pip`). Başka hiçbir şey gerekmez — bağımlılıklar
+  `vendor/wheels/` içinde gelir ve ilk çalıştırmada `./lib`'e kurulur (offline), her işletim
+  sisteminde ve işlemcide. Daha eski bir `python3` (RHEL / AlmaLinux / Rocky 8 ve 9) bir
+  mesajla reddedilir: daha yenisini kurun (`sudo dnf install python3.11`; `./start.sh` onu
+  bulur) ya da standalone binary'yi kullanın.
 - Linux'ta seri portu **açmak** için kullanıcının seri cihazların grubunda olması gerekir
   (port **listelemek** için ayrıcalık gerekmez). Bu grup Debian, Ubuntu, Raspberry Pi OS,
   Fedora, RHEL ve openSUSE'de `dialout`, Arch, Manjaro ve EndeavourOS'ta ise `uucp`'dir (bu
@@ -558,7 +562,7 @@ düzenlemeye gerek yok.
 ## 🚀 Kurulum & Çalıştırma
 
 ```bash
-# Linux / macOS
+# Linux / macOS / Raspberry Pi (her işlemci)
 python3 ser2net.py            # veya: ./start.sh
 
 # Windows
@@ -577,8 +581,13 @@ MQTT / LDAP / OIDC desteği. Python, `openssl` ya da başka bir paket gerekmez. 
 | `ser2net-linux-x64` | glibc ≥ 2.28 olan x86_64 Linux: RHEL / AlmaLinux / Rocky 8+, Debian 11+, Ubuntu 20.04+, Fedora, openSUSE Leap 15 (musl/Alpine değil — orada Docker kullanın) |
 | `ser2net-linux-arm64` | glibc ≥ 2.28 olan 64-bit ARM Linux: Raspberry Pi 3/4/5 (64-bit Raspberry Pi OS 11+ veya Ubuntu), ARM endüstriyel gateway'ler, AWS Graviton, aynı dağıtımlar |
 
-Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`) ve lisans
-metinleri yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
+Diğer platformlar — 32-bit ARM (32-bit Raspberry Pi OS, armv7 gateway'ler), macOS, ARM
+üzerinde Windows: kaynaktan çalıştırın (`python3 ser2net.py`); orada da offline çalışır (bkz.
+*Offline kurulum*). 32-bit ARM'da Docker imajı (arm/v7) da kullanılabilir. ARM üzerindeki Windows 11 x64 exe'yi de (emülasyonla) çalıştırır.
+
+Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json`), lisans
+metinleri, Linux binary'leri için systemd unit'i `ser2net-standalone.service` ve bir binary'yi
+onunla kuran `ser2net-install.sh` (bkz. *Servis olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
 doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
 `gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si **henüz
 imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
@@ -598,7 +607,8 @@ Linux notları:
 - `chmod +x ser2net-linux-x64`; seri portlar cihazların grubunu gerektirir (`dialout`;
   Arch'ta `uucp`, bkz. Gereklilikler).
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
-  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin. Çalıştığı sürece bu kopyayı
+  bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin (`ser2net-install.sh` bunu servis
+  için yapar). Çalıştığı sürece bu kopyayı
   kilitli tutar ve erişim zamanlarını tazeler; böylece systemd-tmpfiles, tmpreaper gibi
   geçici dosya temizleyicileri uzun süre çalışan bir binary'nin dosyalarını silmez.
   Öldürülen bir sürecin geride bıraktığı kopya ise her zamanki gibi temizlenir.
@@ -614,7 +624,11 @@ maskeleyin. `ser2net --licenses` binary'nin içindeki her bileşenin lisans metn
 (sürümlere `*.THIRD-PARTY-LICENSES.txt` olarak da eklenir).
 
 Kendin derlemek için:
-- Windows: `pip install -r requirements.txt -r requirements-optional.txt pyinstaller && pyinstaller ser2net.spec`
+- Windows: `pwsh tools\build_standalone_windows.ps1` (sürümlerde çalışan derleme: sabitlenmiş
+  python-build-standalone yorumlayıcısı, hash kilitli paketler, lisans metinleri ve SBOM) ya
+  da kendi Python 3.12'nizle
+  `pip install --require-hashes --only-binary=:all: -r requirements-lock.txt -r requirements-build.txt && pyinstaller ser2net.spec`
+  (spec, `--licenses` metnini o ortamdan kendisi yazar)
 - Linux (eski dağıtımlarda da çalışsın diye eski glibc'li bir konteynerde):
   `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`
 
@@ -636,13 +650,44 @@ python3 ser2net.py --reconfigure
 
 ### Offline kurulum (internetsiz makine)
 Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2net.py` ilk açılışta bunları
-`./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, Linux x86_64 ve
-Windows x64'te Python 3.10–3.14'ü kapsar; `requirements.txt` değişince
-`python3 tools/refresh_wheels.py` ile yenilenir (`tests/test_vendor_wheels.py` denetler).
+`./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, her işletim
+sisteminde ve işlemcide Python 3.10–3.14'ü kapsar: psutil dışında her şey saf Python'dur,
+psutil (ağ arayüzü listesi) ise Linux x86_64 ve Windows x64 için pakette vardır. Başka
+yerlerde — ARM Linux (32 ve 64-bit Raspberry Pi OS), macOS, Alpine/musl, ARM üzerinde Windows
+ya da 32-bit bir Windows Python'u — ilk açılış seti psutil olmadan kurar ve bunu söyler; arayüz
+listeleri o zaman Python'un standart kütüphanesinden gelir ve bir arayüzü atlayabilir
+(`--about` `psutil not installed` gösterir; `python3 bootstrap.py --online`, makine için
+PyPI'da wheel'i varsa ya da bir C derleyicisi kuruluysa onu ekler). CI bu offline ilk açılışı
+Linux x86_64 ve arm64, Windows, macOS ve 32-bit ARM'da (armv7, emülasyonla) çalıştırır.
+`requirements.txt` değişince set `python3 tools/refresh_wheels.py` ile yenilenir
+(`tests/test_vendor_wheels.py` denetler).
+Her wheel'in sha256'sı `vendor/wheels/SHA256SUMS`'ta kayıtlıdır; listedeki bir wheel farklıysa
+ilk açılış o setten kurulum yapmaz (CI her wheel'i PyPI'ın yayımladığı dosyayla karşılaştırır).
+Kendi eklediğiniz wheel'ler listede olmadığı için olduğu gibi kurulur.
 Opsiyonel özellikleri (MQTT/LDAP/OIDC) offline kaynak kurulumunda etkinleştirmek için
 wheel'lerini de indirip kurun: `pip download -r requirements-optional.txt -d vendor/wheels`
 ardından `pip install --no-index --find-links vendor/wheels -r requirements-optional.txt`.
 (Standalone binary bunları zaten içerir.)
+
+### Kaynak kurulumu yükseltmek
+Dosyaları güncelleyin (`git pull` ya da yeni kaynağı eskisinin üzerine açın) ve ser2net'i
+yeniden başlatın. Yeni sürüm bağımlılıkları başka sürümlere sabitliyorsa ilk açılış onları
+`lib/` içine kurar; çevrimdışı ve bir kez (birkaç saniye). `lib/`'e kendi eklediğiniz paketler
+kalır, eski sürümlerin metadata klasörleri silinir. `lib/.ser2net-deps.json`, `lib/`'in neye
+göre kurulduğunu (sabitlemeler, Python sürümü, platform) kaydeder; böylece yeni bir Python da
+aynı şekilde ele alınır. 2.8.x ya da daha eski bir sürümden yükseltirken bu ilk açılış, o
+sürümlerin `lib/`'de bıraktıklarını (belki de güvenlik duyurusu yayımlanmış 2.7 starlette ve
+anyio'yu) değiştirir.
+Bu yapılamazsa — o Python'da pip yoksa, `lib/` ser2net'in çalıştığı hesap için yazılabilir
+değilse ya da aynı klasörden çalışan başka bir ser2net hâlâ açıksa — ser2net eski `lib/` ile
+açılır ve nedenini log'una yazar (`WARNING: … ./lib …`); bu sürüm eski paketlerle hiç
+çalışamıyorsa (2.8.1 ve sonrası 2.7'ninkilerle) açılış bunu söyleyen tek bir satırla durur.
+`python3 bootstrap.py` seti elle kurar (önce ser2net'i durdurun ve komutu ser2net'in
+çalıştığı hesapla çalıştırın, ör. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`);
+`--no-bootstrap` kullanılıyorsa her yükseltmeden sonra yol budur ve `lib/` güncel olmadıkça
+açılış log'u uyarır. Çalışan bir ser2net'in yanında da çalışabilen tek seferlik komutlar
+(`--set-password`, `--sign-out-all`, `--about`, `--install-service`) `lib/`'e dokunmaz,
+yalnızca uyarır.
 
 ### Docker
 ```bash
@@ -651,8 +696,11 @@ docker compose up -d        # önce docker-compose.yml'deki `devices:` ve `ports
 Compose olmadan [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) içindeki `docker run`
 komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme portları,
 `/dev/serial/by-id` cihaz yolu, log sınırı).
-Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(ya da `:2.8`, `:2.8.1`); `docker-compose.yml` bunu kullanır.
+Hazır imaj (her sürümde; amd64, arm64 ve 32-bit Raspberry Pi OS gibi 32-bit ARM için
+arm/v7): `docker pull ghcr.io/haliskilic/ser2net:latest`
+(ya da `:2.8`, `:2.8.1`); `docker-compose.yml` bunu kullanır. Sürümler arasında Debian/Python
+tabanı değişince `:latest` ve `:X.Y` yeni tabanla yeniden derlenir (haftalık kontrol;
+`:X.Y.Z` yayımlandığı gibi kalır) — bkz. [`docs/DOCKER.md`](docs/DOCKER.md).
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
 ayarlanır — başsız ortamda interaktif seçici çalışamaz; `SER2NET_BIND_IP=*` IPv4 ve IPv6
 tüm arayüzler demektir). Her eşlemenin portunu da yayınlayın
@@ -1228,7 +1276,7 @@ sahibine geçer):
 
 | Kurulum | Komut |
 |---|---|
-| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (binary: `./ser2net-linux-x64 --set-password admin`) |
+| kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (`ser2net-standalone.service` ile binary: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; elle başlatılan: `./ser2net-linux-x64 --set-password admin`) |
 | Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (servisin veri klasörü: `sc qc ser2net` gösterir) |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
@@ -1312,19 +1360,84 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   kapanır), `/data` volume. Düz `docker run` ile çalıştırıyorsanız
   `--restart unless-stopped --init --stop-timeout 30` ekleyin (var olan bir container için:
   `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri;
-  `systemctl reload ser2net` `config.json`'u yeniden okur (bkz. Yapılandırma & durum
-  dosyaları). Arch, Manjaro ve EndeavourOS'ta seri grup `uucp`'dir ve `dialout` grubu yoktur
-  (unit `status=216/GROUP` ile başlamaz): grubu `systemctl edit ser2net` ile ayarla
-  (`[Service]`, `SupplementaryGroups=`, ardından `SupplementaryGroups=uucp`; unit'in yorumunda
-  yazıyor).
-  **root ile çalıştırmayın.** Birden çok kurulum için: `systemd/ser2net@.service` şablonu
-  (aşağıda). İsteğe bağlı: `systemd/ser2net.service.d/notify.conf` drop-in'i
-  (`Type=notify`, `WatchdogSec=120`) systemd'nin ser2net'i ancak eşlemeleri çalışıp arayüzü
-  dinlemeye başladığında (ya da yeniden denemeye geçtiğinde) başlamış saymasını ve event
-  loop'u yanıt vermeyi bırakınca yeniden başlatmasını sağlar (2.9.0'dan eski bir sürüme
-  dönmeden önce kaldırın: eski sürümler hazır olduğunu bildirmez).
+- **Linux (systemd):** iki unit var. İkisi de ser2net'i ayrı, yetkisiz bir kullanıcıyla
+  (`ser2net`; seri portlar için `dialout` grubunda) çalıştırır, hata durumunda 3 sn sonra
+  yeniden başlatır ve sandbox içinde tutar (salt okunur sistem, kendine ait `/tmp`, sistem
+  çağrısı filtresi). **root ile çalıştırmayın.** `systemctl reload ser2net` `config.json`'u
+  yeniden okur (bkz. Yapılandırma & durum dosyaları). Arch, Manjaro ve EndeavourOS'ta seri
+  grup `uucp`'dir ve `dialout` grubu yoktur (unit `status=216/GROUP` ile başlamaz): grubu
+  `systemctl edit ser2net` ile ayarla (`[Service]`, `SupplementaryGroups=`, ardından
+  `SupplementaryGroups=uucp`; unit'in yorumunda yazıyor).
+  - `/opt/ser2net` altında *kaynak kurulum*: `systemd/ser2net.service`.
+    ```bash
+    sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
+    sudo git clone https://github.com/haliskilic/ser2net.git /opt/ser2net
+    sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    ```
+    İlk açılış `data/` ve `lib/` dizinlerini `ser2net` kullanıcısı için oluşturur ve
+    paketlenmiş bağımlılıkları `lib/` içine kurar (çevrimdışı). `/usr/bin/python3` olarak
+    Python 3.10 ya da daha yenisi gerekir: RHEL / AlmaLinux / Rocky 8 ve 9 ile Debian 11'de
+    `ExecStart=` satırını daha yeni bir yorumlayıcıya yönlendirin (RHEL: `dnf install
+    python3.11`, ardından `/usr/bin/python3.11`) ya da binary'yi kullanın.
+  - *Standalone binary*: `ser2net-standalone.service` (her release'e eklenir, `systemd/`
+    altında da var), `ser2net.service` adıyla kurulur; verisi systemd'nin oluşturduğu
+    `/var/lib/ser2net` içindedir. Hepsini `ser2net-install.sh` (o da her release'e eklenir)
+    yapar: `ser2net-linux-x64` (ya da `-arm64`), `ser2net-standalone.service`,
+    `ser2net-install.sh` ve `SHA256SUMS` dosyalarını bir klasöre indirin, sonra
+    ```bash
+    sudo sh ser2net-install.sh                         # web arayüzü 127.0.0.1:8080'de
+    sudo sh ser2net-install.sh --listen 0.0.0.0:8080   # ya da ağda (orada TLS kullanın)
+    ```
+    Dosyaları `SHA256SUMS`'a karşı ve binary'nin bu makinede çalıştığını denetler, `ser2net`
+    kullanıcısını ve `/var/lib/ser2net`'i oluşturur, binary'yi `/usr/local/bin/ser2net`,
+    unit'i `/etc/systemd/system/ser2net.service` olarak kurar, servisi etkinleştirip başlatır
+    ve yanıt verene kadar bekler. Yükseltmek için yeni sürümle yeniden çalıştırın (veri
+    kalır); `--uninstall` servisi ve binary'yi kaldırır (veri ve kullanıcı kalır). Başka bir
+    `ser2net.service`'i (klasik ser2net daemon'unun paketi, `/opt/ser2net`'teki bir kaynak
+    kurulumu) siz onu durdurup `--replace-unit` vermedikçe gizlemez; `/tmp`'nin `noexec` ile
+    bağlı olduğu yerde binary'nin kendini `/var/cache/ser2net`'e açmasını sağlar (bir
+    drop-in). `--root DIR` dosyaları yalnızca DIR altına hazırlar. Elle aynısı:
+    ```bash
+    sudo install -m 0755 ser2net-linux-x64 /usr/local/bin/ser2net
+    sudo useradd --system --user-group --home-dir /var/lib/ser2net -M -s /usr/sbin/nologin ser2net
+    sudo cp ser2net-standalone.service /etc/systemd/system/ser2net.service
+    sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
+    ```
+  - Web arayüzü, aksi söylenmedikçe `127.0.0.1:8080`'de dinler. Ağdan erişmek için
+    `sudo systemctl edit ser2net` çalıştırıp aşağıdaki satırları ekleyin (ağ adresinde TLS
+    kullanın, bkz. Güvenlik) ve `sudo systemctl restart ser2net` yapın:
+    ```ini
+    [Service]
+    Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
+    ```
+    İlk parolayı tarayıcıda ya da `--set-password` ile belirleyin (Güvenlik altındaki
+    tablo). Bu tür komutları `ser2net` kullanıcısıyla çalıştırın (`sudo -u ser2net …`),
+    düz root ile değil; root, servisin okuyamayacağı dosyalar bırakır. Log'lar:
+    `journalctl -u ser2net` ve veri dizinindeki `all.log`.
+  - Birden çok kurulum için: `systemd/ser2net@.service` şablonu (aşağıda). İsteğe bağlı:
+    `systemd/ser2net.service.d/notify.conf` drop-in'i (`Type=notify`, `WatchdogSec=120`)
+    systemd'nin ser2net'i ancak eşlemeleri çalışıp arayüzü dinlemeye başladığında (ya da
+    yeniden denemeye geçtiğinde) başlamış saymasını ve event loop'u yanıt vermeyi bırakınca
+    yeniden başlatmasını sağlar (2.9.0'dan eski bir sürüme dönmeden önce kaldırın: eski
+    sürümler hazır olduğunu bildirmez).
+- **1024 altı portlar** (Modbus/TCP'nin 502'si, 80 ya da 443'te web arayüzü): Linux bu
+  portlarda yalnızca root'un ya da `CAP_NET_BIND_SERVICE` yetkisi olan bir sürecin
+  dinlemesine izin verir; iki unit de ser2net'i yetkisiz bir kullanıcıyla çalıştırır. Böyle
+  bir porttaki eşleme panoda bir ipucuyla başarısız olur, 1024 altındaki bir admin arayüzü
+  portu için açılışta uyarı çıkar (web arayüzü başlayamaz). İzin vermek için servise
+  yalnızca bu yetkiyi `sudo systemctl edit ser2net` ile verin, ardından
+  `sudo systemctl restart ser2net`:
+  ```ini
+  [Service]
+  AmbientCapabilities=CAP_NET_BIND_SERVICE
+  CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+  ```
+  Unit'lerdeki `NoNewPrivileges=true` ile çalışır; eşleme düzenleyebilen herkes bundan sonra
+  1024 altındaki boş her portta dinleyebilir. python3'e `setcap cap_net_bind_service=+ep`
+  işe yaramaz (`NoNewPrivileges` dosya yetkilerini yok sayar) ve bu hakkı makinedeki her
+  Python programına verir. Ya da 1024 ya da üstünde bir port kullanın. Host ağında Docker:
+  `SER2NET_LOW_PORTS=1` ([`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
   ser2net-windows-x64.exe --install-service
@@ -1429,8 +1542,9 @@ farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle g
 - **Linux (systemd):** `systemd/ser2net@.service` şablonu her ad için bir kurulum çalıştırır;
   verisi `/var/lib/ser2net/<ad>` altında, adresi `/etc/ser2net/<ad>.env` içinde durur
   (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); kurulum adı bildirimlerdeki adı olur.
-  Paketlenmiş bağımlılıkları bir kez kurun (`ser2net` kullanıcısıyla
-  `python3 /opt/ser2net/bootstrap.py`), sonra
+  Paketlenmiş bağımlılıkları bir kez, her yükseltmeden sonra da yeniden kurun (`ser2net`
+  kullanıcısıyla `python3 /opt/ser2net/bootstrap.py`: kurulumlar `--no-bootstrap` ile başlar
+  ve `lib/` güncel değilken açılış log'ları uyarır), sonra
   `systemctl enable --now ser2net@line1 ser2net@line2`.
 - **Docker:** her kurulum için ayrı bir container; her birinin kendi volume'ü,
   `container_name`'i ve yayınlanan portları (`8081:8080`), adı için de `SER2NET_NODE_NAME`
@@ -1475,9 +1589,15 @@ saat atlamasından etkilenmeyen bir saatle ölçülür.
 
 ## 🗂️ Yapılandırma & durum dosyaları
 
-Tüm durum **veri dizininde** (varsayılan `data/`). Veri dizini yalnızca sahibe açık
-kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), böylece
-içindeki dosyalar başka kullanıcılarca okunamaz:
+Tüm durum **veri dizininde** (varsayılan `data/`; `--data-dir`, `--config` verilirse config
+dosyasının klasörü). Veri dizini yalnızca sahibe açık kilitlenir (POSIX `0700`; Windows'ta
+`icacls` ile sahip/SYSTEM/Administrators), böylece içindeki dosyalar başka kullanıcılarca
+okunamaz; Linux/macOS'ta sunucunun oluşturduğu dosyalar da yalnızca sahibine açıktır. Bu,
+ser2net'in oluşturduğu ya da içinde yalnızca kendi dosyaları (aşağıdakiler) bulunan bir klasör
+için geçerlidir: içinde başka dosyalar olan bir klasörün (`--config /etc/ser2net.json`, bir ev
+dizini) izinlerine dokunulmaz, yalnızca config dosyası (ve `backups/`, `logs/`, `traces/`)
+gizli tutulur ve başka hesaplar klasörü kullanabiliyorsa açılış log'u uyarır — ser2net'e kendi
+klasörünü verin:
 - `config.json` — admin IP, parola hash'leri, tüm eşlemeler (atomik yazım) ve ser2net'in
   kendisinin kullanması gereken gizli değerler, açık metin olarak (aşağıda *Gizli değerler*).
 - `backups/` — her değişikliğin yazdığı `config.json` ve henüz saklanmamışsa yerini aldığı
@@ -1708,7 +1828,8 @@ python3 tests/run_all.py -v         # geçen testlerin çıktısını da göster
 socat (Linux) ile sanal seri portlar kullanılır; donanım gerekmez. Tek tek de
 çalıştırılabilir, örn. `python3 tests/test_rest_api.py`. CI (GitHub Actions) her pull
 request'te ruff, mypy, `pip-audit`, çevrimdışı wheel kontrolü, tam test matrisi
-(ubuntu/windows × Python 3.10–3.13) ve coverage koşar
+(ubuntu/windows × Python 3.10–3.14; her leg çevrimdışı ilk kurulumu da dener, 3.15
+birleştirmeyi engellemeden çalışır) ve coverage koşar
 (`python3 tests/coverage_run.py`: testlerin başlattığı sunucular da ölçülür). Geliştirme
 ortamı ve kurallar için [CONTRIBUTING.md](CONTRIBUTING.md).
 

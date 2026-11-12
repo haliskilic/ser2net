@@ -12,8 +12,10 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import typing
+from typing import TYPE_CHECKING, Optional
 
 from starlette.exceptions import HTTPException
+from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
@@ -24,6 +26,9 @@ from . import proxy
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 from .routes.system import METRICS_TYPE, metrics_text
+
+if TYPE_CHECKING:
+    from ..state import AppState
 
 API_PREFIX = "/api/v1"
 # the values a true/false query parameter may have
@@ -41,7 +46,8 @@ def _caller(request) -> str:
     return token.audit_label if token is not None else "api-token"
 
 
-def _mapping_view(mapping, state, request=None) -> dict:
+def _mapping_view(mapping: MappingConfig, state: AppState,
+                  request: Optional[Request] = None) -> dict:
     """A mapping's full config plus its live runtime status. A read-only (viewer)
     token doesn't get stored secrets (the MQTT password and client key password, the
     TLS key password) — the same rule as the web UI, where viewers can't open the edit
@@ -129,7 +135,7 @@ def _not_saved(e: ConfigError) -> JSONResponse:
     return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
 
 
-def build_api_routes(state):
+def build_api_routes(state: AppState) -> list[Route]:
     async def list_mappings(request):
         return JSONResponse({"mappings": [_mapping_view(m, state, request) for m in state.config.mappings]})
 

@@ -58,7 +58,7 @@ TR = json.load(open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="ut
 
 
 class Hook(BaseHTTPRequestHandler):
-    def do_POST(self):  # noqa: N802 (http.server API)
+    def do_POST(self):  # http.server API
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         RECEIVED.append((self.path, json.loads(body)))
         if self.path == "/moved":  # as a receiver that moved (or answers a POST so) does
@@ -69,7 +69,7 @@ class Hook(BaseHTTPRequestHandler):
             self.send_response(500 if self.path == "/fail" else 204)
         self.end_headers()
 
-    def do_GET(self):  # noqa: N802 (http.server API) - where a redirect leads
+    def do_GET(self):  # http.server API; where a redirect leads
         RECEIVED.append((self.path, None))
         self.send_response(200)
         self.send_header("Content-Length", "0")
@@ -84,9 +84,9 @@ class Smtp(socketserver.StreamRequestHandler):
     server's `auth` attribute names (none: no AUTH), credentials decoded as UTF-8."""
 
     def handle(self):
-        w = lambda s: self.wfile.write(s.encode() + b"\r\n")  # noqa: E731
-        r = lambda: self.rfile.readline().decode().strip()  # noqa: E731
-        b64 = lambda s: base64.b64decode(s).decode("utf-8")  # noqa: E731
+        w = lambda s: self.wfile.write(s.encode() + b"\r\n")
+        r = lambda: self.rfile.readline().decode().strip()
+        b64 = lambda s: base64.b64decode(s).decode("utf-8")
         w("220 test ESMTP")
         rcpt, data = [], None
         mechs = getattr(self.server, "auth", "")
@@ -421,10 +421,18 @@ async def test_delivery(hook_port, smtp_port):
     assert warnings == [f"webhook (json) was redirected to http://127.0.0.1:{hook_port}: if the "
                         "message didn't arrive, set the address it redirects to"], warnings
     assert await n.deliver("device_lost", "PLC", "gone") == [], "a warning is no error"
+    # a URL that isn't http(s) (a config.json tolerated on load) is never opened
+    sent = len(RECEIVED)
+    for url in (f"file://{os.path.abspath(__file__)}", "ftp://127.0.0.1/x"):
+        s.webhook_url = url
+        errors = await n.deliver("device_lost", "PLC", "gone")
+        assert errors and "https://" in str(errors[0]), [str(e) for e in errors]
+    assert len(RECEIVED) == sent
     print("delivery: webhook + SMTP received (Turkish, 7-bit e-mail; the test message in the "
           "notification language); a line break in a mapping name can't stop its e-mail or add "
           "a header; a failing webhook is reported (log English with event and mapping, page "
-          "Turkish), not raised; a redirect is reported  OK")
+          "Turkish), not raised; a redirect is reported; a URL that isn't http(s) is never "
+          "opened  OK")
 
 
 async def test_non_ascii(hook_port, smtp):

@@ -582,7 +582,7 @@ async def test_sparkplug(slave_port):
     fake, logs = FakeMqtt(), []
     REGS[10], REGS[30] = 5, 42
     r, sw = await gateway("sparkplug_b", slave_port, fake, SP_POINTS, logs)
-    t = lambda kind, dev=None: sparkplug.topic("ser2net", kind, "Line_3_PLC", dev)  # noqa: E731
+    t = lambda kind, dev=None: sparkplug.topic("ser2net", kind, "Line_3_PLC", dev)
 
     def decoded(kind, dev=None):
         return [sparkplug.decode_payload(p) for tp, p in fake.published if tp == t(kind, dev)]

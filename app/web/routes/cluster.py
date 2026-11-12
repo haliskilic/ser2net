@@ -31,7 +31,9 @@ from ...engine.cluster import (ACTOR_FIELD, ACTOR_MAX, ACTOR_NODE_FIELD, AUTH_HE
 from ...i18n import _
 from .. import auth
 from . import ops
-from .common import Ctx, LiveTable, bytesize, csrf_failed, domid, notice, reason, start_failed
+from .common import (
+    Ctx, LiveTable, bytesize, csrf_failed, domid, notice, read_form, reason, start_failed,
+)
 from .forms import (
     _TEXT_INPUTS, MQTT_PASSWORD_CLEAR, MQTT_PASSWORD_WRITE_ONLY, _build_mapping_dict,
     _parse_modbus_points, blocks_not_read, form_context, in_text_box, mapping_for_rerender,
@@ -363,7 +365,7 @@ def routes(ctx: Ctx) -> list:
         """A peer-facing JSON answer; for a signed request (also a refusal of one with a
         valid signature) signed for that request, so the caller can trust it."""
         resp = JSONResponse(payload, status_code=status_code)
-        resp.headers[AUTH_HEADER] = state.cluster.reply_auth(a, status_code, resp.body)
+        resp.headers[AUTH_HEADER] = state.cluster.reply_auth(a, status_code, bytes(resp.body))
         return resp
 
     async def cluster_local(request):
@@ -444,7 +446,7 @@ def routes(ctx: Ctx) -> list:
         a, deny = await _peer_auth(request)
         if deny:
             return deny
-        form = await request.form()
+        form = await read_form(request)
         mid, action = form.get("mapping_id", ""), form.get("action", "")
         if action not in ("start", "stop", "restart"):
             return _peer_json(a, {"error": "bad_action"}, 400)
@@ -469,7 +471,7 @@ def routes(ctx: Ctx) -> list:
         at an arbitrary host); the call goes to its address with the shared key."""
         if deny := require_peer_access(request):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         action, mid = form.get("action", ""), form.get("mid", "")
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
@@ -525,7 +527,7 @@ def routes(ctx: Ctx) -> list:
         a, deny = await _peer_auth(request)
         if deny:
             return deny
-        form = await request.form()
+        form = await read_form(request)
         ok, msg, saved = await ops.save_mapping_from_form(state, form)
         if not ok or saved is None:
             return _peer_json(a, {"ok": False, "error": msg}, 400)
@@ -583,7 +585,7 @@ def routes(ctx: Ctx) -> list:
         already exist on the peer. On a peer or validation error, re-render the form."""
         if deny := require_peer_access(request):
             return deny
-        form = await request.form()
+        form = await read_form(request)
         target, err = _peer_target(form.get)
         if err:
             return err

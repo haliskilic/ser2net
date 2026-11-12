@@ -1,0 +1,265 @@
+name: Image refresh
+
+# A release builds the published image (ghcr.io/<owner>/ser2net) with the Debian, OpenSSL and
+# CPython 3.12.x of that day. Every Monday, and when started by hand, this workflow
+#  * scans :latest with Grype (a pinned, sha256-checked release) and uploads the HIGH and
+#    CRITICAL findings that have a fix to code scanning (Security -> Code scanning); report
+#    only, nothing fails on a finding;
+#  * compares the base image :latest was built from (its label
+#    org.opencontainers.image.base.digest, release.yml records it) with what that release's
+#    Dockerfile base tag points at now. Only when the base moved (or "rebuild" is set) it
+#    rebuilds the latest release from its tag (same Dockerfile, same hash-locked pins, the
+#    platforms :latest has), pushes it by digest, smoke-tests that digest on each of them
+#    with the tag's tests/docker_smoke.sh (arm/v7 under QEMU), attests it and moves the X.Y
+#    and latest tags to it. X.Y.Z stays the image its release tested and published.
+# Auto-updaters (Watchtower and the like) restart the container after such a refresh.
+# GitHub turns scheduled workflows off after 60 days without repository activity:
+# Actions -> Image refresh -> "Enable workflow".
+on:
+  schedule:
+    - cron: "13 6 * * 1"     # Mondays 06:13 UTC
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Rebuild the latest release even if its base image hasn't moved
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# one at a time, never cancelled (a refresh half-way through would leave an untagged push)
+concurrency:
+  group: image-refresh
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: scan the published image (Grype, fixed HIGH/CRITICAL)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read         # pull the image's layers
+      security-events: write # upload the report to code scanning
+    env:
+      GRYPE_VERSION: "0.121.0"
+      # grype_<version>_linux_amd64.tar.gz, from the release's grype_<version>_checksums.txt
+      GRYPE_SHA256: 64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Grype ${{ env.GRYPE_VERSION }} (sha256-checked)
+        run: |
+          curl -fsSL --retry 3 -o grype.tar.gz \
+            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          echo "${GRYPE_SHA256}  grype.tar.gz" | sha256sum -c -
+          tar -xzf grype.tar.gz grype
+      - name: Scan :latest (linux/amd64; arm64 has the same packages)
+        env:
+          GRYPE_REGISTRY_AUTH_AUTHORITY: ghcr.io
+          GRYPE_REGISTRY_AUTH_USERNAME: ${{ github.actor }}
+          GRYPE_REGISTRY_AUTH_PASSWORD: ${{ github.token }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ser2net:latest"
+          ./grype "registry:$image" --platform linux/amd64 --only-fixed -o sarif=all.sarif -o table
+          # Grype gives HIGH and CRITICAL the SARIF level "error"
+          jq '.runs[].results |= map(select(.level == "error"))' all.sarif > grype.sarif
+          n=$(jq '[.runs[].results[]] | length' grype.sarif)
+          echo "$image: $n HIGH/CRITICAL findings with a fix (Security -> Code scanning)" >> "$GITHUB_STEP_SUMMARY"
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066  # v4.39.3
+        with:
+          sarif_file: grype.sarif
+          category: ghcr-image-latest
+
+  check:
+    name: has the latest release's base image moved?
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read         # read the published image's labels
+    outputs:
+      rebuild: ${{ steps.base.outputs.rebuild }}
+      tag: ${{ steps.base.outputs.tag }}
+      image: ${{ steps.base.outputs.image }}
+      base: ${{ steps.base.outputs.base }}
+      base-name: ${{ steps.base.outputs.base-name }}
+      base-digest: ${{ steps.base.outputs.base-digest }}
+      image-tags: ${{ steps.base.outputs.image-tags }}
+      platforms: ${{ steps.base.outputs.platforms }}
+    steps:
+      - name: Sign in to GHCR (read)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.rebuild == true }}
+        run: |
+          tag=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)  # never a pre-release
+          version=${tag#v}
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ser2net"
+          dockerfile=$(gh api "repos/$GITHUB_REPOSITORY/contents/Dockerfile?ref=$tag" -H "Accept: application/vnd.github.raw")
+          base=$(sed -n 's/^ARG BASE_IMAGE=//p' <<<"$dockerfile")
+          [ -n "$base" ] || base=$(sed -n 's/^FROM //p' <<<"$dockerfile" | head -n 1)  # before 2.9.0
+          case "$base" in */*) name=$base ;; *) name=docker.io/library/$base ;; esac
+          now=$(docker buildx imagetools inspect "$base" --format '{{json .Manifest}}' | jq -r .digest)
+          built=$(docker buildx imagetools inspect "$image:latest" --format '{{json .Image}}' \
+                  | jq -r '.["linux/amd64"].config.Labels["org.opencontainers.image.base.digest"] // "unknown"')
+          # the platforms :latest was published for (2.9.0 added linux/arm/v7), not the
+          # attestation manifests; arm64's variant v8 is its only one (linux/arm64)
+          platforms=$(docker buildx imagetools inspect "$image:latest" --format '{{json .Manifest}}' \
+                      | jq -r '[.manifests[].platform | select(.os != "unknown")
+                               | .os + "/" + .architecture
+                                 + (if .variant and .architecture != "arm64" then "/" + .variant else "" end)]
+                               | join(",")')
+          [ -n "$platforms" ] || { echo "::error::no platforms in $image:latest"; exit 1; }
+          echo "latest release $tag ($platforms); $name now $now; :latest built from $built"
+          rebuild=false
+          if [ "$built" != "$now" ] || [ "$FORCE" = true ]; then rebuild=true; fi
+          echo "rebuild: $rebuild" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "rebuild=$rebuild"; echo "tag=$tag"; echo "image=$image"; echo "base=$base"
+            echo "base-name=$name"; echo "base-digest=$now"; echo "platforms=$platforms"
+            echo "image-tags=${version%.*} latest"     # X.Y and latest, never X.Y.Z
+          } >> "$GITHUB_OUTPUT"
+
+  # The release's image job, again: built once for its platforms from the tag and pushed by
+  # digest only, nothing points at it before it passed its test.
+  build:
+    name: rebuild ${{ needs.check.outputs.tag }} on the current base, push it untagged
+    needs: check
+    if: needs.check.outputs.rebuild == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # the untagged push
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.tag }}
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        with:
+          images: ${{ needs.check.outputs.image }}
+          tags: type=semver,pattern={{version}},value=${{ needs.check.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=ser2net
+            org.opencontainers.image.description=Serial-to-network bridge with a web UI
+            org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.base.name=${{ needs.check.outputs.base-name }}
+            org.opencontainers.image.base.digest=${{ needs.check.outputs.base-digest }}
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          platforms: ${{ needs.check.outputs.platforms }}
+          build-args: BASE_IMAGE=${{ needs.check.outputs.base }}@${{ needs.check.outputs.base-digest }}
+          outputs: type=image,name=${{ needs.check.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+      - name: Tagging keeps this digest (imagetools create --dry-run)
+        env:
+          IMAGE: ${{ needs.check.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker buildx imagetools create --dry-run "$IMAGE@$DIGEST" > index.json
+          got="sha256:$(head -c -1 index.json | sha256sum | cut -d' ' -f1)"   # minus its newline
+          [ "$got" = "$DIGEST" ] || { echo "::error::tagging would push $got, not $DIGEST"; exit 1; }
+
+  # Each platform the rebuild has (a leg for one it doesn't have, linux/arm/v7 before 2.9.0,
+  # skips its steps)
+  test:
+    name: test the rebuilt image (${{ matrix.arch }})
+    needs: [check, build]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read         # pull the untagged digest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest, platform: linux/amd64 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, platform: linux/arm64 }
+          - { arch: arm/v7, runner: ubuntu-latest, platform: linux/arm/v7, qemu: true }
+    env:
+      REF: ${{ needs.check.outputs.image }}@${{ needs.build.outputs.digest }}
+      DOCKER_DEFAULT_PLATFORM: ${{ matrix.qemu && matrix.platform || '' }}
+      DOCKER_SMOKE_WAIT: ${{ matrix.qemu && '300' || '60' }}
+      BUILT: ${{ contains(format(',{0},', needs.check.outputs.platforms), format(',{0},', matrix.platform)) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: env.BUILT == 'true'
+        with:
+          ref: ${{ needs.check.outputs.tag }}   # the release's own smoke test
+          persist-credentials: false
+      - if: env.BUILT == 'true' && matrix.qemu
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm
+      - name: Sign in to GHCR (read)
+        if: env.BUILT == 'true'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Pull the pushed digest, its ${{ matrix.arch }} image
+        if: env.BUILT == 'true'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker pull "$REF"
+          got=$(docker image inspect -f '{{.Architecture}}' "$REF")
+          if [ "$ARCH" = arm/v7 ]; then got="$got/$(docker image inspect -f '{{.Variant}}' "$REF")"; fi
+          test "$got" = "$ARCH"
+      - if: env.BUILT == 'true'
+        run: tests/docker_smoke.sh "$REF"
+
+  tag:
+    name: move X.Y and latest to the tested image
+    needs: [check, build, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # the tags, and the attestation pushed next to the image
+      id-token: write        # build provenance attestation
+      attestations: write    # (both)
+    env:
+      IMAGE: ${{ needs.check.outputs.image }}
+      DIGEST: ${{ needs.build.outputs.digest }}
+    steps:
+      - name: Sign in to GHCR
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ${{ needs.check.outputs.image }}
+          subject-digest: ${{ needs.build.outputs.digest }}
+          push-to-registry: true
+      - name: Tag it ${{ needs.check.outputs.image-tags }}
+        env:
+          TAGS: ${{ needs.check.outputs.image-tags }}
+        run: |
+          refs=()
+          for tag in $TAGS; do refs+=(--tag "$IMAGE:$tag"); done
+          docker buildx imagetools create "${refs[@]}" "$IMAGE@$DIGEST"
+          for tag in $TAGS; do
+            got=$(docker buildx imagetools inspect "$IMAGE:$tag" | awk '$1 == "Digest:" {print $2; exit}')
+            echo "$IMAGE:$tag -> $got"
+            [ "$got" = "$DIGEST" ] || { echo "::error::$IMAGE:$tag is $got, not the tested $DIGEST"; exit 1; }
+          done
+          echo "refreshed: $TAGS -> $DIGEST" >> "$GITHUB_STEP_SUMMARY"

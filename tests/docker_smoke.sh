@@ -20,11 +20,22 @@
 # 8. the image holds what it runs and the license texts, not the tests, the offline
 #    wheels or the docs, and the app is compiled already;
 # 9. a read-only /data whose config.json needs updating still starts, with a warning;
-# 10. a host folder mounted inside /data (certificates, say) is never taken over;
+# 10. a host folder mounted inside /data (certificates, say) is never taken over, and a new
+#    volume with one is private (0700) without a warning;
 # 11. the first admin without the browser: `docker exec ... --set-password` on the running
-#    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE.
+#    container of 1. (run as root, it writes as the /data owner) and SER2NET_ADMIN_PASSWORD_FILE;
+# 12. upgrade: a volume a v2.8.0 image left (owned by uid 10001: config.json, backups with a
+#    -2 name, audit.log, traces) starts as it is, keeps its owner and the 2.8.0 settings, and
+#    the accounts 2.8.0 made sign in.
+# 13. ports below 1024 on the host network: the server has no capability (the admin UI on
+#    502 can't start, and the log says why) unless SER2NET_LOW_PORTS=1 keeps
+#    CAP_NET_BIND_SERVICE for it (then 502 answers); --cap-drop NET_BIND_SERVICE wins.
+# An image of another architecture runs emulated (QEMU) when DOCKER_DEFAULT_PLATFORM names it
+# (CI: linux/arm/v7), much slower: DOCKER_SMOKE_WAIT (seconds, default 60) is how long a
+# container may take to get healthy or to stop.
 set -euo pipefail
 IMAGE=${1:?usage: docker_smoke.sh <image>}
+WAIT=${DOCKER_SMOKE_WAIT:-60}
 HERE=$(cd "$(dirname "$0")" && pwd)
 PORT=18080
 JAR=$(mktemp)
@@ -33,7 +44,8 @@ dev_dir=""
 fail() { echo "FAIL: $*"; docker logs s2n-smoke 2>&1 | tail -40 || true; exit 1; }
 cleanup() {
     docker rm -f s2n-smoke >/dev/null 2>&1 || true
-    docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d s2n-smoke-e >/dev/null 2>&1 || true
+    docker volume rm -f s2n-smoke-a s2n-smoke-b s2n-smoke-c s2n-smoke-d s2n-smoke-e s2n-smoke-f \
+        s2n-smoke-g >/dev/null 2>&1 || true
     for d in "$host_dir" "$dev_dir"; do [ -n "$d" ] && sudo rm -rf "$d"; done
     rm -f "$JAR"
 }
@@ -41,13 +53,13 @@ trap cleanup EXIT
 cleanup
 
 wait_healthy() {
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 "$WAIT"); do
         s=$(docker inspect -f '{{.State.Health.Status}}' s2n-smoke 2>/dev/null || echo gone)
         [ "$s" = healthy ] && return 0
         [ "$s" = gone ] && fail "container exited"
         sleep 1
     done
-    fail "not healthy after 60 s (status: $s)"
+    fail "not healthy after $WAIT s (status: $s)"
 }
 proc_status() { docker exec s2n-smoke sh -c 'grep -E "^(Uid|Gid|Groups):" /proc/1/status'; }
 # the CSRF cookie's value in $JAR (on a port other than 8080 its name ends in _<8 hex>)
@@ -161,7 +173,7 @@ echo "rejected setting: logged and kept, healthy, the UI signs in and saves othe
 
 echo "== 5. an unusable SER2NET_BIND_IP"
 docker run -d --name s2n-smoke -e SER2NET_BIND_IP=not-an-ip "$IMAGE" >/dev/null
-code=$(timeout 60 docker wait s2n-smoke) || fail "did not stop"
+code=$(timeout "$WAIT" docker wait s2n-smoke) || fail "did not stop"
 logs=$(docker logs s2n-smoke 2>&1)
 echo "$logs" | tail -3
 [ "$code" = 1 ] || fail "exit code $code"
@@ -183,7 +195,7 @@ sudo touch "$host_dir/left-by-2.8.0" && sudo chown 10001:10001 "$host_dir/left-b
 sudo chown 4321:4321 "$host_dir"  # the folder is the host user's, the files root's (2.7 ran as root)
 docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
     -v "$host_dir:/data:ro" "$IMAGE" >/dev/null
-code=$(timeout 60 docker wait s2n-smoke) || fail "did not stop"
+code=$(timeout "$WAIT" docker wait s2n-smoke) || fail "did not stop"
 logs=$(docker logs s2n-smoke 2>&1)
 echo "$logs" | tail -3
 [ "$code" = 1 ] || fail "read-only: exit code $code"
@@ -244,8 +256,10 @@ docker run --rm --entrypoint python "$IMAGE" -c '
 import glob, os, sys
 os.chdir("/app")
 need = ["ser2net.py", "bootstrap.py", "requirements.txt", "requirements-optional.txt",
+        "requirements-lock.txt",
         "LICENSE", "NOTICE", "COMMERCIAL_LICENSE.md", "THIRD-PARTY-NOTICES.md",
-        "tools/docker-entrypoint.sh", "tools/licenses/pyserial.txt", "app/locale/tr.json",
+        "tools/docker-entrypoint.sh", "tools/licenses/pyserial.txt", "tools/licenses/npm/xterm.txt",
+        "app/locale/tr.json",
         "app/web/templates/base.html", "app/web/static/app.css"]
 missing = [f for f in need if not os.path.isfile(f)]
 extra = [d for d in ("tests", "vendor", "docs", ".github", "Dockerfile") if os.path.exists(d)]
@@ -282,6 +296,9 @@ wait_healthy
 docker exec s2n-smoke sh -c '[ "$(stat -c %u /data/stray)" = 10001 ]' || fail "the stray file was not taken over"
 [ "$(sudo stat -c %u "$host_dir")" = 0 ] && [ "$(sudo stat -c %u "$host_dir/key.pem")" = 0 ] \
     || fail "the host folder mounted at /data/certs changed owner"
+# ser2net leaves a folder holding other files as it is: the new volume is private already
+[ "$(docker exec s2n-smoke stat -c %a /data)" = 700 ] || fail "/data is not 0700"
+docker logs s2n-smoke 2>&1 | grep -q "WARNING: /data" && fail "a warning about /data"
 docker rm -f s2n-smoke >/dev/null
 sudo rm -rf "$host_dir"
 host_dir=""
@@ -302,5 +319,76 @@ grep -q "env-pass-123" <<<"$logs" && fail "the password is in the log"
 docker rm -f -v s2n-smoke >/dev/null  # -v: its anonymous /data volume too
 rm -rf "$secret_dir"
 echo "SER2NET_ADMIN_PASSWORD_FILE: the first admin signs in, the password is not logged  OK"
+
+echo "== 12. upgrade from a v2.8.0 volume (owned by uid 10001)"
+docker run --rm --user 0 --entrypoint python -v s2n-smoke-f:/data -v "$HERE/fixtures:/fx:ro" "$IMAGE" -c '
+import json, os
+for d in ("backups", "logs", "traces"):
+    os.makedirs("/data/" + d, exist_ok=True)
+text = open("/fx/config-2.8.0.json", encoding="utf-8").read()
+open("/data/config.json", "w", encoding="utf-8").write(text)
+# two saves in one second, before the last two mappings were added
+for name, last in (("config-20261104T093000Z.json", -2), ("config-20261104T093000Z-2.json", -1)):
+    earlier = json.loads(text)
+    earlier["mappings"] = earlier["mappings"][:last]
+    open("/data/backups/" + name, "w", encoding="utf-8").write(json.dumps(earlier, indent=2))
+open("/data/audit.log", "w").write("2026-11-04 09:30:00\t10.0.0.8\tmapping_save\tPLC-1 raw\top1\n")
+open("/data/traces/aaaa00000001-plc1.trace.1", "w").write("net>ser hello\n")
+for top, dirs, files in os.walk("/data"):
+    for p in [top] + [os.path.join(top, f) for f in files]:
+        os.chown(p, 10001, 10001)
+        os.chmod(p, 0o700 if os.path.isdir(p) else 0o600)'
+sum_before=$(docker run --rm -v s2n-smoke-f:/data --entrypoint sha256sum "$IMAGE" /data/config.json)
+docker run -d --name s2n-smoke -p 127.0.0.1:$PORT:8080 --health-interval=1s \
+    -v s2n-smoke-f:/data "$IMAGE" >/dev/null
+wait_healthy
+logs=$(docker logs s2n-smoke 2>&1)
+grep -q "Traceback" <<<"$logs" && fail "traceback in the log"
+grep -q "handing" <<<"$logs" && fail "a volume owned by the image's user was handed over again"
+docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "files not owned by 10001"
+docker exec s2n-smoke sh -c 'ls /data/backups'
+sums=$(docker exec s2n-smoke sh -c 'sha256sum /data/backups/config-*.json')
+grep -q "${sum_before%% *}" <<<"$sums" || fail "the 2.8.0 config.json was not kept in backups/"
+grep -q "config-20261104T093000Z-2.json" <<<"$sums" || fail "the 2.8.0 backup with a -2 name is gone"
+docker exec s2n-smoke python -c 'import json, sys
+c = json.load(open("/data/config.json"))
+n, gw = c["notifications"], c["mappings"][5]
+sys.exit(0 if n["enabled"] and n["smtp_password"] == "dummy-smtp-pass-2.8.0"
+         and c["admin_ui"]["language"] == "tr" and gw["mqtt"]["payload_format"] == "sparkplug_b"
+         and len(gw["modbus_poll"]["points"]) == 5 else 1)' || fail "2.8.0 settings were lost"
+[ "$(sign_in op28 new-in-2.8.0-pass-1)" = 303 ] || fail "the account made by 2.8.0 did not sign in"
+[ "$(sign_in admin old-admin-pass-1)" = 303 ] || fail "the admin password did not sign in"
+docker rm -f s2n-smoke >/dev/null
+echo "v2.8.0 volume: starts as it is, owner kept, 2.8.0 file and its -2 backup kept, settings and accounts work  OK"
+
+echo "== 13. ports below 1024 on the host network (SER2NET_LOW_PORTS)"
+low() { docker run -d --name s2n-smoke --network host --health-interval=1s \
+            -e SER2NET_BIND_IP=127.0.0.1 -e SER2NET_PORT=502 "$@" -v s2n-smoke-g:/data "$IMAGE" >/dev/null; }
+caps() { docker exec s2n-smoke sh -c 'grep -E "^Cap(Eff|Amb):" /proc/1/status' | tr -s '\t ' ' '; }
+low -e SER2NET_LOW_PORTS=1
+wait_healthy
+caps
+caps | grep -q "^CapAmb: 0000000000000400$" || fail "CAP_NET_BIND_SERVICE not kept with SER2NET_LOW_PORTS=1"
+caps | grep -q "^CapEff: 0000000000000400$" || fail "more than CAP_NET_BIND_SERVICE kept"
+curl -fsS "http://127.0.0.1:502/healthz" | grep -q ok || fail "the admin UI on 502 does not answer"
+docker rm -f s2n-smoke >/dev/null
+low
+for _ in $(seq 1 $((WAIT / 2))); do
+    logs=$(docker logs s2n-smoke 2>&1 || true)
+    grep -q "admin UI port 502 is below 1024" <<<"$logs" && break
+    sleep 1
+done
+grep -q "admin UI port 502 is below 1024" <<<"$logs" || fail "no warning for the admin UI on 502"
+grep -q "CAP_NET_BIND_SERVICE" <<<"$logs" || fail "the warning doesn't say what is missing"
+docker rm -f s2n-smoke >/dev/null
+low -e SER2NET_LOW_PORTS=1 --cap-drop NET_BIND_SERVICE
+for _ in $(seq 1 $((WAIT / 2))); do
+    logs=$(docker logs s2n-smoke 2>&1 || true)
+    grep -q "admin UI port 502 is below 1024" <<<"$logs" && break
+    sleep 1
+done
+grep -q "no CAP_NET_BIND_SERVICE to keep" <<<"$logs" || fail "--cap-drop NET_BIND_SERVICE not reported"
+docker rm -f s2n-smoke >/dev/null
+echo "ports below 1024: none without SER2NET_LOW_PORTS=1 (the log says why), 502 answers with it, --cap-drop wins  OK"
 echo
 echo "PASS: Docker image smoke test"

@@ -30,11 +30,47 @@ sys.path.insert(0, ROOT)
 
 
 def free_port() -> int:
+    """A TCP port free on 127.0.0.1 right now, for a test's listener (never a fixed one: a
+    port in the ephemeral range can be held by an earlier test's closed connection, in
+    TIME_WAIT, and then refuses the bind)."""
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+def free_udp_port(host: str = "127.0.0.1") -> int:
+    """A UDP port free on ``host`` right now ("" for every address, as the cluster's
+    discovery listens). A port free_port() found free for TCP may still be in use for UDP
+    (by another program on Windows, where the server's SO_REUSEADDR then shares it)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind((host, 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def server_log(folder: str):
+    """Open <folder>/server.log for a server a test spawns (stdout=..., stderr=STDOUT):
+    its output goes to a file, never to an unread pipe, whose buffer (about 4 KB on Windows)
+    fills up and then blocks the server's event loop at its next log line. Close this copy
+    once the server runs (it has its own); show_log_on_failure(folder) in the test's finally
+    prints the log's end when the test failed."""
+    return open(os.path.join(folder, "server.log"), "wb")
+
+
+def show_log_on_failure(folder: str) -> None:
+    """Called in a finally: while an exception propagates, print the end of
+    <folder>/server.log (server_log)."""
+    if sys.exc_info()[0] is None:
+        return
+    try:
+        with open(os.path.join(folder, "server.log"), "rb") as fh:
+            tail = fh.read()[-3000:].decode("utf-8", "replace")
+    except OSError:
+        return
+    print("--- server log (tail) ---\n" + tail)
 
 
 def wait_port(port: int, timeout: float = 20) -> bool:
@@ -155,7 +191,14 @@ class Server:
         self.proc = None
 
     def __enter__(self) -> "Server":
-        return self.start()
+        try:
+            self.start()
+            if self.proc.poll() is not None:  # its port answered, but not this server
+                raise AssertionError("server exited at start:\n" + self.output()[-2000:])
+        except BaseException:
+            self.__exit__()  # (a with block runs __exit__ only once __enter__ returned)
+            raise
+        return self
 
     def __exit__(self, *exc) -> None:
         self.stop()

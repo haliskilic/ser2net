@@ -1,8 +1,29 @@
 # Running ser2net in Docker
 
 ser2net ships an official `Dockerfile`, an example `docker-compose.yml` and a published
-image for amd64 + arm64 with every release: `ghcr.io/haliskilic/ser2net` (`:latest` or a
-release tag).
+image for amd64, arm64 and arm/v7 (32-bit ARM: 32-bit Raspberry Pi OS, armv7 gateways;
+since 2.9.0) with every release: `ghcr.io/haliskilic/ser2net` (`:latest` or a release tag).
+The published image is the very build the release smoke-tested on each architecture (same
+digest; arm/v7 under emulation, as no runner has that CPU); its tags `:X.Y.Z`, `:X.Y` and
+`:latest` are added only after that. On arm/v7 the image builds psutil and cffi from their
+hash-locked source releases (PyPI has no wheels of them for that CPU); everything else, and
+every package on amd64 and arm64, is the hash-locked wheel. A pre-release (`X.Y.Z-rc.N`) gets only its own tag, never `:X.Y` or `:latest`.
+
+**Between releases** the image is kept current. Every Monday
+`.github/workflows/image-refresh.yml` scans `:latest` for known vulnerabilities (the HIGH and
+CRITICAL ones with a fix go to the repository's code scanning) and checks whether the base
+image (`python:3.12-slim-trixie`: CPython 3.12 on Debian 13) has moved since `:latest` was
+built. If it has, it rebuilds the latest release from its tag on the new base — the same
+ser2net code and the same hash-locked Python packages — smoke-tests it natively on both
+architectures and moves `:X.Y` and `:latest` to it. `:X.Y.Z` always stays the image its
+release published. So `:latest` / `:X.Y` get Debian, OpenSSL and CPython 3.12.x fixes within
+a week; an auto-updater (Watchtower and the like) restarts the container when that happens.
+Use `:X.Y.Z` (or a digest) to change only when you decide to. The base is a Debian codename
+tag, so a refresh never switches to a new Debian major release; only a ser2net release does.
+Each image records its base:
+`docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' ghcr.io/haliskilic/ser2net:latest`.
+Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest -R haliskilic/ser2net`
+(a release's image is attested by `release.yml`, a refreshed one by `image-refresh.yml`).
 
 ## Quick start (compose)
 
@@ -99,7 +120,14 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   (`0.0.0.0` = all its IPv4 interfaces, `*` = all of them, IPv4 and IPv6; set the LAN
   address to keep the UI off the others),
   and the unprivileged process can't open ports below 1024 there (Modbus TCP's 502): use
-  1024 or above, or the default network with `-p 502:502`, where Docker allows them.
+  1024 or above, the default network with `-p 502:502`, where Docker allows them, or
+  `-e SER2NET_LOW_PORTS=1` (compose: under `environment:`). That keeps the
+  `CAP_NET_BIND_SERVICE` capability for the server, and only it, so whoever may edit
+  mappings can then open any free port below 1024 of the host. It needs the capability in
+  the container (Docker's default set has it); with `--cap-drop ALL` or
+  `--cap-drop NET_BIND_SERVICE` the start says it can't keep it. Without either, a mapping
+  on such a port fails with a hint on the dashboard, and an admin UI port below 1024 is
+  named in a start-up warning.
 - **LAN cluster.** Discovery (UDP broadcast, port 41750) doesn't cross Docker's default
   network. Use the host network, or set Settings → LAN cluster → Advertise IP to the
   host's LAN address and list the other nodes under Manual peers (on every node);
@@ -210,7 +238,9 @@ and session key. README, *Several instances on one machine*, has the whole check
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to
-  `ser2net` once (logged), so **upgrading needs no manual step**. A bind-mounted folder
+  `ser2net` once (logged), so **upgrading needs no manual step** — except on the host
+  network with a port below 1024, which root could open: add `SER2NET_LOW_PORTS=1`
+  ([Ports and networking](#ports-and-networking)). A bind-mounted folder
   owned by another user is used as that user, so the folder keeps its owner; files in it
   that an image wrote (owned by root, as with the images before v2.8, or by uid 10001)
   are handed to the folder's owner first (logged). A volume or host folder mounted

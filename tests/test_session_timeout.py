@@ -21,7 +21,7 @@ PASSWORD = "session-pass-1"
 
 
 def test_config_values():
-    load = lambda v: AppConfig.from_dict({"session_timeout_s": v}).session_timeout_s  # noqa: E731
+    load = lambda v: AppConfig.from_dict({"session_timeout_s": v}).session_timeout_s
     assert load(None) == SESSION_TIMEOUT_DEFAULT_S == 8 * 3600
     assert load("abc") == SESSION_TIMEOUT_DEFAULT_S
     assert load(10) == SESSION_TIMEOUT_MIN_S
