@@ -1059,5 +1059,6 @@
   "Account no longer in use": "Artık kullanılmayan hesap",
   "Remove it from the backups": "Yedeklerden çıkar",
   "Delete every configuration backup? This can’t be undone.": "Tüm yapılandırma yedekleri silinsin mi? Bu geri alınamaz.",
-  "Delete all backups": "Tüm yedekleri sil"
+  "Delete all backups": "Tüm yedekleri sil",
+  "It is started as soon as it can listen there (its row shows when it is tried again).": "Orayı dinleyebildiği anda başlatılır (ne zaman yeniden deneneceğini satırı gösterir)."
 }

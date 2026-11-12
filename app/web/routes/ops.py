@@ -47,7 +47,8 @@ async def save_mapping_from_form(state, form, started: dict | None = None) -> tu
     on success or (False, error). Shared by the local UI save and the cluster
     remote-edit save (which runs the same form on the target node). A saved mapping that
     doesn't start (its port taken by another program, ...) is still saved; `started`, when
-    given, gets what applying it said: {"ok": bool, "detail": "started" / the error}.
+    given, gets what applying it said: {"ok": bool, "detail": "started" / the error,
+    "retrying": whether the supervisor tries the start again (a listener that can't bind)}.
 
     The server owns mapping ids: a form without an id creates a mapping with a new
     one, a form with an id edits that mapping and is refused when there is none."""
@@ -90,7 +91,8 @@ async def save_mapping_from_form(state, form, started: dict | None = None) -> tu
             return False, str(e)
     ok, detail = await state.supervisor.apply_mapping(mapping)
     if started is not None:
-        started.update(ok=ok, detail=detail)
+        retrying = bool((state.supervisor.status(mapping.id) or {}).get("retrying"))
+        started.update(ok=ok, detail=detail, retrying=retrying)
     return True, mapping.name
 
 
