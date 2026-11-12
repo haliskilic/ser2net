@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import socket
 import ssl
@@ -123,6 +124,11 @@ def mapping(mid, name, port, **network):
                         "port": port, **network}}
 
 
+def done(srv: Server) -> None:
+    srv.stop()
+    shutil.rmtree(srv.tmp, ignore_errors=True)
+
+
 def server(cfg_extra, env=None) -> Server:
     """A server whose admin UI address comes from config.json (not the environment), so a
     changed address can be seen waiting for the next start."""
@@ -143,7 +149,7 @@ def test_reload() -> None:
     notify_dir = tempfile.mkdtemp(prefix="s2n_reload_notify_")
     notify_path = os.path.join(notify_dir, "notify")
     listener = None
-    if hasattr(socket, "AF_UNIX"):
+    if HAS_SIGHUP and hasattr(socket, "AF_UNIX"):  # (sd_notify: POSIX datagram sockets)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         listener.bind(notify_path)
         listener.settimeout(0.2)
@@ -211,19 +217,21 @@ def test_reload() -> None:
             and "the running configuration is kept" in out, out
         assert any("WARNING: config.json not reloaded (command line)" in ln
                    for ln in reload_lines(srv, mark)), srv.output()[mark:]
-        for broken in ({**cfg, "users": []}, None):
+        twice = json.loads(json.dumps(cfg))
+        twice["mappings"].append(mapping("d1", "D again", free_port()))
+        for broken, why in (({**cfg, "users": []}, "no user accounts"),
+                            (twice, "the mapping id d1 is used more than once"),
+                            (None, "is not a valid configuration")):
             if broken is None:
                 with open(srv.config_path, "w") as fh:
                     fh.write('{"mappings": [')  # cut off
             else:
                 write_config(srv, broken)
             code, out = cli_reload(srv.data)
-            assert code == 1 and "not reloaded" in out, out
-            assert ("no user accounts" in out) if broken is not None else \
-                ("is not a valid configuration" in out), out
+            assert code == 1 and "not reloaded" in out and why in out, out
         assert still_connected(ca) and names(srv) == ["A", "B2", "D"]
-        print("a clash, no accounts, broken JSON: not reloaded (CLI exit 1, all.log says why), "
-              "nothing changes  OK")
+        print("a clash, no accounts, an id used twice, broken JSON: not reloaded (CLI exit 1, "
+              "all.log says why), nothing changes  OK")
 
         # a changed admin UI address waits for the next start
         moved = free_port()
@@ -257,9 +265,13 @@ def test_reload() -> None:
         srv.stop()
         if listener is not None:
             listener.close()
-    code, out = cli_reload(data)
-    assert code == 1 and "not running" in out, out
-    print("ser2net --reload without a running instance: exit 1, nothing to reload  OK")
+        shutil.rmtree(notify_dir, ignore_errors=True)
+    try:
+        code, out = cli_reload(data)
+        assert code == 1 and "not running" in out, out
+        print("ser2net --reload without a running instance: exit 1, nothing to reload  OK")
+    finally:
+        shutil.rmtree(srv.tmp, ignore_errors=True)
 
 
 def test_mapping_tls_renewal() -> None:
@@ -314,7 +326,8 @@ def test_mapping_tls_renewal() -> None:
               "keep the certificate in use  OK")
         assert "Traceback" not in srv.output(), srv.output()[-3000:]
     finally:
-        srv.stop()
+        done(srv)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_terminal_hangup() -> None:
@@ -355,7 +368,7 @@ def test_terminal_hangup() -> None:
     finally:
         if master >= 0:
             os.close(master)
-        srv.stop()
+        done(srv)
 
 
 def test_outside_edit_store() -> None:
@@ -404,6 +417,7 @@ def test_outside_edit_store() -> None:
         assert '"log_max_age_days": 8' in fh.read()
     os.remove(path)
     assert store.changed_on_disk() == 0.0
+    shutil.rmtree(d, ignore_errors=True)
     print("store: an outside edit is seen (a touch is not), a save (also a start/stop) keeps "
           "it in backups/ and reports it; a removed file is seen  OK")
 
@@ -454,7 +468,7 @@ def test_outside_edit_server() -> None:
         print("server: once reloaded, the file is the one in use: later saves keep its "
               "changes and report nothing  OK")
     finally:
-        srv.stop()
+        done(srv)
 
 
 def test_restore_applies_changes() -> None:
@@ -485,7 +499,7 @@ def test_restore_applies_changes() -> None:
         print("backup restore: an unchanged mapping keeps its client, a changed one "
               "restarts  OK")
     finally:
-        srv.stop()
+        done(srv)
 
 
 def main() -> None:
