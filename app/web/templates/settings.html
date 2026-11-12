@@ -491,21 +491,32 @@
   {% for w in p.warnings %}<div class="banner warn">{{ w }}</div>{% endfor %}
   {% if p.problem %}<div class="banner error" role="alert">{{ _("This import can’t be applied: %(problem)s", problem=p.problem) }}</div>{% endif %}
   <div class="table-scroll">
-  <table class="grid">
-    <thead><tr><th>{{ _("Mapping") }}</th><th>{{ _("Port / network") }}</th><th>{{ _("Change") }}</th></tr></thead>
+  <table class="grid import-preview">
+    <thead><tr><th>{{ _("Mapping") }}</th><th>{{ _("Port / network") }}</th><th>{{ _("After import") }}</th><th>{{ _("Change") }}</th></tr></thead>
     <tbody>
     {% for r in p.rows %}
-      <tr>
+      <tr{% if r.notes %} class="has-notes"{% endif %}>
         <td>{{ r.name|softbreak }}</td>
         <td class="mono">{{ r.kind|softbreak }}</td>
+        <td>
+          {%- if r.after %}{% set a = r.after %}
+            {%- if a.enabled %}<span class="muted">{{ _("enabled") }}</span>{% else %}<span class="tag">{{ _("disabled") }}</span>{% endif %}
+            {%- if a.tls %} <span class="tag">TLS</span>{% endif %}
+            {%- if a.read_only %} <span class="tag" title="{{ _('read-only') }}">RO</span>{% endif %}
+            {%- if a.clients is not none %} <span class="tag{% if a.open %} tag-warn{% endif %}">{% if a.clients %}{{ ngettext("%(num)s allowed address", "%(num)s allowed addresses", a.clients) }}{% else %}{{ _("any client") }}{% endif %}</span>{% endif %}
+          {%- endif %}
+        </td>
         <td>
           {% if r.action == 'add' %}<span class="tag">{{ _("new") }}</span>
           {% elif r.action == 'update' %}<span class="tag">{{ _("updates") }}</span>{% if r.target != r.name %} <span class="muted">“{{ r.target }}”</span>{% endif %}
           {% elif r.action == 'same' %}<span class="muted">{{ _("unchanged") }}</span>
           {% else %}<span class="tag tag-danger">{{ _("removed") }}</span>{% endif %}
-          {%- if r.changes %}<ul class="cell-list">{% for c in r.changes %}<li{% if c.security %} class="security"{% endif %}>{% if c.kept %}{{ _("%(what)s: %(value)s is kept (the file has %(file)s)", what=c.what, value=c.before, file=c.file) }}{% else %}{{ c.what }}: {{ c.before }} → {{ c.after }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+          {%- if r.changes %}<ul class="cell-list">{% for c in r.changes %}<li{% if c.security %} class="security"{% endif %}>{% if c.security %}⚠ {% endif %}{% if c.kept %}{{ _("%(what)s: %(value)s is kept (the file has %(file)s)", what=c.what, value=c.before, file=c.file) }}{% else %}{{ c.what }}: {{ c.before }} → {{ c.after }}{% endif %}</li>{% endfor %}</ul>{% endif %}
         </td>
       </tr>
+      {%- if r.notes %}
+      <tr class="notes-row"><td colspan="4"><ul class="cell-list">{% for n in r.notes %}<li{% if n.security %} class="security"{% endif %}>{% if n.security %}⚠ {% endif %}{{ n.text }}</li>{% endfor %}</ul></td></tr>
+      {%- endif %}
     {% endfor %}
     </tbody>
   </table>

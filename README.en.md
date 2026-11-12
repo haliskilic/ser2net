@@ -183,8 +183,10 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status.
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
-  import through Settings with a preview; options without an equivalent are listed as
-  warnings, and a connection that would be more open here (a gtlssh login or TLS client
+  import through Settings with a preview, which shows each mapping as it will be (enabled
+  or disabled, TLS, any client or how many allowed, read-only) with its own warnings in
+  its row; applying it writes the warnings to the log. Options without an equivalent are
+  listed as warnings, and a connection that would be more open here (a gtlssh login or TLS client
   certificates, TLS whose certificate is not on this host, a write-only device) comes in
   disabled. Merging such a file again later takes only what the file says and keeps what
   was set on its mappings here (TLS, bind IP, allowed clients, USB identity, RS-485, MQTT,
@@ -699,7 +701,9 @@ whose refreshes fail is marked *not up to date*. The mapping form asks before un
 changes are thrown away. In the console, **Shift+Tab** moves the keyboard focus out (Tab
 goes to the device).
 **Import:** shows a preview first; choose *merge* (update mappings with the same name, add
-the new ones) or *replace all*.
+the new ones) or *replace all*. The one-step import of 2.7 scripts (a POST without
+`step=preview`) still replaces all mappings from a JSON file; a classic ser2net file is
+taken only through the preview.
 
 ---
 

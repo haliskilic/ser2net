@@ -6,7 +6,8 @@ Users migrating from it bring /etc/ser2net/ser2net.yaml (ser2net 4.x) or
 `*(name)` references inside strings, which is not standard YAML (and PyYAML is not a
 dependency anyway); 3.x has its own colon-separated line format. So this module
 carries a small reader for the YAML subset ser2net configs use plus a 3.x line
-parser, and turns every ser2net connection into a dict for MappingConfig.from_dict.
+parser, and turns every ser2net connection into a dict for MappingConfig.from_dict
+(each warning about one is a Note that knows its mapping: the preview shows it there).
 
 What has no equivalent here (LEDs, rotators, mDNS, chardelay, ...) is reported as a
 warning that names the connection. A connection that would be more open here than in
@@ -580,12 +581,17 @@ class _Conn:
     notes: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)             # why it is not imported
     noted: set[str] = field(default_factory=set)                 # = set(notes)
+    flagged: set[str] = field(default_factory=set)               # notes about its protection
 
-    def note(self, msg: str) -> None:
+    def note(self, msg: str, security: bool = False) -> None:
+        """`security`: the note says the mapping is held disabled or has lost a limit on
+        its clients (Note.security)."""
         if msg not in self.noted:
             self.budget.spend(len(self.label) + len(msg))  # the warning it becomes
             self.noted.add(msg)
             self.notes.append(msg)
+        if security:
+            self.flagged.add(msg)
 
     def hold(self, why: str) -> None:
         """Import the connection disabled: as it is here it would be more open than in
@@ -1138,7 +1144,7 @@ def _remaddr(c: _Conn, value: str) -> None:
             continue
         if len(fields) > 1 and fields[1] != "0":
             c.note(_("remaddr {0}: only the client address is checked here, not its port")
-                   .format(entry))
+                   .format(entry), security=True)
         if host not in allowed:
             allowed.append(host)
 
@@ -1206,7 +1212,7 @@ def _finish(c: _Conn) -> None:
     if c.holds:
         c.enabled = False
         for why in c.holds:
-            c.note(why)
+            c.note(why, security=True)
     if c.dropped:
         c.note(_("not imported (no equivalent here): {0}").format(", ".join(c.dropped)))
 
@@ -1230,9 +1236,37 @@ def _high_bytes(c: _Conn, key: str, escapes: str) -> None:
                  "(strings are sent as UTF-8)").format(escapes))
 
 
+class Note(str):
+    """A warning of the import, as parse_ser2net_config returns them (a str). `mapping`: the
+    index of the mapping it is about in the list returned with it (None: about the file,
+    or about a connection that is not imported); `detail`: the text without the name of
+    the connection in front; `security`: it says why the mapping comes in disabled (it
+    would be more open here than in ser2net) or which limit on its clients is lost."""
+    mapping: Optional[int] = None
+    detail: str = ""
+    security: bool = False
+    conn: Optional[_Conn] = None  # until the mappings are known (_point_notes)
+
+
+def _note(c: _Conn, detail: str, security: bool = False) -> Note:
+    n = Note(f"{c.label}: {detail}")
+    n.detail, n.security, n.conn = detail, security, c
+    return n
+
+
+def _point_notes(warnings: list[str], kept: list[_Conn]) -> None:
+    """Point each connection's note at its mapping (Note.mapping), by position in `kept`."""
+    index = {id(c): i for i, c in enumerate(kept)}
+    for w in warnings:
+        if isinstance(w, Note) and w.conn is not None:
+            w.mapping, w.conn = index.get(id(w.conn)), None
+
+
 def _notes(c: _Conn, imported: bool) -> list[str]:
     """A connection's warnings; for a skipped one only why it was skipped."""
-    return [f"{c.label}: {n}" for n in (c.notes if imported else c.skipped)]
+    if not imported:
+        return [f"{c.label}: {n}" for n in c.skipped]
+    return [_note(c, n, n in c.flagged) for n in c.notes]
 
 
 # ---------------------------------------------------------------------------
@@ -1484,6 +1518,8 @@ class _Yaml:
         b = _bool(enable)
         if b is None:
             c.note(_("enable '{0}' is not on/off: imported disabled").format(enable))
+        elif not b:
+            c.note(_("imported disabled: the file turns it off (enable: off)"))
         c.enabled = bool(b)
         for k, v in self.option_defaults.items():
             if k != "remaddr":  # see below
@@ -1635,6 +1671,8 @@ class _V3:
     def settings(self, c: _Conn, state: str, timeout: str, device: str, options: str) -> None:
         c.device = device
         c.enabled = state != "off"
+        if not c.enabled:
+            c.note(_("imported disabled: the file turns it off (state off)"))
         c.network["protocol"] = "telnet" if state == "telnet" else "raw"
         if state == "rawlp":  # a printer port: ser2net opens it write-only
             _write_only(c, "rawlp")
@@ -1764,12 +1802,15 @@ def _from_v3(lines: list[tuple[int, str]], budget: _Budget) -> tuple[list[_Conn]
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[dict]:
+def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[_Conn]:
     """Drop what does not validate or listens where an earlier one does, make the names
-    unique and keep one active mapping per serial device."""
+    unique and keep one active mapping per serial device: the connections to import."""
     def warn(msg: str) -> None:
         budget.spend(len(msg))
         warnings.append(msg)
+
+    def warn_for(c: _Conn, msg: str) -> None:  # "<label>: ..." about one that is imported
+        warn(_note(c, msg.removeprefix(f"{c.label}: ")))
     kept: list[_Conn] = []
     listening: dict[tuple[str, int], dict[str, str]] = {}  # (tcp|udp, port) -> bind IP -> name
     for c in conns:
@@ -1801,15 +1842,15 @@ def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[
         tried[base] = k
         used.add(c.name)
         if c.name != base:
-            warn(_("{0}: renamed to '{1}' (the name is used twice)").format(c.label, c.name))
+            warn_for(c, _("{0}: renamed to '{1}' (the name is used twice)").format(c.label, c.name))
         if c.enabled and c.device in owner:
             c.enabled = False
-            warn(_("{0}: imported disabled: {1} is also used by '{2}', and a serial port can be "
+            warn_for(c, _("{0}: imported disabled: {1} is also used by '{2}', and a serial port can be "
                    "open in only one active mapping here")
                  .format(c.label, c.device, owner[c.device]))
         elif c.enabled:
             owner[c.device] = c.name
-    return [c.to_dict() for c in kept]
+    return kept
 
 
 def looks_yaml(text: str) -> bool:
@@ -1847,7 +1888,9 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
                                 "(ser2net 4.x) or ser2net.conf (ser2net 3.x) file.").format(
                                     label or _("The file")))
         conns, warnings = _from_v3(lines, budget)
-    mappings = _assemble(conns, warnings, budget)
+    kept = _assemble(conns, warnings, budget)
+    mappings = [c.to_dict() for c in kept]
+    _point_notes(warnings, kept)
     if len(warnings) > _MAX_WARNINGS:
         more = len(warnings) - _MAX_WARNINGS
         del warnings[_MAX_WARNINGS:]

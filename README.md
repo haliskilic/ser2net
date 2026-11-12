@@ -192,8 +192,11 @@ düzenlemeye gerek yok.
   yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla. `paho-mqtt`
   gerektirir (opsiyonel; yoksa köprü normal çalışır).
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
-  Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
-  olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
+  Ayarlar → içe aktarma ile önizlemeli olarak alınır; önizleme her eşlemenin içe aktarma
+  sonrası halini (açık ya da kapalı, TLS, her istemci ya da kaç izinli adres, salt okunur)
+  kendi uyarılarıyla birlikte kendi satırında gösterir, uygulandığında uyarılar log'a
+  yazılır. Karşılığı olmayan seçenekler uyarı olarak gösterilir, burada daha açık hale
+  gelecek bir bağlantı (gtlssh girişi ya da TLS
   istemci sertifikası, sertifikası bu makinede olmayan TLS, yalnızca yazılan cihaz) kapalı
   olarak gelir. Aynı dosya sonradan yeniden birleştirilirse yalnızca dosyanın söyledikleri
   alınır, eşlemelerde burada ayarlananlar korunur (TLS, bind IP, izinli istemciler, USB
@@ -721,7 +724,9 @@ altında görünür; yenilemeleri başarısız olan panel *güncel değil* diye 
 formu kaydedilmemiş değişiklikleri atmadan önce sorar. Konsolda **Shift+Tab** klavye odağını
 konsoldan çıkarır (Tab cihaza gider).
 **İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,
-yenileri ekle) ya da *hepsini değiştir* seçilir.
+yenileri ekle) ya da *hepsini değiştir* seçilir. 2.7 betiklerinin tek adımlı içe aktarması
+(`step=preview` olmadan gelen POST) JSON dosyasıyla yine bütün eşlemeleri değiştirir;
+klasik ser2net dosyası yalnızca önizlemeyle alınır.
 
 ---
 
