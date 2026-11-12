@@ -15,7 +15,6 @@ import asyncio
 import hmac
 import logging
 import os
-import re
 import secrets
 import sys
 import time
@@ -28,6 +27,7 @@ from .config import AppConfig, ConfigStore, User, lock_down_dir, mapping_file, v
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
+from .logtext import one_line
 from .notify import Notifier
 from .signins import SignIns
 from .web.auth import LoginRateLimiter, RevokedSessions
@@ -62,9 +62,18 @@ VIEW_RECORDS = 50
 SETUP_CODE_FILE = "setup-code.txt"
 
 
-# characters that must not reach an audit record: control characters (tab / CR / LF and
-# the C1 ones such as NEL included) and the Unicode line and paragraph separators
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+class LineFormatter(logging.Formatter):
+    """The format of all.log, stdout and the mapping logs: time and message, the message
+    on one line (logtext.one_line: a line break or another control character in a name or
+    a device's text becomes a space, so it can't start a line of its own or reach a
+    terminal as an escape sequence). A traceback after it is left as it is."""
+
+    def __init__(self) -> None:
+        super().__init__("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S")
+
+    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802 (logging API)
+        record.message = one_line(record.message)
+        return super().formatMessage(record)
 
 
 def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
@@ -72,11 +81,12 @@ def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
     """Append one record to the audit log at `path`: one line, tab-separated: time,
     client IP, action, detail, user (the user column was added in v2.8 — older lines
     have four fields). Each field is cut to its AUDIT_FIELD_MAX, and control characters
-    in it become spaces, so a crafted mapping name can't forge an extra record. Rotated
+    in it become spaces (logtext.one_line), so a crafted mapping name can't forge an extra
+    record or cut one short. Rotated
     past AUDIT_LOG_MAX_BYTES (one backup kept). Best effort: never raises. Returns the
     fields as written."""
     fields = [time.strftime("%Y-%m-%d %H:%M:%S")] + [
-        _CONTROL.sub(" ", str(value)[:limit])
+        one_line(str(value)[:limit])
         for value, limit in zip((actor_ip, action, detail, user), AUDIT_FIELD_MAX, strict=True)]
     line = "\t".join(fields)
     try:
@@ -311,7 +321,7 @@ class AppState:
         logger.setLevel(logging.INFO)
         logger.handlers.clear()
         logger.propagate = False
-        fmt = logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S")
+        fmt = LineFormatter()
 
         console = logging.StreamHandler(sys.stdout)
         console.setFormatter(fmt)
@@ -331,6 +341,8 @@ class AppState:
         return logger
 
     def log(self, msg: str) -> None:
+        """One line in all.log and on stdout: cut at LOG_MESSAGE_MAX characters, control
+        characters written as spaces (LineFormatter)."""
         if len(msg) > LOG_MESSAGE_MAX:
             msg = f"{msg[:LOG_MESSAGE_MAX]}… ({len(msg) - LOG_MESSAGE_MAX} more characters)"
         self._logger.info(msg)
@@ -378,7 +390,7 @@ class AppState:
         try:
             os.makedirs(self.logs_dir, exist_ok=True)
             fh = logging.FileHandler(self.mapping_log_path(mapping_id), encoding="utf-8")
-            fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
+            fh.setFormatter(LineFormatter())
             lg.addHandler(fh)
         except (OSError, ValueError) as e:
             self.log(f"could not open mapping log for {mapping_id!r}: {e}")
