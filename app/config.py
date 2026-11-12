@@ -12,6 +12,7 @@ config.json still resets all config.
 """
 from __future__ import annotations
 
+import calendar
 import contextlib
 import dataclasses
 import functools
@@ -2073,6 +2074,11 @@ BACKUPS_KEPT = 50
 _BACKUP_NAME = re.compile(r"^config-\d{8}T\d{6}Z(-\d+)?\.json$")
 
 
+def now() -> float:
+    """The wall clock that names backups (tests set another)."""
+    return time.time()
+
+
 class ConfigStore:
     """config.json with atomic writes, plus automatic backups.
 
@@ -2081,7 +2087,10 @@ class ConfigStore:
     not the newest backup already (an older release wrote it, or it was edited by hand).
     So backups/ always holds the current config.json too: going back to a release that
     keeps no backups (2.7) and drops what it doesn't know at its first save loses nothing.
-    Identical content is not copied twice; the newest BACKUPS_KEPT are kept. Backups are
+    Identical content is not copied twice; the newest BACKUPS_KEPT are kept. Starting and
+    stopping mappings takes no backup of its own (save(backup=False)), so it doesn't push
+    the backups of real changes out. A new name always sorts first, also when the clock
+    went back (it then takes the newest name's time, with the next number). Backups are
     never read back on their own: deleting config.json still resets the system; restoring
     one is an explicit admin action."""
 
@@ -2093,6 +2102,10 @@ class ConfigStore:
         # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).
         lock_down_dir(directory)
         self.backup_dir = os.path.join(directory, "backups")
+        # where a backup that fails, or a clock behind the backups, is reported (AppState
+        # sets its log; a save itself never fails because of a backup)
+        self.log: Any = lambda _msg: None
+        self._clock_noted = False
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)
@@ -2119,21 +2132,39 @@ class ConfigStore:
         mine.pop("written_by", None)
         return on_disk == mine
 
-    def save(self, config: AppConfig, *, validate: bool = True) -> None:
+    def save(self, config: AppConfig, *, validate: bool = True, backup: bool = True) -> bool:
         """Atomically persist config to a single file (validates first: what start-up
         accepted while broken may stay as it was, see AppConfig.validate_for_save).
 
         Uses a temp file + os.replace so config.json is never partially written; the
         version being replaced is kept in backups/ first, the new one after (see the class
-        docstring).
+        docstring). Content config.json holds already is not written again.
         validate=False is for a change the caller checked itself and that must not
         fail on an unrelated setting (account recovery, app/accounts.py; start-up right
         after tolerate_problems(), runtime.prepare_config).
-        """
+        backup=False: a change only of which mappings run (start / stop). It takes no backup
+        of its own: when the newest backup is the file it replaces, the new file takes its
+        place (as the newest backup, under a new name); otherwise it is kept as usual.
+        Returns whether the configuration config.json held before is kept in backups/
+        (False: that backup could not be written; logged)."""
         still_accepted = config.validate_for_save() if validate else config.tolerated
         data = json.dumps(config.to_dict(), indent=2, ensure_ascii=False)
         directory = os.path.dirname(self.path)
-        self._backup_current(data)
+        try:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                current: Optional[str] = fh.read()
+        except OSError:
+            current = None  # first save: nothing to keep
+        if current == data:  # config.json holds this already: nothing to write
+            config.tolerated = still_accepted
+            self._add_backup(data)  # (newest already, unless backups/ was emptied)
+            return True
+        kept, replaces = True, None
+        if current is not None:
+            if not backup and (newest := self._newest()) is not None and newest[1] == current:
+                replaces = newest[0]  # the newest backup is the file replaced: it goes
+            else:
+                kept = self._add_backup(current)
 
         fd, tmp = tempfile.mkstemp(dir=directory, prefix=".cfg.", suffix=".tmp")
         try:
@@ -2148,48 +2179,64 @@ class ConfigStore:
         # written: only now does a part this save fixed stop being accepted while broken
         config.tolerated = still_accepted
         _fsync_dir(directory)
-        self._add_backup(data)
+        if self._add_backup(data, prune=replaces is None) and replaces is not None:
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(self.backup_dir, replaces))
+        return kept
 
     # ----- backups -----
-    def _backup_current(self, new_data: str) -> None:
-        """Before config.json is replaced by new_data: keep it in backups/, unless that is
-        the newest backup already (_add_backup)."""
-        try:
-            with open(self.path, "r", encoding="utf-8") as fh:
-                current = fh.read()
-        except OSError:
-            return  # first save: nothing to keep
-        if current != new_data:
-            self._add_backup(current)
+    def _newest(self) -> Optional[tuple[str, str]]:
+        """(name, text) of the newest backup, or None."""
+        for name in self.backup_names()[:1]:
+            try:
+                with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
+                    return name, fh.read()
+            except OSError:
+                return None
+        return None
 
-    def _add_backup(self, current: str) -> None:
+    def _add_backup(self, current: str, *, prune: bool = True) -> bool:
         """Make `current` (a config.json's text) the newest backup, unless it is that
-        already. Best effort: a failing backup must never stop the save itself."""
+        already; True when it is now. Best effort: a failing backup is logged, and never
+        stops the save itself. The name sorts first: when the clock is behind the newest
+        backup, the new one takes that one's time with the next number."""
         try:
             os.makedirs(self.backup_dir, exist_ok=True)
             lock_down_dir(self.backup_dir)
-            names = self.backup_names()
-            if names:
-                with open(os.path.join(self.backup_dir, names[0]), encoding="utf-8") as fh:
-                    if fh.read() == current:
-                        return  # this version is already the newest backup
-            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            newest = self._newest()
+            if newest is not None and newest[1] == current:
+                return True  # this version is already the newest backup
+            clock = time.strftime("%Y%m%dT%H%M%S", time.gmtime(now()))
+            stamp = clock
+            if newest is not None and (top := _backup_order(newest[0])[0]) > clock:
+                stamp = top
+                if not self._clock_noted:
+                    self._clock_noted = True
+                    self.log(f"WARNING: the system clock ({backup_time(f'config-{clock}')} "
+                             f"UTC) is behind the newest configuration backup "
+                             f"({backup_time(newest[0])} UTC): new backups are named after "
+                             f"that one, so that they stay the newest")
             # several saves in one second: -2, -3 ... (never reuse a pruned lower number,
             # or the newest backup would sort as the oldest)
-            same = [_backup_order(n)[1] for n in names if n.startswith(f"config-{stamp}")]
+            same = [_backup_order(n)[1] for n in self.backup_names()
+                    if _backup_order(n)[0] == stamp]
             n = max(same) + 1 if same else 1
-            name = f"config-{stamp}.json" if n == 1 else f"config-{stamp}-{n}.json"
+            name = f"config-{stamp}Z.json" if n == 1 else f"config-{stamp}Z-{n}.json"
             fd, tmp = tempfile.mkstemp(dir=self.backup_dir, prefix=".bak.", suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(current)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, os.path.join(self.backup_dir, name))
-            for old in self.backup_names()[BACKUPS_KEPT:]:
-                with contextlib.suppress(OSError):
-                    os.remove(os.path.join(self.backup_dir, old))
-        except OSError:
-            pass
+            for old in self.backup_names()[BACKUPS_KEPT:] if prune else ():
+                if old != name:  # (it sorts first; never the one just written)
+                    with contextlib.suppress(OSError):
+                        os.remove(os.path.join(self.backup_dir, old))
+            return True
+        except OSError as e:
+            self.log(f"WARNING: could not keep a backup of config.json in {self.backup_dir}: "
+                     f"{e}")
+            return False
 
     def backup_names(self) -> list[str]:
         """Backup file names, newest first."""
@@ -2202,7 +2249,9 @@ class ConfigStore:
     def backups(self) -> list[dict]:
         """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users, written_by
         (the release that wrote it; None: 2.8.1 or older), current (it is what config.json
-        holds now)}], newest first."""
+        holds now), file_time (when the file was written, UTC, if that is more than a minute
+        before the time in its name: the clock was behind the newest backup then, so it is
+        named after that one; else "")}], newest first."""
         try:
             with open(self.path, encoding="utf-8") as fh:
                 current: Optional[str] = fh.read()
@@ -2213,9 +2262,14 @@ class ConfigStore:
             path = os.path.join(self.backup_dir, name)
             info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
                                     "time": backup_time(name), "written_by": None,
-                                    "current": False}
+                                    "current": False, "file_time": ""}
             try:
-                info["size"] = os.path.getsize(path)
+                st = os.stat(path)
+                info["size"] = st.st_size
+                named = calendar.timegm(time.strptime(_backup_order(name)[0], "%Y%m%dT%H%M%S"))
+                if named - st.st_mtime > 60:  # (a copy of data/ makes it later: not shown)
+                    info["file_time"] = time.strftime("%Y-%m-%d %H:%M:%S",
+                                                      time.gmtime(st.st_mtime))
                 with open(path, encoding="utf-8") as fh:
                     text = fh.read()
                 info["current"] = text == current

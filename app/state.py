@@ -297,7 +297,8 @@ async def _to_its_end(task: asyncio.Future) -> bool:
 @dataclasses.dataclass
 class ConfigEdit:
     """What AppState.edit_config did, once its block has ended."""
-    saved: bool = False  # config.json was written (False: the block changed nothing)
+    saved: bool = False      # config.json was written (False: the block changed nothing)
+    backed_up: bool = True   # what config.json held before is in backups/ (False: failed)
 
 
 class AppState:
@@ -305,6 +306,7 @@ class AppState:
         self.store = store
         self.config = config
         self.data_dir = os.path.dirname(os.path.abspath(store.path))
+        store.log = self.log  # a backup that fails, a clock behind the backups
         # all.log lives next to config.json; per-mapping logs live in data/logs/
         self.log_path = os.path.join(self.data_dir, "all.log")
         self.logs_dir = os.path.join(self.data_dir, "logs")
@@ -687,20 +689,21 @@ class AppState:
         """Persist config atomically (validates first; raises ConfigError on bad config)."""
         self.store.save(self.config)
 
-    async def asave(self) -> None:
+    async def asave(self, *, backup: bool = True) -> bool:
         """Async wrapper around save(): the atomic write does blocking file I/O plus
         two fsyncs, so run it off the event loop to avoid stalling every bridge while
         config is persisted. Raises ConfigError on invalid config, same as save(), and
         ConfigWriteError (a ConfigError) when config.json can't be written. Changes go
-        through edit_config, which undoes them when this fails."""
+        through edit_config, which undoes them when this fails. backup and the result:
+        ConfigStore.save."""
         try:
-            await asyncio.to_thread(self.store.save, self.config)
+            return await asyncio.to_thread(self.store.save, self.config, backup=backup)
         except OSError as e:
             raise ConfigWriteError(_("Could not save config.json: {0}").format(
                 e.strerror or e)) from e
 
     @contextlib.asynccontextmanager
-    async def edit_config(self, *, keep_on_failure: bool = False):
+    async def edit_config(self, *, keep_on_failure: bool = False, backup: bool = True):
         """Change the configuration and save it, all or nothing:
 
             async with state.edit_config():
@@ -715,7 +718,7 @@ class AppState:
         ConfigError (a ConfigWriteError for a failed write) for the caller to show.
         keep_on_failure: a change that is used even when it can't be saved (a sign-in's
         account, a sign-out) stays in memory, until a restart; the error is raised too.
-        Yields a ConfigEdit."""
+        backup=False: only mappings start or stop (ConfigStore.save). Yields a ConfigEdit."""
         async with self.config_lock:
             snapshot = _snapshot(self.config)
             before = self.config.to_dict()
@@ -727,14 +730,14 @@ class AppState:
                 raise
             if self.config.to_dict() == before:
                 return
-            save = asyncio.ensure_future(self.asave())
+            save = asyncio.ensure_future(self.asave(backup=backup))
             cancelled = await _to_its_end(save)
             error = asyncio.CancelledError() if save.cancelled() else save.exception()
             if error is not None:
                 if not keep_on_failure:
                     _restore(snapshot)
                 raise error
-            edit.saved = True
+            edit.saved, edit.backed_up = True, save.result()
             if cancelled:
                 raise asyncio.CancelledError
 

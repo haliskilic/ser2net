@@ -90,42 +90,87 @@ class ActionResult(NamedTuple):
 
 
 async def apply_action(state, mid, action) -> ActionResult:
-    """Start/stop/restart a local mapping by id. Shared by the UI action and bulk
-    endpoints, the cluster remote-control endpoint and the REST API.
+    """Start/stop/restart a local mapping by id. Shared by the UI action endpoint, the
+    cluster remote-control endpoint and the REST API: apply_actions for one mapping."""
+    return (await apply_actions(state, [mid], action))[0]
 
-    The enabled flag is saved first (only when it changes), then the supervisor brings the
-    runner in line (it reads the config when the mapping's turn comes). Start and stop
-    are idempotent: a start leaves a mapping that runs with its settings as it is, clients
-    and serial port included (changed=False); restart always restarts. A start or restart
-    that can't be saved (e.g. the mapping shares a serial port with a running one, or
-    config.json can't be written) changes nothing and gives `error`. A stop always stops:
-    when config.json can't be written, the mapping stays stopped (in memory too) and
-    `warning` says it starts again when ser2net restarts."""
+
+async def apply_actions(state, ids, action) -> list[ActionResult]:
+    """Start/stop/restart the mappings with these ids (once each, in this order; the
+    dashboard's bulk action) with one save.
+
+    The enabled flags are saved first (when one changes; a start or stop takes no backup
+    of its own, see ConfigStore.save), then the supervisor brings each runner in line (it
+    reads the config when the mapping's turn comes). Start and stop are idempotent: a
+    start leaves a mapping that runs with its settings as it is, clients and serial port
+    included (changed=False); restart always restarts. A start or restart that can't be
+    saved (e.g. the mapping shares a serial port with a running one, or config.json can't
+    be written) leaves that mapping as it was and gives `error`; the others go on. A stop
+    always stops: when config.json can't be written, the mappings stay stopped (in memory
+    too) and `warning` says they start again when ser2net restarts."""
     stop = action == "stop"
-    m = None
+    ids = list(dict.fromkeys(ids))
+    found: dict[str, MappingConfig] = {}
+    refused: dict[str, ConfigError] = {}
     warning = ""
     try:
-        async with state.edit_config(keep_on_failure=stop):
-            m = state.config.get_mapping(mid)
-            if m is not None:
+        async with state.edit_config(keep_on_failure=stop, backup=False):
+            found = {mid: m for mid in ids if (m := state.config.get_mapping(mid)) is not None}
+            flipped = [m for m in found.values() if m.enabled == stop]
+            for m in flipped:
                 m.enabled = not stop
-    except ConfigError as e:  # (only a change is saved: m is the mapping)
-        if m is None or not stop:
-            return ActionResult(m is not None, getattr(m, "name", ""), error=e)
-        state.log(f"WARNING: [{m.name}] stopped, but config.json could not be saved ({e}): "
-                  "it starts again when ser2net restarts, unless a later change is saved")
+            if flipped and not stop:  # starting can make a clash: find who can't
+                refused = _refuse_clashes(state.config, flipped)
+    except ConfigError as e:  # the save itself failed (only a change is saved)
+        if not stop:
+            return [ActionResult(mid in found, found[mid].name if mid in found else "",
+                                 error=e) for mid in ids]
+        state.log(f"WARNING: stopped {', '.join(repr(m.name) for m in found.values())}, but "
+                  f"config.json could not be saved ({e}): they start again when ser2net "
+                  "restarts, unless a later change is saved")
         warning = _("Stopped, but config.json could not be saved ({0}): it starts again when "
                     "ser2net restarts.").format(e)
-    if m is None:
-        return ActionResult(False)
-    if stop:
-        changed = await state.supervisor.stop_mapping(mid)
-    elif action == "restart":
-        await state.supervisor.restart_mapping(m)
-        changed = True
-    else:  # start
-        _ok, _msg, changed = await state.supervisor.ensure_running(m)
-    return ActionResult(True, m.name, warning=warning, changed=changed)
+    results = []
+    for mid in ids:
+        m = found.get(mid)
+        if m is None:
+            results.append(ActionResult(False))
+            continue
+        if mid in refused:
+            results.append(ActionResult(True, m.name, error=refused[mid]))
+            continue
+        if stop:
+            changed = await state.supervisor.stop_mapping(mid)
+        elif action == "restart":
+            await state.supervisor.restart_mapping(m)
+            changed = True
+        else:  # start
+            _ok, _msg, changed = await state.supervisor.ensure_running(m)
+        results.append(ActionResult(True, m.name, warning=warning, changed=changed))
+    return results
+
+
+def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
+    """Mappings just switched on whose start the save would refuse (a serial port it would
+    share, ...): each is switched off again, by id with the reason. One check when none
+    is refused; otherwise they are switched on again one by one, in order, so the first of
+    two that share a port starts."""
+    try:
+        config.validate_for_save()
+        return {}
+    except ConfigError:
+        pass
+    for m in started:
+        m.enabled = False
+    refused = {}
+    for m in started:
+        m.enabled = True
+        try:
+            config.validate_for_save()
+        except ConfigError as e:
+            m.enabled = False
+            refused[m.id] = e
+    return refused
 
 
 async def delete_mapping(state, mid):

@@ -647,7 +647,11 @@ owner-only (POSIX `0700`; Windows `icacls` owner/SYSTEM/Administrators), so the 
 inside aren't readable by other users:
 - `config.json` — admin IP, password hash, all mappings (atomic write).
 - `backups/` — the `config.json` every change writes, and the one it replaces when that
-  isn't kept yet (newest 50): the newest backup is always the current `config.json`. The
+  isn't kept yet (newest 50): the newest backup is always the current `config.json`.
+  Starting or stopping a mapping adds no backup but updates the newest one, so it doesn't
+  push out the backups of real changes. A new backup's name sorts first also after the
+  clock went back (it takes the newest backup's time with the next number; the list then
+  also shows when it was really saved). The
   list shows which release wrote each one. Download or restore one under Settings →
   *Configuration backups*. A restore first shows what changes
   for sign-in and access, then brings back the mappings and settings; the user accounts

@@ -92,8 +92,8 @@ def routes(ctx: Ctx) -> list:
         if not ids or len(ids) > 500:
             return PlainTextResponse(_("Select one or more mappings."), status_code=400)
         done, refused = [], []
-        for mid in ids:
-            res = await ops.apply_action(state, mid, action)
+        results = await ops.apply_actions(state, ids, action)  # one save for all
+        for res in results:
             if res.error is not None:
                 refused.append(res)
             elif res.found:
@@ -102,7 +102,9 @@ def routes(ctx: Ctx) -> list:
         state.log(f"bulk {action}: {len(done)} mapping(s)"
                   + (f", {len(refused)} refused" if refused else ""))
         if refused:  # the others are done
-            return PlainTextResponse(_bulk_refused(refused, len(ids)), status_code=400)
+            return PlainTextResponse(_bulk_refused(refused, len(results)), status_code=400)
+        if warning := next((r.warning for r in results if r.warning), ""):
+            return PlainTextResponse(warning, status_code=200, headers=TRIGGER)
         return Response("", headers=TRIGGER)
 
     # ---------------- mapping form ----------------

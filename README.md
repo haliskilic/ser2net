@@ -665,7 +665,11 @@ kilitlenir (POSIX `0700`; Windows'ta `icacls` ile sahip/SYSTEM/Administrators), 
 içindeki dosyalar başka kullanıcılarca okunamaz:
 - `config.json` — admin IP, parola hash'i, tüm eşlemeler (atomik yazım).
 - `backups/` — her değişikliğin yazdığı `config.json` ve henüz saklanmamışsa yerini aldığı
-  hâli (son 50): en yeni yedek her zaman güncel `config.json`'dur. Liste her yedeği hangi
+  hâli (son 50): en yeni yedek her zaman güncel `config.json`'dur. Bir eşlemeyi başlatmak ya
+  da durdurmak yeni bir yedek eklemez, en yeni yedeği günceller; böylece gerçek
+  değişikliklerin yedekleri listeden itilmez. Saat geri alınsa da yeni yedeğin adı en üstte
+  sıralanır (en yeni yedeğin zamanını ve bir sonraki numarayı alır; listede gerçek kayıt
+  zamanı da gösterilir). Liste her yedeği hangi
   sürümün yazdığını gösterir. Ayarlar → *Yapılandırma yedekleri*'nden indirilir ya da geri
   yüklenir. Geri yükleme önce giriş ve
   erişim için neyin değişeceğini gösterir, sonra eşlemeleri ve ayarları geri getirir;
