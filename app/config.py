@@ -1629,6 +1629,8 @@ class ConfigStore:
         # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).
         lock_down_dir(directory)
         self.backup_dir = os.path.join(directory, "backups")
+        # what each backup holds, by name: ((size, mtime_ns), _backup_summary()) - see backups()
+        self._backup_summaries: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
 
     def exists(self) -> bool:
         return os.path.isfile(self.path)
@@ -1724,21 +1726,31 @@ class ConfigStore:
         return sorted(names, key=_backup_order, reverse=True)
 
     def backups(self) -> list[dict]:
-        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users}], newest first."""
-        out = []
+        """[{name, time (UTC, 'YYYY-MM-DD HH:MM:SS'), size, mappings, users}], newest first.
+
+        The Settings page lists them at every visit: a file's contents are read once and
+        kept by its name, size and modification time (a backup is written once and never
+        changed in place), so only a new or changed one is parsed again. In memory only:
+        the files and their names stay as they are."""
+        known, kept, out = self._backup_summaries, {}, []
         for name in self.backup_names():
             path = os.path.join(self.backup_dir, name)
             info: dict[str, Any] = {"name": name, "size": 0, "mappings": None, "users": None,
                                     "time": backup_time(name)}
             try:
-                info["size"] = os.path.getsize(path)
-                with open(path, encoding="utf-8") as fh:
-                    doc = json.load(fh)
-                info["mappings"] = len(doc.get("mappings") or [])
-                info["users"] = len(doc.get("users") or [])
-            except (OSError, ValueError, AttributeError):
-                pass
+                st = os.stat(path)
+            except OSError:
+                out.append(info)
+                continue
+            stamp = (st.st_size, st.st_mtime_ns)
+            hit = known.get(name)
+            summary = hit[1] if hit is not None and hit[0] == stamp else _backup_summary(path)
+            if summary is not None:
+                kept[name] = (stamp, summary)
+                info.update(summary)
+            info["size"] = st.st_size
             out.append(info)
+        self._backup_summaries = kept  # pruned to the files there are
         return out
 
     def read_backup(self, name: str) -> str:
@@ -1748,6 +1760,22 @@ class ConfigStore:
             raise ConfigError(_("No such backup."))
         with open(os.path.join(self.backup_dir, name), encoding="utf-8") as fh:
             return fh.read()
+
+
+def _backup_summary(path: str) -> dict[str, Any] | None:
+    """What the backups list shows of one backup's contents (None for the counts of a file
+    that isn't a configuration; None itself when it can't be read now)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except OSError:
+        return None
+    except ValueError:
+        return {"mappings": None, "users": None}
+    try:
+        return {"mappings": len(doc.get("mappings") or []), "users": len(doc.get("users") or [])}
+    except (AttributeError, TypeError):
+        return {"mappings": None, "users": None}
 
 
 def backup_time(name: str) -> str:
