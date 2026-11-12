@@ -26,6 +26,7 @@ from ...config import (
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
 from .. import auth, ldap_auth, selfsigned
+from . import ops
 from .common import Ctx, csrf_failed
 from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
@@ -701,14 +702,7 @@ def routes(ctx: Ctx) -> list:
 
     async def _import_preview(request, plan, mode):
         """Show what importing `plan` would change; nothing changes until it is applied."""
-        current = state.config.mappings
-        rows = importer.plan_rows(current, plan.mappings, mode)
-        candidate, _touched = importer.apply_import(current, plan.mappings, mode)
-        problem = None
-        try:
-            dataclasses.replace(state.config, mappings=candidate).validate_for_save()
-        except ConfigError as e:
-            problem = str(e)
+        rows, problem = ops.import_preview(state, plan, mode)
         preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
                    "source": plan.source, "warnings": plan.warnings, "problem": problem,
                    "count": len(plan.mappings)}
@@ -732,23 +726,11 @@ def routes(ctx: Ctx) -> list:
         return await _apply_import(request, item["plan"], mode)
 
     async def _apply_import(request, plan, mode):
-        rows = importer.plan_rows(state.config.mappings, plan.mappings, mode)
-        async with state.config_lock:
-            old = state.config.mappings
-            new_maps, touched = importer.apply_import(old, plan.mappings, mode)
-            state.config.mappings = new_maps
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.mappings = old
-                return await settings_get(request, error=_("Import rejected: {0}").format(e))
-        if mode == "replace":
-            await state.supervisor.stop_all()
-            await state.supervisor.start_all(state.config)
-        else:
-            for m in touched:
-                await state.supervisor.apply_mapping(m)
-        count = {a: sum(1 for r in rows if r["action"] == a) for a in ("add", "update", "same", "remove")}
+        try:
+            rows, new_maps = await ops.import_mappings(state, plan, mode)
+        except ConfigError as e:
+            return await settings_get(request, error=_("Import rejected: {0}").format(e))
+        count = ops.import_counts(rows)
         state.log(f"mappings imported ({mode}): {count['add']} added, {count['update']} updated, "
                   f"{count['same']} unchanged, {count['remove']} removed")
         ctx.audit(request, f"config_import_{mode}",
