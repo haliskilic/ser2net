@@ -459,7 +459,9 @@ def feedback_checks(browser, base, problems):
         bad("the lost-connection note stayed after the server answered again")
 
     # an ended session: a lasting note with a sign-in link; signing in (another tab) clears it
-    ctx.clear_cookies(name="ser2net_session")
+    # (the session cookie's name carries the port: app/web/proxy.py cookie_name)
+    ctx.clear_cookies(name=next(c["name"] for c in ctx.cookies()
+                                if c["name"].startswith("ser2net_session")))
     if not until("() => document.querySelector('#mappings.stale') && "
                  "document.querySelector('#ui-alert a[href=\"/login\"]')"):
         bad("an ended session was not shown with a sign-in link")
