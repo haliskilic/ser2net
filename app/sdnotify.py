@@ -25,12 +25,15 @@ def _address(env: Mapping[str, str]) -> Optional[str]:
 
 def notify(*fields: str, env: Optional[Mapping[str, str]] = None) -> bool:
     """Send ``fields`` ("READY=1", "STATUS=..."), one per line, to systemd. True when sent;
-    False without $NOTIFY_SOCKET or when it can't be (never raises)."""
+    False without $NOTIFY_SOCKET or when it can't be (never raises). It never waits: this
+    runs on the event loop, and a socket whose queue is full (nobody reads it) would hold
+    it up; that message is lost instead."""
     addr = _address(os.environ if env is None else env)
     if addr is None:
         return False
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.setblocking(False)
             s.connect(addr)
             s.sendall("\n".join(fields).encode("utf-8", "replace"))
     except OSError:

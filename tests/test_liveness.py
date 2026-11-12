@@ -175,6 +175,16 @@ def test_sd_notify():
                                            "WATCHDOG_PID": str(os.getpid())}) == 2.0
         assert sdnotify.watchdog_interval({**env, "WATCHDOG_USEC": "x"}) is None
         assert sdnotify.notify("READY=1", env={"NOTIFY_SOCKET": path + ".gone"}) is False
+        # nobody reads the socket: its queue fills, and a send must not wait for room (it
+        # runs on the event loop)
+        t0 = time.monotonic()
+        sent = [sdnotify.notify("STATUS=x" * 100, env=env) for _ in range(300)]
+        assert time.monotonic() - t0 < 5 and sent[0] and not sent[-1], sent.count(True)
+        while True:  # (what queued)
+            try:
+                s.recv(4096)
+            except OSError:  # timed out: empty
+                break
         if sys.platform.startswith("linux"):
             name = f"s2n-test-{os.getpid()}"
             a = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -185,7 +195,8 @@ def test_sd_notify():
             finally:
                 a.close()
         print("sd_notify: nothing without NOTIFY_SOCKET; READY/STATUS, STOPPING, WATCHDOG "
-              "datagrams (path and abstract socket); WatchdogSec read  OK")
+              "datagrams (path and abstract socket); WatchdogSec read; a full socket never "
+              "waits  OK")
     finally:
         s.close()
         shutil.rmtree(d, ignore_errors=True)
