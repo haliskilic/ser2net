@@ -17,16 +17,24 @@ feed the bridges fill to the WebSocket's close (no socat, no serial device).
     changed (4002), stalled (4003), no such mapping (4004), too many (1013); a page that
     asks for protocol 2 is told when the mapping is not running.
 
+A mapping's console text encoding (options.console_encoding): UTF-8 by default, or a
+single-byte code page whose characters for 0x80-0xFF the console panel carries (C1 codes
+as '.'); an older peer's form keeps it, an edit refuses an unknown one, a stored unknown
+one reads as UTF-8.
+
 End to end (a real server, no serial device): a Modbus gateway's console is observe-only
-and opens in the hex view; the close codes and the notice over real WebSockets.
+and opens in the hex view; the close codes and the notice over real WebSockets; the
+encoding saved from the form and shown by the console panel.
 The other parts run the handlers against stand-ins for the WebSocket, the runner and
 the app state.
 
 Run: python3 tests/test_console_feed.py
 """
 import asyncio
+import html
 import json
 import os
+import re
 import struct
 import sys
 import time
@@ -37,13 +45,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from _server import Browser, Server, free_port  # noqa: E402
 
-from app.config import AppConfig, MappingConfig  # noqa: E402
+from app.config import (  # noqa: E402
+    CONSOLE_ENCODINGS, AppConfig, ConfigError, MappingConfig, console_charset, console_encoding,
+)
 from app.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner  # noqa: E402
 from app.engine.modbus_gateway import ModbusGatewayRunner  # noqa: E402
 from app.engine.supervisor import _Unbuildable  # noqa: E402
 from app.web import auth  # noqa: E402
 from app.web.routes import console  # noqa: E402
 from app.web.routes.common import Ctx  # noqa: E402
+from app.web.routes.forms import _build_mapping_dict, _preserve_unmanaged_fields  # noqa: E402
 from app.web.routes.console import _Monitor, _TrafficMonitor  # noqa: E402
 
 
@@ -430,6 +441,48 @@ def test_close_reasons():
           "when the mapping is not running  OK")
 
 
+def test_console_encoding():
+    m = MappingConfig.from_dict({"name": "n"})
+    assert m.options.console_encoding == "utf-8" and console_charset("utf-8") == ""
+    for enc in CONSOLE_ENCODINGS[1:]:
+        table = console_charset(enc)
+        assert len(table) == 128, enc
+        for b in range(0x80, 0x100):
+            ch = bytes([b]).decode(enc, "replace")
+            assert table[b - 0x80] == ("." if 0x80 <= ord(ch) <= 0x9F else ch), (enc, hex(b))
+    assert console_charset("iso-8859-9")[0xDE - 0x80] == "Ş" == console_charset("cp857")[0x9E - 0x80]
+    assert console_charset("cp1254")[0xFD - 0x80] == "ı"
+    assert "Ş" not in console_charset("iso-8859-1"), "Latin-1 has no Ş"
+    # a stored value that isn't offered (hand-edited, a newer version's) reads as UTF-8;
+    # an edit refuses it
+    odd = MappingConfig.from_dict({"name": "n", "serial": {"port": "COM7"},
+                                   "options": {"console_encoding": "koi8-r"}})
+    assert odd.options.console_encoding == "koi8-r" and console_encoding(odd.options) == "utf-8"
+    odd.validate()  # a stored config keeps loading and saving
+    try:
+        odd.validate_input()
+        raise AssertionError("an edit with an unknown console encoding was accepted")
+    except ConfigError as e:
+        assert "Unknown console text encoding 'koi8-r'" in str(e), e
+    MappingConfig.from_dict({"name": "n", "options": {"console_encoding": "cp857"}}).validate_input()
+
+    form = {"name": "n", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "network_mode": "server", "network_protocol": "raw", "network_port": "4001"}
+    posted = MappingConfig.from_dict(_build_mapping_dict(dict(form, opt_console_encoding="cp1254"),
+                                                         strict=True))
+    assert posted.options.console_encoding == "cp1254"
+    fresh = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+    assert fresh.options.console_encoding == "utf-8", "a form without it: the default"
+    stored = MappingConfig.from_dict({"name": "n", "options": {"console_encoding": "iso-8859-9"}})
+    old_peer = dict(form, id=stored.id)  # an older cluster peer's form doesn't have it
+    edited = MappingConfig.from_dict(_build_mapping_dict(old_peer, strict=True))
+    _preserve_unmanaged_fields(edited, stored, old_peer)
+    assert edited.options.console_encoding == "iso-8859-9", "an older peer's edit reset it"
+    print("console text encoding: UTF-8 by default, a code page's table for 0x80-0xFF (C1 as "
+          "'.'), kept by an older peer's form, an unknown one refused by edits and read as "
+          "UTF-8  OK")
+
+
 PW = "console-feed-pass-1"
 
 
@@ -489,8 +542,35 @@ def test_live():
             assert closed(conn) == (4001, "mapping stopped or restarted")
             conn.close()
         assert "[Raw] console closed (127.0.0.1): mapping stopped or restarted" in srv.output()
-    print("live: 4004 for no such mapping, the not-running notice, 1013 past the limit, "
-          "4001 when the mapping is stopped  OK")
+        print("live: 4004 for no such mapping, the not-running notice, 1013 past the limit, "
+              "4001 when the mapping is stopped  OK")
+
+        # the console text encoding, from the form to the console panel
+        st, _, form = b.get("/api/mappings/cf0000000001/form")
+        assert st == 200 and 'name="opt_console_encoding"' in form
+        assert '<option value="utf-8" selected>' in form, "the default is selected"
+        fields = {"id": "cf0000000001", "name": "Raw", "enabled": "on", "kind": "net",
+                  "serial_port": "/dev/ser2net-console-feed-cf0000000001",
+                  "network_mode": "server", "network_protocol": "raw",
+                  "network_bind_ip": "127.0.0.1", "network_port": str(free_port())}
+        st, _, body = b.post("/api/mappings/save", dict(fields, opt_console_encoding="koi8-r"),
+                             htmx=True)
+        assert st == 400 and "Unknown console text encoding" in body, (st, body[:300])
+        st, _, _ = b.post("/api/mappings/save", dict(fields, opt_console_encoding="iso-8859-9"),
+                          htmx=True)
+        assert st == 200
+        saved = next(m for m in srv.saved_config()["mappings"] if m["id"] == "cf0000000001")
+        assert saved["options"]["console_encoding"] == "iso-8859-9", saved["options"]
+        st, _, page = b.get("/api/mappings/cf0000000001/console-view")
+        table = re.search(r'data-charset="([^"]*)"', page).group(1)
+        assert html.unescape(table) == console_charset("iso-8859-9"), table
+        assert "Text encoding: ISO-8859-9." in page
+        st, _, form = b.get("/api/mappings/cf0000000001/form")
+        assert '<option value="iso-8859-9" selected>' in form
+        st, _, page = b.get("/api/mappings/cf0000000003/console-view")
+        assert 'data-charset=""' in page and "Text encoding" not in page, "UTF-8: xterm decodes"
+    print("console text encoding: saved from the form (an unknown one refused), the console "
+          "panel carries its table  OK")
 
 
 def main():
@@ -502,6 +582,7 @@ def main():
     test_batches()
     test_drop_notices()
     test_close_reasons()
+    test_console_encoding()
     test_live()
     print("\nPASS: console and hex-view feeds")
 

@@ -340,8 +340,11 @@ function initTerm(root) {
   el._onresize = refit;
   window.addEventListener("resize", refit);
   if (el.getAttribute("data-interactive") === "1") {
+    var cs = charset(el);
     term.onData(function (d) {
-      if (el._mode === "text" && el._ws && el._ws.readyState === 1) el._ws.send(d);
+      // UTF-8: a text message (the server sends it as UTF-8); a code page: its bytes
+      if (el._mode === "text" && el._ws && el._ws.readyState === 1)
+        el._ws.send(cs ? encodeText(d, cs) : d);
     });
     // the focus: once the panel is in view (8) — keys typed into a console out of view
     // (Space / PageDown to scroll the page) would go to the device
@@ -373,7 +376,7 @@ function connectTerm(el, mode, again) {
   var ws = new WebSocket(scheme + "://" + location.host + path + "?v=2");
   ws.binaryType = "arraybuffer";
   el._ws = ws;
-  var bridge = el.getAttribute("data-bridge") === "1", opened = false;
+  var bridge = el.getAttribute("data-bridge") === "1", opened = false, cs = charset(el);
   function say(msg) { term.write("\r\n\x1b[33m[" + msg + "]\x1b[0m\r\n"); }
   function notice(text) {
     var n = null;
@@ -390,8 +393,9 @@ function connectTerm(el, mode, again) {
   ws.onmessage = function (ev) {
     if (typeof ev.data === "string") { notice(ev.data); return; }
     el._retries = 0;
-    if (mode === "text") term.write(new Uint8Array(ev.data));
-    else term.write(hexRecords(ev.data, bridge));
+    var bytes = new Uint8Array(ev.data);
+    if (mode === "text") term.write(cs ? decodeBytes(bytes, cs) : bytes);
+    else term.write(hexRecords(ev.data, bridge, cs));
   };
   ws.onclose = function (ev) {
     if (el._ws !== ws || !el._term) return;   // replaced (the other view) or closed
@@ -431,20 +435,48 @@ function closedText(code, opened) {
   return tr("disconnected", "console disconnected");
 }
 
+// The mapping's console text encoding (its form's "Console text encoding"): UTF-8, which
+// xterm.js decodes itself (null), or a single-byte code page, whose characters for the
+// bytes 0x80-0xFF the page carries (data-charset: the browser has no CP857, and encodes
+// nothing but UTF-8). The bytes 0x00-0x7F are ASCII in all of them.
+function charset(el) {
+  var cs = el.getAttribute("data-charset") || "";
+  return cs.length === 128 ? cs : null;
+}
+function decodeBytes(bytes, cs) {
+  var out = "";
+  for (var i = 0; i < bytes.length; i++)
+    out += bytes[i] < 128 ? String.fromCharCode(bytes[i]) : cs.charAt(bytes[i] - 128);
+  return out;
+}
+// what is typed, as the code page's bytes: '?' for a character it doesn't have
+function encodeText(text, cs) {
+  var out = [];
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charCodeAt(i);
+    if (c < 128) { out.push(c); continue; }
+    if (c >= 0xd800 && c < 0xdc00) i++;   // beyond U+FFFF: no code page here has one
+    var j = (c >= 0xd800 && c < 0xe000) || c === 0xfffd ? -1 : cs.indexOf(text.charAt(i));
+    out.push(j >= 0 ? 128 + j : 63);
+  }
+  return new Uint8Array(out);
+}
+
 // the hex view's lines for one message of packed records
-function hexRecords(buf, bridge) {
+function hexRecords(buf, bridge, cs) {
   var dv = new DataView(buf), out = "", off = 0;
   while (off + 13 <= buf.byteLength) {
     var n = dv.getUint32(off + 9, false);
     if (off + 13 + n > buf.byteLength) break;
     out += hexLines(dv.getUint8(off), dv.getFloat64(off + 1, false),
-                    new Uint8Array(buf, off + 13, n), bridge);
+                    new Uint8Array(buf, off + 13, n), bridge, cs);
     off += 13 + n;
   }
   return out;
 }
 
-function hexLines(dir, ts, bytes, bridge) {
+// `cs`: the code page's characters for the text column (else it shows ASCII only)
+function hexLines(dir, ts, bytes, bridge, cs) {
   var d = new Date(ts * 1000);
   function pad(n, w) { n = String(n); while (n.length < w) n = "0" + n; return n; }
   var stamp = pad(d.getHours(), 2) + ":" + pad(d.getMinutes(), 2) + ":" + pad(d.getSeconds(), 2) +
@@ -460,7 +492,7 @@ function hexLines(dir, ts, bytes, bridge) {
       if (i < bytes.length) {
         var b = bytes[i];
         hex += (b < 16 ? "0" : "") + b.toString(16) + " ";
-        text += (b >= 32 && b < 127) ? String.fromCharCode(b) : ".";
+        text += (b >= 32 && b < 127) ? String.fromCharCode(b) : (cs && b >= 128 ? cs.charAt(b - 128) : ".");
       } else {
         hex += "   ";
       }

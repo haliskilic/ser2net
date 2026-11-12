@@ -903,5 +903,16 @@
   "the mapping stopped or restarted": "eşleme durdu ya da yeniden başlatıldı",
   "closed: signed out, or your access changed": "kapatıldı: oturum kapandı ya da erişimin değişti",
   "closed: this browser took nothing for too long": "kapatıldı: bu tarayıcı uzun süre hiçbir şey almadı",
-  "the mapping no longer exists": "eşleme artık yok"
+  "the mapping no longer exists": "eşleme artık yok",
+  "Text encoding: %(encoding)s.": "Metin kodlaması: %(encoding)s.",
+  "Console text encoding": "Konsol metin kodlaması",
+  "how the web console and the hex view show the device’s text, and send what is typed; the bridge passes bytes unchanged": "web konsolu ve hex görünümü cihazın metnini bununla gösterir, yazılanı bununla gönderir; köprü baytları değiştirmeden iletir",
+  "UTF-8 (default)": "UTF-8 (varsayılan)",
+  "ISO-8859-9 (Latin-5, Turkish)": "ISO-8859-9 (Latin-5, Türkçe)",
+  "Windows-1254 (Turkish)": "Windows-1254 (Türkçe)",
+  "CP857 (DOS, Turkish)": "CP857 (DOS, Türkçe)",
+  "ISO-8859-1 (Latin-1, Western European)": "ISO-8859-1 (Latin-1, Batı Avrupa)",
+  "Windows-1252 (Western European)": "Windows-1252 (Batı Avrupa)",
+  "CP437 (DOS, US)": "CP437 (DOS, ABD)",
+  "Unknown console text encoding {0}: use one of {1}.": "Bilinmeyen konsol metin kodlaması {0}: şunlardan birini kullan: {1}."
 }

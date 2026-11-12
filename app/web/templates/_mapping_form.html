@@ -215,6 +215,18 @@
       <label>{{ _("Rotated trace files kept") }} <span class="muted">({{ _("0 = start over") }})</span>
         <input type="number" name="opt_trace_keep" min="0" max="50" value="{{ mapping.options.trace_keep }}"></label>
     </div>
+    <div class="grid2">
+      <label>{{ _("Console text encoding") }} <span class="muted">({{ _("how the web console and the hex view show the device’s text, and send what is typed; the bridge passes bytes unchanged") }})</span>
+        <select name="opt_console_encoding">{% for value, label in [
+          ("utf-8", _("UTF-8 (default)")),
+          ("iso-8859-9", _("ISO-8859-9 (Latin-5, Turkish)")),
+          ("cp1254", _("Windows-1254 (Turkish)")),
+          ("cp857", _("CP857 (DOS, Turkish)")),
+          ("iso-8859-1", _("ISO-8859-1 (Latin-1, Western European)")),
+          ("cp1252", _("Windows-1252 (Western European)")),
+          ("cp437", _("CP437 (DOS, US)"))] %}<option value="{{ value }}" {% if value == mapping.options.console_encoding %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      </label>
+    </div>
   </fieldset>
 
   <fieldset data-show-when="kind=net">

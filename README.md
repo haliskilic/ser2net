@@ -327,6 +327,11 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   ve hex görünümünde açılır). Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
   gönderdiklerini görür. Eşleme durunca ya da yeniden başlayınca konsol bunu söyler ve
   kendiliğinden yeniden bağlanır; yetişemeyen bir tarayıcıya kaç bayt kaçırdığı söylenir.
+  Türkçe (ya da başka) harfleri tek baytlı bir kod sayfasıyla gönderen bir cihaz için
+  eşlemenin *Konsol metin kodlaması* ayarını seç (varsayılan UTF-8; ISO-8859-9,
+  Windows-1254, CP857, ISO-8859-1, Windows-1252, CP437): konsol cihazın metnini bununla
+  gösterir, yazılanı bununla gönderir; hex görünümünün metin sütunu da. Köprü baytları her
+  durumda değiştirmeden iletir.
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
 - **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
   admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak` olarak

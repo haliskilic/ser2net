@@ -453,6 +453,33 @@ def udp_peer_timeout(net: NetworkSettings) -> float:
 # ---------------------------------------------------------------------------
 # Per-mapping options
 # ---------------------------------------------------------------------------
+# The text encoding of a mapping's web console and hex view (MappingOptions.
+# console_encoding): what the device's bytes are shown as, and what is typed is sent as.
+# The bridge itself passes bytes unchanged. UTF-8, or one of these single-byte code pages.
+CONSOLE_ENCODINGS = ("utf-8", "iso-8859-9", "cp1254", "cp857", "iso-8859-1", "cp1252", "cp437")
+
+
+def console_encoding(options: "MappingOptions") -> str:
+    """A mapping's console encoding: a stored value that is not one of CONSOLE_ENCODINGS
+    (hand-edited, or from a newer version) reads as UTF-8, today's behaviour (edits
+    refuse one: MappingConfig.validate_input)."""
+    value = options.console_encoding
+    return value if value in CONSOLE_ENCODINGS else "utf-8"
+
+
+@functools.lru_cache(maxsize=None)
+def console_charset(encoding: str) -> str:
+    """What the web console shows for the bytes 0x80-0xFF in `encoding` (app.js decodes
+    the device's bytes with it, and encodes what is typed with it, in the browser: it has
+    no CP857 and encodes nothing but UTF-8): 128 characters, "" for UTF-8 (xterm.js decodes
+    that itself). A C1 control code shows as '.', so no byte becomes a terminal command; a
+    byte the code page leaves undefined as U+FFFD."""
+    if encoding not in CONSOLE_ENCODINGS or encoding == "utf-8":
+        return ""
+    chars = (bytes([b]).decode(encoding, "replace") for b in range(0x80, 0x100))
+    return "".join("." if "\x80" <= c <= "\x9f" else c for c in chars)
+
+
 @dataclass
 class MappingOptions:
     banner: str = ""
@@ -471,6 +498,9 @@ class MappingOptions:
     trace_timestamp: bool = True
     trace_max_mb: float = 10.0
     trace_keep: int = 3
+    # the web console's and hex view's text encoding (CONSOLE_ENCODINGS); display and typing
+    # only: what the bridge passes stays the same bytes
+    console_encoding: str = "utf-8"
     # RFC2217 interop knobs for non-compliant peers:
     rfc2217_poll_modem_interval_s: float = 1.0
     rfc2217_net_timeout_s: float = 3.0
@@ -715,6 +745,9 @@ class MappingConfig:
                                     "supported).").format(side.port))
         if self.kind == "net" and self.network.mode == "udp":
             self._validate_udp_peer()
+        if self.options.console_encoding not in CONSOLE_ENCODINGS:
+            raise ConfigError(_("Unknown console text encoding {0}: use one of {1}.").format(
+                repr(self.options.console_encoding), ", ".join(CONSOLE_ENCODINGS)))
 
     def _validate_udp_peer(self) -> None:
         """A UDP mapping's reply address and peer timeout (an edit's rules: a stored
