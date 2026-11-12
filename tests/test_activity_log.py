@@ -5,8 +5,9 @@ Checks:
     journal or Docker's container log keep a copy of); on / unset as before; another value
     keeps stdout and says so; when all.log can't be opened, stdout stays;
   * admin_ui.request_log: "all" (default) as before, "changes" logs only requests that
-    change something and refused or failed ones, "off" none; sign-ins and the audit
-    records are logged whatever it says; an unknown value loads as "all" with a note;
+    change something and refused or failed ones, "off" none — also of the requests answered
+    before any handler (no session: 401, or sent to the sign-in page); sign-ins and the
+    audit records are logged whatever it says; an unknown value loads as "all" with a note;
   * Settings -> Audit log saves it (admin only, audited).
 
 Run: python3 tests/test_activity_log.py
@@ -151,13 +152,17 @@ def test_settings_and_live_server():
         b.get("/settings")
         b.get("/settings/backups/config-20000101T000000Z.json")   # 404
         b.post("/settings/node-name", {"node_name": "line-1"})
+        anon = Browser(srv.base)
+        assert anon.get("/api/status")[0] == 401      # refused before any handler
         lines = _http_lines(_all_log(srv)[mark:])
+        assert ("GET", "/api/status", "401") in lines, lines
         assert ("GET", "/settings", "200") not in lines, lines
         assert ("GET", "/settings/backups/config-20000101T000000Z.json", "404") in lines, lines
         assert ("POST", "/settings/node-name", "200") in lines, lines
         b.post("/settings/request-log", {"request_log": "off"})
         mark = len(_all_log(srv))
         b.post("/settings/node-name", {"node_name": "line-2"})
+        assert anon.get("/settings")[0] == 303        # sent to the sign-in page by the gate
         Browser(srv.base).post("/login", {"username": "admin", "password": "wrong"})
         op.login("op", PW)
         text = _all_log(srv)[mark:]

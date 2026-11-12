@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
@@ -20,11 +21,12 @@ from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.templating import Jinja2Templates
 
-from .. import i18n
+from .. import clock, i18n
 from ..config import ROLE_RANK, node_name
 from ..engine import netguard
 from . import auth, proxy
 from .routes import build_routes
+from .routes.common import client_ip
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -55,6 +57,10 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 # the audit trail (the user actions that drive them ARE logged).
 QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
                "/api/ports/table", "/api/ports.json", "/healthz", "/favicon.ico"}
+# The REST API's counterpart: what monitoring polls. Every other /api/v1 request (any
+# change, a read of the mappings — they hold the MQTT passwords — and any refusal) is.
+API_QUIET_PATHS = {"/api/v1/health", "/api/v1/status", "/api/v1/ports", "/api/v1/metrics",
+                   "/api/v1/openapi.json"}
 
 
 def logs_request(mode: str, method: str, path: str, status: int) -> bool:
@@ -111,7 +117,41 @@ class GuardMiddleware(BaseHTTPMiddleware):
         return response
 
     async def _dispatch_ui(self, request, call_next, state, cfg, path):
+        ip = client_ip(request)
+        early = self._gate_ui(request, state, cfg, path)
+        if early is not None:  # refused or sent elsewhere before any handler ran
+            # anyone can cause these as often as they like: one line per address and status
+            # a minute (state.log_refused); "changes" keeps the refusals, "off" none of them
+            mode = cfg.admin_ui.request_log
+            if mode == "all" or logs_request(mode, request.method, path, early.status_code):
+                state.log_refused((ip, early.status_code),
+                                  f"HTTP {ip} {request.method} {path} -> {early.status_code}")
+            return early
 
+        response = await call_next(request)
+
+        # all.log: every state-changing request, plus meaningful page loads (skip the
+        # static assets and the periodic poll endpoints), or less (admin_ui.request_log)
+        if logs_request(cfg.admin_ui.request_log, request.method, path, response.status_code):
+            state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
+
+        # The CSRF cookie lasts as long as a session: a browser restart that keeps the
+        # session cookie keeps it too, so there is no time without one in which a page of
+        # another site could put its own token into the browser.
+        if (request.state.csrf_token != request.state.csrf_cookie
+                or getattr(request.state, "csrf_renew", False)):
+            auth.set_cookie(response, request, cfg, auth.CSRF_COOKIE, request.state.csrf_token,
+                            max_age=cfg.session_timeout_s)
+        if request.state.legacy_session is not None:
+            auth.move_session(response, request, cfg, request.state.legacy_session)
+        return response
+
+    def _gate_ui(self, request, state, cfg, path):
+        """The answer for a UI request that may not reach its handler (a request of another
+        site, a CSRF failure, first-run setup, no session), or None. Sets
+        request.state.csrf_token (csrf_cookie: the one the browser sent under this
+        instance's name, or None; legacy_session: a 2.8 session cookie to move) and, for a
+        signed-in request, request.state.user."""
         is_public = path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES)
 
         # A state-changing request that a page of another site made the browser send is
@@ -133,14 +173,16 @@ class GuardMiddleware(BaseHTTPMiddleware):
         # the CSRF token of this browser: its cookie's (one under the name of 2.8 and older
         # is taken over, and set under its name now), or a new one. A handler may issue a
         # new one (Ctx.new_csrf_token: a sign-in, a sign-out) or renew the cookie's lifetime
-        # with a session's (Ctx.set_session); the cookie is set below.
+        # with a session's (Ctx.set_session); the cookie is set in _dispatch_ui.
         csrf_cookie = auth.cookie(request, auth.CSRF_COOKIE, legacy=False)
+        request.state.csrf_cookie = csrf_cookie
         request.state.csrf_token = (csrf_cookie or auth.cookie(request, auth.CSRF_COOKIE)
                                     or auth.new_csrf_token())
         # a sign-in from before the upgrade, under the session cookie's old name: moved to
         # its name now with this response (not a static file's, which may be cached)
-        legacy = (None if path.startswith("/static")
-                  else auth.legacy_session(request, cfg, state.revoked_sessions))
+        request.state.legacy_session = (
+            None if path.startswith("/static")
+            else auth.legacy_session(request, cfg, state.revoked_sessions))
 
         # CSRF: API/HTMX endpoints must carry a matching X-CSRF-Token header.
         # Plain HTML form posts (login/setup/settings/logout) carry _csrf in the
@@ -170,43 +212,66 @@ class GuardMiddleware(BaseHTTPMiddleware):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
                     return proxy.redirect(request, "/login")
                 request.state.user = user  # available to handlers for role checks
-
-        response = await call_next(request)
-
-        # all.log: every state-changing request, plus meaningful page loads (skip the
-        # static assets and the periodic poll endpoints), or less (admin_ui.request_log)
-        if logs_request(cfg.admin_ui.request_log, request.method, path, response.status_code):
-            ip = request.client.host if request.client else "?"
-            state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
-
-        # The CSRF cookie lasts as long as a session: a browser restart that keeps the
-        # session cookie keeps it too, so there is no time without one in which a page of
-        # another site could put its own token into the browser.
-        if (request.state.csrf_token != csrf_cookie
-                or getattr(request.state, "csrf_renew", False)):
-            auth.set_cookie(response, request, cfg, auth.CSRF_COOKIE, request.state.csrf_token,
-                            max_age=cfg.session_timeout_s)
-        if legacy is not None:
-            auth.move_session(response, request, cfg, legacy)
-        return response
+        return None
 
     async def _dispatch_api(self, request, call_next, cfg, path):
-        """Gate for the JSON REST API: bearer-token auth, no cookies/CSRF, JSON errors."""
-        if path not in ("/api/v1/health", "/api/v1/openapi.json"):
-            if not cfg.password_set:
-                return JSONResponse({"error": "setup_incomplete"}, status_code=503)
-            if not cfg.api_token_hash:
-                return JSONResponse({"error": "api_token_not_configured"}, status_code=401)
-            if not auth.verify_token(auth.bearer_token(request), cfg.api_token_hash):
-                return JSONResponse({"error": "unauthorized"}, status_code=401,
-                                    headers={"WWW-Authenticate": "Bearer"})
-            # a 'viewer' token is read-only: block state-changing methods
-            if request.method in ("POST", "PUT", "DELETE", "PATCH") and \
-                    ROLE_RANK.get(cfg.api_token_role, 0) < ROLE_RANK["operator"]:
-                return JSONResponse(
-                    {"error": "forbidden", "detail": "API token role 'viewer' is read-only"},
-                    status_code=403)
-        return await call_next(request)
+        """Gate for the JSON REST API: bearer-token auth, no cookies/CSRF, JSON errors.
+        The token found (config.ApiToken) is request.state.api_token: its role and its
+        name for the audit log. Requests are logged to all.log (but the successful polls
+        of API_QUIET_PATHS), refusals one line per address and kind a minute; one refused
+        for its token is recorded in the audit log too (api_auth_failed, bounded)."""
+        state = request.app.state.appstate
+        ip = client_ip(request)
+        early, token = self._gate_api(request, cfg, state, path)
+        if early is not None:
+            by = f" by {token.audit_label}" if token is not None else ""
+            state.log_refused((ip, early.status_code),
+                              f"HTTP {ip} {request.method} {path} -> {early.status_code}{by}")
+            return early
+        response = await call_next(request)
+        if not (request.method in ("GET", "HEAD") and response.status_code < 400
+                and path in API_QUIET_PATHS):
+            by = f" by {token.audit_label}" if token is not None else ""
+            state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}{by}")
+        return response
+
+    @staticmethod
+    def _gate_api(request, cfg, state, path):
+        """(the answer for a REST API request that may not reach its handler, or None;
+        the API token it presented, also an expired one, or None)."""
+        if path in ("/api/v1/health", "/api/v1/openapi.json"):
+            return None, None
+        if not cfg.password_set:
+            return JSONResponse({"error": "setup_incomplete"}, status_code=503), None
+        if not cfg.api_token_hash and not cfg.api_tokens:
+            return JSONResponse({"error": "api_token_not_configured"}, status_code=401), None
+        given = auth.bearer_token(request)
+        token = auth.find_api_token(cfg, given)
+        if token is None or token.expired():
+            ip = client_ip(request)
+            why = ("expired token" if token is not None else
+                   "wrong token" if given else "no token")
+            state.api_auth_failures.note(ip, token.audit_label if token is not None else "",
+                                         "api_auth_failed",
+                                         f"{request.method} {path[:200]}: {why}", key=(ip,))
+        if token is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401,
+                                headers={"WWW-Authenticate": "Bearer"}), None
+        if token.expired():
+            return JSONResponse({"error": "unauthorized", "detail": "API token expired"},
+                                status_code=401,
+                                headers={"WWW-Authenticate": 'Bearer error="invalid_token"'}), token
+        request.state.api_token = token
+        used = getattr(state, "api_token_used", None)
+        if used is not None:  # in memory only (AppState.api_token_used)
+            used[token.id] = time.time()
+        # a 'viewer' token is read-only: block state-changing methods
+        if request.method in ("POST", "PUT", "DELETE", "PATCH") and \
+                ROLE_RANK.get(token.role, 0) < ROLE_RANK["operator"]:
+            return JSONResponse(
+                {"error": "forbidden", "detail": "API token role 'viewer' is read-only"},
+                status_code=403), token
+        return None, token
 
     @staticmethod
     def _security_headers(response, cfg, path: str, request=None) -> None:
@@ -274,6 +339,11 @@ def make_templates() -> Jinja2Templates:
         # ?v=<version> on the static URLs: browsers fetch the new CSS/JS right after an
         # upgrade instead of reusing a heuristically cached copy with the new templates
         asset_version=__version__,
+        # the server's time zone now ("UTC+03:00"), next to the times it shows
+        server_zone=clock.zone,
+        # the server's clock when it rendered the page (<body data-server-time>): app.js
+        # compares it with the browser's (not the Date header: a reverse proxy sets its own)
+        server_now=lambda: int(time.time()),
     )
     templates.env.filters["softbreak"] = softbreak
     from ..engine.portlist import choice as port_choice

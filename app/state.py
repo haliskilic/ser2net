@@ -18,7 +18,6 @@ import asyncio
 import hmac
 import logging
 import os
-import re
 import secrets
 import sys
 import time
@@ -26,13 +25,14 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from . import accounts
+from . import accounts, clock
 from .config import (
     AppConfig, ConfigStore, User, fold, lock_down_dir, mapping_file, valid_mapping_id,
 )
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
+from .logtext import one_line
 from .notify import Notifier
 from .signins import SignIns
 from .web.auth import LoginRateLimiter, RevokedSessions, SlowWork
@@ -63,6 +63,16 @@ FAILED_LOGIN_WINDOW_S = 600
 # for failed sign-ins (all.log keeps a line for every open).
 VIEW_REPEAT_S = 300
 VIEW_RECORDS = 50
+# A console session that wrote to its device gets a console_close record (how many bytes,
+# never what): at most VIEW_RECORDS of them in FAILED_LOGIN_WINDOW_S, then summed up.
+# A request to the REST API refused for its token (none, a wrong or an expired one): one
+# api_auth_failed record per address in API_AUTH_REPEAT_S seconds, at most
+# FAILED_LOGIN_RECORDS in FAILED_LOGIN_WINDOW_S (its all.log line: REFUSED_LOG_S).
+API_AUTH_REPEAT_S = 60
+# A request refused before it reached a handler (CSRF, no session, a bad API token, a
+# console WebSocket without a session or from another site): one all.log line per
+# address and kind in REFUSED_LOG_S seconds, the next one says how many there were.
+REFUSED_LOG_S = 60
 # first-run setup through a host name that isn't this machine's needs this file's code
 SETUP_CODE_FILE = "setup-code.txt"
 # SER2NET_LOG_STDOUT=off: the log lines go only to all.log, not to stdout as well (where
@@ -83,21 +93,35 @@ def log_stdout(environ=None) -> tuple[bool, str]:
                   "also go to stdout")
 
 
-# characters that must not reach an audit record: control characters (tab / CR / LF and
-# the C1 ones such as NEL included) and the Unicode line and paragraph separators
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+class LineFormatter(logging.Formatter):
+    """The format of all.log, stdout and the mapping logs: time (clock.stamp: local time
+    with its UTC offset) and message, the message on one line (logtext.one_line: a line
+    break or another control character in a name or a device's text becomes a space, so it
+    can't start a line of its own or reach a terminal as an escape sequence). A traceback
+    after it is left as it is."""
+
+    def __init__(self) -> None:
+        super().__init__("%(asctime)s %(message)s")
+
+    def formatTime(self, record, datefmt=None) -> str:  # noqa: N802 (logging API)
+        return clock.stamp(record.created)
+
+    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802 (logging API)
+        record.message = one_line(record.message)
+        return super().formatMessage(record)
 
 
 def write_audit_record(path: str, actor_ip: str, action: str, detail: str = "",
                        user: str = "") -> list[str]:
-    """Append one record to the audit log at `path`: one line, tab-separated: time,
-    client IP, action, detail, user (the user column was added in v2.8 — older lines
-    have four fields). Each field is cut to its AUDIT_FIELD_MAX, and control characters
-    in it become spaces, so a crafted mapping name can't forge an extra record. Rotated
-    past AUDIT_LOG_MAX_BYTES (one backup kept). Best effort: never raises. Returns the
-    fields as written."""
-    fields = [time.strftime("%Y-%m-%d %H:%M:%S")] + [
-        _CONTROL.sub(" ", str(value)[:limit])
+    """Append one record to the audit log at `path`: one line, tab-separated: time
+    (clock.stamp: local time with its UTC offset; before 2.9 without the offset), client
+    IP, action, detail, user (the user column was added in v2.8 — older lines have four
+    fields). Each field is cut to its AUDIT_FIELD_MAX, and control characters in it become
+    spaces (logtext.one_line), so a crafted mapping name can't forge an extra record or cut
+    one short. Rotated past AUDIT_LOG_MAX_BYTES (one backup kept). Best effort: never
+    raises. Returns the fields as written."""
+    fields = [clock.stamp()] + [
+        one_line(str(value)[:limit])
         for value, limit in zip((actor_ip, action, detail, user), AUDIT_FIELD_MAX, strict=True)]
     line = "\t".join(fields)
     try:
@@ -187,29 +211,30 @@ class FailedLoginRecords(BoundedRecords):
         super().__init__(audit, limit, window_s, "login_failed", "failed sign-ins")
 
 
-class ViewRecords(BoundedRecords):
-    """The console_open / hex_view_open records: one per `key` (account or address,
-    mapping, kind) in VIEW_REPEAT_S seconds — the opens in between are counted, and the
-    next record of that key says how many — and of those at most VIEW_RECORDS in
-    FAILED_LOGIN_WINDOW_S, then summed up in one console_open record."""
+class RepeatRecords(BoundedRecords):
+    """BoundedRecords of something the same caller can repeat: one record per `key` in
+    `repeat_s` seconds — the ones in between are counted, and the next record of that key
+    says how many (`again`, formatted with their number n and the time at) — and of those
+    at most `limit` in `window_s`, then summed up in one `summary` record."""
 
-    MAX_KEYS = 4096  # keys remembered (past that, an open is recorded within the limit)
+    MAX_KEYS = 4096  # keys remembered (past that, one is recorded within the limit)
 
-    def __init__(self, audit, limit: int = VIEW_RECORDS, window_s: float = FAILED_LOGIN_WINDOW_S,
-                 repeat_s: float = VIEW_REPEAT_S) -> None:
-        super().__init__(audit, limit, window_s, "console_open", "console and hex view opens")
-        self.repeat_s = repeat_s
-        self._seen: dict[tuple, list] = {}  # key -> [recorded (monotonic), opens since, at]
+    def __init__(self, audit, limit: int, window_s: float, repeat_s: float, summary: str,
+                 what: str, again: str = "{n} more after {at}") -> None:
+        super().__init__(audit, limit, window_s, summary, what)
+        self.repeat_s, self._again = repeat_s, again
+        self._seen: dict[tuple, list] = {}  # key -> [recorded (monotonic), counted since, at]
 
-    def open(self, ip: str, user: str, action: str, detail: str, key: tuple) -> bool:
-        """A console or hex view opened: True if it got its own record."""
+    def note(self, ip: str, user: str, action: str, detail: str, key: tuple) -> bool:
+        """One more of them: True if it got its own record."""
         now = time.monotonic()
         seen = self._seen.get(key)
         if seen is not None and now - seen[0] < self.repeat_s:
             seen[1] += 1
             return False
         if seen is not None and seen[1]:
-            detail += f"; opened {seen[1]} more times after {seen[2]}, not recorded one by one"
+            detail += "; " + self._again.format(n=seen[1], at=seen[2]) + \
+                ", not recorded one by one"
         if key not in self._seen and len(self._seen) >= self.MAX_KEYS:
             self._seen = {k: v for k, v in self._seen.items() if now - v[0] < self.repeat_s}
         if key in self._seen or len(self._seen) < self.MAX_KEYS:
@@ -217,12 +242,64 @@ class ViewRecords(BoundedRecords):
         return self.add(ip, user, action, detail)
 
 
+class ViewRecords(RepeatRecords):
+    """The console_open / hex_view_open records: one per `key` (account or address,
+    mapping, kind) in VIEW_REPEAT_S seconds — the opens in between are counted, and the
+    next record of that key says how many — and of those at most VIEW_RECORDS in
+    FAILED_LOGIN_WINDOW_S, then summed up in one console_open record."""
+
+    def __init__(self, audit, limit: int = VIEW_RECORDS, window_s: float = FAILED_LOGIN_WINDOW_S,
+                 repeat_s: float = VIEW_REPEAT_S) -> None:
+        super().__init__(audit, limit, window_s, repeat_s, "console_open",
+                         "console and hex view opens", "opened {n} more times after {at}")
+
+    def open(self, ip: str, user: str, action: str, detail: str, key: tuple) -> bool:
+        """A console or hex view opened: True if it got its own record."""
+        return self.note(ip, user, action, detail, key)
+
+
+class LineLimiter:
+    """all.log lines of something any visitor can cause as often as they like (a request
+    refused before it reached a handler): one line per key in `every_s` seconds; the ones
+    in between are counted, and the next line of that key says how many there were."""
+
+    MAX_KEYS = 4096
+
+    def __init__(self, every_s: float = REFUSED_LOG_S) -> None:
+        self.every_s = every_s
+        self._keys: dict[tuple, list] = {}  # key -> [logged (monotonic), held back, since]
+
+    def line(self, key: tuple, text: str) -> str | None:
+        """The line to log for one more of `key` (`text`, plus how many were held back
+        before it), or None to hold this one back."""
+        now = time.monotonic()
+        seen = self._keys.get(key)
+        if seen is not None and now - seen[0] < self.every_s:
+            if not seen[1]:
+                seen[2] = time.strftime("%H:%M:%S")
+            seen[1] += 1
+            return None
+        if seen is not None and seen[1]:
+            text += f" ({seen[1]} more like it since {seen[2]}, not logged one by one)"
+        if key not in self._keys and len(self._keys) >= self.MAX_KEYS:
+            self._keys = {k: v for k, v in self._keys.items() if now - v[0] < self.every_s}
+        if key in self._keys or len(self._keys) < self.MAX_KEYS:
+            self._keys[key] = [now, 0, ""]
+        return text
+
+
 def _parse_log_ts(line: str) -> float | None:
-    """Parse the 'YYYY-MM-DD HH:MM:SS' prefix of a log line into an epoch time."""
-    try:
-        return time.mktime(time.strptime(line[:19], "%Y-%m-%d %H:%M:%S"))
-    except (ValueError, IndexError):
-        return None
+    """The epoch time a log line starts with: 'YYYY-MM-DD HH:MM:SS' with its UTC offset,
+    or without one (a line written before 2.9) - clock.parse_stamp."""
+    return clock.parse_stamp(line)
+
+
+def _lines(text: str) -> list[str]:
+    """*text*'s lines, each with its line end. Only a line feed ends a line (a CRLF too):
+    str.splitlines() would also end one at a CR, NEL, U+2028 ... inside a message."""
+    lines = [ln + "\n" for ln in text.split("\n")]
+    lines[-1] = lines[-1][:-1]  # what follows the last line feed ("" if the text ends so)
+    return lines if lines[-1] else lines[:-1]
 
 
 def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
@@ -240,15 +317,21 @@ def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
     if not content:
         return False
 
-    lines = content.splitlines(keepends=True)
-    # 1) age filter — lines are chronological, so keep from the first recent one
-    start = len(lines)
+    lines = _lines(content)
+    # 1) age filter — lines are chronological, so keep from the first recent one. A line
+    # without a time (the rest of a message that had a line break, as older versions
+    # wrote it) belongs to the one before it: skipped here, it goes or stays with that
+    # one. Nothing is dropped from a file in which no line has a time.
+    start, dated = len(lines), False
     for i, ln in enumerate(lines):
         ts = _parse_log_ts(ln)
-        if ts is None or ts >= cutoff_ts:
+        if ts is None:
+            continue
+        dated = True
+        if ts >= cutoff_ts:
             start = i
             break
-    data = "".join(lines[start:])
+    data = "".join(lines[start if dated else 0:])
 
     # 2) size cap — keep only the last max_bytes, trimmed to a line boundary
     encoded = data.encode("utf-8")
@@ -298,7 +381,17 @@ class AppState:
         self.directory_work = SlowWork(limit=4, queue=16)
         self.failed_logins = FailedLoginRecords(self.audit)  # their audit records
         self.view_records = ViewRecords(self.audit)          # console / hex view opens
+        self.console_writes = BoundedRecords(self.audit, VIEW_RECORDS, FAILED_LOGIN_WINDOW_S,
+                                             "console_close",
+                                             "console sessions that wrote to a device")
+        self.api_auth_failures = RepeatRecords(
+            self.audit, FAILED_LOGIN_RECORDS, FAILED_LOGIN_WINDOW_S, API_AUTH_REPEAT_S,
+            "api_auth_failed", "refused REST API requests")
+        self.refused_lines = LineLimiter()  # requests refused before reaching a handler
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
+        # when each REST API token was last used: token id ('' for api_token_hash's) ->
+        # epoch seconds; in memory only (a save on every request would push out backups)
+        self.api_token_used: dict[str, float] = {}
         # when each account last signed in (from audit.log, then every session issued)
         self.signins = SignIns()
         # sessions issued per account (Ctx.set_session), and that count with the account's
@@ -319,7 +412,8 @@ class AppState:
         self.pending_imports: dict[str, dict] = {}
         self.notifier = Notifier(self)
         self.config_lock = asyncio.Lock()
-        self.started_at = time.time()
+        self.started_at = time.time()        # when this process started (wall clock)
+        self.started_mono = time.monotonic()  # the same for how long it runs (uptime)
         # the admin UI listener's connection guard (runtime.py; None in tests without one)
         self.admin_guard: Any = None
         # first-run setup (see prepare_first_run)
@@ -342,7 +436,7 @@ class AppState:
         logger.setLevel(logging.INFO)
         logger.handlers.clear()
         logger.propagate = False
-        fmt = logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S")
+        fmt = LineFormatter()
 
         console = logging.StreamHandler(sys.stdout)
         console.setFormatter(fmt)
@@ -365,9 +459,18 @@ class AppState:
         return logger
 
     def log(self, msg: str) -> None:
+        """One line in all.log and on stdout: cut at LOG_MESSAGE_MAX characters, control
+        characters written as spaces (LineFormatter)."""
         if len(msg) > LOG_MESSAGE_MAX:
             msg = f"{msg[:LOG_MESSAGE_MAX]}… ({len(msg) - LOG_MESSAGE_MAX} more characters)"
         self._logger.info(msg)
+
+    def log_refused(self, key: tuple, msg: str) -> None:
+        """log() a request refused before it reached a handler: one line per `key` (its
+        address and kind) in REFUSED_LOG_S seconds (refused_lines)."""
+        line = self.refused_lines.line(key, msg)
+        if line is not None:
+            self.log(line)
 
     @property
     def audit_path(self) -> str:
@@ -412,7 +515,7 @@ class AppState:
         try:
             os.makedirs(self.logs_dir, exist_ok=True)
             fh = logging.FileHandler(self.mapping_log_path(mapping_id), encoding="utf-8")
-            fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S"))
+            fh.setFormatter(LineFormatter())
             lg.addHandler(fh)
         except (OSError, ValueError) as e:
             self.log(f"could not open mapping log for {mapping_id!r}: {e}")
@@ -458,7 +561,11 @@ class AppState:
                 data = fh.read()
         except (OSError, ValueError):
             return []
-        lines = data.decode("utf-8", errors="replace").splitlines()
+        # only a line feed (or CRLF) ends a line: splitlines() would also cut one at a
+        # CR, NEL or U+2028 inside a message (an older version wrote them as they were)
+        lines = data.decode("utf-8", errors="replace").replace("\r\n", "\n").split("\n")
+        if not lines[-1]:
+            lines.pop()
         return lines[-limit:][::-1]
 
     def forget_mappings(self, mapping_ids) -> None:
@@ -702,7 +809,8 @@ class AppState:
                     await task
         self._maint_task = self._requests_task = None
         self.failed_logins.flush()  # failed sign-ins counted but not recorded yet
-        self.view_records.flush()
+        for records in (self.view_records, self.console_writes, self.api_auth_failures):
+            records.flush()
         await self.notifier.stop()
         await self.cluster.stop()
         await self.supervisor.stop_all()

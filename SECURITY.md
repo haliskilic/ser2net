@@ -44,9 +44,10 @@ untrusted networks prefer TCP with TLS, or a firewall.
 ### Stored secrets
 `config.json` keeps in plain text what ser2net has to use itself: the LDAP bind password,
 the OIDC client secret, the SMTP password, the webhook URL, each mapping's MQTT broker
-password, the TLS key passwords (a mapping's, the admin UI's), the cluster key and the
-session key (`secret_key`) that signs sign-ins. Local passwords are scrypt hashes; the REST
-API token is stored only as a hash. `backups/` holds earlier copies of the file (a
+password, the TLS key passwords (a mapping's, the admin UI's), the cluster key, the
+session key (`secret_key`) that signs sign-ins and the two-factor sign-in key of each
+account that uses it. Local passwords are scrypt hashes; the REST API tokens are stored
+only as hashes. `backups/` holds earlier copies of the file (a
 downloaded backup leaves out the session key), and the mappings export (operator role)
 holds the MQTT and TLS key passwords. On the host the data folder is owner-only (POSIX
 `0700`, files `0600`; Windows: owner, SYSTEM and Administrators), so what needs care are
@@ -60,7 +61,7 @@ an export. Keep them like a password vault. If one leaked:
 - Settings → Web UI access → *Sign out everyone*: a new session key, so a sign-in made
   with the old one stops working;
 - change the passwords of local accounts that could be guessed (their hashes are in the
-  copy);
+  copy), and set up two-factor sign-in again (a new key) for the accounts that use it;
 - replace a TLS certificate whose key file was in the copy too (`tls/`, a key next to the
   data): its key password, if any, is in `config.json`.
 
@@ -130,8 +131,9 @@ güvenlik duvarını tercih edin.
 `config.json`, ser2net'in kendisinin kullanması gereken gizli değerleri açık metin tutar:
 LDAP bind parolası, OIDC client secret, SMTP parolası, webhook URL'si, her eşlemenin MQTT
 broker parolası, TLS anahtar parolaları (bir eşlemenin, yönetim arayüzünün), cluster
-anahtarı ve oturumları imzalayan oturum anahtarı (`secret_key`). Yerel parolalar scrypt
-hash'i olarak, REST API token'ı yalnızca hash'i olarak saklanır. `backups/` dosyanın önceki
+anahtarı, oturumları imzalayan oturum anahtarı (`secret_key`) ve iki adımlı giriş
+kullanan her hesabın anahtarı. Yerel parolalar scrypt hash'i olarak, REST API token'ları
+yalnızca hash'leri olarak saklanır. `backups/` dosyanın önceki
 kopyalarını tutar (indirilen bir yedekte oturum anahtarı yoktur), eşleme dışa aktarımı
 (operator rolü) da MQTT ve TLS anahtar parolalarını içerir. Makinede veri klasörü yalnızca
 sahibine açıktır (POSIX `0700`, dosyalar `0600`; Windows: sahip, SYSTEM ve Administrators),
@@ -145,7 +147,8 @@ gibi koruyun. Biri sızarsa:
   üret ve kaydet*; "mevcut anahtarı 7 gün daha kabul et" kutusu işaretsiz);
 - Ayarlar → Web arayüzü erişimi → *Herkesin oturumunu kapat*: yeni bir oturum anahtarı
   üretir, eskisiyle açılmış oturumlar çalışmaz olur;
-- tahmin edilebilecek yerel hesap parolalarını değiştirin (hash'leri kopyada);
+- tahmin edilebilecek yerel hesap parolalarını değiştirin (hash'leri kopyada), iki adımlı
+  giriş kullanan hesaplarda onu yeniden kurun (yeni bir anahtarla);
 - anahtar dosyası da kopyada olan bir TLS sertifikasını yenileyin (`tls/`, verinin yanındaki
   bir anahtar): varsa anahtar parolası `config.json`'dadır.
 

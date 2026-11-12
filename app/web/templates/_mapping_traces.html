@@ -11,6 +11,7 @@
 <p class="muted mb-sm">{{ _("Tracing is off for this mapping (set a trace file name in its options). Files recorded earlier are listed below.") }}</p>
 {% endif %}
 {% if files %}
+<p class="muted mb-sm">{{ _("Times in trace files are the server’s local time (now %(zone)s).", zone=server_zone()) }}</p>
 <div class="table-scroll">
 <table class="grid">
   <thead><tr><th>{{ _("File") }}</th><th>{{ _("Size") }}</th><th>{{ _("Last written") }}</th><th class="col-actions"></th></tr></thead>

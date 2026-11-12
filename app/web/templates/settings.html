@@ -39,6 +39,11 @@
     <p class="muted mb-sm">{{ _("Ends your sign-ins in other browsers and on other devices; this one stays signed in.") }}</p>
     <button class="btn" type="submit">{{ _("Sign out my other sessions") }}</button>
   </form>
+  {% if me and me.source == 'local' %}
+  <h3 class="mt-sm">{{ _("Two-factor sign-in") }}</h3>
+  <p class="mb-sm">{% if me.totp_on %}<span class="tag">{{ _("enabled") }}</span> {{ _("Signing in takes your password and a code from your authenticator app.") }}{% else %}<span class="tag">{{ _("disabled") }}</span> <span class="muted">{{ _("Your password alone signs you in. Add a code from an authenticator app on your phone or computer, so a password alone is not enough.") }}</span>{% endif %}</p>
+  <a class="btn" href="{{ base }}/settings/totp">{{ _("Turn off…") if me.totp_on else _("Set up…") }}</a>
+  {% endif %}
   {% endif %}
 </section>
 
@@ -58,6 +63,9 @@
     <button class="btn primary" type="submit">{{ _("Save name") }}</button>
   </form>
   {% endif %}
+  <p>{{ _('Server time: <span class="mono">%(utc)s UTC</span> · local <span class="mono">%(local)s</span> (%(zone)s)', utc=server_utc, local=server_local[:19], zone=server_zone()) }}</p>
+  {% if clock_behind %}<div class="banner warn">{% if clock_behind.what == 'backup' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the newest configuration backup (%(when)s UTC): it is probably wrong, or it was ahead when that backup was made.", now=server_utc, when=clock_behind.when) }}{% elif clock_behind.what == 'config' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the last change to config.json (%(when)s UTC): it is probably wrong.", now=server_utc, when=clock_behind.when) }}{% else %}{{ _("The server’s clock reads %(now)s UTC, before this version of ser2net was made (%(when)s): it is wrong.", now=server_utc, when=clock_behind.when[:10]) }}{% endif %} {{ _("Logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. ser2net never sets the clock: set it on the server, or let its time sync (NTP) do it.") }}</div>{% endif %}
+  <div class="banner warn" data-clock-skew hidden></div>
 </section>
 
 {% if is_admin %}
@@ -126,7 +134,7 @@
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
+        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}{% if u.totp_on %} <span class="tag" title="{{ _('two-factor sign-in') }}">2FA</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
         <td>
           {% if u.source != 'local' %}
             <span class="mono">{{ u.role }}</span> <span class="muted">({{ _("from %(source)s", source=u.source|upper) }})</span>
@@ -149,6 +157,14 @@
               <input type="hidden" name="username" value="{{ u.username }}">
               <button class="btn sm" type="submit">{{ _("Sign out") }}</button>
             </form>
+            {% if u.totp_on %}
+            <form method="post" action="{{ base }}/settings/users/totp-reset" class="inline"
+                  data-confirm="{{ _('Turn off two-factor sign-in for %(user)s? They are signed out, and their password alone signs them in until they set it up again.', user=u.username) }}">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <button class="btn sm" type="submit">{{ _("Turn off 2FA") }}</button>
+            </form>
+            {% endif %}
             <form method="post" action="{{ base }}/settings/users/delete" class="inline"
                   data-confirm="{{ _('Delete the account %(user)s?', user=u.username) }}">
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
@@ -424,6 +440,9 @@
         <label>{{ _("Username") }} <span class="muted">({{ _("optional") }})</span><input type="text" name="notify_smtp_username" value="{{ notify.smtp_username }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
         <label>{{ _("Password") }} <input type="password" name="notify_smtp_password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if notify.smtp_password %}{{ unchanged }}{% endif %}"></label>
       </div>
+      {% if notify.smtp_security == 'none' and notify.smtp_username %}
+      <div class="banner warn">{{ _("With security “none”, the user name and password go to the mail server unencrypted. Choose STARTTLS or TLS unless the network to it is trusted.") }}</div>
+      {% endif %}
     </fieldset>
     <div class="row-actions start">
       <button class="btn primary" type="submit">{{ _("Save notifications") }}</button>
@@ -435,6 +454,17 @@
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Admin TLS (HTTPS)") }}</h2></div>
   <p class="muted mb-sm">{{ _("Encrypts this management UI. Changes take effect after a restart.") }}</p>
+  {% set cert = tls_certificate %}
+  {% if cert and cert.problem == 'unreadable' %}<div class="banner warn">{{ _("The certificate file can’t be read (%(error)s): ser2net can’t start with TLS until it can.", error=cert.detail) }}</div>
+  {% elif cert and cert.problem == 'not_pem' %}<div class="banner warn">{{ _("The certificate file holds no PEM certificate: ser2net can’t start with TLS like this.") }}</div>
+  {% elif cert and cert.problem %}<p class="muted mb-sm">{{ _('Install the <span class="mono">cryptography</span> package to see the certificate’s details here.') }}</p>
+  {% elif cert %}
+  <p class="mb-sm">{{ _('Certificate: <span class="mono">%(subject)s</span>', subject=cert.subject|softbreak) }}{% if cert.self_signed %} <span class="tag">{{ _("self-signed") }}</span>{% endif %}
+    {% if cert.state == 'expired' %}<span class="tag tag-danger">{{ _("expired") }}</span>{% elif cert.state == 'not_yet_valid' %}<span class="tag tag-danger">{{ _("not valid yet") }}</span>{% elif cert.state == 'expiring' %}<span class="tag tag-warn">{{ _("ends in %(days)s day(s)", days=cert.days) }}</span>{% else %}<span class="tag">{{ _("%(days)s day(s) left", days=cert.days) }}</span>{% endif %}<br>
+    <span class="muted">{{ _("Valid from %(start)s to %(end)s UTC", start=cert.start, end=cert.end) }}{% if cert.names %} · {{ _("names: %(names)s", names=cert.names|softbreak) }}{% endif %}</span></p>
+  {% if cert.state == 'expired' %}<div class="banner warn">{{ _("By this server’s clock the certificate ended at %(end)s UTC: browsers and clients that check it refuse the connection. Renew it, or generate a new self-signed one.", end=cert.end) }}</div>
+  {% elif cert.state == 'not_yet_valid' %}<div class="banner warn">{{ _("The certificate starts at %(start)s UTC, later than this server’s clock reads: the clock is behind (see Admin interface), or the certificate was made while a clock was ahead. Clients whose clock reads earlier refuse it.", start=cert.start) }}</div>{% endif %}
+  {% endif %}
   <form method="post" action="{{ base }}/settings/tls" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <label>{{ _("Certificate path") }} <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>
@@ -484,7 +514,7 @@
   </div>
   {% endif %}
   <p>{{ _("Status:") }}
-    {% if api_token_set %}<span class="tag">{{ _("enabled") }}</span> <span class="muted">{{ _('role: <span class="mono">%(role)s</span>', role=api_token_role) }}</span>{% else %}<span class="tag">{{ _("disabled") }}</span>{% endif %}
+    {% if api_token_set %}<span class="tag">{{ _("enabled") }}</span> <span class="muted">{{ _('role: <span class="mono">%(role)s</span>', role=api_token_role) }} · {{ _("last used: %(time)s", time=api_token_last_used) }}</span>{% else %}<span class="tag">{{ _("disabled") }}</span>{% endif %}
   </p>
   <form method="post" action="{{ base }}/settings/api-token" class="inline">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
@@ -500,6 +530,45 @@
   <form method="post" action="{{ base }}/settings/api-token/revoke" class="inline mt-sm">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <button class="btn" type="submit">{{ _("Revoke") }}</button>
+  </form>
+  {% endif %}
+  <h3 class="mt-sm">{{ _("More tokens") }}</h3>
+  <p class="muted mb-sm">{{ _('Give each client its own token: a read-only one for monitoring, one that may change mappings for automation. Each has a name — the audit log shows it as <span class="mono">api-token:NAME</span> — a role and, if you like, an expiry; revoking one leaves the others working. The token above works as before. When a token was last used is known since ser2net started.') }}</p>
+  {% if api_token_rows %}
+  <div class="table-scroll">
+  <table class="grid th-wrap">
+    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Role") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for t in api_token_rows %}
+      <tr>
+        <td class="mono">{{ t.name }}{% if t.expired %} <span class="tag">{{ _("expired") }}</span>{% endif %}<br><span class="muted">{{ _("created %(date)s", date=t.created) }} · {% if t.expires %}{{ _("expires %(date)s", date=t.expires) }}{% else %}{{ _("never expires") }}{% endif %} · {{ _("last used: %(time)s", time=t.last_used) }}</span></td>
+        <td class="mono">{{ t.role }}</td>
+        <td>
+          <form method="post" action="{{ base }}/settings/api-tokens/revoke" class="inline">
+            <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+            <input type="hidden" name="id" value="{{ t.id }}">
+            <button class="btn sm danger" type="submit">{{ _("Revoke") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  {% if api_token_rows|length < api_token_max %}
+  <form method="post" action="{{ base }}/settings/api-tokens" class="authform">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <div class="grid2">
+      <label>{{ _("Name") }} <input type="text" name="name" placeholder="{{ _('e.g. %(example)s', example='prometheus') }}" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="64" pattern="[A-Za-z0-9._\-]{1,64}" title="{{ _("A token name is 1-64 characters: English letters, digits, '.', '_' or '-'.") }}" required></label>
+      <label>{{ _("Role") }} <span class="muted">({{ _("viewer = read-only") }})</span>
+        <select name="role"><option value="viewer" selected>viewer</option><option value="operator">operator</option></select>
+      </label>
+    </div>
+    <label>{{ _("Expires after (days)") }} <span class="muted">({{ _("empty or 0 = never · at most %(max)s", max=api_token_days_max) }})</span>
+      <input type="number" name="expires_days" min="0" max="{{ api_token_days_max }}">
+    </label>
+    <button class="btn" type="submit">{{ _("Add token") }}</button>
   </form>
   {% endif %}
 </section>

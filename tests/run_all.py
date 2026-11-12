@@ -46,6 +46,9 @@ PORTABLE = [
     "test_form_validation.py",
     "test_rest_api.py",
     "test_api_token_role.py",
+    "test_rest_patch.py",     # PATCH /api/v1/mappings/{id} (JSON merge patch)
+    "test_rest_import.py",    # POST /api/v1/import (dry run), /api/v1/metrics
+    "test_api_tokens.py",     # named REST API tokens (role, expiry, audit name)
     "test_modbus_frame.py",
     "test_modbus_gateway.py",
     "test_rbac.py",
@@ -68,6 +71,7 @@ PORTABLE = [
     "test_session_timeout.py",
     "test_session_revocation.py",
     "test_account_recovery.py",
+    "test_totp.py",           # two-factor sign-in (TOTP) for local accounts
     "test_first_run_setup.py",
     "test_backups_import.py",
     "test_audit_log.py",
@@ -135,6 +139,9 @@ PORTABLE = [
     "test_login_notice.py",    # Settings -> Web UI access -> Sign-in notice
     "test_backup_erasure.py",  # deleting backups, a deleted account out of every backup
     "test_privacy_doc.py",     # docs/PRIVACY.md's numbers and settings match the code
+    "test_clock_ages.py",     # ages and client order by the monotonic clock (no wall clock)
+    "test_time_stamps.py",    # log/audit times with their UTC offset; old lines still read
+    "test_clock_check.py",    # a clock that reads earlier than it can: start-up log, Settings
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

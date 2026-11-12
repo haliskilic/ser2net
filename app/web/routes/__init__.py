@@ -8,6 +8,7 @@ Interaction model (HTMX, no SPA):
 
 One module per area; each exposes ``routes(ctx)``:
   login      sign-in, logout, first-run setup, OIDC SSO
+  totp       two-factor sign-in: the code step, setting it up in Settings
   settings   the Settings page and its forms, mappings export/import
   mappings   dashboard, mapping table/form/actions, log and console panels
   console    the console and hex-view WebSockets, the console's serial BREAK
@@ -20,7 +21,7 @@ from __future__ import annotations
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
-from . import cluster, console, login, mappings, settings, system
+from . import cluster, console, login, mappings, settings, system, totp
 from .common import Ctx
 from .forms import _build_mapping_dict, _preserve_unmanaged_fields
 
@@ -33,6 +34,7 @@ def build_routes(templates, state, static_dir) -> list:
     ctx = Ctx(templates, state)
     return [
         *login.routes(ctx),
+        *totp.routes(ctx),
         *settings.routes(ctx),
         # JSON REST API (bearer-token auth, enforced in GuardMiddleware)
         *build_api_routes(state),

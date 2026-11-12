@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import re
 import time
 from dataclasses import dataclass, field
@@ -31,7 +32,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, ModbusPoint
 from . import modbus, netguard, sockopts, tls
-from .access import AccessPolicy, server_ssl
+from .access import AccessPolicy, connection_order, server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
 )
@@ -59,7 +60,8 @@ class _Master:
     writer: asyncio.StreamWriter
     peer: str
     priority: bool = False          # admitted from priority_client_ips
-    connected_at: float = field(default_factory=time.time)
+    seq: int = field(default_factory=connection_order)          # access.Client
+    connected_at: float = field(default_factory=time.monotonic)
     close_reason: str = ""          # why the gateway dropped it (first cause wins)
     refused: int = 0                # requests refused because the mapping is read-only
     closing: bool = False           # kicked: listed until its handler is done
@@ -163,7 +165,8 @@ class ModbusGatewayRunner:
                 mq = self.mapping.mqtt
                 if mq.payload_format == "sparkplug_b":
                     from .sparkplug_node import SparkplugNode
-                    self._sparkplug = SparkplugNode(self.mapping, self._log, self._write_soon)
+                    self._sparkplug = SparkplugNode(self.mapping, self._log, functools.partial(
+                        self._write_soon, source="Sparkplug DCMD"))
                     self._mqtt = self._sparkplug.publisher()
                 else:
                     from .mqtt_pub import MqttPublisher
@@ -308,12 +311,13 @@ class ModbusGatewayRunner:
                 pass
 
     # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug DCMD) ----
-    async def write_point(self, point, value) -> None:
+    async def write_point(self, point, value, source: str = "") -> None:
         """Write one value to one writable point, and nothing beyond it: a coil takes a
         bool (FC5), a holding register a number, encoded as the point's own type (FC6 for
         a 16-bit type, FC16 for the two registers of a 32-bit one). Check the slave's
         reply, then read the point back and publish it. A read-only mapping writes nothing
-        (checked here, at write time, for every command path)."""
+        (checked here, at write time, for every command path). The mapping's log names
+        the write and where it came from (`source`)."""
         if self.mapping.network.read_only:
             raise ValueError("mapping is read-only")
         if not point.writable:
@@ -333,17 +337,18 @@ class ModbusGatewayRunner:
                    else modbus.write_multiple_registers_pdu(point.address, regs))
         rpdu = await self._transaction(point.unit, pdu)
         modbus.check_write_response(rpdu, pdu)
-        self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]})")
+        via = f", from {source}" if source else ""
+        self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]}{via})")
         with contextlib.suppress(Exception):
             self._publish_values({point.name: await self._read_point(point)})
 
-    def _write_soon(self, point, value, done=None) -> None:
+    def _write_soon(self, point, value, done=None, source: str = "") -> None:
         """Schedule write_point from an MQTT callback (already on the loop); ``done``
         gets None or the error message."""
         async def run():
             err = None
             try:
-                await self.write_point(point, value)
+                await self.write_point(point, value, source)
             except Exception as e:
                 err = str(e) or type(e).__name__
                 self._log(f"write '{point.name}' = {shown(value)} failed: {err}")
@@ -371,7 +376,7 @@ class ModbusGatewayRunner:
             return
         mqtt = self._mqtt
         self._write_soon(point, value, lambda err: mqtt.publish_raw(
-            result, b"ok" if err is None else f"error: {err}".encode()))
+            result, b"ok" if err is None else f"error: {err}".encode()), source=f"MQTT {topic}")
 
     async def _read_rtu_response(self, reader) -> bytes:
         # wait for the first byte(s) within the response timeout
@@ -494,7 +499,7 @@ class ModbusGatewayRunner:
             reason = master.close_reason or reason
             if self._stop.is_set():
                 reason = "gateway stopped"
-            held = fmt_duration(time.time() - master.connected_at)
+            held = fmt_duration(time.monotonic() - master.connected_at)
             refused = f", {master.refused} request(s) refused (read-only)" if master.refused else ""
             self._log(f"modbus master disconnected: {peer} after {held} — {reason}{refused} "
                       f"({len(self._clients)} total)")

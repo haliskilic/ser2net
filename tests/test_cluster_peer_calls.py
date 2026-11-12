@@ -13,6 +13,9 @@ it is authenticated, and what a beacon may change.
     while validate() stays lenient for entries an older release accepted;
   * the cluster key may hold any characters: it is NFKC-normalised and used as UTF-8
     bytes, so an ASCII key keeps exactly the bytes older releases send and check;
+  * a remote action names the user acting on this node and this node's host name in
+    its body (which the signature covers): any name, Turkish letters included, also to
+    an older peer, which ignores them;
   * requests are signed, not keyed: the signature covers the method, path and query,
     body, both node ids, the time and a nonce; a replayed, altered, misdirected or
     stale request is refused, refusals after a valid signature are signed (the
@@ -531,6 +534,22 @@ def test_signed_peer_calls():
         assert (await d.post_peer(t, "/api/cluster/control", {"action": "stop"}))["path"]
         assert len(peer.requests) == 3 and peer.auths[-1].ok
         assert b"action=stop" == peer.requests[-1]["body"]
+        # who acts on this node goes with it, in the signed body (any letters)
+        assert (await d.control_peer(t, "m1", "start", actor="Ayşe İlker"))["path"]
+        assert peer.auths[-1].ok and urllib.parse.parse_qs(peer.requests[-1]["body"].decode()) \
+            == {"mapping_id": ["m1"], "action": ["start"], "_actor": ["Ayşe İlker"],
+                "_actor_node": [socket.gethostname()]}, peer.requests[-1]["body"]
+        # ...with this instance's name when it has one (Settings -> Admin interface)
+        d.config.admin_ui.node_name = "line 1 · hall B"
+        try:
+            assert (await d.control_peer(t, "m1", "stop", actor="admin"))["path"]
+        finally:
+            d.config.admin_ui.node_name = ""
+        assert urllib.parse.parse_qs(peer.requests[-1]["body"].decode())["_actor_node"] == \
+            ["line 1 · hall B"], peer.requests[-1]["body"]
+        assert (await d.post_peer(t, "/api/cluster/mapping-save", [("id", "m1")],
+                                  actor="x" * 300))["path"]
+        assert urllib.parse.parse_qs(peer.requests[-1]["body"].decode())["_actor"] == ["x" * 128]
         # a reply that is not signed for the request (altered, forged) is not used
         saved = peer.respond
 
@@ -624,6 +643,9 @@ def test_legacy_peer_calls():
         assert d.peer_state(t)["auth"] == "legacy" and d.legacy_nodes() == [f"127.0.0.1:{legacy.port}"]
         assert (await d.get_peer(t, "/api/cluster/local"))["id"] == "old1"
         assert _attempts(legacy)[-1] == "key", "it is remembered as an older node"
+        # an older node gets the acting user's name too (and ignores it, as any field)
+        assert (await d.control_peer(t, "m1", "stop", actor="İlker")) is not None
+        assert b"&_actor=%C4%B0lker&" in legacy.requests[-1]["body"], legacy.requests[-1]
         # legacy authentication off: the raw key is never sent
         d.cluster.legacy_auth = False
         legacy.requests.clear()

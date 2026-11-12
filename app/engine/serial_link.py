@@ -81,7 +81,8 @@ class FailureLog:
         self._every = every
         self.error = ""        # the last failure's error ("" while it works)
         self.failures = 0      # failures since it last worked
-        self.since = 0.0       # time.time() of the first of them
+        self.since = 0.0       # time.time() of the first of them (the "since" it logs)
+        self._since_mono = 0.0  # the same by time.monotonic(): how long it was down
         self._next = 0.0       # time.monotonic() of the next summary
 
     def failed(self, error: str) -> bool:
@@ -89,7 +90,7 @@ class FailureLog:
         the error changed."""
         now = time.monotonic()
         if not self.failures:
-            self.since = time.time()
+            self.since, self._since_mono = time.time(), now
         self.failures += 1
         new = error != self.error
         self.error = error
@@ -109,7 +110,7 @@ class FailureLog:
         "" when nothing had failed."""
         if not self.failures:
             return ""
-        took = fmt_duration(time.time() - self.since)
+        took = fmt_duration(time.monotonic() - self._since_mono)  # (a clock step aside)
         self.error, self.failures, self.since = "", 0, 0.0
         return f" (back after {took})"
 

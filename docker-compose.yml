@@ -39,6 +39,7 @@ services:
       # This instance's name in notifications, the browser tab and the fleet view (else
       # Settings -> Admin interface, else the host name):
       # SER2NET_NODE_NAME: "line-1"
+      # TZ: "Europe/Istanbul"   # the zone of log, audit and trace times (default: UTC)
     # ser2net also writes its log to /data/all.log (rotated); cap Docker's own copy
     logging:
       driver: json-file

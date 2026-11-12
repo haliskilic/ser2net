@@ -71,6 +71,12 @@ ROUTES = {
     ("GET", "/auth/oidc/callback"): (PUBLIC, NONE),
     ("GET", "/setup"): (SETUP, NONE),
     ("POST", "/setup"): (SETUP, FORM),
+    # ---- routes/totp.py (the code step: a signed cookie from /login, not a session) ----
+    ("GET", "/auth/totp"): (PUBLIC, NONE),
+    ("POST", "/auth/totp"): (PUBLIC, FORM),
+    ("GET", "/settings/totp"): (ACCOUNT, NONE),
+    ("POST", "/settings/totp/enable"): (ACCOUNT, FORM),
+    ("POST", "/settings/totp/disable"): (ACCOUNT, FORM),
     # ---- routes/settings.py ----
     ("GET", "/settings"): (VIEWER, NONE),  # the admin sections only for admins
     ("POST", "/settings/password"): (ACCOUNT, FORM),
@@ -85,12 +91,15 @@ ROUTES = {
     ("POST", "/settings/sessions/revoke-all"): (ADMIN, FORM),
     ("POST", "/settings/api-token"): (ADMIN, FORM),
     ("POST", "/settings/api-token/revoke"): (ADMIN, FORM),
+    ("POST", "/settings/api-tokens"): (ADMIN, FORM),
+    ("POST", "/settings/api-tokens/revoke"): (ADMIN, FORM),
     ("POST", "/settings/users"): (ADMIN, FORM),
     ("POST", "/settings/users/password"): (ADMIN, FORM),
     ("POST", "/settings/users/role"): (ADMIN, FORM),  # the user name in a form field
     ("POST", "/settings/users/delete"): (ADMIN, FORM),
     ("POST", "/settings/users/signout"): (ADMIN, FORM),
     ("POST", "/settings/users/expiry"): (ADMIN, FORM),
+    ("POST", "/settings/users/totp-reset"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/role"): (ADMIN, FORM),  # the same, by path
     ("POST", "/settings/users/{username}/delete"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/signout"): (ADMIN, FORM),
@@ -113,11 +122,14 @@ ROUTES = {
     ("GET", "/api/v1/health"): (TOKEN_PUBLIC, NONE),
     ("GET", "/api/v1/openapi.json"): (TOKEN_PUBLIC, NONE),
     ("GET", "/api/v1/status"): (TOKEN_READ, NONE),
+    ("GET", "/api/v1/metrics"): (TOKEN_READ, NONE),
+    ("POST", "/api/v1/import"): (TOKEN_WRITE, NONE),
     ("GET", "/api/v1/ports"): (TOKEN_READ, NONE),
     ("GET", "/api/v1/mappings"): (TOKEN_READ, NONE),
     ("POST", "/api/v1/mappings"): (TOKEN_WRITE, NONE),
     ("GET", "/api/v1/mappings/{mid}"): (TOKEN_READ, NONE),
     ("PUT", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
+    ("PATCH", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
     ("DELETE", "/api/v1/mappings/{mid}"): (TOKEN_WRITE, NONE),
     ("POST", "/api/v1/mappings/{mid}/{action}"): (TOKEN_WRITE, NONE),
     # ---- routes/mappings.py ----
@@ -161,6 +173,9 @@ ROUTES = {
 ACCOUNT_REFUSALS = {
     "/settings/password": "Sign in to change your password.",
     "/settings/sessions/signout-others": "Sign in to manage your sessions.",
+    "/settings/totp": "Sign in to set up two-factor sign-in.",
+    "/settings/totp/enable": "Sign in to set up two-factor sign-in.",
+    "/settings/totp/disable": "Sign in to set up two-factor sign-in.",
 }
 
 # the session gate's public paths, pinned: widening them opens routes without a session
