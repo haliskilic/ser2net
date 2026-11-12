@@ -23,6 +23,7 @@ import smtplib
 import socket
 import ssl
 import time
+import urllib.parse
 import urllib.request
 from collections import deque
 from email.message import EmailMessage
@@ -32,6 +33,7 @@ from typing import Optional
 from . import __version__, i18n
 from .config import node_name as configured_name
 from .i18n import _
+from .logtext import one_line
 from .web import proxy
 
 POLL_S = 2.0
@@ -129,12 +131,13 @@ def mask_address(text: str) -> str:
 
 def sign_in_detail(settings, user: str, ip: str, source: str = "", reason: str = "") -> str:
     """The detail of a login_failed notification: "[LDAP |OIDC ]user '<name>' from <ip>"
-    (an account's name, or auth.UNKNOWN_USER), then ": <reason>" when there is one. With
+    (an account's name, or auth.UNKNOWN_USER; "sign-in" for one that failed before it had a
+    name, an SSO answer that doesn't match), then ": <reason>" when there is one. With
     settings.mask_personal_data the name is left out and the address is its network."""
     if settings.mask_personal_data:
         who, ip = "user (name left out)", mask_address(ip)
     else:
-        who = f"user {user!r}"
+        who = f"user {user!r}" if user else "sign-in"
     text = f"{source} {who} from {ip}" if source else f"{who} from {ip}"
     return f"{text}: {reason}" if reason else text
 
@@ -156,9 +159,11 @@ def baseline(statuses: dict) -> dict:
 def message(event: str, mapping: str, detail: str, url: str = "",
             name: str = "") -> tuple[str, str]:
     """(title, text) of a notification; `url`: the web UI's public URL (a last line);
-    `name`: this instance's name (Settings -> Admin interface), else the host name."""
+    `name`: this instance's name (Settings -> Admin interface), else the host name. The
+    title is one line (logtext.one_line): it is the e-mail's Subject, which a line break in
+    a mapping name would make invalid."""
     host = name or socket.gethostname()
-    head = f"ser2net {host}: {mapping + ' — ' if mapping else ''}{title(event)}"
+    head = one_line(f"ser2net {host}: {mapping + ' — ' if mapping else ''}{title(event)}")
     return head, head + (f"\n{detail}" if detail else "") + (f"\n{url}" if url else "")
 
 
@@ -192,7 +197,11 @@ def webhook_body(fmt: str, event: str, mapping: str, detail: str, chat_id: str =
 
 
 def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "",
-                 name: str = "", instance_id: str = "") -> None:
+                 name: str = "", instance_id: str = "") -> str:
+    """POST the message to the webhook. Returns a warning, or "". A redirect (301/302/303)
+    is followed, as a GET without the message: some receivers answer a POST they handled
+    that way, others moved (http:// to https://, a new path) and never got the message, so
+    the 2xx at the end of it doesn't tell whether it arrived."""
     body = json.dumps(webhook_body(settings.webhook_format, event, mapping, detail,
                                    str(settings.telegram_chat_id), url, name,
                                    instance_id)).encode()
@@ -202,6 +211,17 @@ def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "",
     with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
         if r.status >= 300:
             raise OSError(f"webhook answered HTTP {r.status}")
+        final = r.geturl()
+    if final == req.full_url:
+        return ""
+    return (f"webhook ({settings.webhook_format}) was redirected to {_origin(final)}: if the "
+            f"message didn't arrive, set the address it redirects to")
+
+
+def _origin(url: str) -> str:
+    """scheme://host[:port] of *url* - not its path or query, which may hold a token."""
+    parts = urllib.parse.urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}"
 
 
 def sender(settings, name: str = "") -> str:
@@ -333,33 +353,40 @@ class Notifier:
                                f"not sent: {event} {mapping}")
                 continue
             self._sent.append(now)
-            errors = await self.deliver(event, mapping, detail)
-            for err in errors:
-                self.state.log(f"notifications: {err}")
+            warnings: list[str] = []
+            errors = await self.deliver(event, mapping, detail, warnings=warnings)
+            what = f"{event}, mapping {mapping!r}" if mapping else event
+            for err in errors + warnings:
+                self.state.log(f"notifications: {err} ({what})")
 
     async def deliver(self, event: str, mapping: str, detail: str,
-                      settings=None) -> list[str]:
-        """Send to every configured channel now; returns the errors (empty = all sent).
-        Messages are in the UI's default language (Settings -> Web UI access), or
-        English when that is "the browser's", name the instance by its name (Settings ->
+                      settings=None, warnings: Optional[list] = None) -> list[str]:
+        """Send to every configured channel now; returns the errors (empty = all sent),
+        and adds to *warnings* what was sent but may not have arrived (a redirected
+        webhook). Messages are in the UI's default language (Settings -> Web UI access),
+        or English when that is "the browser's", name the instance by its name (Settings ->
         Admin interface) or else the host name, and end with the UI's public URL when one is
         set (Settings -> Reverse proxy)."""
         s = settings or self.settings
         token = i18n.set_language(self.state.config.admin_ui.language)
         try:
-            return await self._deliver(s, event, mapping, detail)
+            return await self._deliver(s, event, mapping, detail,
+                                       [] if warnings is None else warnings)
         finally:
             i18n.reset(token)
 
-    async def _deliver(self, s, event: str, mapping: str, detail: str) -> list[str]:
+    async def _deliver(self, s, event: str, mapping: str, detail: str,
+                       warnings: list) -> list[str]:
         errors = []
         cfg = self.state.config
         url = proxy.public_url(cfg.admin_ui)
         name = configured_name(cfg.admin_ui)   # '' = the host name
         if s.webhook_url.strip():
             try:
-                await asyncio.to_thread(send_webhook, s, event, mapping, detail, url,
-                                        name=name, instance_id=cfg.instance_id)
+                if warning := await asyncio.to_thread(send_webhook, s, event, mapping, detail,
+                                                      url, name=name,
+                                                      instance_id=cfg.instance_id):
+                    warnings.append(warning)
             except Exception as e:
                 errors.append(f"webhook ({s.webhook_format}) failed: {_reason(e)}")
         if s.recipients:

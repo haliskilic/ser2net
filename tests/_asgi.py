@@ -12,6 +12,7 @@ every Set-Cookie. a.cookies(headers) -> {name: (value, attributes)}.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -62,11 +63,13 @@ class App:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def call(self, method: str, path: str, *, fields: dict | None = None, headers=None,
-             client: str = "127.0.0.1", host: str = "127.0.0.1:8080"):
-        """One request: (status, headers, body text). `fields`: a urlencoded form body."""
-        return self.loop.run_until_complete(self._call(method, path, fields, headers, client, host))
+             client: str = "127.0.0.1", host: str = "127.0.0.1:8080", json_body=None):
+        """One request: (status, headers, body text). `fields`: a urlencoded form body;
+        `json_body`: a JSON one."""
+        return self.loop.run_until_complete(
+            self._call(method, path, fields, headers, client, host, json_body))
 
-    async def _call(self, method, path, fields, headers, client, host):
+    async def _call(self, method, path, fields, headers, client, host, json_body=None):
         path, _, query = path.partition("?")
         body = urllib.parse.urlencode(fields or {}).encode()
         hdrs = _headers(headers)
@@ -74,6 +77,10 @@ class App:
             hdrs.insert(0, (b"host", host.encode()))
         if fields is not None:
             hdrs += [(b"content-type", b"application/x-www-form-urlencoded"),
+                     (b"content-length", str(len(body)).encode())]
+        elif json_body is not None:
+            body = json.dumps(json_body).encode()
+            hdrs += [(b"content-type", b"application/json"),
                      (b"content-length", str(len(body)).encode())]
         scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
                  "http_version": "1.1", "method": method, "scheme": "http", "path": path,

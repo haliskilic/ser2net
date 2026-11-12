@@ -18,20 +18,22 @@ from urllib.parse import urlencode
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from ... import i18n, importer, optional
+from ... import clock, i18n, importer, optional
 from ...config import (
-    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, NODE_NAME_ENV, NODE_NAME_MAX,
-    NOTIFY_EVENTS, REQUEST_LOG_MODES, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS,
-    LOGIN_NOTICE_MAX, LOGIN_NOTICE_URL_MAX, AppConfig, ClusterSettings, ConfigError,
+    API_TOKEN_DAYS_MAX, API_TOKEN_NAME, API_TOKEN_ROLES, API_TOKENS_MAX, EXPIRE_DAYS_MAX,
+    EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, NODE_NAME_ENV, NODE_NAME_MAX, NOTIFY_EVENTS,
+    REQUEST_LOG_MODES, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS, LOGIN_NOTICE_MAX,
+    LOGIN_NOTICE_URL_MAX, ApiToken, AppConfig, ClusterSettings, ConfigError,
     NotificationSettings, User, backup_time, clean_login_notice, data_path, host_port,
-    login_notice_problem, login_notice_url_problem, new_pwd_version, node_name_from_env,
-    node_name_problem, normalize_public_url, parse_cluster_peer, proxy_entry_problem,
-    public_url_problem, serial_conflict, split_proxy_entries, tls_file_message,
+    login_notice_problem, login_notice_url_problem, new_api_token_id, new_pwd_version,
+    node_name_from_env, node_name_problem, normalize_public_url, parse_cluster_peer,
+    proxy_entry_problem, public_url_problem, split_proxy_entries, tls_file_message,
 )
 from ...engine import tls
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
-from .. import auth, ldap_auth, oidc_auth, proxy, selfsigned
+from .. import auth, certinfo, ldap_auth, oidc_auth, proxy, selfsigned
+from . import ops
 from .common import Ctx, csrf_failed
 from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
@@ -70,10 +72,39 @@ def routes(ctx: Ctx) -> list:
         when = state.signins.last(user)
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(when)) if when else "—"
 
+    def _server_clock(admin: bool) -> dict:
+        """The server's time for the Admin interface panel, and (admins only: it names the
+        newest backup's time) whether the clock reads earlier than it can (clock.behind)."""
+        now = time.time()
+        behind = clock.behind(state.store, now) if admin else None
+        return {"server_utc": clock.utc_text(now), "server_local": clock.stamp(now),
+                "clock_behind": {"what": behind[0], "when": clock.utc_text(behind[1])}
+                if behind else None}
+
+    def _tls_certificate() -> dict | None:
+        """What the admin UI's certificate file says (certinfo), for Settings → Admin TLS:
+        None without one, {"problem", "detail"} when it can't be read."""
+        path = state.config.admin_ui.tls_cert
+        if not path:
+            return None
+        try:
+            info = certinfo.read(path)
+        except certinfo.CertReadError as e:
+            return {"problem": e.code, "detail": str(e)}
+        now = time.time()
+        return {"subject": info.subject, "names": ", ".join(info.names),
+                "self_signed": info.self_signed, "state": info.state(now),
+                "days": info.days_left(now), "start": clock.utc_text(info.not_before)[:16],
+                "end": clock.utc_text(info.not_after)[:16]}
+
+    def _clock_and_certificate(admin: bool) -> dict:
+        return {**_server_clock(admin), "tls_certificate": _tls_certificate() if admin else None}
+
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
-        backups = state.store.backups() if me is not None and me.role == "admin" else []
+        admin = me is not None and me.role == "admin"
+        backups = state.store.backups() if admin else []
         # names in a backup that are no account now (deleted since): Settings can take
         # them out of every backup
         current = {u.username for u in state.config.users}
@@ -83,7 +114,8 @@ def routes(ctx: Ctx) -> list:
         # the redirect URI a sign-in started from this page's address would send
         published = proxy.public_url(state.config.admin_ui)
         oidc_redirect = oidc_auth.redirect_uri(state.config.oidc, request, published)
-        return render(request, "settings.html", ok=ok, error=error,
+        server_clock = await asyncio.to_thread(_clock_and_certificate, admin)
+        return render(request, "settings.html", ok=ok, error=error, **server_clock,
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups, backup_gone_accounts=gone_accounts,
                       admin=state.config.admin_ui, hsts_max=HSTS_MAX_AGE_MAX,
@@ -95,6 +127,8 @@ def routes(ctx: Ctx) -> list:
                       trusted=proxy.trusted_entries(state.config.admin_ui),
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
+                      api_token_last_used=_used(""), api_token_rows=_api_token_rows(),
+                      api_token_max=API_TOKENS_MAX, api_token_days_max=API_TOKEN_DAYS_MAX,
                       new_api_token=new_api_token, new_cluster_key=new_cluster_key,
                       me=current_user(request), users=state.config.users, roles=ROLES,
                       last_sign_in={u.username: _sign_in_time(u) for u in state.config.users},
@@ -112,8 +146,7 @@ def routes(ctx: Ctx) -> list:
                       **_cluster_view(),
                       session_minutes=state.config.session_timeout_s // 60,
                       notify=state.config.notifications, notify_events=NOTIFY_EVENTS,
-                      webhook_formats=WEBHOOK_FORMATS, smtp_security=SMTP_SECURITY,
-                      uptime=int(state.started_at))
+                      webhook_formats=WEBHOOK_FORMATS, smtp_security=SMTP_SECURITY)
 
     async def settings_page(request):
         """GET /settings; ?restore=<backup> shows what restoring that backup would change."""
@@ -285,8 +318,15 @@ def routes(ctx: Ctx) -> list:
             state.config.admin_ui.tls_key_password = ""  # (the key it writes is not encrypted)
             await state.asave()
         ctx.audit(request, "admin_tls_generate", "")
+        # not refused: the clock may be right after all (a backup made while it was ahead)
+        behind = await asyncio.to_thread(clock.behind, state.store)
+        warning = _("The server’s clock reads {0} UTC, which can’t be right (Settings → "
+                    "Admin interface says why), and the certificate is dated from it: clients "
+                    "whose clock is right may take it for expired or not valid yet. Set the "
+                    "clock, then generate the certificate again.").format(
+                        clock.utc_text(time.time())) if behind else None
         return await settings_get(request, ok=_("Self-signed certificate generated. Restart to "
-                                                "apply TLS."))
+                                                "apply TLS."), error=warning)
 
     # ---------------- web-UI access (login requirement) ----------------
     async def settings_access_post(request):
@@ -492,6 +532,7 @@ def routes(ctx: Ctx) -> list:
             state.config.api_token_hash = auth.hash_token(token)
             state.config.api_token_role = role
             await state.asave()
+        state.api_token_used.pop("", None)  # the token it replaced was used, not this one
         state.log(f"REST API token generated (role: {role})")
         ctx.audit(request, "api_token_generate", role)
         # show the token exactly once — only its hash is stored
@@ -508,9 +549,100 @@ def routes(ctx: Ctx) -> list:
         async with state.config_lock:
             state.config.api_token_hash = ""
             await state.asave()
+        state.api_token_used.pop("", None)
         state.log("REST API token revoked")
         ctx.audit(request, "api_token_revoke", "")
+        if state.config.api_tokens:
+            return await settings_get(request, ok=_("API token revoked. The other tokens keep "
+                                                    "working."))
         return await settings_get(request, ok=_("API token revoked. The REST API is now disabled."))
+
+    # ---------------- named REST API tokens ----------------
+    def _used(token_id: str) -> str:
+        when = state.api_token_used.get(token_id)
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(when)) if when else "—"
+
+    def _api_token_rows() -> list[dict]:
+        def day(when: float) -> str:
+            return time.strftime("%Y-%m-%d", time.localtime(when)) if when else ""
+
+        return [{"id": t.id, "name": t.name, "role": t.role, "created": day(t.created) or "—",
+                 "expires": day(t.expires), "expired": t.expired(), "last_used": _used(t.id)}
+                for t in state.config.api_tokens]
+
+    async def settings_api_tokens_create(request):
+        """Another REST API token, with its own name, role and optional expiry; the token
+        of api_token_hash stays as it is."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        name = str(form.get("name") or "").strip()
+        role = str(form.get("role") or "viewer").strip().lower()
+        raw_days = str(form.get("expires_days") or "").strip()
+        try:
+            days = int(raw_days) if raw_days else 0
+        except ValueError:
+            days = -1
+        if not API_TOKEN_NAME.fullmatch(name):
+            return await settings_get(request, error=_(
+                "A token name is 1-64 characters: English letters, digits, '.', '_' or '-'."))
+        if role not in API_TOKEN_ROLES:
+            return await settings_get(request, error=_("Invalid role."))
+        if not 0 <= days <= API_TOKEN_DAYS_MAX:
+            return await settings_get(request, error=_(
+                "Enter 0 (never) or a number of days from 1 to {0}.").format(API_TOKEN_DAYS_MAX))
+        token = auth.new_api_token()
+        now = time.time()
+        async with state.config_lock:
+            tokens = state.config.api_tokens
+            if any(t.name.casefold() == name.casefold() for t in tokens):
+                return await settings_get(request, error=_(
+                    "There is a token named '{0}' already.").format(name))
+            if len(tokens) >= API_TOKENS_MAX:
+                return await settings_get(request, error=_(
+                    "There are {0} tokens already, the most there can be: revoke one "
+                    "first.").format(API_TOKENS_MAX))
+            new = ApiToken(id=new_api_token_id(), name=name, sha256=auth.hash_token(token),
+                           role=role, created=now, expires=now + days * 86400 if days else 0.0)
+            tokens.append(new)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                tokens.remove(new)
+                return await settings_get(request, error=str(e))
+        state.log(f"REST API token {name!r} created (role: {role}"
+                  + (f", expires in {days} days)" if days else ")"))
+        ctx.audit(request, "api_token_create", f"{name}:{role}" + (f":{days}d" if days else ""))
+        return await settings_get(request, new_api_token=token, ok=_(
+            "New API token '{0}' (role: {1}). Copy it now — it is not shown again.").format(
+                name, role))
+
+    async def settings_api_tokens_revoke(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        token_id = str(form.get("id") or "")
+        async with state.config_lock:
+            tokens = state.config.api_tokens
+            gone = next((t for t in tokens if t.id == token_id), None)
+            if gone is None:
+                return await settings_get(request, error=_("No such token (it may have been "
+                                                           "revoked already)."))
+            index = tokens.index(gone)
+            tokens.remove(gone)
+            try:
+                await state.asave()
+            except ConfigError as e:
+                tokens.insert(index, gone)
+                return await settings_get(request, error=str(e))
+        state.api_token_used.pop(gone.id, None)
+        state.log(f"REST API token {gone.name!r} revoked")
+        ctx.audit(request, "api_token_revoke", gone.name)
+        return await settings_get(request, ok=_("API token '{0}' revoked.").format(gone.name))
 
     # ---------------- LDAP / AD settings (admin only) ----------------
     def _directory_off_problem(before: int, name: str) -> str | None:
@@ -823,6 +955,40 @@ def routes(ctx: Ctx) -> list:
         return await settings_get(request, ok=_("New password set for '{0}'; they were signed out "
                                                 "everywhere.").format(username))
 
+    async def settings_users_totp_reset(request):
+        """An admin turns off another local account's two-factor sign-in (its authenticator
+        was lost): it is signed out everywhere, and its password alone signs it in until
+        it sets two-factor sign-in up again."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        username = str(form.get("username") or "")
+        async with state.config_lock:  # checked under the lock: two admins at once
+            target = state.config.get_user(username)
+            if target is None:
+                return await settings_get(request, error=_("User not found."))
+            if _is_me(request, username):
+                return await settings_get(request, error=_(
+                    "To turn off your own two-factor sign-in, use “Two-factor sign-in” at the "
+                    "top (it asks for a code)."))
+            if not target.totp_on:
+                return await settings_get(request, error=_(
+                    "'{0}' doesn’t use two-factor sign-in.").format(username))
+            old = (target.totp_secret, target.pwd_version)
+            target.totp_secret, target.pwd_version = "", target.pwd_version + 1
+            try:
+                await state.asave()
+            except ConfigError as e:
+                target.totp_secret, target.pwd_version = old
+                return await settings_get(request, error=str(e))
+        state.log(f"two-factor sign-in of {username} turned off by an admin; their sessions "
+                  "were signed out")
+        ctx.audit(request, "user_totp_reset", username)
+        return await settings_get(request, ok=_("Two-factor sign-in is off for '{0}'; they were "
+                                                "signed out everywhere.").format(username))
+
     # ---------------- config export / import ----------------
     async def config_export(request):
         # mappings only — never export password_hash / secret_key. Mappings can carry
@@ -830,7 +996,11 @@ def routes(ctx: Ctx) -> list:
         # offers it to operators; a viewer, possibly an anonymous one, must not read them).
         if deny := require_role(request, "operator"):
             return deny
-        data = {"version": 1, "mappings": [m.to_dict() for m in state.config.mappings]}
+        mappings = state.config.mappings
+        data = {"version": 1, "mappings": [m.to_dict() for m in mappings]}
+        secrets_in = sum(1 for m in mappings if m.mqtt.password)
+        ctx.audit(request, "config_export", f"{len(mappings)} mappings"
+                  + (f", {secrets_in} with an MQTT password" if secrets_in else ""))
         return Response(
             json.dumps(data, indent=2), media_type="application/json",
             headers={"Content-Disposition": "attachment; filename=ser2net-mappings.json"})
@@ -838,10 +1008,10 @@ def routes(ctx: Ctx) -> list:
     # ---- import: the form first shows a preview (step=preview), then applies it in
     #      "merge" or "replace" mode. A POST without step (scripts written for 2.7)
     #      keeps the old behaviour: replace everything at once.
-    PENDING_TTL_S = 900
+    PENDING_TTL_S = 900   # (time.monotonic(): a clock step neither ends nor extends it)
 
     def _pending_put(user: str, plan) -> str:
-        now, pend = time.time(), state.pending_imports
+        now, pend = time.monotonic(), state.pending_imports
         for k in [k for k, v in pend.items() if now - v["created"] > PENDING_TTL_S]:
             del pend[k]
         while len(pend) >= 20:
@@ -852,7 +1022,7 @@ def routes(ctx: Ctx) -> list:
 
     def _pending_get(token: str, user: str):
         item = state.pending_imports.get(token or "")
-        if not item or item["user"] != user or time.time() - item["created"] > PENDING_TTL_S:
+        if not item or item["user"] != user or time.monotonic() - item["created"] > PENDING_TTL_S:
             return None
         return item
 
@@ -884,15 +1054,7 @@ def routes(ctx: Ctx) -> list:
 
     async def _import_preview(request, plan, mode):
         """Show what importing `plan` would change; nothing changes until it is applied."""
-        current = state.config.mappings
-        rows = importer.plan_rows(current, plan.mappings, mode)
-        candidate, touched = importer.apply_import(current, plan.mappings, mode)
-        problem = None
-        try:
-            dataclasses.replace(state.config, mappings=candidate).validate_for_save()
-        except ConfigError as e:
-            problem = str(e)
-        problem = problem or _own_port_conflict(state.config, touched, candidate)
+        rows, problem = ops.import_preview(state, plan, mode)
         preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
                    "source": plan.source, "warnings": plan.warnings, "problem": problem,
                    "count": len(plan.mappings)}
@@ -916,26 +1078,11 @@ def routes(ctx: Ctx) -> list:
         return await _apply_import(request, item["plan"], mode)
 
     async def _apply_import(request, plan, mode):
-        rows = importer.plan_rows(state.config.mappings, plan.mappings, mode)
-        async with state.config_lock:
-            old = state.config.mappings
-            new_maps, touched = importer.apply_import(old, plan.mappings, mode)
-            if conflict := _own_port_conflict(state.config, touched, new_maps):  # UI's port, ...
-                return await settings_get(request, error=_("Import rejected: {0}").format(conflict))
-            state.config.mappings = new_maps
-            try:
-                await state.asave()
-            except ConfigError as e:
-                state.config.mappings = old
-                return await settings_get(request, error=_("Import rejected: {0}").format(e))
-        if mode == "replace":
-            await state.supervisor.stop_all()
-            state.forget_mappings({m.id for m in old} - {m.id for m in new_maps})
-            await state.supervisor.start_all(state.config)
-        else:
-            for m in touched:
-                await state.supervisor.apply_mapping(m)
-        count = {a: sum(1 for r in rows if r["action"] == a) for a in ("add", "update", "same", "remove")}
+        try:
+            rows, new_maps = await ops.import_mappings(state, plan, mode)
+        except ConfigError as e:
+            return await settings_get(request, error=_("Import rejected: {0}").format(e))
+        count = ops.import_counts(rows)
         state.log(f"mappings imported ({mode}): {count['add']} added, {count['update']} updated, "
                   f"{count['same']} unchanged, {count['remove']} removed")
         ctx.audit(request, f"config_import_{mode}",
@@ -1002,11 +1149,17 @@ def routes(ctx: Ctx) -> list:
             + (["personal data masked"] if new.mask_personal_data else [])
             + (["e-mail to each recipient"] if new.email_separately else [])))
         if form.get("then") == "test":
+            warnings: list[str] = []
             errors = await state.notifier.deliver("test", "", _("If you can read this, "
-                                                    "ser2net can reach you."))
+                                                    "ser2net can reach you."), warnings=warnings)
+            for problem in errors + warnings:
+                state.log(f"notifications: {problem} (test)")
             if errors:
                 return await settings_get(request, error=_("Saved, but the test failed: {0}").format(
-                    "; ".join(errors)))
+                    "; ".join(errors + warnings)))
+            if warnings:
+                return await settings_get(request, error=_("Saved; the test notification was "
+                                                           "sent, but: {0}").format("; ".join(warnings)))
             return await settings_get(request, ok=_("Saved; the test notification was sent."))
         return await settings_get(request, ok=_("Notification settings saved."))
 
@@ -1048,7 +1201,10 @@ def routes(ctx: Ctx) -> list:
     async def audit_csv(request):
         if deny := require_role(request, "admin"):
             return deny
-        records, *_ = await _audit_records(request)
+        records, filters, *_ = await _audit_records(request)
+        shown = ", ".join(f"{k}={v}" for k, v in filters.items() if v)
+        ctx.audit(request, "audit_export", f"{len(records)} records"
+                  + (f" ({shown})" if shown else ""))
         buf = io.StringIO()
         out = csv.writer(buf)
         out.writerow(["time", "ip", "user", "action", "detail"])
@@ -1103,7 +1259,7 @@ def routes(ctx: Ctx) -> list:
         # the accounts and credentials
         keep = {"secret_key", "instance_id", "load_notes", "ids_created", "tolerated"}
         if not with_accounts:
-            keep |= {"users", "api_token_hash", "api_token_role"}
+            keep |= {"users", "api_token_hash", "api_token_role", "api_tokens"}
         notes = []
         async with state.config_lock:
             cur = state.config
@@ -1373,12 +1529,15 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/sessions/revoke-all", settings_sessions_revoke_all, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
+        Route("/settings/api-tokens", settings_api_tokens_create, methods=["POST"]),
+        Route("/settings/api-tokens/revoke", settings_api_tokens_revoke, methods=["POST"]),
         Route("/settings/users", settings_users_create, methods=["POST"]),
         Route("/settings/users/password", settings_users_password, methods=["POST"]),
         Route("/settings/users/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/delete", settings_users_delete, methods=["POST"]),
         Route("/settings/users/signout", settings_users_signout, methods=["POST"]),
         Route("/settings/users/expiry", settings_users_expiry, methods=["POST"]),
+        Route("/settings/users/totp-reset", settings_users_totp_reset, methods=["POST"]),
         # the user name in the URL: older pages and scripts (only names without /)
         Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
@@ -1401,15 +1560,6 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/backups/remove-account", backup_remove_account, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
-
-
-def _own_port_conflict(config, mappings, result) -> str:
-    """The first of ``mappings`` (an import's new and changed ones) that can't listen next
-    to ser2net's own listeners (AppConfig.own_port_conflict) or would share a serial port
-    with another enabled one of ``result`` (the mappings after the import; serial_conflict),
-    "" when none."""
-    return next((c for m in mappings
-                 if (c := config.own_port_conflict(m) or serial_conflict(m, result))), "")
 
 
 def _load_tls_pair(cert: str, key: str, password: str) -> None:
@@ -1497,8 +1647,15 @@ def _account_changes(old, new) -> list[str]:
                    (after[n].password_hash, after[n].role, after[n].source)
                    != (before[n].password_hash, before[n].role, before[n].source)]:
         out.append(_("Accounts with another password or role: {0}").format(", ".join(changed)))
+    if two_factor := [n for n in after if n in before
+                      and after[n].totp_secret != before[n].totp_secret]:
+        out.append(_("Accounts whose two-factor sign-in changes: {0}").format(", ".join(two_factor)))
     if (old.api_token_hash, old.api_token_role) != (new.api_token_hash, new.api_token_role):
         out.append(_("The REST API token as it was then (the current one stops working)"))
+    if ({(t.sha256, t.role, t.expires) for t in old.api_tokens}
+            != {(t.sha256, t.role, t.expires) for t in new.api_tokens}):
+        out.append(_("The other REST API tokens as they were then: {0}").format(
+            ", ".join(t.name for t in new.api_tokens) or _("none")))
     if (old.cluster.key, old.cluster.previous_key) != (new.cluster.key, new.cluster.previous_key):
         out.append(_("The cluster key as it was then"))
     return out

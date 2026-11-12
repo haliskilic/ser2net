@@ -21,7 +21,9 @@ repeats), or fails with SER2NET_OPTIONAL_TESTS=1.
     exchange too (401, the token endpoint's answer in all.log), with nothing saved; the
     code request carries PKCE (S256), a state cookie from before it still works; the
     provider's error answers are logged and shown by their code (403 / 503 / 400); an
-    e-mail address the provider has not verified names nobody;
+    e-mail address the provider has not verified names nobody; each of these failed
+    sign-ins, and one refused for its groups, is audited (oidc_login_failed, with a
+    short reason);
   * a directory or provider account named like a local account (letter case aside) is
     refused (403, logged and audited): the local admin keeps its source, role,
     password and sessions; so is a name with invisible characters, an over-long one or
@@ -413,6 +415,11 @@ def oidc_provider_answers(srv, provider):
             "assigned to the client application.')") in log, log[-1500:]
     assert "'temporarily_unavailable' (not for a sign-in started in this browser)" in log
     assert provider.token_requests == requests
+    audit = audit_log(srv)
+    for reason in ("(access_denied)", "(invalid_scope)", "(?)",
+                   "(temporarily_unavailable), not for a sign-in started in this browser"):
+        assert f"\toidc_login_failed\tthe identity provider refused it {reason}\t\n" in audit, \
+            (reason, audit[-1500:])
 
     # an e-mail address the provider hasn't verified names nobody (sub doesn't stand in)
     st, page = oidc_sign_in(srv, provider, {"email": "eve@example.com", "email_verified": False,
@@ -421,6 +428,8 @@ def oidc_provider_answers(srv, provider):
     assert ("OIDC login denied: the ID token names the user by the e-mail address "
             "'eve@example.com', which the provider has not verified") in all_log(srv)
     assert not [u for u in srv.saved_config()["users"] if u["username"] in ("eve@example.com", "s-1")]
+    assert "\toidc_login_failed\tno user name in the ID token (all.log says why)\t\n" \
+        in audit_log(srv), audit_log(srv)[-800:]
 
 
 def oidc_sign_in(srv, provider, claims):
@@ -461,6 +470,12 @@ def oidc_refused_callbacks(srv, provider):
             "'invalid_grant'") in all_log(srv), all_log(srv)[-1500:]
     assert srv.saved_config()["users"] == before["users"]
     assert not any(u["username"] == "mallory" for u in srv.saved_config()["users"])
+    audit = audit_log(srv)
+    mismatch = "\toidc_login_failed\tthe answer doesn't match a sign-in started in this browser"
+    assert audit.count(mismatch) == 5 and \
+        f"{mismatch} (none, or it took over 10 minutes)\t\n" in audit, audit
+    assert "\toidc_login_failed\tthe code or the ID token was refused (all.log says why)\t\n" \
+        in audit, audit
 
 
 def test_oidc():
@@ -523,6 +538,7 @@ def test_oidc():
             assert ("OIDC login denied for 'sso.user': no group setting matches their groups: "
                     "'ser2net-admins'") in log, log[-2000:]
             assert not signed_in(srv, old) and user_of(srv, "sso.user")["pwd_version"] == 8
+            assert "\toidc_login_failed\ttheir groups give no role\tsso.user\n" in audit_log(srv)
             print("OIDC: part of a group name is refused, logged, and signs the account out  OK")
 
             # Keycloak path, Turkish name in capitals: /Fabrika/BAKIM = "Bakım"

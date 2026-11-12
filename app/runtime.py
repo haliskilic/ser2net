@@ -21,7 +21,6 @@ import signal
 import stat
 import sys
 import threading
-import time
 from typing import Callable, Mapping, Optional
 
 # asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
@@ -31,13 +30,13 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, console, datalock, i18n, standalone
+from . import accounts, clock, console, datalock, i18n, standalone
 from .config import (NODE_NAME_ENV, ConfigError, ConfigStore, data_path, host_port, node_name,
                      node_name_problem)
 from .engine import netguard
 from .engine.serial_link import Backoff
 from .state import AppState, write_audit_record
-from .web import httpguard, proxy
+from .web import certinfo, httpguard, proxy
 from .web.server import build_app
 
 
@@ -162,6 +161,9 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         raise SystemExit(f"ser2net: {store.path} is not a valid configuration ({e}) — fix "
                          f"it{restore}") from None
     notes = config.load_notes
+    # before anything below writes config.json: its time is one the clock can't be before
+    if clock_note := clock.warning(store):
+        notes.append(clock_note)
     moved = config.find_moved_tls_files(data_dir)
     notes.extend(moved)
 
@@ -265,6 +267,21 @@ def require_admin_tls(admin) -> None:
                         "TLS generates its certificate in the data directory's tls folder)")
             raise SystemExit(f"ser2net: cannot read the admin UI TLS {what}: "
                              f"{_os_error(e)}{fix}") from None
+
+
+def tls_certificate_note(path: str) -> str:
+    """The start-up log's line about the admin UI's certificate: its subject and validity,
+    a WARNING when it has ended, isn't valid yet or ends soon (certinfo); "" when there
+    is nothing to read it with."""
+    try:
+        info = certinfo.read(path)
+    except certinfo.CertReadError as e:
+        if e.code == "no_decoder":
+            return ""
+        what = "no PEM certificate in it" if e.code == "not_pem" else str(e)
+        return f"WARNING: admin UI TLS certificate {path}: {what}"
+    line = f"admin UI TLS certificate: {info.describe()}"
+    return line if info.state() == "valid" else f"WARNING: {line}"
 
 
 def hold_data_dir(config_path: str) -> str | None:
@@ -403,7 +420,7 @@ def service_main(config_path: str) -> int:
         if isinstance(e.code, str):
             log = os.path.join(os.path.dirname(os.path.abspath(config_path)), "all.log")
             with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
-                fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {e.code}\n")
+                fh.write(f"{clock.stamp()} {e.code}\n")
         raise
 
 
@@ -438,6 +455,8 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if warning := winservice.location_warning():
             state.log(warning)
     state.prepare_first_run()
+    if admin.tls_enabled and (note := tls_certificate_note(admin.tls_cert)):
+        state.log(note)
     if warning := plain_http_warning(admin, published):
         state.log(warning)
     if config.password_set and not admin.require_login:

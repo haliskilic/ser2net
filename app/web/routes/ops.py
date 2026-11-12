@@ -3,8 +3,10 @@ validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 
-from ...config import ConfigError, MappingConfig, valid_mapping_id
+from ... import importer
+from ...config import ConfigError, MappingConfig, serial_conflict, valid_mapping_id
 from ...engine import portlist
 from ...i18n import _
 from .forms import _checkbox, _mapping_from_form, _preserve_unmanaged_fields
@@ -144,3 +146,59 @@ async def delete_mapping(state, mid):
         state.delete_mapping_log(removed.id)
         state.delete_mapping_traces(removed.id)
     return removed
+
+
+def import_preview(state, plan, mode: str) -> tuple[list[dict], str | None]:
+    """What importing `plan` (importer.ImportPlan) in `mode` would do, without changing
+    anything: the preview rows (importer.plan_rows) and why the result could not be saved
+    (None when it could). Shared by the import form's preview and the REST API's dry run."""
+    current = state.config.mappings
+    rows = importer.plan_rows(current, plan.mappings, mode)
+    candidate, touched = importer.apply_import(current, plan.mappings, mode)
+    try:
+        dataclasses.replace(state.config, mappings=candidate).validate_for_save()
+    except ConfigError as e:
+        return rows, str(e)
+    return rows, import_conflict(state.config, touched, candidate) or None
+
+
+async def import_mappings(state, plan, mode: str) -> tuple[list[dict], list[MappingConfig]]:
+    """Import `plan` in `mode` as one change: one save (so one backup of the configuration it
+    replaces), then the mappings it added or changed are (re)started; replace restarts them
+    all. Returns (the preview rows, the new mapping list). Raises ConfigError when the
+    result can't be saved, and nothing has changed then. Shared by the import form and the
+    REST API."""
+    async with state.config_lock:
+        old = state.config.mappings
+        rows = importer.plan_rows(old, plan.mappings, mode)
+        new_maps, touched = importer.apply_import(old, plan.mappings, mode)
+        if conflict := import_conflict(state.config, touched, new_maps):  # the UI's port, ...
+            raise ConfigError(conflict)
+        state.config.mappings = new_maps
+        try:
+            await state.asave()
+        except Exception:  # not saved, so not imported
+            state.config.mappings = old
+            raise
+    if mode == "replace":
+        await state.supervisor.stop_all()
+        state.forget_mappings({m.id for m in old} - {m.id for m in new_maps})
+        await state.supervisor.start_all(state.config)
+    else:
+        for m in touched:
+            await state.supervisor.apply_mapping(m)
+    return rows, new_maps
+
+
+def import_conflict(config, mappings, result) -> str:
+    """The first of ``mappings`` (an import's new and changed ones) that can't listen next
+    to ser2net's own listeners (AppConfig.own_port_conflict) or would share a serial port
+    with another enabled one of ``result`` (the mappings after the import; serial_conflict),
+    "" when none."""
+    return next((c for m in mappings
+                 if (c := config.own_port_conflict(m) or serial_conflict(m, result))), "")
+
+
+def import_counts(rows: list[dict]) -> dict[str, int]:
+    """How many preview rows add, update, leave unchanged and remove a mapping."""
+    return {a: sum(1 for r in rows if r["action"] == a) for a in ("add", "update", "same", "remove")}

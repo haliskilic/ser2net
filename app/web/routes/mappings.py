@@ -6,11 +6,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import time
 
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
+from ... import clock
 from ...config import ConfigError, MappingConfig
 from ...engine import netinfo, portlist
 from ...i18n import _
@@ -152,7 +152,7 @@ def routes(ctx: Ctx) -> list:
             text = (f"{size / 1048576:.1f} MB" if size >= 1048576 else
                     f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B")
             out.append({"name": os.path.basename(path), "path": path, "size_text": text,
-                        "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime))})
+                        "time": clock.stamp(st.st_mtime)})
         return out
 
     # Traces record both directions, what clients type to the device included (see

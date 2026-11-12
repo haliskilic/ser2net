@@ -1,7 +1,8 @@
 """Account recovery and the first admin account, without the web UI.
 
     ser2net --set-password NAME   a new password for local account NAME, whose sessions
-                                  end (NAME is created as an admin if it doesn't exist)
+                                  end and whose two-factor sign-in is turned off (NAME
+                                  is created as an admin if it doesn't exist)
     ser2net --sign-out-all        a new session key: every web UI session ends
     SER2NET_ADMIN_PASSWORD_FILE   (+ SER2NET_ADMIN_USER, default "admin") the first admin
                                   of an install without accounts, e.g. a Docker secret
@@ -116,13 +117,18 @@ def _set_password(config, username: str, password_hash: str) -> Change:
     if user.source != "local":
         raise AccountError(f"'{username}' is an {user.source.upper()} account, whose password "
                            "is managed there; give a new local admin account another name")
-    old = (user.password_hash, user.pwd_version)
-    user.password_hash, user.pwd_version = password_hash, user.pwd_version + 1
+    old = (user.password_hash, user.pwd_version, user.totp_secret)
+    # this is also the way back in for someone who lost their authenticator app: the new
+    # password alone signs in, and they can set two-factor sign-in up again
+    user.password_hash, user.pwd_version, user.totp_secret = (password_hash,
+                                                              user.pwd_version + 1, "")
 
     def restore() -> None:
-        user.password_hash, user.pwd_version = old
+        user.password_hash, user.pwd_version, user.totp_secret = old
+    two_factor = "; two-factor sign-in was turned off (set it up again in Settings)" if old[2] else ""
     return Change(f"new password set for '{username}' ({user.role}); its sessions were "
-                  "signed out", "user_password_set", username, restore)
+                  f"signed out{two_factor}", "user_password_set",
+                  username + (" (two-factor sign-in off)" if old[2] else ""), restore)
 
 
 def provision_requested(environ) -> bool:

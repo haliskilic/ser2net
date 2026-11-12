@@ -37,6 +37,28 @@ def free_port() -> int:
     return port
 
 
+def server_log(folder: str):
+    """Open <folder>/server.log for a server a test spawns (stdout=..., stderr=STDOUT):
+    its output goes to a file, never to an unread pipe, whose buffer (about 4 KB on Windows)
+    fills up and then blocks the server's event loop at its next log line. Close this copy
+    once the server runs (it has its own); show_log_on_failure(folder) in the test's finally
+    prints the log's end when the test failed."""
+    return open(os.path.join(folder, "server.log"), "wb")
+
+
+def show_log_on_failure(folder: str) -> None:
+    """Called in a finally: while an exception propagates, print the end of
+    <folder>/server.log (server_log)."""
+    if sys.exc_info()[0] is None:
+        return
+    try:
+        with open(os.path.join(folder, "server.log"), "rb") as fh:
+            tail = fh.read()[-3000:].decode("utf-8", "replace")
+    except OSError:
+        return
+    print("--- server log (tail) ---\n" + tail)
+
+
 def wait_port(port: int, timeout: float = 20) -> bool:
     end = time.time() + timeout
     while time.time() < end:

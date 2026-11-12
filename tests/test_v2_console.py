@@ -2,7 +2,9 @@
 
 Also: the hex view's traffic feed (both directions, timestamped) for an admin; a viewer
 gets a read-only console and a hex view of what the device sends only — never what a
-client sends to the device — and opening either is recorded in the audit log.
+client sends to the device — and opening either is recorded in the audit log, closing a
+console that wrote to the device too (how many bytes, never what). A WebSocket refused
+(no session, another site's page) gets an all.log line.
 
 Run: python3 tests/test_v2_console.py
 """
@@ -27,7 +29,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 UI = 8085
 
-from _server import ui_cookie  # noqa: E402
+from _server import server_log, show_log_on_failure, ui_cookie  # noqa: E402
 SESSION, CSRF = ui_cookie("ser2net_session", UI), ui_cookie("ser2net_csrf", UI)
 
 
@@ -62,9 +64,11 @@ def main():
     with open(cfg, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI}}, fh)
     socat, dev_a, dev_b = start_socat()
+    out = server_log(tmp)  # the server's output: a file, never an unread pipe
     srv = subprocess.Popen([sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg],
                            cwd=ROOT, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                           stdout=out, stderr=subprocess.STDOUT)
+    out.close()  # (the server has its own copy)
     try:
         assert wait_port(UI), "server did not start"
         jar = http.cookiejar.CookieJar()
@@ -153,9 +157,26 @@ def main():
             except Exception:
                 pass
 
+        async def ws_foreign():  # a valid session, from another site's page (CSWSH)
+            uri = f"ws://127.0.0.1:{UI}/api/mappings/{mid}/console"
+            try:
+                async with websockets.connect(uri, origin="http://evil.example", additional_headers={
+                        "Cookie": f"ser2net_session={session}"}) as ws:
+                    await asyncio.wait_for(ws.recv(), timeout=2)
+                return False
+            except Exception:
+                return True
+
         asyncio.run(ws_test())
         assert asyncio.run(ws_noauth()), "unauthenticated WS should be rejected"
-        print("console: unauthenticated WS rejected  OK")
+        assert asyncio.run(ws_foreign()), "a WS from another site should be rejected"
+        log = open(os.path.join(tmp, "all.log"), encoding="utf-8").read()
+        assert f"WebSocket /api/mappings/{mid}/console from 127.0.0.1 refused: no valid " \
+            "session" in log, log[-1500:]
+        # (another site's page: the cross-site refusal's line, as for the UI's forms)
+        assert f"refused WebSocket /api/mappings/{mid}/console from 127.0.0.1: opened by a " \
+            "page of another site (Origin 'http://evil.example'" in log, log[-1500:]
+        print("console: unauthenticated / cross-site WS rejected, and logged  OK")
         asyncio.run(traffic_test())
 
         # ---- a viewer: read-only console, hex view without what is sent to the device ----
@@ -230,6 +251,11 @@ def main():
             "[CON] console opened by view1") == 6
         print("audit log: console and hex view opens recorded with user and mode, once per "
               "account, mapping and kind in 5 minutes (all.log: every one)  OK")
+        assert audit("console_close") == {("admin", "CON (9 bytes written)")}, \
+            audit("console_close")   # a viewer's read-only console wrote nothing
+        assert "[CON] console closed (127.0.0.1; 9 bytes written)" in open(
+            os.path.join(tmp, "all.log"), encoding="utf-8").read()
+        print("audit log: a console session that wrote to the device, with the byte count  OK")
 
         device.close()
         print("\nPASS: WebSocket console (auth + bidirectional)")
@@ -240,6 +266,7 @@ def main():
             srv.wait(timeout=5)
         except subprocess.TimeoutExpired:
             srv.kill()
+        show_log_on_failure(tmp)
         shutil.rmtree(tmp, ignore_errors=True)
 
 
