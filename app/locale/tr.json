@@ -885,5 +885,13 @@
   "Point {0}: min is greater than max.": "{0} noktası: min, max'tan büyük.",
   "Point {0}: allowed must be a list of the values MQTT may write: true / false for a coil, numbers for a register.": "{0} noktası: allowed, MQTT'nin yazabileceği değerlerin listesi olmalı: coil için true / false, register için sayılar.",
   "Point {0}: poll must be true or false.": "{0} noktası: poll true ya da false olmalı.",
-  "Point {0}: a point that is not polled (\"poll\": false) is write-only, so it needs \"writable\": true.": "{0} noktası: okunmayan (\"poll\": false) bir nokta yalnızca yazılır, bu yüzden \"writable\": true gerekir."
+  "Point {0}: a point that is not polled (\"poll\": false) is write-only, so it needs \"writable\": true.": "{0} noktası: okunmayan (\"poll\": false) bir nokta yalnızca yazılır, bu yüzden \"writable\": true gerekir.",
+  "The MQTT base topic can't contain '+', '#' or the null character: no message can be published to such a topic.": "MQTT ana topic'i '+', '#' ya da null karakter içeremez: böyle bir topic'e mesaj yayınlanamaz.",
+  "Point {0}: with the plain MQTT format its name is part of its topic, which can't contain '+', '#' or the null character.": "{0} noktası: düz MQTT biçiminde noktanın adı topic'inin parçasıdır, topic ise '+', '#' ya da null karakter içeremez.",
+  "Point {0}: its MQTT topic {1} is already {2}. Rename the point.": "{0} noktası: MQTT topic'i {1} zaten {2}. Noktanın adını değiştir.",
+  "the mapping's online/offline status topic": "eşlemenin online/offline durum topic'i",
+  "the status topic of unit {0}": "unit {0} için durum topic'i",
+  "the command topic of point {0}": "{0} noktasının komut topic'i",
+  "the topic of the answers to point {0}'s commands": "{0} noktasına gelen komutların yanıt topic'i",
+  "the topic of point {0}": "{0} noktasının topic'i"
 }

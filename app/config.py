@@ -832,6 +832,35 @@ class MappingConfig:
                 if not isinstance(host, str) or any(c in host for c in "/+#"):
                     raise ConfigError(_("Sparkplug {0} must not contain '/', '+' or '#'.").format(
                         _("primary host ID")))
+        if self.kind == "net" and self.mqtt.enabled and _plain_mqtt(self):
+            if _bad_topic(self.mqtt.base_topic):
+                raise ConfigError(_("The MQTT base topic can't contain '+', '#' or the null "
+                                    "character: no message can be published to such a topic."))
+            self.check_mqtt_topics()
+
+    def check_mqtt_topics(self) -> None:
+        """Plain MQTT on a Modbus gateway (an edit's rules, see validate_input): a point's
+        name is part of its topics (<base_topic>/<name>, .../set, .../set/result), so it
+        can't have '+', '#' or the null character, and a point can't be published where the
+        mapping already publishes or takes something else: its status (<base_topic>/status),
+        a unit's status (unit<N>/status, with unit_status on) or another point's command or
+        result topic. A stored mapping that breaks them keeps loading and running
+        (validate() leaves them alone). Raises ConfigError."""
+        if not (self.kind == "net" and self.network.protocol == "modbus"):
+            return
+        for p in self.modbus_poll.points:
+            if _bad_topic(p.name):
+                raise ConfigError(_("Point {0}: with the plain MQTT format its name is part "
+                                    "of its topic, which can't contain '+', '#' or the null "
+                                    "character.").format(repr(p.name)))
+        uses: dict[str, tuple[str, Any]] = {}
+        for topic, use, of in sorted(_mqtt_topics(self), key=lambda t: t[1] == "value"):
+            if topic not in uses:
+                uses[topic] = (use, of)
+                continue
+            # (an overlap is always a point's value topic: the others can't meet)
+            raise ConfigError(_("Point {0}: its MQTT topic {1} is already {2}. Rename the "
+                                "point.").format(repr(of), repr(topic), _topic_use(*uses[topic])))
 
     def check_mqtt_tls_files(self) -> None:
         """An edit on the node that runs the mapping (its form, the REST API): with MQTT
@@ -885,6 +914,60 @@ class MappingConfig:
         if not _is_number(timeout) or not (0 <= timeout <= MAX_TIMER_S):
             raise ConfigError(_("{0} must be between 0 (off) and {1} seconds.").format(
                 _("Peer timeout"), MAX_TIMER_S))
+
+
+# ---------------------------------------------------------------------------
+# MQTT: the topics a plain-format mapping uses on its broker. Checked where a mapping
+# is created or changed (validate_input), never by validate(): a stored config keeps
+# loading and running.
+# ---------------------------------------------------------------------------
+def _plain_mqtt(m: MappingConfig) -> bool:
+    """The mapping publishes plain MQTT topics under its base topic (serial lines, or
+    Modbus points), not Sparkplug B (which a Modbus gateway alone can speak)."""
+    return m.network.protocol != "modbus" or m.mqtt.payload_format != "sparkplug_b"
+
+
+def _bad_topic(text: Any) -> bool:
+    """'+' / '#' (wildcards, which a message can't be published to) or U+0000 (which no
+    MQTT string may have) in a topic, or in the part of one a name makes."""
+    return any(c in str(text) for c in "+#\x00")
+
+
+def _mqtt_topics(m: MappingConfig) -> list[tuple[str, str, Any]]:
+    """The topics a plain-format mapping uses while it runs, as (topic, use, of): use
+    "status" (its retained online/offline and its Last Will) and "lines" (serial lines),
+    or on a Modbus gateway "value", "set" and "result" (a point's value, its command
+    topic and the answers to its commands; of = the point's name) and "unit" (a unit's
+    status, with unit_status on; of = the unit). As engine/mqtt_pub and
+    engine/modbus_gateway build them."""
+    base = str(m.mqtt.base_topic).rstrip("/")
+    out: list[tuple[str, str, Any]] = [(f"{base}/status", "status", None)]
+    if m.network.protocol != "modbus":
+        return out + [(base, "lines", None)]
+    units: list[Any] = []
+    for p in m.modbus_poll.points:
+        if p.poll is not False:  # (a write-only point is never published)
+            out.append((f"{base}/{p.name}", "value", p.name))
+            if p.unit != 0 and p.unit not in units:
+                units.append(p.unit)
+        if p.writable:
+            out.append((f"{base}/{p.name}/set", "set", p.name))
+            out.append((f"{base}/{p.name}/set/result", "result", p.name))
+    if m.mqtt.unit_status:
+        out += [(f"{base}/unit{u}/status", "unit", u) for u in units]
+    return out
+
+
+def _topic_use(use: str, of: Any) -> str:
+    if use == "status":
+        return _("the mapping's online/offline status topic")
+    if use == "unit":
+        return _("the status topic of unit {0}").format(of)
+    if use == "set":
+        return _("the command topic of point {0}").format(repr(of))
+    if use == "result":
+        return _("the topic of the answers to point {0}'s commands").format(repr(of))
+    return _("the topic of point {0}").format(repr(of))
 
 
 # ---------------------------------------------------------------------------
