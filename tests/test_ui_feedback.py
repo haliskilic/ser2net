@@ -33,6 +33,8 @@ from _server import ROOT, Browser, Server, free_port
 from app.web.auth import hash_password
 
 PW = "feedback-pass-1"
+# a taken port in the OS's own words: POSIX, Windows (WSAEADDRINUSE)
+IN_USE = ("address already in use", "only one usage of each socket address")
 with open(os.path.join(ROOT, "app", "locale", "tr.json"), encoding="utf-8") as _fh:
     TR = json.load(_fh)
 USERS = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
@@ -140,7 +142,8 @@ def test_notices():
                                    "another program (or another mapping). Another program"), text
             assert text.endswith("It is started as soon as it can listen there (its row shows "
                                  "when it is tried again)."), text
-            assert "already in use" in detail(h).lower() and "Errno" in detail(h), detail(h)
+            assert any(w in detail(h).lower() for w in IN_USE) and "Errno" in detail(h), \
+                detail(h)
             st, _, log = b.get("/api/mappings/fb0000000004/log")
             assert "start failed: " in log, "the reason belongs in the mapping's own log too"
             st, h, _ = b.post("/api/mappings/save", {**form, "id": "fb0000000004", "name": "Delta",
