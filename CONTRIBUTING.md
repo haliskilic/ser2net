@@ -91,9 +91,9 @@ in `app/web/static/` (htmx, xterm.js) are pinned in `vendor/npm/package.json`; c
 version there and run `python tools/refresh_assets.py`, which copies the files out of the npm
 release and records their sha256 (Dependabot proposes minor updates, `refresh-pins.yml`
 copies them in; test the console by hand before a major one). GitHub's dependency graph (and so the
-Dependabot alerts) reads `requirements.txt` for its newest Python only; the pins only
-Python 3.10 installs are submitted to it from `main` by
-`.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`), so they get
+Dependabot alerts) reads `requirements.txt` for its newest Python only, without the pins
+only Python 3.10 installs; `.github/workflows/dependency-graph.yml`
+(`tools/dependency_snapshot.py`) submits the whole file from `main` instead, so those get
 alerts too.
 
 ### Python versions
@@ -209,9 +209,9 @@ kütüphaneleri (htmx, xterm.js) `vendor/npm/package.json`'da sabitlenir; oradak
 değiştirip `python tools/refresh_assets.py` çalıştırın: dosyaları npm sürümünden kopyalar ve
 sha256'larını kaydeder (Dependabot minor güncellemeleri önerir, `refresh-pins.yml` onları
 kopyalar; major bir güncellemeden önce konsolu elle deneyin). GitHub'ın bağımlılık grafiği (dolayısıyla Dependabot uyarıları) `requirements.txt`'i
-yalnızca en yeni Python için okur; yalnızca Python 3.10'un kurduğu pin'leri
-`.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`) `main`'den grafiğe
-gönderir, böylece onlar için de uyarı çıkar.
+yalnızca en yeni Python için okur, yalnızca Python 3.10'un kurduğu pin'ler eksik kalır;
+`.github/workflows/dependency-graph.yml` (`tools/dependency_snapshot.py`) bunun yerine dosyanın
+tamamını `main`'den grafiğe gönderir, böylece onlar için de uyarı çıkar.
 
 ### Python sürümleri
 CI, Python 3.10–3.14'ü Linux ve Windows'ta test eder; en yeni sürüm (3.15) de çalışır, ama
