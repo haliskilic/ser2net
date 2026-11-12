@@ -9,6 +9,7 @@ ser2net-standalone.service for the binary, and any other one added later):
 - the service runs as the unprivileged ser2net user with NoNewPrivileges;
 - netlink is allowed, which lists the network interfaces (the bind-IP pickers, the cluster's
   directed broadcasts), and ProcSubset=pid stays;
+- a system call the filter denies fails with EPERM instead of killing the process;
 - systemd-analyze verify accepts the file (Linux, where systemd-analyze is installed);
 - the release attaches the binary's unit.
 What only a real start shows (the sandbox around a running server) is the CI job
@@ -114,6 +115,16 @@ def test_interfaces_readable():
         print(f"{name}: AF_NETLINK allowed, ProcSubset=pid kept  OK")
 
 
+def test_denied_calls_fail_with_eperm():
+    # without SystemCallErrorNumber= a call the filter denies kills the whole process with
+    # SIGSYS (status 31/SYS, no traceback) and Restart= repeats that every 3 s
+    for path in UNITS:
+        unit, name = parse(path), os.path.basename(path)
+        assert values(unit, "SystemCallFilter")[:1] == ["@system-service"], name
+        assert one(unit, "SystemCallErrorNumber") == "EPERM", name
+        print(f"{name}: a denied system call fails with EPERM  OK")
+
+
 def test_binary_unit():
     unit = parse(os.path.join(ROOT, "systemd", "ser2net-standalone.service"))
     start = one(unit, "ExecStart")
@@ -158,6 +169,7 @@ if __name__ == "__main__":
     test_writable_paths_exist_at_start()
     test_unprivileged()
     test_interfaces_readable()
+    test_denied_calls_fail_with_eperm()
     test_binary_unit()
     test_systemd_analyze_verify()
     print("\nPASS: systemd units")
