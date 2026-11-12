@@ -446,15 +446,12 @@
   {% if api_token_rows %}
   <div class="table-scroll">
   <table class="grid th-wrap">
-    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Role") }}</th><th>{{ _("Created") }}</th><th>{{ _("Expires") }}</th><th>{{ _("Last used") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Role") }}</th><th></th></tr></thead>
     <tbody>
     {% for t in api_token_rows %}
       <tr>
-        <td class="mono">{{ t.name }}</td>
+        <td class="mono">{{ t.name }}{% if t.expired %} <span class="tag">{{ _("expired") }}</span>{% endif %}<br><span class="muted">{{ _("created %(date)s", date=t.created) }} · {% if t.expires %}{{ _("expires %(date)s", date=t.expires) }}{% else %}{{ _("never expires") }}{% endif %} · {{ _("last used: %(time)s", time=t.last_used) }}</span></td>
         <td class="mono">{{ t.role }}</td>
-        <td>{{ t.created }}</td>
-        <td>{% if t.expired %}<span class="tag">{{ _("expired") }}</span> {% endif %}{{ t.expires or _("never") }}</td>
-        <td>{{ t.last_used }}</td>
         <td>
           <form method="post" action="/settings/api-tokens/revoke" class="inline">
             <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">

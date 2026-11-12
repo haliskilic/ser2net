@@ -842,9 +842,6 @@
   "last used: %(time)s": "son kullanım: %(time)s",
   "More tokens": "Diğer token'lar",
   "Give each client its own token: a read-only one for monitoring, one that may change mappings for automation. Each has a name — the audit log shows it as <span class=\"mono\">api-token:NAME</span> — a role and, if you like, an expiry; revoking one leaves the others working. The token above works as before. When a token was last used is known since ser2net started.": "Her istemciye kendi token'ını ver: izleme için salt okunur bir token, otomasyon için eşlemeleri değiştirebilen bir token. Her birinin bir adı (denetim kaydında <span class=\"mono\">api-token:AD</span> olarak görünür), bir rolü ve istersen bir bitiş tarihi olur; birini iptal etmek diğerlerini etkilemez. Yukarıdaki token eskisi gibi çalışır. Bir token'ın en son ne zaman kullanıldığı ser2net açıldığından beri bilinir.",
-  "Created": "Oluşturulma",
-  "Expires": "Bitiş",
-  "Last used": "Son kullanım",
   "expired": "süresi doldu",
   "A token name is 1-64 characters: English letters, digits, '.', '_' or '-'.": "Token adı 1-64 karakterdir: İngilizce harfler, rakamlar, '.', '_' ya da '-'.",
   "Expires after (days)": "Geçerlilik süresi (gün)",
@@ -895,5 +892,8 @@
   "Or give the app this link (some take it pasted; any QR code maker turns it into a code to scan):": "Ya da uygulamaya bu bağlantıyı ver (bazıları yapıştırılınca alır; herhangi bir QR kod oluşturucu onu taranacak bir koda çevirir):",
   "Enter the code the app shows, and your password:": "Uygulamanın gösterdiği kodu ve parolanı gir:",
   "Turn on two-factor sign-in": "İki adımlı girişi aç",
-  "Lost the app or the device? An admin can turn two-factor sign-in off for you in Settings → Users. On the server, <span class=\"mono\">ser2net --set-password NAME</span> sets a new password and turns it off — also for the only admin.": "Uygulamayı ya da cihazı mı kaybettin? Bir admin Ayarlar → Kullanıcılar'dan senin için iki adımlı girişi kapatabilir. Sunucuda <span class=\"mono\">ser2net --set-password AD</span> yeni bir parola verir ve onu kapatır — tek admin için de."
+  "Lost the app or the device? An admin can turn two-factor sign-in off for you in Settings → Users. On the server, <span class=\"mono\">ser2net --set-password NAME</span> sets a new password and turns it off — also for the only admin.": "Uygulamayı ya da cihazı mı kaybettin? Bir admin Ayarlar → Kullanıcılar'dan senin için iki adımlı girişi kapatabilir. Sunucuda <span class=\"mono\">ser2net --set-password AD</span> yeni bir parola verir ve onu kapatır — tek admin için de.",
+  "created %(date)s": "oluşturulma: %(date)s",
+  "expires %(date)s": "bitiş: %(date)s",
+  "never expires": "süresiz"
 }

@@ -143,8 +143,8 @@ def test_tokens():
         st, _, page = admin.get("/settings")
         assert "monitor" in page and "deploy" in page and "api-token:NAME" in page
         assert '<span class="tag">expired</span>' in page, "the expired token is marked"
-        assert re.search(r"last used: \d{4}-\d\d-\d\d \d\d:\d\d", page), "the main token's last use"
-        assert len(re.findall(r"<td>\d{4}-\d\d-\d\d \d\d:\d\d</td>", page)) == 2, "monitor, deploy"
+        used = re.findall(r"last used: (\d{4}-\d\d-\d\d \d\d:\d\d|—)", page)
+        assert len(used) == 4 and used.count("—") == 1, used  # main, old (never), monitor, deploy
         assert "last_used" not in json.dumps(srv.saved_config()), "last use is kept in memory only"
         before = srv.saved_config()
         for fields, want in (({"name": "bad name", "role": "viewer"}, "A token name is 1-64"),
