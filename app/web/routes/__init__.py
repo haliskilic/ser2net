@@ -17,6 +17,8 @@ Shared helpers live in common (Ctx), forms (form parsing) and ops (mapping opera
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from starlette.routing import Mount
 from starlette.staticfiles import StaticFiles
 
@@ -24,10 +26,15 @@ from . import cluster, console, login, mappings, settings, system
 from .common import Ctx
 from .forms import _build_mapping_dict, _preserve_unmanaged_fields
 
+if TYPE_CHECKING:
+    from starlette.templating import Jinja2Templates
+
+    from ...state import AppState
+
 __all__ = ["build_routes", "_build_mapping_dict", "_preserve_unmanaged_fields"]
 
 
-def build_routes(templates, state, static_dir) -> list:
+def build_routes(templates: Jinja2Templates, state: AppState, static_dir: str) -> list:
     from ..api import build_api_routes  # here: api imports .routes.ops (no import cycle)
 
     ctx = Ctx(templates, state)

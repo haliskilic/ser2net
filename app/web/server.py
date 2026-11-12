@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+from typing import TYPE_CHECKING
 
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
@@ -24,6 +25,9 @@ from .. import i18n
 from ..config import ROLE_RANK
 from . import auth
 from .routes import build_routes
+
+if TYPE_CHECKING:
+    from ..state import AppState
 
 TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -205,7 +209,7 @@ def make_templates() -> Jinja2Templates:
     return templates
 
 
-def build_app(state) -> Starlette:
+def build_app(state: AppState) -> Starlette:
     templates = make_templates()
     routes = build_routes(templates, state, STATIC_DIR)
     # The body limit holds for every route, and sits inside GuardMiddleware: in front of
