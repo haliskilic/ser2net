@@ -917,7 +917,10 @@ def test_binary():
         log = read(os.path.join(data, "all.log"))
         assert f"listening on 127.0.0.1:{raw} (raw, keepalive" in log, log[-1500:]
         assert "client connected: 127.0.0.1" in log, log[-1500:]
-        assert "MQTT publishing serial lines to 127.0.0.1" in log, "paho-mqtt missing from the bundle?"
+        # (paho-mqtt imported: the mapping's publisher connects; without it the log says
+        # "MQTT publishing disabled: ...")
+        assert f"MQTT: connecting to 127.0.0.1:{mqtt}" in log and \
+            "MQTT publishing disabled" not in log, "paho-mqtt missing from the bundle?"
         assert "not installed" not in log and "failed to import" not in log, log[-1500:]
         assert "UI translation is missing" not in log, log[:1500]
         kept = re.search(r"standalone: unpacked in [^\n]*_MEI[^\n]* — (locked, )?access times "
