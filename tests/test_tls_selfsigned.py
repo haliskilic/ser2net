@@ -209,10 +209,25 @@ def test_web_button_with_empty_path():
             admin = json.load(fh)["admin_ui"]
         assert admin["tls_cert"].endswith("cert.pem") and admin["tls_key"].endswith("key.pem"), admin
         ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(admin["tls_cert"], admin["tls_key"])
+        assert f"use HTTPS now: continue at https://127.0.0.1:{ui}/settings" in body, \
+            "the answer to the form says where to go on"
         print("server with an empty PATH: Settings -> Generate self-signed certificate works  OK")
 
-        # a certificate is set now: generating another one asks first, and the previous
-        # pair is kept as *.bak (config backups don't cover data/tls)
+        # the UI serves HTTPS at once: signed in again there (its cookies have names of
+        # their own over https), a certificate is set now: generating another one asks
+        # first, and the previous pair is kept as *.bak (config backups don't cover data/tls)
+        unverified = ssl.create_default_context()
+        unverified.check_hostname, unverified.verify_mode = False, ssl.CERT_NONE
+        jar = http.cookiejar.CookieJar()
+        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar),
+                                         urllib.request.HTTPSHandler(context=unverified))
+        base = f"https://127.0.0.1:{ui}"
+
+        def csrf():  # (the __Host- name of the cookie over https)
+            return next(c.value for c in jar if c.name == ui_cookie("ser2net_csrf", ui, "https"))
+
+        op.open(base + "/login", timeout=10)
+        post("/login", {"username": "admin", "password": "tlsgen-pass-1", "_csrf": csrf()})
         page = op.open(base + "/settings", timeout=10).read().decode()
         form = page[page.index('action="/settings/tls/generate"'):][:400]
         assert "data-confirm=" in form and "cert.pem" in form.split(">")[0], form
