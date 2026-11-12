@@ -97,6 +97,16 @@
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Audit log") }}</h2><a class="btn sm" href="{{ base }}/settings/audit">{{ _("Open audit log →") }}</a></div>
   <p class="muted">{{ _("Sign-ins and every configuration change: who, from where, what — with search, filters and CSV export.") }}</p>
+  <form method="post" action="{{ base }}/settings/request-log" class="authform mt-sm">
+    <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+    <label>{{ _("Web UI requests in all.log") }} <span class="muted">({{ _("one line each, with the client’s IP address; sign-ins and the audit log’s records are written either way") }})</span>
+      <select name="request_log">
+        {% set request_log_labels = {'all': _("Every page and change (the default)"), 'changes': _("Only changes, and refused or failed requests"), 'off': _("None")} %}
+        {% for m in request_log_modes %}<option value="{{ m }}" {% if m == admin.request_log %}selected{% endif %}>{{ request_log_labels[m] }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn" type="submit">{{ _("Save") }}</button>
+  </form>
 </section>
 
 <section class="panel panel-narrow">

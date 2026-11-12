@@ -156,7 +156,11 @@ and session key. README, *Several instances on one machine*, has the whole check
 - **Logs.** Every log line goes to `/data/all.log` (rotated, 10 MB × 5) and to the
   container's output, which Docker keeps without a limit by default: cap it with
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
-  container in `/etc/docker/daemon.json`.
+  container in `/etc/docker/daemon.json`. The lines name clients and the web UI's users by
+  IP address and user name; `-e SER2NET_LOG_STDOUT=off`
+  keeps them in `/data/all.log` only (`docker logs` then shows just what isn't a log line,
+  such as a start-up error), and Settings → Audit log → *Web UI requests in all.log* can
+  leave out page views or every request line.
 - **Runs as a non-root user.** The process runs as `ser2net` (uid/gid 10001), never
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to

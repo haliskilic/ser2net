@@ -784,7 +784,13 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
 - `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
   konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
-  *Audit log*'da aranabilir, CSV olarak indirilebilir.
+  *Audit log*'da aranabilir, CSV olarak indirilebilir. `all.log`'un her satırı stdout'a da
+  yazılır; systemd'nin journal'ı ya da Docker'ın container log'u bunları kendi saklama
+  süreleriyle tutar. `SER2NET_LOG_STDOUT=off` satırları yalnızca `all.log`'da tutar.
+  `all.log` her web arayüzü sayfası ve değişikliği için istemcinin IP adresiyle bir satır
+  yazar: Ayarlar → *Denetim kaydı* → *all.log'daki web arayüzü istekleri* yalnızca
+  değişiklikleri ve reddedilen istekleri ya da hiçbirini yazdırabilir (girişler ve denetim
+  kayıtları her durumda yazılır).
 - `logs/<id>.log` — eşleme başına geçmiş (saatlik bakım: >15 gün veya >100MB kırpılır).
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam

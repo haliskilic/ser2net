@@ -62,6 +62,22 @@ VIEW_REPEAT_S = 300
 VIEW_RECORDS = 50
 # first-run setup through a host name that isn't this machine's needs this file's code
 SETUP_CODE_FILE = "setup-code.txt"
+# SER2NET_LOG_STDOUT=off: the log lines go only to all.log, not to stdout as well (where
+# systemd's journal or Docker's container log keep a copy of their own)
+LOG_STDOUT_ENV = "SER2NET_LOG_STDOUT"
+
+
+def log_stdout(environ=None) -> tuple[bool, str]:
+    """(whether the log lines also go to stdout, a warning for a value that is neither
+    on nor off — then they do, as without it)."""
+    raw = ((os.environ if environ is None else environ).get(LOG_STDOUT_ENV) or "").strip()
+    value = raw.lower()
+    if value in ("", "on", "1", "yes", "true"):
+        return True, ""
+    if value in ("off", "0", "no", "false"):
+        return False, ""
+    return True, (f"WARNING: {LOG_STDOUT_ENV}={raw[:40]!r} is not on or off; the log lines "
+                  "also go to stdout")
 
 
 # characters that must not reach an audit record: control characters (tab / CR / LF and
@@ -259,7 +275,10 @@ class AppState:
         self.logs_dir = os.path.join(self.data_dir, "logs")
         # traffic traces: the ONLY place a trace is written (see config.trace_file_name)
         self.traces_dir = os.path.join(self.data_dir, "traces")
-        self._logger = self._setup_logging(self.log_path)
+        stdout, stdout_problem = log_stdout()
+        self._logger = self._setup_logging(self.log_path, stdout=stdout)
+        if stdout_problem:
+            self._logger.info(stdout_problem)
         self._mapping_loggers: dict[str, logging.Logger] = {}
         self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger,
                                      trace_dir=self.traces_dir)
@@ -312,7 +331,9 @@ class AppState:
             lock_down_dir(d)
 
     @staticmethod
-    def _setup_logging(log_path: str) -> logging.Logger:
+    def _setup_logging(log_path: str, stdout: bool = True) -> logging.Logger:
+        """The 'ser2net' logger: all.log, and stdout too unless `stdout` is False (also
+        then when all.log can't be opened, so the lines still go somewhere)."""
         logger = logging.getLogger("ser2net")
         logger.setLevel(logging.INFO)
         logger.handlers.clear()
@@ -334,6 +355,9 @@ class AppState:
             logger.addHandler(fileh)
         except OSError as e:
             logger.warning(f"could not open log file {log_path}: {e}")
+        else:
+            if not stdout:
+                logger.removeHandler(console)
         return logger
 
     def log(self, msg: str) -> None:

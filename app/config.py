@@ -797,6 +797,12 @@ class AdminUI:
     # instead), for instances that share a host name: notifications, the cluster's fleet
     # view, the browser tab and the top bar use it. '' = the host name, as before.
     node_name: str = ""
+    # Which web UI requests all.log gets an "HTTP <ip> <method> <path> -> <status>" line
+    # for (Settings -> Audit log): "all" (every page and change but the static files and
+    # the automatic refreshes, as before), "changes" (only requests that change something,
+    # and refused or failed ones: status 400 and up) or "off". Sign-ins, failed sign-ins
+    # and the audit records are logged whatever it says.
+    request_log: str = "all"
 
     @property
     def tls_enabled(self) -> bool:
@@ -837,6 +843,18 @@ def node_label(admin: "AdminUI") -> str:
     """What names this instance where the host name did up to 2.8: node_name(), else the
     host name (notifications, the cluster's beacon and fleet view)."""
     return node_name(admin) or socket.gethostname()
+
+
+REQUEST_LOG_MODES = ("all", "changes", "off")
+
+
+def _normalize_request_log(admin: "AdminUI", notes: list[str]) -> None:
+    """A hand-edited admin_ui.request_log other than all / changes / off logs every request,
+    as before the setting existed, with a load note."""
+    if admin.request_log not in REQUEST_LOG_MODES:
+        notes.append(f"admin_ui.request_log {str(admin.request_log)[:40]!r} is not one of "
+                     f"{', '.join(REQUEST_LOG_MODES)}; using all")
+        admin.request_log = "all"
 
 
 def _normalize_node_name(admin: "AdminUI", notes: list[str]) -> None:
@@ -1451,6 +1469,7 @@ class AppConfig:
         _normalize_admin_limits(cfg.admin_ui, cfg.load_notes)
         _normalize_proxy_settings(cfg.admin_ui, cfg.load_notes)
         _normalize_node_name(cfg.admin_ui, cfg.load_notes)
+        _normalize_request_log(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
         raw_days = d.get("external_users_expire_days")
         if raw_days is not None and raw_days != cfg.external_users_expire_days:

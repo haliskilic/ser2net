@@ -114,6 +114,7 @@ PORTABLE = [
     "test_port_picker.py",     # the console picker tries the admin UI port it offers
     "test_save_start_result.py",  # a mapping save says when the mapping didn't start
     "test_systemd_units.py",   # ser2net.service and the per-instance ser2net@.service
+    "test_activity_log.py",    # SER2NET_LOG_STDOUT, admin_ui.request_log
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
