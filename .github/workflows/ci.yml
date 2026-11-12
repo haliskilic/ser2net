@@ -248,6 +248,12 @@ jobs:
       - name: Run full test suite incl. socat data-path (Linux)
         if: runner.os == 'Linux'
         run: python tests/run_all.py --socat -v
+      # 8 serial bridges at once under request/response load, then every device unplugged
+      # and plugged back twice (socat); the full size runs weekly in scheduled.yml
+      - name: Stress, 8 bridges with device loss and return (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: python tests/stress_24.py 8 512 100 --cycles 2
 
   # The newest Python, before its wheels have all settled: shows what breaks there
   # without blocking a merge (not in ci-ok's needs, continue-on-error). Move it into the
