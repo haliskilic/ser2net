@@ -25,7 +25,8 @@ network bytes appended to it. Checks:
     at its start and while it writes, says why, and goes on by itself with 10% to spare;
   * with trace_max_age_days set (0, the default, keeps them), the hourly maintenance
     deletes the trace files not written for that long, a running trace's through its
-    writer; a hand-edited value out of range is read as 0 or the maximum, with a note;
+    writer, and has a running trace whose file holds older traffic begin a new file; a
+    hand-edited value out of range is read as 0 or the maximum, with a note;
   * deleting a mapping deletes its traces; the start-up prunes the traces of mappings
     that no longer exist (a replace import or a restore leaves them), and those removals
     close the gone mappings' runners and log files at once.
@@ -225,6 +226,34 @@ async def test_tracer_low_space(tmp):
     assert any("trace written again" in ln for ln in logs), logs
     print("tracer: below the free-space floor it pauses (at start and while writing), says "
           "why and goes on by itself with 10% to spare  OK")
+
+
+async def test_tracer_renew(tmp):
+    """renew_if_older: a file whose traffic begins before the time given is rotated (as at
+    its size) in the writer's turn, the next traffic goes into a new one; the time is the
+    file's first line, or without timestamps when it was last written."""
+    old = time.time() - 10 * 86400
+    path = os.path.join(tmp, "r.log")
+    with open(path, "w") as fh:
+        fh.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(old)) + " ser>net x\n")
+    t = Tracer(path, _Opts(hexdump=False))
+    assert await asyncio.wrap_future(t.renew_if_older(old - 60)) is False, "not that old"
+    assert await asyncio.wrap_future(t.renew_if_older(time.time() - 7 * 86400)) is True
+    assert open(path + ".1").read().endswith(" ser>net x\n") and os.path.getsize(path) == 0
+    t.write("ser>net", b"new")
+    assert await asyncio.wrap_future(t.renew_if_older(time.time() - 7 * 86400)) is False
+    await t.aclose()
+    assert open(path, "rb").read().endswith(b"ser>net new\n")
+    assert t.renew_if_older(time.time()) is None, "writer ended"
+    plain = os.path.join(tmp, "p.log")
+    with open(plain, "wb") as fh:
+        fh.write(b"ser>net no time\n")
+    os.utime(plain, (old, old))
+    t = Tracer(plain, _Opts(hexdump=False))
+    assert await asyncio.wrap_future(t.renew_if_older(time.time() - 7 * 86400)) is True
+    await t.aclose()
+    print("tracer: a file holding traffic older than asked begins anew (first line's time, "
+          "else when last written)  OK")
 
 
 class _SlowTracer(Tracer):
@@ -614,6 +643,17 @@ async def test_retention(tmp):
         assert tracer.active and not tracer.error
         assert await st.run_trace_maintenance() == 0
         assert sum("trace maintenance" in ln for ln in logs) == 1, logs
+        # written into all the time, so never "not written for 7 days": begun anew once its
+        # traffic is that old, and the rotated file goes 7 days after its last write
+        tracer.write("ser>net", b"payload")
+        await wait_for(lambda: os.path.exists(tracer.path) and os.path.getsize(tracer.path))
+        tracer._begun = time.time() - 8 * 86400  # (its first line came 8 days ago)
+        assert await st.run_trace_maintenance() == 0
+        assert logs[-1] == ("trace maintenance: 1 trace(s) begun in a new file, as theirs held "
+                            "traffic from more than 7 days ago"), logs[-1]
+        assert b"payload" in open(tracer.path + ".1", "rb").read()
+        assert await st.run_trace_maintenance() == 0  # its new file is young: nothing more
+        assert sum("begun in a new file" in ln for ln in logs) == 1, logs
     finally:
         await st.supervisor.stop_all()
         st.delete_mapping_log("ret001")
@@ -679,6 +719,8 @@ async def main():
         await test_tracer_survives_failures(os.path.join(tmp, "e"))
         os.makedirs(os.path.join(tmp, "l"))
         await test_tracer_low_space(os.path.join(tmp, "l"))
+        os.makedirs(os.path.join(tmp, "m"))
+        await test_tracer_renew(os.path.join(tmp, "m"))
         await test_tracer_folder_removed(os.path.join(tmp, "f"))
         test_thread_errors_logged()
         os.makedirs(os.path.join(tmp, "g"))

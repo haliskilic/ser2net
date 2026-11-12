@@ -266,6 +266,19 @@ class Supervisor:
                 return await asyncio.wrap_future(done)
             return await asyncio.to_thread(remove_files, paths)
 
+    async def renew_traces(self, begun_before: float) -> int:
+        """Have every running trace whose file holds traffic from before `begun_before`
+        begin a new one (bridge.Tracer.renew_if_older, in its writer thread). Returns how
+        many did."""
+        waits = []
+        for runner in list(self._runners.values()):
+            tracer = getattr(runner, "tracer", None)
+            done = tracer.renew_if_older(begun_before) if tracer is not None else None
+            if done is not None:
+                waits.append(asyncio.wrap_future(done))
+        results = await asyncio.gather(*waits, return_exceptions=True)
+        return sum(r is True for r in results)
+
     # ---------------- status ----------------
     def get_runner(self, mapping_id: str) -> Optional[Runner]:
         return self._runners.get(mapping_id)

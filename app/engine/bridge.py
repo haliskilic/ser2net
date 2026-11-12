@@ -231,6 +231,7 @@ class Tracer:
         self._done = False     # the writer has ended (remove_files then returns None)
         self._resumed = False  # opened again after an error: logged once it writes
         self._unchecked = 0    # bytes written since the free space was checked
+        self._begun: Optional[float] = None  # when the traffic in the file begins (None: empty)
         self._low_space = False  # paused for the free space (goes on with some to spare)
         self.error = ""        # why the trace is not written now ("" while it is)
         self._fh: Optional[io.BufferedWriter] = None
@@ -292,6 +293,24 @@ class Tracer:
         if gone:
             self._log(f"trace: deleted {len(gone)} rotated file(s) of {self.path} past the "
                       f"{self._keep} kept")
+
+    def renew_if_older(self, begun_before: float) -> Optional[concurrent.futures.Future]:
+        """Have the writer begin a new file (rotating this one, as at its size) if the file
+        it writes holds traffic from before `begun_before`, in turn with the lines queued
+        before: the retention by age (trace_max_age_days) can then delete it. The future's
+        result: whether it did. None once the writer has ended."""
+        job = _Job(lambda: self._renew(begun_before))
+        with self._lock:
+            if self._done:
+                return None
+            self._q.put(job)
+        return job.future
+
+    def _renew(self, begun_before: float) -> bool:
+        if self._fh is None or self._begun is None or self._begun >= begun_before:
+            return False
+        self._rotate()
+        return True
 
     def _remove(self, paths) -> dict[str, Optional[OSError]]:
         mine = os.path.normcase(os.path.abspath(self.path))
@@ -394,6 +413,8 @@ class Tracer:
         if self._fh is None:
             raise OSError(f"{self.path} is not open")
         data = b"".join(line for line, _n in lines)
+        if self._begun is None:
+            self._begun = time.time()
         self._unchecked += len(data)
         if self._unchecked >= self.SPACE_CHECK_BYTES:
             self._unchecked = 0
@@ -432,10 +453,24 @@ class Tracer:
         storage.check_space(folder, resuming=self._low_space)
         self._fh = open(self.path, "ab")
         self._unchecked, self._low_space = 0, False
+        self._begun = self._first_time() if self._fh.tell() else None
         if self.error:
             self._resumed = True
             self._set_error("")
         return self._fh
+
+    def _first_time(self) -> float:
+        """When the traffic in the (not empty) file begins: the time of its first line
+        (trace_timestamp), else when it was last written (no earlier time is known)."""
+        try:
+            with open(self.path, "rb") as fh:
+                head = fh.read(19).decode("ascii")
+            return time.mktime(time.strptime(head, "%Y-%m-%d %H:%M:%S"))
+        except (OSError, ValueError, OverflowError):
+            try:
+                return os.path.getmtime(self.path)
+            except OSError:
+                return time.time()
 
     def _close_file(self) -> None:
         fh, self._fh = self._fh, None
