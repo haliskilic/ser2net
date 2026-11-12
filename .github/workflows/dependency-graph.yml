@@ -1,0 +1,43 @@
+name: Dependency graph
+
+# GitHub reads requirements.txt into the dependency graph itself (and raises the Dependabot
+# alerts from it), but evaluates its python_version markers for one interpreter, the newest:
+# the pins only Python 3.10 installs (the python_version < "3.11" lines) are not in the graph,
+# so an advisory against one of them would raise no alert. This job submits those pins
+# (tools/dependency_snapshot.py) through the dependency submission API whenever main's
+# requirements change; a newer submission replaces the older one.
+on:
+  push:
+    branches: [main]
+    paths:
+      - requirements.txt
+      - requirements-optional.txt
+      - tools/dependency_snapshot.py
+      - tools/refresh_wheels.py
+      - .github/workflows/dependency-graph.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-graph
+  cancel-in-progress: true   # the newest commit's snapshot replaces an older one anyway
+
+jobs:
+  submit:
+    name: submit the pins the dependency graph leaves out
+    if: github.ref == 'refs/heads/main'   # alerts come from the default branch's graph
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # the dependency submission API needs it; nothing else is written
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The pins only older Pythons install
+        run: python3 tools/dependency_snapshot.py --out snapshot.json
+      - name: Submit them (Insights -> Dependency graph shows them as their own manifests)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/dependency-graph/snapshots" --input snapshot.json

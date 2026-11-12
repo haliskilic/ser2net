@@ -104,6 +104,7 @@ PORTABLE = [
     "test_ci_gate.py",          # ci.yml: ci-ok needs every job; required names kept
     "test_release_pipeline.py",  # release.yml gates, SHA-pinned actions
     "test_release_guard.py",    # release tag = version, CHANGELOG section, image tags
+    "test_dependency_snapshot.py",  # the Python 3.10 pins go to the dependency graph
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
