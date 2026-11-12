@@ -145,6 +145,7 @@ def routes(ctx: Ctx) -> list:
                 "kind": _mapping_kind_label(m), "endpoint": _mapping_endpoint(m),
                 "serial": m.serial.port,
                 "state": st.get("state", "stopped"),
+                "link": st.get("link", ""),  # connect-out: connecting / up / down
                 "client_count": st.get("client_count", 0),
                 "bytes_in": st.get("bytes_in", 0), "bytes_out": st.get("bytes_out", 0),
             })

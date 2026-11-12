@@ -140,9 +140,15 @@ düzenlemeye gerek yok.
   sayılır (serial↔serial: A → B / B → A). Ağdan gelip cihaza yazılamayan veri (port açık
   değilken ya da bir UDP datagram'ı kuyruğu dolu bulduğunda) atılmış sayılır
   (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`), panoda işaretlenir ve loglanır.
-- **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
-  bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
-  Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+- **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, dışa bağlanan
+  bir eşleme uzak sunucusunu kaybettiğinde/yeniden bulduğunda, istemci bağlanıp düştüğünde
+  ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) ve/veya
+  e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+- **Dışa bağlanma durumu:** dışa bağlanan bir eşlemenin durumu seri tarafı göstermeye devam
+  eder; uzak sunucuyla bağlantısı yanında gösterilir ("bağlantı yok" ve nedeni, Sorunlu
+  filtresi bunu sayar; "bağlanıyor"), `/api/v1/status`'ta (`link`: `connecting` / `up` /
+  `down`, `link_error`, `link_since`, `connect_failures`) ve filo görünümünde de. Kapanıp
+  hemen yeniden kurulan bir bağlantı (maksimum bağlantı süresi, idle timeout) kesinti sayılmaz.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
@@ -330,7 +336,9 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
-  düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
+  düşürülen yavaş istemciler (dışa bağlanan eşlemede bağlantının açık olup olmadığı,
+  `ser2net_mapping_link_up`, ve başarısız bağlanma denemeleri,
+  `ser2net_mapping_connect_failures_total`); süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
   `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren ve sıra bekleyen TLS
   el sıkışmaları ve kabulden hemen sonra reddedilen bağlantılar
   (`ser2net_connections_refused_total`, nedene göre).

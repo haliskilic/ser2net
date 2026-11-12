@@ -66,7 +66,7 @@
         <div class="mono">{{ m.endpoint|softbreak }}</div>
         <div class="sub mono">{{ m.kind }}</div>
       </td>
-      <td data-label="{{ _('State') }}"><span class="state state-{{ m.state }}">{{ state_label(m.state) }}</span></td>
+      <td data-label="{{ _('State') }}"><span class="state state-{{ m.state }}">{{ state_label(m.state) }}</span>{% if m.link == 'down' %} <span class="tag tag-warn">{{ _("link down") }}</span>{% endif %}</td>
       <td data-label="{{ _('Clients') }}">{{ m.client_count }}</td>
       <td class="mono nowrap" data-label="{{ _('In / Out') }}">{{ m.bytes_in }} / {{ m.bytes_out }}</td>
       <td class="col-actions">
