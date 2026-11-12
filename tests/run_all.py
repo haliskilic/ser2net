@@ -52,6 +52,7 @@ PORTABLE = [
     "test_route_access.py",   # every route and WebSocket against the access matrix
     "test_mqtt_pub.py",
     "test_modbus_poll.py",
+    "test_modbus_unit_health.py",
     "test_ldap.py",
     "test_oidc.py",
     "test_directory_login.py",  # LDAP/OIDC sign-in end to end; skips without ldap3 / authlib

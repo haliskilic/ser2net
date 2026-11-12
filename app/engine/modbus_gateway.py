@@ -22,6 +22,13 @@ a read-only gateway answers every request that is not known to be a read with
 exception 01 and never puts it on the bus, and refuses MQTT/Sparkplug writes as well.
 A banner, open/close strings and closeon don't apply: bytes outside Modbus frames
 would break the framing.
+
+Edge mode (MQTT enabled, poll points) reads the points off the bus on an interval, unit by
+unit, and keeps track of each unit's health (_poll_unit): a unit that gives no reply to any
+of its points in UNIT_OFFLINE_AFTER cycles in a row, or whose serial port stays gone that
+long, is offline (logged once; a Sparkplug B node sends its DDEATH) and is polled with one
+point per cycle until it answers; then all its points are read again (Sparkplug B: a DBIRTH
+with those values). Requests from Modbus/TCP masters are not affected.
 """
 from __future__ import annotations
 
@@ -62,6 +69,9 @@ TURNAROUND_S = 0.2
 # Log lines about one slave's replies (cut short, not matching): at most one per this many
 # seconds per kind and unit; the ones in between are counted into the next.
 NOTE_EVERY_S = 60.0
+# Edge mode: a unit none of whose points has answered in this many poll cycles in a row (or
+# while the serial port is gone) is offline, and polled with one point per cycle from then on.
+UNIT_OFFLINE_AFTER = 3
 
 
 def _next_timer(idle_s: float, deadline: Optional[float]) -> Optional[float]:
@@ -86,6 +96,40 @@ class _Master:
         self.close_reason = self.close_reason or reason
         with contextlib.suppress(Exception):
             self.writer.transport.abort()
+
+
+class NoReply(ValueError):
+    """A poll point got no reply: its unit did not answer in time (or not usably), or the
+    serial port is down (exception 0x0B / 0x0A, which the gateway makes up then)."""
+
+
+@dataclass(eq=False)
+class _Unit:
+    """A polled Modbus unit (slave address) and how it is doing (see _poll_unit)."""
+    unit: int
+    points: list[ModbusPoint] = field(default_factory=list)
+    state: str = "unknown"      # unknown (not polled yet) | online | offline
+    cause: str = ""             # offline: "no reply" (the unit) or "port down" (the port)
+    misses: int = 0             # poll cycles in a row in which none of its points answered,
+    miss_cause: str = ""        # ... all for this cause (another one starts the count over)
+    since: float = 0.0          # time.time() when it went online / offline
+    errors: int = 0             # point reads that failed, in this run
+    probe: int = 0              # offline: which point the next probe reads (each in turn)
+
+
+@dataclass
+class _Reads:
+    """What one round of point reads gave."""
+    values: dict = field(default_factory=dict)
+    stamps: dict = field(default_factory=dict)  # when each value was read (ms since the epoch)
+    failed: list = field(default_factory=list)  # (point, error)
+    answered: bool = False      # the unit answered at least once (a value or an exception)
+
+    def add(self, other: "_Reads") -> None:
+        self.values.update(other.values)
+        self.stamps.update(other.stamps)
+        self.failed += other.failed
+        self.answered = self.answered or other.answered
 
 
 class ModbusGatewayRunner:
@@ -128,6 +172,14 @@ class ModbusGatewayRunner:
         # (unit, PDU)
         self._dirty: Optional[float] = None
         self._unanswered: Optional[tuple[int, bytes]] = None
+        # edge mode: the polled units, in the order their first point is listed (a point on
+        # unit 0, the broadcast address, is never read: no slave answers a broadcast), and the
+        # points whose last read failed (True: that was logged)
+        self._units: dict[int, _Unit] = {}
+        for p in mapping.modbus_poll.points:
+            if p.unit != modbus.BROADCAST:
+                self._units.setdefault(p.unit, _Unit(p.unit)).points.append(p)
+        self._failing: dict[str, bool] = {}
 
     def _log(self, msg: str) -> None:
         if self.log:
@@ -289,13 +341,25 @@ class ModbusGatewayRunner:
 
     async def _read_point(self, p):
         """One poll point's current value off the bus (bool for coils / discrete
-        inputs, a number for registers). Raises ValueError / OSError."""
+        inputs, a number for registers). Raises NoReply if the unit did not answer (or the
+        port is down), ValueError for an answer that is not a value (an exception, ...)."""
         if p.fn in (modbus.READ_COILS, modbus.READ_DISCRETE_INPUTS):
             rpdu = await self._transaction(p.unit, modbus.read_bits_pdu(p.fn, p.address, 1))
+            self._check_answered(rpdu, p)
             return modbus.decode_bits(modbus.response_data(rpdu, p.fn), 1)[0]
         req = modbus.read_pdu(p.fn, p.address, modbus.dtype_registers(p.dtype))
         rpdu = await self._transaction(p.unit, req)
+        self._check_answered(rpdu, p)
         return modbus.decode_value(modbus.response_data(rpdu, p.fn), p.dtype, p.scale)
+
+    def _check_answered(self, rpdu: bytes, p) -> None:
+        """Raise NoReply for the exceptions the gateway answers itself when no reply came:
+        0x0B (none in time, or none that could be used) and 0x0A (the port is down)."""
+        if len(rpdu) == 2 and rpdu[0] & 0x80:
+            if rpdu[1] == modbus.GATEWAY_TARGET_FAILED:
+                raise NoReply(f"no reply from unit {p.unit} within {self._resp_timeout:g} s")
+            if rpdu[1] == modbus.GATEWAY_PATH_UNAVAILABLE:
+                raise NoReply("the serial port is down")
 
     def _publish_values(self, values: dict, stamps: Optional[dict] = None) -> None:
         """Publish values read off the bus; ``stamps``: when each was read (ms since the
@@ -308,28 +372,115 @@ class ModbusGatewayRunner:
                 self._mqtt.publish_value(name, text.encode())
 
     async def _poll_loop(self) -> None:
-        """Edge mode: read the configured points off the RTU bus on an interval and
-        publish the decoded values (to <base_topic>/<point name>, or as Sparkplug B)."""
+        """Edge mode: read the configured points off the RTU bus on an interval, unit by
+        unit, and publish the decoded values (to <base_topic>/<point name>, or as Sparkplug
+        B); see _poll_unit."""
         poll = self.mapping.modbus_poll
         while not self._stop.is_set():
-            values, stamps = {}, {}
-            # while the port is gone there is nothing to read (the link logs the outage); a
-            # point on unit 0 is never read: no slave answers a broadcast
-            points = ([p for p in poll.points if p.unit != modbus.BROADCAST]
-                      if not self._link.down else [])
-            for p in points:
-                try:
-                    values[p.name] = await self._read_point(p)
-                    stamps[p.name] = _now_ms()
-                except Exception as e:  # one bad point must not stop the loop
-                    self._log(f"poll '{p.name}': {e}")
-            if values:
-                self._publish_values(values, stamps)
+            lost = []  # units that went offline in this cycle because the port is gone
+            for u in list(self._units.values()):
+                if self._stop.is_set():
+                    break
+                if await self._poll_unit(u) == "port down":
+                    lost.append(u.unit)
+            if lost:
+                self._log(f"{_units_text(lost)}: offline, the serial port has been down for "
+                          f"{UNIT_OFFLINE_AFTER} polls")
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=poll.interval_s)
                 break
             except asyncio.TimeoutError:
                 pass
+
+    async def _poll_unit(self, u: _Unit) -> Optional[str]:
+        """Read one unit's points and publish the values. A unit that gave no reply to any of
+        them in UNIT_OFFLINE_AFTER cycles in a row, or whose port stayed down that long, goes
+        offline: a Sparkplug B node sends its DDEATH and drops its values, and from then on
+        each cycle reads one of its points (each in turn), so a dead unit holds the bus for
+        one response timeout per cycle, not one per point. When it answers, its other points
+        are read too and it is online again (Sparkplug B: a DBIRTH with those values). A slave
+        exception is an answer: the unit is there. Only changes of state are logged; a point
+        that keeps failing on a unit that answers is logged when it starts failing (at most
+        once a minute) and when it reads again. Returns the cause if the unit went offline
+        in this cycle."""
+        if self._link.down:  # nothing to read (the link logs the outage)
+            return self._unit_missed(u, "port down")
+        if u.state == "offline":
+            probe = u.points[u.probe % len(u.points)]
+            u.probe += 1
+            reads = await self._read_points([probe])
+            if reads.answered:
+                reads.add(await self._read_points([p for p in u.points if p is not probe]))
+        else:
+            reads = await self._read_points(u.points)
+        u.errors += len(reads.failed)
+        self._forget([p.name for p, _e in reads.failed])
+        if not reads.answered:
+            return self._unit_missed(u, "port down" if self._link.down else "no reply")
+        back = u.state == "offline"
+        u.misses, u.miss_cause = 0, ""
+        if u.state != "online":
+            if back:
+                self._log(f"unit {u.unit} answers again (offline for "
+                          f"{fmt_duration(time.time() - u.since)})")
+            u.state, u.cause, u.since = "online", "", time.time()
+        for p, e in reads.failed:
+            if p.name not in self._failing:
+                self._failing[p.name] = self._note(f"poll {p.name}", p.unit,
+                                                   f"poll '{p.name}' (unit {p.unit}): {e}")
+        for name in reads.values:
+            if self._failing.pop(name, False):
+                self._log(f"poll '{name}' reads again")
+        if back and self._sparkplug is not None:
+            self._sparkplug.device_online(u.unit, reads.values, reads.stamps)
+        elif reads.values:
+            self._publish_values(reads.values, reads.stamps)
+        return None
+
+    async def _read_points(self, points) -> _Reads:
+        reads = _Reads()
+        for p in points:
+            if self._stop.is_set():
+                break
+            try:
+                reads.values[p.name] = await self._read_point(p)
+                reads.stamps[p.name] = _now_ms()
+                reads.answered = True
+            except NoReply as e:
+                reads.failed.append((p, e))
+            except Exception as e:  # an answer, but not a value; one bad point must not stop the loop
+                reads.failed.append((p, e))
+                reads.answered = True
+        return reads
+
+    def _unit_missed(self, u: _Unit, cause: str) -> Optional[str]:
+        """A poll cycle in which ``u`` gave no reply, because of ``cause``; it goes offline
+        after UNIT_OFFLINE_AFTER such cycles in a row. A unit that already stopped answering
+        stays offline for that reason while the port is down."""
+        if cause != u.miss_cause:
+            u.misses, u.miss_cause = 0, cause
+        u.misses += 1
+        if u.misses < UNIT_OFFLINE_AFTER or (u.state == "offline"
+                                              and (u.cause == cause or cause == "port down")):
+            return None
+        went = u.state != "offline"
+        u.state, u.cause = "offline", cause
+        if went:
+            u.since = time.time()
+            if self._sparkplug is not None:
+                self._sparkplug.device_offline(u.unit)
+        if cause == "no reply":
+            n = len(u.points)
+            self._log(f"unit {u.unit}: offline, no reply to "
+                      f"{'its point' if n == 1 else f'any of its {n} points'} in "
+                      f"{UNIT_OFFLINE_AFTER} polls in a row; polling one point per cycle until "
+                      "it answers")
+        return cause if went else None
+
+    def _forget(self, names: list) -> None:
+        """Points whose read failed: their last value is not reported as current again."""
+        if names and self._sparkplug is not None:
+            self._sparkplug.forget(names)
 
     # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug DCMD) ----
     async def write_point(self, point, value) -> None:
@@ -538,17 +689,19 @@ class ModbusGatewayRunner:
             self._tracer.write("ser>drop", data)
         self._feed_traffic(FROM_DEVICE, data)
 
-    def _note(self, kind: str, unit: int, message: str) -> None:
+    def _note(self, kind: str, unit: int, message: str) -> bool:
         """Log a note about the replies on the line, at most once per NOTE_EVERY_S for one
-        kind and unit: a slave that keeps failing every request must not flood the log."""
+        kind and unit: a slave that keeps failing every request must not flood the log.
+        Returns whether it was logged (or only counted)."""
         now = time.monotonic()
         last, held = self._notes.get((kind, unit), (None, 0))
         if last is not None and now - last < NOTE_EVERY_S:
             self._notes[(kind, unit)] = (last, held + 1)
-            return
+            return False
         self._notes[(kind, unit)] = (now, 0)
         more = f" (and {held} more since the last such line)" if held else ""
         self._log(message + more)
+        return True
 
     # ---------------- network side ----------------
     def _log_policy(self) -> None:
@@ -671,6 +824,11 @@ class ModbusGatewayRunner:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _units_text(units: list[int]) -> str:
+    return (f"unit {units[0]}" if len(units) == 1
+            else "units " + ", ".join(str(u) for u in units))
 
 
 def _names(names: list[str]) -> str:
