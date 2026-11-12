@@ -220,7 +220,7 @@ class FieldNote:
     warning: str = ""
 
     def text(self) -> str:
-        """The note in English, for the log, the REST API and the import preview."""
+        """The note in English, for the log (AppConfig.load_notes)."""
         if self.kind == "unknown":
             return f"{self.path} is not a setting of this version and is ignored"
         if self.kind == "invalid":
