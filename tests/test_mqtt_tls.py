@@ -206,6 +206,13 @@ def test_form_and_api():
     mq = parsed(dict(base))                           # new, without the fields: defaults
     assert mq.ca_file == "" and mq.tls_check_hostname is True
     assert MqttSettings().tls_check_hostname is True and MqttSettings().ca_file == ""
+    # the host name check protects: text in a hand-edited config keeps it on (with a note
+    # an edit refuses), as for the other protective switches
+    for raw, on in (("false", True), ("", False), (False, False)):
+        notes = []
+        mq = MqttSettings.from_dict({"tls_check_hostname": raw}, notes, "mqtt.")
+        assert mq.tls_check_hostname is on, (raw, mq.tls_check_hostname)
+        assert [n.kind for n in notes] == (["switch_text"] if isinstance(raw, str) else []), notes
     print("form: TLS fields read when posted, kept when not (older peers), check on by "
           "default  OK")
 
