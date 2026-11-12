@@ -349,6 +349,10 @@ def test_serial_drivers_enumerated():
     """Ports whose names pyserial 3.5 doesn't look for are found through the kernel's serial
     drivers (/proc/tty/drivers), by the major and minor numbers each one lists."""
     import stat as st_mod
+    if not hasattr(os, "makedev"):
+        print("serial drivers: SKIP on Windows (Linux's /proc/tty/drivers; no device "
+              "numbers there)")
+        return
     d = tempfile.mkdtemp(prefix="s2n_drivers_")
     nodes = {}  # path -> (major, minor), a stand-in for the device nodes
 

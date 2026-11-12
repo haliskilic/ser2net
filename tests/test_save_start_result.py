@@ -26,6 +26,8 @@ from app.web.routes.mappings import _port_taken
 
 PW = "save-start-pass-1"
 CSRF = "save-start-csrf"
+# a taken port in the OS's own words: POSIX, Windows (WSAEADDRINUSE)
+IN_USE = ("address already in use", "only one usage of each socket address")
 
 
 def _sign_in(a: App) -> dict:
@@ -67,7 +69,8 @@ def test_save() -> None:
         assert "The port is already in use by another program" in n["text"], n
         assert "listens on that port: give the mapping a port of its own." in n["text"], n
         assert "It is started as soon as it can listen there" in n["text"], n
-        assert "address already in use" in n["detail"].lower(), "the error itself: the tooltip"
+        assert any(w in n["detail"].lower() for w in IN_USE), ("the error itself: the tooltip",
+                                                               n["detail"])
         saved = [m for m in a.state.config.mappings if m.name == "Line <1>"]
         assert len(saved) == 1 and a.state.store.load().mappings[0].name == "Line <1>"
         assert n["focus"] == f"m-{saved[0].id}-edit", n

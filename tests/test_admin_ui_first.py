@@ -2,7 +2,9 @@
 
   - httpguard.listen makes the UI's sockets as asyncio would (every address of the bind
     IP, IPV6_V6ONLY on IPv6), listening at once: a mapping started afterwards on the same
-    address and port fails to bind (BindError) instead of taking the port;
+    address and port fails to bind (BindError) instead of taking the port, and one on
+    every address of its family too (on Windows, where the OS lets such a listener share
+    the port, netguard refuses it itself);
   - a mapping stored on the admin UI's address and port no longer keeps the UI from
     starting: the UI comes up (/healthz answers), the mapping shows "error" (retrying);
   - the UI's port held by another program: the mappings start anyway, all.log says why
@@ -98,6 +100,7 @@ async def _listen():
     finally:
         for s in socks:
             s.close()
+    await _reserved_port()
     try:
         await httpguard.listen("192.0.2.1", 0, 16)  # not an address of this machine
     except OSError as e:
@@ -121,8 +124,41 @@ async def _listen():
     finally:
         for s in socks:
             s.close()
-    print("httpguard.listen: listening at once (a later mapping on the port fails), clear "
-          "errors, IPv6 only on IPv6, '' = every interface  OK")
+    print("httpguard.listen: listening at once (a later mapping on the port or on every "
+          "address fails, on Windows too), clear errors, IPv6 only on IPv6, '' = every "
+          "interface  OK")
+
+
+async def _reserved_port():
+    """netguard.start_server refuses an address and port that overlaps a reserved socket
+    (the admin UI's) itself, the way Linux refuses one next to a listening socket: Windows
+    lets a wildcard listener share a port with one on a specific address. Checked on every
+    OS with a reserved socket that is only bound, which a later listener may share on Linux
+    (both with SO_REUSEADDR) and Windows alike."""
+    held = socket.socket()
+    if os.name == "posix":
+        held.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    held.bind(("127.0.0.1", 0))
+    port = held.getsockname()[1]
+    netguard.reserve([held], "the admin UI")
+    try:
+        for ip in ("0.0.0.0", "127.0.0.1"):
+            try:
+                await netguard.start_server(lambda r, w: None, ip, port)
+            except netguard.BindError as e:
+                if ip == "0.0.0.0":  # (the same address: Windows refuses it itself)
+                    assert f"the admin UI listens on 127.0.0.1:{port}" in str(e), e
+                    assert "address already in use" in str(e), e
+            else:
+                raise AssertionError(f"a mapping on {ip}:{port} took the admin UI's port")
+        other = await netguard.start_server(lambda r, w: None, "127.0.0.1", 0)  # another port
+        other.close()
+        await other.wait_closed()
+    finally:
+        held.close()
+    free = await netguard.start_server(lambda r, w: None, "0.0.0.0", port)  # closed: free
+    free.close()
+    await free.wait_closed()
 
 
 def test_listen():
