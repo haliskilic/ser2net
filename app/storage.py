@@ -21,6 +21,7 @@ import errno
 import os
 import shutil
 import stat
+import sys
 import time
 
 FREE_FLOOR_MIN = 256 * 1024 * 1024
@@ -110,12 +111,13 @@ def usage(data_dir: str) -> dict:
 def _elapsed() -> float:
     """Seconds since an arbitrary start that no clock step changes: CLOCK_BOOTTIME on
     Linux (it also counts a suspend), else time.monotonic()."""
-    boottime = getattr(time, "CLOCK_BOOTTIME", None)
-    if boottime is not None:
-        try:
-            return time.clock_gettime(boottime)
-        except OSError:
-            pass
+    if sys.platform != "win32":  # (no clock_gettime there)
+        boottime = getattr(time, "CLOCK_BOOTTIME", None)
+        if boottime is not None:
+            try:
+                return time.clock_gettime(boottime)
+            except OSError:
+                pass
     return time.monotonic()
 
 

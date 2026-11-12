@@ -81,10 +81,12 @@ def _device_key(device: str) -> Any:
     if os.name == "nt":
         name = device.upper()
         return name[4:] if name.startswith("\\\\.\\") else name
-    try:
-        return os.stat(device).st_rdev or None
-    except (OSError, ValueError):
-        return None
+    if sys.platform != "win32":  # (for mypy --platform: device numbers are POSIX's)
+        try:
+            return os.stat(device).st_rdev or None
+        except (OSError, ValueError):
+            return None
+    return None
 
 
 def opened(ser: Any, owner: str, device: str) -> None:
@@ -92,11 +94,13 @@ def opened(ser: Any, owner: str, device: str) -> None:
     ``ser`` is closed or gone)."""
     if os.name == "nt":
         key = _device_key(device)
-    else:
+    elif sys.platform != "win32":  # (as in _device_key)
         try:
             key = os.fstat(ser.fileno()).st_rdev or None
         except (AttributeError, OSError, ValueError, TypeError):
             key = None
+    else:
+        key = None
     if key is not None:
         try:
             _OPEN[ser] = (owner, key)
@@ -160,12 +164,13 @@ def uucp_lock(device: str) -> Optional[UucpLock]:
     are not this process's to clean up). Blocking: a few small reads."""
     real = os.path.realpath(device)
     names = [f"LCK..{os.path.basename(device)}", f"LCK..{os.path.basename(real)}"]
-    try:
-        rdev = os.stat(real).st_rdev
-        if rdev:
-            names.append(f"LCK.{os.major(rdev):03d}.{os.minor(rdev):03d}")
-    except OSError:
-        pass
+    if sys.platform != "win32":  # (device numbers)
+        try:
+            rdev = os.stat(real).st_rdev
+            if rdev:
+                names.append(f"LCK.{os.major(rdev):03d}.{os.minor(rdev):03d}")
+        except OSError:
+            pass
     seen = set()
     for folder in LOCK_DIRS:
         for name in dict.fromkeys(names):
@@ -219,6 +224,8 @@ def _program(pid: int) -> str:
 
 
 def _no_access(device: str) -> Optional[Note]:
+    if sys.platform == "win32":  # POSIX owners and groups (explain() answers Windows itself)
+        return None
     try:
         st = os.stat(device)
     except OSError:
@@ -287,6 +294,8 @@ def _port_checks(device: str) -> list[tuple[str, str]]:
 
 def _mm_ignores(real: str) -> bool:
     """Whether udev tells ModemManager to leave the tty ``real`` alone."""
+    if sys.platform == "win32":  # (Linux only: _port_checks)
+        return False
     try:
         rdev = os.stat(real).st_rdev
         path = os.path.join(UDEV_DATA, f"c{os.major(rdev)}:{os.minor(rdev)}")

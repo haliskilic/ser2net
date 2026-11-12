@@ -182,7 +182,7 @@ def routes(ctx: Ctx) -> list:
                             me.source.upper())
         ctx_vars: dict = {"ok": ok, "error": error, "refusal": refusal, "me": me,
                           "enabled": bool(me is not None and me.totp_on)}
-        if refusal is None and not ctx_vars["enabled"]:
+        if me is not None and refusal is None and not ctx_vars["enabled"]:
             secret = secret or totp.new_secret()
             ctx_vars.update(secret_grouped=totp.grouped(secret),
                             uri=totp.otpauth_uri(secret, me.username),

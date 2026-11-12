@@ -123,6 +123,8 @@ def serial_devices(drivers: str = PROC_TTY_DRIVERS,
     bus, which before Linux 6.5 are a Raspberry Pi's ttyS0 and other SoC UARTs. Its master
     branch reads /proc/tty/drivers the same way: this can go once a pyserial release after
     3.5 is pinned. Blocking (one small read, a glob and a stat per node)."""
+    if sys.platform == "win32":  # (no /proc, no device numbers)
+        return []
     try:
         with open(drivers, encoding="ascii", errors="replace") as fh:
             lines = fh.read().splitlines()

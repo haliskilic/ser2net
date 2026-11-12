@@ -420,7 +420,7 @@ def routes(ctx: Ctx) -> list:
         state.name_limiter.record_failure(username)
         authed = None
         # local account: verify the scrypt hash off the event loop (it's slow on purpose)
-        if local:
+        if local and user is not None:
             if await work.run(auth.verify_password, password, user.password_hash):
                 authed = user
         # LDAP/AD: for unknown users (or LDAP shadow accounts) when LDAP is enabled

@@ -275,7 +275,7 @@ def routes(ctx: Ctx) -> list:
             return render(request, "_modbus_read.html", rows=[], error=str(e))
         runner = state.supervisor.get_runner(m.id)
         read_now = getattr(runner, "read_now", None)  # (a Modbus gateway's runner)
-        if read_now is None or runner.status.state in ("stopped", "error"):
+        if runner is None or read_now is None or runner.status.state in ("stopped", "error"):
             return render(request, "_modbus_read.html", rows=[], error=_(
                 "Start this Modbus gateway to read the points: it reads them over its serial "
                 "port."))
