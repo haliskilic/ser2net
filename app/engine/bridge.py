@@ -306,6 +306,7 @@ class RunnerStatus:
     reconnects: int = 0     # serial port: attempts to open it again (failed opens + losses)
     open_failures: int = 0  # of which: opens that failed
     device_lost: int = 0    # times the open port went away
+    hangups: int = 0        # of those: hung up and reopened at once (SerialLink)
     dropped_clients: int = 0   # clients dropped because their output queue overflowed
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
     last_error: str = ""
@@ -363,6 +364,7 @@ class RunnerStatus:
             "reconnects": self.reconnects,
             "open_failures": self.open_failures,
             "device_lost": self.device_lost,
+            "hangups": self.hangups,
             "dropped_clients": self.dropped_clients,
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,

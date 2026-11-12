@@ -375,6 +375,30 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   el sıkışmaları ve kabulden hemen sonra reddedilen bağlantılar
   (`ser2net_connections_refused_total`, nedene göre).
 
+### Başka programlarla paylaşılan seri portlar (Linux)
+
+Programların hepsi kilit kullanmadıkça hiçbir şey diğer programları bir seri porttan uzak
+tutmaz; çekirdek konsolu, oturum açma istemi (login prompt) ve ModemManager da bir portu
+sormadan kullanır. ser2net bu durumda portun baytlarını onlarla paylaşır (araya karışan
+karakterler, Modbus timeout'ları), oturum açma istemi de her yeniden başladığında portu
+kapatır (hang-up). Portlar sayfası böyle portları işaretler (**çekirdek konsolu**, **oturum
+açma istemi**, **ModemManager**, ser2net'in açamayacağı bir port için de **erişim yok**);
+böyle bir portu açık tutan eşleme de bunu durumunun altında söyler (kapatılıp hemen yeniden
+açılan port da orada sayılır).
+- **Çekirdek konsolu, oturum açma istemi** (Raspberry Pi'nin GPIO UART'ı, bir VM'nin seri
+  konsolu): Raspberry Pi'de `sudo raspi-config` → Interface Options → Serial Port çalıştır,
+  login shell sorusuna *No*, seri donanım sorusuna *Yes* de. Diğer sistemlerde çekirdek
+  komut satırından `console=ttyS0` değerini kaldır ve oturum açma istemini kapat:
+  `sudo systemctl mask --now serial-getty@ttyS0.service`.
+- **ModemManager** (masaüstü Ubuntu / Fedora; Arduino gibi USB CDC `ttyACM*` cihazlar):
+  cihazı rahat bırakmasını bir udev kuralıyla söyle, örneğin
+  `/etc/udev/rules.d/99-ser2net.rules` dosyasına
+  `ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"` yazıp
+  `sudo udevadm control --reload && sudo udevadm trigger` çalıştır.
+- **Permission denied:** pano cihazın ait olduğu grubu ve neyin eksik olduğunu söyler (bkz.
+  Gereklilikler); **meşgul port:** portu bu ser2net'in hangi eşlemesinin açık tuttuğunu ya da
+  başka bir programın ne tür bir kilit tuttuğunu söyler.
+
 ---
 
 ## 🔌 REST API

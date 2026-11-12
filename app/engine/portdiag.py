@@ -17,12 +17,22 @@ match on it):
     of lock another program holds.
 It reads the device's owner and group and the account and group databases, which may ask
 a directory service: run it in a thread.
+
+``port_warnings(device)`` (Linux) is what else may use a port that no lock keeps out: the
+kernel console (/sys/class/tty/console/active), a login prompt (a running serial-getty /
+getty unit, /run/systemd/units), and for a USB CDC port (ttyACM) ModemManager, unless udev
+tells it to leave the port alone (ID_MM_DEVICE_IGNORE / ID_MM_PORT_IGNORE). These sources
+need no privileges and are there in a container too (the console list is the host's);
+where one is missing nothing is said. The ports page shows them (portlist.snapshot), and
+the open port's status (port_notes, through serial_io.open_serial).
 """
 from __future__ import annotations
 
+import asyncio
 import errno
 import os
 import stat
+import sys
 import weakref
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -159,6 +169,78 @@ def _no_access(device: str) -> Optional[Note]:
     return Note("group", (device, group, gid, user))
 
 
+CONSOLE_ACTIVE = "/sys/class/tty/console/active"
+SYSTEMD_UNITS = "/run/systemd/units"
+UDEV_DATA = "/run/udev/data"
+_LOGIN_UNITS = ("serial-getty@{0}.service", "getty@{0}.service")
+_MM_IGNORE = ("E:ID_MM_DEVICE_IGNORE=1", "E:ID_MM_PORT_IGNORE=1")
+
+
+def _port_checks(device: str) -> list[tuple[str, str]]:
+    """(kind, detail) of what else may use ``device``: ("console", tty name),
+    ("getty", the unit), ("modemmanager", tty name). Linux only ([] elsewhere)."""
+    if not sys.platform.startswith("linux"):
+        return []
+    real = os.path.realpath(device)  # /dev/serial0, a by-id link: the tty itself
+    name = os.path.basename(real)
+    found = []
+    try:
+        with open(CONSOLE_ACTIVE, encoding="ascii", errors="replace") as fh:
+            if name in fh.read().split():
+                found.append(("console", name))
+    except OSError:
+        pass
+    for unit in (u.format(name) for u in _LOGIN_UNITS):
+        if os.path.lexists(os.path.join(SYSTEMD_UNITS, f"invocation:{unit}")):
+            found.append(("getty", unit))
+            break
+    if (name.startswith("ttyACM")
+            and os.path.lexists(os.path.join(SYSTEMD_UNITS, "invocation:ModemManager.service"))
+            and not _mm_ignores(real)):
+        found.append(("modemmanager", name))
+    return found
+
+
+def _mm_ignores(real: str) -> bool:
+    """Whether udev tells ModemManager to leave the tty ``real`` alone."""
+    try:
+        rdev = os.stat(real).st_rdev
+        path = os.path.join(UDEV_DATA, f"c{os.major(rdev)}:{os.minor(rdev)}")
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return any(line.strip() in _MM_IGNORE for line in fh)
+    except OSError:
+        return False
+
+
+def port_warnings(device: str) -> list[str]:
+    """What else may use ``device``, for the ports page: "console", "getty",
+    "modemmanager" (Linux; blocking, a few small reads)."""
+    return [kind for kind, _detail in _port_checks(device)]
+
+
+def port_notes(device: str) -> list[Note]:
+    """The same as Notes for the status of a mapping that has ``device`` open."""
+    return [Note(kind, (detail,)) for kind, detail in _port_checks(device)]
+
+
+async def about_port(device: str) -> list[Note]:
+    """port_notes off the event loop (nothing to look at off Linux)."""
+    if not sys.platform.startswith("linux"):
+        return []
+    return await asyncio.to_thread(port_notes, device)
+
+
+def access(device: str) -> Optional[bool]:
+    """Whether this process may open ``device`` (POSIX; None on Windows, or when it can't
+    be told)."""
+    if os.name != "posix":
+        return None
+    try:
+        return os.access(device, os.R_OK | os.W_OK)
+    except (OSError, ValueError):
+        return None
+
+
 # what each kind of Note says; `_` is the translate function (test_i18n finds the texts)
 _TEXTS: dict[str, Callable[..., str]] = {
     # a port that did not take a setting asked for at open (serial_io.open_serial)
@@ -197,6 +279,20 @@ _TEXTS: dict[str, Callable[..., str]] = {
     "exclusive": lambda _: _(
         "another program keeps other programs out of this port (TIOCEXCL), for example "
         "ModemManager or a classic ser2net"),
+    # what else may use an open port (port_notes), and what that did (SerialLink)
+    "console": lambda _, name: _(
+        "{0} is also the kernel console: the kernel writes its messages to it (remove "
+        "console={0} from the kernel command line; Raspberry Pi: raspi-config, Interface "
+        "Options, Serial Port)").format(name),
+    "getty": lambda _, unit: _(
+        "a login prompt runs on this port ({0}): it reads from the port and hangs it up when "
+        "it restarts (systemctl disable --now {0}, or systemctl mask {0})").format(unit),
+    "modemmanager": lambda _, name: _(
+        "ModemManager may probe {0} (it sends AT commands to new ttyACM devices): a udev rule "
+        "that sets ID_MM_DEVICE_IGNORE=1 for it keeps it away").format(name),
+    "hangups": lambda _, n: _(
+        "hung up {0} time(s) while open, and could be reopened at once: another program may "
+        "be using this port (a login prompt on it?)").format(n),
 }
 
 
