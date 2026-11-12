@@ -227,7 +227,8 @@ def routes(ctx: Ctx) -> list:
         except ConfigError as e:
             return await settings_get(request, error=str(e))
         ctx.audit(request, "admin_tls_set", cert)
-        return await settings_get(request, ok=_tls_applied(request, prepared, _("Admin TLS saved.")))
+        return await settings_get(request, ok=_("Admin TLS saved.") + " "
+                                  + _tls_applied(request, prepared))
 
     async def _admin_tls(admin):
         """The admin UI's TLS context for its settings (in an edit_config block): files
@@ -238,23 +239,21 @@ def routes(ctx: Ctx) -> list:
                 prepared.error))
         return prepared
 
-    def _tls_applied(request, prepared, saved: str) -> str:
+    def _tls_applied(request, prepared) -> str:
         """Hand a saved admin TLS change to the UI's listener, and say so: new connections
         use it at once (the one this page came over stays as it is)."""
         if not state.use_admin_tls(prepared):
             if state.admin_guard is None:  # (no listener in this process)
-                return saved + " " + _("Restart to apply.")
-            return saved + " " + _("Its key has a passphrase, which ser2net asks for on the "
-                                   "console when it starts: restart ser2net to use it.")
+                return _("Restart to apply.")
+            return _("Its key has a passphrase, which ser2net asks for on the console when it "
+                     "starts: restart ser2net to use it.")
         _ip, port, tls = state.admin_serving()
         host = request.url.hostname or "127.0.0.1"
         host = f"[{host}]" if ":" in host else host
         url = f"{'https' if tls else 'http'}://{host}:{port}/settings"
         if tls:
-            return saved + " " + _("New connections to this UI use HTTPS now: continue at "
-                                   "{0}").format(url)
-        return saved + " " + _("New connections to this UI use plain HTTP now: continue at "
-                               "{0}").format(url)
+            return _("New connections to this UI use HTTPS now: continue at {0}").format(url)
+        return _("New connections to this UI use plain HTTP now: continue at {0}").format(url)
 
     async def settings_tls_generate(request):
         if deny := require_role(request, "admin"):
@@ -279,9 +278,10 @@ def routes(ctx: Ctx) -> list:
             return await settings_get(request, error=_("The certificate was generated, but not "
                                                        "set up: {0}").format(e))
         ctx.audit(request, "admin_tls_generate", "")
-        return await settings_get(request, ok=_tls_applied(
-            request, prepared, _("Self-signed certificate generated (browsers warn about a "
-                                 "self-signed certificate until you accept it).")))
+        return await settings_get(request, ok=_("Self-signed certificate generated (browsers "
+                                                "warn about a self-signed certificate until "
+                                                "you accept it).") + " "
+                                  + _tls_applied(request, prepared))
 
     # ---------------- web-UI access (login requirement) ----------------
     async def settings_access_post(request):
@@ -1023,13 +1023,24 @@ def routes(ctx: Ctx) -> list:
             keep |= {"users", "api_token_hash", "api_token_role"}
         notes: list[str] = []
         cur = state.config
+        prepared = None
         try:
             async with state.edit_config() as edit:
                 previous = {f.name: getattr(cur, f.name) for f in dataclasses.fields(AppConfig)}
+                applied_from = reload.capture(cur)
                 usable_before = cur.usable_admin_count()
                 for f in dataclasses.fields(AppConfig):
                     if f.name not in keep:
                         setattr(cur, f.name, getattr(restored, f.name))
+                # a mapping the backup has as it is keeps its object (its runner's)
+                kept = {m.id: m for m in previous["mappings"]}
+                cur.mappings = [kept[m.id] if m.id in kept and kept[m.id].to_dict() == m.to_dict()
+                                else m for m in cur.mappings]
+                reload.keep_env_address(cur.admin_ui)
+                was_admin = previous["admin_ui"]
+                if (cur.admin_ui.tls_cert, cur.admin_ui.tls_key) != (was_admin.tls_cert,
+                                                                       was_admin.tls_key):
+                    prepared = await _admin_tls(cur.admin_ui)  # (as Settings -> Admin TLS)
                 if with_accounts:
                     cur.secret_key = secrets.token_hex(32)
                 else:  # both cluster keys are credentials: the key and the one still accepted
@@ -1048,12 +1059,14 @@ def routes(ctx: Ctx) -> list:
             return await settings_get(request, error=_("Restore rejected: {0}").format(e))
         if with_accounts:
             state.revoked_sessions.clear()  # signed with the old key: dead anyway
-        await state.supervisor.stop_all()
-        await state.forget_mappings({m.id for m in previous["mappings"]}
-                                    - {m.id for m in cur.mappings})
-        await state.supervisor.start_all(state.config)
-        await state.cluster.stop()
-        await state.cluster.start()
+        # as a reload applies config.json: an unchanged mapping keeps running with its
+        # clients, a changed one restarts, a removed one goes, the cluster restarts only
+        # when its settings changed
+        await reload.apply_changes(state, applied_from)
+        if state.admin_guard is not None:
+            state.admin_guard.use_limits(cur.admin_ui)
+        if (state.store.replaced_edit or {}).get("backup") == name:
+            state.store.replaced_edit = None  # (that edit is the one in use now)
         before = types.SimpleNamespace(**previous)
         changes = _restore_changes(before, cur, with_accounts)
         tok = i18n.set_language("en")  # the log and the audit log stay English
@@ -1068,11 +1081,17 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "config_backup_restore",
                   "; ".join([name, "accounts restored" if with_accounts else "accounts kept",
                              *audit_changes]))
-        ok = [(_("Restored {0}; the configuration it replaced was backed up too. A changed admin "
-                 "UI address or TLS takes effect after a restart.") if edit.backed_up else
+        ok = [(_("Restored {0}; the configuration it replaced was backed up too.")
+               if edit.backed_up else
                _("Restored {0}, but the configuration it replaced could not be backed up (see "
-                 "all.log). A changed admin UI address or TLS takes effect after a "
-                 "restart.")).format(name)]
+                 "all.log).")).format(name),
+              _("Mappings it leaves as they are kept running.")]
+        if prepared is not None:
+            ok.append(_tls_applied(request, prepared))
+        ip, port, _tls = state.admin_serving()
+        if (cur.admin_ui.bind_ip, cur.admin_ui.port) != (ip, port):
+            ok.append(_("Its admin UI address {0} takes effect at the next start.").format(
+                f"{cur.admin_ui.bind_ip}:{cur.admin_ui.port}"))
         ok.append(_("Everyone else was signed out.") if with_accounts else
                   _("User accounts, the REST API token and the cluster key were kept."))
         if changes:

@@ -734,8 +734,11 @@ inside aren't readable by other users:
   for sign-in and access, then brings back the mappings and settings; the user accounts
   and passwords, the REST API token and the cluster key stay as they are unless you tick
   the box to restore them too (that also signs everyone else out). *Only its mappings*
-  goes through the import preview. A restore can be undone too; a downloaded backup
-  leaves out the session key.
+  goes through the import preview. A restore is applied like a reload of `config.json`
+  (see below): mappings it leaves as they are keep running with their clients, its admin
+  TLS is used at once (files that can't be loaded refuse the restore), its admin UI address
+  at the next start. A restore can be undone too; a downloaded backup leaves out the
+  session key.
 - `all.log` — global activity (size-rotated), also the warnings and errors of the web
   server and other libraries (an address the admin UI can't use, a request it can't parse,
   the traceback of a request that failed; each message at most once a minute). On Windows,
