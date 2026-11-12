@@ -30,6 +30,9 @@ StateDirectoryMode=0700
 # (root would own what they write, and the service could no longer read it):
 #   sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin
 ExecStart=/usr/local/bin/ser2net --data-dir /var/lib/ser2net
+# `systemctl reload ser2net`: read config.json again without a restart (SIGHUP; see
+# ser2net.service)
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 # Open files: each running mapping holds about three (serial port, listener, log) plus

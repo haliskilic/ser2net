@@ -84,8 +84,7 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
 # AF_NETLINK: the list of network interfaces and their addresses (the bind-IP pickers,
-# the cluster's directed broadcasts) is read over netlink; pyudev's event-driven hotplug
-# uses it too (without pyudev ser2net polls for serial ports, which works fine).
+# the cluster's directed broadcasts) is read over netlink.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
