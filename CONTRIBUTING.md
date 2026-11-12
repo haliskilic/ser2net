@@ -28,7 +28,7 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 | + serial data path (Linux, needs `socat`) | `python tests/run_all.py --socat -v` |
 | Coverage (CI fails below the floor in `ci.yml`, job `coverage`) | `pip install coverage && python tests/coverage_run.py && coverage report` |
 | Browser layout | `pip install playwright && python -m playwright install chromium`, then `SER2NET_UI_TESTS=1 python tests/test_ui_layout.py` |
-| Offline wheels | `python tests/test_vendor_wheels.py` |
+| Offline wheels | `python tests/test_vendor_wheels.py`; against PyPI (network): `python tools/refresh_wheels.py --verify` |
 | Known vulnerabilities | `pip install pip-audit && pip-audit -r requirements.txt` |
 | Workflow lint | `pip install zizmor && zizmor --offline .` (settings in `.github/zizmor.yml`) |
 

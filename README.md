@@ -282,6 +282,9 @@ Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2net.py` ilk açılışt
 `./lib`'e kurar (`pip install --no-index`). İnternet gerektirmez. Set, Linux x86_64 ve
 Windows x64'te Python 3.10–3.14'ü kapsar; `requirements.txt` değişince
 `python3 tools/refresh_wheels.py` ile yenilenir (`tests/test_vendor_wheels.py` denetler).
+Her wheel'in sha256'sı `vendor/wheels/SHA256SUMS`'ta kayıtlıdır; listedeki bir wheel farklıysa
+ilk açılış o setten kurulum yapmaz (CI her wheel'i PyPI'ın yayımladığı dosyayla karşılaştırır).
+Kendi eklediğiniz wheel'ler listede olmadığı için olduğu gibi kurulur.
 Opsiyonel özellikleri (MQTT/LDAP/OIDC) offline kaynak kurulumunda etkinleştirmek için
 wheel'lerini de indirip kurun: `pip download -r requirements-optional.txt -d vendor/wheels`
 ardından `pip install --no-index --find-links vendor/wheels -r requirements-optional.txt`.
