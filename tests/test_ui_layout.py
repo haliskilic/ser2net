@@ -7,8 +7,8 @@ and the whole page scrolled sideways. This drives a real browser (Playwright +
 Chromium) against two real nodes — A shows B through a manual cluster peer — whose
 mappings use such values, at desktop, half-screen, tablet and phone widths, and
 checks the dashboard, the log / console / edit views, the settings page (users with row
-buttons, a backup's restore preview) — in English and again in Turkish, whose texts are
-longer:
+buttons, a backup's restore preview, a classic ser2net file's import preview) — in
+English and again in Turkish, whose texts are longer:
 
   * the page never scrolls sideways and no table needs horizontal scrolling
     (wide windows: the table fits; narrow ones: its rows become cards);
@@ -521,6 +521,76 @@ def feedback_checks(browser, base, problems):
     ctx.close()
 
 
+# a classic ser2net.yaml for the import preview (long names, held, open and limited ones)
+# and the form round trip of an imported close-on string the text box can't show
+CLASSIC = ("connection: &" + LONG_NAME.lower() + "\n"
+           "  accepter: telnet(rfc2217),mux,certauth,ssl,tcp,{p1}\n"
+           "  connector: serialdev," + BY_ID + ",19200 EVEN 8DATABITS 1STOPBIT\n"
+           "  options:\n"
+           "    remaddr: 10.11.12.0/24,4000;10.11.13.0/24\n"
+           "connection: &roundtrip\n"
+           "  accepter: tcp,127.0.0.1,{p2}\n"
+           "  connector: serialdev,/dev/ttyUSB9\n"
+           "  enable: off\n"
+           "  options:\n"
+           "    closeon: 'ctrl-a\\001nil\\000'\n"
+           "    banner: 'Port \\N\\r\\n'\n"
+           "rotator: &r\n"
+           "  accepter: tcp,4999\n"
+           "  connections: [ roundtrip ]\n")
+
+
+def preview_import(page, base, text, mode="merge"):
+    """Upload a mappings file through the Settings import form; the preview is shown."""
+    page.goto(f"{base}/settings#import")
+    form = page.locator("form[action='/settings/config/import']")
+    form.locator("input[name=file]").set_input_files(
+        files=[{"name": "ser2net.yaml", "mimeType": "text/plain", "buffer": text.encode()}])
+    form.locator(f"input[name=mode][value={mode}]").check()
+    with page.expect_navigation():
+        form.locator("button[type=submit]").click()
+    page.wait_for_selector("table.import-preview")
+
+
+def import_round_trip(browser, base, problems, config_path):
+    """An imported close-on string with a NUL and a banner with CR/LF survive saving the
+    mapping form in a real browser (which sends a NUL back as U+FFFD, without CR/LF)."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    page = ctx.new_page()
+    page.goto(f"{base}/login")
+    page.fill("input[name=username]", USER)
+    page.fill("input[name=password]", PASSWORD)
+    page.click("button[type=submit]")
+    page.wait_for_url(f"{base}/")
+    preview_import(page, base, CLASSIC.format(p1=free_port(), p2=free_port()))
+    with page.expect_navigation():
+        page.locator("form[action='/settings/config/import/apply'] button[type=submit]").click()
+
+    def stored():
+        with open(config_path, encoding="utf-8") as fh:
+            m = next(m for m in json.load(fh)["mappings"] if m["name"] == "roundtrip")
+        return m["options"]["closeon"], m["options"]["banner"], m["options"]["idle_timeout_s"]
+    before = stored()
+    if before[:2] != ("ctrl-a\x01nil\x00", "Port \\N\\r\\n"):
+        problems.append(f"import round trip: imported as {before!r}")
+    page.goto(f"{base}/")
+    page.wait_for_selector("#mappings table")
+    page.locator("#mappings tr", has_text="roundtrip").first.get_by_role(
+        "button", name="Edit", exact=True).click()
+    page.wait_for_selector("#form-panel .form-head")
+    sent = page.locator("#form-panel input[name=opt_closeon]").input_value()
+    if sent != "ctrl-a\x01nil\ufffd":   # what the browser makes of it (and would send back)
+        problems.append(f"import round trip: the close-on box holds {sent!r}")
+    page.locator("#form-panel input[name=opt_idle_timeout_s]").fill("77")
+    with page.expect_response(lambda r: r.url.endswith("/api/mappings/save")):
+        page.locator("#form-panel button.primary[type=submit]").click()
+    page.wait_for_timeout(500)
+    after = stored()
+    if after != before[:2] + (77,):
+        problems.append(f"import round trip: saving the form stored {after!r} (was {before!r})")
+    ctx.close()
+
+
 def settings_checks(browser, base, problems, config_path):
     """The Settings forms in a browser (a context of its own): a refused form comes back
     filled in, at its own address (a reload loads the page, it doesn't post the form
@@ -725,6 +795,9 @@ def main():
                     page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
                     page.wait_for_selector("#backups h3")
                     check(f"{lang} restore preview @{w}")
+                    preview_import(page, base, CLASSIC.format(p1=free_port(), p2=free_port()),
+                                   mode="replace")
+                    check(f"{lang} import preview @{w}")
                     page.goto(f"{base}/settings/audit")
                     page.wait_for_selector("form.filters")
                     check(f"{lang} audit log @{w}")
@@ -758,6 +831,10 @@ def main():
             n = len(problems)
             settings_checks(browser, base, problems, os.path.join(nodes[0][1], "config.json"))
             print(f"settings forms: redirect after a change, refused form refilled, reload: "
+                  f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
+            n = len(problems)
+            import_round_trip(browser, base, problems, os.path.join(nodes[0][1], "config.json"))
+            print(f"an imported close-on string through the mapping form and back: "
                   f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
             browser.close()
 

@@ -992,7 +992,7 @@
   "off": "kapalı",
   "any client": "her istemci",
   "%(what)s: %(value)s is kept (the file has %(file)s)": "%(what)s: %(value)s korunur (dosyada %(file)s)",
-  "After import": "İçe aktarma sonrası",
+  "After import": "Sonuç",
   "%(num)s allowed address": "%(num)s izinli adres",
   "%(num)s allowed addresses": "%(num)s izinli adres",
   "imported disabled: the file turns it off (enable: off)": "kapalı olarak içe aktarıldı: dosya onu kapatıyor (enable: off)",
