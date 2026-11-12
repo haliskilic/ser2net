@@ -95,10 +95,11 @@ düzenlemeye gerek yok.
   komutları, bilinmeyen fonksiyon kodları) hatta göndermeden `0x01` exception ile yanıtlar.
   Banner, open/close string ve `closeon` burada kullanılmaz (Modbus çerçevelerini bozar).
   **Edge modu:** coil ve register'ları periyodik okuyup MQTT'ye yayınlar (bool,
-  uint/int/float 16/32, ölçek); `"writable": true` noktalar MQTT'den yazılır
+  uint/int 16/32/64, float 32/64, metin, register'ın tek biti, ölçek, kelime sırası:
+  aşağıda Modbus noktaları); `"writable": true` noktalar MQTT'den yazılır
   (`<topic>/<nokta>/set`, yalnızca o noktaya tek değer: coil için FC5, holding register için
-  kendi bir ya da iki register'ına FC6/FC16; JSON liste ya da başka bir metin
-  `.../set/result`'ta `error: …` alır). Unit 0'daki bir nokta okunmaz; ona yazma broadcast
+  kendi register'larına FC6/FC16; JSON liste ya da başka bir metin `.../set/result`'ta
+  `error: …` alır). Unit 0'daki bir nokta okunmaz; ona yazma broadcast
   olarak gider ve geri okunmaz. Eşleme formu ve log, unit 0'daki ve seri hattın ayırdığı
   248–255 unit'lerindeki noktalar için uyarır. **Salt okunur** bu yazmaları da reddeder
   (`error: mapping is read-only`; reddedilen DCMD loglanır); MQTT'den yazma alan eşlemeler
@@ -175,6 +176,40 @@ düzenlemeye gerek yok.
   bitebilir (en çok 2 sn; bitmezse `error: cancelled: mapping stopped (sent, outcome
   unknown)` ya da `(not sent)`), bekleyenler `error: cancelled: mapping stopped`, bu
   sırada gelen bir komut `error: mapping stopped` alır; yapılmayan yazmalar loglanır.
+- **Modbus noktaları (edge modu):** her nokta, eşleme formundaki noktalar JSON'unda
+  `{"name", "unit", "fn", "address", "dtype", "scale", …}` olarak yazılır; **Noktaları
+  alanlarla düzenle** ile her nokta için bir alan kutusu da kullanılabilir (formun kaydettiği
+  yine JSON'dur; alanı olmayan anahtarlar, örneğin `"min"`, korunur). Tipler: `uint16`/`int16`
+  (bir register), `uint32`/`int32`/`float32` (iki), `int64`/`uint64`/`float64` (dört, FC16
+  ile yazılır), register cinsinden `"length"` değeriyle `"string"` (register başına iki
+  karakter; ilk NUL'da biter, sondaki boşluklar atılır) ve `"bool"`: coil ya da discrete
+  input, veya `"bit": 0–15` ile bir holding ya da input register'ın tek biti; string'ler ve
+  register bitleri salt okunurdur. `"word_order"` cihazın değerin baytlarını register'lara
+  nasıl dizdiğini söyler, okuma ve yazmada geçerlidir: `"ABCD"` (varsayılan, önce yüksek
+  register), `"CDAB"` (önce düşük register; 32-bit sayaçlarda sık görülen "word swap"),
+  `"BADC"` (her register'ın baytları yer değiştirmiş) ya da `"DCBA"`; bir string'in
+  karakterleri önce yüksek baytta (`"ABCD"`) ya da önce düşük baytta (`"BADC"`) olur.
+  Sparkplug B bunları Int64, UInt64, Double, String ve Boolean olarak gönderir (diğer
+  tiplerin veri tipleri değişmez). Değerler eşleme düzenlenirken denetlenir (form, REST API,
+  içe aktarma, küme düzenlemesi): `"unit": "1"` ve `"scale": "0.1"` sayı, `"writable":
+  "false"` false sayılır; kullanılamayanlar (sayı olmayan bir scale, formda `"adress"` gibi
+  yanlış yazılmış bir anahtar) noktanın adını veren bir mesajla reddedilir; form geçersiz
+  JSON'un nerede bozulduğunu (satır ve sütun) söyler ve yazılanı korur. **Komşu noktaları
+  tek istekle oku** (varsayılan kapalı), bir birimin aynı fonksiyondaki yakın noktalarını
+  tek istekle okur (en çok 125 register ya da 2000 coil, arada verilen sayıda kullanılmayan
+  register olabilir): 9600 baud'da 100 nokta okuma başına birkaç saniye yerine saniyenin bir
+  bölümünde okunur. Slave'in reddettiği bir blok (exception 02 ya da 03) o andan itibaren
+  nokta nokta okunur (bir kez loglanır), yanıtsız kalan bir blok ise içindeki her nokta için
+  yanıt yok sayılır. Düzenleme formundaki **Bu noktaları şimdi oku**, noktaları yazıldığı gibi
+  (kaydetmeden) çalışan ağ geçidi üzerinden okur ve değerlerini gösterir; status (REST API)
+  her noktanın son değerini, ne zaman okunduğunu ve son okumanın neden başarısız olduğunu
+  listeler. **Birim yönlendirme** (Modbus ağ geçitleri, isteğe bağlı): `255=1, 0=1`,
+  master'ın unit 255 ve unit 0 isteklerini RTU unit 1'e gönderir ve master'ın gönderdiği id
+  ile yanıtlar (birçok master ağ geçidinin arkasındaki cihazı 255 ya da 0 ile adresler).
+  Retry eklenmez: yanıt vermeyi kesen bir birim döngü başına bir kez okunur (yukarıya
+  bakın). v2.8 bir düğüm (ya da oradan yapılan bir küme düzenlemesi) veya sürüm düşürme
+  `word_order`, `bit`, `length`, blok okuma ve birim yönlendirme ayarlarını atar; o
+  sürümlerde yeni tiplerin okunması hata verir.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -821,7 +856,9 @@ herkesin oturumu kapanır).
 
 **Oturum süresi:** Ayarlar → *Web arayüzü erişimi* → *Oturum süresi (dakika)* (varsayılan 8 saat).
 **İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,
-yenileri ekle) ya da *hepsini değiştir* seçilir.
+yenileri ekle) ya da *hepsini değiştir* seçilir. **Dışa aktarma** eşlemeleri UTF-8 bir JSON
+dosyası olarak verir (Türkçe adlar ve topic'ler kaçışsız, `config.json` gibi); içe aktarma
+onu (ve eski sürümlerin kaçışlı dosyalarını) okur.
 
 ---
 

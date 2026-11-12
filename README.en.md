@@ -93,10 +93,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   `0x01` without putting it on the bus. Banner, open/close strings and `closeon` don't
   apply (they would break the Modbus framing).
   **Edge mode:** also polls coils and registers on an interval and publishes the decoded
-  values to MQTT (bool, uint/int/float 16/32, scaling); `"writable": true` points take
-  values from MQTT (`<topic>/<point>/set`, one value for that point only: FC5 for a coil,
-  FC6/FC16 for a holding register's own one or two registers; a JSON list or other text
-  gets `error: …` on `.../set/result`). A point on unit 0 is never read; a write to it is
+  values to MQTT (bool, uint/int 16/32/64, float 32/64, text, a register's bit, scaling,
+  word order: see Modbus points below); `"writable": true` points take values from MQTT
+  (`<topic>/<point>/set`, one value for that point only: FC5 for a coil, FC6/FC16 for a
+  holding register's own registers; a JSON list or other text gets `error: …` on
+  `.../set/result`). A point on unit 0 is never read; a write to it is
   broadcast and not read back. The mapping form and the log warn about points on unit 0
   and on units 248–255, which a serial line reserves. **Read-only** refuses these writes
   too (`error: mapping is read-only`; a refused DCMD is logged), and the dashboard marks a
@@ -172,6 +173,38 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   outcome unknown)` or `(not sent)`), the ones still waiting get `error: cancelled: mapping
   stopped`, and a command that comes meanwhile gets `error: mapping stopped`; the log
   says which were not made.
+- **Modbus points (edge mode):** each point is `{"name", "unit", "fn", "address", "dtype",
+  "scale", …}` in the points JSON of the mapping form, or with **Edit the points as
+  fields** one box of fields per point (the JSON stays what the form saves; keys without a
+  field, such as `"min"`, are kept). Types: `uint16`/`int16` (one register),
+  `uint32`/`int32`/`float32` (two), `int64`/`uint64`/`float64` (four, written with FC16),
+  `"string"` with its `"length"` in registers (two characters each; it ends at a NUL,
+  trailing spaces are dropped), and `"bool"`: a coil or discrete input, or with `"bit":
+  0–15` one bit of a holding or input register; strings and register bits are read-only.
+  `"word_order"` says how the device lays out a value's bytes, for reads and writes:
+  `"ABCD"` (the default, high register first), `"CDAB"` (low register first, the common
+  "word swap" of 32-bit meters), `"BADC"` (each register's bytes swapped) or `"DCBA"`; a
+  string's characters come high byte first (`"ABCD"`) or low byte first (`"BADC"`).
+  Sparkplug B sends them as Int64, UInt64, Double, String and Boolean (the other types keep
+  their datatypes). Values are checked when a mapping is edited (form, REST API, import,
+  fleet edit): `"unit": "1"` and `"scale": "0.1"` count as numbers, `"writable": "false"`
+  as false, and what can't be used (a scale that is not a number, a misspelt key such as
+  `"adress"` in the form) is refused with a message naming the point; the form says where
+  invalid JSON breaks (line and column) and keeps what was typed. **Read neighbouring
+  points with one request** (off by default) reads a unit's points of one function that
+  lie close together with one request (at most 125 registers or 2000 coils, with up to the
+  given number of unused registers in between): 100 points at 9600 baud then take a
+  fraction of a second instead of several seconds per poll. A block the slave refuses
+  (exception 02 or 03) is read point by point from then on (logged once), and a block
+  without a reply counts as no reply for each of its points. **Read these points now** in
+  the edit form reads the points as typed (not saved) through the running gateway and
+  shows their values; the status (REST API) lists each point's last value, when it was
+  read and why the last read failed. **Unit map** (Modbus gateways, optional): `255=1,
+  0=1` sends a master's requests for unit 255 and unit 0 to RTU unit 1 and answers them
+  with the id the master sent (many masters address a gateway's device as 255 or 0).
+  Retries are not added: a unit that stops answering is polled once per cycle (see
+  above). A v2.8 node (a fleet edit from one) or a downgrade drops `word_order`, `bit`,
+  `length`, the block reads and the unit map, and its polling fails on the new types.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
@@ -804,7 +837,9 @@ them a new id and session key (everyone signed in to it is signed out).
 
 **Session lifetime:** Settings → *Web UI access* → *Session lifetime* (default 8 hours).
 **Import:** shows a preview first; choose *merge* (update mappings with the same name, add
-the new ones) or *replace all*.
+the new ones) or *replace all*. **Export** writes the mappings as a UTF-8 JSON file
+(non-ASCII names and topics as they are, like `config.json`); the import reads it (and the
+escaped files of older versions).
 
 ---
 
