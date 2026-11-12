@@ -151,7 +151,8 @@ def test_color_scheme_and_early_theme():
         assert table[box].get("color-scheme") == "dark", box
     base = open(os.path.join(ROOT, "app", "web", "templates", "base.html"), encoding="utf-8").read()
     head = base[:base.index("</head>")]
-    tag = re.search(r'<script src="/static/theme\.js\?v=\{\{ asset_version \}\}"([^>]*)>', head)
+    tag = re.search(r'<script src="\{\{ base \}\}/static/theme\.js\?v=\{\{ asset_version \}\}"([^>]*)>',
+                    head)
     assert tag and "defer" not in tag.group(1) and "async" not in tag.group(1), \
         "theme.js runs before the first paint"
     assert head.index("theme.js") < head.index("app.css"), "theme.js before the stylesheets"

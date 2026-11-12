@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import threading
+from unittest import mock
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
@@ -42,6 +43,7 @@ from app.web.server import make_templates  # noqa: E402
 class Request:
     def __init__(self, sent=""):
         self.headers = {"x-content-hash": sent} if sent else {}
+        self.scope = {"type": "http", "path": "/api/status", "root_path": "", "headers": []}
 
         class state:
             lang = "en"
@@ -127,17 +129,28 @@ def test_arender_off_loop():
 def status(clients=(), bytes_in=0, bytes_out=0, now=1000.0):
     st = RunnerStatus(state="running", bytes_in=bytes_in, bytes_out=bytes_out)
 
-    class C:
-        def __init__(self, peer, at):
-            self.peer, self.connected_at, self.priority = peer, at, False
-    st.set_clients([C(p, at) for p, at in clients])
+    class C:   # (access.Client: connected_at by the monotonic clock, seq its order)
+        def __init__(self, seq, peer, at):
+            self.seq, self.peer, self.connected_at, self.priority = seq, peer, at, False
+    st.set_clients([C(i, p, at) for i, (p, at) in enumerate(clients)])
     return st
 
 
+# the clocks while test_mappings_shape runs: the wall clock WALL when the monotonic one
+# reads MONO, so a client connected at monotonic 900 connected at Unix time WALL - MONO + 900
+WALL, MONO = 1_000_000.0, 5_000.0
+
+
 def test_mappings_shape():
+    with mock.patch("time.time", lambda: WALL), mock.patch("time.monotonic", lambda: MONO):
+        _mappings_shape()
+
+
+def _mappings_shape():
     one = [("10.0.0.5:5000", 900.0)]
     a = status(one, 10, 20).as_dict()
-    assert a["clients"][0]["connected_at"] == 900.0, "REST /status: connected_at as well"
+    assert a["clients"][0]["connected_at"] == WALL - MONO + 900.0, \
+        "REST /status: connected_at as well, as Unix time"
     b = status(one, 4096, 20).as_dict()
     b["clients"][0]["duration"] = "9h 59m"   # later: the time counted on
     assert _steady(a) == _steady(b), "connection times and counters are not the shape"
@@ -157,7 +170,7 @@ def test_mappings_shape():
     assert f'<span id="m-m1-bytes">{_in_out(b)}</span>' in out, "a patched span shows what the table does"
     # the time shown is counted from connected_at, in the page's language (since filter);
     # a client without it (an older peer's payload) shows the duration it came with
-    assert 'data-since="900.0"' in out and re.search(r'<span class="dur">\d+h \d\dm</span>', out), out
+    assert f'data-since="{WALL - MONO + 900.0}"' in out and '<span class="dur">1h 08m</span>' in out, out
     del b["clients"][0]["connected_at"]
     out = make_templates().env.get_template("_mappings_body.html").render(
         mappings=[m], statuses={"m1": b}, can_edit=True)
