@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextvars
 import ipaddress
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -294,6 +295,18 @@ def _after(m: MappingConfig) -> dict:
             "clients": len(n.allowed_client_ips) if listens else None,
             "open": listens and m.enabled and not n.allowed_client_ips
             and _bind_reach(n.bind_ip) > 0}
+
+
+_CONTROL = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]")
+
+
+def log_lines(plan: ImportPlan) -> list[str]:
+    """The import's warnings for all.log, in English, one line each: a line break or other
+    control character from the file is written as its escape (it would start a log line
+    of its own)."""
+    warnings = plan.log_warnings if plan.log_source else plan.warnings
+    return [_CONTROL.sub(lambda m: m.group().encode("unicode_escape").decode(), w)
+            for w in warnings]
 
 
 def audit_detail(plan: ImportPlan, most: int = 500) -> str:

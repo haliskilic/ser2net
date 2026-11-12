@@ -919,10 +919,9 @@ def routes(ctx: Ctx) -> list:
                 await state.supervisor.apply_mapping(m)
         count = {a: sum(1 for r in rows if r["action"] == a) for a in ("add", "update", "same", "remove")}
         # in English (parse_for_preview): what the import left out or changed stays on record
-        source, warnings = ((plan.log_source, plan.log_warnings) if plan.log_source else
-                            (plan.source, plan.warnings))
-        state.log(f"mappings imported ({mode}) from {source}: {count['add']} added, "
-                  f"{count['update']} updated, {count['same']} unchanged, "
+        warnings = importer.log_lines(plan)
+        state.log(f"mappings imported ({mode}) from {plan.log_source or plan.source}: "
+                  f"{count['add']} added, {count['update']} updated, {count['same']} unchanged, "
                   f"{count['remove']} removed, {len(warnings)} warnings")
         for w in warnings:
             state.log(f"import warning: {w}")
