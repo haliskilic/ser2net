@@ -335,13 +335,18 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
-  çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
-  düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
-  `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren ve sıra bekleyen TLS
-  el sıkışmaları, kabulden hemen sonra reddedilen bağlantılar
-  (`ser2net_connections_refused_total`, nedene göre), veri klasörünün diski
+  etkin olup olmadığı (`ser2net_mapping_enabled`: bilerek durdurulan eşleme 0'dır, hata
+  veren eşlemeyle karışmaz), çalışıp çalışmadığı, durumu (`ser2net_mapping_state`, her
+  durum için bir seri, geçerli olan 1), istemcileri, gelen / giden / atılan baytlar,
+  yeniden bağlanmalar ve düşürülen yavaş istemciler; süreç için sürüm
+  (`ser2net_build_info`), başlangıç zamanı (`ser2net_start_time_seconds`), açık dosya
+  sayısı ve sınırı (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX), yönetim arayüzünün
+  bağlantıları, süren ve sıra bekleyen TLS el sıkışmaları, kabulden hemen sonra reddedilen
+  bağlantılar (`ser2net_connections_refused_total`, nedene göre), veri klasörünün diski
   (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) ve orada trace'lerle log'ların
-  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`).
+  kapladığı yer (`ser2net_traces_bytes`, `ser2net_logs_bytes`). Her serinin `# HELP` ve
+  `# TYPE` satırı vardır. Oturum olmadan gelen bir scraper `401` alır (tarayıcı giriş
+  sayfasına yönlenir) ve başarılı scrape'ler `all.log`'a yazılmaz.
 
 ---
 

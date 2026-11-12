@@ -54,10 +54,35 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 # the audit trail (the user actions that drive them ARE logged).
 QUIET_PATHS = {"/api/status", "/api/cluster/status", "/api/cluster/local",
                "/api/ports/table", "/api/ports.json", "/healthz", "/favicon.ico"}
+# What monitoring polls: not logged while it is answered (a refusal or an error is), and a
+# client that is not a browser is refused with 401, not sent to the sign-in page
+MONITORING_PATHS = {"/metrics"}
 
 
 def _wants_json(request) -> bool:
     return request.url.path.startswith("/api")
+
+
+def _quiet(method: str, path: str, status: int) -> bool:
+    """A UI request that all.log leaves out: a poll of QUIET_PATHS, a successful one of
+    MONITORING_PATHS."""
+    return method == "GET" and (path in QUIET_PATHS
+                                or (path in MONITORING_PATHS and status < 400))
+
+
+def _monitoring_refusal(request, path: str):
+    """The answer for MONITORING_PATHS without a session to a client that is not a browser
+    (it sends credentials, or doesn't ask for HTML): 401, which a Prometheus scrape reports
+    as such, instead of the redirect to the sign-in page, which it follows and then can't
+    parse. None for a browser (and every other path): it goes to the sign-in page."""
+    if path not in MONITORING_PATHS:
+        return None
+    if "authorization" not in request.headers and \
+            "text/html" in request.headers.get("accept", ""):
+        return None
+    return PlainTextResponse("unauthorized: sign in to the web UI, or read /api/v1/metrics "
+                             "with a REST API token\n", status_code=401,
+                             headers={"WWW-Authenticate": 'Bearer realm="ser2net"'})
 
 
 class GuardMiddleware(BaseHTTPMiddleware):
@@ -119,6 +144,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 if user is None:
                     if _wants_json(request):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
+                    if (refused := _monitoring_refusal(request, path)) is not None:
+                        return refused
                     return RedirectResponse("/login", status_code=303)
                 request.state.user = user  # available to handlers for role checks
 
@@ -126,9 +153,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
 
         # audit log: every state-changing request, plus meaningful page loads
         # (skip the static assets and the periodic poll endpoints)
-        if not path.startswith("/static") and not (
-            request.method == "GET" and path in QUIET_PATHS
-        ):
+        if not path.startswith("/static") and not _quiet(request.method, path,
+                                                         response.status_code):
             ip = request.client.host if request.client else "?"
             state.log(f"HTTP {ip} {request.method} {path} -> {response.status_code}")
 
