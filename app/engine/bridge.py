@@ -738,6 +738,7 @@ class MappingRunner:
                                 on_change=self._serial_changed)
         self._access = AccessPolicy(mapping.network)
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
+        self._refusal_log = netguard.RefusalLog(self._log)  # refused connections
         co = mapping.options.closeon
         # nothing to close on UDP (ignored_settings says so at start)
         if mapping.kind == "net" and mapping.network.mode == "udp":
@@ -1019,7 +1020,7 @@ class MappingRunner:
         net = self.mapping.network
 
         # allow-list, then max connections (a priority client / kick_old_user makes room)
-        admission = self._access.admit(peer_ip, peer_label, self._clients, self._log)
+        admission = self._access.admit(peer_ip, peer_label, self._clients, self._refusal_log)
         if not admission.admitted:
             if admission.at_capacity:
                 with contextlib.suppress(Exception):
@@ -1036,7 +1037,7 @@ class MappingRunner:
                 await asyncio.wait_for(ready.wait(),
                                        timeout=self.mapping.options.rfc2217_net_timeout_s)
             if not ready.is_set():
-                self._log(f"rejected {peer_label}: serial not ready for RFC2217")
+                self._refusal_log(f"rejected {peer_label}: serial not ready for RFC2217")
                 writer.close()
                 return
 

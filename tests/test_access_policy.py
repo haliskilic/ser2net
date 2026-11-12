@@ -8,12 +8,13 @@ Run: python3 tests/test_access_policy.py
 import asyncio
 import os
 import sys
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import NetworkSettings, client_networks
-from app.engine import access
+from app.engine import access, netguard
 from app.engine.serial_link import Backoff
 
 
@@ -126,11 +127,35 @@ def test_backoff():
     print("backoff: 0.5 s + jitter first, stop ends it, reset() starts over  OK")
 
 
+def test_refusal_lines_limited():
+    """A client refused again and again (a retry loop, a scan) writes one line per reason
+    a minute, the next one saying how many were held back; a kick is logged as it is."""
+    logs, clock = [], [1000.0]
+    with mock.patch.object(netguard.time, "monotonic", lambda: clock[0]):
+        log = netguard.RefusalLog(logs.append)
+        p = policy(allowed_client_ips="10.0.0.0/24")
+        for i in range(50):
+            assert not p.admit(f"192.0.2.{i}", f"192.0.2.{i}:4000", [], log).admitted
+        full = policy(max_connections=1)
+        assert not full.admit("10.0.0.9", "10.0.0.9:1", [FakeClient("10.0.0.1:1", 1.0)],
+                              log).admitted
+        log("kicking 10.0.0.1:1 for priority client 10.0.0.2:2")
+        assert logs == ["rejected 192.0.2.0:4000: not in allowed list",
+                        "rejected 10.0.0.9:1: max connections reached",
+                        "kicking 10.0.0.1:1 for priority client 10.0.0.2:2"], logs
+        clock[0] += 61
+        p.admit("192.0.2.200", "192.0.2.200:4000", [], log)
+    assert logs[-1] == ("rejected 192.0.2.200:4000: not in allowed list (49 more since the "
+                        "last such line)"), logs[-1]
+    print("refused connections: one line per reason a minute, then the count  OK")
+
+
 def main():
     test_allow_list()
     test_unusable_allow_list_admits_nobody()
     test_admit()
     test_backoff()
+    test_refusal_lines_limited()
     print("\nPASS: client admission policy + reconnect backoff")
 
 

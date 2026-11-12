@@ -97,6 +97,7 @@ class ModbusGatewayRunner:
         self._set_points: dict[str, ModbusPoint] = {
             f"{base}/{p.name}/set": p for p in mapping.modbus_poll.points if p.writable}
         self._access = AccessPolicy(mapping.network)
+        self._refusal_log = netguard.RefusalLog(self._log)  # refused connections
         # inter-frame gap used to detect the end of an RTU reply (timing-based framing)
         baud = max(1, mapping.serial.baudrate)
         self._gap = max(0.01, 3.5 * 11 / baud)
@@ -449,7 +450,7 @@ class ModbusGatewayRunner:
         net = self.mapping.network
 
         # allow-list, then max connections (a priority master / kick_old_user makes room)
-        admission = self._access.admit(peer_ip, peer, self._clients, self._log)
+        admission = self._access.admit(peer_ip, peer, self._clients, self._refusal_log)
         if not admission.admitted:
             with contextlib.suppress(Exception):
                 writer.close()
