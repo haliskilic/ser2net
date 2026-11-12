@@ -11,6 +11,7 @@ portable test guards the template side of the contract on every platform:
     phone card layout; each row spans exactly as many columns as the header;
   * a mapping name / device path full of HTML is rendered escaped;
   * the static assets carry ?v=<version> (fresh CSS/JS right after an upgrade);
+  * htmx runs with eval, fragment <script>s and its injected <style> off;
   * the mapping form does not offer a Modbus gateway the options it doesn't use.
 
 Run: python3 tests/test_ui_markup.py
@@ -214,6 +215,26 @@ def test_ports_table_and_assets():
     print("ports table contract + versioned static asset URLs  OK")
 
 
+def test_htmx_config():
+    """htmx runs without the features the UI doesn't use: eval (hx-on, js: values, trigger
+    filters), <script> elements from fragments, the indicator <style> it would inject.
+    The meta is read when htmx starts, so it must come before the htmx script."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    nodes = list(parse(make_templates().env.get_template("base.html").render(request=Req)).walk())
+    meta = [i for i, n in enumerate(nodes) if n.tag == "meta"
+            and n.attrs.get("name") == "htmx-config"]
+    script = [i for i, n in enumerate(nodes) if n.tag == "script"
+              and "/static/htmx.min.js" in (n.attrs.get("src") or "")]
+    assert len(meta) == 1 and len(script) == 1 and meta[0] < script[0], (meta, script)
+    config = json.loads(nodes[meta[0]].attrs["content"])
+    assert config == {"allowEval": False, "allowScriptTags": False,
+                      "includeIndicatorStyles": False}, config
+    print("htmx: no eval, no <script> from fragments, no injected <style>  OK")
+
+
 def test_mapping_form_modbus_fields():
     """The Modbus gateway uses no connect banner, close-on string or client buffer, so the
     form shows those only for raw / telnet / rfc2217 (app.js hides and disables a
@@ -377,6 +398,7 @@ def main():
     test_mappings_table()
     test_cluster_table()
     test_ports_table_and_assets()
+    test_htmx_config()
     test_mapping_form_modbus_fields()
     test_mapping_form_udp_fields()
     test_mapping_form_rfc2217_restore()

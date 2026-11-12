@@ -102,6 +102,7 @@ PORTABLE = [
     "test_cluster_peer_calls.py",
     "test_cluster_settings.py",
     "test_changelog.py",
+    "test_browser_hardening.py",  # CSP and the other protections the browser is told to apply
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
