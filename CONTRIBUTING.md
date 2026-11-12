@@ -1,4 +1,4 @@
-# Contributing to ser2net
+# Contributing to ser2netweb
 
 [English](#english) · [Türkçe](#türkçe)
 
@@ -137,7 +137,7 @@ alerts too.
 ### Python versions
 CI tests Python 3.10–3.14 on Linux and Windows; the newest release (3.15) runs too, without
 blocking a merge, until its wheels have settled. Python 3.10 is past its end of life but
-stays supported while distributions people run ser2net on ship it (Ubuntu 22.04): it keeps
+stays supported while distributions people run ser2netweb on ship it (Ubuntu 22.04): it keeps
 the last dependency releases that support it (the `python_version < "3.11"` pins). It is
 dropped once one of those frozen pins has a known vulnerability that no release supporting
 3.10 fixes (the py3.10 dependency audit reports it), announced in the release notes one
@@ -146,9 +146,9 @@ minor release ahead.
 ### Third-party code
 Runtime dependencies are pinned exactly. When one has a bug its maintainers have not
 fixed in a release (pyserial and pyserial-asyncio-fast rarely release), the fix goes into
-ser2net, not into a fork or a process-wide patch:
+ser2netweb, not into a fork or a process-wide patch:
 - One module per library (`ser2netweb/engine/serial_compat.py` for pyserial and
-  pyserial-asyncio-fast), with a subclass ser2net itself uses that overrides as little as
+  pyserial-asyncio-fast), with a subclass ser2netweb itself uses that overrides as little as
   possible. Its docstring names the upstream issue, pull request or commit it mirrors;
   where a report exists, comment there instead of filing another.
 - It applies whenever the upstream members it builds on exist (feature detection), not
@@ -344,7 +344,7 @@ tamamını `main`'den grafiğe gönderir, böylece onlar için de uyarı çıkar
 
 ### Python sürümleri
 CI, Python 3.10–3.14'ü Linux ve Windows'ta test eder; en yeni sürüm (3.15) de çalışır, ama
-wheel'ları oturana kadar birleştirmeyi engellemez. Python 3.10'un ömrü doldu, ama ser2net'in
+wheel'ları oturana kadar birleştirmeyi engellemez. Python 3.10'un ömrü doldu, ama ser2netweb'in
 kullanıldığı dağıtımlar onu getirdiği sürece (Ubuntu 22.04) desteklenir: onu destekleyen
 son bağımlılık sürümlerinde kalır (`python_version < "3.11"` pin'leri). Bu donmuş
 pin'lerden birinde, 3.10'u destekleyen hiçbir sürümün düzeltmediği bilinen bir güvenlik
@@ -354,9 +354,9 @@ açığı çıkınca (py3.10 bağımlılık denetimi bunu bildirir) bırakılır
 ### Üçüncü taraf kodu
 Çalışma zamanı bağımlılıkları tam sürümle sabitlenir. Birindeki bir hata yayımlanmış bir
 sürümde düzeltilmediyse (pyserial ve pyserial-asyncio-fast nadiren sürüm çıkarır), düzeltme
-bir fork'a ya da tüm süreci değiştiren bir yamaya değil, ser2net'e girer:
+bir fork'a ya da tüm süreci değiştiren bir yamaya değil, ser2netweb'e girer:
 - Kütüphane başına tek bir modül (pyserial ve pyserial-asyncio-fast için
-  `ser2netweb/engine/serial_compat.py`): ser2net'in kendisinin kullandığı ve olabildiğince az şeyi
+  `ser2netweb/engine/serial_compat.py`): ser2netweb'in kendisinin kullandığı ve olabildiğince az şeyi
   değiştiren bir alt sınıf. Docstring'i taklit ettiği upstream issue'yu, PR'ı ya da commit'i
   belirtir; bir rapor zaten varsa yenisini açmak yerine oraya yorum yazılır.
 - Dayandığı upstream üyeler var olduğu sürece uygulanır (özellik tespiti); sürüm

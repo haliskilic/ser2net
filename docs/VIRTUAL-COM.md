@@ -1,7 +1,7 @@
 # Client-side virtual COM ports
 
-ser2net exposes each serial port as a TCP/UDP endpoint. To make a **remote**
-serial port appear as a **local** port to an application, you pair ser2net with a
+ser2netweb exposes each serial port as a TCP/UDP endpoint. To make a **remote**
+serial port appear as a **local** port to an application, you pair ser2netweb with a
 client-side redirector. There are three tiers, cheapest first.
 
 ## 1. Apps that already speak pySerial / RFC2217 (no driver)
@@ -28,7 +28,7 @@ What the server does with an RFC 2217 client's settings:
   and the port keeps it; pySerial then raises `ValueError: remote rejected value`, and
   the connection stays up.
 - If the serial device goes away (a USB adapter unplugged), the client stays connected
-  while ser2net reopens the port; settings it changes meanwhile are answered and take
+  while ser2netweb reopens the port; settings it changes meanwhile are answered and take
   effect when the port is back. The reopened port is given the client's baud rate, data
   bits, parity, stop bits, flow control and RTS/DTR, so the session goes on as before
   (if the reopened port refuses one of them, the client is disconnected and the log says
@@ -94,7 +94,7 @@ mapping:
 
 ```bat
 REM create a linked virtual pair, e.g. COM10 <-> CNCB0  (com0com setup GUI)
-REM then bridge CNCB0 to the ser2net rfc2217 mapping (in hub4com's folder):
+REM then bridge CNCB0 to the ser2netweb rfc2217 mapping (in hub4com's folder):
 com2tcp-rfc2217.bat \\.\CNCB0 HOST 4001
 REM the legacy app opens COM10; its baud rate, parity, RTS and DTR reach the device
 ```
@@ -107,7 +107,7 @@ against a `raw` or `telnet` mapping whose serial settings are fixed on the serve
 > the signed build or to allow the test certificate. `hub4com` can fan one virtual
 > port out to several consumers.
 
-**Commercial (turnkey, signed drivers)** — point any of these at the ser2net
+**Commercial (turnkey, signed drivers)** — point any of these at the ser2netweb
 **`rfc2217`** mapping port; they create the COMx and handle the redirection:
 
 - HW group **HW VSP3** (free single-port tier)
@@ -116,7 +116,7 @@ against a `raw` or `telnet` mapping whose serial settings are fixed on the serve
 
 ## Pairing two machines (no client driver at all)
 
-To tunnel a serial link between two hosts running ser2net (like Moxa "Pair
+To tunnel a serial link between two hosts running ser2netweb (like Moxa "Pair
 Connection"): run one mapping as **TCP server** and, on the other host, a mapping
 in **TCP client** mode with the same serial settings pointing at the server's
 `IP:port`. Each side's local serial port now mirrors the other's.

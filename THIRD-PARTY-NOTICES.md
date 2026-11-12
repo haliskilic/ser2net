@@ -1,11 +1,11 @@
 # Third-Party Notices
 
-ser2net is licensed under the AGPL-3.0-only or a commercial license (see `NOTICE`). It
+ser2netweb is licensed under the AGPL-3.0-only or a commercial license (see `NOTICE`). It
 ships with the third-party components below, each under its own license. These
-components are not covered by ser2net's license.
+components are not covered by ser2netweb's license.
 
 **Full license texts:** every standalone executable carries the texts of everything it
-contains — run `ser2net --licenses` — and each release attaches the same file as
+contains — run `ser2netweb --licenses` — and each release attaches the same file as
 `ser2net-<platform>.THIRD-PARTY-LICENSES.txt`. It is generated at build time from the
 build environment (`tools/third_party.py`), so it always matches the bundled versions. The
 release's SBOMs (`ser2net-<platform>.cdx.json`, CycloneDX) list the same components with SPDX
@@ -70,14 +70,14 @@ Docker image. Used unmodified, through their public APIs.
 Both executables use a [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
 interpreter (the native libraries above are linked into it), pinned to the same release
 per platform so Windows and Linux ship the same CPython and a supported OpenSSL (3.5 LTS).
-Each native library's own license text is included in `ser2net --licenses` and in the
+Each native library's own license text is included in `ser2netweb --licenses` and in the
 `*.THIRD-PARTY-LICENSES.txt` attached to the release.
 
 ## Browser assets (`ser2netweb/web/static/`)
 
 Copied unmodified from their npm releases; `vendor/npm/package.json` records the versions,
 the files and their sha256, and the license texts are in `tools/licenses/npm/` (and in
-`ser2net --licenses`).
+`ser2netweb --licenses`).
 
 | Component | npm package | License |
 |---|---|---|
@@ -87,19 +87,19 @@ the files and their sha256, and the license texts are in `tools/licenses/npm/` (
 
 ## LGPL components
 
-ldap3 is an LGPL library. ser2net uses it unmodified through its public API. The LGPL
+ldap3 is an LGPL library. ser2netweb uses it unmodified through its public API. The LGPL
 lets you run the program with a modified version of the library; that right holds for
-every distribution of ser2net — AGPL or commercial:
+every distribution of ser2netweb — AGPL or commercial:
 
 - **Source and Docker installs:** ldap3 is a normal Python package; install another
   version with `pip`.
 - **Standalone executables:** ldap3 is stored as plain source files (`.py`), not inside
   the executable's compressed archive. Point `SER2NETWEB_LIB_OVERRIDE` at a directory that
-  contains your version (`<dir>/ldap3/...`) and ser2net loads it instead of the bundled
-  copy; `ser2net --about` shows which one is in use. The bundled source is the
+  contains your version (`<dir>/ldap3/...`) and ser2netweb loads it instead of the bundled
+  copy; `ser2netweb --about` shows which one is in use. The bundled source is the
   Corresponding Source of the library; the project is at https://github.com/cannatag/ldap3.
 
 ---
 
 Preserve this file (and the `--licenses` text of a binary you redistribute) when
-redistributing ser2net.
+redistributing ser2netweb.

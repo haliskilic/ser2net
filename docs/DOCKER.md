@@ -1,6 +1,6 @@
-# Running ser2net in Docker
+# Running ser2netweb in Docker
 
-ser2net ships an official `Dockerfile`, an example `docker-compose.yml` and a published
+ser2netweb ships an official `Dockerfile`, an example `docker-compose.yml` and a published
 image for amd64, arm64 and arm/v7 (32-bit ARM: 32-bit Raspberry Pi OS, armv7 gateways;
 since 2.9.0) with every release: `ghcr.io/haliskilic/ser2net` (`:latest` or a release tag).
 The published image is the very build the release smoke-tested on each architecture (same
@@ -14,12 +14,12 @@ every package on amd64 and arm64, is the hash-locked wheel. A pre-release (`X.Y.
 CRITICAL ones with a fix go to the repository's code scanning) and checks whether the base
 image (`python:3.12-slim-trixie`: CPython 3.12 on Debian 13) has moved since `:latest` was
 built. If it has, it rebuilds the latest release from its tag on the new base — the same
-ser2net code and the same hash-locked Python packages — smoke-tests it on every platform
+ser2netweb code and the same hash-locked Python packages — smoke-tests it on every platform
 `:latest` has (amd64 and arm64 natively, arm/v7 under QEMU) and moves `:X.Y` and `:latest` to it. `:X.Y.Z` always stays the image its
 release published. So `:latest` / `:X.Y` get Debian, OpenSSL and CPython 3.12.x fixes within
 a week; an auto-updater (Watchtower and the like) restarts the container when that happens.
 Use `:X.Y.Z` (or a digest) to change only when you decide to. The base is a Debian codename
-tag, so a refresh never switches to a new Debian major release; only a ser2net release does.
+tag, so a refresh never switches to a new Debian major release; only a ser2netweb release does.
 Each image records its base:
 `docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' ghcr.io/haliskilic/ser2net:latest`.
 Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest -R haliskilic/ser2net`
@@ -77,7 +77,7 @@ Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest
   switches to the owner of `/data` before writing, so file ownership stays right.
 - **`config.json` changed in the volume:** `docker kill -s HUP ser2net` (or
   `docker exec ser2net python /app/ser2netweb.py --no-bootstrap --data-dir /data --reload`, or
-  Settings → *Configuration backups* → *Reload config.json*) has ser2net read it again
+  Settings → *Configuration backups* → *Reload config.json*) has ser2netweb read it again
   without a restart: mappings whose settings didn't change keep their clients, a file that
   doesn't validate changes nothing (the log says why). The admin UI address comes from
   `SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT`, which a reload keeps.
@@ -97,9 +97,9 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   cut. A container started without it stays down until someone starts it by hand; add
   the policy to an existing one with `docker update --restart unless-stopped ser2net`.
 - `--init` (compose: `init: true`) runs a small init as the container's first process,
-  which passes `docker stop` on to ser2net; `--stop-timeout 30` (compose:
+  which passes `docker stop` on to ser2netweb; `--stop-timeout 30` (compose:
   `stop_grace_period: 30s`) gives the stop 30 s before Docker kills the container.
-  ser2net finishes within that even when a device, an MQTT broker or a client stops
+  ser2netweb finishes within that even when a device, an MQTT broker or a client stops
   answering: an admin UI response under way gets 5 s, the mappings stop side by side in
   at most 15 s, and output a serial device has not taken 2 s after its port closes is
   dropped. (Docker's default is 10 s, after which unsent trace data and the last log
@@ -157,8 +157,8 @@ In short:
   container in the same network: that network's subnet; a proxy on the host: Docker's
   gateway, such as `172.17.0.1`), or Settings → Reverse proxy does; all.log names the
   address it ignored (`X-Forwarded-For from … is ignored`);
-- `SER2NETWEB_PUBLIC_URL` is the address users open (`https://ser2net.example.com`, or with a
-  path the UI is served under: `https://gw.example.com/ser2net`);
+- `SER2NETWEB_PUBLIC_URL` is the address users open (`https://ser2netweb.example.com`, or with a
+  path the UI is served under: `https://gw.example.com/ser2netweb`);
 - the UI port stays off the network: publish it to the host only (`127.0.0.1:8080:8080`),
   or not at all when the proxy runs in the same Docker network.
 
@@ -189,7 +189,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   follows a `/dev/serial/by-id` link, whose own GID is root's; `getent group dialout`
   finds nothing on Arch, whose serial group is `uucp`), and so does the 2.8.0 image. A
   device the server can't open (mode `0600`, say) is reported at start:
-  `[ser2net] warning: uid … can't open /dev/…`.
+  `[ser2netweb] warning: uid … can't open /dev/…`.
 - **A device missing at start** (an adapter unplugged at boot) makes Docker refuse to
   start the container, and the web UI is down with it. A renumbered adapter
   (`ttyUSB0` → `ttyUSB1`) isn't seen inside either. Both are what hot-plug avoids.
@@ -201,13 +201,13 @@ and session key. README, *Several instances on one machine*, has the whole check
   adapter plugged in after the start; the compose file has this variant. The port list
   and mappings bound to a USB identity then see a re-plugged adapter too.
 - USB passthrough into containers is only reliable on Linux hosts (not Docker Desktop on
-  Windows/macOS — there, run ser2net natively or bridge via RFC2217).
+  Windows/macOS — there, run ser2netweb natively or bridge via RFC2217).
 - A port that won't open, a host service on the same device (ModemManager, brltty, a login
   prompt), a Raspberry Pi UART: [`LINUX-SERIAL.md`](LINUX-SERIAL.md).
 
 ## Notes
 
-- **Health.** The image has a `HEALTHCHECK` (`ser2net --healthcheck` asks `/healthz`,
+- **Health.** The image has a `HEALTHCHECK` (`ser2netweb --healthcheck` asks `/healthz`,
   over HTTPS when `config.json` sets admin TLS, and over the other scheme when that one
   gets no answer): `docker ps` shows `healthy` once the UI answers — also before the
   first-run setup. The
@@ -217,7 +217,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   be bound at start (with the host network: another program has it), the container stays
   up and `unhealthy` while the mappings run, and the UI comes up once the port is free.
   So that a stuck event loop doesn't leave a container that runs but forwards nothing,
-  ser2net exits by itself when its loop has not run for 90 s (its threads' stacks in
+  ser2netweb exits by itself when its loop has not run for 90 s (its threads' stacks in
   `/data/hang.log`), and the restart policy starts it again; `SER2NETWEB_LOOP_WATCHDOG` sets
   the limit in seconds (`0` = off). A busy container is not affected: it gets back to its
   loop within about a second, and `docker pause` is not counted.
@@ -225,7 +225,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   container's output, which Docker keeps without a limit by default: cap it with
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), use the `local`
   driver (`--log-driver local`: compressed, capped at 100 MB by default), or set either for
-  every container in `/etc/docker/daemon.json`. How long ser2net keeps its own logs, audit
+  every container in `/etc/docker/daemon.json`. How long ser2netweb keeps its own logs, audit
   log and backups is set under Settings → *Retention* (off by default; see the README's
   *Retention*); the container's output is kept by Docker's settings alone. The lines name
   clients and the web UI's users by IP address and user name (see
@@ -234,7 +234,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   Settings → Audit log → *Web UI requests in all.log* can leave out page views or every
   request line.
 - **Clock.** A container has no clock of its own: it uses the host's. Keep the host's
-  clock synchronised (NTP; README, *Time synchronisation*): ser2net never sets it, and a
+  clock synchronised (NTP; README, *Time synchronisation*): ser2netweb never sets it, and a
   wrong clock puts wrong times in logs and backups and makes sign-ins and certificate
   checks fail. The start-up log warns when the clock reads earlier than the newest
   configuration backup.
@@ -256,14 +256,14 @@ and session key. README, *Several instances on one machine*, has the whole check
   given with `--group-add` are kept, root's group is not. With `docker run --user …` the
   entrypoint just runs as that user.
 - **When files can't be taken over** (a read-only mount, NFS with `root_squash`), the
-  start goes on and ser2net says what it can't use: a `config.json` it can't read stops
-  the start with one line naming its owner and mode, the account ser2net runs as and the
+  start goes on and ser2netweb says what it can't use: a `config.json` it can't read stops
+  the start with one line naming its owner and mode, the account ser2netweb runs as and the
   fix — run `sudo chown -R <uid>:<gid> <folder>` on the host, for the folder mounted at
   `/data`; a log it can't write is a warning.
 - **Rootless Podman** maps your own user to root inside the container: your
   bind-mounted folder looks root-owned there and would be handed to uid 10001 (a
   sub-uid on the host). Start it with `--userns=keep-id` (plus `--group-add keep-groups`
-  with crun, to keep your serial device group); ser2net then runs as you.
+  with crun, to keep your serial device group); ser2netweb then runs as you.
 - **Persistence.** `config.json`, its automatic backups (`backups/`), logs, traces
   (`traces/`) and any generated TLS material live in the `/data` volume; back that up to
   preserve mappings and the admin password. `config.json` and `backups/` hold secrets in

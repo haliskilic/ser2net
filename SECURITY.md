@@ -15,7 +15,7 @@ reporting; an upgrade from any 2.x release keeps `config.json` as it is.
   <https://github.com/haliskilic/ser2net/security/advisories/new>
 - e-mail: **mail@haliskilic.com.tr**
 
-Include the version (`ser2net --about`), how it is installed (binary, Docker, source),
+Include the version (`ser2netweb --about`), how it is installed (binary, Docker, source),
 the steps to reproduce and the impact you see. You will get an answer and we will agree
 on a disclosure date with you; please give a fix time before going public. Reporters
 are credited in the release notes unless they prefer otherwise.
@@ -25,7 +25,7 @@ In scope: the web UI and its sign-in (local accounts, LDAP, OIDC), roles, CSRF a
 session handling, the REST API and its token, the console WebSocket, the LAN cluster
 endpoints and key, the data bridges (access lists, TLS), the MQTT / Sparkplug commands of
 Modbus mappings, config/backup/trace files, the standalone executables, the Docker image and
-the release pipeline. What ser2net stores and sends about people, for how long and how to
+the release pipeline. What ser2netweb stores and sends about people, for how long and how to
 erase it: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 Not vulnerabilities by themselves: a setting an admin chose deliberately (e.g. login
@@ -37,12 +37,12 @@ See the README's **Security** section: bind the UI to `127.0.0.1` or enable TLS,
 login required, give people the least role they need, use access lists on the data
 ports, keep the cluster key secret, and let only trusted clients publish to the MQTT
 command topics of writable Modbus points (broker ACLs; TLS and credentials for the broker
-connection): ser2net does not authenticate MQTT commands itself. On a UDP mapping the
+connection): ser2netweb does not authenticate MQTT commands itself. On a UDP mapping the
 access list checks a source address that can be forged: set a reply address, and on
 untrusted networks prefer TCP with TLS, or a firewall.
 
 ### Stored secrets
-`config.json` keeps in plain text what ser2net has to use itself: the LDAP bind password,
+`config.json` keeps in plain text what ser2netweb has to use itself: the LDAP bind password,
 the OIDC client secret, the SMTP password, the webhook URL, each mapping's MQTT broker
 password and MQTT client key password, the TLS key passwords (a mapping's, the admin UI's),
 the cluster key (and, during a planned key change, the previous one), the
@@ -56,7 +56,7 @@ the copies: a copied data folder or Docker volume, a disk or VM image, a downloa
 an export. Keep them like a password vault. If one leaked:
 - change the third-party credentials where they are issued — the LDAP service account's
   password, the OIDC client secret, the SMTP password, the webhook URL (a new one from the
-  chat service), the MQTT broker accounts — and enter the new ones in ser2net;
+  chat service), the MQTT broker accounts — and enter the new ones in ser2netweb;
 - set a new cluster key on every node (Settings → LAN cluster → *Generate a new key and
   save*, with "keep accepting the current one for 7 days" unticked);
 - Settings → Web UI access → *Sign out everyone*: a new session key, so a sign-in made
@@ -101,7 +101,7 @@ yükseltmede `config.json` olduğu gibi kalır.
   <https://github.com/haliskilic/ser2net/security/advisories/new>
 - e-posta: **mail@haliskilic.com.tr**
 
-Sürümü (`ser2net --about`), kurulum şeklini (binary, Docker, kaynak), tekrarlama
+Sürümü (`ser2netweb --about`), kurulum şeklini (binary, Docker, kaynak), tekrarlama
 adımlarını ve gördüğünüz etkiyi yazın. Size dönüş yapılır ve yayımlama tarihi sizinle
 birlikte belirlenir; herkese açıklamadan önce düzeltme için süre tanıyın. İstemediğiniz
 sürece adınız sürüm notlarında anılır.
@@ -111,7 +111,7 @@ Kapsamda: web arayüzü ve girişi (yerel hesaplar, LDAP, OIDC), roller, CSRF ve
 yönetimi, REST API ve token'ı, konsol WebSocket'i, LAN cluster uç noktaları ve anahtarı,
 veri köprüleri (erişim listeleri, TLS), Modbus eşlemelerinin MQTT / Sparkplug komutları,
 config/yedek/trace dosyaları, standalone binary'ler, Docker imajı ve sürüm hattı.
-ser2net'in kişiler hakkında neyi sakladığı ve gönderdiği, ne kadar tuttuğu ve nasıl
+ser2netweb'in kişiler hakkında neyi sakladığı ve gönderdiği, ne kadar tuttuğu ve nasıl
 silineceği: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 Tek başına açık sayılmayanlar: bir admin'in bilerek seçtiği ayarlar (ör. güvenilir ağda
@@ -123,13 +123,13 @@ README'nin **Güvenlik** bölümüne bakın: arayüzü `127.0.0.1`'e bağlayın 
 girişi zorunlu tutun, herkese gereken en düşük rolü verin, veri portlarında erişim
 listesi kullanın, cluster anahtarını gizli tutun ve yazılabilir Modbus noktalarının MQTT
 komut topic'lerine yalnızca güvendiğiniz istemcilerin yayın yapmasına izin verin (broker
-ACL'leri; broker bağlantısı için TLS ve kimlik bilgisi): ser2net MQTT komutlarının
+ACL'leri; broker bağlantısı için TLS ve kimlik bilgisi): ser2netweb MQTT komutlarının
 kimliğini kendisi doğrulamaz. UDP eşlemelerinde erişim listesi taklit edilebilen bir kaynak
 adresine bakar: bir yanıt adresi girin, güvenilmeyen ağlarda TLS'li TCP'yi ya da bir
 güvenlik duvarını tercih edin.
 
 ### Saklanan gizli değerler
-`config.json`, ser2net'in kendisinin kullanması gereken gizli değerleri açık metin tutar:
+`config.json`, ser2netweb'in kendisinin kullanması gereken gizli değerleri açık metin tutar:
 LDAP bind parolası, OIDC client secret, SMTP parolası, webhook URL'si, her eşlemenin MQTT
 broker parolası ve MQTT istemci anahtarı parolası, TLS anahtar parolaları (bir eşlemenin,
 yönetim arayüzünün), cluster anahtarı (planlı bir anahtar değişikliği sırasında öncekiyle
@@ -144,7 +144,7 @@ bir disk ya da VM imajı, indirilen bir yedek, bir dışa aktarım. Bunları bir
 gibi koruyun. Biri sızarsa:
 - üçüncü taraf kimlik bilgilerini verildikleri yerde değiştirin — LDAP servis hesabının
   parolası, OIDC client secret, SMTP parolası, webhook URL'si (sohbet servisinden yenisi),
-  MQTT broker hesapları — ve yenilerini ser2net'e girin;
+  MQTT broker hesapları — ve yenilerini ser2netweb'e girin;
 - her düğümde yeni bir cluster anahtarı ayarlayın (Ayarlar → LAN cluster → *Yeni anahtar
   üret ve kaydet*; "mevcut anahtarı 7 gün daha kabul et" kutusu işaretsiz);
 - Ayarlar → Web arayüzü erişimi → *Herkesin oturumunu kapat*: yeni bir oturum anahtarı
