@@ -14,8 +14,14 @@
     (the next Save edits the same mapping), also when the points can't be read at all;
     the cluster proxy re-renders the same way and checks the points before it forwards
     them;
+  * non-ASCII point names are shown as they are in the points JSON ("Sıcaklık", not
+    \\u escapes) and so is all text in the mappings export, which stays a JSON file the
+    importer reads back; text UTF-8 can't carry (an unpaired surrogate escape such as
+    \\ud800) is refused by an edit and in the points JSON, and never makes the form or the
+    export fail;
   * end to end: the form, the REST API and an import answer such points with 400 and a
-    message, and the stored mapping keeps its points.
+    message, and the stored mapping keeps its points; the edit form and the export show
+    Turkish names unescaped.
 Cross-platform (the server part binds 127.0.0.1 only).
 
 Run: python3 tests/test_modbus_points.py
@@ -27,10 +33,13 @@ import urllib.request
 
 from _server import Browser, Server, free_port
 
-from app.config import ConfigError, MappingConfig, ModbusPoint, ModbusPoll, point_scale
+from app.config import (ConfigError, MappingConfig, ModbusPoint, ModbusPoll, point_scale,
+                        unstorable_text)
+from app.importer import parse_mappings_file
 from app.web.auth import hash_password, hash_token
 from app.web.routes import cluster as cluster_routes
-from app.web.routes.forms import _form_error, _parse_modbus_points, _reshown_mapping
+from app.web.routes.forms import (_form_error, _modbus_points_json, _parse_modbus_points,
+                                  _reshown_mapping, json_text)
 
 PW = "modbus-points-pass-1"
 TOKEN = "s2n_modbus-points-token"
@@ -199,11 +208,55 @@ def test_refused_form_shown_again():
     print("a refused form comes back with the points as typed and its id  OK")
 
 
+def test_non_ascii_text():
+    m = gateway([{"name": "Sıcaklık", "fn": 4}, {"name": "Basınç/ölçüm", "fn": 3}])
+    text = _modbus_points_json(m)
+    assert '"name": "Sıcaklık"' in text and "\\u" not in text, text
+    assert [p["name"] for p in json.loads(text)] == ["Sıcaklık", "Basınç/ölçüm"]
+    assert [p["name"] for p in _parse_modbus_points(text, strict=True)] == ["Sıcaklık",
+                                                                         "Basınç/ölçüm"]
+    # an unpaired surrogate (only a JSON escape makes one): refused, never a failed page
+    lone = gateway([{"name": "S\ud800k", "fn": 3}])
+    assert unstorable_text(lone.to_dict()) == "modbus_poll.points[0].name"
+    shown = _modbus_points_json(lone)
+    shown.encode("utf-8")
+    assert "\\ud800" in shown and json.loads(shown)[0]["name"] == "S\ud800k"
+    try:
+        lone.validate_input()
+        raise AssertionError("an edit took an unpaired surrogate")
+    except ConfigError as e:
+        assert str(e).startswith("modbus_poll.points[0].name has a character that can't be "
+                                 "stored"), e
+    for bad in (gateway([], name="PLC \udfff"), gateway([], mqtt={"base_topic": "a\ud800"}),
+                gateway([], options={"banner": "x\udc80"})):
+        try:
+            bad.validate_input()
+            raise AssertionError("an edit took an unpaired surrogate")
+        except ConfigError as e:
+            assert "can't be stored" in str(e), e
+    try:
+        _parse_modbus_points('[{"name": "a"}, {"name": "S\\ud800"}]', strict=True)
+        raise AssertionError("the points JSON took an unpaired surrogate")
+    except ValueError as e:
+        assert str(e).startswith("Modbus poll point #2 has a character that can't be stored"), e
+    # the export: unescaped, valid JSON the importer reads; escaped only if it must be
+    doc = {"version": 1, "mappings": [m.to_dict()]}
+    out = json_text(doc, indent=2)
+    assert "Sıcaklık" in out and "\\u" not in out
+    plan = parse_mappings_file(out.encode("utf-8"))
+    assert [p.name for p in plan.mappings[0].modbus_poll.points] == ["Sıcaklık", "Basınç/ölçüm"]
+    assert "\\ud800" in json_text({"a": "\ud800"}) and json_text({"a": "ı"}) == '{"a": "ı"}'
+    print("Turkish names unescaped in the points JSON and the export; unpaired surrogates "
+          "refused  OK")
+
+
 def boot_config(port):
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
     m = gateway([{"name": "kept", "fn": 3, "address": 4}], id="aaaaaaaaaaa1",
                 enabled=False).to_dict()
+    m["name"] = "Hat-1 ölçüm"
+    m["modbus_poll"]["points"][0]["name"] = "Sıcaklık"
     m["network"]["port"] = port
     return {"users": users, "api_token_hash": hash_token(TOKEN), "api_token_role": "admin",
             "mappings": [m]}
@@ -223,11 +276,25 @@ def test_server():
 
     def points():
         return [p["name"] for p in srv.saved_config()["mappings"][0]["modbus_poll"]["points"]]
+    kept = ["Sıcaklık"]
 
     port = free_port()
     with Server(boot_config(port)) as srv:
         b = Browser(srv.base)
         b.login("admin", PW)
+        st, _, page = b.get("/api/mappings/aaaaaaaaaaa1/form")
+        assert st == 200 and '&#34;name&#34;: &#34;Sıcaklık&#34;' in page, page[-1500:]
+        assert "u0131" not in page
+        st, headers, raw = b.get("/settings/config/export", raw=True)
+        assert st == 200 and headers.get("Content-Type") == "application/json; charset=utf-8"
+        assert "Sıcaklık".encode() in raw and "Hat-1 ölçüm".encode() in raw and b"\\u" not in raw
+        st, _, page = b.post("/settings/config/import", {"step": "preview", "mode": "merge"},
+                             files={"file": ("ser2net-mappings.json", raw)})
+        assert st == 200 and "Import failed" not in page, page[-800:]
+        row = page.split("Import preview", 1)[1].split("<tbody>", 1)[1].split("</tr>", 1)[0]
+        assert "ölçüm" in row and "unchanged" in row, row
+        print("edit form and export: Turkish names unescaped; the export imports again  OK")
+
         edit = dict(form_of(""), id="aaaaaaaaaaa1", network_port=str(port), name="PLC")
         edit.pop("enabled")
         for text, words in (('[{"name": "a",}]', "line 1, column 14"),
@@ -236,14 +303,15 @@ def test_server():
                             ('["temp", "hum"]', "#1 is not an object"),
                             ('[{"name": "a", "unit": "one"}]', "unit must be 0-255"),
                             ('[{"name": "a", "unit": 1.5}]', "unit must be a whole number"),
-                            ('[{"name": "a", "adress": 1}]', "Did you mean")):
+                            ('[{"name": "a", "adress": 1}]', "Did you mean"),
+                            ('[{"name": "S\\ud800"}]', "can&#39;t be stored")):
             st, _, body = b.post("/api/mappings/save", dict(edit, modbus_points=text))
             assert st == 400 and words in body, (text, st, body[:600])
             assert 'name="id" value="aaaaaaaaaaa1"' in body, text
             assert '<textarea name="modbus_points"' in body
             shown = body.split('<textarea name="modbus_points"', 1)[1].split(">", 1)[1]
             assert shown.startswith(text.replace('"', "&#34;")), (text, shown[:80])
-            assert points() == ["kept"] and len(srv.saved_config()["mappings"]) == 1
+            assert points() == kept and len(srv.saved_config()["mappings"]) == 1
         st, _, body = b.post("/api/mappings/save", dict(
             edit, modbus_points='[{"name": "b", "unit": "2", "scale": "0.5", "fn": 3, '
                                 '"writable": "false"}]'))
@@ -280,6 +348,7 @@ def main():
     test_stored_scale_ignored()
     test_points_json_parse()
     test_refused_form_shown_again()
+    test_non_ascii_text()
     test_server()
     print("\nPASS: Modbus poll points")
 

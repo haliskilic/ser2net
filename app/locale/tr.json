@@ -905,5 +905,7 @@
   "Point {0}: scale must be a number (0 or 1: not scaled).": "{0} noktası: scale bir sayı olmalı (0 ya da 1: ölçeklenmez).",
   "Point {0}: writable must be true or false.": "{0} noktası: writable true ya da false olmalı.",
   "Modbus poll points: the JSON is not valid at line {0}, column {1}: {2}.": "Modbus okuma noktaları: JSON {0}. satırın {1}. sütununda geçersiz: {2}.",
-  "Modbus poll point #{0} ({1}): unknown key {2}. Did you mean {3}?": "Modbus okuma noktası #{0} ({1}): bilinmeyen anahtar {2}. {3} mı demek istedin?"
+  "Modbus poll point #{0} ({1}): unknown key {2}. Did you mean {3}?": "Modbus okuma noktası #{0} ({1}): bilinmeyen anahtar {2}. {3} mı demek istedin?",
+  "{0} has a character that can't be stored: an unpaired surrogate escape (\\ud800 to \\udfff).": "{0} saklanamayan bir karakter içeriyor: eşi olmayan bir surrogate kaçışı (\\ud800 - \\udfff).",
+  "Modbus poll point #{0} has a character that can't be stored: an unpaired surrogate escape (\\ud800 to \\udfff).": "Modbus okuma noktası #{0} saklanamayan bir karakter içeriyor: eşi olmayan bir surrogate kaçışı (\\ud800 - \\udfff)."
 }
