@@ -110,9 +110,9 @@ def _client_host(peer: str) -> str:
 def mask_address(text: str) -> str:
     """A client's address with personal data left out: only its network, IPv4 as /24
     ("10.0.5.x"), IPv6 as /48 ("2001:db8:5::/48"), without the port. The whole text is
-    tried as an address before the part before its last ':' (an IPv6 address is written
-    without brackets in "ip:port"). Text that is no IP address (a host name set as a UDP
-    mapping's reply address) is returned as it is."""
+    tried as an address before the part before its last ':' (a client is "[ipv6]:port"; a
+    peer of an older version writes it without the brackets). Text that is no IP address
+    (a host name set as a UDP mapping's reply address) is returned as it is."""
     text = str(text).strip()
     for candidate in (text, text.rpartition(":")[0]):
         try:
