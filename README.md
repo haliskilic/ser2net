@@ -466,7 +466,9 @@ düzenlemeye gerek yok.
   ya da IP adresi) taşımalı; **Broker'ın host adını doğrula** kapalıyken host adını
   taşımayan bir sertifika da kabul edilir (yine de güvenilen bir CA'dan gelmeli). Bir
   **istemci sertifikası** (PEM; anahtarı ayrı dosyada ya da aynı dosyada, şifreli anahtar
-  **parolasıyla**) sertifika isteyen broker'a sunulur (karşılıklı TLS, ör. AWS IoT Core).
+  **parolasıyla**) sertifika isteyen broker'a sunulur (karşılıklı TLS, ör. AWS IoT Core);
+  form kayıtlı anahtar parolasını hiç göstermez (boş bırakılan alan onu korur, *Kayıtlı
+  parolayı sil* siler).
   Eşleme formu ve REST API kullanılamayan dosyaları reddeder; içe aktarma böyle bir eşlemeyi
   uyarıyla alır, dosyaları kaybolan bir eşleme ise yüklenmeye devam eder ve MQTT'siz çalışır
   (loglanır, panoda görünür) — asla düz metinle bağlanmaz. Docker'da dosyaları `/data`
@@ -852,7 +854,8 @@ scrape_configs:
 ```
 Token, üretilirken seçilen rolü taşır (*Yalnızca rolü değiştir* token'ı koruyarak rolü
 değiştirir): `viewer` token'ı yalnızca okuyabilir (GET) ve kayıtlı
-sırları (MQTT parolası, bir eşlemenin TLS anahtar parolası) `********` olarak maskeli görür;
+sırları (MQTT parolası ve istemci anahtarı parolası, bir eşlemenin TLS anahtar parolası)
+`********` olarak maskeli görür;
 bu maskeyi geri gönderen bir `PUT` ya da `PATCH` kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
 ve açılış log'u bunu yazar.
 
@@ -1572,12 +1575,14 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 
 **Gizli değerler:** `config.json` LDAP bind parolasını, OIDC client secret'ı, SMTP
 parolasını, webhook URL'sini (çoğu zaman içinde bir token vardır), her eşlemenin MQTT broker
-parolasını, TLS anahtar parolalarını (bir eşlemenin ve yönetim arayüzünün), cluster
+parolasını ve MQTT istemci anahtarı parolasını, TLS anahtar parolalarını (bir eşlemenin ve
+yönetim arayüzünün), cluster
 anahtarını (tüm düğümlerin eşlemelerini okumaya ve değiştirmeye yeter) ve oturum anahtarı
 `secret_key`'i (aynı dosyadaki hesaplarla birlikte geçerli bir oturum üretmeye yeter) ve
 iki adımlı giriş kullanan her hesabın anahtarını açık metin olarak tutar. Yerel parolalar
 scrypt hash'i, REST API token'ları da yalnızca hash'leri olarak saklanır. `backups/` aynı dosyanın önceki kopyalarını tutar (indirilen bir yedekte oturum
-anahtarı yoktur), eşleme dışa aktarımı da MQTT ve TLS anahtar parolalarını içerir. Bu
+anahtarı yoktur), eşleme dışa aktarımı da MQTT parolalarını ve MQTT ile TLS anahtar
+parolalarını içerir. Bu
 makinede bunları yalnızca ser2net'in çalıştığı hesap okuyabilir; her kopyayı — kopyalanan bir
 veri klasörünü ya da Docker volume'unu, bir disk ya da VM imajını, indirilen bir yedeği, bir
 dışa aktarımı — bir parola kasası gibi koruyun. Böyle bir kopya sızarsa neyin değiştirileceği

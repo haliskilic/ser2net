@@ -610,6 +610,7 @@ def routes(ctx: Ctx) -> list:
                 mapping, ports, peer.get("ips", []), is_new=False, error=msg,
                 links=_peer_links(data), mqtt_stored=stored.mqtt.password if stored else "",
                 tls_stored=stored.network.tls_key_password if stored else "", form=form,
+                mqtt_key_stored=stored.mqtt.client_key_password if stored else "",
                 **_peer_form(target, mapping, version, form.get("id", ""), peer)))
 
         if not data:

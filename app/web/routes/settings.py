@@ -1270,16 +1270,19 @@ def routes(ctx: Ctx) -> list:
     # ---------------- config export / import ----------------
     async def config_export(request):
         # mappings only — never export password_hash / secret_key. Mappings can carry
-        # secrets (MQTT password), so — like import — this needs operator+ (the UI only
-        # offers it to operators; a viewer, possibly an anonymous one, must not read them).
+        # secrets (the MQTT password and client key password, the TLS key password), so —
+        # like import — this needs operator+ (the UI only offers it to operators; a viewer,
+        # possibly an anonymous one, must not read them).
         if deny := require_role(request, "operator"):
             return deny
         mappings = state.config.mappings
         # non-ASCII text as it is (mapping and point names, topics), like config.json
         data = {"version": 1, "mappings": [m.to_dict() for m in mappings]}
-        secrets_in = sum(1 for m in mappings if m.mqtt.password)
+        secrets_in = sum(1 for m in mappings if m.mqtt.password or m.mqtt.client_key_password
+                         or m.network.tls_key_password)
         ctx.audit(request, "config_export", f"{len(mappings)} mappings"
-                  + (f", {secrets_in} with an MQTT password" if secrets_in else ""))
+                  + (f", {secrets_in} with a stored password (MQTT, MQTT or TLS key)"
+                     if secrets_in else ""))
         return Response(
             json_text(data, indent=2), media_type="application/json; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=ser2net-mappings.json"})
