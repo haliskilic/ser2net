@@ -227,9 +227,14 @@
         <select name="mqtt_qos">{% for q in [0, 1, 2] %}<option value="{{ q }}" {% if q == mapping.mqtt.qos %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
       </label>
     </div>
-    <label>{{ _("Base topic") }} <span class="muted">({{ _("lines publish here; status at &lt;topic&gt;/status") }})</span>
-      <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
-    </label>
+    <div class="grid2">
+      <label>{{ _("Base topic") }} <span class="muted">({{ _("lines publish here; status at &lt;topic&gt;/status") }})</span>
+        <input type="text" name="mqtt_base_topic" value="{{ mapping.mqtt.base_topic }}" placeholder="{{ _('e.g. %(example)s', example='ser2net/plc1') }}">
+      </label>
+      <label>{{ _("Client ID") }} <span class="muted">({{ _("blank = auto") }})</span>
+        <input type="text" name="mqtt_client_id" value="{{ mapping.mqtt.client_id }}" placeholder="{{ _('e.g. %(example)s', example='s2n-plc1') }}" autocapitalize="none" autocorrect="off" spellcheck="false">
+      </label>
+    </div>
     <div class="grid3">
       <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       <label>{{ _("Password") }} <input type="password" name="mqtt_password" value="{{ mapping.mqtt.password }}" placeholder="{{ _('optional') }}"></label>
