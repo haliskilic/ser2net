@@ -580,25 +580,6 @@ def test_manual_peer_and_remote_control():
         trap.close()
         print("remote edit of a peer's mapping took effect on the peer  OK")
 
-        # every setting survives an unchanged edit of the form A renders, posted as a
-        # browser posts it
-        before = json.load(open(os.path.join(tb, "config.json")))["mappings"]
-        for sink in form_cases.mappings():
-            q = urllib.parse.urlencode({"host": "127.0.0.1", "port": ui_b, "mid": sink["id"]})
-            code, page = get_a(f"/api/cluster/peer-form?{q}")
-            assert code == 200, (sink["name"], code, page[:300])
-            assert post_a("/api/cluster/peer-save", browser_post(page)) == 200, sink["name"]
-        after = json.load(open(os.path.join(tb, "config.json")))["mappings"]
-        assert form_cases.relevant(after) == form_cases.relevant(before), [
-            (a["name"], a, b_) for a, b_ in zip(form_cases.relevant(before),
-                                                form_cases.relevant(after), strict=True)
-            if a != b_][:1]
-        print(f"remote edit: {len(form_cases.mappings())} kitchen-sink mappings saved "
-              "unchanged through the rendered form keep every setting  OK")
-
-        # the form carries the revision B gave; B refuses it once the mapping changed
-        # there (here: stopped from the fleet view), and the form shown again has B's new
-        # revision, so saving it again is a deliberate overwrite
         def post_page(path, fields):
             req = urllib.request.Request(
                 f"http://127.0.0.1:{ui_a}{path}", method="POST",
@@ -611,6 +592,25 @@ def test_manual_peer_and_remote_control():
                 r = e
             return r.status if hasattr(r, "status") else r.code, r.read().decode()
 
+        # every setting survives an unchanged edit of the form A renders, posted as a
+        # browser posts it (and A, reading the mapping back, finds nothing B didn't keep)
+        before = json.load(open(os.path.join(tb, "config.json")))["mappings"]
+        for sink in form_cases.mappings():
+            q = urllib.parse.urlencode({"host": "127.0.0.1", "port": ui_b, "mid": sink["id"]})
+            code, page = get_a(f"/api/cluster/peer-form?{q}")
+            assert code == 200, (sink["name"], code, page[:300])
+            assert post_page("/api/cluster/peer-save", browser_post(page)) == (200, ""), sink["name"]
+        after = json.load(open(os.path.join(tb, "config.json")))["mappings"]
+        assert form_cases.relevant(after) == form_cases.relevant(before), [
+            (a["name"], a, b_) for a, b_ in zip(form_cases.relevant(before),
+                                                form_cases.relevant(after), strict=True)
+            if a != b_][:1]
+        print(f"remote edit: {len(form_cases.mappings())} kitchen-sink mappings saved "
+              "unchanged through the rendered form keep every setting  OK")
+
+        # the form carries the revision B gave; B refuses it once the mapping changed
+        # there (here: stopped from the fleet view), and the form shown again has B's new
+        # revision, so saving it again is a deliberate overwrite
         _, data = raw_request(ui_b, f"/api/cluster/mapping-data?mid={mid}", hdr)
         data = json.loads(data)
         assert data["version"] == __version__ and "edit" in data["caps"] and data["rev"], data
@@ -794,8 +794,17 @@ def test_edit_on_a_peer_with_its_own_id():
                 "serial_bytesize": "8", "serial_parity": "N", "serial_stopbits": "1",
                 "serial_flowcontrol": "none", "network_mode": "server",
                 "network_protocol": "raw", "network_bind_ip": "127.0.0.1", "network_port": "4555"}
-        assert post_a("/api/cluster/peer-save", edit) == 200, seen
-        assert ("mapping-data", peer_id) in seen and seen[-1] == ("mapping-save", peer_id), seen
+        req = urllib.request.Request(f"http://127.0.0.1:{ui_a}/api/cluster/peer-save",
+                                     data=urllib.parse.urlencode(edit).encode(), method="POST")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        req.add_header("X-CSRF-Token", csrf())
+        with op.open(req, timeout=10) as r:
+            assert r.status == 200, seen
+            saved = r.read().decode()
+        assert ("mapping-data", peer_id) in seen and seen[-2] == ("mapping-save", peer_id), seen
+        # read back afterwards: the stand-in keeps nothing, and the answer says what
+        assert seen[-1] == ("mapping-data", peer_id), seen
+        assert "but it did not keep:" in saved and "serial.port" in saved, saved
         # a form that comes back with an error keeps the peer's id too
         req = urllib.request.Request(f"http://127.0.0.1:{ui_a}/api/cluster/peer-save",
                                      data=urllib.parse.urlencode(
