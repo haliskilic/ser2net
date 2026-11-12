@@ -330,7 +330,8 @@ düzenlemeye gerek yok.
   (varsayılan açık; 3.x'te her zaman) **Başka bir programın kilitlediği portu açma** olur;
   bir uyarı da hâlâ farklı olanı söyler (eşleme portunu başladığı andan itibaren açık tutar
   ve kilit dosyası oluşturmaz). Dinleme adresleri ailesini korur (`ipv6,::1` `::1` kalır,
-  adressiz `ipv6`/`ipv6n4` `::` olur). İkisini de belirtmeyen bir accepter (`tcp,2000`)
+  adressiz `ipv6` yalnızca IPv6 için `::` olur; IPv4 istemcilerini de alan bir IPv6 soketi
+  olan `ipv6n4` ise **Tüm arayüzler (IPv4 + IPv6)** olur). İkisini de belirtmeyen bir accepter (`tcp,2000`)
   ser2net'te IPv4 ve IPv6 istemcileri alıyordu; burada `0.0.0.0` olarak, yalnızca IPv4 için
   gelir ve bir uyarı **Tüm arayüzler (IPv4 + IPv6)**'ya geçirilebilecek olanları sayar. Bir
   RFC 2217 bağlantısının imzası (4.x `signature`, 3.x `SIGNATURE`) **RFC 2217 imzası** olur;

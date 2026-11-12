@@ -314,8 +314,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   the port** plus **Keep other programs out**, `uucplock` (on by default; 3.x always)
   **Don't open a port another program has locked**; one warning says what still differs
   (a mapping holds its port open from its start, and makes no lock files). Listen
-  addresses keep their family (`ipv6,::1` stays `::1`, `ipv6`/`ipv6n4` without an address
-  is `::`); an accepter with neither (`tcp,2000`), on which ser2net took IPv4 and IPv6
+  addresses keep their family (`ipv6,::1` stays `::1`, `ipv6` without an address is `::`,
+  IPv6 only; `ipv6n4`, an IPv6 socket that takes IPv4 clients too, is **All interfaces
+  (IPv4 + IPv6)**); an accepter with neither (`tcp,2000`), on which ser2net took IPv4 and IPv6
   clients, comes in on `0.0.0.0`, IPv4 only, and a warning names those to switch to **All
   interfaces (IPv4 + IPv6)**. An RFC 2217 connection's signature (4.x `signature`, 3.x
   `SIGNATURE`) becomes its **RFC 2217 signature**; `hangup-when-done` and `nobreak` are kept

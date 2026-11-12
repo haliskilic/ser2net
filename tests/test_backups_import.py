@@ -12,7 +12,9 @@ up, so a wrong import or edit could not be undone. Checks:
     file with nothing to import is refused instead of emptying the mappings; merging it
     again keeps what was set on its mappings since (TLS, bind IP, allowed clients, USB
     identity, RS-485, MQTT, Modbus, disabled), never opens one up, and the preview lists
-    what an update changes and keeps; the same file again is "unchanged";
+    what an update changes and keeps; the same file again is "unchanged"; the port
+    locking, the families a :: listener takes (dual_stack, ipv6n4) and a TLS client CA
+    follow the same rules (never wider, a CA is not dropped);
   * an admin can download (without the session key) and restore a backup; the restore
     is undoable, keeps the session working, and a backup without users is refused;
   * a restore first shows what changes for sign-in and access. By default it brings back
@@ -38,7 +40,7 @@ from _server import Browser, Server, free_port
 
 from app import config as config_module
 from app.config import BACKUPS_KEPT, AppConfig, ConfigError, ConfigStore, MappingConfig
-from app.importer import apply_import, parse_mappings_file, plan_rows
+from app.importer import _overlay, apply_import, parse_mappings_file, plan_rows
 from app.web.auth import hash_password, verify_password
 
 PW = "backup-pass-1"
@@ -258,11 +260,63 @@ def test_classic_merge():
           "an export still replaces, with what it opens up marked  OK")
 
 
+V6 = """connection: &v6
+  accepter: tcp,{family},4101
+  connector: serialdev,/dev/ttyUSB3,9600n81{lock}
+"""
+
+
+def test_classic_merge_serial_fields():
+    """The fields the import learned with the port locking, dual-stack listeners and TLS
+    client certificates: taken from the file as the rest, never so that a mapping is more
+    open than it is."""
+    def parsed(family="ipv6", lock=""):
+        plan = parse_mappings_file(V6.format(family=family, lock=lock).encode(), "ser2net.yaml")
+        assert plan.classic
+        return plan
+    v6only = parsed("ipv6")
+    both = parsed("ipv6n4")
+    assert both.mappings[0].network.both_families, "ipv6n4: an IPv6 socket that takes IPv4 too"
+    assert not v6only.mappings[0].network.both_families
+    # a mapping that listens on :: for IPv6 only does not take IPv4 clients from the file
+    old, _ = apply_import([], v6only.mappings, "merge", True)
+    merged, touched = apply_import(old, both.mappings, "merge", True)
+    assert touched == [] and not merged[0].network.both_families, "wider: kept"
+    rows = {r["name"]: r for r in plan_rows(old, both.mappings, "merge", True)}
+    bind = {c["what"]: c for c in rows["v6"]["changes"]}["Bind IP"]
+    assert bind["kept"] and bind["security"] and bind["file"] == "All interfaces (IPv4 + IPv6)", bind
+    # ... and one that takes both families gets narrower when the file says so
+    wide, _ = apply_import([], both.mappings, "merge", True)
+    merged, touched = apply_import(wide, v6only.mappings, "merge", True)
+    assert [m.name for m in touched] == ["v6"] and not merged[0].network.both_families
+    # the port locking: what the file sets is taken (4.x flock / uucplock, on by default)
+    local = MappingConfig.from_dict(dict(old[0].to_dict()))
+    local.serial.advanced.tiocexcl = local.serial.advanced.respect_uucp_locks = False
+    merged, _ = apply_import([local], v6only.mappings, "merge", True)
+    a = merged[0].serial.advanced
+    assert a.tiocexcl and a.respect_uucp_locks and merged[0].serial.exclusive, a
+    merged, _ = apply_import([local], parsed(lock=",flock=false").mappings, "merge", True)
+    assert merged[0].serial.exclusive is False, "flock off in the file: not kept exclusive"
+    # TLS client certificates: a CA file the file names is taken, one the mapping has stays
+    tls = MappingConfig.from_dict(dict(old[0].to_dict()))
+    tls.network.tls, tls.network.tls_cert, tls.network.tls_key = True, "/c.pem", "/k.pem"
+    tls.network.tls_client_ca = "/etc/clients-ca.pem"
+    plain_tls = MappingConfig.from_dict(tls.to_dict())
+    plain_tls.network.tls_client_ca = ""
+    assert _overlay(tls, plain_tls).network.tls_client_ca == "/etc/clients-ca.pem"
+    other = MappingConfig.from_dict(tls.to_dict())
+    other.network.tls_client_ca = "/etc/other-ca.pem"
+    assert _overlay(plain_tls, other).network.tls_client_ca == "/etc/other-ca.pem"
+    print("classic merge: dual-stack (ipv6n4) not taken over an IPv6-only listener, a "
+          "narrower one is; port locking from the file; a TLS client CA is never dropped  OK")
+
+
 def main():
     test_store_backups()
     test_backup_list_cache()
     test_planner()
     test_classic_merge()
+    test_classic_merge_serial_fields()
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin", "pwd_version": 1},
              {"username": "op", "password_hash": hash_password(PW), "role": "operator", "pwd_version": 1}]
     p1, p2, p3 = free_port(), free_port(), free_port()

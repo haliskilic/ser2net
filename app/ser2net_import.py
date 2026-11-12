@@ -716,9 +716,11 @@ def _listen_address(c: _Conn, fields: list[str]) -> bool:
     c.network["port"] = port
     c.network["bind_ip"] = _bind_ip(c, host, family)
     if c.network["bind_ip"] == "::":
-        # IPv6 only, also for UDP where IPv6 sockets take IPv4 by default (MappingConfig.
-        # from_dict reads a UDP mapping on :: without the key as an older release ran it)
-        c.network["dual_stack"] = False
+        # ipv6n4: an IPv6 socket that takes IPv4 connections too (gensio.5), so IPv4 and
+        # IPv6 here; else IPv6 only, also for UDP where IPv6 sockets take IPv4 by default
+        # (MappingConfig.from_dict reads a UDP mapping on :: without the key as an older
+        # release ran it)
+        c.network["dual_stack"] = family == "ipv6n4"
     c.any_family = not family and not host.strip("[]")
     return True
 
@@ -728,7 +730,7 @@ def _bind_ip(c: _Conn, host: str, family: str) -> str:
     stays loopback (::1 too), and an address that cannot be used here (a host name) gives
     0.0.0.0 with the mapping imported disabled until its bind IP is set."""
     h = host.strip("[]")
-    if not h:  # (ipv6n4: IPv6 without IPv4-mapped addresses)
+    if not h:  # (ipv6n4: IPv6 that takes IPv4 too, see _listen_address)
         return "::" if family in ("ipv6", "ipv6n4") else "0.0.0.0"
     if h.lower() == "localhost":
         return "127.0.0.1"

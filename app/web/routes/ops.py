@@ -157,11 +157,14 @@ async def delete_mapping(state, mid):
 
 def import_preview(state, plan, mode: str) -> tuple[list[dict], str | None]:
     """What importing `plan` (importer.ImportPlan) in `mode` would do, without changing
-    anything: the preview rows (importer.plan_rows) and why the result could not be saved
-    (None when it could). Shared by the import form's preview and the REST API's dry run."""
+    anything: the preview rows (importer.plan_rows, with each mapping's own warnings) and
+    why the result could not be saved (None when it could). Shared by the import form's
+    preview and the REST API's dry run. A classic ser2net file updates a mapping through
+    importer._overlay (plan.classic), as the import itself does."""
     current = state.config.mappings
-    rows = importer.plan_rows(current, plan.mappings, mode)
-    candidate, touched = importer.apply_import(current, plan.mappings, mode)
+    _general, notes = plan.split_warnings()
+    rows = importer.plan_rows(current, plan.mappings, mode, plan.classic, notes)
+    candidate, touched = importer.apply_import(current, plan.mappings, mode, plan.classic)
     try:
         dataclasses.replace(state.config, mappings=candidate).validate_for_save()
     except ConfigError as e:
@@ -177,8 +180,8 @@ async def import_mappings(state, plan, mode: str) -> tuple[list[dict], list[Mapp
     REST API."""
     async with state.config_lock:
         old = state.config.mappings
-        rows = importer.plan_rows(old, plan.mappings, mode)
-        new_maps, touched = importer.apply_import(old, plan.mappings, mode)
+        rows = importer.plan_rows(old, plan.mappings, mode, plan.classic)
+        new_maps, touched = importer.apply_import(old, plan.mappings, mode, plan.classic)
         if conflict := import_conflict(state.config, touched, new_maps):  # the UI's port, ...
             raise ConfigError(conflict)
         state.config.mappings = new_maps
