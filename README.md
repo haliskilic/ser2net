@@ -354,6 +354,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 ```
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
+`GET /info` (ser2net'in sürümü, API'nin sürümü ve sunduğu `features`),
 `GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
 Başlatma ve durdurma idempotenttir: ayarlarıyla zaten çalışan bir eşlemeyi başlatmak ya da
 durmuş birini durdurmak hiçbir şeyi değiştirmez (`"changed": false`; istemcileri, seri portu

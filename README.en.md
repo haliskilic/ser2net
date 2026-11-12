@@ -345,6 +345,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 ```
 Endpoints: `GET/POST /mappings`, `GET/PUT/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `GET /status`, `GET /ports`,
+`GET /info` (ser2net's version, the API's version and its `features`),
 `GET /health` (unauthenticated), `GET /openapi.json`.
 Start and stop are idempotent: starting a mapping that already runs with its settings, or
 stopping a stopped one, changes nothing (`"changed": false`; its clients, serial port and
