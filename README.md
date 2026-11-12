@@ -129,19 +129,23 @@ düzenlemeye gerek yok.
   gelip gelmediğine bakar (Linux: sysfs'teki tty cihazları ve `/dev/serial` linkleri;
   Windows: kayıt defterinin listelediği COM portları); portlar yalnızca o zaman, arayüz ya
   da API 2 sn'den eski bir liste gösterecekken ve en az dakikada bir yeniden taranır.
-  Linux'ta arkasında donanım olmayan `ttyS` portları gizlenir; udev'in adları gösterilir ve
-  seçilebilir: `/dev/serial/by-id` (seri numarasına göre: hangi USB soketinde olursa olsun
-  yeniden takmaya dayanır) ve `/dev/serial/by-path` (USB soketine göre: adaptör aynı
-  sokette kaldıkça doğrudur). by-id adı üretici, model ve seri numarasından oluşur; bu
-  yüzden kendi seri numarası olmayan özdeş adaptörler (CH340, çoğu PL2303, hepsi aynı
-  numarayı taşıyan klonlar) tek bir adı paylaşır, udev onu birine verir ve hangisine
-  verdiği reboot ya da yeniden takmayla değişebilir: Portlar sayfası böyle adaptörleri
-  işaretler (`aynı USB kimliği`, `by-id benzersiz değil`), form da bunu söyler; bunları USB
-  soketine göre bağlayın. Eşleme formunda Cihaz'ın yanındaki ↻ formu kapatmadan portları
-  yeniden listeler, **Başka bir cihaz yolu…** ise listede olmayan bir yolu alır (bir kartın
-  `/dev/ttymxc1` gibi UART'ı, henüz takılmamış bir adaptör, Windows'ta bir `\\.\` adı);
-  `/dev/serial0` gibi ayarlı bir link, gösterdiği cihazla birlikte görünür
-  (`/dev/serial0 → /dev/ttyS0`) ve o portun kullanımda sayılmasını sağlar.
+  Linux'ta yalnızca pyserial'ın baktığı adlar değil, çekirdekteki her seri sürücünün portu
+  listelenir (`/proc/tty/drivers`); böylece kartın kendi UART'ları da görünür (i.MX'te
+  `ttymxc*`, `ttyLP*`, Jetson'da `ttyTHS*`, Zynq'te `ttyPS*`, `ttyMSM*`, `ttyMAX*`, 6.5
+  öncesi kernel'lerde Raspberry Pi'nin `ttyS0`'ı ...). Arkasında donanım olmayan `ttyS`
+  portları gizlenir; udev'in adları gösterilir ve seçilebilir: `/dev/serial/by-id` (seri
+  numarasına göre: hangi USB soketinde olursa olsun yeniden takmaya dayanır) ve
+  `/dev/serial/by-path` (USB soketine göre: adaptör aynı sokette kaldıkça doğrudur). by-id
+  adı üretici, model ve seri numarasından oluşur; bu yüzden kendi seri numarası olmayan
+  özdeş adaptörler (CH340, çoğu PL2303, hepsi aynı numarayı taşıyan klonlar) tek bir adı
+  paylaşır, udev onu birine verir ve hangisine verdiği reboot ya da yeniden takmayla
+  değişebilir: Portlar sayfası böyle adaptörleri işaretler (`aynı USB kimliği`,
+  `by-id benzersiz değil`), form da bunu söyler; bunları USB soketine göre bağlayın.
+  Eşleme formunda Cihaz'ın yanındaki ↻ formu kapatmadan portları yeniden listeler, **Başka
+  bir cihaz yolu…** ise listede olmayan bir yolu alır (bir kartın `/dev/ttymxc1` gibi
+  UART'ı, henüz takılmamış bir adaptör, Windows'ta bir `\\.\` adı); `/dev/serial0` gibi
+  ayarlı bir link, gösterdiği cihazla birlikte görünür (`/dev/serial0 → /dev/ttyS0`) ve o
+  portun kullanımda sayılmasını sağlar.
 - **Cihazı USB kimliğiyle bulma:** eşleme formundaki kutu işaretlenince adaptör VID:PID
   (+ seri no) ile bağlanır; çıkarılıp takılınca `ttyUSB0`→`ttyUSB1` ya da COM numarası
   değişse de eşleme doğru cihazı açar. Kendi seri numarası olmayan özdeş adaptörler (CH340,

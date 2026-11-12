@@ -118,22 +118,26 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   node, so it isn't expected to keep out programs on the host (with `-v /dev:/dev` it is the
   host's node); `TIOCEXCL` holds for the port itself.
 - **Live port list:** privilege-free. Every 2 s a cheap check tells whether a port came or
-  went (Linux: the tty devices in sysfs and the `/dev/serial` links; Windows: the COM ports
-  the registry lists), and the ports are enumerated again only then, when the UI or the API
-  shows a list older than 2 s, and at least every minute. On Linux the kernel's placeholder
-  `ttyS` ports without hardware are hidden, and udev's names are shown and selectable:
-  `/dev/serial/by-id` (by serial number: survives re-plugging, in any USB socket) and
-  `/dev/serial/by-path` (by USB socket: right while the adapter stays in that socket). A
-  by-id name is made from vendor, model and serial number, so identical adapters without a
-  serial number of their own (CH340, most PL2303, clones that all carry one number) share
-  one, which udev gives to one of them, and which one can change at a reboot or a
-  re-plug: the Ports page marks such adapters (`same USB identity`, `by-id not unique`) and
-  the form says so; bind those by USB socket. In the mapping form, ↻ next to Device lists
-  the ports again without closing the form, and **Other device path…** takes a path that
-  is not listed (a board's UART such as `/dev/ttymxc1`, an adapter not plugged in yet, a
-  `\\.\` name on Windows); a configured link such as `/dev/serial0` is shown with the
-  device it leads to (`/dev/serial0 → /dev/ttyS0`) and counts as that port in use. **IP
-  picker** from the machine's own addresses (localhost / LAN / 0.0.0.0) or custom.
+  went (Linux: the tty devices in sysfs and the `/dev/serial` links; Windows: the COM
+  ports the registry lists), and the ports are enumerated again only then, when the UI or
+  the API shows a list older than 2 s, and at least every minute. On Linux every port of a
+  kernel serial driver is listed (`/proc/tty/drivers`), not only the names pyserial looks
+  for, so a board's own UARTs are there too (`ttymxc*`, `ttyLP*` on i.MX, `ttyTHS*` on
+  Jetson, `ttyPS*` on Zynq, `ttyMSM*`, `ttyMAX*`, a Raspberry Pi's `ttyS0` on kernels
+  before 6.5, ...). The kernel's placeholder `ttyS` ports without hardware are hidden, and
+  udev's names are shown and selectable: `/dev/serial/by-id` (by serial number: survives
+  re-plugging, in any USB socket) and `/dev/serial/by-path` (by USB socket: right while
+  the adapter stays in that socket). A by-id name is made from vendor, model and serial
+  number, so identical adapters without a serial number of their own (CH340, most PL2303,
+  clones that all carry one number) share one, which udev gives to one of them, and which
+  one can change at a reboot or a re-plug: the Ports page marks such adapters
+  (`same USB identity`, `by-id not unique`) and the form says so; bind those by USB
+  socket. In the mapping form, ↻ next to Device lists the ports again without closing the
+  form, and **Other device path…** takes a path that is not listed (a board's UART such as
+  `/dev/ttymxc1`, an adapter not plugged in yet, a `\\.\` name on Windows); a configured
+  link such as `/dev/serial0` is shown with the device it leads to
+  (`/dev/serial0 → /dev/ttyS0`) and counts as that port in use. **IP picker** from the
+  machine's own addresses (localhost / LAN / 0.0.0.0) or custom.
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
   COM number still opens the right device. Identical adapters without a serial number of

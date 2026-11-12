@@ -541,6 +541,7 @@ def test_ports_page():
                                  hwid="", vid=None, pid=None, serial_number=None,
                                  manufacturer=None, product=None, location=None)
     with mock.patch.object(list_ports, "comports", lambda: [port]), \
+            mock.patch.object(portlist, "serial_devices", lambda: []), \
             mock.patch.object(portdiag, "port_warnings", lambda d: ["console", "getty"]), \
             mock.patch.object(portdiag, "access", lambda d: False):
         ports = portlist.snapshot()
