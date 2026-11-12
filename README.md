@@ -783,8 +783,8 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 Klasik `ser2net` servisinden (dağıtımın paketi) mi geliyorsunuz? Onun
 `/etc/ser2net/ser2net.yaml` ya da `/etc/ser2net.conf` dosyasını **Ayarlar → Eşlemeleri
 dışa / içe aktar** bölümünden içe aktarın: önizleme her bağlantıyı dönüşeceği eşleme olarak,
-hangilerinin devre dışı geldiğini ve nedenini, neyin farklı çalıştığını gösterir. Eşlemeleri
-başlatmadan önce:
+hangilerinin devre dışı geldiğini ve nedenini, neyin farklı çalıştığını gösterir. Uygulamadan
+önce (uygulamak etkin eşlemeleri başlatır):
 - aynı portları ve cihazları tutan klasik servisi durdurup devre dışı bırakın
   (`sudo systemctl disable --now ser2net`); onun unit'inin adı da `ser2net.service`, bu
   yüzden paketini kaldırın ya da bunu `ser2net@.service` örneği olarak çalıştırın;
