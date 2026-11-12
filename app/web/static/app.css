@@ -258,6 +258,8 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
     font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
   }
   table.stackable .row-actions { justify-content: flex-start; margin-top: 4px; }
+  table.stackable tr.has-notes { border-bottom: 0; padding-bottom: 0; }
+  table.stackable tr.notes-row td { padding-top: 0; }
 }
 
 /* audit log page */
