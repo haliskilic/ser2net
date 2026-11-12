@@ -23,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _server import Browser, Server
+from _server import Browser, Server, ui_cookie
 
 from app.web.auth import hash_password
 
@@ -102,7 +102,7 @@ def test_second_setup_request():
         s = socket.create_connection(("127.0.0.1", srv.port), timeout=20)
         s.sendall((f"POST /setup HTTP/1.1\r\nHost: 127.0.0.1:{srv.port}\r\n"
                    "Content-Type: application/x-www-form-urlencoded\r\n"
-                   f"Content-Length: {len(body)}\r\nCookie: ser2net_csrf={token}\r\n"
+                   f"Content-Length: {len(body)}\r\nCookie: {ui_cookie('ser2net_csrf', srv.port)}={token}\r\n"
                    "Connection: close\r\n\r\n").encode() + body[:-1])
         time.sleep(1.0)  # let in while there is no admin yet; waits for the rest of its body
         owner = Browser(srv.base)

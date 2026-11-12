@@ -41,7 +41,7 @@ import urllib.parse
 import urllib.request
 
 from _optional import need
-from _server import Browser, Server, _NoRedirect, free_port
+from _server import Browser, Server, _NoRedirect, free_port, ui_cookie
 
 from app.config import OidcSettings
 from app.web import auth, oidc_auth
@@ -109,8 +109,13 @@ def test_websockets(srv) -> None:
     own = f"127.0.0.1:{srv.port}"
 
     def status(path, **h):
-        hdr = {"Host": own, "Cookie": f"ser2net_session={session}"}
+        hdr = {"Host": own}
         hdr.update({k.replace("_", "-"): v for k, v in h.items() if v is not None})
+        # the session cookie under its name for that Host (and scheme): what a browser that
+        # always reaches the UI this way has
+        scope = {"type": "websocket", "scheme": "ws", "path": path,
+                 "headers": [(k.lower().encode(), v.encode()) for k, v in hdr.items()]}
+        hdr["Cookie"] = f"{auth.proxy.cookie_name(scope, 'ser2net_session')}={session}"
         return ws_handshake(srv.port, path, hdr)
 
     for kind in ("console", "traffic"):
@@ -250,8 +255,15 @@ def test_sso_redirect(srv, issuer: str) -> None:
             "(made from the request; Settings → Single sign-on (OIDC) shows it)") in log, log[-2000:]
     assert "redirect URI 'https://s2n.example.com/auth/oidc/callback'" in log
 
+    session = b.cookie("ser2net_session").value
+
     def settings(headers=None) -> str:
-        st, _, body = b._open(urllib.request.Request(srv.base + "/settings", headers=headers or {}))
+        headers = dict(headers or {})
+        if headers:   # the session cookie under its name for that address (Host, scheme)
+            scope = {"type": "http", "scheme": "http", "path": "/settings", "headers": [
+                (k.lower().encode(), v.encode()) for k, v in {"Host": own, **headers}.items()]}
+            headers["Cookie"] = f"{auth.proxy.cookie_name(scope, 'ser2net_session')}={session}"
+        st, _, body = b._open(urllib.request.Request(srv.base + "/settings", headers=headers))
         assert st == 200, st
         return body.decode()
 
@@ -391,9 +403,18 @@ def proxied_browser(base: str) -> Browser:
     return b
 
 
+def path_cookie(name: str, proxy: Proxy) -> str:
+    """The name of the UI's cookie `name` under /ser2net through `proxy`: tagged by the
+    proxy's port (the Host it passes on) and the path, __Secure- over https."""
+    scope = {"root_path": "/ser2net", "path": "/", "scheme": proxy.scheme,
+             "headers": [(b"host", f"127.0.0.1:{proxy.port}".encode())]}
+    return auth.proxy.cookie_name(scope, name)
+
+
 def test_through_proxy(srv, proxied: Proxy, stripping: Proxy) -> None:
     public = f"{proxied.scheme}://127.0.0.1:{proxied.port}"
-    tag = auth.proxy.cookie_name({"root_path": "/ser2net", "path": "/"}, "")
+    csrf_name = path_cookie("ser2net_csrf", proxied)
+    session_name = path_cookie("ser2net_session", proxied)
     log = srv.output()
     assert (f"admin UI on http://127.0.0.1:{srv.port}, published as {public}/ser2net "
             "(admin_ui.public_url)") in log, log[:1500]
@@ -403,17 +424,17 @@ def test_through_proxy(srv, proxied: Proxy, stripping: Proxy) -> None:
     assert st == 200 and 'action="/ser2net/login"' in page, st
     assert 'href="/ser2net/static/app.css' in page
     st, h, _ = b.post("/ser2net/login", {"username": "admin", "password": PW,
-                                         "_csrf": b.cookie(f"ser2net_csrf{tag}").value})
+                                         "_csrf": b.cookie(csrf_name).value})
     assert st == 303 and h.get("Location") == "/ser2net/", (st, dict(h))
     secure = proxied.scheme == "https"
+    assert csrf_name.startswith("__Secure-") == secure, csrf_name
     # (Browser.post also fetched /login, outside the path, for a CSRF cookie of its own)
-    made = {c.name: (c.path, c.secure) for c in b.jar if c.name.endswith(tag)}
-    assert made == {f"ser2net_csrf{tag}": ("/ser2net", secure),
-                    f"ser2net_session{tag}": ("/ser2net", secure)}, made
+    made = {c.name: (c.path, c.secure) for c in b.jar if c.path == "/ser2net"}
+    assert made == {csrf_name: ("/ser2net", secure), session_name: ("/ser2net", secure)}, made
     st, _, page = b.get("/ser2net/settings")
     assert st == 200 and f'Published as <a class="mono" href="{public}/ser2net">' in page
     # a form of the page, with the browser's Origin
-    csrf = b.cookie(f"ser2net_csrf{tag}").value
+    csrf = b.cookie(csrf_name).value
     st, _, _ = b._open(urllib.request.Request(
         public + "/ser2net/settings/access", method="POST", headers={
             "Origin": public, "Content-Type": "application/x-www-form-urlencoded"},
@@ -425,7 +446,7 @@ def test_through_proxy(srv, proxied: Proxy, stripping: Proxy) -> None:
     assert f"AUDIT {Proxy.CLIENT} web_access login-required by admin" in log, log[-1500:]
     assert f"login: admin (admin, local) from {Proxy.CLIENT}" in log
     # the console, through the tunnel
-    session = b.cookie(f"ser2net_session{tag}").value
+    session = b.cookie(session_name).value
     raw = socket.create_connection(("127.0.0.1", proxied.port), timeout=10)
     if secure:
         ctx = ssl.create_default_context()
@@ -436,21 +457,23 @@ def test_through_proxy(srv, proxied: Proxy, stripping: Proxy) -> None:
                      f"Host: 127.0.0.1:{proxied.port}\r\nUpgrade: websocket\r\n"
                      "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
                      f"Sec-WebSocket-Version: 13\r\nOrigin: {public}\r\n"
-                     f"Cookie: ser2net_session{tag}={session}\r\n\r\n").encode())
+                     f"Cookie: {session_name}={session}\r\n\r\n").encode())
         answer = raw.recv(4096)
     assert answer.startswith(b"HTTP/1.1 101"), answer[:200]
     # a proxy that strips the path and says so
     s = proxied_browser(f"{stripping.scheme}://127.0.0.1:{stripping.port}")
+    stripped_csrf = path_cookie("ser2net_csrf", stripping)
     st, h, page = s.get("/ser2net/login")
     assert st == 200 and 'action="/ser2net/login"' in page
     st, h, _ = s.post("/ser2net/login", {"username": "admin", "password": PW,
-                                         "_csrf": s.cookie(f"ser2net_csrf{tag}").value})
+                                         "_csrf": s.cookie(stripped_csrf).value})
     assert st == 303 and h.get("Location") == "/ser2net/", st
     assert s.get("/ser2net/settings")[0] == 200
     # '/' directly, as before
     d = Browser(srv.base)
     d.login("admin", PW)
-    assert {c.name: c.path for c in d.jar} == {"ser2net_csrf": "/", "ser2net_session": "/"}
+    assert {c.name: c.path for c in d.jar} == {ui_cookie("ser2net_csrf", srv.port): "/",
+                                               ui_cookie("ser2net_session", srv.port): "/"}
     print(f"through a reverse proxy ({proxied.scheme}, the path passed on or stripped): "
           "sign-in, pages, forms and the console under the path, its own"
           + (" Secure" if secure else "") + " cookies, the client's address  OK")

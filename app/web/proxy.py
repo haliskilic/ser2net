@@ -14,8 +14,14 @@
   too, behind a proxy that passes the path on, or one that strips it and sends exactly that
   path as X-Forwarded-Prefix. A request without it is served at '/' as before (the LAN,
   cluster peers, the health check). Links, redirects and cookies follow the path a request
-  came under (base()); under a path the cookies have names of their own (cookie_name), so
-  another instance at '/' of the same site can't mix its cookies into this one's.
+  came under (base()).
+* Cookie names (cookie_name): browsers keep cookies per host name, not per port or scheme,
+  so the UI's cookies are named after what else tells its address apart - the port (but
+  the default 8080), the public URL's path, and https (the __Host- / __Secure- prefixes).
+  Instances on other ports or under other paths of one host name then keep their own
+  sign-ins, and an http:// address can still set its cookies after an https:// one of the
+  same name left Secure ones. The plain names of 2.8 and older (legacy_cookie_name) are
+  still read, so nobody is signed out by the change.
 """
 from __future__ import annotations
 
@@ -23,12 +29,13 @@ import functools
 import hashlib
 import ipaddress
 import os
+import re
 from typing import Mapping, Optional
 
 from starlette.responses import RedirectResponse
 
 from ..config import (
-    normalize_public_url, proxy_entry_problem, public_url_problem, split_proxy_entries,
+    AdminUI, normalize_public_url, proxy_entry_problem, public_url_problem, split_proxy_entries,
 )
 from ..engine import netguard
 
@@ -237,13 +244,78 @@ def redirect(conn, path: str, status_code: int = 303) -> RedirectResponse:
     return RedirectResponse(url(conn, path), status_code=status_code)
 
 
-def cookie_name(conn, name: str) -> str:
-    """The name of one of the UI's cookies for a request: `name` at '/', `name` plus a tag of
-    the path under a public URL's path."""
-    prefix = base(conn)
-    if not prefix:
-        return name
-    return f"{name}_{hashlib.sha256(prefix.encode()).hexdigest()[:8]}"
+def _header(conn, name: bytes) -> str | None:
+    """The first value of a request header (`name` in lower case), or None."""
+    for key, value in _scope(conn).get("headers") or ():
+        if key == name:
+            return value.decode("latin-1")
+    return None
+
+
+_FORWARDED_PROTO = re.compile(r'(?:^|[;\s])proto="?([a-z]+)', re.IGNORECASE)
+
+
+def browser_https(conn) -> bool:
+    """Did the browser use HTTPS, as the request shows it? Its scheme is https (uvicorn's
+    TLS, or X-Forwarded-Proto from a trusted proxy), or the first X-Forwarded-Proto or
+    Forwarded proto= says so, whoever sent it: that only makes cookies stricter (Secure,
+    and their names: cookie_name), which a page can't make the browser's requests say.
+    auth.is_https adds admin TLS."""
+    if _scope(conn).get("scheme") in ("https", "wss"):
+        return True
+    if _first(_header(conn, b"x-forwarded-proto") or "") == "https":
+        return True
+    m = _FORWARDED_PROTO.search((_header(conn, b"forwarded") or "").split(",", 1)[0])
+    return bool(m and m.group(1).lower() == "https")
+
+
+# The port whose cookies keep the plain names (AdminUI's default): one instance per host
+# name, the usual case, has the same cookies as before.
+_PLAIN_PORT = str(AdminUI.port)
+
+
+def _host_port(conn) -> str | None:
+    """The port in a request's Host header as the browser wrote it ('8081'), '' when it
+    names none (the scheme's default), None without a Host header."""
+    host = _header(conn, b"host")
+    if host is None:
+        return None
+    host = host.strip()
+    if host.startswith("["):
+        _addr, _sep, rest = host.partition("]")
+        port = rest[1:] if rest.startswith(":") else ""
+    else:
+        port = host.rpartition(":")[2] if host.count(":") == 1 else ""
+    return str(int(port)) if port.isascii() and port.isdigit() else ""
+
+
+def cookie_tag(conn) -> str:
+    """What the names of the UI's cookies end with for a request: '' at '/' on port 8080
+    (or without a Host header), else '_' and 8 hex digits of a hash of the port in the
+    address (but 8080) and the path it came under (base())."""
+    port = _host_port(conn)
+    key = ("" if port is None or port == _PLAIN_PORT else f":{port}") + base(conn)
+    return f"_{hashlib.sha256(key.encode()).hexdigest()[:8]}" if key else ""
+
+
+def cookie_name(conn, name: str, path: str = "/") -> str:
+    """The name of one of the UI's cookies for a request: `name` and its cookie_tag, with
+    the __Host- prefix when the browser used HTTPS (browser_https) - __Secure- for a cookie
+    whose Path isn't '/' (cookie_path) - so that a Secure cookie of an https:// address
+    never has the name an http:// one of the same host name sets."""
+    tagged = name + cookie_tag(conn)
+    if not browser_https(conn):
+        return tagged
+    return ("__Host-" if cookie_path(conn, path) == "/" else "__Secure-") + tagged
+
+
+def legacy_cookie_name(conn, name: str, path: str = "/") -> str | None:
+    """The name 2.8 and older gave the cookie (`name` itself), when a request might carry
+    one under it: at '/' only (they had no base path), and when it isn't the name the
+    cookie has now (cookie_name), else None."""
+    if base(conn) or cookie_name(conn, name, path) == name:
+        return None
+    return name
 
 
 def cookie_path(conn, path: str = "/") -> str:

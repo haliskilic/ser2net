@@ -75,7 +75,8 @@ unaffected. The proxy may pass the path on as it is (nginx `location /ser2net/ {
 http://127.0.0.1:8080; }`, Caddy `handle`), or strip it and send exactly that path as
 `X-Forwarded-Prefix` (Traefik's `StripPrefix`). Under a path, the UI's cookies have names of
 their own and `Path=<path>`, so another instance at `/` of the same site doesn't mix its
-cookies in; users sign in once more there.
+cookies in; users sign in once more there. (Cookie names also follow the port in the
+address unless it is 8080, and HTTPS: see *Secure cookies*.)
 
 **Trusted proxies** — IP addresses or networks (CIDR), separated by spaces or commas:
 `127.0.0.1`, `172.18.0.0/16`, `2001:db8::/64`. Only on a connection from one of them are
@@ -104,9 +105,11 @@ proxy can send the header itself instead (examples below).
 whenever the browser used HTTPS: with admin TLS, or when the request's first
 `X-Forwarded-Proto` (or `Forwarded: proto=`) is `https`, from any client — that header can
 only make cookies stricter. So nginx's `proxy_cookie_flags` isn't needed (nginx before
-1.19.3, as on Ubuntu 22.04, doesn't have it). A browser that has the Secure cookies of
-`https://ser2net.example.com` can't sign in at `http://ser2net.example.com:8080` until they
-expire: use one of the two addresses.
+1.19.3, as on Ubuntu 22.04, doesn't have it). Over HTTPS the cookies are named `__Host-…`
+(`__Secure-…` under a path), and on a port other than 8080 their names carry a tag of the
+port, so the Secure cookies of `https://ser2net.example.com` never get in the way of
+`http://ser2net.example.com:8080`. The names follow the `Host` (port) the UI sees and the
+scheme, which is one more reason to pass the browser's address on unchanged.
 
 ## Examples
 
@@ -230,8 +233,9 @@ all.log names what the web UI refused and why:
 - `X-Forwarded-For from 172.18.0.5 is ignored: 172.18.0.5 is not a trusted proxy …` (once
   an hour) — list that address under Trusted proxies. Until then the audit log shows it
   for every user, and many wrong passwords from anyone answer 429 for everyone.
-- The sign-in page reloads without signing in, over `http://`: the browser keeps Secure
-  cookies of the `https://` address of the same name (see *Secure cookies*).
+- The sign-in page reloads without signing in: the proxy sends `X-Forwarded-Proto: https`
+  for a page the browser opened over `http://` (its cookies are then Secure, which browsers
+  refuse over `http://`), or a different `Host` from one request to the next.
 - The SSO provider says the redirect URI is not registered: compare it with the one in
   Settings → Single sign-on, and all.log's `OIDC login init … redirect URI …` line.
 
@@ -243,4 +247,6 @@ from the trusted proxies. A proxy on the same machine that sent `X-Forwarded-For
 shows `127.0.0.1` for every user (the audit log, the per-address sign-in limit) until
 `127.0.0.1` is listed under Trusted proxies; all.log says so once an hour. A
 `FORWARDED_ALLOW_IPS` you set keeps working. Secure cookies behind a TLS proxy need nothing
-from you.
+from you; their names change to `__Host-…` (and on a port other than 8080 carry a tag of
+it), and a sign-in from 2.8 is moved to the new name at its next page, so nobody has to
+sign in again.

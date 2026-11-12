@@ -248,7 +248,8 @@ def routes(ctx: Ctx) -> list:
         oidc = state.config.oidc
         if not oidc.enabled:
             return proxy.redirect(request, "/login")
-        data = auth.read_payload(state.config.secret_key, auth.cookie(request, OIDC_COOKIE))
+        stash = auth.cookie(request, OIDC_COOKIE, path="/auth/oidc")
+        data = auth.read_payload(state.config.secret_key, stash)
         if (error := request.query_params.get("error")) is not None:
             return _provider_error(request, data, error)
         code = request.query_params.get("code", "")

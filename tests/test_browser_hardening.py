@@ -21,7 +21,7 @@ import re
 import urllib.parse
 import urllib.request
 
-from _server import Browser, Server, free_port
+from _server import Browser, Server, free_port, ui_cookie
 
 from app.web.auth import hash_password
 
@@ -140,7 +140,10 @@ def test_cross_site(srv) -> None:
     assert b.get("/settings")[0] == 200, "still signed in: the sign-out was refused"
     assert any(c["id"] == "m1" for c in srv.saved_config()["mappings"]), "not deleted"
 
-    # this UI's own pages; a reverse proxy that passes the browser's host name; no header
+    # this UI's own pages; a reverse proxy that passes the browser's host name; no header.
+    # (A browser behind the TLS proxy has its cookies under the names for https: __Host-…)
+    over_https = "; ".join(f"{ui_cookie(n, srv.port, 'https')}={b.cookie(n).value}"
+                           for n in ("ser2net_session", "ser2net_csrf"))
     for name, headers in (("same-origin", {"Sec-Fetch-Site": "same-origin", "Origin": own}),
                           ("typed", {"Sec-Fetch-Site": "none"}),
                           ("origin", {"Origin": own}),
@@ -148,7 +151,7 @@ def test_cross_site(srv) -> None:
                                        "X-Forwarded-Host": "ser2net.example.com"}),
                           ("forwarded", {"Origin": "https://gw.example.com:8443",
                                          "Forwarded": "for=10.0.0.9;host=gw.example.com:8443;"
-                                                      "proto=https"}),
+                                                      "proto=https", "Cookie": over_https}),
                           ("script", {})):
         st, _, body = create(f"ok-{name}", headers)
         assert st == 200 and f"User &#39;ok-{name}&#39; created." in body, (name, st, body[:300])
@@ -173,10 +176,10 @@ def test_cross_site(srv) -> None:
           "host name, scripts, GETs and cluster peers unaffected  OK")
 
 
-def csrf_cookie(h):
-    """The ser2net_csrf Set-Cookie of a response: (value, max-age) or None."""
+def csrf_cookie(h, srv):
+    """The CSRF Set-Cookie of a response of `srv`: (value, max-age) or None."""
     for line in h.get_all("Set-Cookie") or []:
-        if line.startswith("ser2net_csrf="):
+        if line.startswith(ui_cookie("ser2net_csrf", srv.port) + "="):
             value = line.split(";", 1)[0].split("=", 1)[1]
             m = re.search(r"Max-Age=(\d+)", line, re.I)
             return value, int(m.group(1)) if m else None
@@ -186,12 +189,12 @@ def csrf_cookie(h):
 def test_csrf_token(srv) -> None:
     b = Browser(srv.base)
     st, h, _ = b.get("/login")
-    before, age = csrf_cookie(h)
+    before, age = csrf_cookie(h, srv)
     assert age == 8 * 3600, age  # as long as a session (default 8 hours)
-    assert csrf_cookie(b.get("/login")[1]) is None, "set once, not on every page"
+    assert csrf_cookie(b.get("/login")[1], srv) is None, "set once, not on every page"
     st, h, _ = b.post("/login", {"username": "admin", "password": PW})
     assert st == 303, st
-    after, age = csrf_cookie(h)
+    after, age = csrf_cookie(h, srv)
     assert after != before and age == 8 * 3600, (before, after, age)
     assert b.csrf() == after
     # a token from before the sign-in is refused (as one a page of another site set
@@ -200,10 +203,10 @@ def test_csrf_token(srv) -> None:
     assert st == 403 and "CSRF" in body, st
     # a renewed session keeps the token the page was drawn with, for as long as it lasts
     st, h, page = b.post("/settings/sessions/signout-others", {})
-    assert st == 200 and csrf_cookie(h) == (after, 8 * 3600), csrf_cookie(h)
+    assert st == 200 and csrf_cookie(h, srv) == (after, 8 * 3600), csrf_cookie(h, srv)
     assert f'name="_csrf" value="{after}"' in page
     st, h, _ = b.post("/logout", {})
-    assert st == 303 and csrf_cookie(h)[0] not in (before, after), csrf_cookie(h)
+    assert st == 303 and csrf_cookie(h, srv)[0] not in (before, after), csrf_cookie(h, srv)
     print("CSRF token: new at sign-in and sign-out, its cookie lasts as long as a session, "
           "a renewed session keeps it  OK")
 

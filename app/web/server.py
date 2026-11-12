@@ -118,11 +118,17 @@ class GuardMiddleware(BaseHTTPMiddleware):
                     "ser2net’s own page, its address must reach ser2net unchanged (behind a "
                     "reverse proxy: as Host or X-Forwarded-Host)."), status_code=403)
 
-        # the CSRF token of this browser: its cookie's, or a new one. A handler may issue a
+        # the CSRF token of this browser: its cookie's (one under the name of 2.8 and older
+        # is taken over, and set under its name now), or a new one. A handler may issue a
         # new one (Ctx.new_csrf_token: a sign-in, a sign-out) or renew the cookie's lifetime
         # with a session's (Ctx.set_session); the cookie is set below.
-        csrf_cookie = auth.cookie(request, auth.CSRF_COOKIE)
-        request.state.csrf_token = csrf_cookie or auth.new_csrf_token()
+        csrf_cookie = auth.cookie(request, auth.CSRF_COOKIE, legacy=False)
+        request.state.csrf_token = (csrf_cookie or auth.cookie(request, auth.CSRF_COOKIE)
+                                    or auth.new_csrf_token())
+        # a sign-in from before the upgrade, under the session cookie's old name: moved to
+        # its name now with this response (not a static file's, which may be cached)
+        legacy = (None if path.startswith("/static")
+                  else auth.legacy_session(request, cfg, state.revoked_sessions))
 
         # CSRF: API/HTMX endpoints must carry a matching X-CSRF-Token header.
         # Plain HTML form posts (login/setup/settings/logout) carry _csrf in the
@@ -170,6 +176,8 @@ class GuardMiddleware(BaseHTTPMiddleware):
                 or getattr(request.state, "csrf_renew", False)):
             auth.set_cookie(response, request, cfg, auth.CSRF_COOKIE, request.state.csrf_token,
                             max_age=cfg.session_timeout_s)
+        if legacy is not None:
+            auth.move_session(response, request, cfg, legacy)
         return response
 
     async def _dispatch_api(self, request, call_next, cfg, path):

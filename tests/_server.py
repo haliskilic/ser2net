@@ -143,6 +143,17 @@ class Server:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
+def ui_cookie(name: str, port, scheme: str = "http", path: str = "/") -> str:
+    """The name the web UI gives its cookie `name` (ser2net_session, ser2net_csrf, ...) at
+    scheme://127.0.0.1:`port`: tagged by the port unless it is 8080, with __Host- over https
+    (app/web/proxy.cookie_name; test_cookie_names pins the scheme)."""
+    from app.web import proxy
+
+    host = "127.0.0.1" + ("" if port is None else f":{port}")
+    scope = {"type": "http", "scheme": scheme, "path": "/", "headers": [(b"host", host.encode())]}
+    return proxy.cookie_name(scope, name, path)
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -158,7 +169,11 @@ class Browser:
                                               _NoRedirect())
 
     def cookie(self, name: str):
-        return next((c for c in self.jar if c.name == name), None)
+        """The UI's cookie `name` under its name at this address (ui_cookie: ser2net_csrf ->
+        ser2net_csrf_<tag> on a port other than 8080), else the jar's cookie `name`."""
+        u = urllib.parse.urlsplit(self.base)
+        names = (ui_cookie(name, u.port, u.scheme), name)
+        return next((c for n in names for c in self.jar if c.name == n), None)
 
     def csrf(self) -> str:
         for page in ("/login", "/setup"):  # before first-run setup only /setup sets it
