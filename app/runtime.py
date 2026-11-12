@@ -35,7 +35,7 @@ from . import accounts, console, datalock, i18n, standalone
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
-from .web import httpguard
+from .web import httpguard, proxy
 from .web.server import build_app
 
 
@@ -355,7 +355,8 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
     state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
-    for note in standalone.notes + config.load_notes + ([loop_note] if loop_note else []):
+    for note in (standalone.notes + config.load_notes + ([loop_note] if loop_note else [])
+                 + proxy.start_notes(admin)):
         state.log(note)
     for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config)):
         if line:
@@ -401,6 +402,9 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         log_level="warning",
         access_log=False,
         http=httpguard.protocol_class(guard),
+        # X-Forwarded-For / -Proto are taken by app/web/proxy.py, from trusted proxies only
+        # (uvicorn's own would believe them from 127.0.0.1 and ::1, and any text as an address)
+        proxy_headers=False,
     )
     if admin.tls_enabled:
         try:

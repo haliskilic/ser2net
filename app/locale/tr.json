@@ -851,5 +851,15 @@
   "HSTS max-age (seconds)": "HSTS max-age (saniye)",
   "31536000 = one year, the default · 0 = off · applies at once": "31536000 = bir yıl, varsayılan · 0 = kapalı · hemen geçerli olur",
   "With TLS, browsers that trust the certificate and reach this UI by host name use only https:// for that name, on every port, for this long after each visit: other plain-HTTP or self-signed web pages on the same name stop opening there. Before turning TLS off, set 0 and let the users open this UI once.": "TLS açıkken, sertifikaya güvenen ve bu arayüze host adıyla gelen tarayıcılar her ziyaretten sonra bu süre boyunca o ad için, her portta, yalnızca https:// kullanır: aynı addaki düz HTTP ya da self-signed başka web sayfaları o tarayıcılarda açılmaz olur. TLS'yi kapatmadan önce değeri 0 yap ve kullanıcıların bu arayüzü bir kez açmasını bekle.",
-  "The HSTS max-age must be a whole number of seconds from 0 to {0}.": "HSTS max-age, 0 ile {0} arasında tam sayı bir saniye değeri olmalı."
+  "The HSTS max-age must be a whole number of seconds from 0 to {0}.": "HSTS max-age, 0 ile {0} arasında tam sayı bir saniye değeri olmalı.",
+  "“{0}” is not an IP address or network (such as 172.18.0.0/16).": "“{0}” bir IP adresi ya da ağ değil (örneğin 172.18.0.0/16).",
+  "Reverse proxy settings saved.": "Reverse proxy ayarları kaydedildi.",
+  "Trusted proxies": "Güvenilen proxy'ler",
+  "Reverse proxy": "Reverse proxy",
+  "Only for a reverse proxy (nginx, Apache, Caddy, Traefik, IIS) in front of this UI; <span class=\"mono\">docs/REVERSE-PROXY.md</span> has examples. Changes apply at once.": "Yalnızca bu arayüzün önünde bir reverse proxy (nginx, Apache, Caddy, Traefik, IIS) varsa gerekir; örnekler <span class=\"mono\">docs/REVERSE-PROXY.md</span> dosyasında. Değişiklikler hemen geçerli olur.",
+  "Set by <span class=\"mono\">%(name)s</span> for this run; the field takes effect again once that is removed.": "Bu çalıştırma için <span class=\"mono\">%(name)s</span> ile ayarlandı; o kaldırılınca bu alan yeniden geçerli olur.",
+  "IP addresses or networks of the proxies, such as 127.0.0.1 or 172.18.0.0/16 · blank: none": "proxy'lerin IP adresleri ya da ağları, örneğin 127.0.0.1 ya da 172.18.0.0/16 · boş: yok",
+  "<span class=\"mono\">FORWARDED_ALLOW_IPS</span> gives <span class=\"mono\">%(list)s</span> while this is blank.": "Bu alan boşken <span class=\"mono\">FORWARDED_ALLOW_IPS</span> geçerli: <span class=\"mono\">%(list)s</span>.",
+  "Only a connection from one of them may say who the client is (X-Forwarded-For: for the sign-in limits, the audit log and all.log) and that the browser used HTTPS (X-Forwarded-Proto). Without them every client behind a proxy has the proxy’s address.": "İstemcinin kim olduğunu (X-Forwarded-For: giriş sınırları, denetim kaydı ve all.log için) ve tarayıcının HTTPS kullandığını (X-Forwarded-Proto) yalnızca bunlardan gelen bir bağlantı bildirebilir. Bunlar olmadan proxy arkasındaki her istemci proxy'nin adresini taşır.",
+  "Save reverse proxy settings": "Reverse proxy ayarlarını kaydet"
 }

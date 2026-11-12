@@ -22,10 +22,11 @@ from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, NOTIFY_EVENTS, ROLES, SMTP_SECURITY,
     UI_LANGUAGES, WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError,
     NotificationSettings, User, backup_time, new_pwd_version, parse_cluster_peer,
+    proxy_entry_problem, split_proxy_entries,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
-from .. import auth, ldap_auth, oidc_auth, selfsigned
+from .. import auth, ldap_auth, oidc_auth, proxy, selfsigned
 from .common import Ctx, csrf_failed
 from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
@@ -75,6 +76,7 @@ def routes(ctx: Ctx) -> list:
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups,
                       admin=state.config.admin_ui, hsts_max=HSTS_MAX_AGE_MAX,
+                      trusted=proxy.trusted_entries(state.config.admin_ui),
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
                       new_api_token=new_api_token, new_cluster_key=new_cluster_key,
@@ -301,6 +303,34 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "web_access",
                     "login-required" if require_login else f"open:{role}")
         return await settings_get(request, ok=ok)
+
+    # ---------------- behind a reverse proxy ----------------
+    async def settings_proxy_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        ui = state.config.admin_ui
+        # a field the form doesn't have (disabled: the environment sets it) keeps its value
+        entries = list(ui.trusted_proxies)
+        if "trusted_proxies" in form:
+            entries = list(dict.fromkeys(split_proxy_entries(str(form.get("trusted_proxies") or ""))))
+            if problem := next(filter(None, map(proxy_entry_problem, entries)), None):
+                return await settings_get(request, error=problem)
+        async with state.config_lock:
+            old = list(ui.trusted_proxies)
+            ui.trusted_proxies = entries
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.trusted_proxies = old
+                return await settings_get(request, error=str(e))
+        changes = [f"trusted proxies {' '.join(entries) or '(none)'}"] if entries != old else []
+        if changes:
+            state.log(f"reverse proxy settings: {'; '.join(changes)}")
+        ctx.audit(request, "reverse_proxy_set", "; ".join(changes) or "unchanged")
+        return await settings_get(request, ok=_("Reverse proxy settings saved."))
 
     async def settings_sessions_revoke_all(request):
         """A new session key: every web UI session ends at once, including sessions
@@ -1139,6 +1169,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
         Route("/settings/access", settings_access_post, methods=["POST"]),
+        Route("/settings/proxy", settings_proxy_post, methods=["POST"]),
         Route("/settings/sessions/revoke-all", settings_sessions_revoke_all, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
@@ -1204,6 +1235,8 @@ def _setting_changes(old, new) -> list[str]:
     diff(_("Admin UI address"), f"{o.bind_ip}:{o.port}", f"{n.bind_ip}:{n.port}")
     diff(_("Admin TLS (HTTPS)"), onoff(o.tls_enabled), onoff(n.tls_enabled))
     diff(_("HSTS max-age (seconds)"), o.hsts_max_age, n.hsts_max_age)
+    diff(_("Trusted proxies"), " ".join(o.trusted_proxies) or "—",
+         " ".join(n.trusted_proxies) or "—")
     for label, a, b in (("LDAP", old.ldap, new.ldap), ("OIDC", old.oidc, new.oidc)):
         diff(label, onoff(a.enabled), onoff(b.enabled))
         diff(f"{label} · {_('Default role')}", role(a.default_role), role(b.default_role))

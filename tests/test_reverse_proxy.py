@@ -10,7 +10,8 @@
     proxy;
   * `also`: an address the UI is published under is accepted as an Origin too;
   * the SSO redirect URI: with oidc.redirect_uri blank it is made from the request as
-    it has been since v2.3 (X-Forwarded-Proto or the scheme, X-Forwarded-Host or Host;
+    it has been since v2.3 (X-Forwarded-Proto or the scheme, X-Forwarded-Host or Host,
+    of a list the first value;
     never Forwarded or X-Forwarded-Port, which would change what working installs
     registered at their provider); every sign-in start logs it; Settings -> Single
     sign-on shows the value for its own request (or the configured one), warns about an
@@ -168,6 +169,10 @@ DERIVED = (
      "https://s2n.example.com/auth/oidc/callback"),
     ({"Host": "s2n.example.com:8443", "X-Forwarded-Proto": "https"}, "http",
      "https://s2n.example.com:8443/auth/oidc/callback"),
+    # proxies in a row: the first value (the whole list made no usable address)
+    ({"Host": "ser2net:8080", "X-Forwarded-Proto": "https, http",
+      "X-Forwarded-Host": "s2n.example.com, gw.internal:8080"}, "http",
+     "https://s2n.example.com/auth/oidc/callback"),
     # not read: X-Forwarded-Port, Forwarded
     ({"Host": "gw.example.com", "X-Forwarded-Proto": "https", "X-Forwarded-Port": "8443"},
      "http", "https://gw.example.com/auth/oidc/callback"),
