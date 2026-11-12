@@ -29,7 +29,7 @@ import socket
 from email.message import EmailMessage
 from types import SimpleNamespace
 
-from _asgi import App, cookies
+from _asgi import App, cookies, header
 from _server import Server
 
 from app import notify, runtime
@@ -180,7 +180,9 @@ def test_web() -> None:
         st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
         assert 'name="node_name" value=""' in page and f'placeholder="{HOST}"' in page
         save = {"_csrf": CSRF, "node_name": "  Line 1 <b>  "}
-        st, _, page = a.call("POST", "/settings/node-name", fields=save, headers={"Cookie": jar})
+        st, h, _ = a.call("POST", "/settings/node-name", fields=save, headers={"Cookie": jar})
+        assert st == 303 and header(h, "location") == "/settings#admin-interface", (st, h)
+        st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
         assert st == 200 and "Instance name saved." in page, st
         assert a.state.config.admin_ui.node_name == "Line 1 <b>"
         assert a.state.store.load().admin_ui.node_name == "Line 1 <b>"
@@ -202,11 +204,11 @@ def test_web() -> None:
             st, _, page = a.call("POST", "/settings/node-name", fields={"_csrf": CSRF,
                                                                         "node_name": bad},
                                  headers={"Cookie": jar})
-            assert st == 200 and why in page and a.state.config.admin_ui.node_name == "Line 1 <b>"
+            assert st == 400 and why in page and a.state.config.admin_ui.node_name == "Line 1 <b>"
         # a form without the field (the environment sets it there) keeps the name
         st, _, _ = a.call("POST", "/settings/node-name", fields={"_csrf": CSRF},
                           headers={"Cookie": jar})
-        assert st == 200 and a.state.config.admin_ui.node_name == "Line 1 <b>"
+        assert st == 303 and a.state.config.admin_ui.node_name == "Line 1 <b>"
         os.environ["SER2NET_NODE_NAME"] = "from-env"
         try:
             st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})

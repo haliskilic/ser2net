@@ -180,7 +180,7 @@ async def _replaced():
         oldest = state.store.backup_names()[-1]
         s, _h, page = await call(app, "POST", "/settings/backups/restore", {"name": oldest},
                                  headers=headers)
-        assert s == 200 and [m.id for m in state.config.mappings] == [first], page[-300:]
+        assert s == 303 and [m.id for m in state.config.mappings] == [first], page[-300:]
         assert set(state._mapping_loggers) == {first}
         assert all(not seen[mid].handlers for mid in now)
         await state.supervisor.stop_all()

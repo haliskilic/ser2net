@@ -446,14 +446,18 @@ def test_settings_shows_certificate():
         # with a warning that the certificate is dated from that clock
         form = urllib.parse.urlencode({"_csrf": CSRF}).encode()
         with WallClock.patch(clock, settings_routes, shift=-3 * 86400):
-            status, page = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
-        assert status == 200 and "Self-signed certificate generated" in page, page[:400]
+            status, _ = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
+        assert status == 303, status   # done: the page the redirect leads to says it all
+        page = settings_page()
+        assert "Self-signed certificate generated" in page, page[:400]
         assert "which can’t be right" in page, page[page.find("banner"):][:600]
         assert certinfo.read(cfg.admin_ui.tls_cert).subject == "ser2net"
         page = settings_page()
         assert "self-signed</span>" in page and re.search(r">\d+ days left<", page), page
-        status, page = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
-        assert "Self-signed certificate generated" in page and "can’t be right" not in page
+        status, _ = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))
+        page = settings_page()
+        assert status == 303 and "Self-signed certificate generated" in page \
+            and "can’t be right" not in page
         print("Settings: generating while the clock reads earlier than it can warns (and "
               "generates); with a right clock it doesn't  OK")
     finally:
