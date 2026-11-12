@@ -538,6 +538,29 @@ async def _listeners():
             await r.stop()
 
 
+def test_no_ipv6_here():
+    """Where Python or the kernel has no IPv6, a mapping for both families listens on IPv4
+    (and says so) instead of failing to start."""
+    net = mapping(port=0, mode="udp", dual_stack=True).network
+    with mock.patch.object(netguard.socket, "has_ipv6", False):
+        assert netguard.listen_hosts(net) == ["0.0.0.0"]
+    assert netguard.listen_hosts(net) == (["0.0.0.0", "::"] if socket.has_ipv6 else ["0.0.0.0"])
+    real = socket.socket
+
+    def no_ipv6(family=socket.AF_INET, *a, **k):
+        if family == socket.AF_INET6:
+            raise OSError(97, "Address family not supported by protocol")
+        return real(family, *a, **k)
+
+    with mock.patch.object(netguard.socket, "socket", no_ipv6):
+        sock = asyncio.run(netguard.udp_socket(net))
+    with sock:
+        assert sock.family == socket.AF_INET and sock.getsockname()[0] == "0.0.0.0"
+        assert netguard.listen_where(net, [sock]) == \
+            "0.0.0.0:0, IPv4 only (IPv6 is not available here)"
+    print("no IPv6 here: a dual-stack mapping listens on IPv4 and says so  OK")
+
+
 def test_listeners():
     if not ipv6_loopback():
         print("SKIP (part): no IPv6 loopback here: dual-stack listeners not tried")
@@ -561,6 +584,7 @@ def main():
     test_env_and_healthcheck()
     test_admin_ui_every_interface()
     test_address_keys()
+    test_no_ipv6_here()
     test_listeners()
     print("\nPASS: IPv6 bind addresses")
 

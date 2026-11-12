@@ -621,8 +621,11 @@ class Listener:
 
 def listen_hosts(net: NetworkSettings) -> list[str]:
     """The addresses a mapping's TCP listener binds: both wildcards when it takes IPv4 and
-    IPv6 clients (NetworkSettings.both_families), else its bind IP."""
-    return list(WILDCARDS) if net.both_families else [net.bind_ip]
+    IPv6 clients (NetworkSettings.both_families; 0.0.0.0 alone where Python has no IPv6),
+    else its bind IP."""
+    if net.both_families:
+        return list(WILDCARDS) if socket.has_ipv6 else ["0.0.0.0"]
+    return [net.bind_ip]
 
 
 def listen_where(net: NetworkSettings, sockets: Sequence[socket.socket]) -> str:
@@ -657,17 +660,20 @@ async def udp_socket(net: NetworkSettings) -> socket.socket:
     0.0.0.0), any other has it on, so :: takes IPv6 senders only, as a TCP listener does.
     Raises BindError when the address and port can't be taken."""
     both = net.both_families
+    address: Any
     try:
-        infos = await asyncio.get_running_loop().getaddrinfo(
-            "::" if both else net.bind_ip, net.port, type=socket.SOCK_DGRAM,
-            flags=socket.AI_PASSIVE | socket.AI_NUMERICHOST)
-        family, kind, proto, _name, address = infos[0]
-        try:
-            sock = socket.socket(family, kind, proto)
-        except OSError:
-            if not both:
-                raise
-            family, address = socket.AF_INET, ("0.0.0.0", net.port)  # no IPv6 here
+        if both:
+            family, address = socket.AF_INET6, ("::", net.port)
+            try:
+                sock = socket.socket(family, socket.SOCK_DGRAM)
+            except (OSError, AttributeError):  # no IPv6 here
+                family, address = socket.AF_INET, ("0.0.0.0", net.port)
+                sock = socket.socket(family, socket.SOCK_DGRAM)
+        else:
+            infos = await asyncio.get_running_loop().getaddrinfo(
+                net.bind_ip, net.port, type=socket.SOCK_DGRAM,
+                flags=socket.AI_PASSIVE | socket.AI_NUMERICHOST)
+            family, kind, proto, _name, address = infos[0]
             sock = socket.socket(family, kind, proto)
     except OSError as e:
         raise BindError.of(e) from e
