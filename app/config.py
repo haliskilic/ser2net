@@ -843,7 +843,7 @@ class MappingConfig:
         # every way into the config (file, import, form, REST, cluster) passes here, so an
         # id that is not a valid mapping id never gets further (see _mapping_id_from)
         d = dict(d or {})
-        return MappingConfig(
+        m = MappingConfig(
             id=_mapping_id_from(d.get("id")),
             name=d.get("name", ""),
             enabled=bool(d.get("enabled", True)),
@@ -855,6 +855,15 @@ class MappingConfig:
             mqtt=MqttSettings.from_dict(d.get("mqtt", {})),
             modbus_poll=ModbusPoll.from_dict(d.get("modbus_poll", {})),
         )
+        net = d.get("network")
+        if (isinstance(net, dict) and "dual_stack" not in net and m.kind == "net"
+                and m.network.mode == "udp" and m.network.bind_ip == "::"
+                and _ipv6_takes_ipv4()):
+            # Written by (or for) a release without dual_stack, whose UDP socket on :: kept
+            # the OS default: on Linux it took IPv4 datagrams too. IPV6_V6ONLY is set now
+            # (NetworkSettings.dual_stack), so such a mapping keeps doing what it did here.
+            m.network.dual_stack = True
+        return m
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1476,10 +1485,7 @@ class AppConfig:
                     f"letters, digits or '_'), so it is now {m.id}: the REST API and /metrics "
                     "use the new id, and its log and traces start afresh under it")
             raw_net = (raw or {}).get("network") or {}
-            if (m.kind == "net" and m.network.mode == "udp" and m.network.bind_ip == "::"
-                    and "dual_stack" not in raw_net and _ipv6_takes_ipv4()):
-                # what the socket got from the OS before (IPV6_V6ONLY is set now)
-                m.network.dual_stack = True
+            if m.network.dual_stack is True and "dual_stack" not in raw_net:  # (from_dict)
                 cfg.load_notes.append(
                     f"mapping '{m.name}': a UDP mapping on :: now takes IPv6 datagrams only, "
                     "unless it listens for IPv4 and IPv6 (dual_stack); this one took IPv4 "

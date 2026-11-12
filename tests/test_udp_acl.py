@@ -349,7 +349,7 @@ def test_reply_address_validation():
                mapping(udp_peer_timeout_s=60),
                mapping(bind_ip="::", dual_stack=True, udp_peer_host="10.0.0.1", udp_peer_port=9),
                mapping(dual_stack=True, udp_peer_host="fd00::1", udp_peer_port=9),
-               mapping(bind_ip="::", udp_peer_host="fd00::1", udp_peer_port=9)):
+               mapping(bind_ip="::", dual_stack=False, udp_peer_host="fd00::1", udp_peer_port=9)):
         ok.validate()
         ok.validate_input()
     refused(mapping(udp_peer_host="plc.local", udp_peer_port=4001), "must be a host's IP address")
@@ -358,7 +358,7 @@ def test_reply_address_validation():
     refused(mapping(udp_peer_host="10.0.0.1", udp_peer_port=70000), "between 1 and 65535")
     refused(mapping(udp_peer_host="fd00::1", udp_peer_port=9), "is IPv6, but the mapping listens")
     # :: takes IPv6 only (IPV6_V6ONLY): an IPv4 reply address can't be reached from it
-    refused(mapping(bind_ip="::", udp_peer_host="10.0.0.1", udp_peer_port=9),
+    refused(mapping(bind_ip="::", dual_stack=False, udp_peer_host="10.0.0.1", udp_peer_port=9),
             "is IPv4, but the mapping listens on an IPv6 address")
     refused(mapping(bind_ip="2001:db8::5", dual_stack=False, udp_peer_host="10.0.0.1",
                     udp_peer_port=9), "is IPv4, but the mapping listens")

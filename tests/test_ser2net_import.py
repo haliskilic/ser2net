@@ -165,6 +165,9 @@ connection: &v6long
 connection: &v6only
   accepter: tcp,ipv6n4,2012
   connector: serialdev,/dev/ttyUSB14
+connection: &udp6
+  accepter: udp,ipv6n4,2013
+  connector: serialdev,/dev/ttyUSB15
 connection: &hostname
   accepter: tcp,myhost.example.com,2009
   connector: serialdev,/dev/ttyUSB9
@@ -196,6 +199,9 @@ def test_accepters():
     assert net["v6"]["bind_ip"] == "::1" and not has(warns, "v6:")
     assert net["v6long"]["bind_ip"] == "::1" and not has(warns, "v6long:")
     assert net["v6any"]["bind_ip"] == "::" and net["v6only"]["bind_ip"] == "::"
+    assert not any(n.get("dual_stack") for n in net.values()), "never wider: one family each"
+    for name in ("v6only", "udp6"):  # (a UDP one too, where IPv6 sockets take IPv4 by default)
+        assert MappingConfig.from_dict(maps[name]).network.both_families is False, name
     # ser2net listens on both families without one named: here that is 0.0.0.0, IPv4 only
     assert net["tel"]["bind_ip"] == "0.0.0.0" and not net["tel"].get("dual_stack")
     wide = [w for w in warns if "ser2net listened on IPv4 and IPv6" in w]

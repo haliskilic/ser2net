@@ -166,7 +166,8 @@ düzenlemeye gerek yok.
   IP'sidir. IPv6 adresleri port yanında köşeli parantezle yazılır (`[::1]:4001`). Eski bir
   sürümden gelen, Linux'ta `::`'da dinleyen bir UDP eşlemesi IPv4 datagramlarını da
   alıyordu: `dual_stack` açık olarak gelir, yani almaya devam eder (açılış log'u bunu bir
-  kez söyler).
+  kez söyler); `dual_stack` olmadan gönderilen biri de öyle (bir REST API betiği, eski bir
+  küme düğümü).
 - **Eksik ya da meşgul seri cihaz:** cihaz yokken (çıkarılmış, henüz tanınmamış) eşleme
   `cihaz yok`, açık port az önce kaybolduğunda ya da başka bir nedenle açılamadığında
   `yeniden bağlanıyor` gösterir; birkaç saniyede bir (en fazla yaklaşık 10 sn arayla), port

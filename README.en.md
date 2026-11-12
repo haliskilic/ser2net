@@ -147,7 +147,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   localhost) is a bind IP like `127.0.0.1`. IPv6 addresses are written in brackets next
   to a port (`[::1]:4001`). A UDP mapping on `::` from an older release on Linux took
   IPv4 datagrams too: it comes up with `dual_stack` on, so it still does (the start-up log
-  says so once).
+  says so once), and so does one sent without `dual_stack` (a REST API script, an older
+  cluster node).
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
   COM number still opens the right device. Identical adapters without a serial number of
