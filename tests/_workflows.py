@@ -63,6 +63,12 @@ def permissions(block: str) -> dict[str, str]:
     return out
 
 
+def steps(block: str) -> list[str]:
+    """The steps of a job block, each as its text (from its `- ` line to the next one)."""
+    body = block.split("\n    steps:\n", 1)[1] if "\n    steps:\n" in block else ""
+    return [s for s in re.split(r"(?m)^(?=      - )", body) if s.startswith("      - ")]
+
+
 def uses(text: str) -> list[tuple[int, str, str]]:
     """Every `uses:` of a file: (line number, reference, the rest of the line)."""
     out = []
