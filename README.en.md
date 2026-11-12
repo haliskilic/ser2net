@@ -930,11 +930,12 @@ Each instance needs its own:
 - **web UI port:** the console picker (first start, `--reconfigure`, `--install-service`)
   tries the port it offers and, when another program (another instance) has it, says so
   and offers the next free one; a choice you type is kept. A first start without a terminal
-  (a service, a container) keeps its port and logs the warning. Without the picker:
+  (a service, a container) keeps its port and logs the warning. A UI whose port is taken
+  starts its mappings anyway and keeps trying the port until it is free. Without the picker:
   `SER2NET_BIND_IP` + `SER2NET_PORT`.
 - **mapping ports and serial devices:** a TCP/UDP port and a serial device belong to one
   instance. A mapping saved while another program holds its port or device is kept, and the
-  UI says why it didn't start.
+  UI says why it didn't start; it is tried again, and starts once its port is free.
 - **name:** **Settings → Admin interface → Name of this instance** (or
   `SER2NET_NODE_NAME`) — notifications, the browser tab, the top bar and the fleet view
   then say which instance it is.
