@@ -182,6 +182,29 @@ def test_clashes():
           "don't count  OK")
 
 
+def test_serial_writes_topic():
+    """A serial mapping's MQTT writes (<base_topic>/tx) are a command topic like a point's
+    /set: another enabled mapping on the broker that takes writes from it too, or publishes
+    its data there, is refused; one that only publishes next to it is warned about."""
+    tx = lines("T", "lab/scale", tx_enabled=True)
+    twin = lines("T2", "lab/scale/", port=5031, tx_enabled=True)
+    assert kinds(twin, [tx]) == [("command", "T")], kinds(twin, [tx])
+    text = mqtt_clashes(twin, [tx])[0].text()
+    assert "'lab/scale/tx'" in text and "/tx" in text, text
+    onto = gw("G", "lab/scale", [dict(TEMP, name="tx")])  # a point's value on T's /tx
+    assert kinds(onto, [tx]) == [("command", "T")] and kinds(tx, [onto]) == [("command", "G")]
+    assert kinds(lines("R", "lab/scale", port=5032), [tx]) == [("shared", "T")], \
+        "a mapping that only publishes there"
+    assert kinds(lines("T4", "lab/scale", port=5033), [lines("T", "lab/scale")]) == [
+        ("shared", "T")], "writes off: no command topic"
+    try:
+        check_mqtt_clashes(twin, [tx])
+        raise AssertionError("a shared /tx topic was accepted")
+    except ConfigError as e:
+        assert "takes writes from it" in str(e), e
+    print("serial writes: a /tx topic shared with another enabled mapping refused  OK")
+
+
 def stored_config():
     return [gw("A", mid="aaaaaaaaaaa1", port=5020),
             gw("B", "plant/line3/", mid="aaaaaaaaaaa2", port=5021),
@@ -468,6 +491,7 @@ def test_server():
 def main():
     test_topic_rules()
     test_clashes()
+    test_serial_writes_topic()
     test_stored_clashes()
     test_copy()
     test_server()

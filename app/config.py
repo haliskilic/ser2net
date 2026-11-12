@@ -2103,15 +2103,16 @@ def _plain_mqtt(m: MappingConfig) -> bool:
 
 def _mqtt_topics(m: MappingConfig) -> list[tuple[str, str, Any]]:
     """The topics a plain-format mapping uses while it runs, as (topic, use, of): use
-    "status" (its retained online/offline and its Last Will) and "lines" (serial lines),
-    or on a Modbus gateway "value", "set" and "result" (a point's value, its command
-    topic and the answers to its commands; of = the point's name) and "unit" (a unit's
-    status, with unit_status on; of = the unit). As engine/mqtt_pub and
-    engine/modbus_gateway build them."""
+    "status" (its retained online/offline and its Last Will) and "lines" (serial lines,
+    with "tx" and "tx_result" for its MQTT writes: mqtt_tx_topics), or on a Modbus gateway
+    "value", "set" and "result" (a point's value, its command topic and the answers to its
+    commands; of = the point's name) and "unit" (a unit's status, with unit_status on;
+    of = the unit). As engine/mqtt_pub, engine/bridge and engine/modbus_gateway build
+    them."""
     base = str(m.mqtt.base_topic).rstrip("/")
     out: list[tuple[str, str, Any]] = [(f"{base}/status", "status", None)]
     if m.network.protocol != "modbus":
-        return out + [(base, "lines", None)]
+        return out + [(base, "lines", None)] + mqtt_tx_topics(m)
     units: list[Any] = []
     for p in m.modbus_poll.points:
         if p.poll is not False:  # (a write-only point is never published)
@@ -2153,7 +2154,7 @@ class _MqttUse:
     broker: str              # host:port (the host in lower case)
     client_id: str           # "" = the client library makes one up
     node: str                # Sparkplug B: "<group>/<edge node>"; plain: ""
-    commands: set[str]       # plain: the topics it takes writes from (<point>/set)
+    commands: set[str]       # plain: the topics it takes writes from (<point>/set, /tx)
     published: set[str]      # plain: the topics it publishes to
 
 
@@ -2173,9 +2174,10 @@ def _mqtt_use(m: MappingConfig) -> Optional[_MqttUse]:
     if any(c in str(mq.base_topic) for c in "+#"):
         return None
     topics = _mqtt_topics(m)
+    commands = {"set", "tx"}
     return _MqttUse(broker, client_id, "",
-                    {t for t, use, _of in topics if use == "set"},
-                    {t for t, use, _of in topics if use != "set"})
+                    {t for t, use, _of in topics if use in commands},
+                    {t for t, use, _of in topics if use not in commands})
 
 
 @dataclass(frozen=True)
@@ -2210,9 +2212,9 @@ class MqttClash:
                          self.other, repr(self.what), self.broker)
         if self.kind == "command":
             return _("Mapping '{0}' also uses the MQTT topic {1} on the broker {2}, and one of "
-                     "the two takes writes from it (a point's /set): one MQTT command would be "
-                     "written by both, or the data of one taken as a command by the other. "
-                     "Give one of them another base topic.").format(
+                     "the two takes writes from it (a point's /set, a serial mapping's /tx): "
+                     "one MQTT command would be written by both, or the data of one taken as a "
+                     "command by the other. Give one of them another base topic.").format(
                          self.other, repr(self.what), self.broker)
         # only logged (never refused, so never shown in the UI)
         return (f"mapping '{self.other}' publishes to the MQTT topic {self.what!r} on the "

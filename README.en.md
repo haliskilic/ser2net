@@ -438,7 +438,8 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   states on, or another point's `<point>/set` or `/set/result`. Two enabled mappings on
   the same broker (host:port) can't share an explicit client ID (the broker keeps one
   connection per ID), a Sparkplug B group and edge node ID, or a command topic — a `/set`
-  both would take, or one that the other publishes its data to. Mappings that only
+  (or a serial mapping's `<topic>/tx`) both would take, or one that the other publishes
+  its data to. Mappings that only
   publish to the same topics (a shared base topic, whose `<topic>/status` then shows
   whichever connected last) are allowed, with a warning in the mapping's log when it
   starts. A config.json that already has such a clash keeps loading and running: start-up

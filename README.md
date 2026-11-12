@@ -453,8 +453,8 @@ düzenlemeye gerek yok.
   `unit<N>/status` ya da başka bir noktanın `<nokta>/set` veya `/set/result` topic'i. Aynı
   broker'daki (host:port) iki etkin eşleme açık bir client ID'yi (broker her ID için tek
   bağlantı tutar), bir Sparkplug B grup ve edge düğüm ID'sini ya da bir komut topic'ini —
-  ikisinin de alacağı bir `/set`'i ya da birinin verisini yayınladığı, diğerinin komut
-  aldığı bir topic'i — paylaşamaz. Yalnızca aynı topic'lere yayın yapan eşlemelere (ortak
+  ikisinin de alacağı bir `/set`'i (ya da bir seri eşlemenin `<topic>/tx`'ini) ya da
+  birinin verisini yayınladığı, diğerinin komut aldığı bir topic'i — paylaşamaz. Yalnızca aynı topic'lere yayın yapan eşlemelere (ortak
   bir base topic; `<topic>/status` o zaman en son bağlananı gösterir) izin verilir, eşleme
   başlarken log'una bir uyarı yazılır. Böyle bir çakışması zaten olan bir config.json
   yüklenmeye ve çalışmaya devam eder: açılış ve eşlemenin her başlatılışı bunu loglar,
