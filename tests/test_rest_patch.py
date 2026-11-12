@@ -8,6 +8,7 @@
   * a nested object merges (network.port alone), null resets a field to its default;
   * a patch that makes the mapping invalid, a body that is no JSON object and an unknown
     mapping are refused and change nothing; the change is audited;
+  * a created mapping's URL is in Location; a client's connection time is also a number;
   * openapi.json describes every route build_api_routes registers, with the token errors
     (401, 503; 403 for a change) and the Error schema; the mapping schemas are made from
     the config dataclasses (every field, its default, open to fields added later).
@@ -16,6 +17,7 @@ Run: python3 tests/test_rest_patch.py
 """
 import dataclasses
 import json
+import time
 import types
 import typing
 import urllib.error
@@ -215,14 +217,39 @@ def test_patch():
         assert st == 200 and doc["network"]["read_only"] is False and doc["serial"]["match"] == {}
         print("PUT: still replaces the whole mapping (left-out fields get their defaults)  OK")
 
+        # a created mapping's URL is in Location
+        req = urllib.request.Request(
+            base + "/api/v1/mappings", method="POST", headers={
+                "Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"},
+            data=json.dumps({"name": "made", "enabled": False,
+                             "serial": {"port": "/dev/ser2net-rest-patch-2"},
+                             "network": {"bind_ip": "127.0.0.1", "port": free_port()}}).encode())
+        with urllib.request.urlopen(req, timeout=10) as r:
+            made = json.loads(r.read())
+            assert r.status == 201 and r.headers["Location"] == f"/api/v1/mappings/{made['id']}"
+        assert call(base, "GET", r.headers["Location"])[1]["name"] == "made"
+        print("POST: the new mapping's URL in Location  OK")
+
         with open(srv.data + "/audit.log", encoding="utf-8") as fh:
             audit = fh.read()
         assert "\tapi_mapping_patch\tplc-renamed\tapi-token" in audit, audit[-500:]
         print("PATCH is audited  OK")
 
 
+def test_connected_seconds():
+    from app.engine.bridge import RunnerStatus
+
+    st = RunnerStatus()
+    st.set_clients([types.SimpleNamespace(peer="10.0.0.5:5000", connected_at=time.time() - 125,
+                                          priority=False)])
+    client = st.as_dict()["clients"][0]
+    assert client["duration"] and 124 <= client["connected_s"] <= 127, client
+    print("status: a client's connection time also as a number (connected_s)  OK")
+
+
 def main():
     test_merge_patch()
+    test_connected_seconds()
     test_spec()
     test_patch()
     print("\nPASS: REST API PATCH (JSON merge patch)")

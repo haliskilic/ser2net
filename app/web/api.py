@@ -90,7 +90,8 @@ def build_api_routes(state):
         await state.supervisor.apply_mapping(mapping)
         state.log(f"api: mapping created: {mapping.name}")
         state.audit(_client_ip(request), "api_mapping_create", mapping.name, user="api-token")
-        return JSONResponse(_mapping_view(mapping, state), status_code=201)
+        return JSONResponse(_mapping_view(mapping, state), status_code=201,
+                            headers={"Location": f"{API_PREFIX}/mappings/{mapping.id}"})
 
     async def update_mapping(request):
         mid = request.path_params["mid"]
@@ -337,6 +338,7 @@ def openapi_spec(admin) -> dict:
             "clients": {"type": "array", "items": {"type": "object", "properties": {
                 "peer": {"type": "string"},
                 "duration": {"type": "string", "description": "connected for (text)"},
+                "connected_s": {"type": "integer", "description": "connected for (seconds)"},
                 "priority": {"type": "boolean"}}}},
             "bytes_in": {"type": "integer", "description": "read from the serial device"},
             "bytes_out": {"type": "integer", "description": "written to the serial device"},
@@ -440,7 +442,8 @@ def openapi_spec(admin) -> dict:
             "/ports": {"get": op("Detected serial ports", ("200", "PortList", "port list"))},
             "/mappings": {
                 "get": op("List mappings (config + status)", ("200", "MappingList", "mappings")),
-                "post": op("Create a mapping", ("201", "Mapping", "created"), "BadRequest",
+                "post": op("Create a mapping", ("201", "Mapping", "created (Location: its URL)"),
+                           "BadRequest",
                            "TooLarge", write=True, body=mapping_body(),
                            description="Fields left out get their defaults; the server "
                                        "assigns the id."),
