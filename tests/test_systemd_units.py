@@ -12,6 +12,7 @@ and any other one added later):
 - netlink is allowed, which lists the network interfaces (the bind-IP pickers, the cluster's
   directed broadcasts), and ProcSubset=pid stays;
 - a system call the filter denies fails with EPERM instead of killing the process;
+- `systemctl reload` reads config.json again (ExecReload= sends SIGHUP);
 - systemd-analyze verify accepts the file, and the template as an instance of it (Linux,
   where systemd-analyze is installed);
 - the release attaches the binary's unit;
@@ -141,6 +142,13 @@ def test_denied_calls_fail_with_eperm():
         print(f"{name}: a denied system call fails with EPERM  OK")
 
 
+def test_reload():
+    for path in UNITS:
+        unit, name = parse(path), os.path.basename(path)
+        assert one(unit, "ExecReload") == "/bin/kill -HUP $MAINPID", name
+        print(f"{name}: systemctl reload sends SIGHUP  OK")
+
+
 def test_template():
     plain = parse(os.path.join(ROOT, "systemd", "ser2net.service"))
     tmpl = parse(os.path.join(ROOT, "systemd", "ser2net@.service"))
@@ -222,6 +230,7 @@ if __name__ == "__main__":
     test_unprivileged()
     test_interfaces_readable()
     test_denied_calls_fail_with_eperm()
+    test_reload()
     test_template()
     test_binary_unit()
     test_systemd_analyze_verify()
