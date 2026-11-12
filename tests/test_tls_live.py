@@ -5,8 +5,8 @@ page's "Listening on" (a saved change that waits for the next start doesn't).
   * Settings -> Admin TLS: a pair that can't be used is refused (config.json unchanged, the
     UI goes on as it was); a usable pair is served to the next connection, plain HTTP is
     not; the same paths saved again with renewed files serve the new certificate; a key
-    with a passphrase is saved but waits for the next start (where the console asks for
-    it), and the Settings page says so; blank fields switch TLS off again; Generate
+    with a passphrase is refused without its password (tls_key_password: never asked for
+    on a console) and served at once with it; blank fields switch TLS off again; Generate
     serves its certificate at once;
   * cookies are Secure (and HSTS is sent) exactly while the UI serves TLS;
   * the cluster beacon advertises the served port and scheme, and the Settings page's
@@ -118,8 +118,7 @@ def test_live_tls() -> None:
 
             # a pair that doesn't belong together: refused, nothing changes
             st, _, page = b.post("/settings/tls", {"tls_cert": cert_a, "tls_key": key_b})
-            assert "The TLS certificate and key can&#39;t be used" in page or \
-                "The TLS certificate and key can't be used" in page, page[-1500:]
+            assert "The TLS certificate and key could not be loaded" in page, page[-1500:]
             assert srv.saved_config()["admin_ui"]["tls_cert"] == ""
             assert plain_http(port) and served_cert(port) is None
             st, h, page = b.get("/settings")
@@ -156,7 +155,8 @@ def test_live_tls() -> None:
             assert served_cert(port) == der(cert_b)
             print("renewed files saved again: new connections get the new certificate  OK")
 
-            # a key with a passphrase: saved, but only the next start can use it
+            # a key with a passphrase: refused without its password (nothing changes), served
+            # at once with it
             with open(key_a, "rb") as fh:
                 key = load_pem_private_key(fh.read(), None)
             locked = os.path.join(tmp, "locked.key")
@@ -165,13 +165,16 @@ def test_live_tls() -> None:
                                            serialization.PrivateFormat.PKCS8,
                                            serialization.BestAvailableEncryption(b"secret-1")))
             st, _, page = s.post("/settings/tls", {"tls_cert": cert_a, "tls_key": locked})
-            assert "Its key has a passphrase" in page, page[-800:]
-            assert srv.saved_config()["admin_ui"]["tls_key"] == locked
+            assert st == 400 and "password-protected" in page, (st, page[-800:])
+            assert srv.saved_config()["admin_ui"]["tls_key"] == key_a
             assert served_cert(port) == der(cert_b), "the certificate in use stays"
-            st, _, page = s.get("/settings")
-            assert "The admin TLS settings saved are used from the next start." in page
-            print("a key with a passphrase: saved, waits for the next start (Settings says so) "
-                  "OK")
+            st, _, page = s.post("/settings/tls", {"tls_cert": cert_a, "tls_key": locked,
+                                                   "tls_key_password": "secret-1"})
+            assert "use HTTPS now" in page and "secret-1" not in page, page[-800:]
+            assert srv.saved_config()["admin_ui"]["tls_key"] == locked
+            assert served_cert(port) == der(cert_b)
+            print("a key with a passphrase: refused without its password, served at once with "
+                  "it  OK")
 
             # blank fields: TLS off for new connections; cookies no longer Secure
             st, _, page = s.post("/settings/tls", {"tls_cert": "", "tls_key": ""})
@@ -185,17 +188,19 @@ def test_live_tls() -> None:
             assert not h.get("Strict-Transport-Security")
             b.login("admin", PW)
 
-            # a saved change that waits (plain HTTP served): the cookies follow what is served
-            st, _, page = b.post("/settings/tls", {"tls_cert": cert_a, "tls_key": locked})
-            assert "Its key has a passphrase" in page and plain_http(port)
+            # a refused change (the stored key password removed) leaves plain HTTP served, and
+            # the cookies follow what is served
+            st, _, page = b.post("/settings/tls", {"tls_cert": cert_a, "tls_key": locked,
+                                                   "tls_key_password_clear": "on"})
+            assert st == 400 and "password-protected" in page and plain_http(port), st
             st, h, page = Browser(srv.base).get("/login")
             assert set_cookie_lines(h) and not any("Secure" in c for c in set_cookie_lines(h)), \
                 "no Secure cookie on the plain HTTP the UI still serves"
             st, _, page = b.get("/settings")
             assert '<span class="tag">HTTP</span>' in page
-            assert "The admin TLS settings saved are used from the next start." in page
-            print("TLS off: plain HTTP at once; a change waiting for the next start keeps the "
-                  "cookies for what is served  OK")
+            assert "used from the next start" not in page
+            print("TLS off: plain HTTP at once; a refused change keeps the cookies for what is "
+                  "served  OK")
 
             # Generate: the self-signed certificate is served at once
             st, _, page = b.post("/settings/tls/generate", {})

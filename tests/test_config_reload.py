@@ -502,7 +502,47 @@ def test_restore_applies_changes() -> None:
         done(srv)
 
 
+def test_refused_like_an_edit() -> None:
+    """A changed or new mapping in the reloaded file is held to what an edit of it is:
+    its TLS files must load, and it may not share a serial port with another enabled
+    mapping, listen on the admin UI's port or use the admin UI's TLS key. A mapping that
+    didn't change is not checked again (a stored clash keeps running)."""
+    from app import reload as reload_mod
+    from app.config import AppConfig
+
+    def cfg(*mappings):
+        return AppConfig.from_dict({"admin_ui": {"bind_ip": "127.0.0.1", "port": 8080},
+                                    "users": [{"username": "a", "password_hash": "x",
+                                               "role": "admin"}],
+                                    "mappings": list(mappings)})
+    a = {"id": "aaaaaaaaaaaa", "name": "A", "serial": {"port": "/dev/ser2net-a"},
+         "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4100}}
+    cur = cfg(a)
+    for new_mapping, needle in (
+            ({"id": "bbbbbbbbbbbb", "name": "B", "serial": {"port": "/dev/ser2net-a"},
+              "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4101}},
+             "both use serial port /dev/ser2net-a"),
+            ({"id": "bbbbbbbbbbbb", "name": "B", "serial": {"port": "/dev/ser2net-b"},
+              "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 8080}},
+             "is the admin UI's port"),
+            ({"id": "bbbbbbbbbbbb", "name": "B", "serial": {"port": "/dev/ser2net-b"},
+              "network": {"mode": "server", "bind_ip": "127.0.0.1", "port": 4101, "tls": True,
+                          "tls_cert": "/nonexistent/c.pem", "tls_key": "/nonexistent/k.pem"}},
+             "TLS file not found")):
+        problems, _still = reload_mod._refusals(cur, cfg(a, new_mapping))
+        assert any(needle in p for p in problems), (needle, problems)
+    # the clash was there already (start-up accepted it) and nothing changed: not refused
+    twins = cfg(a, dict(a, id="cccccccccccc", name="C",
+                        network=dict(a["network"], port=4102)))
+    twins.tolerate_problems()
+    problems, _still = reload_mod._refusals(twins, cfg(*[m.to_dict() for m in twins.mappings]))
+    assert problems == [], problems
+    print("reload: a changed or new mapping is checked as an edit (serial port, the UI's "
+          "port, TLS files); an unchanged stored clash is not refused  OK")
+
+
 def main() -> None:
+    test_refused_like_an_edit()
     test_restore_applies_changes()
     test_outside_edit_store()
     test_outside_edit_server()
