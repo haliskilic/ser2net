@@ -436,6 +436,14 @@ the login page. Behind a reverse proxy, the proxy must pass the original name in
 and managed after signing in, and open consoles are closed when access is revoked or the
 role changes. While it is on, the UI shows a warning and startup logs it.
 
+**Sign-in notice (optional):** **Settings → Web UI access → Sign-in notice** sets a text the
+sign-in and first-run setup pages show before anyone signs in — a privacy notice, or the
+system-use notification that IEC 62443 (SR 1.12) and NIST SP 800-53 (AC-8) ask for — plus an
+optional http(s) link to the full text. It is plain text (line breaks kept, at most 2000
+characters, never HTML; `admin_ui.login_notice`, `admin_ui.login_notice_url`); with open
+access, visitors who don't sign in find it under *Notice* in the top bar. Changes are
+audited (`login_notice_set`). None is set by default.
+
 **Requests from other sites:** a change (any POST, PUT, PATCH or DELETE of the web UI) is
 refused with 403 when the browser says a page of another site sent it: `Sec-Fetch-Site`
 other than `same-origin`, or an `Origin` that isn't the address the UI was reached by —

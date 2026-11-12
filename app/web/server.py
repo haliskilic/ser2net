@@ -242,10 +242,16 @@ class GuardMiddleware(BaseHTTPMiddleware):
 def _page_context(request) -> dict:
     """What every template gets: base, the path prefix of the request, which its links go
     under (app/web/proxy.py); node_name, this instance's name ('' = none: Settings -> Admin
-    interface), which the signed-in pages (_shell.html) show in the title and the top bar."""
+    interface), which the signed-in pages (_shell.html) show in the title and the top bar;
+    login_notice / login_notice_url, the notice the sign-in and setup pages show (every one
+    of their renders, also a refusal's) and open-access visitors get a link to (Settings ->
+    Web UI access)."""
     state = getattr(request.app.state, "appstate", None)
+    ui = state.config.admin_ui if state is not None else None
     return {"base": proxy.base(request),
-            "node_name": node_name(state.config.admin_ui) if state is not None else ""}
+            "node_name": node_name(ui) if ui is not None else "",
+            "login_notice": ui.login_notice if ui is not None else "",
+            "login_notice_url": ui.login_notice_url if ui is not None else ""}
 
 
 def make_templates() -> Jinja2Templates:

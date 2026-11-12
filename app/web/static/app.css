@@ -158,6 +158,11 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .banner.error { background: rgba(248,81,73,.14); border: 1px solid rgba(248,81,73,.4); color: #ff8580; }
 .banner.ok { background: rgba(46,160,67,.14); border: 1px solid rgba(46,160,67,.4); color: #56d364; }
 .banner.warn { background: rgba(210,153,34,.14); border: 1px solid rgba(210,153,34,.4); color: #e3b341; }
+/* the sign-in notice an admin wrote: plain text, its line breaks kept */
+.banner.notice { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+.banner.notice p { margin: 0; }
+.banner.notice p + p { margin-top: 8px; }
+.notice-text { white-space: pre-line; }
 
 /* auth pages */
 .auth-wrap { max-width: 380px; margin: 8vh auto; }

@@ -6,6 +6,7 @@
   {{ lang_switch(request, request.state.lang) }}
   <div class="panel">
     <h1>{{ _("Welcome to ser2net") }}</h1>
+    {% include "_login_notice.html" %}
     {% if locked %}
     <div class="banner error">{{ _('Setup in the browser is closed: <span class="mono">SER2NET_ADMIN_PASSWORD_FILE</span> / <span class="mono">SER2NET_ADMIN_USER</span> is set, but no admin account could be created from it (the log says why). Fix it and restart, or create the admin on the server with <span class="mono">ser2net --set-password admin</span>.') }}</div>
     {% else %}

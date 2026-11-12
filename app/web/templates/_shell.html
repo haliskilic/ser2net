@@ -8,6 +8,8 @@
     <a href="{{ base }}/settings">{{ _("Settings") }}</a>
     {% set u = request.state.user %}
     {% if u and u.source == 'anonymous' %}<span class="muted mono who" title="{{ _('login is switched off — open access') }}">{{ _("no login · %(role)s", role=u.role) }}</span>
+    {%- if login_notice_url %} <a href="{{ login_notice_url }}" target="_blank" rel="noopener noreferrer">{{ _("Notice") }}</a>
+    {%- elif login_notice %} <a href="{{ base }}/login#notice">{{ _("Notice") }}</a>{% endif %}
     {% elif u %}<span class="muted mono who" title="{{ _('signed in as %(user)s · %(role)s', user=u.username, role=u.role) }}">{{ u.username }} · {{ u.role }}</span>{% endif %}
     {{ lang_switch(request, request.state.lang) }}
     <button class="link" type="button" data-theme-toggle title="{{ _('Toggle light / dark theme') }}" aria-label="{{ _('Toggle theme') }}">◐</button>

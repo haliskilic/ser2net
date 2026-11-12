@@ -7,6 +7,7 @@
   <div class="panel">
     <h1>⇄ ser2net</h1>
     <p class="muted">{{ _("Sign in to manage serial-to-network mappings.") }}</p>
+    {% include "_login_notice.html" %}
     {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
     {% if oidc_error %}<div class="banner error">{{ oidc_error }}</div>{% endif %}
     {% if oidc_enabled %}

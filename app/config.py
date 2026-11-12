@@ -803,6 +803,13 @@ class AdminUI:
     # and refused or failed ones: status 400 and up) or "off". Sign-ins, failed sign-ins
     # and the audit records are logged whatever it says.
     request_log: str = "all"
+    # A notice the sign-in and first-run setup pages show before anyone signs in (Settings
+    # -> Web UI access): who runs this system, what is recorded, a privacy notice or a
+    # system-use warning. Plain text (line breaks kept, never HTML), at most
+    # LOGIN_NOTICE_MAX characters; login_notice_url: an http(s) link to the full text.
+    # '' = none, as before.
+    login_notice: str = ""
+    login_notice_url: str = ""
 
     @property
     def tls_enabled(self) -> bool:
@@ -846,6 +853,73 @@ def node_label(admin: "AdminUI") -> str:
 
 
 REQUEST_LOG_MODES = ("all", "changes", "off")
+LOGIN_NOTICE_MAX = 2000
+LOGIN_NOTICE_URL_MAX = 500
+# characters a sign-in notice keeps out: control characters but tab and line feed
+_NOTICE_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean_login_notice(text: str) -> str:
+    """A sign-in notice as it is kept: line breaks as line feeds, no other control
+    characters, no white space at its ends."""
+    return _NOTICE_CONTROL.sub("", str(text).replace("\r\n", "\n").replace("\r", "\n")).strip()
+
+
+def login_notice_problem(text: Any) -> str | None:
+    """Why `text` can't be admin_ui.login_notice, or None when it can (also when blank)."""
+    if not isinstance(text, str):
+        return _("The sign-in notice must be text.")
+    if len(clean_login_notice(text)) > LOGIN_NOTICE_MAX:
+        return _("The sign-in notice can have at most {0} characters.").format(LOGIN_NOTICE_MAX)
+    return None
+
+
+def login_notice_url_problem(url: Any) -> str | None:
+    """Why `url` can't be admin_ui.login_notice_url, or None when it can (also when blank):
+    an http:// or https:// address with a host name, without a user name or password."""
+    bad = _("The notice’s link must be an http:// or https:// address, such as "
+            "https://example.com/privacy.")
+    if not isinstance(url, str):
+        return bad
+    text = url.strip()
+    if not text:
+        return None
+    if len(text) > LOGIN_NOTICE_URL_MAX:
+        return _("The notice’s link can have at most {0} characters.").format(
+            LOGIN_NOTICE_URL_MAX)
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in text):
+        return bad
+    try:
+        parts = urllib.parse.urlsplit(text)
+        parts.port  # noqa: B018 (raises ValueError for a port that is no number)
+    except ValueError:
+        return bad
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname or "@" in parts.netloc:
+        return bad
+    return None
+
+
+def _normalize_login_notice(admin: "AdminUI", notes: list[str]) -> None:
+    """A hand-edited sign-in notice or link that can't be used is left out (a notice too
+    long is cut), with a load note."""
+    text = admin.login_notice
+    if not isinstance(text, str):
+        notes.append(f"admin_ui.login_notice is not text ({type(text).__name__}); no sign-in "
+                     "notice is shown")
+        admin.login_notice = ""
+    else:
+        admin.login_notice = clean_login_notice(text)
+        if len(admin.login_notice) > LOGIN_NOTICE_MAX:
+            notes.append(f"admin_ui.login_notice has {len(admin.login_notice)} characters; "
+                         f"the first {LOGIN_NOTICE_MAX} are shown")
+            admin.login_notice = admin.login_notice[:LOGIN_NOTICE_MAX].rstrip()
+    url = admin.login_notice_url
+    if login_notice_url_problem(url) is not None:
+        notes.append(f"admin_ui.login_notice_url {str(url)[:80]!r} is not an http(s) address; "
+                     "the sign-in notice has no link")
+        admin.login_notice_url = ""
+    else:
+        admin.login_notice_url = url.strip()
 
 
 def _normalize_request_log(admin: "AdminUI", notes: list[str]) -> None:
@@ -1470,6 +1544,7 @@ class AppConfig:
         _normalize_proxy_settings(cfg.admin_ui, cfg.load_notes)
         _normalize_node_name(cfg.admin_ui, cfg.load_notes)
         _normalize_request_log(cfg.admin_ui, cfg.load_notes)
+        _normalize_login_notice(cfg.admin_ui, cfg.load_notes)
         cfg.ids_created = not (d.get("secret_key") and d.get("instance_id"))
         raw_days = d.get("external_users_expire_days")
         if raw_days is not None and raw_days != cfg.external_users_expire_days:
