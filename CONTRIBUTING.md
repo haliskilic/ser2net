@@ -47,6 +47,10 @@ and `tests/test_release_pipeline.py` fail on a tag reference.
 `SER2NET_BLACKHOLE_TESTS=1` only in a throwaway network namespace or VM, never on a
 machine whose firewall matters. The standalone executable checks need a build
 (`SER2NET_STANDALONE_BIN=dist/ser2net python tests/test_standalone.py`).
+`tests/systemd_smoke.sh` (CI jobs `systemd unit` and `systemd unit (binary)`) installs the
+systemd units as the README says and runs them on the runner's systemd: it adds a `ser2net`
+user, `/opt/ser2net` and the service, so run it only on a throwaway VM. A change to a unit in
+`systemd/` goes into every unit there (`tests/test_systemd_units.py` checks them all).
 
 A test that starts a server uses `tests/_server.py` (`Server`, or `server_log` for the
 output: a file, never an unread pipe) and listens on `free_port()` / `free_udp_port()` or
@@ -185,7 +189,11 @@ Dependabot günceller, tag ile verilen bir referansta zizmor ve
 
 `tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
 `SER2NET_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
-ya da sanal makinede çalıştırın.
+ya da sanal makinede çalıştırın. `tests/systemd_smoke.sh` (CI'daki `systemd unit` ve
+`systemd unit (binary)` işleri) systemd unit'lerini README'deki gibi kurar ve runner'ın
+systemd'sinde çalıştırır: bir `ser2net` kullanıcısı, `/opt/ser2net` ve servisi ekler; bu
+yüzden yalnızca silinebilir bir sanal makinede çalıştırın. `systemd/` altındaki bir unit'te
+yapılan değişiklik oradaki her unit'e uygulanır (`tests/test_systemd_units.py` hepsini denetler).
 
 Sunucu başlatan bir test `tests/_server.py`'yi kullanır (`Server` ya da çıktı için
 `server_log`: okunmayan bir pipe değil, bir dosya) ve sabit bir portu değil,
