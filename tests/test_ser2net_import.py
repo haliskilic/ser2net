@@ -15,6 +15,8 @@ dicts plus warnings. Checks:
     Windows //./COMn, network/IPMI connectors skipped;
   * options: kickolduser, max-connections, banner escapes, openstr/closestr/closeon,
     trace-both, timeout, enable: off, remaddr -> allowed IPs, unsupported -> one warning;
+    an escape for a byte of 0x80 or more (sent as two UTF-8 bytes here) holds an open or
+    close string's mapping and is noted for a close-on string or banner;
   * the default remaddr only for a connection without addresses of its own (4.x / 3.x);
   * *(name), $(name), =(name) and *alias substitution; defaults by position and class
     (rfc2217, banner/openstr/closeon too), delete_default; version 2 files;
@@ -513,6 +515,55 @@ def test_options():
     assert has(warns, "locked:", "imported disabled rather than open")
     print("options: kickolduser, max-connections, banner/openstr/closestr/closeon escapes, "
           "trace-both, timeout, enable: off, remaddr, read-only; the rest warned once  OK")
+
+
+# ser2net (ser2net_str.c, process_str) sends the byte an escape like \377 or \xff stands
+# for; a string here is sent as UTF-8 (bridge: .encode("utf-8")), so such a byte would go
+# out as two. A YAML "\xff" is a character to libyaml, which hands ser2net its UTF-8 too.
+HIGH_BYTES = r"""
+connection: &init
+  accepter: tcp,5201
+  connector: serialdev,/dev/ttyS1
+  options:
+    openstr: '\377\r'
+connection: &close
+  accepter: tcp,5202
+  connector: serialdev,/dev/ttyS2
+  options:
+    closeon: '\xff\xfeEND'
+    banner: 'caf\xe9 \001'
+connection: &yaml
+  accepter: tcp,5203
+  connector: serialdev,/dev/ttyS3
+  options:
+    closestr: "\xff"
+    closeon: 'ctrl-a\001nil\000'
+"""
+
+
+def test_high_bytes():
+    from app.engine.bridge import _render_banner
+    maps, warns = parse(HIGH_BYTES)
+    init, close, yaml = maps["init"], maps["close"], maps["yaml"]
+    # what the bridge would send: \377 as c3 bf, not ff: the device gets other bytes
+    assert init["options"]["openstr"].encode("utf-8") == b"\xc3\xbf\r"
+    assert init["enabled"] is False
+    assert has(warns, "init:", "openstr", "\\377", "0x80", "imported disabled")
+    assert close["enabled"] is True
+    assert close["options"]["closeon"].encode("utf-8") != b"\xff\xfeEND"
+    assert has(warns, "close:", "closeon", "\\xff \\xfe", "won't match")
+    assert has(warns, "close:", "banner", "\\xe9")
+    assert not has(warns, "close:", "\\001")  # below 0x80: the byte itself
+    banner = _render_banner(close["options"]["banner"], MappingConfig.from_dict(close),
+                            "/dev/ttyS2", "10.0.0.9")
+    assert banner == "caf\xe9 \x01".encode("utf-8"), banner
+    assert yaml["enabled"] is True and not has(warns, "yaml:", "0x80"), warns
+    assert yaml["options"]["closeon"].encode("utf-8") == b"ctrl-a\x01nil\x00"
+    conf = "\n".join(["OPENSTR:o1:ATZ\\r\\x80", "3001:raw:0:/dev/ttyS1:o1"])
+    maps, warns = parse(conf, "ser2net.conf")
+    assert maps["ser2net-3001"]["enabled"] is False and has(warns, "\\x80", "0x80")
+    print("escapes for bytes 0x80-0xFF: an open/close string comes in disabled, a close-on "
+          "string or banner with a note; YAML escapes and bytes below 0x80 as they are  OK")
 
 
 REMADDR = r"""
@@ -1073,6 +1124,7 @@ def main():
     test_serial_words()
     test_options()
     test_remaddr_default()
+    test_high_bytes()
     test_substitution()
     test_defaults()
     test_default_classes()
