@@ -6,8 +6,8 @@ row buttons (Start/Stop/Restart/Edit/Log/Monitor/Copy/Delete) ended up outside i
 and the whole page scrolled sideways. This drives a real browser (Playwright +
 Chromium) against two real nodes — A shows B through a manual cluster peer — whose
 mappings use such values, at desktop, half-screen, tablet and phone widths, and
-checks the dashboard, the log / console / edit views, the settings page (users with row
-buttons, a backup's restore preview) — in English and again in Turkish, whose texts are
+checks the dashboard, the log / console / edit / trace views, the settings page (users with
+row buttons, a backup's restore preview) — in English and again in Turkish, whose texts are
 longer:
 
   * the page never scrolls sideways and no table needs horizontal scrolling
@@ -60,6 +60,8 @@ LONG_WORDS = "Packaging line 2 weighing scale near the north loading dock (Mettl
 BY_ID = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A50285BI-if00-port0"
 LONG_HOST = "very-long-hostname-for-the-remote-serial-server.factory-floor.example-industries.internal"
 USER = "operations.supervisor.building-b.east-wing"   # long account name in the top bar
+TRACE_ID = "uilayout0001"  # the long-named mapping traces: the Trace panel's file rows
+TRACE_NAME = "production-line-3-plc-siemens-s7-1500-main-controller-building-b-east.trace"
 PASSWORD = "layout-pass-123"
 
 # Returns a list of human-readable layout problems on the current page.
@@ -134,10 +136,11 @@ def demo_mappings(prefix, raw_port):
     """Worst-case values: an unbroken 75-char name, a by-id path, a long remote host,
     a serial↔serial bridge; enabled ones fail to open their port → long errors."""
     return [
-        {"name": prefix + LONG_NAME, "enabled": True,
+        {"id": TRACE_ID, "name": prefix + LONG_NAME, "enabled": True,
          "serial": {"port": BY_ID, "baudrate": 115200, "flowcontrol": "rtscts"},
          "network": {"mode": "server", "protocol": "rfc2217", "bind_ip": "127.0.0.1",
-                     "port": free_port(), "read_only": True}},
+                     "port": free_port(), "read_only": True},
+         "options": {"trace_both": TRACE_NAME, "trace_keep": 50}},
         {"name": prefix + LONG_WORDS, "enabled": False,
          "serial": {"port": BY_ID + "-second", "baudrate": 9600},
          "network": {"mode": "client", "protocol": "raw", "remote_host": LONG_HOST, "remote_port": 4001}},
@@ -160,6 +163,10 @@ def start_node(cfg, backup=False):
     path = os.path.join(tmp, "config.json")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh)
+    os.makedirs(os.path.join(tmp, "traces"))  # rotated files of the trace (Trace panel)
+    for n in (1, 2, 49):
+        with open(os.path.join(tmp, "traces", f"{TRACE_ID}-{TRACE_NAME}.{n}"), "wb") as fh:
+            fh.write(b"x" * 1500 * n)
     if backup:  # an older version in backups/, for the restore preview
         os.makedirs(os.path.join(tmp, "backups"))
         with open(os.path.join(tmp, "backups", "config-20260101T000000Z.json"), "w",
@@ -258,7 +265,7 @@ def main():
                     check(f"{lang} dashboard @{w}")
                 for w in (1024, 390):
                     page.set_viewport_size({"width": w, "height": 900})
-                    for view in ("Log", "Monitor", "Edit"):
+                    for view in ("Log", "Monitor", "Edit", "Trace"):
                         dashboard()
                         open_view(TR[view] if lang == "tr" else view)
                         check(f"{lang} {view.lower()} view @{w}")
