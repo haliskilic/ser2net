@@ -192,6 +192,17 @@ def test_form_and_api():
     assert (mq.ca_file, mq.client_cert, mq.client_key, mq.client_key_password,
             mq.tls_check_hostname) == ("/data/ca.pem", "/data/gw.pem", "/data/gw.key", "pw",
                                        False), mq
+    # the form never shows the stored key password: blank keeps it (so does the REST
+    # API's mask), the remove box clears it, a typed one replaces it
+    shown = dict(base, id="m1", mqtt_ca_file="/data/ca.pem", mqtt_client_cert="/data/gw.pem",
+                 mqtt_client_key="/data/gw.key")
+    assert parsed(shown, stored).client_key_password == "pw"
+    assert parsed(dict(shown, mqtt_client_key_password=REDACTED), stored).client_key_password \
+        == "pw"
+    assert parsed(dict(shown, mqtt_client_key_password_clear="on"),
+                  stored).client_key_password == ""
+    assert parsed(dict(shown, mqtt_client_key_password="new"), stored).client_key_password \
+        == "new"
     mq = parsed(dict(base))                           # new, without the fields: defaults
     assert mq.ca_file == "" and mq.tls_check_hostname is True
     assert MqttSettings().tls_check_hostname is True and MqttSettings().ca_file == ""

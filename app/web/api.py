@@ -191,6 +191,8 @@ def build_api_routes(state):
             stored = state.config.get_mapping(mid)
             if mapping.network.tls_key_password == REDACTED and stored is not None:
                 mapping.network.tls_key_password = stored.network.tls_key_password
+            if mapping.mqtt.client_key_password == REDACTED and stored is not None:
+                mapping.mqtt.client_key_password = stored.mqtt.client_key_password
             mapping.validate()
             mapping.validate_input()
             await _check_tls_files(mapping)
@@ -257,6 +259,8 @@ def build_api_routes(state):
                         mapping.mqtt.password = existing.mqtt.password
                     if mapping.network.tls_key_password == REDACTED:
                         mapping.network.tls_key_password = existing.network.tls_key_password
+                    if mapping.mqtt.client_key_password == REDACTED:
+                        mapping.mqtt.client_key_password = existing.mqtt.client_key_password
                     mapping.validate()
                     mapping.validate_input()
                     await _check_tls_files(mapping)
@@ -438,6 +442,9 @@ _NOTES = {
     ("NetworkSettings", "read_only"): "Clients only read: nothing they send reaches the device.",
     ("MqttSettings", "password"): "Masked as ******** for a viewer token; sent back so in a PUT "
                                   "or PATCH, the stored one stays.",
+    ("MqttSettings", "client_key_password"): "The password of an encrypted client_key. "
+                                             "Masked as ******** for a viewer token; sent back "
+                                             "so in a PUT or PATCH, the stored one stays.",
     ("NetworkSettings", "tls_key_password"): "The password of an encrypted tls_key. Masked as "
                                              "******** for a viewer token; sent back so in a "
                                              "PUT or PATCH, the stored one stays.",

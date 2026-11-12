@@ -351,8 +351,12 @@
       <label>{{ _("Client key file") }} <span class="muted">({{ _("blank = in the certificate file") }})</span>
         <input type="text" name="mqtt_client_key" value="{{ mapping.mqtt.client_key }}" placeholder="{{ _('e.g. %(example)s', example='/data/certs/gateway.key') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
     </div>
+    {# write-only, as the TLS key password: the stored one is never in the page; blank keeps it #}
+    {% set mqtt_key_pw_kept = mqtt_key_pw_stored if mqtt_key_pw_stored is defined else mapping.mqtt.client_key_password %}
     <div class="grid3">
-      <label>{{ _("Client key password") }} <input type="password" name="mqtt_client_key_password" value="{{ mapping.mqtt.client_key_password }}" placeholder="{{ _('optional') }}" autocomplete="off"></label>
+      <label>{{ _("Client key password") }}{% if mqtt_key_pw_kept %} <span class="muted">({{ _("blank = unchanged") }})</span>{% endif %}
+        <input type="password" name="mqtt_client_key_password" value="{{ mqtt_key_pw_typed | default('') }}" placeholder="{{ _('•••••• (unchanged)') if mqtt_key_pw_kept else _('optional') }}" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore></label>
+      {% if mqtt_key_pw_kept %}<label class="chk chk-pad"><input type="checkbox" name="mqtt_client_key_password_clear" {% if mqtt_key_pw_clear | default(false) %}checked{% endif %}> {{ _("Remove the stored password") }}</label>{% endif %}
       <label class="chk chk-pad" title="{{ _('off: a certificate that does not name the broker host is accepted too (it must still come from a trusted CA)') }}"><input type="checkbox" name="mqtt_tls_check_hostname" {% if mapping.mqtt.tls_check_hostname %}checked{% endif %}> {{ _("Check the broker’s host name") }}</label>
     </div>
     {% if 'payload_format' not in hide %}

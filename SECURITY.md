@@ -44,12 +44,13 @@ untrusted networks prefer TCP with TLS, or a firewall.
 ### Stored secrets
 `config.json` keeps in plain text what ser2net has to use itself: the LDAP bind password,
 the OIDC client secret, the SMTP password, the webhook URL, each mapping's MQTT broker
-password, the TLS key passwords (a mapping's, the admin UI's), the cluster key, the
+password and MQTT client key password, the TLS key passwords (a mapping's, the admin UI's),
+the cluster key, the
 session key (`secret_key`) that signs sign-ins and the two-factor sign-in key of each
 account that uses it. Local passwords are scrypt hashes; the REST API tokens are stored
 only as hashes. `backups/` holds earlier copies of the file (a
 downloaded backup leaves out the session key), and the mappings export (operator role)
-holds the MQTT and TLS key passwords. On the host the data folder is owner-only (POSIX
+holds the MQTT passwords and the MQTT and TLS key passwords. On the host the data folder is owner-only (POSIX
 `0700`, files `0600`; Windows: owner, SYSTEM and Administrators), so what needs care are
 the copies: a copied data folder or Docker volume, a disk or VM image, a downloaded backup,
 an export. Keep them like a password vault. If one leaked:

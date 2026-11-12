@@ -425,9 +425,15 @@ def test_mapping_form_mqtt_tls_fields():
                                      "mqtt": dict({"enabled": True, "host": "b",
                                                    "base_topic": "t", "tls": True,
                                                    "client_key_password": "pw"}, **stored)})
-        root = parse(tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
-                                ports=[], ips=[], error=None))
+        out = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                         ports=[], ips=[], error=None)
+        root = parse(out)
         fields = {n.attrs.get("name"): n for n in root.walk() if n.attrs.get("name")}
+        # write-only: the stored key password is never in the page, only that there is one
+        assert fields["mqtt_client_key_password"].attrs.get("value", "") == "" \
+            and 'value="pw"' not in out, fields["mqtt_client_key_password"].attrs
+        assert "unchanged" in fields["mqtt_client_key_password"].attrs.get("placeholder", "")
+        assert "mqtt_client_key_password_clear" in fields
         for name in ("mqtt_ca_file", "mqtt_client_cert", "mqtt_client_key",
                      "mqtt_client_key_password", "mqtt_tls_check_hostname"):
             conditions = [a.attrs["data-show-when"] for a in fields[name].ancestors()

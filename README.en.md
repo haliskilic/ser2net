@@ -451,7 +451,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   certificate that doesn't (it must still come from a trusted CA). A **client
   certificate** (PEM; its key in its own file or in the same one, an encrypted key with
   its **password**) is presented to a broker that asks for one (mutual TLS, such as AWS
-  IoT Core). The mapping form and the REST API refuse files that can't be used; an
+  IoT Core); the form never shows a stored key password (a blank field keeps it, *Remove
+  the stored password* clears it). The mapping form and the REST API refuse files that
+  can't be used; an
   import takes such a mapping with a warning, and a mapping whose files are gone keeps
   loading and runs without MQTT (logged, shown on the dashboard) — never in clear text.
   In Docker put the files under `/data` (for example `/data/certs/`); the Windows service
@@ -822,7 +824,8 @@ scrape_configs:
 ```
 The token has the role chosen when it was generated (*Change the role only* changes it and
 keeps the token): a `viewer` token may only read (GET)
-and gets stored secrets (the MQTT password, a mapping's TLS key password) masked as
+and gets stored secrets (the MQTT password and client key password, a mapping's TLS key
+password) masked as
 `********`; a `PUT` or `PATCH` that sends that mask back keeps the stored password. An `api_token_role` in `config.json` that is not a
 role counts as `viewer`, and the start-up log says so.
 
@@ -1513,13 +1516,14 @@ inside aren't readable by other users:
 
 **Secrets:** `config.json` holds, in plain text, the LDAP bind password, the OIDC client
 secret, the SMTP password, the webhook URL (which often carries a token), each mapping's
-MQTT broker password, the TLS key passwords (a mapping's and the admin UI's), the cluster
+MQTT broker password and MQTT client key password, the TLS key passwords (a mapping's and
+the admin UI's), the cluster
 key (enough to read and change the mappings of every node) and the session key `secret_key`
 (with the accounts in the same file, enough to make a valid sign-in), and the two-factor
 sign-in key of each account that uses it. Local passwords are kept as scrypt hashes and the
 REST API tokens only as hashes. `backups/` holds earlier copies
 of the same file (a downloaded backup leaves out the session key), and the mappings export
-holds the MQTT and TLS key passwords. On this machine only the account ser2net runs as can
+holds the MQTT passwords and the MQTT and TLS key passwords. On this machine only the account ser2net runs as can
 read them; treat every copy — a copied data folder or Docker
 volume, a disk or VM image, a downloaded backup, an export — like a password vault.
 [SECURITY.md](SECURITY.md) (*Stored secrets*) lists what to change after such a copy leaked.

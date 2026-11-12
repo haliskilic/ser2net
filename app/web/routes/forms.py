@@ -469,6 +469,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             **({"ca_file": form.get("mqtt_ca_file", "").strip(),
                 "client_cert": form.get("mqtt_client_cert", "").strip(),
                 "client_key": form.get("mqtt_client_key", "").strip(),
+                # never shown in the form: blank keeps the stored one
+                # (_preserve_unmanaged_fields)
                 "client_key_password": form.get("mqtt_client_key_password", ""),
                 "tls_check_hostname": _checkbox(form, "mqtt_tls_check_hostname")}
                if "mqtt_ca_file" in form else {}),
@@ -689,16 +691,17 @@ def blocks_not_read(version) -> frozenset[str]:
 
 def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool,
                  error=None, remote=None, hide=frozenset(), rev: str = "", links=None,
-                 mqtt_stored: str = "", tls_stored: str | None = None, form=None) -> dict:
+                 mqtt_stored: str = "", tls_stored: str | None = None, form=None,
+                 mqtt_key_stored: str | None = None) -> dict:
     """What _mapping_form.html is rendered with (every place that shows the form);
     `hide`: blocks the node that saves it doesn't read (blocks_not_read); `rev`: the
     stored mapping's revision (config.mapping_revision) on the node that saves it;
     `links`: the other names of the serial ports (portlist.links). The stored MQTT
-    password and TLS key password are never shown, only whether there is one
-    (`mqtt_stored`, `tls_stored`; None: the form goes by the mapping it shows), and after
-    an error what was typed and the remove boxes of the submitted `form`
-    (mqtt_password_view, tls_password_view) and its points JSON as it was posted
-    (_reshown_points)."""
+    password, TLS key password and MQTT client key password are never shown, only whether
+    there is one (`mqtt_stored`, `tls_stored`, `mqtt_key_stored`; None: the form goes by the
+    mapping it shows), and after an error what was typed and the remove boxes of the
+    submitted `form` (mqtt_password_view, tls_password_view, mqtt_key_password_view) and
+    its points JSON as it was posted (_reshown_points)."""
     out = {"mapping": mapping, "is_new": is_new,
            "modbus_points_json": (_reshown_points(form, mapping) if form is not None
                                   else _modbus_points_json(mapping)),
@@ -707,6 +710,8 @@ def form_context(mapping: MappingConfig, ports: list, ips: list, *, is_new: bool
            **mqtt_password_view(mqtt_stored, form)}
     if tls_stored is not None:
         out.update(tls_password_view(tls_stored, form))
+    if mqtt_key_stored is not None:
+        out.update(mqtt_key_password_view(mqtt_key_stored, form))
     return out
 
 
@@ -740,6 +745,12 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
         _keep_point_options(new_map, existing)
     if posted:
         new_map.mqtt.password = mqtt_password_from_form(form, existing.mqtt.password)
+        if "mqtt_ca_file" in form and form.get("mqtt_client_key_password", "") in ("", REDACTED):
+            # nor the MQTT client key password: a blank field keeps it, unless the remove
+            # box is ticked (a form without the MQTT TLS block keeps all of it, above)
+            new_map.mqtt.client_key_password = (
+                "" if _checkbox(form, "mqtt_client_key_password_clear")
+                else existing.mqtt.client_key_password)
         net = new_map.network
         if not form.get("network_tls_key_password", ""):
             # the form never shows the stored TLS key password: a blank field (or a form
@@ -782,6 +793,13 @@ def tls_password_view(stored: str, form=None) -> dict:
             "tls_pw_clear": form is not None and _checkbox(form, "network_tls_key_password_clear")}
 
 
+def mqtt_key_password_view(stored: str, form=None) -> dict:
+    """The same for the MQTT client key password (mqtt.client_key_password)."""
+    return {"mqtt_key_pw_stored": bool(stored),
+            "mqtt_key_pw_typed": form.get("mqtt_client_key_password", "") if form is not None else "",
+            "mqtt_key_pw_clear": form is not None and _checkbox(form, "mqtt_client_key_password_clear")}
+
+
 def _reshown_points(form, mapping) -> str:
     """The points JSON of a refused form, to show it again: the text as it was posted (a
     typo in it is then fixed, not lost, and Save never stores the points it could not read
@@ -808,4 +826,5 @@ def _form_error(render, request, state, form, message: str):
                                                       (mapping.serial.port, mapping.serial_b.port)),
                                  mqtt_stored=stored.mqtt.password if stored else "",
                                  tls_stored=stored.network.tls_key_password if stored else "",
+                                 mqtt_key_stored=stored.mqtt.client_key_password if stored else "",
                                  form=form))
