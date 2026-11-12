@@ -136,8 +136,11 @@ def routes(ctx: Ctx) -> list:
     flash = _Flash()
 
     def _browser(request) -> str:
-        """Which browser asks, for the flash: its CSRF cookie (a form's POST has one)."""
-        return request.cookies.get(auth.CSRF_COOKIE) or ""
+        """Which browser asks, for the flash: its CSRF token (a form's POST has one), as
+        GuardMiddleware read it from the cookie under this port's name (or moved it from
+        the name of 2.8), so the page the redirect leads to finds it under that name."""
+        return (getattr(request.state, "csrf_token", None)
+                or auth.cookie(request, auth.CSRF_COOKIE) or "")
 
     async def settings_get(request, ok=None, error=None, new_api_token=None, import_preview=None,
                            new_cluster_key=None, restore_preview=None, section=None,
