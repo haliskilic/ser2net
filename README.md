@@ -221,8 +221,15 @@ düzenlemeye gerek yok.
   durunca ya da broker bağlantıyı kaybedince (Last-Will) `offline` olur. Client ID boşsa
   broker yeni bağlantıyı kopan eskisiyle eşleştiremez ve eskisinin Will'ini yeni
   `online`'dan sonra yayınlayabilir (30 s'lik keepalive'ın 1,5 katına kadar bekler); bu
-  yüzden `online` her bağlantıdan 50 s sonra bir kez daha gönderilir. `paho-mqtt`
-  gerektirir (opsiyonel; yoksa köprü normal çalışır).
+  yüzden `online` her bağlantıdan 50 s sonra bir kez daha gönderilir. Bağlantı her
+  değiştiğinde loglanır (bağlanıyor, bağlandı, broker'ın verdiği nedenle reddedildi,
+  hatasıyla bağlanamıyor — DNS, yanıt yok, TLS sertifikası — ve koptu; her sorun, değişene
+  kadar bir kez); broker'ın reddettiği abonelikler ve bir topic'e ilk başarısız yayın da
+  loglanır. Eşlemenin durumu (REST API'de `mqtt`: durum, broker, ne zamandan beri, hata,
+  teslim edilemeyen mesajlar) ve `/metrics` bunu taşır; pano nedeniyle birlikte
+  **⚠ MQTT: … ile bağlantı yok** gösterir. `+` ya da `#` içeren bir base topic (hiçbir mesaj
+  ona yayınlanamaz) eşlemenin MQTT'sini kapalı tutar ve loglanır. `paho-mqtt` gerektirir
+  (opsiyonel; yoksa köprü normal çalışır).
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
   olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
@@ -374,7 +381,9 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   el sıkışmaları ve kabulden hemen sonra reddedilen bağlantılar
   (`ser2net_connections_refused_total`, nedene göre); bir Modbus gateway'in periyodik
   okuduğu her unit için yanıt verip vermediği (`ser2net_modbus_unit_up`) ve başarısız
-  okumaları (`ser2net_modbus_unit_poll_errors_total`).
+  okumaları (`ser2net_modbus_unit_poll_errors_total`); MQTT'ye yayın yapan bir eşlemenin
+  broker'ına bağlı olup olmadığı (`ser2net_mqtt_connected`) ve broker'a teslim
+  edemediği mesajlar (`ser2net_mqtt_messages_dropped_total`).
 
 ---
 

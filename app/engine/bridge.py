@@ -303,6 +303,10 @@ class RunnerStatus:
     # offline), "cause" (offline: "no reply" | "port down"), "since" (unix time of the last
     # change, None before one), "errors" (failed point reads)}
     units: list[dict] = field(default_factory=list)
+    # the MQTT publisher's connection to its broker while the mapping runs (empty: MQTT
+    # off): MqttPublisher.state — "state" (connecting | connected | down | off), "broker",
+    # "since", "error", "dropped"
+    mqtt: dict = field(default_factory=dict)
 
     def set_clients(self, clients) -> None:
         """Publish the connected clients (each has peer, connected_at and priority)."""
@@ -333,6 +337,7 @@ class RunnerStatus:
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
             "units": [dict(u) for u in self.units],
+            "mqtt": dict(self.mqtt),
         }
 
 
@@ -627,6 +632,7 @@ class MappingRunner:
         if self.mapping.mqtt.enabled:
             from .mqtt_pub import MqttPublisher
             self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log)
+            self.status.mqtt = self._mqtt.state
             self._mqtt.connect()
 
         net = self.mapping.network
@@ -687,6 +693,7 @@ class MappingRunner:
         if self._mqtt is not None:
             self._mqtt.close()
             self._mqtt = None
+        self.status.mqtt = {}
         if self._server is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)

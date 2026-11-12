@@ -66,6 +66,16 @@ def routes(ctx: Ctx) -> list:
         for m, u in units:
             lines.append(f"ser2net_modbus_unit_poll_errors_total{{{_unit_label(m, u)}}} "
                          f"{u.get('errors', 0)}")
+        # mappings that publish to MQTT (while they run): connected to the broker, and the
+        # messages not handed to it (see MqttPublisher.state)
+        brokers = [(m, mq) for m in state.config.mappings
+                   if (mq := (statuses.get(m.id) or {}).get("mqtt"))]
+        for m, mq in brokers:
+            lines.append(f"ser2net_mqtt_connected{{{_label(m)}}} "
+                         f"{1 if mq.get('state') == 'connected' else 0}")
+        for m, mq in brokers:
+            lines.append(f"ser2net_mqtt_messages_dropped_total{{{_label(m)}}} "
+                         f"{mq.get('dropped', 0)}")
         return PlainTextResponse("\n".join(lines) + "\n",
                                  media_type="text/plain; version=0.0.4")
 
@@ -106,6 +116,10 @@ def routes(ctx: Ctx) -> list:
         Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
         Route("/api/ports/table", api_ports_table),
     ]
+
+
+def _label(mapping) -> str:
+    return f'mapping="{_metric_label(mapping.name)}",id="{_metric_label(mapping.id)}"'
 
 
 def _unit_label(mapping, unit: dict) -> str:

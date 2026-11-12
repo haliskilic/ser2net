@@ -392,6 +392,36 @@ def test_units_not_answering():
     print("dashboard: a running gateway lists the units that stopped answering  OK")
 
 
+def test_mqtt_not_connected():
+    """A mapping whose MQTT publisher has no connection to its broker, or could not start,
+    says so under its state, with the reason; not while connected or connecting, nor for
+    a status without mqtt (MQTT off, an older peer's)."""
+    tpl = make_templates().env.get_template("_mappings_body.html")
+    m = MappingConfig.from_dict({"id": "m1", "name": "m1", "serial": {"port": "COM3"},
+                                 "mqtt": {"enabled": True, "host": "b", "base_topic": "t"}})
+    for mq, shown in (
+            ({"state": "down", "broker": "b:1883", "error": "b:1883 refused the connection: "
+              "Not authorized"}, "MQTT: no connection to b:1883 (b:1883 refused the "
+                                 "connection: Not authorized)"),
+            ({"state": "off", "broker": "b:1883", "error": "paho-mqtt is not installed"},
+             "MQTT off: paho-mqtt is not installed"),
+            ({"state": "connected", "broker": "b:1883", "error": ""}, None),
+            ({"state": "connecting", "broker": "b:1883", "error": ""}, None),
+            ({}, None), (None, None)):
+        st = {"state": "device-missing", "last_error": "no such device"}
+        if mq is not None:
+            st["mqtt"] = mq
+        out = tpl.render(mappings=[m], statuses={"m1": st}, can_edit=False)
+        check_table_contract(out, f"mappings table (mqtt {mq})")
+        flagged = [n for n in parse(out).walk() if "data-mqtt-down" in n.attrs]
+        if shown is None:
+            assert not flagged, (mq, out)
+            continue
+        assert len(flagged) == 1 and html.escape(shown, quote=False) in out, out
+        assert "the mapping’s log" in flagged[0].attrs["title"], flagged[0].attrs
+    print("dashboard: an MQTT publisher without a broker connection says why  OK")
+
+
 def test_mapping_form_kick_hint():
     """A server mapping with "Kick old client" on and no allow-list says, in its form, that any
     host reaching the port can take the connection over; with an allow-list, or without
@@ -469,6 +499,7 @@ def main():
     test_mqtt_command_tags()
     test_mapping_form_unit_warnings()
     test_units_not_answering()
+    test_mqtt_not_connected()
     print("\nPASS: UI markup contract")
 
 
