@@ -136,11 +136,12 @@ class _Reads:
     failed: list = field(default_factory=list)  # (point, error)
     answered: bool = False      # the unit answered at least once (a value or an exception)
 
-    def add(self, other: "_Reads") -> None:
-        self.values.update(other.values)
-        self.stamps.update(other.stamps)
-        self.failed += other.failed
-        self.answered = self.answered or other.answered
+    def drop(self, name: str) -> None:
+        """A point written after it was read here: what was read before the write is out
+        of date (the write's read-back has reported the point already)."""
+        self.values.pop(name, None)
+        self.stamps.pop(name, None)
+        self.failed = [(p, e) for p, e in self.failed if p.name != name]
 
 
 class ModbusGatewayRunner:
@@ -192,6 +193,7 @@ class ModbusGatewayRunner:
                 self._units.setdefault(p.unit, _Unit(p.unit)).points.append(p)
         self._failing: dict[str, bool] = {}
         self._bad: set[str] = set()  # plain JSON values: points last published as "bad"
+        self._cycle: Optional[_Reads] = None  # the reads of the unit being polled (see _Reads.drop)
 
     def _log(self, msg: str) -> None:
         if self.log:
@@ -438,14 +440,20 @@ class ModbusGatewayRunner:
         in this cycle."""
         if self._link.down:  # nothing to read (the link logs the outage)
             return self._unit_missed(u, "port down")
-        if u.state == "offline":
-            probe = u.points[u.probe % len(u.points)]
-            u.probe += 1
-            reads = await self._read_points([probe])
-            if reads.answered:
-                reads.add(await self._read_points([p for p in u.points if p is not probe]))
-        else:
-            reads = await self._read_points(u.points)
+        # what is read here is published once all of the unit's points are read; a write in
+        # between drops the value of its point that was read before it (write_point)
+        reads = self._cycle = _Reads()
+        try:
+            if u.state == "offline":
+                probe = u.points[u.probe % len(u.points)]
+                u.probe += 1
+                await self._read_points([probe], reads)
+                if reads.answered:
+                    await self._read_points([p for p in u.points if p is not probe], reads)
+            else:
+                await self._read_points(u.points, reads)
+        finally:
+            self._cycle = None
         u.errors += len(reads.failed)
         self._forget([p.name for p, _e in reads.failed])
         if not reads.answered:
@@ -472,8 +480,7 @@ class ModbusGatewayRunner:
             self._publish_values(reads.values, reads.stamps)
         return None
 
-    async def _read_points(self, points) -> _Reads:
-        reads = _Reads()
+    async def _read_points(self, points, reads: _Reads) -> None:
         for p in points:
             if self._stop.is_set():
                 break
@@ -486,7 +493,6 @@ class ModbusGatewayRunner:
             except Exception as e:  # an answer, but not a value; one bad point must not stop the loop
                 reads.failed.append((p, e))
                 reads.answered = True
-        return reads
 
     def _report_units(self) -> None:
         self.status.units = [u.as_dict() for u in self._units.values()]
@@ -565,6 +571,8 @@ class ModbusGatewayRunner:
                    else modbus.write_multiple_registers_pdu(point.address, regs))
         rpdu = await self._transaction(point.unit, pdu)
         modbus.check_write_response(rpdu, pdu)
+        if self._cycle is not None:  # a poll that read the point before the write is under way
+            self._cycle.drop(point.name)
         if point.unit == modbus.BROADCAST:
             self._log(f"wrote '{point.name}' = {value!r} (broadcast to unit 0, FC{pdu[0]}; "
                       "not read back)")
