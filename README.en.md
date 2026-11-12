@@ -807,8 +807,12 @@ are read again for new connections (a renewed certificate: e.g. certbot's
 `--deploy-hook "systemctl reload ser2net"`). The admin UI's address takes effect only at the
 next start (the log, the reply and Settings say so), as do `--data-dir` / `--config` and the
 environment variables. In a terminal, SIGHUP from the terminal closing still ends ser2net
-(cleanly). The log line and the audit record (`config_reload`) say what changed. Saves made in
-the UI meanwhile write the configuration in use, so reload first.
+(cleanly). The log line and the audit record (`config_reload`) say what changed. An edit that
+isn't reloaded is noticed within seconds (a WARNING in `all.log`, a banner in Settings). A
+change saved meanwhile — in the UI, a start or stop, an LDAP/OIDC sign-in — is not refused,
+but it writes the configuration in use: the edited file is kept in `backups/` first, and
+`all.log`, the audit log (`config_outside_edit_replaced`) and Settings name that backup, with a
+link to restore it. So reload before saving anything else.
 
 Deleting `config.json` + `all.log` fully resets the system (the next start deletes the
 logs and traces of mappings that no longer exist; `backups/` is never restored by itself —

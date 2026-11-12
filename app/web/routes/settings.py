@@ -71,11 +71,19 @@ def routes(ctx: Ctx) -> list:
         is_admin = me is not None and me.role == "admin"
         backups = state.store.backups() if is_admin else []
         disk = await asyncio.to_thread(storage.usage, state.data_dir) if is_admin else None
+        # config.json edited outside ser2net: not in use yet, or replaced by a save since
+        outside = await asyncio.to_thread(state.store.changed_on_disk) if is_admin else None
+        replaced = state.store.replaced_edit if is_admin else None
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
         serve_ip, serve_port, serving_tls = state.admin_serving()
         configured = state.config.admin_ui
         hint_kind, hint_command = console.reconfigure_hint(state.data_dir, state.service_name)
         return render(request, "settings.html", ok=ok, error=error,
+                      outside_edit=_local_time(outside) if outside else "",
+                      outside_gone=outside == 0.0,
+                      replaced_edit=dict(replaced, edited=_local_time(replaced["edited"]),
+                                         saved=_local_time(replaced["saved"]))
+                      if replaced else None,
                       serving_address=f"{serve_ip}:{serve_port}", serving_tls=serving_tls,
                       # what config.json sets and the admin UI uses only from the next start
                       pending_address="" if (configured.bind_ip, configured.port) == (
@@ -1260,6 +1268,10 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/backups/restore-mappings", backup_restore_mappings, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
+
+
+def _local_time(epoch: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch)) if epoch else "?"
 
 
 def _key_hint(key: str) -> str:

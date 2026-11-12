@@ -175,11 +175,6 @@ def _copy_into(cur: AppConfig, new: AppConfig) -> None:
             setattr(cur, f.name, getattr(new, f.name))
 
 
-def _read(path: str) -> str:
-    with open(path, encoding="utf-8") as fh:
-        return fh.read()
-
-
 async def reload_config(state, source: str, actor_ip: str = "local",
                         user: str = "") -> tuple[bool, str]:
     """Read config.json again and apply it (see the module docstring). `source` names who
@@ -213,7 +208,7 @@ async def _reload(state) -> tuple[bool, str]:
     cur = state.config
     async with state.config_lock:
         try:
-            text = await asyncio.to_thread(_read, state.store.path)
+            text, seen = await asyncio.to_thread(state.store.read_current)
             raw = json.loads(text)
             if not isinstance(raw, dict):
                 raise ValueError("not a JSON object")
@@ -248,6 +243,8 @@ async def _reload(state) -> tuple[bool, str]:
         before = capture(cur)
         _copy_into(cur, new)
         cur.tolerated = still
+        state.store.note_read(seen)  # in use now: a save no longer replaces an outside edit
+        state.store.replaced_edit = None
     done = await apply_changes(state, before, renew_tls=True)
     notes = []
     guard = state.admin_guard

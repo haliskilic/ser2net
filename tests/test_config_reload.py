@@ -13,7 +13,10 @@ Settings -> Configuration backups -> Reload config.json.
   * `ser2net --reload` reloads the running instance (any platform) and fails when none
     runs; the Settings button reloads, admins only;
   * an unchanged TLS mapping reads its renewed certificate files for new connections
-    (cryptography makes them).
+    (cryptography makes them);
+  * an edit made outside ser2net is noticed (all.log, Settings); a save made before it is
+    reloaded goes ahead (never refused), keeps the edited file in backups/ and names it
+    (all.log, the audit log, Settings with a restore link).
 
 Run: python3 tests/test_config_reload.py
 """
@@ -354,7 +357,108 @@ def test_terminal_hangup() -> None:
         srv.stop()
 
 
+def test_outside_edit_store() -> None:
+    """ConfigStore: an edit made outside ser2net is seen (not a touch), and a save that
+    replaces it keeps it in backups/ and reports it, also a start/stop's save."""
+    from app.config import AppConfig, ConfigStore
+
+    d = tempfile.mkdtemp(prefix="s2n_outside_")
+    path = os.path.join(d, "config.json")
+    store = ConfigStore(path)
+    lines, reported = [], []
+    store.log, store.on_replaced = lines.append, reported.append
+    store.save(AppConfig(), validate=False)
+    cfg = store.load()
+    assert store.changed_on_disk() is None
+    st = os.stat(path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))  # touched only
+    assert store.changed_on_disk() is None, "a touch is no edit"
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    doc["log_max_age_days"] = 9
+    edited = json.dumps(doc, indent=2)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(edited)
+    changed = store.changed_on_disk()
+    assert changed and abs(changed - os.stat(path).st_mtime) < 1, changed
+    cfg.trace_max_age_days = 3  # a change made in the UI meanwhile
+    store.save(cfg)
+    assert store.changed_on_disk() is None
+    info = store.replaced_edit
+    assert info and info["backup"] and reported == [info], (info, reported)
+    with open(os.path.join(store.backup_dir, info["backup"]), encoding="utf-8") as fh:
+        assert fh.read() == edited, "the edited file is kept"
+    assert any(ln.startswith("WARNING: config.json had been changed outside ser2net") and
+               os.path.join("backups", info["backup"]) in ln for ln in lines), lines
+    # a start or stop (backup=False) keeps an outside edit too
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(edited.replace('"log_max_age_days": 9', '"log_max_age_days": 8'))
+    store.replaced_edit = None
+    cfg.mappings = []
+    cfg.trace_max_age_days = 4
+    store.save(cfg, backup=False)
+    info = store.replaced_edit
+    assert info and info["backup"], info
+    with open(os.path.join(store.backup_dir, info["backup"]), encoding="utf-8") as fh:
+        assert '"log_max_age_days": 8' in fh.read()
+    os.remove(path)
+    assert store.changed_on_disk() == 0.0
+    print("store: an outside edit is seen (a touch is not), a save (also a start/stop) keeps "
+          "it in backups/ and reports it; a removed file is seen  OK")
+
+
+def test_outside_edit_server() -> None:
+    srv = server({})
+    try:
+        srv.start()
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        cfg = srv.saved_config()
+        cfg["external_users_expire_days"] = 30
+        write_config(srv, cfg)
+        wait(lambda: "WARNING: config.json was changed outside ser2net (" in srv.output(),
+             "the notice in all.log", 15)
+        st, _, page = b.get("/settings")
+        assert "config.json was changed outside ser2net (" in page and "is not in use" in page
+        # a change saved here before a reload: goes ahead, keeps and names the edited file
+        st, _, page = b.post("/settings/retention", {"trace_max_age_days": "5",
+                                                     "log_max_age_days": "0"})
+        assert st == 200, st
+        assert srv.saved_config().get("external_users_expire_days") != 30
+        log = srv.output()
+        assert "WARNING: config.json had been changed outside ser2net (" in log, log[-1500:]
+        st, _, page = b.get("/settings")
+        assert "replaced a config.json edited outside ser2net" in page, page[-3000:]
+        name = page.split('/settings?restore=')[1].split('#')[0]
+        with open(os.path.join(srv.data, "backups", name), encoding="utf-8") as fh:
+            assert json.load(fh)["external_users_expire_days"] == 30
+        with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
+            audit = fh.read()
+        assert "config_outside_edit_replaced" in audit and name in audit, audit[-800:]
+        assert "config.json was changed outside ser2net (" not in page
+        print("server: an outside edit is noted in all.log and Settings; a save made before a "
+              "reload goes ahead, keeps the edited file (named in all.log, the audit log and "
+              "Settings, with a restore link)  OK")
+        # edited and reloaded: nothing is reported any more
+        cfg = srv.saved_config()
+        cfg["external_users_expire_days"] = 31
+        write_config(srv, cfg)
+        st, _, page = b.post("/settings/config/reload", {})
+        assert "config.json was read again and applied" in page
+        assert "outside ser2net" not in page, "a reloaded file is the one in use"
+        st, _, page = b.post("/settings/retention", {"trace_max_age_days": "6",
+                                                     "log_max_age_days": "0"})
+        assert srv.saved_config()["external_users_expire_days"] == 31
+        assert srv.output().count("WARNING: config.json had been changed outside ser2net") == 1
+        print("server: once reloaded, the file is the one in use: later saves keep its "
+              "changes and report nothing  OK")
+    finally:
+        srv.stop()
+
+
 def main() -> None:
+    test_outside_edit_store()
+    test_outside_edit_server()
     test_reload()
     test_terminal_hangup()
     if need("cryptography", what="the TLS mapping's certificates (made in-process)"):

@@ -837,7 +837,12 @@ yeniden okunur (yenilenen bir sertifika: örn. certbot'un
 sonraki açılışta geçerli olur (log, yanıt ve Ayarlar bunu söyler); `--data-dir` / `--config`
 ve ortam değişkenleri de öyle. Terminalde, terminal kapanınca gelen SIGHUP ser2net'i yine
 (düzgünce) kapatır. Log satırı ve denetim kaydı (`config_reload`) neyin değiştiğini söyler.
-Bu arada arayüzden yapılan kayıtlar kullanılan yapılandırmayı yazar; önce yeniden yükleyin.
+Yeniden yüklenmeyen bir düzenleme birkaç saniye içinde fark edilir (`all.log`'da bir WARNING,
+Ayarlar'da bir uyarı). Bu arada kaydedilen bir değişiklik — arayüzde, bir başlatma ya da
+durdurma, bir LDAP/OIDC girişi — reddedilmez, ama kullanılan yapılandırmayı yazar: düzenlenen
+dosya önce `backups/`'a alınır; `all.log`, denetim kaydı (`config_outside_edit_replaced`) ve
+Ayarlar o yedeğin adını, geri yükleme bağlantısıyla birlikte verir. Bu yüzden başka bir şey
+kaydetmeden önce yeniden yükleyin.
 
 `config.json` + `all.log` silinince sistem **sıfırdan** başlar (sonraki açılış artık
 olmayan eşlemelerin log'larını ve trace'lerini siler; `backups/` kendiliğinden geri
