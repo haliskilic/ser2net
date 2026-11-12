@@ -12,7 +12,7 @@ import json
 import re
 
 from ...config import (MODBUS_TIMEOUT_DEFAULT_S, LdapSettings, MappingConfig, ModbusPoint,
-                       OidcSettings, valid_mapping_id)
+                       OidcSettings, unstorable_text, valid_mapping_id)
 from ...engine import netinfo, portlist
 from ...i18n import _
 
@@ -296,7 +296,19 @@ def _modbus_points_json(mapping) -> str:
             **{k: getattr(p, k) for k in ("min", "max", "allowed") if getattr(p, k) is not None},
             **({"poll": p.poll} if p.poll is not True else {})}
            for p in mapping.modbus_poll.points]
-    return json.dumps(pts, indent=2) if pts else ""
+    return json_text(pts, indent=2) if pts else ""
+
+
+def json_text(value, **kwargs) -> str:
+    """JSON with non-ASCII text as it is ("Sıcaklık", not S\\u0131cakl\\u0131k), so it can be
+    read and edited; escaped only if it holds what UTF-8 can't carry (an unpaired surrogate,
+    which an edit refuses: see config.unstorable_text)."""
+    text = json.dumps(value, ensure_ascii=False, **kwargs)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return json.dumps(value, **kwargs)
+    return text
 
 
 def _keep_point_options(new_map, existing) -> None:
@@ -344,6 +356,9 @@ def _parse_modbus_points(raw: str, strict: bool) -> list:
     for i, p in enumerate(points, 1):
         if not isinstance(p, dict):
             raise ValueError(_("Modbus poll point #{0} is not an object.").format(i))
+        if unstorable_text(p) is not None:
+            raise ValueError(_("Modbus poll point #{0} has a character that can't be stored: "
+                               "an unpaired surrogate escape (\\ud800 to \\udfff).").format(i))
         for key in p:
             if key in _POINT_KEYS:
                 continue

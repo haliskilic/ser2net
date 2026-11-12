@@ -807,6 +807,30 @@ class ModbusPoll:
                                         name))
 
 
+def unstorable_text(value: Any, where: str = "") -> Optional[str]:
+    """Where in ``value`` (a to_dict() tree: dicts, lists, strings) there is text that can't
+    be written as UTF-8 — an unpaired surrogate (U+D800-U+DFFF), which only a JSON escape
+    such as \\ud800 can make — as a path like "modbus_poll.points[0].name"; None when there
+    is none. config.json could not be saved with it."""
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return where or "?"
+        return None
+    if isinstance(value, dict):
+        for k, v in value.items():
+            key = str(k).encode("utf-8", "backslashreplace").decode("utf-8")
+            spot = f"{where}.{key}" if where else key
+            if (bad := unstorable_text(k, spot)) or (bad := unstorable_text(v, spot)):
+                return bad
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            if bad := unstorable_text(v, f"{where}[{i}]"):
+                return bad
+    return None
+
+
 # ---------------------------------------------------------------------------
 # A single serial<->TCP mapping
 # ---------------------------------------------------------------------------
@@ -889,6 +913,9 @@ class MappingConfig:
         refuse them: a stored config has to keep loading and saving (Docker re-saves it on
         every start), so a stored value they forbid is refused where it is used instead
         (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url)."""
+        if (spot := unstorable_text(self.to_dict())) is not None:
+            raise ConfigError(_("{0} has a character that can't be stored: an unpaired "
+                                "surrogate escape (\\ud800 to \\udfff).").format(spot))
         for side in self.serial_sides():
             if url_port(side.port):
                 raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "

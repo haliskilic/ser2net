@@ -28,7 +28,7 @@ from ...i18n import _
 from .. import auth, ldap_auth, selfsigned
 from .common import Ctx, csrf_failed
 from .forms import (
-    _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
+    _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem, json_text,
 )
 
 # a mappings file to import may be larger than other requests (server.MAX_BODY_BYTES):
@@ -647,9 +647,10 @@ def routes(ctx: Ctx) -> list:
         # offers it to operators; a viewer, possibly an anonymous one, must not read them).
         if deny := require_role(request, "operator"):
             return deny
+        # non-ASCII text as it is (mapping and point names, topics), like config.json
         data = {"version": 1, "mappings": [m.to_dict() for m in state.config.mappings]}
         return Response(
-            json.dumps(data, indent=2), media_type="application/json",
+            json_text(data, indent=2), media_type="application/json; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=ser2net-mappings.json"})
 
     # ---- import: the form first shows a preview (step=preview), then applies it in
