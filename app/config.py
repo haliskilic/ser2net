@@ -531,14 +531,16 @@ class NetworkSettings:
     connect_timeout_s: float = 10.0
     # Per-mapping TLS for the data bridge (server/client TCP), see engine/tls.py. A listener
     # needs tls_cert and tls_key. A connect-out link presents them (when set) to a server
-    # that asks for a client certificate, and checks the server's certificate against the
-    # SHA-256 fingerprints in tls_fingerprint (when set; without, it only encrypts).
+    # that asks for a client certificate, and checks the server's certificate: it must
+    # chain to a certificate in the CA file tls_ca and name remote_host, and/or be one of
+    # the SHA-256 fingerprints in tls_fingerprint (with neither, the link only encrypts).
     # tls_key_password decrypts an encrypted key (never asked for on a terminal); edits
     # load the files with it (MappingConfig.check_tls_files).
     tls: bool = False
     tls_cert: str = ""
     tls_key: str = ""
     tls_key_password: str = ""
+    tls_ca: str = ""
     tls_fingerprint: str = ""
 
     @property
@@ -1002,6 +1004,10 @@ def tls_file_message(e: Any) -> str:
                  "password right, and is it the certificate's key?").format(e.path, e.detail)
     if e.kind == "no_cert":
         return _("Enable TLS requires both a certificate and a key.")
+    if e.kind == "ca_unreadable":
+        return _("The CA file {0} can't be read: {1}").format(e.path, e.detail)
+    if e.kind == "ca_empty":
+        return _("The CA file {0} holds no certificate (PEM or DER).").format(e.path)
     return str(e)
 
 

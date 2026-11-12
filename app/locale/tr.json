@@ -925,5 +925,8 @@
   "optional: for a server that asks for a client certificate": "isteğe bağlı: istemci sertifikası isteyen bir sunucu için",
   "Server certificate fingerprint (SHA-256)": "Sunucu sertifikası parmak izi (SHA-256)",
   "blank = not checked; several: separate with commas": "boş = denetlenmez; birden çok: virgülle ayır",
-  "Without a fingerprint the link is encrypted, but the server’s certificate is not checked: anyone on the network path could pose as the server. The mapping’s log shows the fingerprint of the certificate at each connection.": "Parmak izi olmadan bağlantı şifrelenir ama sunucunun sertifikası denetlenmez: ağ yolundaki herkes kendini sunucu gibi gösterebilir. Eşlemenin logu her bağlantıda sertifikanın parmak izini gösterir."
+  "Without a CA file or a fingerprint the link is encrypted, but the server’s certificate is not checked: anyone on the network path could pose as the server. The mapping’s log shows the fingerprint of the certificate at each connection.": "CA dosyası ya da parmak izi olmadan bağlantı şifrelenir ama sunucunun sertifikası denetlenmez: ağ yolundaki herkes kendini sunucu gibi gösterebilir. Eşlemenin logu her bağlantıda sertifikanın parmak izini gösterir.",
+  "the server’s certificate must come from it and name the remote host": "sunucunun sertifikası bundan gelmeli ve uzak sunucunun adını taşımalı",
+  "The CA file {0} can't be read: {1}": "CA dosyası {0} okunamıyor: {1}",
+  "The CA file {0} holds no certificate (PEM or DER).": "CA dosyası {0} hiç sertifika içermiyor (PEM ya da DER)."
 }
