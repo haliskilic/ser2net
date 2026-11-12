@@ -50,14 +50,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--data-dir",
         default=None,  # see below: whether it was given matters to --install-service
-        help="Directory for config.json, backups and logs (default: ./data; for "
-             "--install-service: the data directory the service already uses, or for a "
-             "new service from the standalone exe %%ProgramData%%\\ser2net).",
+        help="Directory for config.json, its backups, the logs and traces (default: ./data; "
+             "for --install-service: the data directory the service already uses, or for a "
+             "new service from the standalone exe %%ProgramData%%\\ser2net). Give ser2net "
+             "a folder of its own: it makes it private to the account it runs as.",
     )
     p.add_argument(
         "--config",
         default=None,
-        help="Path to config.json (default: <data-dir>/config.json).",
+        help="Path to config.json (default: <data-dir>/config.json). Its folder is the data "
+             "directory then: the backups, logs and traces are kept next to it.",
     )
     p.add_argument(
         "--reconfigure",
@@ -207,6 +209,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
 
     config_path = args.config or os.path.join(args.data_dir, "config.json")
+    split = split_layout_note(args)
+    if split:
+        print(f"ser2net: {split}", file=sys.stderr)
+        from app import standalone  # (its notes are the lines all.log gets at start-up)
+
+        standalone.notes.append(split)
     if args.service:
         return _service(args, config_path)
 
@@ -249,7 +257,23 @@ def main(argv: list[str] | None = None) -> int:
         if rc == 0 and done.get("config") is not None:
             _print_firewall_hint(done["config"], args.service_name)
         return rc
+    if os.name == "posix":
+        # what the server creates (all.log, audit.log, traces, a mapping's log, tls/) is
+        # for this account only, also in a data directory it doesn't make private
+        os.umask(0o077)
     return runtime.main(config_path=config_path, reconfigure=args.reconfigure)
+
+
+def split_layout_note(args: argparse.Namespace) -> str:
+    """A warning when both --data-dir and --config are given and the config file is not in
+    that directory: ser2net keeps its state next to the config file, not in --data-dir."""
+    if not (args.config and args.data_dir_given):
+        return ""
+    folder = os.path.dirname(os.path.abspath(args.config))
+    if os.path.normcase(os.path.abspath(args.data_dir)) == os.path.normcase(folder):
+        return ""
+    return (f"WARNING: --config {args.config} is not in --data-dir {args.data_dir}: ser2net "
+            f"keeps the backups, logs and traces next to the config file, in {folder}")
 
 
 def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
