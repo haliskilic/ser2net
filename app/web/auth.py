@@ -34,6 +34,7 @@ import time
 import unicodedata
 from collections import OrderedDict, deque
 
+from ..engine.netguard import address_key  # an IPv6 address by its /64, as the connection caps
 from . import proxy
 
 SESSION_COOKIE = "ser2net_session"
@@ -603,21 +604,6 @@ def csrf_token_matches(request, token) -> bool:
 # --------------------------------------------------------------------------
 # login rate limiter (per IP or per user name, sliding window)
 # --------------------------------------------------------------------------
-def address_key(ip: str) -> str:
-    """What the per-address sign-in limit counts an address under: an IPv6 address by its
-    /64 network (a host or a LAN gets a whole /64 and can use any address in it), an IPv4
-    address (also when written IPv4-mapped) as it is, anything else unchanged."""
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
-        return ip
-    if isinstance(addr, ipaddress.IPv6Address):
-        if addr.ipv4_mapped is not None:
-            return str(addr.ipv4_mapped)
-        return str(ipaddress.IPv6Network((int(addr) >> 64 << 64, 64)))
-    return str(addr)
-
-
 class LoginRateLimiter:
     """Blocks an address (an IPv6 one by its /64: address_key), or what `key` makes of the
     value given (a user name), after `max_attempts` failed sign-ins in `window_s` seconds.
