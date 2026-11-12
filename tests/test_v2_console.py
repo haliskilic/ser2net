@@ -171,8 +171,9 @@ def main():
         log = open(os.path.join(tmp, "all.log"), encoding="utf-8").read()
         assert f"WebSocket /api/mappings/{mid}/console from 127.0.0.1 refused: no valid " \
             "session" in log, log[-1500:]
-        assert f"WebSocket /api/mappings/{mid}/console from 127.0.0.1 refused: from another " \
-            "site ('http://evil.example')" in log, log[-1500:]
+        # (another site's page: the cross-site refusal's line, as for the UI's forms)
+        assert f"refused WebSocket /api/mappings/{mid}/console from 127.0.0.1: opened by a " \
+            "page of another site (Origin 'http://evil.example'" in log, log[-1500:]
         print("console: unauthenticated / cross-site WS rejected, and logged  OK")
         asyncio.run(traffic_test())
 
