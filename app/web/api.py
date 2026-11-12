@@ -12,7 +12,8 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from ..config import ROLE_RANK, ConfigError, MappingConfig, valid_mapping_id
+from ..config import (ROLE_RANK, ConfigError, MappingConfig, check_mqtt_clashes,
+                      valid_mapping_id)
 from .routes import ops
 from .routes.common import client_ip as _client_ip
 
@@ -65,6 +66,10 @@ def build_api_routes(state):
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         async with state.config_lock:
+            try:
+                check_mqtt_clashes(mapping, state.config.mappings)
+            except ConfigError as e:
+                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
             state.config.mappings.append(mapping)
             try:
                 await state.asave()
@@ -101,6 +106,10 @@ def build_api_routes(state):
             existing = state.config.get_mapping(mid)
             if not existing:
                 return JSONResponse({"error": "not_found"}, status_code=404)
+            try:
+                check_mqtt_clashes(mapping, state.config.mappings)
+            except ConfigError as e:
+                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
             backup = list(state.config.mappings)
             state.config.mappings[state.config.mappings.index(existing)] = mapping
             try:
