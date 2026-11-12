@@ -676,7 +676,6 @@
   "“Kick old client” is on and no allowed client IPs are set: any host that can reach this port can take the connection over from the client using it.": "“Eski istemciyi at” açık ve izin verilen istemci IP'si girilmemiş: bu porta ulaşabilen her host, bağlantıyı kullanan istemcinin elinden alabilir.",
   "{0} (encryption) is not available here for this connection: the mapping is imported disabled rather than unencrypted": "{0} (şifreleme) bu bağlantıda burada kullanılamıyor: eşleme şifresiz olmak yerine kapalı olarak içe aktarıldı",
   "certauth (gtlssh login) is not available here: the mapping is imported disabled rather than open to clients without a login; allow only known client IPs on it before you enable it": "certauth (gtlssh girişi) burada kullanılamıyor: eşleme giriş yapmadan bağlanan istemcilere açık olmak yerine kapalı olarak içe aktarıldı; açmadan önce yalnızca bilinen istemci IP'lerine izin ver",
-  "TLS client certificates (ssl clientauth) are not available here: the mapping is imported disabled rather than open to clients without a certificate; allow only known client IPs on it before you enable it": "TLS istemci sertifikaları (ssl clientauth) burada kullanılamıyor: eşleme sertifikasız istemcilere açık olmak yerine kapalı olarak içe aktarıldı; açmadan önce yalnızca bilinen istemci IP'lerine izin ver",
   "TLS (ssl) is kept: the mapping uses the certificate '{0}' and the key '{1}'": "TLS (ssl) korundu: eşleme '{0}' sertifikasını ve '{1}' anahtarını kullanır",
   "TLS (ssl): the certificate '{0}' or the key '{1}' is not on this host: the mapping is imported disabled rather than unencrypted; set TLS on it with a certificate and key, then enable it": "TLS (ssl): '{0}' sertifikası ya da '{1}' anahtarı bu makinede yok: eşleme şifresiz olmak yerine kapalı olarak içe aktarıldı; eşlemede sertifika ve anahtarla TLS'i ayarla, sonra aç",
   "{0} (a write-only device) is not available here: the device's output would be sent to clients, so the mapping is imported disabled": "{0} (yalnızca yazılan cihaz) burada kullanılamıyor: cihazın çıktısı istemcilere gönderileceği için eşleme kapalı olarak içe aktarıldı",
@@ -930,5 +929,9 @@
   "The CA file {0} can't be read: {1}": "CA dosyası {0} okunamıyor: {1}",
   "The CA file {0} holds no certificate (PEM or DER).": "CA dosyası {0} hiç sertifika içermiyor (PEM ya da DER).",
   "Client CA certificate file": "İstemci CA sertifika dosyası",
-  "blank = no client certificate asked for; set: every client needs a certificate from it": "boş = istemci sertifikası istenmez; dolu: her istemcinin bundan gelen bir sertifikası olmalı"
+  "blank = no client certificate asked for; set: every client needs a certificate from it": "boş = istemci sertifikası istenmez; dolu: her istemcinin bundan gelen bir sertifikası olmalı",
+  "TLS client certificates (ssl clientauth) are kept: clients need a certificate from the CA file '{0}'": "TLS istemci sertifikaları (ssl clientauth) korundu: istemcilerin '{0}' CA dosyasından gelen bir sertifikası olmalı",
+  "TLS client certificates (ssl clientauth) are checked here only against a CA file on this host, and {0}: the mapping is imported disabled rather than open to clients without a certificate; set its client CA file before you enable it": "TLS istemci sertifikaları (ssl clientauth) burada yalnızca bu makinedeki bir CA dosyasına göre denetlenir ve {0}: eşleme sertifikasız istemcilere açık olmak yerine kapalı olarak içe aktarıldı; açmadan önce istemci CA dosyasını belirle",
+  "the ssl layer names none (CA=)": "ssl katmanı hiçbirini belirtmiyor (CA=)",
+  "'{0}' is not a file on this host": "'{0}' bu makinede bir dosya değil"
 }

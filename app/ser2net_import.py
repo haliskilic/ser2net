@@ -11,8 +11,9 @@ parser, and turns every ser2net connection into a dict for MappingConfig.from_di
 What has no equivalent here (LEDs, rotators, mDNS, chardelay, ...) is reported as a
 warning that names the connection. A connection that would be more open here than in
 ser2net is imported disabled, with a warning that says why: its gtlssh login
-(certauth) or TLS client certificates (ssl clientauth) cannot be carried over, its TLS
-certificate is not on this host (with the files there it keeps TLS), the device only
+(certauth) cannot be carried over, its TLS client certificates (ssl clientauth) only with
+the CA file they are checked against (CA=) on this host, its TLS certificate is not on
+this host (with the files there it keeps TLS), the device only
 received data (wronly, rawlp, no-con-to-acc), its bind address or remaddr cannot be
 used here. A connection that cannot be represented at all (a network or IPMI
 connector, a unix-socket accepter) is skipped with a warning, so every returned dict
@@ -769,33 +770,46 @@ _SSL_FILES = {"key": "/etc/ser2net/ser2net.key", "cert": "/etc/ser2net/ser2net.c
 
 
 def _ssl_layer(opts: list[str], defaults: dict[str, str]) -> dict[str, Any]:
-    """ssl(key=..,cert=..,clientauth) -> {key, cert, clientauth}; what the layer leaves
-    out comes from the file's ssl defaults, then from ser2net's own files."""
-    found = {**_SSL_FILES, **defaults}
+    """ssl(key=..,cert=..,CA=..,clientauth) -> {key, cert, ca, clientauth}; what the layer
+    leaves out comes from the file's ssl defaults, then from ser2net's own files (no CA
+    file of its own)."""
+    found = {**_SSL_FILES, "ca": "", **defaults}
     auth = found.pop("clientauth", "").strip()
     clientauth = bool(auth) and _bool(auth) is not False  # a default without a value is off
     for o in opts:
         name, eq, value = o.partition("=")
         name = name.strip().lower()
-        if name in ("key", "cert"):
+        if name in ("key", "cert", "ca"):
             found[name] = value.strip()
         elif name == "clientauth":
             clientauth = not eq or _bool(value) is not False
     # an empty cert= means the certificate is in the key file
-    return {"key": found["key"], "cert": found["cert"] or found["key"], "clientauth": clientauth}
+    return {"key": found["key"], "cert": found["cert"] or found["key"], "ca": found["ca"],
+            "clientauth": clientauth}
 
 
 def _tls(c: _Conn) -> None:
     """The accepter's ssl layer: TLS with the same certificate when its files are on this
-    host, else the mapping comes in disabled rather than unencrypted. Client
-    certificates (clientauth) are not checked here: such a mapping comes in disabled."""
+    host, else the mapping comes in disabled rather than unencrypted. Client certificates
+    (clientauth) are checked against the CA file it names (CA=, also an ssl default) when
+    that file is on this host, else the mapping comes in disabled rather than open to
+    clients without a certificate."""
     s = c.ssl
     if s is None:
         return
     if s["clientauth"]:
-        c.hold(_("TLS client certificates (ssl clientauth) are not available here: the mapping "
-                 "is imported disabled rather than open to clients without a certificate; "
-                 "allow only known client IPs on it before you enable it"))
+        ca = s["ca"]
+        if ca and os.path.isabs(ca) and os.path.isfile(ca):
+            c.network["tls_client_ca"] = ca
+            c.note(_("TLS client certificates (ssl clientauth) are kept: clients need a "
+                     "certificate from the CA file '{0}'").format(ca))
+        else:
+            c.hold(_("TLS client certificates (ssl clientauth) are checked here only against "
+                     "a CA file on this host, and {0}: the mapping is imported disabled rather "
+                     "than open to clients without a certificate; set its client CA file "
+                     "before you enable it").format(
+                _("the ssl layer names none (CA=)") if not ca else
+                _("'{0}' is not a file on this host").format(ca)))
     if c.network["mode"] == "udp":
         c.hold(_("{0} (encryption) is not available here for this connection: the mapping "
                  "is imported disabled rather than unencrypted").format("ssl"))
@@ -1248,7 +1262,7 @@ class _Yaml:
         self.connections = 0                 # connection entries read (MAX_CONNECTIONS)
         self.serial_defaults: dict[str, str] = {}
         self.option_defaults: dict[str, str] = {}
-        self.ssl_defaults: dict[str, str] = {}   # key / cert / clientauth of the ssl layer
+        self.ssl_defaults: dict[str, str] = {}   # key / cert / ca / clientauth of the ssl layer
 
     def text(self, node: Any, note: Callable[[str], None], what: str) -> str:
         if isinstance(node, (_YMap, list)):
@@ -1313,7 +1327,7 @@ class _Yaml:
 
     def default(self, name: str, value: str, cls: str) -> None:
         n, cls = name.strip().lower(), cls.strip().lower()
-        if n in ("key", "cert", "clientauth") and cls in ("", "ssl"):
+        if n in ("key", "cert", "ca", "clientauth") and cls in ("", "ssl"):
             self.ssl_defaults[n] = value.strip()  # for the accepters' ssl layers
             return
         if not n or cls not in ("", "serialdev", "sdev", "ser2net"):

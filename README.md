@@ -266,9 +266,11 @@ düzenlemeye gerek yok.
   gerektirir (opsiyonel; yoksa köprü normal çalışır).
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
-  olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
-  istemci sertifikası, sertifikası bu makinede olmayan TLS, yalnızca yazılan cihaz) kapalı
-  olarak gelir. ser2net'in port kilitleri de aktarılır: 4.x `flock` (varsayılan açık)
+  olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi, `CA=`
+  dosyası bu makinede olmayan TLS istemci sertifikası, sertifikası bu makinede olmayan TLS,
+  yalnızca yazılan cihaz) kapalı olarak gelir; CA dosyası burada olan
+  `ssl(clientauth,CA=...)` istemci sertifikalarını denetlemeye devam eder (**İstemci CA
+  sertifika dosyası**). ser2net'in port kilitleri de aktarılır: 4.x `flock` (varsayılan açık)
   **Portu kilitle** ile **Port açıkken diğer programları dışarıda tut** olur, `uucplock`
   (varsayılan açık; 3.x'te her zaman) **Başka bir programın kilitlediği portu açma** olur;
   bir uyarı da hâlâ farklı olanı söyler (eşleme portunu başladığı andan itibaren açık tutar

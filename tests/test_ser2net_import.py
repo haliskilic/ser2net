@@ -345,6 +345,34 @@ connection: &after
     assert has(warns, "after:", "/etc/ser2net/ser2net.crt") or has(warns, "after:", "is kept")
     print("ssl defaults (clientauth, delete_default) reach the ssl layers that follow  OK")
 
+    # clientauth with the CA file it names on this host: TLS client certificates are kept
+    ca = os.path.join(d, "clients-ca.pem")
+    with open(ca, "w", encoding="ascii") as fh:
+        fh.write("-----BEGIN CERTIFICATE-----\n(not checked here)\n-----END CERTIFICATE-----\n")
+    text = f"""
+connection: &own
+  accepter: telnet,ssl(clientauth,CA={ca},key={key},cert={cert}),tcp,6301
+  connector: serialdev,/dev/ttyS4
+default:
+  name: CA
+  value: {ca}
+  class: ssl
+connection: &bydefault
+  accepter: telnet,ssl(clientauth,key={key},cert={cert}),tcp,6302
+  connector: serialdev,/dev/ttyS5
+connection: &elsewhere
+  accepter: telnet,ssl(clientauth,CA={d}/gone-ca.pem,key={key},cert={cert}),tcp,6303
+  connector: serialdev,/dev/ttyS6
+"""
+    maps, warns = parse(text)
+    for name in ("own", "bydefault"):
+        m = maps[name]
+        assert m["enabled"] and m["network"]["tls_client_ca"] == ca, (name, m["network"])
+        assert has(warns, f"{name}:", "client certificates", "are kept", ca), warns
+    assert not maps["elsewhere"]["enabled"], maps["elsewhere"]
+    assert has(warns, "elsewhere:", "gone-ca.pem", "not a file on this host", "imported disabled")
+    print("ssl clientauth with its CA file on this host: imported with the client CA file  OK")
+
     # every connection uses a gtlssh login: nothing comes in enabled (and nothing is open)
     text = r"""%YAML 1.1
 ---
