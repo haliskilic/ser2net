@@ -55,8 +55,9 @@ def test_config() -> None:
 def test_header() -> None:
     def sent(**admin) -> str | None:
         response = SimpleNamespace(headers={})
-        GuardMiddleware._security_headers(response, SimpleNamespace(admin_ui=AdminUI(**admin)),
-                                          "/")
+        ui = AdminUI(**admin)   # (the listener serves what is configured)
+        GuardMiddleware._security_headers(response, SimpleNamespace(
+            config=SimpleNamespace(admin_ui=ui), serving_tls=ui.tls_enabled), "/")
         return response.headers.get("Strict-Transport-Security")
 
     assert sent() is None                                       # no TLS: no HSTS
