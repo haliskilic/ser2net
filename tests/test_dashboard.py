@@ -78,6 +78,7 @@ def main():
         assert st == 200 and "aaaaaaaaaaa1-alpha.log.1" in page and "secret" not in page, page[:400]
         st, h, body = b.get("/api/mappings/aaaaaaaaaaa1/traces/aaaaaaaaaaa1-alpha.log")
         assert st == 200 and body == "line now\n" and "attachment" in h.get("Content-Disposition", "")
+        assert h.get("Content-Length") == "9", h.get("Content-Length")  # as it is now
         for bad in ("aaaaaaaaaaa2-secret.log", "..%2Fconfig.json", "%2E%2E%2F%2E%2E%2Fall.log"):
             assert b.get(f"/api/mappings/aaaaaaaaaaa1/traces/{bad}")[0] == 404, bad
         print("traces: listed per mapping, downloadable, other files / traversal 404  OK")
