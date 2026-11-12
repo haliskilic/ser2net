@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 from ..config import MappingConfig, ModbusPoint
-from . import modbus, netguard, sockopts
+from . import modbus, netguard, sockopts, tls
 from .access import AccessPolicy, server_ssl
 from .bridge import (
     FROM_DEVICE, TO_DEVICE, RunnerStatus, Tracer, describe_disconnect, fmt_duration, open_tracer,
@@ -444,7 +444,7 @@ class ModbusGatewayRunner:
         master = _Master(writer, peer, priority=admission.priority)
         self._clients.add(master)
         self._refresh_clients()
-        tag = " [priority]" if master.priority else ""
+        tag = (" [priority]" if master.priority else "") + tls.client_certificate(writer)
         self._log(f"modbus master connected: {peer}{tag} ({len(self._clients)} total)")
         opts = self.mapping.options
         deadline = (time.monotonic() + opts.max_connection_time_s
