@@ -110,6 +110,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The Dockerfile's base tag (ARG BASE_IMAGE) as of now, by digest: the image is built
+      # FROM exactly that and records it, so .github/workflows/image-refresh.yml can tell
+      # when the base has moved on since the release.
+      - id: base
+        name: The base image's digest
+        run: |
+          base=$(sed -n 's/^ARG BASE_IMAGE=//p' Dockerfile)
+          case "$base" in */*) name=$base ;; *) name=docker.io/library/$base ;; esac
+          digest=$(docker buildx imagetools inspect "$base" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "$name -> $digest"
+          { echo "image=$base"; echo "name=$name"; echo "digest=$digest"; } >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
         with:
@@ -120,11 +131,14 @@ jobs:
             org.opencontainers.image.title=ser2net
             org.opencontainers.image.description=Serial-to-network bridge with a web UI
             org.opencontainers.image.licenses=AGPL-3.0-only
+            org.opencontainers.image.base.name=${{ steps.base.outputs.name }}
+            org.opencontainers.image.base.digest=${{ steps.base.outputs.digest }}
       - id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ steps.base.outputs.image }}@${{ steps.base.outputs.digest }}
           outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           provenance: mode=max

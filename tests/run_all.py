@@ -107,6 +107,7 @@ PORTABLE = [
     "test_release_guard.py",    # release tag = version, CHANGELOG section, image tags
     "test_dependency_snapshot.py",  # the Python 3.10 pins go to the dependency graph
     "test_pin_workflows.py",    # a pin bump fails one job; Dependabot branches get wheels
+    "test_image_refresh.py",    # weekly image scan; rebuild on a moved base image
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
