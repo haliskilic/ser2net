@@ -116,6 +116,7 @@ PORTABLE = [
     "test_systemd_units.py",   # ser2net.service and the per-instance ser2net@.service
     "test_activity_log.py",    # SER2NET_LOG_STDOUT, admin_ui.request_log
     "test_login_notice.py",    # Settings -> Web UI access -> Sign-in notice
+    "test_backup_erasure.py",  # deleting backups, a deleted account out of every backup
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

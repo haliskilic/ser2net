@@ -910,5 +910,22 @@
   "Link to the full notice": "Bilgilendirmenin tamamına bağlantı",
   "optional · an http:// or https:// address": "isteğe bağlı · http:// ya da https:// ile başlayan bir adres",
   "With open access, visitors who don’t sign in find it under “Notice” in the top bar.": "Açık erişimde giriş yapmayan ziyaretçiler bunu üst bardaki “Bilgilendirme” bağlantısında bulur.",
-  "Save notice": "Bilgilendirmeyi kaydet"
+  "Save notice": "Bilgilendirmeyi kaydet",
+  "{0} configuration backups still hold it (made before the deletion; a restore with accounts would bring it back): Configuration backups below can remove it from them.": "{0} yapılandırma yedeği hâlâ bu hesabı içeriyor (silmeden önce alınmış; hesaplarıyla birlikte geri yükleme onu geri getirir): aşağıdaki Yapılandırma yedekleri bölümünden onlardan çıkarabilirsin.",
+  "Could not delete: {0}": "Silinemedi: {0}",
+  "{0} configuration backups deleted.": "{0} yapılandırma yedeği silindi.",
+  "Backup of {0} UTC deleted.": "{0} UTC yedeği silindi.",
+  "'{0}' is an account now: delete it under Users first.": "'{0}' şu an bir hesap: önce Kullanıcılar bölümünden sil.",
+  "Could not change the backups: {0}": "Yedekler değiştirilemedi: {0}",
+  "No backup holds an account named '{0}'.": "Hiçbir yedekte '{0}' adlı bir hesap yok.",
+  "'{0}' was removed from {1} configuration backups.": "'{0}', {1} yapılandırma yedeğinden çıkarıldı.",
+  "Delete the account %(user)s?": "%(user)s hesabı silinsin mi?",
+  "Accounts": "Hesaplar",
+  "Delete the backup of %(time)s UTC? This can’t be undone.": "%(time)s UTC yedeği silinsin mi? Bu geri alınamaz.",
+  "Remove this account from every backup that has it? A restore can then no longer bring it back, and this can’t be undone.": "Bu hesap, onu içeren her yedekten çıkarılsın mı? Bundan sonra bir geri yükleme onu geri getiremez ve bu işlem geri alınamaz.",
+  "Deleting a user leaves the account, with its password hash, in the backups made before. These backups hold accounts that no longer exist; removing one from them leaves everything else in each backup as it was.": "Bir kullanıcıyı silmek, hesabı parola hash'iyle birlikte daha önce alınmış yedeklerde bırakır. Bu yedeklerde artık olmayan hesaplar var; birini onlardan çıkarmak her yedeğin geri kalanını olduğu gibi bırakır.",
+  "Account no longer in use": "Artık kullanılmayan hesap",
+  "Remove it from the backups": "Yedeklerden çıkar",
+  "Delete every configuration backup? This can’t be undone.": "Tüm yapılandırma yedekleri silinsin mi? Bu geri alınamaz.",
+  "Delete all backups": "Tüm yedekleri sil"
 }

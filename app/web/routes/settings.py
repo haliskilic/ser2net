@@ -73,13 +73,18 @@ def routes(ctx: Ctx) -> list:
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
         backups = state.store.backups() if me is not None and me.role == "admin" else []
+        # names in a backup that are no account now (deleted since): Settings can take
+        # them out of every backup
+        current = {u.username for u in state.config.users}
+        gone_accounts = sorted({a["username"] for b in backups for a in b["accounts"]
+                                if a["username"] and a["username"] not in current})
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
         # the redirect URI a sign-in started from this page's address would send
         published = proxy.public_url(state.config.admin_ui)
         oidc_redirect = oidc_auth.redirect_uri(state.config.oidc, request, published)
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,
-                      backups=backups,
+                      backups=backups, backup_gone_accounts=gone_accounts,
                       admin=state.config.admin_ui, hsts_max=HSTS_MAX_AGE_MAX,
                       hostname=socket.gethostname(), node_name_max=NODE_NAME_MAX,
                       request_log_modes=REQUEST_LOG_MODES, login_notice_max=LOGIN_NOTICE_MAX,
@@ -701,6 +706,13 @@ def routes(ctx: Ctx) -> list:
         if target.source != "local":
             ok += " " + _("They are signed out; while {0} still gives them a role, their next "
                           "sign-in makes a new account.").format(target.source.upper())
+        names = {u.username for u in gone}
+        kept = sum(1 for b in await asyncio.to_thread(state.store.backups)
+                   if any(a["username"] in names for a in b["accounts"]))
+        if kept:
+            ok += " " + _("{0} configuration backups still hold it (made before the deletion; a "
+                          "restore with accounts would bring it back): Configuration backups "
+                          "below can remove it from them.").format(kept)
         return await settings_get(request, ok=ok)
 
     async def settings_users_expiry(request):
@@ -1142,6 +1154,57 @@ def routes(ctx: Ctx) -> list:
             set_session(resp, request, mine)
         return resp
 
+    async def backup_delete(request):
+        """Delete one backup (`name`), or every one (`all`)."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        name = str(form.get("name") or "")
+        async with state.config_lock:   # no save makes or prunes a backup meanwhile
+            try:
+                if _checkbox(form, "all"):
+                    gone = await asyncio.to_thread(state.store.delete_backups)
+                else:
+                    await asyncio.to_thread(state.store.delete_backup, name)
+            except ConfigError as e:
+                return await settings_get(request, error=str(e))
+            except OSError as e:
+                return await settings_get(request, error=_("Could not delete: {0}").format(e))
+        if _checkbox(form, "all"):
+            state.log(f"all configuration backups deleted ({gone})")
+            ctx.audit(request, "config_backups_delete_all", f"{gone} backups")
+            return await settings_get(request, ok=_("{0} configuration backups deleted.").format(gone))
+        state.log(f"configuration backup {name} deleted")
+        ctx.audit(request, "config_backup_delete", name)
+        return await settings_get(request, ok=_("Backup of {0} UTC deleted.").format(backup_time(name)))
+
+    async def backup_remove_account(request):
+        """Take an account that no longer exists out of every backup that still has it."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        username = str(form.get("username") or "")
+        async with state.config_lock:
+            if any(u.username == username for u in state.config.users):
+                return await settings_get(request, error=_(
+                    "'{0}' is an account now: delete it under Users first.").format(username))
+            try:
+                changed = await asyncio.to_thread(state.store.remove_account, username)
+            except OSError as e:
+                return await settings_get(request, error=_("Could not change the backups: "
+                                                           "{0}").format(e))
+        if not changed:
+            return await settings_get(request, error=_("No backup holds an account named "
+                                                       "'{0}'.").format(username))
+        state.log(f"account {username!r} removed from {changed} configuration backups")
+        ctx.audit(request, "config_backup_account_remove", f"{username}: {changed} backups")
+        return await settings_get(request, ok=_("'{0}' was removed from {1} configuration "
+                                                "backups.").format(username, changed))
+
     async def backup_restore_mappings(request):
         """Restore only a backup's mappings, through the import preview (replace)."""
         if deny := require_role(request, "admin"):
@@ -1311,6 +1374,8 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/audit.csv", audit_csv),
         Route("/settings/backups/restore", backup_restore, methods=["POST"]),
         Route("/settings/backups/restore-mappings", backup_restore_mappings, methods=["POST"]),
+        Route("/settings/backups/delete", backup_delete, methods=["POST"]),
+        Route("/settings/backups/remove-account", backup_remove_account, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
 
