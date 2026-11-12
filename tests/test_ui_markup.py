@@ -241,7 +241,8 @@ def test_htmx_config():
 
 # third-party secrets and the user name / id beside each: never this UI's sign-in
 SECRET_FIELDS = {"mqtt_password", "ldap_bind_password", "oidc_client_secret", "key",
-                 "notify_smtp_password", "notify_webhook_url"}
+                 "notify_smtp_password", "notify_webhook_url", "tls_key_password",
+                 "network_tls_key_password"}
 SECRET_IDS = {"mqtt_username", "ldap_bind_dn", "oidc_client_id", "notify_smtp_username"}
 PM_OPT_OUT = ("data-1p-ignore", "data-lpignore", "data-bwignore")
 
@@ -249,7 +250,8 @@ PM_OPT_OUT = ("data-1p-ignore", "data-lpignore", "data-bwignore")
 def test_secret_fields():
     """A browser or password manager fills the saved ser2net sign-in into an empty password
     field that looks like the half of a login form; saved there, the admin password would
-    end up in config.json as the MQTT, LDAP, OIDC or SMTP password or the cluster key."""
+    end up in config.json as the MQTT, LDAP, OIDC or SMTP password, the cluster key or a TLS
+    key password (an unencrypted key never needs one, so nothing would refuse it)."""
     inputs = []
     for f in sorted(glob.glob(os.path.join(ROOT, "app", "web", "templates", "*.html"))):
         src = open(f, encoding="utf-8").read()

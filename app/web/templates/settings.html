@@ -440,7 +440,7 @@
     <label>{{ _("Certificate path") }} <input type="text" name="tls_cert" value="{{ admin.tls_cert }}" placeholder="/path/cert.pem"></label>
     <label>{{ _("Key path") }} <input type="text" name="tls_key" value="{{ admin.tls_key }}" placeholder="/path/key.pem"></label>
     <label>{{ _("Key password") }} <span class="muted">({{ _("only for an encrypted key") }})</span>
-      <input type="password" name="tls_key_password" autocomplete="new-password" placeholder="{% if admin.tls_key_password %}{{ unchanged }}{% else %}{{ _('optional') }}{% endif %}"></label>
+      <input type="password" name="tls_key_password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore placeholder="{% if admin.tls_key_password %}{{ unchanged }}{% else %}{{ _('optional') }}{% endif %}"></label>
     {% if admin.tls_key_password %}<label class="chk"><input type="checkbox" name="tls_key_password_clear"> {{ _("Remove the stored password") }}</label>{% endif %}
     <label>{{ _("HSTS max-age (seconds)") }} <span class="muted">({{ _("31536000 = one year, the default · 0 = off · applies at once") }})</span>
       <input type="number" name="hsts_max_age" min="0" max="{{ hsts_max }}" step="1" value="{{ admin.hsts_max_age }}" required></label>
