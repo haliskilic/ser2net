@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import time
 from typing import Any, Callable, Optional, Protocol
 
@@ -219,8 +220,12 @@ class Supervisor:
                 for task in pending:
                     mid = stops[task][0]
                     self._late.add(mid)
-                    task.add_done_callback(lambda _t, mid=mid: self._late.discard(mid))
+                    task.add_done_callback(functools.partial(self._stop_ended, mid))
                 return
+
+    def _stop_ended(self, mapping_id: str, _task: asyncio.Future) -> None:
+        """A stop that outlived stop_all's limit has ended: its mapping's turn is free."""
+        self._late.discard(mapping_id)
 
     async def _stop_in_turn(self, mapping_id: str) -> None:
         """stop_all's part for one mapping: its bind retry ends (an attempt under way holds
