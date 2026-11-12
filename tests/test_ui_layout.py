@@ -965,10 +965,17 @@ def main():
             print(f"an imported close-on string through the mapping form and back: "
                   f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
 
+            # (the feedback checks' bulk restart of "short" closed its clients: the client
+            # chips dashboard() waits for need them connected again)
+            for c in clients:
+                c.close()
+            clients[:] = [socket.create_connection(("127.0.0.1", raw_a), timeout=5)
+                          for _ in range(3)]
+
             # UDP offers raw only: picking UDP selects raw, the other protocols can't be
             # picked until the mode is TCP again
             dashboard()
-            open_view(TR["Edit"])  # the language is Turkish here (the loop above)
+            open_view("Edit")  # (in English since the Device field check)
             selects = "#form-panel select[name=network_%s]"
             protocols = ("() => { const s = document.querySelector('#form-panel "
                          "select[name=network_protocol]'); return [s.value, [...s.options]"
