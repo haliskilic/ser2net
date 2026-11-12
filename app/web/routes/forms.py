@@ -669,7 +669,9 @@ def mapping_for_rerender(form, existing, ports: list) -> MappingConfig:
 
 
 # Blocks of the form a node reads only from this version on: the fleet view leaves them
-# out of the form for a peer running an older version, which would not keep them.
+# out of the form for a peer running an older version, which would not keep them. A new
+# field of the form goes into one (tests/test_mixed_version_edit.py names a field an older
+# peer would be shown); the MQTT client ID is in none: every version's save reads it.
 #   block (as _mapping_form.html names it) -> the first version that reads it
 FORM_BLOCKS_SINCE = {
     "usb_match": (2, 8, 0),         # "Find this device by its USB identity"
@@ -678,6 +680,27 @@ FORM_BLOCKS_SINCE = {
     "retained_set": (2, 8, 1),      # re-apply a retained /set
     "rfc2217_restore": (2, 8, 1),   # restore the serial settings after an RFC 2217 client
     "udp_reply": (2, 8, 1),         # UDP reply address and peer timeout
+    # serial ports and the network side
+    "port_lock": (2, 9, 0),         # TIOCEXCL, UUCP lock files
+    "dual_stack": (2, 9, 0),        # "All interfaces (IPv4 + IPv6)", :: is IPv6 only
+    "udp_targets": (2, 9, 0),       # UDP targets for the device's output, broadcast
+    "tls_checks": (2, 9, 0),        # TLS CA file, fingerprints, client CA
+    "tls_key_password": (2, 9, 0),  # TLS key password
+    "disconnect_without_device": (2, 9, 0),
+    "rfc2217_signature": (2, 9, 0),
+    "poll_string": (2, 9, 0),       # poll string, interval, also with clients
+    "no_data_alarm": (2, 9, 0),
+    "console_encoding": (2, 9, 0),
+    "serial_mqtt": (2, 9, 0),       # MQTT line end, writes on <topic>/tx
+    # MQTT and Modbus
+    "mqtt_retain": (2, 9, 0),
+    "mqtt_tls_files": (2, 9, 0),    # CA file, client certificate and key, host name check
+    "primary_host": (2, 9, 0),      # Sparkplug primary host ID
+    "modbus_gateway": (2, 9, 0),    # gateway response timeout, unit map
+    "block_reads": (2, 9, 0),
+    "point_options": (2, 9, 0),     # point keys of 2.9 (min, max, word_order ...), editor
+    "value_format": (2, 9, 0),      # MQTT values as JSON
+    "unit_status": (2, 9, 0),       # <topic>/unit<N>/status
 }
 
 
