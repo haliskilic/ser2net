@@ -28,7 +28,7 @@ from contextlib import suppress as _suppress
 from logging.handlers import RotatingFileHandler
 from typing import Any
 
-from . import accounts
+from . import accounts, storage
 from .config import (
     AppConfig, ConfigStore, ConfigWriteError, User, lock_down_dir, mapping_file, valid_mapping_id,
 )
@@ -691,13 +691,14 @@ class AppState:
 
     async def run_trace_maintenance(self) -> int:
         """With trace_max_age_days set (0, the default, keeps every trace): delete the
-        trace files not written for that many days (their modification time), a running
+        trace files not written for that many days (their modification time, compared with
+        storage.now(): a clock stepped ahead meanwhile deletes nothing early), a running
         trace's through its writer (delete_trace_files), the file it writes included. Logged
         when it deleted something; returns how many went."""
         days = self.config.trace_max_age_days
         if not days:
             return 0
-        old = await asyncio.to_thread(self._traces_older_than, time.time() - days * 86400)
+        old = await asyncio.to_thread(self._traces_older_than, storage.now() - days * 86400)
         deleted, kept = 0, 0
         for mid, names in old.items():
             if self.config.get_mapping(mid) is not None:
@@ -758,9 +759,9 @@ class AppState:
         of the last LOG_VIEW_LINES (what its Log panel shows: a clock that jumps ahead, or
         a date corrected after lines were stamped with a wrong one, must not empty it),
         and cap each file at LOG_MAX_BYTES (keeping the most recent portion), in a worker
-        thread (_trim_log_file). The mapping's log handler stays attached: what it writes
-        meanwhile is kept."""
-        cutoff = time.time() - LOG_MAX_AGE_DAYS * 86400
+        thread (_trim_log_file). Ages are measured from storage.now(). The mapping's log
+        handler stays attached: what it writes meanwhile is kept."""
+        cutoff = storage.now() - LOG_MAX_AGE_DAYS * 86400
         try:
             files = [f for f in os.listdir(self.logs_dir) if f.endswith(".log")]
         except OSError:
