@@ -75,8 +75,12 @@ and REST API messages are not translated.
 Runtime pins live in `requirements.txt` (with the Python 3.10 line kept by markers),
 the optional feature packages bundled into the binaries and the Docker image in
 `requirements-optional.txt`. After changing `requirements.txt`, run
-`python tools/refresh_wheels.py` so `vendor/wheels/` (the offline install set) matches —
-this also applies to Dependabot's pull requests. The Docker image and the standalone
+`python tools/refresh_wheels.py` so `vendor/wheels/` (the offline install set) matches.
+On Dependabot's pull requests `.github/workflows/refresh-pins.yml` does that: it pushes the
+refreshed wheels onto the branch and starts CI on the new commit (on another branch, run it
+by hand: Actions → Refresh pinned files → Run workflow). Until the wheels match, only the job
+"offline wheels match requirements.txt" fails — the test legs leave that check to it — and
+it attaches the refreshed files as a patch (artifact `refreshed-pins`). The Docker image and the standalone
 executables install from hash-locked files instead (`pip install --require-hashes`):
 `requirements-lock.txt` (the same pins for Python 3.12, with the sha256 of each release's
 files) and `requirements-build.txt` (PyInstaller and its dependencies); Dependabot updates
@@ -184,8 +188,12 @@ test başarısız olur.
 Çalışma zamanı sürümleri `requirements.txt`'te (Python 3.10 hattı işaretlerle korunur),
 binary'lere ve Docker imajına giren isteğe bağlı paketler `requirements-optional.txt`'te.
 `requirements.txt`'i değiştirdikten sonra `python tools/refresh_wheels.py` çalıştırın;
-`vendor/wheels/` (çevrimdışı kurulum seti) eşleşsin. Bu Dependabot'un PR'ları için de
-geçerli. Docker imajı ve standalone binary'ler bunun yerine hash kilitli dosyalardan
+`vendor/wheels/` (çevrimdışı kurulum seti) eşleşsin. Dependabot'un PR'larında bunu
+`.github/workflows/refresh-pins.yml` yapar: yenilenen wheel'leri dala push eder ve yeni
+commit'te CI'ı başlatır (başka bir dalda elle çalıştırın: Actions → Refresh pinned files →
+Run workflow). Wheel'ler eşleşene kadar yalnızca "offline wheels match requirements.txt"
+işi başarısız olur (test işleri bu kontrolü ona bırakır) ve yenilenmiş dosyaları bir patch
+olarak ekler (`refreshed-pins` artifact'i). Docker imajı ve standalone binary'ler bunun yerine hash kilitli dosyalardan
 kurulur (`pip install --require-hashes`): `requirements-lock.txt` (Python 3.12 için aynı
 pin'ler, her sürümün dosyalarının sha256'larıyla) ve `requirements-build.txt` (PyInstaller ve
 bağımlılıkları). Dependabot bunları `requirements.txt` ile birlikte günceller; elle yapılan bir

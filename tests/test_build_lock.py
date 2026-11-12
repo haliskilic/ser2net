@@ -9,6 +9,9 @@ requirements.txt / requirements-optional.txt pin, and the resolver's rules offli
 vendor job also compares every hash with PyPI: python tools/refresh_locks.py --verify).
 
 Run: python3 tests/test_build_lock.py   (stdlib only)
+
+With SER2NET_SKIP_PIN_CHECKS=1 (CI's test matrix and coverage job) the comparison with the
+repository's current pins is left to the job "offline wheels match requirements.txt".
 """
 import os
 import shutil
@@ -146,8 +149,11 @@ def test_builds_install_the_locks():
 
 
 if __name__ == "__main__":
-    test_locks_match_the_pins()
-    test_a_changed_pin_is_reported()
+    if os.environ.get("SER2NET_SKIP_PIN_CHECKS") == "1":
+        print("SKIP: the locks against the pins (CI: job 'offline wheels match requirements.txt')")
+    else:
+        test_locks_match_the_pins()
+        test_a_changed_pin_is_reported()
     test_lock_syntax()
     test_wheel_rules()
     test_resolver_markers()
