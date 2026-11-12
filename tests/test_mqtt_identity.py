@@ -325,7 +325,8 @@ def test_copy():
     full = types.SimpleNamespace(mappings=[a] + [
         types.SimpleNamespace(name=str(p), kind="net", mqtt=types.SimpleNamespace(base_topic=""),
                               network=types.SimpleNamespace(listens=True, mode="server", port=p,
-                                                            bind_ip="0.0.0.0"))
+                                                            bind_ip="0.0.0.0",
+                                                            both_families=False))
         for p in range(1, 65536)])
     try:
         copy_of(full, a)

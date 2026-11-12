@@ -322,7 +322,7 @@ async def test_poll_loop_survives():
     async def read_point(p):
         return True
 
-    def publish(values):
+    def publish(values, stamps=None, force=False):
         raise TypeError("can't publish this")
 
     runner._read_point = read_point

@@ -94,7 +94,7 @@ def main():
         for points, needle in (
                 ('[{"name":"t","unit":"one","fn":3,"address":0,"dtype":"uint16"}]',
                  "modbus_poll.points[0].unit: &#34;one&#34; is not a whole number."),
-                ('[1]', "modbus_poll.points[0] must be a JSON object, not 1."),
+                ('[1]', "Modbus poll point #1 is not an object."),  # (the form's JSON check)
                 ('[{"name":null,"unit":1,"fn":3,"address":0,"dtype":"uint16"}]',
                  "Each Modbus poll point needs a name.")):
             r = post("/api/mappings/save", dict(gateway, modbus_points=points))

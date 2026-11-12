@@ -1,8 +1,9 @@
 """Modbus poll points: how they are typed, parsed from the mapping form and shown again.
 
   * a point's values typed loosely before 2.9 load as what was meant ("unit": "1",
-    "scale": "0.1", "writable": "false"), validate() still takes every point it took and
-    gives a ConfigError (never a TypeError) for the ones it refused, and an edit
+    "scale": "0.1", "writable": "false"), one that can't be read takes the default with a
+    note (config._read_fields), validate() still takes every point it took and gives a
+    ConfigError (never a TypeError) for a model built in code it can't use, and an edit
     (validate_input) refuses the values it can't use, so the form, the REST API, an import
     and a cluster save answer 400, not 500;
   * a stored scale that is not a number is not multiplied in;
@@ -39,8 +40,8 @@ from app.importer import parse_mappings_file
 from app.web.auth import hash_password, hash_token
 from app.web.routes import cluster as cluster_routes
 from app.web.routes.forms import (_build_mapping_dict, _form_error, _modbus_points_json,
-                                  _parse_modbus_points, _preserve_unmanaged_fields,
-                                  _reshown_mapping, json_text)
+                                  _parse_modbus_points, _preserve_unmanaged_fields, json_text,
+                                  mapping_for_rerender)
 
 PW = "modbus-points-pass-1"
 TOKEN = "s2n_modbus-points-token"
@@ -78,11 +79,18 @@ def test_loose_values_load():
     # the keys 2.9 added are typed from the start (validate_input)
     p = ModbusPoint.from_dict({"min": "5", "poll": "no", "dtype": "UINT16"})
     assert (p.min, p.poll, p.dtype) == ("5", "no", "UINT16"), p
-    # what can't be read so stays as it is, for an edit to refuse
-    p = ModbusPoint.from_dict({"unit": "one", "scale": "x", "writable": "maybe", "address": 1.5})
-    assert (p.unit, p.scale, p.writable, p.address) == ("one", "x", "maybe", 1.5), p
-    assert ModbusPoint.from_dict({"scale": "nan"}).scale == "nan"
-    print("loosely typed point values load as what was meant; the rest stays as it is  OK")
+    # what can't be read takes the default (a true/false its truth, as before 2.9) with a
+    # note that an edit refuses; a fraction where a whole number belongs stays, for an edit
+    # to refuse
+    notes = []
+    p = ModbusPoint.from_dict({"unit": "one", "scale": "x", "writable": "maybe", "address": 1.5},
+                              notes)
+    assert (p.unit, p.scale, p.writable, p.address) == (1, 1.0, True, 1.5), p
+    assert [(n.path, n.kind) for n in notes] == [
+        ("unit", "invalid"), ("scale", "invalid"), ("writable", "invalid")], notes
+    assert ModbusPoint.from_dict({"scale": "nan"}).scale == 1.0
+    print("loosely typed point values load as what was meant; the rest takes the default "
+          "with a note  OK")
 
 
 def test_validate_keeps_what_it_took():
@@ -91,12 +99,15 @@ def test_validate_keeps_what_it_took():
     took = [{"name": "a", "unit": 1.0, "address": 2.5}, {"name": "b", "unit": True},
             {"name": "c", "scale": "x"}, {"name": "d", "writable": "maybe", "fn": 3}]
     gateway(took).validate()
-    for bad, words in (({"name": 5}, ("names are text", "5")),
-                       ({"name": "a", "unit": "one"}, ("unit must be 0-255",)),
-                       ({"name": "a", "address": [1]}, ("address must be 0-65535",)),
-                       ({"name": "a", "fn": "x"}, ("function must be",))):
+    unread = [{"name": 5}, {"name": "a", "unit": "one"}, {"name": "b", "address": [1]},
+              {"name": "c", "fn": "x"}]
+    gateway(unread).validate()  # (read as "5" and the defaults, with notes)
+    for bad, words in ((ModbusPoint(name=5), ("names are text", "5")),  # type: ignore[arg-type]
+                       (ModbusPoint(name="a", unit="one"), ("unit must be 0-255",)),  # type: ignore[arg-type]
+                       (ModbusPoint(name="a", address=[1]), ("address must be 0-65535",)),  # type: ignore[arg-type]
+                       (ModbusPoint(name="a", fn="x"), ("function must be",))):  # type: ignore[arg-type]
         try:
-            gateway([bad]).validate()
+            ModbusPoll(points=[bad]).validate()  # a model built in code
             raise AssertionError(f"validate() took {bad}")
         except ConfigError as e:
             assert all(w in str(e) for w in words), (str(e), words)
@@ -105,19 +116,20 @@ def test_validate_keeps_what_it_took():
             ModbusPoll.from_dict({"points": [{"name": "ok"}, item]})
             raise AssertionError(f"took {item!r} as a point")
         except ConfigError as e:
-            assert str(e) == "Modbus poll point #2 is not an object.", e
+            assert str(e).startswith("points[1] must be a JSON object, not "), e
     print("validate() takes what it took before, and refuses the rest with a ConfigError  OK")
 
 
 def test_edits_refuse_unusable_values():
-    refused([{"name": "a", "unit": "one"}], "'a'", "unit must be 0-255")
+    refused([{"name": "a", "unit": "one"}], 'points[0].unit: "one" is not a whole number')
     refused([{"name": "a", "unit": 1.5}], "'a'", "unit must be a whole number")
-    refused([{"name": "a", "unit": True}], "'a'", "unit must be a whole number")
+    refused([{"name": "a", "unit": True}], "points[0].unit: true is not a whole number")
     refused([{"name": "a", "address": 2.5}], "'a'", "address must be a whole number")
-    refused([{"name": "a", "scale": "x"}], "'a'", "scale must be a number")
-    refused([{"name": "a", "scale": float("nan")}], "'a'", "scale must be a number")
-    refused([{"name": "a", "fn": 3, "writable": "maybe"}], "'a'", "writable must be true or false")
-    refused([{"name": 5}], "names are text")
+    refused([{"name": "a", "scale": "x"}], 'points[0].scale: "x" is not a finite number')
+    refused([{"name": "a", "scale": float("nan")}], "points[0].scale: NaN is not a finite number")
+    refused([{"name": "a", "fn": 3, "writable": "maybe"}],
+            'points[0].writable: "maybe" is not true or false')
+    refused([{"name": [5]}], "needs a name")  # (a name that is no text: none)
     # what loads as what was meant is taken
     m = gateway([{"name": "a", "unit": "2", "scale": "0.5", "fn": 3, "writable": "false"}])
     m.validate()
@@ -179,7 +191,8 @@ def test_refused_form_shown_again():
     stored = gateway([{"name": "kept", "fn": 3, "writable": True, "min": 0, "max": 9}],
                      id="abcdef012345")
     state = types.SimpleNamespace(
-        config=types.SimpleNamespace(get_mapping=lambda mid: stored if mid == stored.id else None),
+        config=types.SimpleNamespace(get_mapping=lambda mid: stored if mid == stored.id else None,
+                                     secret_key="0" * 64),
         ports=types.SimpleNamespace(get=lambda: []))
 
     def render(_request, template, status_code=200, **ctx):
@@ -198,7 +211,7 @@ def test_refused_form_shown_again():
     assert out["is_new"] and out["modbus_points_json"] == "x"
     f = form_of("")
     del f["modbus_points"]
-    assert _reshown_mapping(f, None).id == "abcdef012345"
+    assert mapping_for_rerender(f, None, []).id == "abcdef012345"
     # the cluster proxy: its re-render and its check before it forwards a form
     fields, error = cluster_routes._peer_save_fields(FakeForm(form_of('{"name": "a"')),
                                                      stored.to_dict(), "2.9.0")
@@ -428,7 +441,7 @@ def test_server():
                             ('{"name": "x"} junk', "line 1, column 15"),
                             ("5", "valid JSON array"),
                             ('["temp", "hum"]', "#1 is not an object"),
-                            ('[{"name": "a", "unit": "one"}]', "unit must be 0-255"),
+                            ('[{"name": "a", "unit": "one"}]', "unit: &#34;one&#34; is not a whole number"),
                             ('[{"name": "a", "unit": 1.5}]', "unit must be a whole number"),
                             ('[{"name": "a", "adress": 1}]', "Did you mean"),
                             ('[{"name": "S\\ud800"}]', "can&#39;t be stored")):
@@ -452,19 +465,22 @@ def test_server():
                 "network": {"protocol": "modbus", "bind_ip": "127.0.0.1", "port": free_port()},
                 "modbus_poll": {"points": [{"name": "a", "unit": "one"}]}}
         st, out = api("POST", "/api/v1/mappings", body)
-        assert st == 400 and "unit must be 0-255" in out.get("detail", ""), (st, out)
+        assert st == 400 and "unit: \"one\" is not a whole number" in out.get("detail", ""), \
+            (st, out)
         body["modbus_poll"]["points"] = ["temp"]
         st, out = api("POST", "/api/v1/mappings", body)
-        assert st == 400 and "#1 is not an object" in out.get("detail", ""), (st, out)
+        assert st == 400 and "points[0] must be a JSON object" in out.get("detail", ""), (st, out)
         body["modbus_poll"]["points"] = [{"name": "a", "scale": "x"}]
         st, out = api("POST", "/api/v1/mappings", body)
-        assert st == 400 and "scale must be a number" in out.get("detail", ""), (st, out)
+        assert st == 400 and "scale: \"x\" is not a finite number" in out.get("detail", ""), \
+            (st, out)
         print("REST API: unusable point values answered 400  OK")
 
         export = {"mappings": [dict(body, modbus_poll={"points": [{"name": "a", "unit": [1]}]})]}
         st, _, page = b.post("/settings/config/import", {"step": "preview", "mode": "merge"},
                              files={"file": ("m.json", json.dumps(export).encode())})
-        assert st == 200 and "Import failed" in page and "unit must be a whole number" in page, page[-800:]
+        assert st == 400 and "Import failed" in page and "unit: [1] is not a whole number" in page, \
+            (st, page[-800:])
         print("import: unusable point values refused with a message  OK")
 
 

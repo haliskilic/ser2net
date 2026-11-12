@@ -333,8 +333,8 @@ async def runner_checks():
     assert "ser2net_mqtt" not in body
     down = {"state": "down", "broker": "b:1883", "since": 1, "error": "x", "dropped": 3}
     body = await metrics_of(m, {"state": "running", "mqtt": down})
-    assert ('ser2net_mqtt_connected{mapping="meter",id="m1"} 0\n'
-            'ser2net_mqtt_messages_dropped_total{mapping="meter",id="m1"} 3') in body, body
+    assert ('ser2net_mqtt_connected{mapping="meter",id="m1"} 0\n' in body
+            and 'ser2net_mqtt_messages_dropped_total{mapping="meter",id="m1"} 3\n' in body), body
 
 
 def test_runner_status_and_metrics():
