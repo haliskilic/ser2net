@@ -51,7 +51,7 @@ def _kind(error) -> str:
     text = str(error)
     low = text.lower()
     if isinstance(error, OSError) and isinstance(getattr(error, "winerror", None), int):
-        codes = [error.winerror]  # type: ignore[attr-defined]
+        codes = [error.winerror]  # type: ignore[attr-defined, unused-ignore]  # (Windows only)
     elif isinstance(error, OSError) and isinstance(error.errno, int):
         codes = [error.errno]
     else:

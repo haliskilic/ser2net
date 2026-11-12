@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import re
 import time
+from typing import Any
 
 from markupsafe import escape
 from starlette.datastructures import FormData
@@ -423,7 +424,8 @@ def routes(ctx: Ctx) -> list:
         # refreshed every 5 s: 204 while the fleet view is what the browser shows already,
         # only the In / Out counters when only they changed (see LiveTable)
         if is_anonymous(request):  # other nodes' data needs a real login here
-            view = {"nodes": nodes, "can_edit": False, "discovery_error": "", "peers_hidden": True}
+            view: dict[str, Any] = {"nodes": nodes, "can_edit": False, "discovery_error": "",
+                                    "peers_hidden": True}
             return await fleet.answer(request, lambda: _fleet_snapshot(view), **view)
         targets = state.cluster.all_targets()
         results = await asyncio.gather(*[state.cluster.fetch_peer(t) for t in targets]) \
