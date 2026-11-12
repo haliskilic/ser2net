@@ -698,7 +698,9 @@ inside aren't readable by other users:
   are reduced to the file name, which is logged at start-up. A trace that can't be written
   (folder removed, disk full, no file handle left) pauses instead of stopping: the
   dashboard row and the Trace panel say why, ser2net tries again every few seconds (making
-  the folder again) and the trace then notes how many bytes are missing.
+  the folder again) and the trace then notes how many bytes are missing. Deleting a mapping
+  deletes its traces; those of mappings a replace import or a restore removed stay until
+  the next start (an undone restore finds them), which deletes them and logs how many.
 - `tls/` — certificate/key if self-signed is generated.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
@@ -708,9 +710,10 @@ new mappings get 12 hex digits. An id in any other form (hand-edited or imported
 replaced when the config is loaded or the file is imported; the start-up log or the import
 preview says so.
 
-Deleting `config.json` + `all.log` fully resets the system (orphan logs auto-pruned;
-`backups/` is never restored by itself — delete it too if you want it gone). To get back in
-after a lost password, use `--set-password` instead (see Security): it keeps everything else.
+Deleting `config.json` + `all.log` fully resets the system (the next start deletes the
+logs and traces of mappings that no longer exist; `backups/` is never restored by itself —
+delete it too if you want it gone). To get back in after a lost password, use
+`--set-password` instead (see Security): it keeps everything else.
 `admin-requests/` only holds a command-line request until the running instance takes it.
 
 **Going back to an older version:** stop the service and copy the data folder first. A

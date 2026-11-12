@@ -65,6 +65,7 @@ PORTABLE = [
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",
     "test_trace.py",
+    "test_trace_files.py",
     "test_session_timeout.py",
     "test_session_revocation.py",
     "test_account_recovery.py",
