@@ -57,19 +57,26 @@ class _Unbuildable:
     def __init__(self, error: Exception):
         self.error = f"its settings can't be used: {error}"
         self.status = RunnerStatus(state="stopped")
+        self._viewers: set = set()  # consoles and hex views: closed when it is replaced
 
     async def start(self) -> None:
         raise RuntimeError(self.error)
 
     async def stop(self) -> None:
-        pass
+        for mon in list(self._viewers):
+            mon.close()
+        self._viewers.clear()
 
-    # the console attaches to any runner: there is nothing to watch or write to here
+    # the console and the hex view attach to any runner: there is nothing to watch or
+    # write to here
     def add_monitor(self, mon) -> None:
-        pass
+        self._viewers.add(mon)
 
     def discard_monitor(self, mon) -> None:
-        pass
+        self._viewers.discard(mon)
+
+    add_traffic_monitor = add_monitor
+    discard_traffic_monitor = discard_monitor
 
     async def serial_write(self, data: bytes) -> None:
         pass
