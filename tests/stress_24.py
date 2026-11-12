@@ -25,11 +25,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
+from _server import free_port
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 24
 MSG = int(sys.argv[2]) if len(sys.argv) > 2 else 512
 ITERS = int(sys.argv[3]) if len(sys.argv) > 3 else 300
-BASE_PORT = 46001
+PORTS: list[int] = []  # a free port per bridge (main)
 
 
 async def make_socat():
@@ -59,7 +60,7 @@ def device_echo(ser, stop):
 
 
 async def drive_bridge(i):
-    reader, writer = await asyncio.open_connection("127.0.0.1", BASE_PORT + i)
+    reader, writer = await asyncio.open_connection("127.0.0.1", PORTS[i])
     req = bytes(((i + k) % 256) for k in range(MSG))
     lats = []
     bad = 0
@@ -99,11 +100,12 @@ async def main():
         socats.append(p); runner_devs.append(a); dev_devs.append(b)
     print(f"created {N} socat PTY pairs")
 
+    PORTS[:] = [free_port() for _ in range(N)]
     sup = Supervisor(logger=lambda m: None)
     mappings = [MappingConfig.from_dict({
         "name": f"s{i:02d}", "enabled": True,
         "serial": {"port": runner_devs[i], "baudrate": 115200},
-        "network": {"protocol": "raw", "bind_ip": "127.0.0.1", "port": BASE_PORT + i},
+        "network": {"protocol": "raw", "bind_ip": "127.0.0.1", "port": PORTS[i]},
     }) for i in range(N)]
 
     t = time.monotonic()

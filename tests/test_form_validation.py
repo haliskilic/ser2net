@@ -22,10 +22,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _server import server_log, show_log_on_failure
+from _server import free_port, server_log, show_log_on_failure
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-UI = 8089
+UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
 
@@ -76,7 +76,7 @@ def main():
         r = post("/api/mappings/save", {
             "name": "Bad", "kind": "net", "enabled": "on",
             "network_mode": "server", "network_protocol": "raw",
-            "network_bind_ip": "127.0.0.1", "network_port": "4099",
+            "network_bind_ip": "127.0.0.1", "network_port": str(free_port()),
             "serial_port": "",  # <-- missing required device
         })
         status = getattr(r, "code", getattr(r, "status", None))
@@ -92,7 +92,7 @@ def main():
         r2 = post("/api/mappings/save", {
             "name": "Good", "kind": "net", "enabled": "",
             "network_mode": "server", "network_protocol": "raw",
-            "network_bind_ip": "127.0.0.1", "network_port": "4100",
+            "network_bind_ip": "127.0.0.1", "network_port": str(free_port()),
             "serial_port": "/dev/ttyUSB-test", "serial_baudrate": "9600",
         })
         s2 = getattr(r2, "code", getattr(r2, "status", 200))

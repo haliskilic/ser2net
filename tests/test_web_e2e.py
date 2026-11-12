@@ -16,14 +16,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from _server import server_log, show_log_on_failure
+from _server import free_port, server_log, show_log_on_failure
 from _socat import pty_pair_sync
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 
-UI_PORT = 8099
-MAP_PORT = 45111
+UI_PORT = free_port()
+MAP_PORT = free_port()
 
 
 def wait_port(host, port, timeout=10):

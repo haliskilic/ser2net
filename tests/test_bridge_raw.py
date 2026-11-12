@@ -14,9 +14,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
+from _server import free_port
 from _socat import pty_pair as start_socat
 
-PORT = 45011
+PORT = free_port()
 
 
 async def main():

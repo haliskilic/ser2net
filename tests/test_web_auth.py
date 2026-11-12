@@ -19,12 +19,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from _server import Server, free_port, server_log, show_log_on_failure
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
-UI = 8087
+UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
-
-from _server import Server, server_log, show_log_on_failure
 
 from app.web import auth
 

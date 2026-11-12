@@ -30,8 +30,22 @@ sys.path.insert(0, ROOT)
 
 
 def free_port() -> int:
+    """A TCP port free on 127.0.0.1 right now, for a test's listener (never a fixed one: a
+    port in the ephemeral range can be held by an earlier test's closed connection, in
+    TIME_WAIT, and then refuses the bind)."""
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def free_udp_port(host: str = "127.0.0.1") -> int:
+    """A UDP port free on ``host`` right now ("" for every address, as the cluster's
+    discovery listens). A port free_port() found free for TCP may still be in use for UDP
+    (by another program on Windows, where the server's SO_REUSEADDR then shares it)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind((host, 0))
     port = s.getsockname()[1]
     s.close()
     return port

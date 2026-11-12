@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import MappingConfig
 from app.engine.supervisor import Supervisor
+from _server import free_port
 from _socat import pty_pair as socat
 
 
@@ -40,7 +41,7 @@ async def main():
     cert, key = gen_cert(tmp)
     p, dev_a, dev_b = await socat()
     sup = Supervisor(logger=lambda s: None)
-    port = 47360
+    port = free_port()
     m = MappingConfig.from_dict({
         "name": "tls", "enabled": True, "serial": {"port": dev_a, "baudrate": 115200},
         "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
