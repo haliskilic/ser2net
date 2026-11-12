@@ -44,7 +44,8 @@ from .web.auth import LoginRateLimiter, RevokedSessions
 # Per-mapping log retention (automatic maintenance).
 LOG_MAX_BYTES = 100 * 1024 * 1024     # cap each mapping log at 100 MB
 LOG_TRIM_TO = 0.9                      # ... cut to 90% of it then, so the next passes leave it
-LOG_MAX_AGE_DAYS = 15                  # drop entries older than 15 days
+LOG_MAX_AGE_DAYS = 15                  # drop entries older than 15 days ...
+LOG_VIEW_LINES = 1000                  # ... but never one of the last lines the Log panel shows
 LOG_MAINTENANCE_INTERVAL = 3600       # run maintenance hourly (and once at startup)
 # Global log rotation (all.log via RotatingFileHandler; audit.log rotated manually).
 ALL_LOG_MAX_BYTES = 10 * 1024 * 1024   # rotate all.log past 10 MB
@@ -238,6 +239,29 @@ def _line_start(fh, offset: int) -> int:
             return fh.tell()
 
 
+def _tail_start(fh, size: int, lines: int) -> int:
+    """The offset at which the last `lines` lines of the open binary file `fh` (`size`
+    bytes) begin: 0 when it has no more, `size` for 0 lines. Reads backwards in chunks."""
+    if lines <= 0:
+        return size
+    fh.seek(size - 1)
+    need = lines + (fh.read(1) == b"\n")  # the last line's own line feed ends no other
+    pos, found = size, 0
+    while pos > 0:
+        step = min(64 * 1024, pos)
+        pos -= step
+        fh.seek(pos)
+        chunk = fh.read(step)
+        count = chunk.count(b"\n")
+        if found + count >= need:
+            end = len(chunk)
+            for _i in range(need - found):
+                end = chunk.rindex(b"\n", 0, end)
+            return pos + end + 1
+        found += count
+    return 0
+
+
 @contextlib.contextmanager
 def _holding(handlers):
     """Hold the locks of these logging handlers: a record logged meanwhile waits."""
@@ -252,9 +276,11 @@ def _holding(handlers):
             h.release()
 
 
-def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int, handlers=()) -> bool:
-    """Trim a log file in place: drop the lines older than cutoff_ts and, if it is still
-    over max_bytes, keep only its newest LOG_TRIM_TO part, from a line's start. Returns True if the file changed. Runs in a worker thread.
+def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int, keep_lines: int = 0,
+                   handlers=()) -> bool:
+    """Trim a log file in place: drop the lines older than cutoff_ts (but none of the last
+    `keep_lines`) and, if it is still over max_bytes, keep only its newest LOG_TRIM_TO
+    part, from a line's start. Returns True if the file changed. Runs in a worker thread.
 
     Only a line feed ends a line (a CR, NEL or U+2028 inside a message doesn't). Lines are
     in time order, so the age filter keeps the file from its first line with a time at or
@@ -277,9 +303,9 @@ def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int, handlers=()) -> 
         with open(path, "rb") as fh:
             size_cut = _line_start(fh, size - int(max_bytes * LOG_TRIM_TO)) \
                 if size > max_bytes else 0
-            start, pos, dated = None, size_cut, False
+            start, pos, dated, stop = None, size_cut, False, size
             fh.seek(pos)
-            while True:
+            while pos < stop:
                 head = fh.readline(_STAMP_BYTES)
                 if not head:
                     break
@@ -293,12 +319,15 @@ def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int, handlers=()) -> 
                     ts = _parse_log_ts(head.decode("utf-8", errors="replace"))
                 if ts is None:
                     continue
-                dated = True
                 if ts >= cutoff_ts:
                     start = line_at
                     break
+                if not dated:  # the age filter cuts: never into the last keep_lines
+                    dated = True
+                    stop = max(size_cut, _tail_start(fh, size, keep_lines))
+                    fh.seek(pos)
             if start is None:
-                start = size if dated else size_cut
+                start = stop if dated else size_cut
     except OSError:
         return False
     if start <= 0:
@@ -546,7 +575,7 @@ class AppState:
 
         return log
 
-    def read_mapping_log(self, mapping_id: str, limit: int = 1000,
+    def read_mapping_log(self, mapping_id: str, limit: int = LOG_VIEW_LINES,
                          tail_bytes: int = 512 * 1024) -> list[str]:
         """Return the mapping's log lines, newest first (most recent at index 0).
 
@@ -725,8 +754,10 @@ class AppState:
                     os.remove(os.path.join(self.logs_dir, fn))
 
     async def run_log_maintenance(self) -> None:
-        """Trim every per-mapping log: drop entries older than LOG_MAX_AGE_DAYS and
-        cap each file at LOG_MAX_BYTES (keeping the most recent portion), in a worker
+        """Trim every per-mapping log: drop entries older than LOG_MAX_AGE_DAYS, but none
+        of the last LOG_VIEW_LINES (what its Log panel shows: a clock that jumps ahead, or
+        a date corrected after lines were stamped with a wrong one, must not empty it),
+        and cap each file at LOG_MAX_BYTES (keeping the most recent portion), in a worker
         thread (_trim_log_file). The mapping's log handler stays attached: what it writes
         meanwhile is kept."""
         cutoff = time.time() - LOG_MAX_AGE_DAYS * 86400
@@ -741,7 +772,7 @@ class AppState:
             try:
                 changed = await asyncio.to_thread(
                     _trim_log_file, os.path.join(self.logs_dir, fn), cutoff, LOG_MAX_BYTES,
-                    handlers=handlers)
+                    keep_lines=LOG_VIEW_LINES, handlers=handlers)
                 if changed:
                     self.log(f"log maintenance: trimmed {fn} (>{LOG_MAX_AGE_DAYS}d / "
                              f">{LOG_MAX_BYTES // 1048576}MB)")
