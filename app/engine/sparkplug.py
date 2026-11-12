@@ -433,12 +433,14 @@ def _decode_metric(data: bytes) -> Metric:
     return metric
 
 
-def decode_payload(data: bytes) -> Payload:
+def decode_payload(data: bytes, max_metrics: int | None = None) -> Payload:
     """Parse Sparkplug B protobuf bytes into a Payload. Values are converted by each
     metric's datatype (signed types sign-extended, range-checked); a metric without a
     datatype -- as NDATA/NCMD metrics are normally sent -- or with a datatype this codec
     doesn't model keeps its plain wire value (int_value as unsigned 32-bit, etc.).
-    Unknown fields are skipped; truncated or malformed input raises ValueError."""
+    Unknown fields are skipped; truncated or malformed input raises ValueError, and so do
+    more than ``max_metrics`` metrics, as soon as the one too many is seen (the rest is
+    not decoded)."""
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError(f"decode_payload needs bytes, got {type(data).__name__}")
     payload = Payload(timestamp=None, metrics=[], seq=None)
@@ -450,6 +452,8 @@ def decode_payload(data: bytes) -> Payload:
                 payload.seq = raw
         elif wire_type == _LEN:
             if number == 2:
+                if max_metrics is not None and len(payload.metrics) >= max_metrics:
+                    raise ValueError(f"more than {max_metrics} metric(s)")
                 payload.metrics.append(_decode_metric(raw))
             elif number == 4:
                 payload.uuid = _utf8(raw, "payload uuid")
@@ -515,18 +519,20 @@ _DTYPE_DATATYPES = {
     "uint16": DataType.UInt16, "int16": DataType.Int16,
     "uint32": DataType.UInt32, "int32": DataType.Int32,
     "float32": DataType.Float, "bool": DataType.Boolean,
+    "uint64": DataType.UInt64, "int64": DataType.Int64,
+    "float64": DataType.Double, "string": DataType.String,
 }
 
 
 def datatype_for(dtype: str, scale: float = 1.0) -> int:
     """Sparkplug datatype for a polled Modbus value of ``dtype`` (see
     modbus.decode_value). A scaled value (scale other than 0/1, the same rule as
-    decode_value) is a float, so it maps to Double; "bool" (coils, discrete inputs)
-    maps to Boolean whatever the scale."""
+    decode_value) is a float, so it maps to Double; "bool" (coils, discrete inputs, a
+    register's bit) maps to Boolean and "string" to String whatever the scale."""
     try:
         datatype = _DTYPE_DATATYPES[dtype]
     except KeyError:
         raise ValueError(f"unknown dtype {dtype!r}") from None
-    if datatype != DataType.Boolean and scale and scale != 1.0:
+    if datatype not in (DataType.Boolean, DataType.String) and scale and scale != 1.0:
         return DataType.Double
     return datatype

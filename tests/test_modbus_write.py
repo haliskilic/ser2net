@@ -270,7 +270,7 @@ def test_encode_value_errors():
         expect_value_error(modbus.encode_value, bad, "int16", match="finite")
     for bad in ("12", None, True, b"\x01", [1]):
         expect_value_error(modbus.encode_value, bad, "uint16", match="must be a number")
-    expect_value_error(modbus.encode_value, 1, "float64", match="unknown dtype")
+    expect_value_error(modbus.encode_value, 1, "float16", match="unknown dtype")
     expect_value_error(modbus.encode_value, 1, "uint16", float("nan"), match="scale")
     expect_value_error(modbus.encode_value, 1, "uint16", float("inf"), match="scale")
     print("encode_value rejects out-of-range, non-finite and non-numeric values  OK")

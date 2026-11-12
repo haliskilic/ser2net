@@ -40,7 +40,7 @@ from .. import auth, certinfo, ldap_auth, oidc_auth, proxy, selfsigned
 from . import ops
 from .common import Ctx, client_ip, csrf_failed
 from .forms import (
-    _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
+    _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem, json_text,
 )
 
 # a mappings file to import may be larger than other requests (server.MAX_BODY_BYTES):
@@ -1275,12 +1275,13 @@ def routes(ctx: Ctx) -> list:
         if deny := require_role(request, "operator"):
             return deny
         mappings = state.config.mappings
+        # non-ASCII text as it is (mapping and point names, topics), like config.json
         data = {"version": 1, "mappings": [m.to_dict() for m in mappings]}
         secrets_in = sum(1 for m in mappings if m.mqtt.password)
         ctx.audit(request, "config_export", f"{len(mappings)} mappings"
                   + (f", {secrets_in} with an MQTT password" if secrets_in else ""))
         return Response(
-            json.dumps(data, indent=2), media_type="application/json",
+            json_text(data, indent=2), media_type="application/json; charset=utf-8",
             headers={"Content-Disposition": "attachment; filename=ser2net-mappings.json"})
 
     # ---- import: the form first shows a preview (step=preview), then applies it in

@@ -14,7 +14,8 @@ from starlette.responses import PlainTextResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from ... import clock
-from ...config import ConfigError, MappingConfig, console_charset, console_encoding, mapping_revision
+from ...config import (ConfigError, MappingConfig, ModbusPoll, console_charset, console_encoding,
+                       mapping_revision)
 from ...engine import netinfo, portlist
 from ...i18n import _, ngettext
 from ...notify import no_data_for
@@ -23,7 +24,7 @@ from .common import (
     TRIGGER, Ctx, LiveTable, action_done, bytesize, console_interactive, notice, reason,
     sees_to_device, start_failed,
 )
-from .forms import _form_error, form_context
+from .forms import _form_error, _parse_modbus_points, form_context
 
 
 def _port_taken(error: str) -> bool:
@@ -143,20 +144,8 @@ def routes(ctx: Ctx) -> list:
         try:
             async with state.edit_config():
                 m = state.config.get_mapping(mid)
-                if m:
-                    d = m.to_dict()
-                    d.pop("id", None)
-                    d["name"] = f"{m.name} (copy)"
-                    d["enabled"] = False  # don't auto-start a duplicate (avoids port clash)
-                    # a broker drops one of two connections with the same client id
-                    d["mqtt"]["client_id"] = ""
-                    dup = MappingConfig.from_dict(d)
-                    # bump a listening port to the next free one (not the admin UI's, ...)
-                    if dup.kind == "net" and dup.network.listens:
-                        used = {mm.network.port for mm in state.config.mappings if mm.kind == "net"}
-                        while ((dup.network.port in used or state.config.own_port_conflict(dup))
-                               and dup.network.port < 65535):
-                            dup.network.port += 1
+                if m:  # disabled, on a free port, with an MQTT identity of its own
+                    dup = ops.copy_of(state.config, m)
                     state.config.mappings.append(dup)
         except ConfigError as e:  # not saved, so not copied (config.json unwritable too)
             return PlainTextResponse(_("Duplicate failed: {0}").format(e), status_code=400)
@@ -251,6 +240,37 @@ def routes(ctx: Ctx) -> list:
             rev=mapping_revision(state.config.secret_key, m),
             links=portlist.links(portlist.visible(ports), (m.serial.port, m.serial_b.port)),
             mqtt_stored=m.mqtt.password))
+
+    async def mapping_modbus_read(request):
+        """The mapping form's test read: the points in the posted points JSON, as typed (not
+        saved), read once now through the mapping's running gateway (its turn on the bus
+        with the poll and the masters); nothing is published. A fragment for the form."""
+        if deny := require_role(request, "operator"):
+            return deny
+        m = state.config.get_mapping(request.path_params["mid"])
+        if not m:
+            return PlainTextResponse(_("Mapping not found"), status_code=404)
+        form = await request.form()
+        try:
+            poll = ModbusPoll.from_dict(
+                {"points": _parse_modbus_points(form.get("modbus_points", ""), strict=True)})
+            poll.validate()
+            poll.validate_input()
+        except (ValueError, ConfigError) as e:
+            return render(request, "_modbus_read.html", rows=[], error=str(e))
+        runner = state.supervisor.get_runner(m.id)
+        read_now = getattr(runner, "read_now", None)  # (a Modbus gateway's runner)
+        if read_now is None or runner.status.state in ("stopped", "error"):
+            return render(request, "_modbus_read.html", rows=[], error=_(
+                "Start this Modbus gateway to read the points: it reads them over its serial "
+                "port."))
+        if not poll.points:
+            return render(request, "_modbus_read.html", rows=[], error=_("There are no points "
+                                                                          "to read."))
+        rows = await read_now(poll.points)
+        return render(request, "_modbus_read.html", error=None, more=len(poll.points) > len(rows),
+                      rows=[{"name": p.name, "unit": p.unit, "value": v, "error": e}
+                            for p, v, e in rows])
 
     async def mapping_log(request):
         mid = request.path_params["mid"]
@@ -422,6 +442,7 @@ def routes(ctx: Ctx) -> list:
         Route("/api/mappings/bulk", mapping_bulk, methods=["POST"]),
         Route("/api/mappings/form", mapping_form_new),
         Route("/api/mappings/{mid}/form", mapping_form_edit),
+        Route("/api/mappings/{mid}/modbus-read", mapping_modbus_read, methods=["POST"]),
         Route("/api/mappings/{mid}/log", mapping_log),
         Route("/api/mappings/{mid}/console-view", console_view),
         Route("/api/mappings/{mid}/traces", mapping_traces),

@@ -470,6 +470,8 @@
         'client_connected': _("sends the client’s IP address"),
         'client_disconnected': _("sends the client’s IP address"),
         'login_failed': _("sends the account name, or “(unknown user)”, and the IP address"),
+        'unit_offline': _("Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)"),
+        'unit_back': _("Modbus unit answering again"),
       } %}
       {% for e in notify_events %}
       <label class="chk"><input type="checkbox" name="notify_event_{{ e }}" {% if e in notify.events %}checked{% endif %}> {{ event_labels[e] }}{% if e in event_hints %} <span class="muted">({{ event_hints[e] }})</span>{% endif %}</label>

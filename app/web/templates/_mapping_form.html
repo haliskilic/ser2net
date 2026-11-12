@@ -235,6 +235,12 @@
         {%- if mapping.options.closeon|in_text_box != mapping.options.closeon %}<span class="muted">{{ hidden_chars }}</span>{% endif %}
       </label>
     </div>
+    <div class="grid2" data-show-when="network_protocol=modbus">
+      <label>{{ _("Response timeout (s)") }} <span class="muted">({{ _("how long an RTU slave gets to begin its reply once the request is out; then exception 0x0B") }})</span>
+        <input type="number" name="opt_modbus_response_timeout_s" min="0.01" max="60" step="any" value="{{ mapping.options.modbus_response_timeout_s }}"></label>
+      <label>{{ _("Unit map") }} <span class="muted">({{ _("optional: the unit id a master sends = the RTU unit it goes to, such as 255=1, 0=1; blank = as sent") }})</span>
+        <input type="text" name="opt_modbus_unit_map" value="{{ mapping.options.modbus_unit_map_text }}" placeholder="255=1" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+    </div>
     {% if 'rfc2217_restore' not in hide %}
     <div data-show-when="network_protocol=rfc2217">
       <input type="hidden" name="opt_rfc2217_restore_on_disconnect_shown" value="1">
@@ -310,6 +316,10 @@
         <input type="text" name="mqtt_client_id" value="{{ mapping.mqtt.client_id }}" placeholder="{{ _('e.g. %(example)s', example='s2n-plc1') }}" autocapitalize="none" autocorrect="off" spellcheck="false">
       </label>
     </div>
+    <div data-show-when="mqtt_payload_format=plain">
+      <input type="hidden" name="mqtt_retain_shown" value="1">
+      <label class="chk"><input type="checkbox" name="mqtt_retain" {% if mapping.mqtt.retain %}checked{% endif %}> {{ _("Retain the data") }} <span class="muted">({{ _("serial lines, Modbus values: a subscriber that connects later gets the last one at once") }})</span></label>
+    </div>
     <div class="grid3">
       <label>{{ _("Username") }} <input type="text" name="mqtt_username" value="{{ mapping.mqtt.username }}" placeholder="{{ _('optional') }}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
       {# write-only: the stored password is never in the page; blank keeps it #}
@@ -333,6 +343,18 @@
       </div>
       {% if mapping.accepts_mqtt_tx and not (mapping.mqtt.tls and mapping.mqtt.username) %}<div class="banner warn">{{ _("MQTT messages are written to the device over a broker connection without TLS or a username: any client the broker lets publish to &lt;topic&gt;/tx can write to it. Restrict that topic with the broker’s ACLs, and use TLS and credentials.") }}</div>{% endif %}
     </div>
+    <div class="grid3" data-mqtt-tls>
+      <label>{{ _("CA certificate file") }} <span class="muted">({{ _("TLS; blank = the system’s CAs") }})</span>
+        <input type="text" name="mqtt_ca_file" value="{{ mapping.mqtt.ca_file }}" placeholder="{{ _('e.g. %(example)s', example='/data/certs/broker-ca.pem') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>{{ _("Client certificate file") }} <span class="muted">({{ _("optional: for a broker that asks for one") }})</span>
+        <input type="text" name="mqtt_client_cert" value="{{ mapping.mqtt.client_cert }}" placeholder="{{ _('e.g. %(example)s', example='/data/certs/gateway.pem') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+      <label>{{ _("Client key file") }} <span class="muted">({{ _("blank = in the certificate file") }})</span>
+        <input type="text" name="mqtt_client_key" value="{{ mapping.mqtt.client_key }}" placeholder="{{ _('e.g. %(example)s', example='/data/certs/gateway.key') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+    </div>
+    <div class="grid3">
+      <label>{{ _("Client key password") }} <input type="password" name="mqtt_client_key_password" value="{{ mapping.mqtt.client_key_password }}" placeholder="{{ _('optional') }}" autocomplete="off"></label>
+      <label class="chk chk-pad" title="{{ _('off: a certificate that does not name the broker host is accepted too (it must still come from a trusted CA)') }}"><input type="checkbox" name="mqtt_tls_check_hostname" {% if mapping.mqtt.tls_check_hostname %}checked{% endif %}> {{ _("Check the broker’s host name") }}</label>
+    </div>
     {% if 'payload_format' not in hide %}
     <div class="grid3" data-show-when="network_protocol=modbus">
       <label>{{ _("Payload format") }} <span class="muted">({{ _("Modbus points") }})</span>
@@ -344,23 +366,68 @@
       <label>{{ _("Sparkplug edge node ID") }} <span class="muted">({{ _("blank = mapping name") }})</span>
         <input type="text" name="mqtt_sparkplug_node_id" value="{{ mapping.mqtt.sparkplug_node_id }}" placeholder="{{ _('e.g. %(example)s', example='line-3-plc') }}"></label>
     </div>
+    <div data-show-when="network_protocol=modbus"><div class="grid3" data-show-when="mqtt_payload_format=sparkplug_b">
+      <label>{{ _("Sparkplug primary host ID") }} <span class="muted">({{ _("optional: births only while this host application’s STATE says online") }})</span>
+        <input type="text" name="mqtt_sparkplug_primary_host_id" value="{{ mapping.mqtt.sparkplug_primary_host_id }}" placeholder="{{ _('e.g. %(example)s', example='scada-1') }}" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+    </div></div>
     {% endif %}
   </fieldset>
 
   <fieldset data-show-when="network_protocol=modbus">
     <legend>{{ _("Modbus register polling → MQTT") }} <span class="muted">({{ _("edge mode; also enable MQTT above") }})</span></legend>
     <label>{{ _("Poll interval (s)") }} <input type="number" name="modbus_poll_interval_s" min="0.1" step="any" value="{{ mapping.modbus_poll.interval_s }}"></label>
+    <input type="hidden" name="modbus_block_reads_shown" value="1">
+    <div class="grid2">
+      <label class="chk chk-pad"><input type="checkbox" name="modbus_block_reads" {% if mapping.modbus_poll.block_reads is sameas true %}checked{% endif %}> {{ _("Read neighbouring points with one request") }} <span class="muted">({{ _("per unit and function, up to 125 registers or 2000 coils; a block the slave refuses is read point by point") }})</span></label>
+      <label>{{ _("Unused registers a block may span") }} <span class="muted">({{ _("between two points; 0 = only adjacent ones") }})</span>
+        <input type="number" name="modbus_block_gap" min="0" max="124" step="1" value="{{ mapping.modbus_poll.block_gap }}"></label>
+    </div>
     <label>{{ _("Points — JSON array") }}
-      <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|bool","scale","writable":true}] — {{ _('writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug DCMD to their unit’s device (<span class="mono">unit&lt;N&gt;</span>)') }}</span>
+      <span class="muted">[{"name","unit","fn":1 coils|2 discrete inputs|3 holding|4 input,"address","dtype":"uint16|int16|uint32|int32|float32|int64|uint64|float64|string|bool","scale","writable":true}] — {{ _('writable points (coils, holding registers) take values from MQTT <span class="mono">&lt;topic&gt;/&lt;point&gt;/set</span> or a Sparkplug DCMD to their unit’s device (<span class="mono">unit&lt;N&gt;</span>)') }}; {{ _('optional: <span class="mono">"min"</span>, <span class="mono">"max"</span> and <span class="mono">"allowed": [ … ]</span> limit what MQTT may write to a point, <span class="mono">"poll": false</span> makes a writable point write-only (never read)') }}; {{ _('<span class="mono">"word_order"</span>: <span class="mono">"CDAB"</span> (low register first), <span class="mono">"BADC"</span> (bytes swapped) or <span class="mono">"DCBA"</span> for a device that does not send ABCD; <span class="mono">"bit": 0–15</span> with <span class="mono">"dtype": "bool"</span> reads one bit of a register; a <span class="mono">"string"</span> takes <span class="mono">"length"</span> registers') }}</span>
+      <input type="hidden" name="modbus_point_options_shown" value="1">
       <textarea name="modbus_points" rows="5" spellcheck="false"
                 placeholder='[{"name":"temp","unit":1,"fn":4,"address":0,"dtype":"float32","scale":0.1}, {"name":"setpoint","unit":1,"fn":3,"address":10,"dtype":"int16","writable":true}]'>{{ modbus_points_json }}</textarea>
     </label>
+    <div class="points-editor" data-points-editor data-texts="{{ {
+      'as_table': _('Edit the points as fields'), 'as_json': _('Edit the points as JSON'),
+      'add': _('Add a point'), 'remove': _('Remove'),
+      'more': _('also %(keys)s: edit them as JSON', keys='{0}'),
+      'bad_json': _('The points can’t be shown as fields: %(why)s. Fix the JSON first.', why='{0}'),
+      'long_number': _('a number has more than 15 digits, which the browser would change'),
+      'not_list': _('the JSON is not a list of points'),
+      'not_object': _('point #%(n)s is not an object', n='{0}'),
+      'name': _('Name'), 'unit': _('Unit'), 'fn': _('Function'), 'address': _('Address'),
+      'dtype': _('Type'), 'bit': _('Bit'), 'length': _('Length (registers)'),
+      'word_order': _('Word order'), 'scale': _('Scale'), 'writable': _('Writable'),
+      'fn1': _('1 coils'), 'fn2': _('2 discrete inputs'), 'fn3': _('3 holding registers'),
+      'fn4': _('4 input registers'),
+    } | tojson | forceescape }}">
+      <button type="button" class="btn sm" data-points-mode>{{ _("Edit the points as fields") }}</button>
+      <div class="points-msg" data-points-msg hidden></div>
+      <div class="points-rows" data-points-rows hidden></div>
+    </div>
+    {% if not is_new and not remote %}
+    <div class="mb-sm">
+      <button type="button" class="btn sm" hx-post="/api/mappings/{{ mapping.id }}/modbus-read" hx-include="[name='modbus_points']" hx-target="#modbus-read" hx-swap="innerHTML">{{ _("Read these points now") }}</button>
+      <span class="muted">{{ _("through the running gateway, as typed above; nothing is saved or published") }}</span>
+      <div id="modbus-read" aria-live="polite"></div>
+    </div>
+    {% endif %}
     <p class="sub mb-sm">{{ _('Who may write is up to the broker: let only trusted clients publish to <span class="mono">&lt;topic&gt;/+/set</span> (Sparkplug: the node’s NCMD and DCMD topics), and use TLS and a username. Read-only refuses every write.') }}</p>
+    {% if mapping.modbus_poll.broadcast_points %}<div class="banner warn" data-unit-warning>{{ _('Points on unit 0, the broadcast address: %(names)s. They are never read (no slave answers a broadcast); a write to one goes to every slave on the line and is not read back.', names=mapping.modbus_poll.broadcast_points|join(', ')) }}</div>{% endif %}
+    {% if mapping.modbus_poll.reserved_unit_points %}<div class="banner warn" data-unit-warning>{{ _('Points on units 248–255, which a Modbus serial line reserves (slave addresses are 1–247): %(names)s.', names=mapping.modbus_poll.reserved_unit_points|join(', ')) }}</div>{% endif %}
     {% if mapping.accepts_mqtt_writes and not (mapping.mqtt.tls and mapping.mqtt.username) %}<div class="banner warn">{{ _('Writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them. Restrict those topics with the broker’s ACLs, and use TLS and credentials.') }}</div>{% endif %}
     {% if 'retained_set' not in hide %}
     <div data-show-when="mqtt_payload_format=plain">
       <input type="hidden" name="mqtt_apply_retained_set_shown" value="1">
       <label class="chk"><input type="checkbox" name="mqtt_apply_retained_set" {% if mapping.mqtt.apply_retained_set %}checked{% endif %}> {{ _("Re-apply a retained /set after every connect") }} <span class="muted">({{ _("off: a command is written when it is published; the retained copy the broker sends again after a reconnect, restart or save is ignored") }})</span></label>
+      <label>{{ _("Value format") }}
+        <select name="mqtt_value_format">
+          <option value="text" {% if mapping.mqtt.value_format != 'json' %}selected{% endif %}>{{ _("Text: the value alone") }}</option>
+          <option value="json" {% if mapping.mqtt.value_format == 'json' %}selected{% endif %}>{{ _('JSON: {"value", "ts", "quality"}') }}</option>
+        </select></label>
+      <input type="hidden" name="mqtt_unit_status_shown" value="1">
+      <label class="chk"><input type="checkbox" name="mqtt_unit_status" {% if mapping.mqtt.unit_status %}checked{% endif %}> {{ _('Publish each unit’s state to <span class="mono">&lt;topic&gt;/unit&lt;N&gt;/status</span>') }} <span class="muted">({{ _("retained online / offline; offline once a unit gave no reply to any of its points in 3 polls in a row. It keeps the last state while the mapping is stopped: read it together with &lt;topic&gt;/status") }})</span></label>
     </div>
     {% endif %}
   </fieldset>

@@ -1,0 +1,18 @@
+{% if error %}<div class="banner error">{{ error }}</div>
+{% else %}
+<div class="table-scroll">
+<table class="grid" data-modbus-read>
+  <thead><tr><th>{{ _("Point") }}</th><th>{{ _("Unit") }}</th><th>{{ _("Value read now") }}</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="mono">{{ r.name|softbreak }}</td>
+      <td>{{ r.unit }}</td>
+      <td class="mono">{% if r.error %}<span class="muted">{{ r.error }}</span>{% elif r.value is sameas true %}true{% elif r.value is sameas false %}false{% else %}{{ r.value }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if more %}<p class="muted">{{ _("Only the first %(n)s points were read.", n=rows|length) }}</p>{% endif %}
+{% endif %}
