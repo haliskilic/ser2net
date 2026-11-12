@@ -207,6 +207,8 @@ def test_personal_data():
         == "LDAP user 'bob' from 10.0.0.9: the name of a local account"
     assert notify.sign_in_detail(on, "bob", "2001:db8::1", "OIDC", "it is empty") \
         == "OIDC user (name left out) from 2001:db8::/48: it is empty"
+    assert notify.sign_in_detail(off, "", "10.0.0.9", "OIDC", "state mismatch") \
+        == "OIDC sign-in from 10.0.0.9: state mismatch", "an SSO answer without a name"
     s = NotificationSettings.from_dict({
         "enabled": True, "events": ["client_connected", "login_failed"], "repeat_s": 300,
         "webhook_url": "http://127.0.0.1:9/hook", "mask_personal_data": True})
