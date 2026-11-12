@@ -21,7 +21,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
-from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
+from ...config import ConfigError, MappingConfig, host_port, peer_host, trace_file_name
 from ...engine import netinfo, portlist
 from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_url
 from ...i18n import _
@@ -111,8 +111,8 @@ def _mapping_endpoint(m) -> str:
     if m.kind == "serialbridge":
         return f"{m.serial.port} ↔ {m.serial_b.port}"
     if m.network.mode == "client":
-        return f"→ {m.network.remote_host}:{m.network.remote_port}"
-    return f"{m.network.bind_ip}:{m.network.port}"
+        return f"→ {host_port(m.network.remote_host, m.network.remote_port)}"
+    return f"{m.network.bind_shown}:{m.network.port}"
 
 
 def _fmt_uptime(seconds) -> str:

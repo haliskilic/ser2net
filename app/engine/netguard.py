@@ -215,21 +215,31 @@ def fd_reserve(limit: int) -> int:
 # ---------------------------------------------------------------------------
 # incoming connections
 # ---------------------------------------------------------------------------
-def peer_ip(transport: Any) -> str:
-    """A connection's source address; an IPv4-mapped IPv6 one as its IPv4 address."""
+def peer_address(transport: Any) -> tuple[str, int]:
+    """A connection's (a stream writer's) source address and port: the address in its
+    canonical form, an IPv4-mapped IPv6 one (an IPv4 client of a socket that takes both
+    families) as its IPv4 address; port 0 when there is none."""
     peer = transport.get_extra_info("peername")
-    ip = str(peer[0]) if isinstance(peer, tuple) and peer else str(peer or "?")
-    if ip.startswith("::ffff:") and "." in ip:
-        ip = ip[len("::ffff:"):]
-    return ip
+    if isinstance(peer, tuple) and peer:
+        port = peer[1] if len(peer) > 1 and isinstance(peer[1], int) else 0
+        return canonical_ip(str(peer[0])), port
+    return str(peer or "?"), 0
+
+
+def peer_ip(transport: Any) -> str:
+    """A connection's source address (see peer_address)."""
+    return peer_address(transport)[0]
+
+
+def client_label(ip: str, port: int) -> str:
+    """ip:port of a client, for the log and the UI ([2001:db8::7]:50123), just the address
+    without a port."""
+    return host_port(ip, port) if port else ip
 
 
 def peer_label(transport: Any) -> str:
     """ip:port of a connection, for the log."""
-    peer = transport.get_extra_info("peername")
-    if isinstance(peer, tuple) and len(peer) > 1:
-        return f"{peer[0]}:{peer[1]}"
-    return peer_ip(transport)
+    return client_label(*peer_address(transport))
 
 
 class Pool:

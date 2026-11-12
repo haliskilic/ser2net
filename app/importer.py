@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from .config import ConfigError, MappingConfig, _new_id
+from .config import ConfigError, MappingConfig, _new_id, host_port
 from .i18n import _
 from .ser2net_import import looks_yaml, parse_ser2net_config
 
@@ -149,6 +149,6 @@ def _kind(m: MappingConfig) -> str:
     if m.kind == "serialbridge":
         return f"{m.serial.port} ↔ {m.serial_b.port}"
     net = m.network
-    where = (f"→ {net.remote_host}:{net.remote_port}" if net.mode == "client"
-             else f"{net.bind_ip}:{net.port}")
+    where = (f"→ {host_port(net.remote_host, net.remote_port)}" if net.mode == "client"
+             else f"{net.bind_shown}:{net.port}")
     return f"{m.serial.port} · {net.mode}/{net.protocol} {where}"

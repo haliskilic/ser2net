@@ -54,7 +54,9 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from exceptiongroup import BaseExceptionGroup
 
 from .. import i18n
-from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
+from ..config import (
+    MappingConfig, canonical_ip, host_port, mapping_file, udp_peer_address, udp_peer_timeout,
+)
 from . import netguard, portdiag, serial_io, sockopts
 from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
@@ -402,7 +404,7 @@ class _ClientConn:
         self.writer = writer
         self.peer_ip = peer_ip
         self.peer_port = peer_port
-        self.peer = f"{peer_ip}:{peer_port}" if peer_port else peer_ip
+        self.peer = netguard.client_label(peer_ip, peer_port)
         self.priority = priority
         self.connected_at = time.time()
         self._queue_max = runner.mapping.network.client_queue_max or CLIENT_QUEUE_MAX
@@ -728,8 +730,8 @@ class MappingRunner:
                 self.status.set_link("connecting")
                 self._main_task = asyncio.create_task(
                     self._client_supervisor(), name=f"connectout:{self.mapping.name}")
-                self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol}, "
-                          f"{sockopts.describe(net)})")
+                self._log(f"connect-out to {host_port(net.remote_host, net.remote_port)} "
+                          f"({net.protocol}, {sockopts.describe(net)})")
             elif udp is not None:
                 self._main_task = asyncio.create_task(udp.run(), name=f"udp:{self.mapping.name}")
         except BaseException:
@@ -904,12 +906,8 @@ class MappingRunner:
         self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        peername = writer.get_extra_info("peername") or ("?", 0)
-        if isinstance(peername, tuple):
-            peer_ip, peer_port = str(peername[0]), int(peername[1]) if len(peername) > 1 else 0
-        else:
-            peer_ip, peer_port = str(peername), 0
-        peer_label = f"{peer_ip}:{peer_port}" if peer_port else peer_ip
+        peer_ip, peer_port = netguard.peer_address(writer)
+        peer_label = netguard.client_label(peer_ip, peer_port)
         net = self.mapping.network
 
         # An RFC2217 session needs the open serial port: wait briefly for it (an allowed
@@ -1002,7 +1000,7 @@ class MappingRunner:
 
     async def _client_supervisor(self) -> None:
         net = self.mapping.network
-        target = f"{net.remote_host}:{net.remote_port}"
+        target = host_port(net.remote_host, net.remote_port)
         backoff = Backoff()
         failures = FailureLog(self._log, "connect-out failed")
         while not self._stop.is_set():
@@ -1143,7 +1141,8 @@ class MappingRunner:
 # datagram from it, when that is set).
 # ---------------------------------------------------------------------------
 def _udp_label(addr) -> str:
-    return f"{addr[0]}:{addr[1]}"
+    """ip:port of a datagram's sender (an IPv4 one of a socket for both families as IPv4)."""
+    return netguard.client_label(canonical_ip(str(addr[0])), addr[1])
 
 
 class _UdpPeer:

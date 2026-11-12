@@ -44,7 +44,7 @@
 
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Admin interface") }}</h2></div>
-  <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=admin.bind_ip ~ ':' ~ admin.port) }}
+  <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=host_port(admin.bind_ip, admin.port)) }}
      {% if admin.tls_enabled %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
   <p class="muted">{{ _('To change the admin bind address, restart with <span class="mono">python3 ser2net.py --reconfigure</span>.') }}</p>
 </section>
@@ -54,7 +54,7 @@
   <div class="panel-head"><h2>{{ _("Web UI access") }}</h2></div>
   <p class="muted mb-sm">{{ _('By default every visitor must sign in. On a trusted network you can let visitors use this UI <em>without a password</em>, with the role chosen below; signing in still gives a user their own role. Open access is honoured only when the UI is reached by IP address, <span class="mono">localhost</span> or this machine’s host name (protection against DNS rebinding — other names still ask for a login); behind a reverse proxy, have it pass the original name in <span class="mono">X-Forwarded-Host</span>, or keep login on. Other cluster nodes are only shown and managed after signing in, and the REST API always needs its token.') }}</p>
   {% if not admin.require_login %}
-  <div class="banner warn">{{ _('Open access is <b>ON</b>: anyone who can reach this page gets the <span class="mono">%(role)s</span> role without a password.', role=admin.anonymous_role) }}{% if admin.bind_ip not in ['127.0.0.1', '::1'] %} {{ _('The UI listens on <span class="mono">%(ip)s</span>.', ip=admin.bind_ip) }}{% endif %}</div>
+  <div class="banner warn">{{ _('Open access is <b>ON</b>: anyone who can reach this page gets the <span class="mono">%(role)s</span> role without a password.', role=admin.anonymous_role) }}{% if admin.bind_ip not in ['127.0.0.1', '::1'] %} {{ _('The UI listens on <span class="mono">%(ip)s</span>.', ip=admin.bind_ip or '*') }}{% endif %}</div>
   {% endif %}
   <form method="post" action="/settings/access" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">

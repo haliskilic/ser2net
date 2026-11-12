@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 
-from .config import AdminUI
+from .config import AdminUI, host_port
 from .engine import netinfo
 
 
@@ -24,7 +24,7 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
         if not (current and current.bind_ip):
             default_ip = "127.0.0.1"
         print(f"[ser2net] non-interactive console; admin UI bind defaults to "
-              f"{default_ip}:{default_port} (loopback). Run with a terminal or "
+              f"{host_port(default_ip, default_port)} (loopback). Run with a terminal or "
               f"--reconfigure to expose it on the network.", flush=True)
         return default_ip, default_port
 
@@ -64,7 +64,7 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
             pass
         print("  Invalid port, try again.")
 
-    print(f"\n[ser2net] Configuration UI will listen on  http://{ip}:{port}")
+    print(f"\n[ser2net] Configuration UI will listen on  http://{host_port(ip, port)}")
     if ip not in ("127.0.0.1", "localhost", "::1"):
         print("[ser2net] NOTE: this is reachable from the network. You will set an "
               "admin password on first access.")

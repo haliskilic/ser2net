@@ -21,7 +21,7 @@ from ... import i18n, importer, optional
 from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
     WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
-    backup_time, new_pwd_version, parse_cluster_peer, serial_conflict,
+    backup_time, host_port, new_pwd_version, parse_cluster_peer, serial_conflict,
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
@@ -1200,7 +1200,7 @@ def _setting_changes(old, new) -> list[str]:
     o, n = old.admin_ui, new.admin_ui
     diff(_("Login required"), onoff(o.require_login), onoff(n.require_login))
     diff(_("Role for visitors without login"), o.anonymous_role, n.anonymous_role)
-    diff(_("Admin UI address"), f"{o.bind_ip}:{o.port}", f"{n.bind_ip}:{n.port}")
+    diff(_("Admin UI address"), host_port(o.bind_ip, o.port), host_port(n.bind_ip, n.port))
     diff(_("Admin TLS (HTTPS)"), onoff(o.tls_enabled), onoff(n.tls_enabled))
     for label, a, b in (("LDAP", old.ldap, new.ldap), ("OIDC", old.oidc, new.oidc)):
         diff(label, onoff(a.enabled), onoff(b.enabled))
