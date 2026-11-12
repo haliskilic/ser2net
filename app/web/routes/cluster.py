@@ -22,13 +22,13 @@ from starlette.routing import Route
 
 from ... import __version__
 from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
-from ...engine import netinfo, portlist
+from ...engine import netinfo
 from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_url
 from ...i18n import _
 from .. import auth
 from . import ops
 from .common import Ctx, csrf_failed
-from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
+from .forms import _build_mapping_dict, form_context, mapping_for_rerender
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
@@ -359,10 +359,9 @@ def routes(ctx: Ctx) -> list:
         if not data or not isinstance(data.get("mapping"), dict):
             return PlainTextResponse(_("Could not load the peer's mapping."), status_code=502)
         mapping = MappingConfig.from_dict(data["mapping"])
-        return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
-                      modbus_points_json=_modbus_points_json(mapping),
-                      ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
-                      remote=_remote(target, data["mapping"].get("id"), mapping), error=None)
+        return render(request, "_mapping_form.html", **form_context(
+            mapping, data.get("ports", []), data.get("ips", []), is_new=False,
+            remote=_remote(target, data["mapping"].get("id"), mapping)))
 
     async def cluster_peer_save(request):
         """Browser-facing proxy: forward an edited mapping to the peer's key-guarded save.
@@ -384,17 +383,14 @@ def routes(ctx: Ctx) -> list:
             state.cluster.get_peer(target, "/api/cluster/local"))
 
         def _reload(msg):
-            try:
-                mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
-                if data and data.get("mapping"):
-                    _preserve_unmanaged_fields(mapping, MappingConfig.from_dict(data["mapping"]), form)
-            except Exception:
-                mapping = MappingConfig(name=form.get("name", ""))
-            return render(request, "_mapping_form.html", status_code=400, mapping=mapping,
-                          is_new=False, modbus_points_json=_modbus_points_json(mapping),
-                          ports=portlist.visible((data or {}).get("ports", [])),
-                          ips=(data or {}).get("ips", []),
-                          remote=_remote(target, form.get("id", ""), mapping), error=msg)
+            peer = data or {}
+            stored = (MappingConfig.from_dict(peer["mapping"])
+                      if isinstance(peer.get("mapping"), dict) else None)
+            ports = peer.get("ports", [])
+            mapping = mapping_for_rerender(form, stored, ports)
+            return render(request, "_mapping_form.html", status_code=400, **form_context(
+                mapping, ports, peer.get("ips", []), is_new=False, error=msg,
+                remote=_remote(target, form.get("id", ""), mapping)))
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))

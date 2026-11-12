@@ -8,6 +8,8 @@ Checks:
     the selected port (VID/PID + serial number), clears it when unticked, keeps it when
     the device is unplugged, refuses a port without a USB identity, and a form without
     the field (an older cluster peer) keeps the stored binding;
+  * a form shown again after an error (local or a cluster peer's) keeps the box and the
+    binding as a save would set them, so saving it does not drop the binding;
   * the engine then opens whatever device currently has that identity.
 
 Run: python3 tests/test_ports_usb_identity.py
@@ -20,7 +22,7 @@ from _server import ROOT  # noqa: F401  (sys.path setup)
 
 from app.config import MappingConfig
 from app.engine import portlist, serial_io
-from app.web.routes.forms import _preserve_unmanaged_fields
+from app.web.routes.forms import _preserve_unmanaged_fields, mapping_for_rerender
 from app.web.routes.ops import apply_usb_match
 
 FTDI = {"device": "/dev/ttyUSB3", "by_id": "/dev/serial/by-id/usb-FTDI_FT232R_A12345-if00-port0",
@@ -93,6 +95,32 @@ def test_form_binding():
     print("form: bind (VID/PID+serial), VID/PID only, unplugged keeps, non-USB refused, untick clears, old form keeps  OK")
 
 
+def test_error_rerender_keeps_binding():
+    # the form posted back with an error elsewhere (a bad bind IP): the mapping shown
+    # again has the identity the ticked box stands for, so its next save keeps it
+    stored = mapping("/dev/ttyUSB3", {"vid": "0403", "pid": "6001", "serial_number": "A12345"})
+    form = {"id": stored.id, "name": "m", "kind": "net", "serial_port": "/dev/ttyUSB3",
+            "serial_usb_match_shown": "1", "serial_usb_match": "on",
+            "serial_b_usb_match_shown": "1", "network_mode": "server",
+            "network_bind_ip": "custom", "network_bind_ip_custom": "10.0.0.300",
+            "network_port": "4000"}
+    for ports in ([FTDI], [CH340]):  # plugged in / not plugged in now
+        again = mapping_for_rerender(form, stored, ports)
+        assert again.serial.match == stored.serial.match, (ports, again.serial.match)
+    # a new mapping: the identity of the port picked
+    new = mapping_for_rerender({**form, "id": ""}, None, [FTDI])
+    assert new.serial.match == {"vid": "0403", "pid": "6001", "serial_number": "A12345"}
+    # the error is the box itself (a port without a USB identity): the stored binding
+    # is shown, not dropped
+    on_board = {**form, "serial_port": "/dev/ttyS0"}
+    assert mapping_for_rerender(on_board, stored, [ONBOARD]).serial.match == stored.serial.match
+    assert mapping_for_rerender({**on_board, "id": ""}, None, [ONBOARD]).serial.match == {}
+    # unticked stays unticked
+    off = {k: v for k, v in form.items() if k != "serial_usb_match"}
+    assert mapping_for_rerender(off, stored, [FTDI]).serial.match == {}
+    print("form shown again after an error: the binding is kept as a save would set it  OK")
+
+
 def test_engine_resolves(monkeypatch_ports):
     m = mapping("/dev/ttyUSB0", {"vid": "0403", "pid": "6001", "serial_number": "A12345"})
     assert serial_io.resolve_device(m.serial) == "/dev/ttyUSB7", "engine must follow the identity"
@@ -104,6 +132,7 @@ def test_engine_resolves(monkeypatch_ports):
 def main():
     test_sysfs_and_by_id()
     test_form_binding()
+    test_error_rerender_keeps_binding()
     from serial.tools import list_ports
     real = list_ports.comports
     list_ports.comports = lambda: [SimpleNamespace(device="/dev/ttyUSB7", vid=0x0403, pid=0x6001,

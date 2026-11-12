@@ -12,11 +12,11 @@ from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ...config import ConfigError, MappingConfig
-from ...engine import netinfo, portlist
+from ...engine import netinfo
 from ...i18n import _
 from . import ops
 from .common import TRIGGER, Ctx, console_interactive, sees_to_device
-from .forms import _form_error, _modbus_points_json
+from .forms import _form_error, form_context
 
 
 def _bulk_refused(refused: list, total: int) -> str:
@@ -115,11 +115,8 @@ def routes(ctx: Ctx) -> list:
     async def mapping_form_new(request):
         if deny := require_role(request, "operator"):
             return deny
-        m = MappingConfig(name="")
-        return render(request, "_mapping_form.html",
-                      mapping=m, is_new=True, modbus_points_json=_modbus_points_json(m),
-                      ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
-                      error=None)
+        return render(request, "_mapping_form.html", **form_context(
+            MappingConfig(name=""), state.ports.get(), netinfo.list_ip_candidates(), is_new=True))
 
     async def mapping_form_edit(request):
         if deny := require_role(request, "operator"):
@@ -127,10 +124,8 @@ def routes(ctx: Ctx) -> list:
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
-        return render(request, "_mapping_form.html",
-                      mapping=m, is_new=False, modbus_points_json=_modbus_points_json(m),
-                      ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
-                      error=None)
+        return render(request, "_mapping_form.html", **form_context(
+            m, state.ports.get(), netinfo.list_ip_candidates(), is_new=False))
 
     async def mapping_log(request):
         mid = request.path_params["mid"]
