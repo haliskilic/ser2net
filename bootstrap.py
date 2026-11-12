@@ -249,7 +249,7 @@ def _pip_install(online: bool) -> bool:
         print(f"[bootstrap] removed the old version's metadata {name}")
     _write_stamp()
     _ensure_lib_on_path()
-    print("[bootstrap] done.")
+    print("[bootstrap] done.", flush=True)
     return True
 
 

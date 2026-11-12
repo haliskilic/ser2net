@@ -334,6 +334,23 @@ jobs:
       - name: Coverage floor
         run: coverage report --format=total --fail-under=87
 
+  # The systemd unit as it ships, on a real systemd (the runner's PID 1): a fresh
+  # /opt/ser2net from git archive, the sandbox seen from inside, data through a mapping,
+  # a lib/ left by an older release, a port below 1024 (tests/systemd_smoke.sh). The
+  # standalone binary's unit runs in standalone.yml, next to the binary it is built with.
+  systemd:
+    name: systemd unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: socat (the PTY a mapping opens), pip for the system Python
+        run: sudo apt-get update && sudo apt-get install -y socat python3-pip
+      - name: Install and run systemd/ser2net.service from a fresh /opt/ser2net
+        timeout-minutes: 10
+        run: tests/systemd_smoke.sh
+
   # The Docker image on amd64 + arm64 (for a release, release.yml then smoke-tests the
   # image it pushes to GHCR with the same script).
   docker:
@@ -363,7 +380,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [lint, typecheck, workflows, audit, vendor, ui, test, coverage, docker, standalone]
+    needs: [lint, typecheck, workflows, audit, vendor, ui, test, coverage, systemd, docker, standalone]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
