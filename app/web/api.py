@@ -34,6 +34,21 @@ def _mapping_view(mapping, state) -> dict:
     return view
 
 
+def merge_patch(target, patch):
+    """RFC 7396 JSON merge patch: `patch` applied to `target` (neither is changed). An
+    object in the patch is merged key by key into the target's (a missing or non-object
+    target counts as empty), null removes a key, anything else replaces the value."""
+    if not isinstance(patch, dict):
+        return patch
+    out = dict(target) if isinstance(target, dict) else {}
+    for key, value in patch.items():
+        if value is None:
+            out.pop(key, None)
+        else:
+            out[key] = merge_patch(out.get(key), value)
+    return out
+
+
 def build_api_routes(state):
     async def list_mappings(request):
         return JSONResponse({"mappings": [_mapping_view(m, state) for m in state.config.mappings]})
@@ -109,6 +124,49 @@ def build_api_routes(state):
         state.audit(_client_ip(request), "api_mapping_update", mapping.name, user="api-token")
         return JSONResponse(_mapping_view(mapping, state))
 
+    async def patch_mapping(request):
+        """PATCH: an RFC 7396 JSON merge patch on the stored mapping. Only what the body
+        names changes (an object is merged into the one it replaces, a list or a value
+        replaces it, null resets a field to its default), unlike PUT, which replaces the
+        whole mapping with the body. Merged and checked under the config lock, so a
+        concurrent change to another field is not lost."""
+        mid = request.path_params["mid"]
+        if not valid_mapping_id(mid):  # no mapping can have it (ids are checked on load)
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        try:
+            body = await request.json()
+        except HTTPException:  # a body over the size limit: 413
+            raise
+        except Exception:
+            return JSONResponse({"error": "invalid_json"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "invalid_json", "detail": "object expected"}, status_code=400)
+        body.pop("id", None)         # the path names the mapping
+        body.pop("status", None)     # read-only field
+        async with state.config_lock:
+            existing = state.config.get_mapping(mid)
+            if not existing:
+                return JSONResponse({"error": "not_found"}, status_code=404)
+            merged = merge_patch(existing.to_dict(), body)
+            merged["id"] = mid
+            try:
+                mapping = MappingConfig.from_dict(merged)
+                mapping.validate()
+                mapping.validate_input()
+            except (ValueError, TypeError, AttributeError) as e:  # ConfigError is a ValueError
+                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+            backup = list(state.config.mappings)
+            state.config.mappings[state.config.mappings.index(existing)] = mapping
+            try:
+                await state.asave()
+            except ConfigError as e:
+                state.config.mappings = backup
+                return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        await state.supervisor.apply_mapping(mapping)
+        state.log(f"api: mapping patched: {mapping.name}")
+        state.audit(_client_ip(request), "api_mapping_patch", mapping.name, user="api-token")
+        return JSONResponse(_mapping_view(mapping, state))
+
     async def delete_mapping(request):
         mid = request.path_params["mid"]
         removed = await ops.delete_mapping(state, mid)
@@ -151,6 +209,7 @@ def build_api_routes(state):
         Route(f"{API_PREFIX}/mappings", create_mapping, methods=["POST"]),
         Route(f"{API_PREFIX}/mappings/{{mid}}", get_mapping, methods=["GET"]),
         Route(f"{API_PREFIX}/mappings/{{mid}}", update_mapping, methods=["PUT"]),
+        Route(f"{API_PREFIX}/mappings/{{mid}}", patch_mapping, methods=["PATCH"]),
         Route(f"{API_PREFIX}/mappings/{{mid}}", delete_mapping, methods=["DELETE"]),
         Route(f"{API_PREFIX}/mappings/{{mid}}/{{action}}", mapping_action, methods=["POST"]),
     ]
@@ -209,6 +268,14 @@ def openapi_spec(admin) -> dict:
                         "responses": {"200": {"description": "updated"},
                                       "400": {"description": "validation error"},
                                       "404": {"description": "not found"}}},
+                "patch": {"summary": "Change some fields of a mapping (JSON merge patch, RFC 7396)",
+                          "security": bearer,
+                          "requestBody": {"required": True, "content": {
+                              "application/merge-patch+json": {"schema": {"type": "object"}},
+                              "application/json": {"schema": {"type": "object"}}}},
+                          "responses": {"200": {"description": "updated"},
+                                        "400": {"description": "validation error"},
+                                        "404": {"description": "not found"}}},
                 "delete": {"summary": "Delete a mapping", "security": bearer,
                            "responses": {"200": {"description": "deleted"},
                                          "404": {"description": "not found"}}},
