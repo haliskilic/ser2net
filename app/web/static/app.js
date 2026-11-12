@@ -214,6 +214,14 @@ function syncCustomInputs(root) {
   });
 }
 
+// a "Custom…" input stays disabled while its select has another value: a block shown by
+// applyShowWhen doesn't enable it (it is required while in use, and hidden otherwise)
+function customUnused(inp) {
+  var sel = inp.name && inp.parentNode ? inp.parentNode.querySelector(
+    'select[data-custom="' + inp.name + '"]') : null;
+  return !!sel && sel.value !== "custom";
+}
+
 // 2a) Device "Other device path…": while that option is chosen the text box under the
 //     select has the select's name ({prefix}port), so the typed path is posted as the field
 //     itself (an older cluster peer saves it as it is) and the select is not posted.
@@ -263,7 +271,7 @@ function applyShowWhen(root) {
       return;
     }
     el.querySelectorAll("input,select,textarea").forEach(function (inp) {
-      inp.disabled = !show;
+      inp.disabled = !show || customUnused(inp);
     });
   });
 }
