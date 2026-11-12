@@ -28,7 +28,11 @@ def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) ->
             continue
         port = portlist.find(ports, settings.port)
         if port is not None and port.get("vid") and port.get("pid"):
-            settings.match = {k: port[k] for k in ("vid", "pid", "serial_number") if port.get(k)}
+            # a binding to a USB socket too (location, set through the REST API or by hand)
+            # stays one, to the socket the adapter is in now
+            keys = ("vid", "pid", "serial_number") + (
+                ("location",) if old is not None and old.identity.get("location") else ())
+            settings.match = {k: port[k] for k in keys if port.get(k)}
         elif port is None and old is not None and old.match:
             settings.match = dict(old.match)  # unplugged now: keep what it was bound to
         else:

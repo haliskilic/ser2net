@@ -1,18 +1,25 @@
 {#- The Device field of a serial side (prefix serial_ / serial_b_), set to `selected`: the
     mapping form's, and what GET /api/ports/select answers for its ↻ button (the port list
     again, while the rest of the form stays as it is). `local`: this node's own form (a
-    cluster peer's form lists the peer's ports and has no ↻). -#}
-{% macro device_field(selected, prefix, ports, local=true) %}
-{%- set devs = ports | map(attribute='device') | list %}
-{%- set stable = ports | selectattr('by_id') | list %}
+    cluster peer's form lists the peer's ports and has no ↻). `links`: {name: device} for a
+    configured link that is not one of a port's own names (portlist.choice). -#}
+{% macro device_field(selected, prefix, ports, local=true, links=none) %}
+{%- set pick = port_choice(ports, selected, links) %}
+{%- set p = pick.port %}
+{%- set by_id = ports | selectattr('by_id') | list %}
+{%- set by_path = ports | selectattr('by_path') | list %}
 <div class="port-pick" id="{{ prefix }}port-pick">
   <div class="port-row">
     <label>{{ _("Device") }}
       <select name="{{ prefix }}port"{% if prefix == 'serial_' %} required{% endif %}>
-        {% if selected and selected not in devs and selected not in (stable | map(attribute='by_id') | list) %}<option value="{{ selected }}" selected>{{ _("%(port)s (not connected)", port=selected) }}</option>{% endif %}
-        {% for p in ports %}<option value="{{ p.device }}" {% if p.device == selected %}selected{% endif %}>{{ p.device }}{% if p.description %} — {{ p.description }}{% endif %}{% if p.serial_number %} [{{ p.serial_number }}]{% endif %}</option>{% endfor %}
-        {% if stable %}<optgroup label="{{ _('Stable names (/dev/serial/by-id — survive re-plugging)') }}">
-          {% for p in stable %}<option value="{{ p.by_id }}" {% if p.by_id == selected %}selected{% endif %}>{{ p.by_id | replace('/dev/serial/by-id/', '') }}</option>{% endfor %}
+        {% if selected and p is none %}<option value="{{ selected }}" selected>{{ _("%(port)s (not connected)", port=selected) }}</option>
+        {%- elif pick.as == 'alias' %}<option value="{{ selected }}" selected>{{ selected }} → {{ p.device }}</option>{% endif %}
+        {% for q in ports %}<option value="{{ q.device }}" {% if q is sameas p and pick.as == 'device' %}selected{% endif %}>{{ q.device }}{% if q.description %} — {{ q.description }}{% endif %}{% if q.serial_number %} [{{ q.serial_number }}]{% endif %}</option>{% endfor %}
+        {% if by_id %}<optgroup label="{{ _('By serial number (/dev/serial/by-id): survives re-plugging; not unique for identical adapters') }}">
+          {% for q in by_id %}<option value="{{ q.by_id }}" {% if q is sameas p and pick.as == 'by_id' %}selected{% endif %}>{{ q.by_id | replace('/dev/serial/by-id/', '') }}{% if q.ambiguous %} {{ _("(not unique)") }}{% endif %}</option>{% endfor %}
+        </optgroup>{% endif %}
+        {% if by_path %}<optgroup label="{{ _('By USB socket (/dev/serial/by-path): right while the adapter stays in the same socket') }}">
+          {% for q in by_path %}<option value="{{ q.by_path }}" {% if q is sameas p and pick.as == 'by_path' %}selected{% endif %}>{{ q.by_path | replace('/dev/serial/by-path/', '') }} ({{ q.device | replace('/dev/', '') }})</option>{% endfor %}
         </optgroup>{% endif %}
         {% if not ports and not selected %}<option value="">{{ _("(no serial ports detected)") }}</option>{% endif %}
       </select>
@@ -23,6 +30,12 @@
             aria-label="{{ _('Look for serial ports again') }}">↻</button>
     {%- endif %}
   </div>
+  {%- if p and p.same_identity %}
+  <p class="warn-small port-hint">⚠ {{ _("%(n)s other connected port(s) have the USB identity of %(port)s (%(id)s), so “Find this device by its USB identity” can't tell them apart.", n=p.same_identity | length, port=p.device, id=p.vid ~ ':' ~ p.pid ~ ((' [' ~ p.serial_number ~ ']') if p.serial_number else '')) }}{% if p.by_path %} {{ _("To keep to this adapter, pick its name under “By USB socket”.") }}{% endif %}</p>
+  {%- endif %}
+  {%- if p and p.ambiguous and pick.as == 'by_id' %}
+  <p class="warn-small port-hint">⚠ {{ _("This by-id name is not unique: an identical adapter can take it at a reboot or a re-plug.") }}{% if p.by_path %} {{ _("Pick the adapter's name under “By USB socket” instead.") }}{% endif %}</p>
+  {%- endif %}
 </div>
 {% endmacro %}
-{%- if fragment %}{{ device_field(selected, prefix, ports) }}{% endif %}
+{%- if fragment %}{{ device_field(selected, prefix, ports, true, links) }}{% endif %}

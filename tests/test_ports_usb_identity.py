@@ -214,9 +214,114 @@ def test_unknown_match_keys_noted():
     print("load: unknown match keys are noted and not used; the stored value is kept  OK")
 
 
+def test_identity_flags():
+    """same_identity / ambiguous come from comparing the listed ports, not from a missing
+    serial number."""
+    def usb(dev, vid="1a86", pid="7523", serial=None, by_id=None):
+        return {"device": dev, "vid": vid, "pid": pid, "serial_number": serial, "by_id": by_id}
+
+    # two CH340s: udev gave the one by-id name to one of them
+    a = usb("/dev/ttyUSB0", by_id="/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
+    b = usb("/dev/ttyUSB1")
+    lone = usb("/dev/ttyUSB2", vid="067b", pid="2303",
+               by_id="/dev/serial/by-id/usb-Prolific_PL2303-if00-port0")
+    onboard = {"device": "/dev/ttyS0", "vid": None, "pid": None, "by_id": None}
+    ports = [a, b, lone, onboard]
+    portlist._identities(ports, udev=True)
+    assert a["same_identity"] == ["/dev/ttyUSB1"] and b["same_identity"] == ["/dev/ttyUSB0"]
+    assert a["ambiguous"] and b["ambiguous"], "the link may go to either"
+    assert lone["same_identity"] == [] and not lone["ambiguous"], "a lone adapter without a serial"
+    assert onboard["same_identity"] == [] and not onboard["ambiguous"]
+    # an FT4232H: one identity, but every channel has its own by-id name (-if00..-if03)
+    chans = [usb(f"/dev/ttyUSB{i}", "0403", "6011", "FT4X", f"/dev/serial/by-id/usb-FTDI-if0{i}")
+             for i in range(4)]
+    portlist._identities(chans, udev=True)
+    assert all(len(c["same_identity"]) == 3 and not c["ambiguous"] for c in chans), chans
+    # clones that all carry serial number 0001 (in any letter case)
+    clones = [usb("/dev/ttyUSB0", "10c4", "ea60", "0001", "/dev/serial/by-id/usb-Silicon_0001"),
+              usb("/dev/ttyUSB1", "10c4", "ea60", "0001")]
+    portlist._identities(clones, udev=True)
+    assert clones[0]["same_identity"] == ["/dev/ttyUSB1"] and clones[0]["ambiguous"]
+    cased = [usb("COM3", serial="ab12"), usb("COM4", serial="AB12")]
+    portlist._identities(cased, udev=False)  # Windows (no udev): no by-id names at all
+    assert cased[0]["same_identity"] == ["COM4"] and not cased[0]["ambiguous"]
+    # in a container without udev's links nothing is taken as ambiguous
+    a2, b2 = usb("/dev/ttyUSB0"), usb("/dev/ttyUSB1")
+    portlist._identities([a2, b2], udev=False)
+    assert a2["same_identity"] == ["/dev/ttyUSB1"] and not a2["ambiguous"]
+    print("ports: identical identities found by comparing the ports (CH340 pair, FT4232H "
+          "channels, 0001 clones, any case); by-id ambiguous only where udev names ports  OK")
+
+
+def test_by_path_names():
+    import sys as _sys
+    if not _sys.platform.startswith("linux"):
+        print("by-path names: not Linux, skipped")
+        return
+    d = tempfile.mkdtemp(prefix="s2n_bypath_")
+    by_id, by_path = os.path.join(d, "by-id"), os.path.join(d, "by-path")
+    os.makedirs(by_id)
+    os.makedirs(by_path)
+    os.symlink("/dev/ttyUSB0", os.path.join(by_id, "usb-1a86_USB_Serial-if00-port0"))
+    for name, dev in (("pci-0000:00:14.0-usb-0:1:1.0-port0", "/dev/ttyUSB0"),
+                      ("pci-0000:00:14.0-usbv2-0:1:1.0-port0", "/dev/ttyUSB0"),
+                      ("pci-0000:00:14.0-usb-0:2:1.0-port0", "/dev/ttyUSB1")):
+        os.symlink(dev, os.path.join(by_path, name))
+
+    def port(dev):
+        return SimpleNamespace(device=dev, name=os.path.basename(dev), description="USB Serial",
+                               hwid="", vid=0x1a86, pid=0x7523, serial_number=None,
+                               manufacturer=None, product=None, location="1-1")
+
+    from serial.tools import list_ports
+    with mock.patch.object(list_ports, "comports", lambda: [port("/dev/ttyUSB1"),
+                                                            port("/dev/ttyUSB0")]), \
+            mock.patch.object(portlist, "BY_ID_DIR", by_id), \
+            mock.patch.object(portlist, "BY_PATH_DIR", by_path), \
+            mock.patch.object(portdiag, "port_warnings", lambda dev: []), \
+            mock.patch.object(portdiag, "access", lambda dev: True):
+        ports = portlist.snapshot()
+    usb0, usb1 = ports
+    assert usb0["by_id"] == os.path.join(by_id, "usb-1a86_USB_Serial-if00-port0")
+    assert usb0["by_path"] == os.path.join(by_path, "pci-0000:00:14.0-usb-0:1:1.0-port0"), \
+        "of the usb- and usbv2- forms the first by name"
+    assert usb1["by_id"] is None and usb1["by_path"].endswith("usb-0:2:1.0-port0")
+    assert usb0["ambiguous"] and usb1["ambiguous"] and usb0["same_identity"] == ["/dev/ttyUSB1"]
+    assert portlist.find(ports, usb1["by_path"]) is usb1
+    assert portlist.names(usb0) == ["/dev/ttyUSB0", usb0["by_id"], usb0["by_path"]]
+    # a mapping set to a by-path name: the supervisor wakes it when that name appears
+    from app.engine.supervisor import Supervisor
+    sup = Supervisor(logger=lambda *a: None)
+    woken = []
+    sup._runners["m"] = SimpleNamespace(status=SimpleNamespace(state="device-missing"),
+                                        wake_serial=lambda: woken.append(1))
+    sup.ports_changed([usb0])
+    woken.clear()
+    sup.ports_changed([usb0, usb1])
+    assert woken, "a new by-path name counts as a port that appeared"
+    print("ports: /dev/serial/by-path names attached (one per socket), found by find(), "
+          "and they wake a waiting mapping  OK")
+
+
+def test_rebinding_keeps_a_socket():
+    form = {"serial_usb_match_shown": "1", "serial_usb_match": "on"}
+    stored = mapping("/dev/ttyUSB3", {"vid": "0403", "pid": "6001", "location": "1-1.2"})
+    m = mapping("/dev/ttyUSB3")
+    apply_usb_match(m, form, [dict(FTDI, location="1-1.4")], existing=stored)
+    assert m.serial.match == {"vid": "0403", "pid": "6001", "serial_number": "A12345",
+                              "location": "1-1.4"}, m.serial.match
+    m = mapping("/dev/ttyUSB3")
+    apply_usb_match(m, form, [dict(FTDI, location="1-1.4")])
+    assert "location" not in m.serial.match, "the form never binds to a socket by itself"
+    print("form: a binding that has a USB socket (location) keeps one when bound again  OK")
+
+
 def main():
     test_sysfs_and_by_id()
     test_form_binding()
+    test_identity_flags()
+    test_by_path_names()
+    test_rebinding_keeps_a_socket()
     test_identity_resolution()
     test_shared_identity_warning()
     test_unknown_match_keys_noted()

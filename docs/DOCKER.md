@@ -12,6 +12,10 @@ release tag).
    devices:
      - "/dev/serial/by-id/usb-FTDI_...-if00-port0:/dev/ttyUSB0"
    ```
+   A by-id name is made from vendor, model and serial number: identical adapters without
+   a serial number of their own (CH340, most PL2303) share one, and udev gives it to only
+   one of them (which one can change at a reboot). Pass those by USB socket instead
+   (`/dev/serial/by-path/...:/dev/ttyUSB0`), and keep each adapter in its socket.
 2. Edit `ports:` so it publishes the port of every mapping you are going to create
    (a new mapping gets 4001; [Ports and networking](#ports-and-networking)).
 3. Start it:

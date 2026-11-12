@@ -20,7 +20,9 @@ services:
     volumes:
       - ser2net-data:/data
     # Pass through the host serial device(s). USB-serial adapters renumber across
-    # replug; bind by stable /dev/serial/by-id/... when possible. The container takes
+    # replug; bind by stable /dev/serial/by-id/... when possible (identical adapters
+    # without their own serial number share one by-id name: use their
+    # /dev/serial/by-path/... names, the USB socket, instead). The container takes
     # each device's group from the device itself (its numeric GID differs between
     # distributions), so no group_add is needed while the container side keeps a serial
     # name (ttyUSB*, ttyACM*, ttyS*, ...). A device missing at start stops the container

@@ -501,8 +501,6 @@
   "SSO provider is unreachable.": "SSO sağlayıcısına ulaşılamıyor.",
   "SSO sign-in failed.": "SSO ile giriş başarısız.",
   "SSO state mismatch — please try again.": "SSO state değeri uyuşmuyor — lütfen tekrar dene.",
-  "stable name: survives re-plugging": "kalıcı ad: yeniden takınca değişmez",
-  "Stable names (/dev/serial/by-id — survive re-plugging)": "Kalıcı adlar (/dev/serial/by-id — yeniden takınca değişmez)",
   "Start": "Başlat",
   "State": "Durum",
   "Status:": "Durum:",
@@ -890,5 +888,18 @@
   "Mappings '{0}' and '{1}' both use serial port {2} (written {3} in '{1}') — a serial port can only be opened by one mapping.": "'{0}' ve '{1}' eşlemeleri aynı seri portu kullanıyor: {2} ('{1}' içinde {3} olarak yazılmış) — bir seri portu yalnızca bir eşleme açabilir.",
   "Look for serial ports again (an adapter plugged in after the form was opened)": "Seri portlara yeniden bak (form açıldıktan sonra takılan bir adaptör için)",
   "Look for serial ports again": "Seri portlara yeniden bak",
-  "Unknown serial port field.": "Bilinmeyen seri port alanı."
+  "Unknown serial port field.": "Bilinmeyen seri port alanı.",
+  "By serial number (/dev/serial/by-id): survives re-plugging; not unique for identical adapters": "Seri numarasına göre (/dev/serial/by-id): yeniden takmaya dayanır; özdeş adaptörlerde benzersiz değildir",
+  "(not unique)": "(benzersiz değil)",
+  "By USB socket (/dev/serial/by-path): right while the adapter stays in the same socket": "USB soketine göre (/dev/serial/by-path): adaptör aynı sokette kaldıkça doğrudur",
+  "%(n)s other connected port(s) have the USB identity of %(port)s (%(id)s), so “Find this device by its USB identity” can't tell them apart.": "Bağlı %(n)s port daha %(port)s ile aynı USB kimliğini (%(id)s) taşıyor; bu yüzden USB kimliğiyle bulma onları ayırt edemez.",
+  "To keep to this adapter, pick its name under “By USB socket”.": "Bu adaptöre bağlı kalmak için “USB soketine göre” altındaki adını seçin.",
+  "This by-id name is not unique: an identical adapter can take it at a reboot or a re-plug.": "Bu by-id adı benzersiz değil: reboot ya da yeniden takmada özdeş bir adaptör onu alabilir.",
+  "Pick the adapter's name under “By USB socket” instead.": "Bunun yerine adaptörün “USB soketine göre” altındaki adını seçin.",
+  "%(ports)s have the same USB identity (VID:PID and serial number): “Find this device by its USB identity” can’t tell them apart. Bind such adapters by USB socket (/dev/serial/by-path).": "%(ports)s aynı USB kimliğini (VID:PID ve seri numarası) taşıyor: USB kimliğiyle bulma onları ayırt edemez. Böyle adaptörleri USB soketine göre (/dev/serial/by-path) bağlayın.",
+  "same USB identity": "aynı USB kimliği",
+  "This adapter has no by-id name of its own: an identical one (no serial number of its own, or the same one) shares it, and which of them gets it can change at a reboot or a re-plug. Use its by-path name (its USB socket).": "Bu adaptörün kendine ait bir by-id adı yok: özdeş bir adaptör (kendi seri numarası olmayan ya da aynı numarayı taşıyan) onu paylaşıyor ve hangisinin alacağı reboot ya da yeniden takmayla değişebilir. by-path adını (USB soketini) kullanın.",
+  "by-id not unique": "by-id benzersiz değil",
+  "by serial number: survives re-plugging; not unique for identical adapters": "seri numarasına göre: yeniden takmaya dayanır; özdeş adaptörlerde benzersiz değildir",
+  "by USB socket: right while the adapter stays in this socket": "USB soketine göre: adaptör bu sokette kaldıkça doğrudur"
 }
