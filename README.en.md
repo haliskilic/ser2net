@@ -664,7 +664,10 @@ is no account at all; later starts ignore it.
   newer exe upgrades it in place and keeps the data directory the service uses (a 2.8.0
   service too). **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
   firewall rule you need to reach it from other hosts, changing the address, upgrading and
-  the SmartScreen warning on unsigned builds.
+  the SmartScreen warning on unsigned builds. Use the service for production: a console
+  window can be closed or signed out of. A click into a console window (QuickEdit) pauses
+  its output until Esc or Enter; ser2net keeps forwarding meanwhile, only the console's
+  lines wait (and past a limit are dropped and counted; `all.log` has them all).
 - **Many mappings:** a running mapping keeps about three files open (its serial port, its
   listener and its log), plus one per connected client. At start ser2net raises its soft
   open-file limit toward the hard limit (at most 65536) and logs the result (`open files:
