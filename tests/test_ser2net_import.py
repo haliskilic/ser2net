@@ -162,6 +162,9 @@ connection: &v6any
 connection: &v6long
   accepter: tcp,ipv6,[0:0:0:0:0:0:0:1],2008
   connector: serialdev,/dev/ttyUSB8
+connection: &v6only
+  accepter: tcp,ipv6n4,2012
+  connector: serialdev,/dev/ttyUSB14
 connection: &hostname
   accepter: tcp,myhost.example.com,2009
   connector: serialdev,/dev/ttyUSB9
@@ -192,7 +195,12 @@ def test_accepters():
     # the IPv6 loopback stays the IPv6 loopback (any spelling of it), with nothing to say
     assert net["v6"]["bind_ip"] == "::1" and not has(warns, "v6:")
     assert net["v6long"]["bind_ip"] == "::1" and not has(warns, "v6long:")
-    assert net["v6any"]["bind_ip"] == "::"
+    assert net["v6any"]["bind_ip"] == "::" and net["v6only"]["bind_ip"] == "::"
+    # ser2net listens on both families without one named: here that is 0.0.0.0, IPv4 only
+    assert net["tel"]["bind_ip"] == "0.0.0.0" and not net["tel"].get("dual_stack")
+    wide = [w for w in warns if "ser2net listened on IPv4 and IPv6" in w]
+    assert len(wide) == 1 and "tel, " in wide[0] and "“All interfaces (IPv4 + IPv6)”" in wide[0]
+    assert "v6any" not in wide[0] and "rfc," not in wide[0] and "v6only" not in wide[0], wide
     # a host name can't be bound: listening on 0.0.0.0 would be wider, so it comes in disabled
     assert net["hostname"]["bind_ip"] == "0.0.0.0" and maps["hostname"]["enabled"] is False
     assert has(warns, "hostname:", "myhost.example.com", "imported disabled")
@@ -954,9 +962,10 @@ def test_limits():
     maps, _w = quick(HEAD + "    banner: '" + "$(" * 30000 + "'\n")
     assert maps["c"]["options"]["banner"] == "$(" * 30000
     maps, warns = quick(HEAD + "".join(f"    max-connections: x{i}\n" for i in range(5000)))
-    assert len(warns) == 1003 and warns[1000] == "… and 4000 more warnings", warns[999:]
+    assert len(warns) == 1004 and warns[1000] == "… and 4000 more warnings", warns[999:]
     assert has(warns[1001:], "TCP wrappers")  # the file-level notes come after the cut
     assert has(warns[1001:], "keeps it open", "makes no UUCP lock files")
+    assert has(warns[1001:], "listened on IPv4 and IPv6", "(c)")
     print("limits: alias / define / escape expansion, size, nesting and connection count "
           "refused quickly; long flows, quoted scalars, many options read in one pass  OK")
 
