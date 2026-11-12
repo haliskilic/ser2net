@@ -1,12 +1,29 @@
 name: CI
 
 # Pull requests (to any branch, so stacked PRs are tested too) and pushes to main.
-# A branch push without a PR no longer runs the suite a second time.
+# A branch push without a PR no longer runs the suite a second time. release.yml calls
+# this workflow too, so a release tag runs exactly these checks before anything is
+# published (and its standalone build is the one released).
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      publish:
+        description: A release build (standalone.yml signs the Windows exe when configured)
+        type: boolean
+        default: false
+    secrets:  # code signing (docs/SIGNING.md); handed on to standalone.yml for a release build
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_CLIENT_SECRET:
+        required: false
+      SIGNPATH_API_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -176,9 +193,11 @@ jobs:
 
   # The newest Python, before its wheels have all settled: shows what breaks there
   # without blocking a merge (not in ci-ok's needs, continue-on-error). Move it into the
-  # matrix above once it passes.
+  # matrix above once it passes. Not run for a release (github.workflow_ref is then
+  # release.yml's), which it must not hold up.
   test-next:
     name: test ${{ matrix.os }} py3.15 (not required)
+    if: ${{ !contains(github.workflow_ref, '/.github/workflows/release.yml@') }}
     runs-on: ${{ matrix.os }}
     continue-on-error: true
     strategy:
@@ -249,17 +268,26 @@ jobs:
       - name: Coverage floor
         run: coverage report --format=total --fail-under=87
 
-  # The Docker image on amd64 + arm64 (same workflow the release pushes to GHCR with).
+  # The Docker image on amd64 + arm64 (for a release, release.yml then smoke-tests the
+  # image it pushes to GHCR with the same script).
   docker:
     uses: ./.github/workflows/docker.yml
 
-  # Build the standalone executables and prove they need nothing else installed
-  # (same workflow the release uses). Heavy, so: pull requests and main only.
+  # Build the standalone executables and prove they need nothing else installed. Heavy,
+  # so: pull requests and main only; called from release.yml, these are the released files.
   standalone:
     permissions:
       contents: read
       actions: read   # the reusable workflow requests it (SignPath); the caller must grant it
     uses: ./.github/workflows/standalone.yml
+    with:
+      publish: ${{ inputs.publish == true }}
+    # the signing credentials only for a release build, never for a pull request or main
+    secrets:
+      AZURE_TENANT_ID: ${{ inputs.publish && secrets.AZURE_TENANT_ID || '' }}
+      AZURE_CLIENT_ID: ${{ inputs.publish && secrets.AZURE_CLIENT_ID || '' }}
+      AZURE_CLIENT_SECRET: ${{ inputs.publish && secrets.AZURE_CLIENT_SECRET || '' }}
+      SIGNPATH_API_TOKEN: ${{ inputs.publish && secrets.SIGNPATH_API_TOKEN || '' }}
 
   # The one check for branch protection to require (with license/cla): it passes only when
   # every job above passed, so jobs added to or renamed in this workflow need no settings

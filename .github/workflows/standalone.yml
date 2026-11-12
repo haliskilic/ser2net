@@ -2,11 +2,11 @@ name: Standalone
 
 # Builds the standalone executables and proves they need nothing else installed
 # (tests/test_standalone.py), on Linux x86_64 + arm64 and Windows x64, and uploads them
-# (+ license texts and SBOMs) as artifacts. Called by ci.yml for pull requests / main
-# and by release.yml on a v* tag, whose own publish job attaches them to the release
-# only after every check here has passed. With publish (release.yml) the Windows exe is
-# code-signed when a signing service is configured (docs/SIGNING.md). This workflow
-# only needs read access, so CI runs it with least privilege.
+# (+ license texts and SBOMs) as artifacts. Called by ci.yml, for pull requests / main
+# and when release.yml runs ci.yml on a v* tag: release.yml's own publish job attaches
+# them to the release only after every check has passed. With publish (a release) the
+# Windows exe is code-signed when a signing service is configured (docs/SIGNING.md).
+# This workflow only needs read access, so CI runs it with least privilege.
 on:
   workflow_call:
     inputs:
