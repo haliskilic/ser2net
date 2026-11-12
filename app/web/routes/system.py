@@ -101,7 +101,7 @@ def routes(ctx: Ctx) -> list:
         resp = RedirectResponse(nxt, status_code=303)
         if code in i18n.LANGUAGES:
             resp.set_cookie(i18n.COOKIE, code, max_age=365 * 86400, httponly=True,
-                            samesite="lax", secure=state.config.admin_ui.tls_enabled, path="/")
+                            samesite="lax", secure=state.serving_tls, path="/")
         return resp
 
     return [

@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from ... import i18n, importer, optional, storage
+from ... import console, i18n, importer, optional, storage
 from ...config import (
     BACKUPS_MIN_KEPT, EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, LOG_DAYS_MAX, NOTIFY_EVENTS, ROLES,
     SMTP_SECURITY, TRACE_DAYS_MAX, UI_LANGUAGES,
@@ -72,7 +72,17 @@ def routes(ctx: Ctx) -> list:
         backups = state.store.backups() if is_admin else []
         disk = await asyncio.to_thread(storage.usage, state.data_dir) if is_admin else None
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
+        serve_ip, serve_port, serving_tls = state.admin_serving()
+        configured = state.config.admin_ui
+        hint_kind, hint_command = console.reconfigure_hint(state.data_dir, state.service_name)
         return render(request, "settings.html", ok=ok, error=error,
+                      serving_address=f"{serve_ip}:{serve_port}", serving_tls=serving_tls,
+                      # what config.json sets and the admin UI uses only from the next start
+                      pending_address="" if (configured.bind_ip, configured.port) == (
+                          serve_ip, serve_port) else f"{configured.bind_ip}:{configured.port}",
+                      pending_tls=bool(state.admin_tls_waiting)
+                      or configured.tls_enabled != serving_tls,
+                      address_hint=hint_kind, address_command=hint_command,
                       import_preview=import_preview, restore_preview=restore_preview,
                       backups=backups, newer_writer=state.config.newer_writer,
                       unknown_keys=state.config.unknown_keys,
@@ -201,13 +211,42 @@ def routes(ctx: Ctx) -> list:
         cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
         try:
             async with state.edit_config():
-                state.config.admin_ui.tls_cert = cert
-                state.config.admin_ui.tls_key = key
-                state.config.admin_ui.check_tls_files()  # here, not at every save
+                admin = state.config.admin_ui
+                admin.tls_cert = cert
+                admin.tls_key = key
+                admin.check_tls_files()  # here, not at every save
+                prepared = await _admin_tls(admin)
         except ConfigError as e:
             return await settings_get(request, error=str(e))
         ctx.audit(request, "admin_tls_set", cert)
-        return await settings_get(request, ok=_("Admin TLS saved. Restart to apply."))
+        return await settings_get(request, ok=_tls_applied(request, prepared, _("Admin TLS saved.")))
+
+    async def _admin_tls(admin):
+        """The admin UI's TLS context for its settings (in an edit_config block): files
+        that can't be used refuse the change, as they would stop the next start."""
+        prepared = await state.prepare_admin_tls(admin)
+        if prepared.error:
+            raise ConfigError(_("The TLS certificate and key can't be used: {0}").format(
+                prepared.error))
+        return prepared
+
+    def _tls_applied(request, prepared, saved: str) -> str:
+        """Hand a saved admin TLS change to the UI's listener, and say so: new connections
+        use it at once (the one this page came over stays as it is)."""
+        if not state.use_admin_tls(prepared):
+            if state.admin_guard is None:  # (no listener in this process)
+                return saved + " " + _("Restart to apply.")
+            return saved + " " + _("Its key has a passphrase, which ser2net asks for on the "
+                                   "console when it starts: restart ser2net to use it.")
+        _ip, port, tls = state.admin_serving()
+        host = request.url.hostname or "127.0.0.1"
+        host = f"[{host}]" if ":" in host else host
+        url = f"{'https' if tls else 'http'}://{host}:{port}/settings"
+        if tls:
+            return saved + " " + _("New connections to this UI use HTTPS now: continue at "
+                                   "{0}").format(url)
+        return saved + " " + _("New connections to this UI use plain HTTP now: continue at "
+                               "{0}").format(url)
 
     async def settings_tls_generate(request):
         if deny := require_role(request, "admin"):
@@ -224,14 +263,17 @@ def routes(ctx: Ctx) -> list:
             return await settings_get(request, error=_("Could not generate a certificate: {0}").format(e))
         try:
             async with state.edit_config():
-                state.config.admin_ui.tls_cert = cert
-                state.config.admin_ui.tls_key = key
+                admin = state.config.admin_ui
+                admin.tls_cert = cert
+                admin.tls_key = key
+                prepared = await _admin_tls(admin)
         except ConfigError as e:
             return await settings_get(request, error=_("The certificate was generated, but not "
                                                        "set up: {0}").format(e))
         ctx.audit(request, "admin_tls_generate", "")
-        return await settings_get(request, ok=_("Self-signed certificate generated. Restart to "
-                                                "apply TLS."))
+        return await settings_get(request, ok=_tls_applied(
+            request, prepared, _("Self-signed certificate generated (browsers warn about a "
+                                 "self-signed certificate until you accept it).")))
 
     # ---------------- web-UI access (login requirement) ----------------
     async def settings_access_post(request):

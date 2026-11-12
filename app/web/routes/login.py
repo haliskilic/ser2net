@@ -225,7 +225,7 @@ def routes(ctx: Ctx) -> list:
                                           {"s": st, "n": nonce, "r": redirect_uri, "v": verifier},
                                           ttl_seconds=600),
                         max_age=600, httponly=True, samesite="lax",
-                        secure=state.config.admin_ui.tls_enabled, path="/auth/oidc")
+                        secure=state.serving_tls, path="/auth/oidc")
         return resp
 
     def _same(given: str, expected) -> bool:

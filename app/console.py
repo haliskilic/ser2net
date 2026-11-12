@@ -7,10 +7,38 @@ or a custom one. In a non-interactive context (service/headless) we default to
 """
 from __future__ import annotations
 
+import os
+import shlex
 import sys
 
 from .config import AdminUI
 from .engine import netinfo
+
+
+def _quoted(arg: str) -> str:
+    if os.name == "nt":
+        return f'"{arg}"' if " " in arg else arg
+    return shlex.quote(arg)
+
+
+def reconfigure_hint(data_dir: str, service_name: str = "", environ=None) -> tuple[str, str]:
+    """How this installation changes the admin UI's address (for the Settings page):
+    ("env", "") when SER2NET_BIND_IP sets it (a container: its environment wins at every
+    start); ("service", command) for the Windows service, whose reinstall with --reconfigure
+    asks for it again; else ("console", command), a start with --reconfigure."""
+    environ = os.environ if environ is None else environ
+    if (environ.get("SER2NET_BIND_IP") or "").strip():
+        return "env", ""
+    if getattr(sys, "frozen", False):
+        prog = _quoted(sys.executable)
+    else:
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "ser2net.py")
+        prog = f"{_quoted(sys.executable)} {_quoted(script)}"
+    if service_name:
+        name = "" if service_name == "ser2net" else f" --service-name {_quoted(service_name)}"
+        return "service", f"{prog} --install-service --reconfigure{name}"
+    return "console", f"{prog} --reconfigure --data-dir {_quoted(data_dir)}"
 
 
 def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:

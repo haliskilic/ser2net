@@ -55,6 +55,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Callable
 
 from . import netinfo
 from ..config import parse_cluster_peer, peer_host
@@ -363,6 +364,9 @@ class ClusterDiscovery:
         self._refusals: dict[str, str] = {}          # address -> why its last request was refused
         self._running = False
         self.discovery_error = ""           # non-empty when UDP discovery couldn't start
+        # () -> (bind IP, port, TLS) the admin UI serves now (AppState.admin_serving; the
+        # address in config.json may wait for a restart); None: admin_ui as configured
+        self.serving: Callable[[], tuple[str, int, bool]] | None = None
 
     # ----- config helpers -----
     @property
@@ -384,17 +388,19 @@ class ClusterDiscovery:
         """(ip, port, scheme) other nodes use to reach THIS node's web UI."""
         c = self.cluster
         ui = self.config.admin_ui
+        bind_ip, port, tls = (self.serving() if self.serving is not None
+                              else (ui.bind_ip, ui.port, ui.tls_enabled))
         ip = c.advertise_ip.strip()
         if not ip:
-            bind = (ui.bind_ip or "").strip()
+            bind = (bind_ip or "").strip()
             if bind not in _LOOPBACK:
                 ip = bind
             else:
                 # no LAN address known (no default route): 127.0.0.1 tells receivers to use
                 # the address the beacon came from - on each network the right one
                 ip = netinfo.primary_lan_ip() or "127.0.0.1"
-        scheme = "https" if ui.tls_enabled else "http"
-        return ip, int(ui.port), scheme
+        scheme = "https" if tls else "http"
+        return ip, int(port), scheme
 
     # ----- beacon (de)serialization -----
     def _beacon_body(self) -> str:
