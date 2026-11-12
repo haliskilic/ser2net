@@ -210,7 +210,7 @@ def test_frozen_fallback_names_the_notices():
         cli.FROZEN, sys.stdout = saved
     text = buf.getvalue().decode("utf-8")
     from ser2netweb import __version__
-    want = f"https://github.com/haliskilic/ser2net/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
+    want = f"https://github.com/haliskilic/ser2netweb/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
     assert want in text, text
     print("an executable without the license file points at THIRD-PARTY-NOTICES.md online  OK")
 

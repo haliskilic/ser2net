@@ -633,7 +633,7 @@ Her sürümde ayrıca `SHA256SUMS`, her binary için CycloneDX SBOM (`*.cdx.json
 metinleri, Linux binary'leri için systemd unit'i `ser2net-standalone.service` ve bir binary'yi
 onunla kuran `ser2net-install.sh` (bkz. *Servis olarak çalıştırma*) yayımlanır; binary'ler GitHub'ın derleme kaynağı imzasıyla (build provenance)
 doğrulanabilir: `sha256sum -c SHA256SUMS --ignore-missing`,
-`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2net`. Windows exe'si **henüz
+`gh attestation verify ser2net-linux-x64 -R haliskilic/ser2netweb`. Windows exe'si **henüz
 imzalanmıyor** (bir imzalama servisi tanımlanınca imzalanacak —
 [`docs/SIGNING.md`](docs/SIGNING.md)); bu yüzden ilk çalıştırmada SmartScreen uyarabilir.
 Windows'ta `Get-FileHash` ile `SHA256SUMS`'a karşı ve `gh attestation verify` ile
@@ -1531,7 +1531,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NETWEB_ADMIN_USE
   - `/opt/ser2net` altında *kaynak kurulum*: `systemd/ser2net.service`.
     ```bash
     sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
-    sudo git clone https://github.com/haliskilic/ser2net.git /opt/ser2net
+    sudo git clone https://github.com/haliskilic/ser2netweb.git /opt/ser2net
     sudo cp /opt/ser2net/systemd/ser2net.service /etc/systemd/system/
     sudo systemctl daemon-reload && sudo systemctl enable --now ser2net
     ```

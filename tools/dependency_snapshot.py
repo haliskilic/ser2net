@@ -40,7 +40,7 @@ REQUIREMENT_FILES = ("requirements.txt", "requirements-optional.txt")
 GRAPH_PYTHON = rw.PYTHONS[-1]
 CORRELATOR = "ser2net-requirements-markers"
 DETECTOR = {"name": "ser2netweb tools/dependency_snapshot.py", "version": "1",
-            "url": "https://github.com/haliskilic/ser2net/blob/main/tools/dependency_snapshot.py"}
+            "url": "https://github.com/haliskilic/ser2netweb/blob/main/tools/dependency_snapshot.py"}
 
 
 def canonical(name: str) -> str:

@@ -216,7 +216,7 @@ Verify the download before trusting it:
 - **Build provenance** (needs the GitHub CLI) — proves GitHub Actions built it from this
   repository:
   ```powershell
-  gh attestation verify .\ser2net-windows-x64.exe -R haliskilic/ser2net
+  gh attestation verify .\ser2net-windows-x64.exe -R haliskilic/ser2netweb
   ```
 
 Once verified, run it past SmartScreen with **More info → Run anyway**. Signing will be

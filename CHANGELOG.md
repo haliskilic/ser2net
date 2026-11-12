@@ -2,7 +2,7 @@
 
 All notable changes to ser2net. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/). Detailed notes for each version:
-[GitHub Releases](https://github.com/haliskilic/ser2net/releases) and [ROADMAP.md](ROADMAP.md).
+[GitHub Releases](https://github.com/haliskilic/ser2netweb/releases) and [ROADMAP.md](ROADMAP.md).
 
 ## [Unreleased]
 
@@ -817,22 +817,22 @@ Hardening and operations.
 ## [1.0] — 2026-06-06
 First release: serial↔TCP (raw, telnet, RFC 2217), web UI, access control, logs.
 
-[Unreleased]: https://github.com/haliskilic/ser2net/compare/v2.9.0...HEAD
-[2.9.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.9.0
-[2.8.1]: https://github.com/haliskilic/ser2net/releases/tag/v2.8.1
-[2.8.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.8.0
-[2.7.1]: https://github.com/haliskilic/ser2net/releases/tag/v2.7.1
-[2.7.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.7.0
-[2.6.3]: https://github.com/haliskilic/ser2net/releases/tag/v2.6.3
-[2.6.2]: https://github.com/haliskilic/ser2net/releases/tag/v2.6.2
-[2.6.1]: https://github.com/haliskilic/ser2net/releases/tag/v2.6.1
-[2.6.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.6.0
-[2.5.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.5.0
-[2.4.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.4.0
-[2.3.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.3.0
-[2.2]: https://github.com/haliskilic/ser2net/tree/v2.2
-[2.1]: https://github.com/haliskilic/ser2net/tree/v2.1
-[2.0]: https://github.com/haliskilic/ser2net/tree/v2.0
-[1.2]: https://github.com/haliskilic/ser2net/tree/v1.2
-[1.1]: https://github.com/haliskilic/ser2net/tree/v1.1
-[1.0]: https://github.com/haliskilic/ser2net/tree/v1.0
+[Unreleased]: https://github.com/haliskilic/ser2netweb/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.9.0
+[2.8.1]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.8.1
+[2.8.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.8.0
+[2.7.1]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.7.1
+[2.7.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.7.0
+[2.6.3]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.6.3
+[2.6.2]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.6.2
+[2.6.1]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.6.1
+[2.6.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.6.0
+[2.5.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.5.0
+[2.4.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.4.0
+[2.3.0]: https://github.com/haliskilic/ser2netweb/releases/tag/v2.3.0
+[2.2]: https://github.com/haliskilic/ser2netweb/tree/v2.2
+[2.1]: https://github.com/haliskilic/ser2netweb/tree/v2.1
+[2.0]: https://github.com/haliskilic/ser2netweb/tree/v2.0
+[1.2]: https://github.com/haliskilic/ser2netweb/tree/v1.2
+[1.1]: https://github.com/haliskilic/ser2netweb/tree/v1.1
+[1.0]: https://github.com/haliskilic/ser2netweb/tree/v1.0

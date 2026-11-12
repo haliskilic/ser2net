@@ -6,13 +6,13 @@
 
 ### Supported versions
 Security fixes go into the **latest release** (the newest `vX.Y.Z` on the
-[Releases](https://github.com/haliskilic/ser2net/releases) page). Please upgrade before
+[Releases](https://github.com/haliskilic/ser2netweb/releases) page). Please upgrade before
 reporting; an upgrade from any 2.x release keeps `config.json` as it is.
 
 ### Reporting a vulnerability
 **Please don't open a public issue.** Report it privately, either way:
 - GitHub: **Security → Report a vulnerability** (private advisory):
-  <https://github.com/haliskilic/ser2net/security/advisories/new>
+  <https://github.com/haliskilic/ser2netweb/security/advisories/new>
 - e-mail: **mail@haliskilic.com.tr**
 
 Include the version (`ser2netweb --about`), how it is installed (binary, Docker, source),
@@ -91,14 +91,14 @@ the address the sign-in limits and the audit log see ([docs/REVERSE-PROXY.md](do
 
 ### Desteklenen sürümler
 Güvenlik düzeltmeleri **son sürüme** gelir
-([Releases](https://github.com/haliskilic/ser2net/releases) sayfasındaki en yeni
+([Releases](https://github.com/haliskilic/ser2netweb/releases) sayfasındaki en yeni
 `vX.Y.Z`). Bildirmeden önce lütfen güncelleyin; 2.x'in herhangi bir sürümünden
 yükseltmede `config.json` olduğu gibi kalır.
 
 ### Güvenlik açığı bildirme
 **Lütfen herkese açık issue açmayın.** Özel olarak bildirin:
 - GitHub: **Security → Report a vulnerability** (özel bildirim):
-  <https://github.com/haliskilic/ser2net/security/advisories/new>
+  <https://github.com/haliskilic/ser2netweb/security/advisories/new>
 - e-posta: **mail@haliskilic.com.tr**
 
 Sürümü (`ser2netweb --about`), kurulum şeklini (binary, Docker, kaynak), tekrarlama
