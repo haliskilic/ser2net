@@ -577,6 +577,7 @@ class _Conn:
     trace_mods: dict[tuple[str, str], bool] = field(default_factory=dict)
     access_given: bool = False                    # remaddr gave an address (a client limit)
     remaddr_set: bool = False                     # 3.x remaddr= (even empty): no default then
+    any_family: bool = False  # no family or address: ser2net listened on IPv4 and IPv6
     holds: list[str] = field(default_factory=list)  # why it comes in disabled (else more open)
     ssl: Optional[dict[str, Any]] = None             # the accepter's ssl layer (_ssl_layer)
     remctl: bool = False                                         # 3.x RFC2217 flag
@@ -697,6 +698,7 @@ def _listen_address(c: _Conn, fields: list[str]) -> bool:
         return False
     c.network["port"] = port
     c.network["bind_ip"] = _bind_ip(c, host, family)
+    c.any_family = not family and not host.strip("[]")
     return True
 
 
@@ -705,8 +707,8 @@ def _bind_ip(c: _Conn, host: str, family: str) -> str:
     stays loopback (::1 too), and an address that cannot be used here (a host name) gives
     0.0.0.0 with the mapping imported disabled until its bind IP is set."""
     h = host.strip("[]")
-    if not h:
-        return "::" if family == "ipv6" else "0.0.0.0"
+    if not h:  # (ipv6n4: IPv6 without IPv4-mapped addresses)
+        return "::" if family in ("ipv6", "ipv6n4") else "0.0.0.0"
     if h.lower() == "localhost":
         return "127.0.0.1"
     if not bind_ip_problem(h):
@@ -1636,9 +1638,9 @@ def _from_v3(lines: list[tuple[int, str]], budget: _Budget) -> tuple[list[_Conn]
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[dict]:
+def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[_Conn]:
     """Drop what does not validate or listens where an earlier one does, make the names
-    unique and keep one active mapping per serial device."""
+    unique and keep one active mapping per serial device: the connections to import."""
     def warn(msg: str) -> None:
         budget.spend(len(msg))
         warnings.append(msg)
@@ -1682,7 +1684,7 @@ def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[
                  .format(c.label, c.device, owner[key]))
         elif c.enabled:
             owner[key] = c.name
-    return [c.to_dict() for c in kept]
+    return kept
 
 
 def looks_yaml(text: str) -> bool:
@@ -1720,7 +1722,8 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
                                 "(ser2net 4.x) or ser2net.conf (ser2net 3.x) file.").format(
                                     label or _("The file")))
         conns, warnings = _from_v3(lines, budget)
-    mappings = _assemble(conns, warnings, budget)
+    kept = _assemble(conns, warnings, budget)
+    mappings = [c.to_dict() for c in kept]
     if len(warnings) > _MAX_WARNINGS:
         more = len(warnings) - _MAX_WARNINGS
         del warnings[_MAX_WARNINGS:]
@@ -1733,6 +1736,13 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
                           "open (ser2net opened it only while a client was connected), and "
                           "makes no UUCP lock files: programs that look for them, such as "
                           "minicom, don't see the port as in use"))
+    wide = [c.name for c in kept if c.any_family]
+    if wide:
+        warnings.append(_("ser2net listened on IPv4 and IPv6 for an accepter that names no "
+                          "address family or address ({0}): imported on 0.0.0.0, which takes "
+                          "IPv4 clients only; pick “All interfaces (IPv4 + IPv6)” as the bind "
+                          "IP to take IPv6 clients too").format(
+            ", ".join(wide[:5]) + (", …" if len(wide) > 5 else "")))
     if any(_open_to_all(m) for m in mappings):
         warnings.append(_("ser2net may also have limited its clients with TCP wrappers "
                           "(/etc/hosts.allow, /etc/hosts.deny); those rules are not imported: a "

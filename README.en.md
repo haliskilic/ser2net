@@ -258,7 +258,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   disabled. ser2net's port locking carries over: 4.x `flock` (on by default) becomes **Lock
   the port** plus **Keep other programs out**, `uucplock` (on by default; 3.x always)
   **Don't open a port another program has locked**; one warning says what still differs
-  (a mapping holds its port open from its start, and makes no lock files).
+  (a mapping holds its port open from its start, and makes no lock files). Listen
+  addresses keep their family (`ipv6,::1` stays `::1`, `ipv6`/`ipv6n4` without an address
+  is `::`); an accepter with neither (`tcp,2000`), on which ser2net took IPv4 and IPv6
+  clients, comes in on `0.0.0.0`, IPv4 only, and a warning names those to switch to **All
+  interfaces (IPv4 + IPv6)**.
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
   notifications use as well. Logs, the audit log and the REST API stay English.

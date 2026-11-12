@@ -271,7 +271,10 @@ düzenlemeye gerek yok.
   **Portu kilitle** ile **Port açıkken diğer programları dışarıda tut** olur, `uucplock`
   (varsayılan açık; 3.x'te her zaman) **Başka bir programın kilitlediği portu açma** olur;
   bir uyarı da hâlâ farklı olanı söyler (eşleme portunu başladığı andan itibaren açık tutar
-  ve kilit dosyası oluşturmaz).
+  ve kilit dosyası oluşturmaz). Dinleme adresleri ailesini korur (`ipv6,::1` `::1` kalır,
+  adressiz `ipv6`/`ipv6n4` `::` olur). İkisini de belirtmeyen bir accepter (`tcp,2000`)
+  ser2net'te IPv4 ve IPv6 istemcileri alıyordu; burada `0.0.0.0` olarak, yalnızca IPv4 için
+  gelir ve bir uyarı **Tüm arayüzler (IPv4 + IPv6)**'ya geçirilebilecek olanları sayar.
 - **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.

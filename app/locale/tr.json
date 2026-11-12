@@ -909,5 +909,6 @@
   "All IPv4 interfaces (0.0.0.0)": "Tüm IPv4 arayüzleri (0.0.0.0)",
   "All IPv6 interfaces (::)": "Tüm IPv6 arayüzleri (::)",
   "Localhost, IPv6 (::1)": "Yalnızca bu makine, IPv6 (::1)",
-  "0.0.0.0 takes IPv4 clients only, :: IPv6 clients only": "0.0.0.0 yalnızca IPv4, :: yalnızca IPv6 istemcileri alır"
+  "0.0.0.0 takes IPv4 clients only, :: IPv6 clients only": "0.0.0.0 yalnızca IPv4, :: yalnızca IPv6 istemcileri alır",
+  "ser2net listened on IPv4 and IPv6 for an accepter that names no address family or address ({0}): imported on 0.0.0.0, which takes IPv4 clients only; pick “All interfaces (IPv4 + IPv6)” as the bind IP to take IPv6 clients too": "ser2net, adres ailesi ya da adres belirtmeyen bir accepter için IPv4 ve IPv6'da dinliyordu ({0}): yalnızca IPv4 istemcileri alan 0.0.0.0 olarak içe aktarıldı; IPv6 istemcileri de almak için dinleme IP'si olarak “Tüm arayüzler (IPv4 + IPv6)” seçeneğini seç"
 }
