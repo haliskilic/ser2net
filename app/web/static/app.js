@@ -80,10 +80,82 @@ document.addEventListener("htmx:configRequest", function (e) {
 });
 document.addEventListener("htmx:afterRequest", function (e) {
   var el = e.detail.askedBy, xhr = e.detail.xhr;
-  if (polls(el) && xhr && xhr.status === 200) {
+  if (polls(el) && xhr && xhr.status === 200 && !xhr.keptOld) {   // (keptOld: 1d)
     var h = xhr.getResponseHeader("X-Content-Hash");
     if (h) el.setAttribute("data-hash", h);
   }
+});
+
+// 1d) A panel that refreshes itself does not refresh in a background tab (it catches up
+//     as soon as the tab is shown again), and keeps what it shows while a pointer is
+//     pressed in it or text in it is selected: a click whose press and release straddled
+//     a refresh was lost, and so was the selection. The log panel also keeps its lines
+//     while it is scrolled down to older ones (the newest are at the top). A refresh an
+//     action asks for (refreshMappings) is shown all the same. A refresh not shown keeps
+//     the panel's old hash, so the next one brings the news.
+var pressed = null;
+document.addEventListener("pointerdown", function (e) { pressed = e.target; }, true);
+document.addEventListener("pointerup", function () { pressed = null; }, true);
+document.addEventListener("pointercancel", function () { pressed = null; }, true);
+function busyIn(el) {
+  if (pressed && el.contains(pressed)) return true;
+  var sel = window.getSelection ? window.getSelection() : null;
+  return !!(sel && !sel.isCollapsed && sel.rangeCount &&
+            el.contains(sel.getRangeAt(0).commonAncestorContainer));
+}
+document.addEventListener("htmx:beforeRequest", function (e) {
+  if (document.hidden && polls(e.detail.elt)) e.preventDefault();
+});
+document.addEventListener("visibilitychange", function () {
+  if (document.hidden || !window.htmx) return;
+  document.querySelectorAll("[hx-trigger][hx-get]").forEach(function (el) {
+    if (polls(el))
+      htmx.ajax("GET", el.getAttribute("hx-get"), { source: el,
+        target: el.getAttribute("hx-target") || el, swap: el.getAttribute("hx-swap") || "innerHTML" });
+  });
+});
+document.addEventListener("htmx:beforeSwap", function (e) {
+  var d = e.detail, el = d.askedBy, panel = d.target, xhr = d.xhr;
+  var asked = d.requestConfig && d.requestConfig.triggeringEvent;   // none: its own timer
+  if (!xhr || xhr.status !== 200 || !panel || !polls(el) || asked) return;
+  var log = panel.id === "form-panel" ? panel.querySelector(".logbox") : null;
+  if (busyIn(panel) || (log && log.scrollTop > 0)) {
+    d.shouldSwap = false;
+    xhr.keptOld = true;
+  }
+});
+
+// 1e) Connection times in the mappings table count on in the browser, from when each
+//     client connected (data-since, by the server's clock, which each answer of the table
+//     gives in X-Server-Time): the table is not sent again every second for them. As
+//     fmt_duration in app/engine/bridge.py.
+var serverSkew = 0;
+document.addEventListener("htmx:afterRequest", function (e) {
+  var xhr = e.detail.xhr, t = xhr && xhr.status ? xhr.getResponseHeader("X-Server-Time") : null;
+  if (t && isFinite(+t)) serverSkew = +t - Date.now() / 1000;
+});
+function fmtDuration(secs) {
+  secs = Math.max(0, Math.floor(secs));
+  var h = Math.floor(secs / 3600), m = Math.floor(secs % 3600 / 60), s = secs % 60;
+  function two(n) { return (n < 10 ? "0" : "") + n; }
+  return h ? h + "h " + two(m) + "m" : m ? m + "m " + two(s) + "s" : s + "s";
+}
+function tickDurations() {
+  if (document.hidden) return;
+  var now = Date.now() / 1000 + serverSkew;
+  document.querySelectorAll("#mappings [data-since]").forEach(function (chip) {
+    var dur = chip.querySelector(".dur"), since = +chip.getAttribute("data-since");
+    if (!dur || !isFinite(since)) return;
+    var text = fmtDuration(now - since);
+    if (dur.textContent === text) return;
+    dur.textContent = text;
+    chip.title = tr("connected", "connected {0}", text) +
+                 (chip.classList.contains("peer-prio") ? " · " + tr("priority", "priority") : "");
+  });
+}
+setInterval(tickDurations, 1000);
+document.addEventListener("htmx:afterSwap", function (e) {
+  if (e.target && e.target.id === "mappings") tickDurations();
 });
 
 // 2) "Custom…" reveal: a <select data-custom="fieldName"> toggles the sibling
@@ -450,16 +522,8 @@ document.addEventListener("htmx:beforeSwap", function (e) {
   document.addEventListener("DOMContentLoaded", restoreControls);
 })();
 
-// 6) Cluster panel: a tab in the background skips its refresh (each one makes this node
-//    ask every peer) and refreshes as soon as it is shown again.
-document.addEventListener("htmx:beforeRequest", function (e) {
-  var el = e.detail.elt;
-  if (el && el.id === "cluster" && document.hidden) e.preventDefault();
-});
-document.addEventListener("visibilitychange", function () {
-  if (!document.hidden && document.getElementById("cluster") && window.htmx)
-    htmx.trigger(document.body, "refreshCluster");
-});
+// 6) (The cluster panel, like every self-refreshing panel, is not refreshed in a
+//    background tab - each refresh makes this node ask every peer: see 1d.)
 
 // 7) Feedback: what an action did and why a request failed, in the two live regions of
 //    _shell.html — #ui-status (polite: the "X-Notice" header of a successful action)

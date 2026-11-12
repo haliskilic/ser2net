@@ -5,11 +5,18 @@ the helpers that used to be closures inside one big ``build_routes()`` live here
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import os
+import re
+import threading
 import urllib.parse
+from collections import OrderedDict
+from collections.abc import Callable
 
-from starlette.responses import PlainTextResponse, Response
+from markupsafe import escape
+from starlette.responses import HTMLResponse, PlainTextResponse, Response
 
 from ...config import ROLE_RANK
 from ...i18n import _
@@ -29,6 +36,85 @@ def unchanged_or(request, resp):
         return Response(status_code=204, headers={"X-Content-Hash": digest})
     resp.headers["X-Content-Hash"] = digest
     return resp
+
+
+class LiveTable:
+    """A table the dashboard polls every few seconds (the mappings, the fleet view),
+    answered without rendering it again when that can be helped.
+
+    Its X-Content-Hash is "<shape>.<counters>": a fingerprint of everything the table
+    shows except the In / Out counters, and one of those. The browser sends back the one
+    it has, and the answer is
+      * 204 when both match: the browser keeps its table;
+      * when only the counters changed: just those, as htmx out-of-band swaps of their
+        <span id=...> (HX-Reswap: none), so the rows, the keyboard focus, a text
+        selection, a tooltip or a click in progress stay;
+      * else the whole table, rendered off the event loop (a render of a few hundred
+        rows takes 100+ ms, during which every bridge on the loop would wait - a Modbus
+        RTU reply that pauses for 10 ms counts as finished), and kept for other tabs
+        that ask for the same table. (So the template may not use the request beyond
+        the language, which is part of the fingerprint.)
+    The fingerprints are taken in the same worker thread (a repr of every mapping is
+    not free either). They are keyed with a secret of this process: the shape covers
+    settings the browser is not shown. A tab from before an upgrade or a restart sends
+    a hash that matches neither and gets the whole table once."""
+
+    def __init__(self, ctx: "Ctx", template: str, size: int = 8) -> None:
+        self.ctx, self.template, self._size = ctx, template, size
+        self._key = os.urandom(16)
+        self._bodies: OrderedDict[str, str] = OrderedDict()   # tag -> rendered table
+        self._lock = threading.Lock()
+
+    def _digest(self, value) -> str:
+        return hashlib.blake2b(repr(value).encode("utf-8", "backslashreplace"),
+                               key=self._key, digest_size=8).hexdigest()
+
+    async def answer(self, request, snapshot: Callable[[], tuple[object, dict[str, str] | None]],
+                     headers=None, **context) -> Response:
+        """`snapshot()` -> (shape, spans): what the table shows apart from the counters,
+        and {element id: text} of the counter spans - None when they can't be patched by
+        id, and then the shape has to include them. Called in a worker thread; `context`
+        renders the table from the same data."""
+        sent = request.headers.get("x-content-hash") or ""
+        lang = getattr(request.state, "lang", "")
+
+        def work() -> tuple[str, str | None, bool]:
+            """(tag, body or None for "unchanged", whether body is only the counters)"""
+            shape, spans = snapshot()
+            tag = self._digest((lang, shape)) + "." + self._digest(spans)
+            if sent == tag:
+                return tag, None, False
+            if spans is not None and sent.partition(".")[0] == tag.partition(".")[0]:
+                return tag, "".join(f'<span id="{escape(k)}" hx-swap-oob="true">{escape(v)}</span>'
+                                    for k, v in spans.items()), True
+            with self._lock:
+                body = self._bodies.get(tag)
+            if body is None:
+                body = self.ctx.templates.get_template(self.template).render(
+                    {"request": request, **context})
+                with self._lock:
+                    self._bodies[tag] = body
+                    while len(self._bodies) > self._size:
+                        self._bodies.popitem(last=False)
+            return tag, body, False
+
+        tag, body, patch = await asyncio.to_thread(work)
+        h = {**(headers or {}), "X-Content-Hash": tag}
+        if body is None:
+            return Response(status_code=204, headers=h)
+        if patch:   # no swap of the table itself; htmx still does the out-of-band ones
+            h["HX-Reswap"] = "none"
+        return HTMLResponse(body, headers=h)
+
+
+_NOT_ID_CHAR = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def domid(value) -> str:
+    """*value* as part of an HTML id: other characters than letters, digits, _ and -
+    become _. (htmx keeps the keyboard focus on a polled table's buttons across a
+    refresh by their ids; a peer's address and mapping id are part of them.)"""
+    return _NOT_ID_CHAR.sub("_", str(value))
 
 
 def bytesize(value) -> str:
@@ -133,6 +219,14 @@ class Ctx:
     def render(self, request, name, status_code=200, headers=None, **ctx):
         return self.templates.TemplateResponse(request, name, ctx,
                                                status_code=status_code, headers=headers)
+
+    async def arender(self, request, name, status_code=200, headers=None, **ctx):
+        """render() in a worker thread: for the panels that refresh themselves, whose
+        render would hold up every bridge on the event loop for as long as it takes (the
+        page's language, a context variable, goes along)."""
+        template = self.templates.get_template(name)
+        body = await asyncio.to_thread(template.render, {"request": request, **ctx})
+        return HTMLResponse(body, status_code=status_code, headers=headers)
 
     def set_session(self, response, request, user) -> None:
         cfg = self.state.config

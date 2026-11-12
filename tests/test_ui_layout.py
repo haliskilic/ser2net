@@ -17,8 +17,13 @@ longer:
   * the browser reports no errors (e.g. a Content-Security-Policy violation);
   * the filter rows (the dashboard's toolbar, the audit log's filters) take one line in
     wide windows, and their search boxes are drawn like the other fields;
-  * the cluster panel isn't refreshed while the tab is hidden (each refresh makes the
-    node ask every peer) and is refreshed as soon as the tab is shown again;
+  * the self-refreshing panels (mappings, cluster, ports) aren't refreshed while the tab
+    is hidden (a cluster refresh makes the node ask every peer) and are refreshed as soon
+    as the tab is shown again;
+  * the mappings table (live_checks): the clients' connection times count on in the
+    browser; an answer with only new counters updates those cells, the rows and the focus
+    stay; the table isn't replaced under a pressed pointer or a text selection; the log
+    panel keeps its lines while scrolled down;
   * what app.js does around the dashboard's requests (feedback_checks): the keyboard
     focus survives the table's refreshes; a panel opened from far down the page comes
     into view and takes the focus, which goes back to its button on Cancel; unsaved
@@ -184,6 +189,68 @@ def start_node(cfg, backup=False):
     return proc, tmp, log
 
 
+def live_checks(page, bad, active, row_button, press):
+    """How the mappings table and the log panel refresh (app.js 1d): only the counters
+    when only they changed; not under a pressed pointer or a text selection; the log not
+    while it is scrolled down."""
+    table = "document.querySelector('#mappings table')"
+    mark = f"window.__table = {table}"
+    same = f"{table} === window.__table"
+    forget = "document.getElementById('mappings').removeAttribute('data-hash')"
+
+    # only the counters changed: htmx swaps their spans in, the rows (and the focus) stay
+    log_id = row_button("short", "log")
+    span = page.evaluate("document.querySelector('#mappings [id$=\"-bytes\"]').id")
+    page.focus(f"#{log_id}")
+    page.evaluate(mark)
+    page.route("**/api/status*", lambda r: r.fulfill(
+        status=200, headers={"Content-Type": "text/html; charset=utf-8", "HX-Reswap": "none",
+                             "X-Content-Hash": "patched.counters"},
+        body=f'<span id="{span}" hx-swap-oob="true">9.9 MB / 1 B</span>'))
+    page.wait_for_timeout(2600)
+    page.unroute("**/api/status*")
+    if page.evaluate(f"document.getElementById('{span}').textContent") != "9.9 MB / 1 B":
+        bad("a counters-only answer did not update the In / Out cell")
+    if not page.evaluate(same) or active() != log_id:
+        bad(f"a counters-only answer replaced the table or took the focus: {active()!r}")
+
+    # a pressed pointer or a text selection in the table: it is not replaced under them
+    for what, start, end in (
+            ("a pointer pressed", "document.querySelector('#mappings td').dispatchEvent("
+             "new PointerEvent('pointerdown', {bubbles: true}))",
+             "document.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}))"),
+            ("a text selection", "(() => { const r = document.createRange(); "
+             "r.selectNodeContents(document.querySelector('#mappings td.col-name span'));"
+             " getSelection().removeAllRanges(); getSelection().addRange(r); })()",
+             "getSelection().removeAllRanges()")):
+        page.evaluate(mark)
+        page.evaluate(start)
+        page.evaluate(forget)
+        page.wait_for_timeout(2600)
+        if not page.evaluate(same):
+            bad(f"the table was replaced under {what}")
+        page.evaluate(end)
+        page.wait_for_timeout(2600)
+        if page.evaluate(same):
+            bad(f"the table was not refreshed after {what} ended")
+
+    # the log panel keeps its lines while scrolled down to older ones
+    press(row_button("short", "log"))
+    page.wait_for_selector("#form-panel .logbox")
+    box = "document.querySelector('#form-panel .logbox')"
+    page.evaluate(f"(() => {{ const b = {box}; b.style.maxHeight = '30px'; b.scrollTop = 20;"
+                  f" window.__log = b; document.querySelector('#form-panel [data-hash]')"
+                  f".setAttribute('data-hash', 'old'); }})()")
+    page.wait_for_timeout(5600)
+    if page.evaluate(f"{box} !== window.__log"):
+        bad("the log panel was refreshed while scrolled down")
+    page.evaluate(f"{box}.scrollTop = 0")
+    page.wait_for_timeout(5600)
+    if page.evaluate(f"{box} === window.__log"):
+        bad("the log panel was not refreshed once scrolled back to the newest lines")
+    page.click("#log-close")
+
+
 def feedback_checks(browser, base, problems):
     """The dashboard's behaviour around its requests (app.js), in a browser context of its
     own. Failed requests are part of it: the browser's "failed to load" lines and htmx's
@@ -238,14 +305,26 @@ def feedback_checks(browser, base, problems):
     page.evaluate("window.__swaps = 0; document.addEventListener('htmx:afterSwap', "
                   "e => { if (e.target.id === 'mappings') window.__swaps++; })")
 
-    # the focus survives the table's refreshes (the clients' durations change every second)
+    # the clients' connection times count on in the browser, with no answer from the server
+    dur = "document.querySelector('#mappings .peer .dur').textContent"
+    page.route("**/api/status*", lambda r: r.fulfill(status=204))
+    first = page.evaluate(dur)
+    page.wait_for_timeout(2600)
+    if page.evaluate(dur) == first:
+        bad(f"a client's connection time did not count on in the browser: {first!r}")
+    page.unroute("**/api/status*")
+
+    # the focus survives a refresh of the table (one that changed: its hash forgotten)
     log_id = row_button("short", "log")
     page.focus(f"#{log_id}")
-    page.wait_for_timeout(4500)
+    page.evaluate("window.__swaps = 0; document.getElementById('mappings').removeAttribute('data-hash')")
+    page.wait_for_timeout(2600)
     if page.evaluate("window.__swaps") < 1:
-        bad("the table was not refreshed while the clients were connected")
+        bad("the table was not refreshed after its hash was forgotten")
     if active() != log_id:
         bad(f"a table refresh took the focus from the row's Log button: {active()!r}")
+
+    live_checks(page, bad, active, row_button, press)
 
     # a panel opened from far down comes into view and takes the focus; Cancel gives it back
     edit_id = row_button(LONG_NAME, "edit")
@@ -450,19 +529,22 @@ def main():
             # the tab is shown again
             page.set_viewport_size({"width": 1280, "height": 900})
             dashboard()
-            polls = []
-            page.on("request", lambda r: "/api/cluster/status" in r.url and polls.append(r.url))
+            polls = {"/api/cluster/status": [], "/api/status": [], "/api/ports/table": []}
+            page.on("request", lambda r: [v.append(r.url) for k, v in polls.items()
+                                          if r.url.split("?")[0].endswith(k)])
             set_hidden = ("h => { Object.defineProperty(document, 'hidden', {configurable: true, "
                           "get: () => h}); document.dispatchEvent(new Event('visibilitychange')); }")
             page.evaluate(set_hidden, True)
             page.wait_for_timeout(6500)
-            if polls:
-                problems.append(f"a hidden tab refreshed the cluster panel {len(polls)}x")
+            for path, seen in polls.items():
+                if seen:
+                    problems.append(f"a hidden tab refreshed {path} {len(seen)}x")
             page.evaluate(set_hidden, False)
             page.wait_for_timeout(1500)
-            if not polls:
-                problems.append("showing the tab again did not refresh the cluster panel")
-            print("cluster panel: no refresh while the tab is hidden, one when shown")
+            for path, seen in polls.items():
+                if not seen:
+                    problems.append(f"showing the tab again did not refresh {path}")
+            print("self-refreshing panels: no refresh while the tab is hidden, one when shown")
             n = len(problems)
             feedback_checks(browser, base, problems)
             print(f"dashboard feedback, focus, unsaved changes, console: "

@@ -63,6 +63,7 @@ PORTABLE = [
     "test_ui_layout.py",      # browser layout check; skips without Playwright (CI 'ui' job runs it)
     "test_ui_feedback.py",    # what the dashboard's htmx requests answer (notices, 286, next=)
     "test_ui_contrast.py",    # status colours readable in both themes (WCAG AA)
+    "test_live_table.py",     # polled tables: 204 / counters only / whole table, off the loop
     "test_tls_selfsigned.py",
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",

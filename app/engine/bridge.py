@@ -311,9 +311,10 @@ class RunnerStatus:
 
     def as_dict(self) -> dict:
         now = time.time()
+        # connected_at (unix time): the dashboard counts the duration on from it
         clients = [
             {"peer": c["peer"], "duration": fmt_duration(now - c["connected_at"]),
-             "priority": c.get("priority", False)}
+             "priority": c.get("priority", False), "connected_at": c["connected_at"]}
             for c in self.clients
         ]
         return {
