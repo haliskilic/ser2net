@@ -9,7 +9,8 @@
     the upgrade, a script) sets the password it posts, as before;
   * a form shown again after an error has what was typed, never the stored password;
   * a REST API PUT that sends back the mask a viewer token reads keeps the stored
-    password (operator tokens still read and write the real one).
+    password (operator tokens still read and write the real one);
+  * the export, which holds the MQTT passwords, says so next to its button.
 The remote edit of a peer's mapping (the controlling node sends the password to store)
 is in tests/test_cluster.py.
 
@@ -115,6 +116,13 @@ def main():
         api("PUT", "/api/v1/mappings/m1", doc)
         assert stored() == "api-new-4", stored()
         print("REST API: a PUT with the viewer mask keeps the stored password  OK")
+
+        st, _, page = b.get("/settings")
+        assert st == 200 and ("The export holds each mapping’s MQTT broker password in plain "
+                              "text: keep the file as safe as a password.") in page
+        st, _, export = b.get("/settings/config/export")
+        assert st == 200 and '"password": "api-new-4"' in export, "the export carries it"
+        print("the export, which holds the MQTT passwords, says so  OK")
     print("\nPASS: the MQTT password is write-only in the mapping form")
 
 

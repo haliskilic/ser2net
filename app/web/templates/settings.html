@@ -435,6 +435,7 @@
 <section class="panel panel-narrow" id="import">
   <div class="panel-head"><h2>{{ _("Mappings export / import") }}</h2></div>
   <p><a class="btn" href="/settings/config/export">{{ _("⤓ Export mappings (JSON)") }}</a></p>
+  <p class="muted mb-sm">{{ _("The export holds each mapping’s MQTT broker password in plain text: keep the file as safe as a password.") }}</p>
   {% if import_preview %}
   {% set p = import_preview %}
   <h3>{{ _("Import preview") }} <span class="muted">— {{ _("%(n)s mapping(s) from a %(source)s, mode: %(mode)s", n=p.count, source=p.source, mode=_("merge") if p.mode == 'merge' else _("replace")) }}</span></h3>
