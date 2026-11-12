@@ -806,7 +806,13 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
   yollar dosya adına indirgenir ve açılışta log'a yazılır.
-- `tls/` — self-signed üretilirse sertifika/anahtar.
+- `tls/` — self-signed üretilirse sertifika/anahtar. Göreli bir TLS yolu (yönetim arayüzü
+  ya da eşleme: sertifika, anahtar, CA dosyaları) veri klasöründeki bir dosyadır, örneğin
+  `tls/cert.pem`; böylece veri klasörü taşınınca da çalışır. Taşımadan ya da başka bir
+  makinede geri yüklemeden sonra (yerelden Docker `/data`'ya, başka bir `--data-dir`,
+  başka bir host'tan yedek) artık orada olmayan ve bir `tls` klasörünü gösteren mutlak bir
+  yol bu veri klasörünün `tls/` klasöründen alınır (açılışta loglanır, config.json yeni
+  yolla kaydedilir); taşımadan önceki yedekler ve içe aktarmalar da aynı şekilde ele alınır.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
 

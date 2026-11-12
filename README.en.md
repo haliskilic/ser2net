@@ -780,7 +780,13 @@ inside aren't readable by other users:
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
   are reduced to the file name, which is logged at start-up.
-- `tls/` — certificate/key if self-signed is generated.
+- `tls/` — certificate/key if self-signed is generated. A relative TLS path (admin UI or a
+  mapping: certificate, key, CA files) is a file in the data directory, e.g. `tls/cert.pem`,
+  so it keeps working when the data directory moves. An absolute path that is no longer
+  there after a move or a restore on another machine (native to Docker `/data`, another
+  `--data-dir`, a backup from another host) and pointed into a `tls` folder is taken from
+  this data directory's `tls/` (logged at start-up, and config.json is saved with the new
+  path); backups and imports from before the move are handled the same way.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
 

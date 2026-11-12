@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from .config import ConfigError, MappingConfig, _new_id, host_port
+from .config import AppConfig, ConfigError, MappingConfig, _new_id, host_port
 from .i18n import _
 from .ser2net_import import looks_yaml, parse_ser2net_config
 
@@ -61,6 +61,10 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
             m.validate_input()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
+        if AppConfig(mappings=[m]).find_moved_tls_files():
+            warnings.append(_("Mapping #{0} ({1}): its TLS files are not where the file says; "
+                              "the files of that name in this data directory's tls folder are "
+                              "used.").format(i, m.name))
         warnings.extend(_tls_warning(i, m))
         if item.get("id") and item["id"] != m.id:
             warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "

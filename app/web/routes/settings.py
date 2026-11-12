@@ -21,7 +21,7 @@ from ... import i18n, importer, optional
 from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
     WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
-    backup_time, host_port, new_pwd_version, parse_cluster_peer, serial_conflict,
+    backup_time, data_path, host_port, new_pwd_version, parse_cluster_peer, serial_conflict,
     tls_file_message,
 )
 from ...engine import tls
@@ -931,6 +931,12 @@ def routes(ctx: Ctx) -> list:
             for f in dataclasses.fields(AppConfig):
                 if f.name not in keep:
                     setattr(cur, f.name, getattr(restored, f.name))
+            # a backup made before the data directory moved (or on another machine) names
+            # TLS files of the old one: those of this data directory's tls folder are used
+            moved = cur.find_moved_tls_files(state.data_dir)
+            if moved:
+                notes.append(_("TLS files the backup names in another data directory are "
+                               "used from this one's tls folder."))
             if with_accounts:
                 cur.secret_key = secrets.token_hex(32)
             else:  # both cluster keys are credentials: the key and the one still accepted
@@ -970,7 +976,7 @@ def routes(ctx: Ctx) -> list:
             i18n.reset(tok)
         state.log(f"configuration restored from backup {name} "
                   f"({'with' if with_accounts else 'without'} its accounts)")
-        for note in restored.load_notes:  # what loading the backup changed, as at start-up
+        for note in restored.load_notes + moved:  # what loading the backup changed, as at start-up
             state.log(note)
         ctx.audit(request, "config_backup_restore",
                   "; ".join([name, "accounts restored" if with_accounts else "accounts kept",
@@ -1171,7 +1177,7 @@ def _load_tls_pair(cert: str, key: str, password: str) -> None:
     """Load a certificate and key as the admin UI will, an encrypted key with ``password``
     (raises tls.TlsFileError). A file that is missing is left to the save, which says
     which one."""
-    if not (os.path.isfile(cert) and os.path.isfile(key)):
+    if not (os.path.isfile(data_path(cert)) and os.path.isfile(data_path(key))):
         return
     tls.tls_context(server_side=True, cert=cert, key=key, password=password)
 
