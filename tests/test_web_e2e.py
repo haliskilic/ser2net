@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(ROOT, "lib"))
 
 UI_PORT = 8099
 
-from _server import ui_cookie  # noqa: E402
+from _server import server_log, show_log_on_failure, ui_cookie  # noqa: E402
 MAP_PORT = 45111
 
 
@@ -76,11 +76,13 @@ def main():
     with open(cfg_path, "w") as fh:
         json.dump({"admin_ui": {"bind_ip": "127.0.0.1", "port": UI_PORT}}, fh)
 
+    out = server_log(tmp)  # the server's output: a file, never an unread pipe
     server = subprocess.Popen(
         [sys.executable, "ser2net.py", "--no-bootstrap", "--config", cfg_path],
         cwd=ROOT, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        stdout=out, stderr=subprocess.STDOUT,
     )
+    out.close()  # (the server has its own copy)
     socat = None
     try:
         assert wait_port("127.0.0.1", UI_PORT), "server did not start"
@@ -176,6 +178,7 @@ def main():
             server.wait(timeout=5)
         except subprocess.TimeoutExpired:
             server.kill()
+        show_log_on_failure(tmp)
         shutil.rmtree(tmp, ignore_errors=True)
 
 

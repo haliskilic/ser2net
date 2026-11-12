@@ -335,8 +335,14 @@ def feedback_checks(browser, base, problems):
 
     def press(button_id):
         """Click a row button. Not with the mouse: the table is replaced every 2 s while
-        clients are connected, and a slow machine may not hit a button in time."""
-        page.evaluate("id => document.getElementById(id).click()", button_id)
+        clients are connected, and a slow machine may not hit a button in time. Nor before
+        htmx has taken in the table it is in: it wires the buttons of swapped-in content
+        when that settles (20 ms on), and a click before then does nothing (checked and
+        clicked in one go, so a refresh can't come in between)."""
+        page.wait_for_function(
+            "id => { const b = document.getElementById(id);"
+            " if (!b || b.closest('.htmx-added, .htmx-settling')) return false;"
+            " b.click(); return true; }", arg=button_id)
 
     def sign_in(p):
         p.goto(f"{base}/login")
@@ -462,7 +468,8 @@ def feedback_checks(browser, base, problems):
     page.wait_for_selector("#mappings tr:has-text('short (copy)')")
     press(row_button("short (copy)", "run"))
     if not until("() => document.getElementById('ui-alert').textContent.trim().length > 0"):
-        bad("a failed Start showed nothing")
+        status = page.evaluate("document.getElementById('ui-status').textContent.trim()")
+        bad(f"a failed Start showed nothing (the status line: {status!r})")
     press(row_button("short (copy)", "delete"))   # hx-confirm: accepted
     page.wait_for_function("() => !document.querySelector('#mappings').textContent.includes('short (copy)')")
     page.evaluate("document.querySelectorAll('#ui-alert .dismiss').forEach(b => b.click())")

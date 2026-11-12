@@ -316,12 +316,16 @@ def test_unpacked_dir_kept():
 
 
 # ---------------------------------------------------------------- helpers
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
+def free_ports(n):
+    """``n`` distinct free ports (held together while they are picked)."""
+    socks = [socket.socket() for _ in range(n)]
+    try:
+        for s in socks:
+            s.bind(("127.0.0.1", 0))
+        return [s.getsockname()[1] for s in socks]
+    finally:
+        for s in socks:
+            s.close()
 
 
 def wait_port(port, timeout):
@@ -785,9 +789,7 @@ def test_binary():
     data = os.path.join(work, "data")
     pki = make_test_pki(work)
     provider = start_provider(pki)
-    ui, raw, mqtt, baud = free_port(), free_port(), free_port(), free_port()
     pty = open_pty()
-    write_config(data, ui, raw, provider.issuer, mqtt, pty, baud)
     run = Launch(work, pki)
     try:
         version = run.version()
@@ -828,6 +830,10 @@ def test_binary():
                 f"SER2NET_LIB_OVERRIDE did not replace ldap3:\n{about}"
             print(f"{where}: SER2NET_LIB_OVERRIDE loads a replacement ldap3 (LGPL)  OK")
 
+        # the ports picked just before the start: the runs above take a while, and a port
+        # freed that long is anyone's
+        ui, raw, mqtt, baud = free_ports(4)
+        write_config(data, ui, raw, provider.issuer, mqtt, pty, baud)
         run.start(data)
         if not wait_port(ui, 90):
             raise AssertionError(f"UI did not come up {where}:\n" + read(run.log.name)[-3000:])
@@ -884,8 +890,13 @@ def test_binary():
         s.request("/lang/en?next=/settings")
         print(f"{where}: TR / EN -> the Settings page is in Turkish (translations bundled)  OK")
 
-        st, _, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
-        assert "Self-signed certificate generated" in page, \
+        st, headers, page = s.request("/settings/tls/generate", {"_csrf": s.csrf()})
+        # done: 303 to the Settings page (Post/Redirect/Get), which says so, as a browser
+        # follows it
+        where_to = headers.get("Location", "") if headers else ""
+        assert st == 303 and where_to.startswith("/settings"), f"generate: {st} {where_to!r}"
+        st, _, page = s.request(where_to.split("#", 1)[0])
+        assert st == 200 and "Self-signed certificate generated" in page, \
             re.sub(r"\s+", " ", page[page.find("banner"):][:300])
         for f in ("cert.pem", "key.pem"):
             assert os.path.getsize(os.path.join(data, "tls", f)) > 0, f
