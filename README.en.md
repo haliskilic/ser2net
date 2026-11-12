@@ -700,7 +700,9 @@ them a new id and session key (everyone signed in to it is signed out).
 
 **Session lifetime:** Settings → *Web UI access* → *Session lifetime* (default 8 hours).
 **Import:** shows a preview first; choose *merge* (update mappings with the same name, add
-the new ones) or *replace all*.
+the new ones) or *replace all*. Settings an export of an older version doesn't have (2.7's
+Modbus points have no `writable`, no trace rotation, no Sparkplug B, ...) are named in the
+preview; a merge keeps their current values, *replace all* gives them the defaults.
 
 ---
 

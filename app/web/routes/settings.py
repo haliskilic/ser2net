@@ -697,8 +697,8 @@ def routes(ctx: Ctx) -> list:
     async def _import_preview(request, plan, mode):
         """Show what importing `plan` would change; nothing changes until it is applied."""
         current = state.config.mappings
-        rows = importer.plan_rows(current, plan.mappings, mode)
-        candidate, _touched = importer.apply_import(current, plan.mappings, mode)
+        rows = importer.plan_rows(current, plan.mappings, mode, plan.absent)
+        candidate, _touched = importer.apply_import(current, plan.mappings, mode, plan.absent)
         problem = None
         try:
             dataclasses.replace(state.config, mappings=candidate).validate_for_save()
@@ -727,11 +727,11 @@ def routes(ctx: Ctx) -> list:
         return await _apply_import(request, item["plan"], mode)
 
     async def _apply_import(request, plan, mode):
-        rows = importer.plan_rows(state.config.mappings, plan.mappings, mode)
+        rows = importer.plan_rows(state.config.mappings, plan.mappings, mode, plan.absent)
         try:
             async with state.edit_config() as edit:
                 new_maps, touched = importer.apply_import(state.config.mappings, plan.mappings,
-                                                          mode)
+                                                          mode, plan.absent)
                 state.config.mappings = new_maps
         except ConfigError as e:  # not saved: the mappings stay as they were
             return await settings_get(request, error=_("Import rejected: {0}").format(e))

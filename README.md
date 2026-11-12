@@ -718,7 +718,10 @@ herkesin oturumu kapanır).
 
 **Oturum süresi:** Ayarlar → *Web arayüzü erişimi* → *Oturum süresi (dakika)* (varsayılan 8 saat).
 **İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,
-yenileri ekle) ya da *hepsini değiştir* seçilir.
+yenileri ekle) ya da *hepsini değiştir* seçilir. Daha eski bir sürümün dışa aktarımında
+olmayan ayarlar (ör. 2.7'nin Modbus noktalarında `writable`, trace rotasyonu, Sparkplug B)
+önizlemede adlarıyla gösterilir; birleştirmede mevcut değerlerini korur, *hepsini değiştir*
+ile varsayılanları alır.
 
 ---
 
