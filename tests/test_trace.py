@@ -186,7 +186,8 @@ async def test_keep0_never_cuts_in_place(tmp):
     every byte it saw (POSIX: the old file is deleted, not cut; Windows: it can't be while
     open, so the trace goes on in it)."""
     path = os.path.join(tmp, "k0.log")
-    t = Tracer(path, _Opts(max_mb=0.002, keep=0, hexdump=False))  # ~2 KB per file
+    logs = []
+    t = Tracer(path, _Opts(max_mb=0.002, keep=0, hexdump=False), log=logs.append)  # ~2 KB
     t.write("ser>net", b"o" * 1000)
     await wait_for(lambda: os.path.isfile(path) and os.path.getsize(path) > 1000)
     with open(path, "rb") as reader:
@@ -196,7 +197,11 @@ async def test_keep0_never_cuts_in_place(tmp):
         await t.aclose()
         got = reader.read(seen)
     assert len(got) == seen and got.endswith(b"o" * 1000 + b"\n"), (len(got), seen)
-    assert os.path.getsize(path) < 4200 and not os.path.exists(path + ".1")
+    assert not os.path.exists(path + ".1")
+    if os.name == "nt":  # can't be deleted while the reader has it open
+        assert any("continuing in the same file" in ln for ln in logs), logs
+    else:
+        assert os.path.getsize(path) < 4200 and not logs, (os.path.getsize(path), logs)
     print("tracer: keep=0 begins a new file, a reader of the old one gets all of it  OK")
 
 
@@ -510,7 +515,10 @@ async def test_retention(tmp):
     tracer = st.supervisor.get_runner("ret001").tracer
     try:
         week, now = time.time() - 8 * 86400, time.time()
-        for name, when in (("ret001-t.log", week), ("ret001-t.log.1", week),
+        # Windows can't change the time of the file the trace has open (and its writer
+        # deletes it like any other then): it stays recent there
+        active = week if os.name != "nt" else now
+        for name, when in (("ret001-t.log", active), ("ret001-t.log.1", week),
                            ("ret001-recent.log", now), ("gone01-x.log", week)):
             path = os.path.join(st.traces_dir, name)
             if not os.path.exists(path):
@@ -519,9 +527,12 @@ async def test_retention(tmp):
             os.utime(path, (when, when))
         assert await st.run_trace_maintenance() == 0 and len(os.listdir(st.traces_dir)) == 4
         st.config.trace_max_age_days = 7
-        assert await st.run_trace_maintenance() == 3
-        assert os.listdir(st.traces_dir) == ["ret001-recent.log"], os.listdir(st.traces_dir)
-        assert logs[-1] == "trace maintenance: deleted 3 trace file(s) not written for 7 days"
+        n = 3 if active == week else 2
+        assert await st.run_trace_maintenance() == n
+        assert sorted(os.listdir(st.traces_dir)) == (
+            ["ret001-recent.log"] if n == 3 else ["ret001-recent.log", "ret001-t.log"]), \
+            os.listdir(st.traces_dir)
+        assert logs[-1] == f"trace maintenance: deleted {n} trace file(s) not written for 7 days"
         assert not _deleted_but_open(tracer.path), "the file being written was left open"
         assert tracer.active and not tracer.error
         assert await st.run_trace_maintenance() == 0
