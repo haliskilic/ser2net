@@ -214,6 +214,14 @@ def _parse_log_ts(line: str) -> float | None:
         return None
 
 
+def _lines(text: str) -> list[str]:
+    """*text*'s lines, each with its line end. Only a line feed ends a line (a CRLF too):
+    str.splitlines() would also end one at a CR, NEL, U+2028 ... inside a message."""
+    lines = [ln + "\n" for ln in text.split("\n")]
+    lines[-1] = lines[-1][:-1]  # what follows the last line feed ("" if the text ends so)
+    return lines if lines[-1] else lines[:-1]
+
+
 def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
     """Rewrite a log file in place keeping only lines newer than cutoff_ts and,
     if still over max_bytes, only the most recent max_bytes. Returns True if the
@@ -229,15 +237,21 @@ def _trim_log_file(path: str, cutoff_ts: float, max_bytes: int) -> bool:
     if not content:
         return False
 
-    lines = content.splitlines(keepends=True)
-    # 1) age filter — lines are chronological, so keep from the first recent one
-    start = len(lines)
+    lines = _lines(content)
+    # 1) age filter — lines are chronological, so keep from the first recent one. A line
+    # without a time (the rest of a message that had a line break, as older versions
+    # wrote it) belongs to the one before it: skipped here, it goes or stays with that
+    # one. Nothing is dropped from a file in which no line has a time.
+    start, dated = len(lines), False
     for i, ln in enumerate(lines):
         ts = _parse_log_ts(ln)
-        if ts is None or ts >= cutoff_ts:
+        if ts is None:
+            continue
+        dated = True
+        if ts >= cutoff_ts:
             start = i
             break
-    data = "".join(lines[start:])
+    data = "".join(lines[start if dated else 0:])
 
     # 2) size cap — keep only the last max_bytes, trimmed to a line boundary
     encoded = data.encode("utf-8")
@@ -436,7 +450,11 @@ class AppState:
                 data = fh.read()
         except (OSError, ValueError):
             return []
-        lines = data.decode("utf-8", errors="replace").splitlines()
+        # only a line feed (or CRLF) ends a line: splitlines() would also cut one at a
+        # CR, NEL or U+2028 inside a message (an older version wrote them as they were)
+        lines = data.decode("utf-8", errors="replace").replace("\r\n", "\n").split("\n")
+        if not lines[-1]:
+            lines.pop()
         return lines[-limit:][::-1]
 
     def delete_mapping_log(self, mapping_id: str) -> None:
