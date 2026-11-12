@@ -167,6 +167,7 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_rfc2217_restore_on_disconnect_shown": ("options", ("rfc2217_restore_on_disconnect",)),
     # Modbus gateways only (before 2.9 it was in config.json only)
     "opt_modbus_response_timeout_s": ("options", ("modbus_response_timeout_s",)),
+    "opt_modbus_unit_map": ("options", ("modbus_unit_map",)),
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
@@ -246,6 +247,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_rfc2217_restore_on_disconnect_shown" in form:
         options["rfc2217_restore_on_disconnect"] = _checkbox(
             form, "opt_rfc2217_restore_on_disconnect")
+    if "opt_modbus_unit_map" in form:
+        options["modbus_unit_map"] = _parse_unit_map(form.get("opt_modbus_unit_map", ""), strict)
     if "opt_modbus_response_timeout_s" in form:  # blank: the default
         options["modbus_response_timeout_s"] = (
             _num(form, "opt_modbus_response_timeout_s", MODBUS_TIMEOUT_DEFAULT_S,
@@ -335,6 +338,24 @@ def _keep_point_options(new_map, existing) -> None:
             for key, fits in _POINT_OPTIONS.items():
                 if fits(p):
                     setattr(p, key, getattr(old, key))
+
+
+def _parse_unit_map(raw: str, strict: bool) -> dict:
+    """A Modbus gateway's unit map as the form takes it: pairs such as "255=1, 0=1" (the unit
+    id a master sends = the RTU unit the request goes to), separated by commas or spaces.
+    ``strict``: a pair that is not one raises ValueError; else it is left out."""
+    out: dict = {}
+    for item in re.split(r"[\s,;]+", raw or ""):
+        if not item:
+            continue
+        sent, eq, unit = item.partition("=")
+        if eq and re.fullmatch(r"[0-9]{1,5}", sent) and re.fullmatch(r"[0-9]{1,5}", unit):
+            out[str(int(sent))] = int(unit)
+        elif strict:
+            raise ValueError(_("The unit map is a list of pairs such as 255=1 (the unit id a "
+                               "master sends = the RTU unit it goes to); {0} is not one.").format(
+                                   repr(item[:40])))
+    return out
 
 
 _POINT_KEYS = tuple(f.name for f in dataclasses.fields(ModbusPoint))

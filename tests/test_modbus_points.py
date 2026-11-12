@@ -318,6 +318,41 @@ def test_form_block_reads():
           "refused, stored ones read safely  OK")
 
 
+def test_form_unit_map():
+    """The unit map in the form: "255=1, 0=1"; a form without the field (an older peer's,
+    another protocol) keeps the stored one; a pair that is not one is refused."""
+    from app.web.routes.forms import _parse_unit_map
+    assert _parse_unit_map("255=1, 0=1;7=2  ", strict=True) == {"255": 1, "0": 1, "7": 2}
+    assert _parse_unit_map("", strict=True) == {}
+    for bad in ("255", "a=1", "1=b", "1=2=3", "²=1", "-1=2"):
+        try:
+            _parse_unit_map(bad, strict=True)
+            raise AssertionError(f"took {bad!r}")
+        except ValueError as e:
+            assert "pairs such as 255=1" in str(e), e
+    assert _parse_unit_map("255=1 junk", strict=False) == {"255": 1}
+    stored = gateway([{"name": "a", "fn": 3}], id="abcdef012345",
+                     options={"modbus_unit_map": {"255": 1}})
+    assert stored.options.modbus_unit_map_text == "255=1"
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, stored, form)
+        return m.options.modbus_unit_map
+    points = '[{"name": "a", "fn": 3}]'
+    assert parsed(form_of(points)) == {"255": 1}, "kept for a form without the field"
+    assert parsed(form_of(points, opt_modbus_unit_map="")) == {}
+    assert parsed(form_of(points, opt_modbus_unit_map="0=4, 255=4")) == {"0": 4, "255": 4}
+    m = MappingConfig.from_dict(_build_mapping_dict(form_of(points, opt_modbus_unit_map="300=1"),
+                                                    strict=True))
+    try:
+        m.validate_input()
+        raise AssertionError("took 300=1")
+    except ConfigError as e:
+        assert "0-255" in str(e), e
+    print("form: the unit map parsed, kept for an older form, unusable pairs refused  OK")
+
+
 def boot_config(port):
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
@@ -419,6 +454,7 @@ def main():
     test_non_ascii_text()
     test_form_point_keys()
     test_form_block_reads()
+    test_form_unit_map()
     test_server()
     print("\nPASS: Modbus poll points")
 

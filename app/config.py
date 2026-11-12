@@ -485,6 +485,11 @@ class MappingOptions:
     # on the line, before the gateway answers exception 0x0B (gateway target failed to
     # respond). Read through modbus_response_timeout().
     modbus_response_timeout_s: float = MODBUS_TIMEOUT_DEFAULT_S
+    # Modbus gateway: unit ids masters send that go to another RTU unit, as {"<id>": unit}
+    # ({"255": 1}: a request for unit 255 goes to unit 1 and is answered as unit 255). Empty
+    # (the default): each request goes to the unit it names, as before. Read through
+    # modbus_unit_map().
+    modbus_unit_map: dict = field(default_factory=dict)
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingOptions":
@@ -493,7 +498,15 @@ class MappingOptions:
         opts = MappingOptions(**{k: v for k, v in d.items() if k in known})
         opts.idle_timeout_s = _legacy_seconds(opts.idle_timeout_s)
         opts.trace_both = trace_file_name(opts.trace_both)
+        if isinstance(opts.modbus_unit_map, dict):  # (JSON keys are text)
+            opts.modbus_unit_map = {str(k): v for k, v in opts.modbus_unit_map.items()}
         return opts
+
+    @property
+    def modbus_unit_map_text(self) -> str:
+        """The unit map as the mapping form shows it: "255=1, 0=1"."""
+        umap = self.modbus_unit_map
+        return ", ".join(f"{k}={v}" for k, v in umap.items()) if isinstance(umap, dict) else ""
 
     def validate(self) -> None:
         for label, value in ((_("Idle timeout"), self.idle_timeout_s),
@@ -520,6 +533,19 @@ def modbus_response_timeout(opts: MappingOptions) -> float:
     if _is_number(t) and math.isfinite(t) and t > 0:
         return float(min(t, MAX_TIMER_S))
     return MODBUS_TIMEOUT_DEFAULT_S
+
+
+def modbus_unit_map(opts: MappingOptions) -> dict[int, int]:
+    """A Modbus gateway's unit map as it is used: {unit id a master sends: the RTU unit
+    the request goes to}. Entries the edits refuse (not ids 0-255 to units 1-255) are left
+    out, with a warning in the gateway's log at start."""
+    out: dict[int, int] = {}
+    umap = opts.modbus_unit_map
+    for key, unit in (umap.items() if isinstance(umap, dict) else ()):
+        sent = _loose_number(key, whole=True)
+        if _is_int(sent) and 0 <= sent <= 255 and _is_int(unit) and 1 <= unit <= 255:
+            out[sent] = unit
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1021,6 +1047,10 @@ class MappingConfig:
             if self.mqtt.value_format not in MQTT_VALUE_FORMATS:
                 raise ConfigError(_("MQTT value format must be one of {0}.").format(
                     MQTT_VALUE_FORMATS))
+            umap = self.options.modbus_unit_map
+            if not isinstance(umap, dict) or len(modbus_unit_map(self.options)) != len(umap):
+                raise ConfigError(_("The unit map sends unit ids 0-255 to RTU units 1-255, "
+                                    "each id once, such as 255=1."))
             self.modbus_poll.validate_input()
             host = self.mqtt.sparkplug_primary_host_id
             if self.mqtt.payload_format == "sparkplug_b" and host != "":
