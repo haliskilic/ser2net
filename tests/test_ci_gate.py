@@ -10,24 +10,12 @@ to main gets a run of its own (no shared concurrency group that drops waiting ru
 
 Run: python3 tests/test_ci_gate.py   (stdlib only)
 """
-import os
 import re
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
+from _workflows import jobs as _jobs
+from _workflows import read as _read
+
 NOT_GATING = {"test-next"}  # may fail (newest Python); not a merge condition
-
-
-def _read(name: str) -> str:
-    with open(os.path.join(WORKFLOWS, name), encoding="utf-8") as fh:
-        return fh.read()
-
-
-def _jobs(text: str) -> dict[str, str]:
-    """Job id -> its block, for the top-level jobs: mapping of a workflow file."""
-    body = text.split("\njobs:\n", 1)[1]
-    parts = re.split(r"(?m)^  ([A-Za-z0-9_-]+):[ \t]*\n", body)
-    return {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
 
 
 def test_ci_ok_needs_every_job():
