@@ -23,7 +23,10 @@ anywhere without a broker or hardware. Checks:
     a retained NCMD / DCMD never is, and an empty message (clearing one) is no command;
   * Read-only refuses MQTT / Sparkplug writes as well (checked when a command arrives),
     and the start-up log warns about commands over a broker link without TLS / username;
-  * a writable point on unit 0 is a broadcast: written (ok), not read back, never polled.
+  * a writable point on unit 0 is a broadcast: written (ok), not read back, never polled;
+  * a write that comes while a poll is reading the unit's points (the slave sends it when
+    the poll asks for the setpoint) is not followed by the value the poll read before it:
+    plain and Sparkplug B report new, then new again, never new, old, new.
 
 Run: python3 tests/test_modbus_mqtt_write.py
 """
@@ -47,6 +50,7 @@ REGS = {10: 0, 20: 0, 21: 0, 0: 0x41BC, 1: 0x0000}   # input regs 0/1 = float32 
 COILS = {0: False, 1: False, 2: False}
 DISCRETE = {5: True}
 SEEN = []   # every request PDU the fake slave got
+ON_REQUEST = []  # callables the fake slave calls with each request PDU before it answers
 
 
 def free_port():
@@ -95,6 +99,8 @@ async def fake_slave(reader, writer):
             with suppress(ValueError):
                 unit, pdu = modbus.rtu_unwrap(bytes(buf))
                 buf.clear()
+                for hook in list(ON_REQUEST):
+                    hook(pdu)
                 reply = answer(pdu)
                 if unit != modbus.BROADCAST:  # a broadcast is carried out, never answered
                     writer.write(modbus.rtu_wrap(unit, reply))
@@ -662,6 +668,60 @@ async def test_sparkplug(slave_port):
         sw.close()
 
 
+async def test_no_stale_value_after_write(slave_port):
+    """The poll publishes a unit's values once all its points are read. A write that comes
+    in between (here: sent when the poll asks for the setpoint, so it lands two reads later)
+    publishes its read-back at once; the value the poll read before the write must not be
+    published after it."""
+    points = [{"name": "setpoint", "unit": 1, "fn": 3, "address": 10, "dtype": "int16",
+               "writable": True}] + [{"name": f"r{n}", "unit": 1, "fn": 3, "address": 40 + n,
+                                      "dtype": "uint16"} for n in range(3)]
+    for fmt in ("plain", "sparkplug_b"):
+        REGS[10] = 20
+        fake = FakeMqtt()
+        r, sw = await gateway(fmt, slave_port, fake, points)
+        armed = []
+
+        def hook(pdu, r=r, fmt=fmt):
+            if armed and pdu == modbus.read_pdu(3, 10, 1):  # the poll reads the setpoint
+                armed.clear()
+                if fmt == "plain":
+                    r._mqtt.handle_message("plant/a/setpoint/set", b"25")
+                else:
+                    r._mqtt.handle_message(
+                        sparkplug.topic("ser2net", "DCMD", "Line_3_PLC", "unit1"),
+                        sparkplug.encode_payload(sparkplug.Payload(0, [sparkplug.Metric(
+                            "setpoint", sparkplug.DataType.Int16, 25)], None)))
+
+        def reported():
+            if fmt == "plain":
+                return [int(p) for t, p in fake.published if t == "plant/a/setpoint"]
+            ddata = sparkplug.topic("ser2net", "DDATA", "Line_3_PLC", "unit1")
+            return [m.value for t, p in fake.published if t == ddata
+                    for m in sparkplug.decode_payload(p).metrics if m.name == "setpoint"]
+        ON_REQUEST.append(hook)
+        poll = asyncio.create_task(r._poll_loop())
+        try:
+            assert await wait(lambda: reported() == [20]), reported()
+            armed.append(1)
+            assert await wait(lambda: REGS[10] == 25 and not armed)
+            if fmt == "plain":
+                assert await wait(lambda: reported().count(25) >= 2), reported()
+            else:  # report by exception: 25 once (a stale 20 would bring a second 25)
+                await asyncio.sleep(0.5)
+            got = reported()
+            assert got[:2] == [20, 25] and 20 not in got[1:], f"{fmt}: {got}"
+        finally:
+            ON_REQUEST.remove(hook)
+            r._stop.set()
+            poll.cancel()
+            with suppress(BaseException):
+                await poll
+            sw.close()
+    print("a write while the poll reads the unit: no stale value after the read-back "
+          "(plain, Sparkplug B)  OK")
+
+
 async def main():
     port = free_port()
     srv = await asyncio.start_server(fake_slave, "127.0.0.1", port)
@@ -672,6 +732,7 @@ async def main():
         await test_read_only(port)
         await test_broadcast_point(port)
         await test_sparkplug(port)
+        await test_no_stale_value_after_write(port)
     finally:
         srv.close()
         with suppress(Exception):
