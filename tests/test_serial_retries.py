@@ -7,6 +7,8 @@
     retries, nothing overwrites it with reconnecting), reconnecting right after an open
     port went away; open_failures and device_lost count the two (reconnects both, as
     before), also in /metrics;
+  - start() never writes "running" over what the serial side reported: a port that fails
+    at once stays device-missing (listening mappings: UDP, TCP server, Modbus gateway);
   - a port that appears (PortWatcher's on_change -> Supervisor.ports_changed) wakes the
     mappings waiting to open theirs again (state device-missing / reconnecting) at once,
     instead of after their backoff (up to ~10 s); one that is running is left alone;
@@ -96,10 +98,10 @@ async def _bridge_side_missing(folder):
     try:
         with fast_retries(), counted_opens(opens):
             await runner.start()
-            await until(lambda: opens.count(missing) >= 6)
-            assert opens.count(a.path) == 1, opens
             st = runner.status
-            assert st.state == "device-missing" and st.open_failures >= 6, st
+            await until(lambda: st.open_failures >= 6)  # (each counted once it has failed)
+            assert opens.count(a.path) == 1, opens
+            assert st.state == "device-missing", st.as_dict()
             assert sum(ln.startswith("serial bridge error:") for ln in logs) == 1, logs
             os.symlink(b.path, missing)  # B is plugged in
             await until(lambda: runner.status.state == "running")
@@ -363,6 +365,44 @@ def test_usb_identity_resolved_off_the_event_loop():
           "never on the event loop  OK")
 
 
+async def _start_keeps_the_serial_state():
+    from app.engine.modbus_gateway import ModbusGatewayRunner
+
+    async def missing(settings):
+        raise serial_io_error()
+
+    def serial_io_error():
+        import errno
+
+        import serial
+        return serial.SerialException(errno.ENOENT, "could not open port /dev/ttyNOPE: "
+                                                    "[Errno 2] No such file or directory")
+
+    cases = [("udp", "raw", MappingRunner), ("server", "raw", MappingRunner),
+             ("server", "modbus", ModbusGatewayRunner)]
+    with mock.patch.object(serial_io, "open_serial", missing), fast_retries():
+        for mode, protocol, cls in cases:
+            m = MappingConfig.from_dict({
+                "name": f"{mode}-{protocol}", "serial": {"port": "/dev/ttyNOPE"},
+                "network": {"mode": mode, "protocol": protocol, "bind_ip": "127.0.0.1",
+                            "port": 0}})
+            runner = cls(m)
+            try:
+                await runner.start()
+                await until(lambda: runner.status.open_failures >= 1)
+                for _ in range(10):
+                    assert runner.status.state == "device-missing", (mode, runner.status)
+                    await asyncio.sleep(0.02)
+            finally:
+                await runner.stop()
+
+
+def test_start_keeps_the_serial_state():
+    asyncio.run(_start_keeps_the_serial_state())
+    print("start(): a serial port that fails at once stays device-missing (UDP, TCP server, "
+          "Modbus gateway)  OK")
+
+
 def test_bridge_opens_the_missing_side_first():
     if os.name != "posix":
         print("SKIP (part): the PTY checks are POSIX only")
@@ -380,6 +420,7 @@ if __name__ == "__main__":
     test_failure_log()
     test_states_and_counters()
     test_metrics()
+    test_start_keeps_the_serial_state()
     test_a_new_port_wakes_the_waiting_mappings()
     test_usb_identity_resolved_off_the_event_loop()
     test_bridge_opens_the_missing_side_first()
