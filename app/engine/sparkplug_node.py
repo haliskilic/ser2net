@@ -59,6 +59,7 @@ import threading
 import time
 from typing import Callable, Optional
 
+from ..config import point_scale
 from . import sparkplug
 from .mqtt_pub import MqttPublisher, shown
 
@@ -261,7 +262,7 @@ class SparkplugNode:
         """A point's metric: its last value, stamped with when it was read; a null (never
         read) stamped ``now``."""
         p = self.points[name]
-        dt = sparkplug.datatype_for(p.dtype, p.scale or 1.0)
+        dt = sparkplug.datatype_for(p.dtype, point_scale(p) or 1.0)
         value = self.values.get(name)
         if value is None:
             return sparkplug.Metric(name=name, datatype=dt, is_null=True, timestamp=now)

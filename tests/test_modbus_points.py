@@ -1,0 +1,288 @@
+"""Modbus poll points: how they are typed, parsed from the mapping form and shown again.
+
+  * a point's values typed loosely before 2.9 load as what was meant ("unit": "1",
+    "scale": "0.1", "writable": "false"), validate() still takes every point it took and
+    gives a ConfigError (never a TypeError) for the ones it refused, and an edit
+    (validate_input) refuses the values it can't use, so the form, the REST API, an import
+    and a cluster save answer 400, not 500;
+  * a stored scale that is not a number is not multiplied in;
+  * the points JSON of the form: where invalid JSON breaks (line, column), one object
+    alone is a list of one, anything else that is not a list is refused (never "no
+    points"), a point that is not an object is named, a misspelt key ("adress") is refused
+    and any other unknown key left alone;
+  * a refused form comes back with the points text exactly as typed and the posted id
+    (the next Save edits the same mapping), also when the points can't be read at all;
+    the cluster proxy re-renders the same way and checks the points before it forwards
+    them;
+  * end to end: the form, the REST API and an import answer such points with 400 and a
+    message, and the stored mapping keeps its points.
+Cross-platform (the server part binds 127.0.0.1 only).
+
+Run: python3 tests/test_modbus_points.py
+"""
+import json
+import types
+import urllib.error
+import urllib.request
+
+from _server import Browser, Server, free_port
+
+from app.config import ConfigError, MappingConfig, ModbusPoint, ModbusPoll, point_scale
+from app.web.auth import hash_password, hash_token
+from app.web.routes import cluster as cluster_routes
+from app.web.routes.forms import _form_error, _parse_modbus_points, _reshown_mapping
+
+PW = "modbus-points-pass-1"
+TOKEN = "s2n_modbus-points-token"
+
+
+def gateway(points, **extra):
+    return MappingConfig.from_dict({
+        "name": "PLC", "serial": {"port": "/dev/ser2net-test-plc"},
+        "network": {"protocol": "modbus", "bind_ip": "127.0.0.1", "port": 5020},
+        "mqtt": {"enabled": True, "host": "broker.lan", "base_topic": "plant/plc"},
+        "modbus_poll": {"points": points}, **extra})
+
+
+def refused(points, *words):
+    m = gateway(points)
+    try:
+        m.validate()
+        m.validate_input()
+    except ConfigError as e:
+        assert all(w in str(e) for w in words), (str(e), words)
+        return str(e)
+    raise AssertionError(f"accepted: {points}")
+
+
+def test_loose_values_load():
+    p = ModbusPoint.from_dict({"name": "a", "unit": "1", "fn": " 3 ", "address": 10.0,
+                               "scale": "0.1", "writable": "false"})
+    assert (p.unit, p.fn, p.address, p.scale, p.writable) == (1, 3, 10, 0.1, False), p
+    assert ModbusPoint.from_dict({"scale": "1e3"}).scale == 1000.0
+    assert ModbusPoint.from_dict({"scale": "2"}).scale == 2
+    for raw, want in (("true", True), ("1", True), ("on", True), ("yes", True), (1, True),
+                      ("False", False), ("0", False), ("off", False), ("", False), (0, False),
+                      (None, False)):
+        assert ModbusPoint.from_dict({"writable": raw}).writable is want, raw
+    # the keys 2.9 added are typed from the start (validate_input)
+    p = ModbusPoint.from_dict({"min": "5", "poll": "no", "dtype": "UINT16"})
+    assert (p.min, p.poll, p.dtype) == ("5", "no", "UINT16"), p
+    # what can't be read so stays as it is, for an edit to refuse
+    p = ModbusPoint.from_dict({"unit": "one", "scale": "x", "writable": "maybe", "address": 1.5})
+    assert (p.unit, p.scale, p.writable, p.address) == ("one", "x", "maybe", 1.5), p
+    assert ModbusPoint.from_dict({"scale": "nan"}).scale == "nan"
+    print("loosely typed point values load as what was meant; the rest stays as it is  OK")
+
+
+def test_validate_keeps_what_it_took():
+    """validate() is run on every save and boot: it takes every point it took before (a
+    stored config has to keep loading), and refuses the others with a ConfigError."""
+    took = [{"name": "a", "unit": 1.0, "address": 2.5}, {"name": "b", "unit": True},
+            {"name": "c", "scale": "x"}, {"name": "d", "writable": "maybe", "fn": 3}]
+    gateway(took).validate()
+    for bad, words in (({"name": 5}, ("names are text", "5")),
+                       ({"name": "a", "unit": "one"}, ("unit must be 0-255",)),
+                       ({"name": "a", "address": [1]}, ("address must be 0-65535",)),
+                       ({"name": "a", "fn": "x"}, ("function must be",))):
+        try:
+            gateway([bad]).validate()
+            raise AssertionError(f"validate() took {bad}")
+        except ConfigError as e:
+            assert all(w in str(e) for w in words), (str(e), words)
+    for item in ("temp", 5, ["name", "x", "y"]):
+        try:
+            ModbusPoll.from_dict({"points": [{"name": "ok"}, item]})
+            raise AssertionError(f"took {item!r} as a point")
+        except ConfigError as e:
+            assert str(e) == "Modbus poll point #2 is not an object.", e
+    print("validate() takes what it took before, and refuses the rest with a ConfigError  OK")
+
+
+def test_edits_refuse_unusable_values():
+    refused([{"name": "a", "unit": "one"}], "'a'", "unit must be 0-255")
+    refused([{"name": "a", "unit": 1.5}], "'a'", "unit must be a whole number")
+    refused([{"name": "a", "unit": True}], "'a'", "unit must be a whole number")
+    refused([{"name": "a", "address": 2.5}], "'a'", "address must be a whole number")
+    refused([{"name": "a", "scale": "x"}], "'a'", "scale must be a number")
+    refused([{"name": "a", "scale": float("nan")}], "'a'", "scale must be a number")
+    refused([{"name": "a", "fn": 3, "writable": "maybe"}], "'a'", "writable must be true or false")
+    refused([{"name": 5}], "names are text")
+    # what loads as what was meant is taken
+    m = gateway([{"name": "a", "unit": "2", "scale": "0.5", "fn": 3, "writable": "false"}])
+    m.validate()
+    m.validate_input()
+    assert not m.accepts_mqtt_writes, "writable 'false' made a write path"
+    print("edits refuse point values that can't be used; 'false' is read-only  OK")
+
+
+def test_stored_scale_ignored():
+    assert point_scale(ModbusPoint(scale=0.1)) == 0.1
+    assert point_scale(ModbusPoint(scale=0)) == 0
+    for bad in ("x", float("nan"), float("inf"), [0.1], None, True):
+        assert point_scale(ModbusPoint(scale=bad)) == 1.0, bad
+    print("a stored scale that is not a number reads as 1  OK")
+
+
+def test_points_json_parse():
+    def err(raw):
+        try:
+            _parse_modbus_points(raw, strict=True)
+        except ValueError as e:
+            return str(e)
+        raise AssertionError(f"took {raw!r}")
+    msg = err('[\n  {"name": "a",}\n]')
+    assert msg.startswith("Modbus poll points: the JSON is not valid at line 2, column 15:"), msg
+    for raw in ("5", "null", '"temp"', "true"):
+        assert err(raw) == "Modbus poll points must be a valid JSON array of objects.", raw
+    assert err('[{"name": "a"}, "hum"]') == "Modbus poll point #2 is not an object."
+    assert err('[[{"name": "a"}]]') == "Modbus poll point #1 is not an object."
+    assert err('[{"name": "a", "adress": 5}]') == (
+        "Modbus poll point #1 ('a'): unknown key \"adress\". Did you mean \"address\"?")
+    assert "Did you mean \"writable\"?" in err('[{"name": "a", "writeable": true}]')
+    assert "Did you mean \"dtype\"?" in err('[{"name": "a", "type": "int16"}]')
+    assert _parse_modbus_points('{"name": "a"}', strict=True) == [{"name": "a"}]
+    # unknown keys a point may carry (a note; a newer node's option) are left alone
+    assert _parse_modbus_points('[{"name": "a", "comment": "x", "deadband": 2}]', strict=True)
+    assert _parse_modbus_points("  ", strict=True) == []
+    # not strict (a refused form shown again): what can't be read is left out
+    assert _parse_modbus_points("[{", strict=False) == []
+    assert _parse_modbus_points('[{"name": "a"}, "b", 5]', strict=False) == [{"name": "a"}]
+    assert _parse_modbus_points("5", strict=False) == []
+    print("points JSON: position of a JSON error, objects only, a misspelt key named  OK")
+
+
+def form_of(points_text, **extra):
+    return {"id": "abcdef012345", "name": "PLC-9", "kind": "net", "enabled": "on",
+            "serial_port": "/dev/ser2net-test-plc", "network_protocol": "modbus",
+            "network_port": "5021", "mqtt_enabled": "on", "mqtt_host": "broker.lan",
+            "mqtt_base_topic": "plant/plc9", "mqtt_payload_format": "plain",
+            "modbus_point_options_shown": "1", "modbus_points": points_text, **extra}
+
+
+class FakeForm(dict):
+    def multi_items(self):
+        return list(self.items())
+
+
+def test_refused_form_shown_again():
+    stored = gateway([{"name": "kept", "fn": 3, "writable": True, "min": 0, "max": 9}],
+                     id="abcdef012345")
+    state = types.SimpleNamespace(
+        config=types.SimpleNamespace(get_mapping=lambda mid: stored if mid == stored.id else None),
+        ports=types.SimpleNamespace(get=lambda: []))
+
+    def render(_request, template, status_code=200, **ctx):
+        return dict(ctx, template=template, status_code=status_code)
+
+    for text in ('[{"name": "a",}]', '["temp", "hum"]', '5', '[[{"name": "a"}]]',
+                 '[{"name": "a", "unit": "one"}]'):
+        out = _form_error(render, None, state, form_of(text), "the error")
+        assert out["status_code"] == 400 and out["error"] == "the error"
+        assert out["modbus_points_json"] == text, (text, out["modbus_points_json"])
+        m = out["mapping"]
+        assert m.id == "abcdef012345" and not out["is_new"], (text, m.id)
+        assert m.name == "PLC-9" and m.network.port == 5021 and m.mqtt.base_topic == "plant/plc9", text
+    # a new mapping stays new; a form that posted no points shows the mapping's
+    out = _form_error(render, None, state, dict(form_of("x"), id=""), "e")
+    assert out["is_new"] and out["modbus_points_json"] == "x"
+    f = form_of("")
+    del f["modbus_points"]
+    assert _reshown_mapping(f, None).id == "abcdef012345"
+    # the cluster proxy: its re-render and its check before it forwards a form
+    fields, error = cluster_routes._peer_save_fields(FakeForm(form_of('{"name": "a"')),
+                                                     stored.to_dict(), "2.9.0")
+    assert fields is None and "line 1, column 13" in error, error
+    fields, error = cluster_routes._peer_save_fields(FakeForm(form_of("5")), stored.to_dict(),
+                                                     "2.8.1")
+    assert fields is None and "valid JSON array" in error, error
+    print("a refused form comes back with the points as typed and its id  OK")
+
+
+def boot_config(port):
+    users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
+              "pwd_version": 1}]
+    m = gateway([{"name": "kept", "fn": 3, "address": 4}], id="aaaaaaaaaaa1",
+                enabled=False).to_dict()
+    m["network"]["port"] = port
+    return {"users": users, "api_token_hash": hash_token(TOKEN), "api_token_role": "admin",
+            "mappings": [m]}
+
+
+def test_server():
+    def api(method, path, body):
+        req = urllib.request.Request(srv.base + path, method=method,
+                                     data=json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {TOKEN}",
+                                              "Content-Type": "application/json"})
+        try:
+            r = urllib.request.urlopen(req, timeout=10)
+            return r.status, json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
+    def points():
+        return [p["name"] for p in srv.saved_config()["mappings"][0]["modbus_poll"]["points"]]
+
+    port = free_port()
+    with Server(boot_config(port)) as srv:
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        edit = dict(form_of(""), id="aaaaaaaaaaa1", network_port=str(port), name="PLC")
+        edit.pop("enabled")
+        for text, words in (('[{"name": "a",}]', "line 1, column 14"),
+                            ('{"name": "x"} junk', "line 1, column 15"),
+                            ("5", "valid JSON array"),
+                            ('["temp", "hum"]', "#1 is not an object"),
+                            ('[{"name": "a", "unit": "one"}]', "unit must be 0-255"),
+                            ('[{"name": "a", "unit": 1.5}]', "unit must be a whole number"),
+                            ('[{"name": "a", "adress": 1}]', "Did you mean")):
+            st, _, body = b.post("/api/mappings/save", dict(edit, modbus_points=text))
+            assert st == 400 and words in body, (text, st, body[:600])
+            assert 'name="id" value="aaaaaaaaaaa1"' in body, text
+            assert '<textarea name="modbus_points"' in body
+            shown = body.split('<textarea name="modbus_points"', 1)[1].split(">", 1)[1]
+            assert shown.startswith(text.replace('"', "&#34;")), (text, shown[:80])
+            assert points() == ["kept"] and len(srv.saved_config()["mappings"]) == 1
+        st, _, body = b.post("/api/mappings/save", dict(
+            edit, modbus_points='[{"name": "b", "unit": "2", "scale": "0.5", "fn": 3, '
+                                '"writable": "false"}]'))
+        assert st == 200, (st, body[:600])
+        saved = srv.saved_config()["mappings"][0]["modbus_poll"]["points"][0]
+        assert (saved["unit"], saved["scale"], saved["writable"]) == (2, 0.5, False), saved
+        print("form: invalid points answered 400 with the text and id kept; loose values "
+              "saved as what was meant  OK")
+
+        body = {"name": "R", "serial": {"port": "/dev/ser2net-test-R"},
+                "network": {"protocol": "modbus", "bind_ip": "127.0.0.1", "port": free_port()},
+                "modbus_poll": {"points": [{"name": "a", "unit": "one"}]}}
+        st, out = api("POST", "/api/v1/mappings", body)
+        assert st == 400 and "unit must be 0-255" in out.get("detail", ""), (st, out)
+        body["modbus_poll"]["points"] = ["temp"]
+        st, out = api("POST", "/api/v1/mappings", body)
+        assert st == 400 and "#1 is not an object" in out.get("detail", ""), (st, out)
+        body["modbus_poll"]["points"] = [{"name": "a", "scale": "x"}]
+        st, out = api("POST", "/api/v1/mappings", body)
+        assert st == 400 and "scale must be a number" in out.get("detail", ""), (st, out)
+        print("REST API: unusable point values answered 400  OK")
+
+        export = {"mappings": [dict(body, modbus_poll={"points": [{"name": "a", "unit": [1]}]})]}
+        st, _, page = b.post("/settings/config/import", {"step": "preview", "mode": "merge"},
+                             files={"file": ("m.json", json.dumps(export).encode())})
+        assert st == 200 and "Import failed" in page and "unit must be a whole number" in page, page[-800:]
+        print("import: unusable point values refused with a message  OK")
+
+
+def main():
+    test_loose_values_load()
+    test_validate_keeps_what_it_took()
+    test_edits_refuse_unusable_values()
+    test_stored_scale_ignored()
+    test_points_json_parse()
+    test_refused_form_shown_again()
+    test_server()
+    print("\nPASS: Modbus poll points")
+
+
+if __name__ == "__main__":
+    main()

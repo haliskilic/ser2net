@@ -28,7 +28,8 @@ from ...i18n import _
 from .. import auth
 from . import ops
 from .common import Ctx, csrf_failed
-from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
+from .forms import (_build_mapping_dict, _modbus_points_json, _parse_modbus_points,
+                    _reshown_mapping, _reshown_points)
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
@@ -60,6 +61,9 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     if not peer_mapping:
         return None, _("This mapping no longer exists on the peer; reload the fleet view.")
     try:
+        # the points as strictly as the peer reads them: an older peer would store a
+        # top-level object as no points
+        _parse_modbus_points(form.get("modbus_points", ""), strict=True)
         MappingConfig.from_dict(_build_mapping_dict(form, strict=False)).validate_input()
     except (ValueError, ConfigError) as e:
         return None, str(e)
@@ -377,13 +381,13 @@ def routes(ctx: Ctx) -> list:
 
         def _reload(msg):
             try:
-                mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
-                if data and data.get("mapping"):
-                    _preserve_unmanaged_fields(mapping, MappingConfig.from_dict(data["mapping"]), form)
+                stored = (MappingConfig.from_dict(data["mapping"])
+                          if data and isinstance(data.get("mapping"), dict) else None)
             except Exception:
-                mapping = MappingConfig(name=form.get("name", ""))
+                stored = None
+            mapping = _reshown_mapping(form, stored)
             return render(request, "_mapping_form.html", status_code=400, mapping=mapping,
-                          is_new=False, modbus_points_json=_modbus_points_json(mapping),
+                          is_new=False, modbus_points_json=_reshown_points(form, mapping),
                           ports=portlist.visible((data or {}).get("ports", [])),
                           ips=(data or {}).get("ips", []),
                           remote=_remote(target, form.get("id", ""), mapping), error=msg)
