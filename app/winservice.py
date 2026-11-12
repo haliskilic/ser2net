@@ -26,6 +26,7 @@ import functools
 import os
 import re
 import sys
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
@@ -1198,6 +1199,43 @@ def uninstall(name: str, log: Callable[[str], None] = print) -> None:
         os.rmdir(install_dir())  # only when no other service's copy is left in it
 
 
+STOP_WAIT_HINT_MS = 30000  # what a STOP_PENDING report tells the SCM to allow for
+STOP_PROGRESS_S = 5.0      # how often a stop under way is reported again
+
+
+class StopProgress:
+    """While a stop is under way, ``report`` it again every ``every`` seconds (STOP_PENDING
+    with the next checkpoint, run()'s report() counts it up): one report with a 30 s
+    hint made the SCM, `sc query` and Services treat a stop that took longer as a hung
+    service. start() after the stop request, finish() once the server has stopped."""
+
+    def __init__(self, report: Callable[[], None], every: float = STOP_PROGRESS_S) -> None:
+        self._report = report
+        self._every = every
+        self._done = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None or self._done.is_set():
+                return
+            self._thread = threading.Thread(target=self._run, name="service-stop-progress",
+                                            daemon=True)
+            self._thread.start()
+
+    def _run(self) -> None:
+        while not self._done.wait(self._every):
+            self._report()
+
+    def finish(self) -> None:
+        self._done.set()
+        with self._lock:
+            thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(self._every + 1)
+
+
 def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
     """For --service: hand the process to the SCM dispatcher (blocks until the service
     has stopped). ``main`` runs the server in the service thread; ``stop`` is called
@@ -1208,21 +1246,27 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
     result = {"code": 0}
     handle = {"h": None}
     status = api.SERVICE_STATUS(SERVICE_WIN32_OWN_PROCESS, SERVICE_START_PENDING, 0, 0, 0, 0, 0)
+    reporting = threading.Lock()  # the SCM's thread, the service's and StopProgress's
 
     def report(state: int, code: int = 0, wait_hint: int = 0) -> None:
-        status.dwCurrentState = state
-        status.dwControlsAccepted = (0 if state == SERVICE_START_PENDING
-                                     else SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN)
-        status.dwWin32ExitCode = ERROR_SERVICE_SPECIFIC_ERROR if code else NO_ERROR
-        status.dwServiceSpecificExitCode = code
-        status.dwWaitHint = wait_hint
-        status.dwCheckPoint = 0 if state in (SERVICE_RUNNING, SERVICE_STOPPED) else status.dwCheckPoint + 1
-        if handle["h"]:
-            api.dll.SetServiceStatus(handle["h"], ctypes.byref(status))
+        with reporting:
+            status.dwCurrentState = state
+            status.dwControlsAccepted = (0 if state == SERVICE_START_PENDING
+                                         else SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN)
+            status.dwWin32ExitCode = ERROR_SERVICE_SPECIFIC_ERROR if code else NO_ERROR
+            status.dwServiceSpecificExitCode = code
+            status.dwWaitHint = wait_hint
+            status.dwCheckPoint = (0 if state in (SERVICE_RUNNING, SERVICE_STOPPED)
+                                   else status.dwCheckPoint + 1)
+            if handle["h"]:
+                api.dll.SetServiceStatus(handle["h"], ctypes.byref(status))
+
+    progress = StopProgress(lambda: report(SERVICE_STOP_PENDING, wait_hint=STOP_WAIT_HINT_MS))
 
     def on_control(control, _event, _data, _ctx):
         if control in (SERVICE_CONTROL_STOP, SERVICE_CONTROL_SHUTDOWN):
-            report(SERVICE_STOP_PENDING, wait_hint=30000)
+            report(SERVICE_STOP_PENDING, wait_hint=STOP_WAIT_HINT_MS)
+            progress.start()
             stop()
             return NO_ERROR
         if control == SERVICE_CONTROL_INTERROGATE:
@@ -1244,6 +1288,7 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None]) -> int:
             import traceback
             traceback.print_exc()
         result["code"] = code
+        progress.finish()
         report(SERVICE_STOPPED, code=code)
 
     entry = api.main_fn(service_main)

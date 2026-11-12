@@ -52,9 +52,14 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 ## ✨ Features
 
 - **Transports:** TCP **server** (listen), TCP **client** (connect-out), **UDP**, and
-  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges. UDP sends the
+  **serial↔serial** bridging; optional per-mapping **TLS** for TCP bridges (client
+  certificates, server checks by CA file or fingerprint: see Security). UDP sends the
   device's output to the sender of the last datagram from an allowed IP, or always to a
   fixed **reply address** (IP + port); a **peer timeout** forgets a sender that went quiet.
+  **Also send the device's output to** lists more destinations (`udp_targets`, `IP:port`)
+  that always get it, whoever sends and before anyone has: an NMEA 0183 feed to UDP 10110
+  on a LAN's broadcast address (with **Allow broadcast**, `udp_broadcast`), a multicast
+  group, several hosts.
   Datagrams wait for the serial port in a queue of at most 64 KiB: what a sender faster
   than the line sends beyond that is dropped, counted and logged.
 - **Protocols:** `raw`, `telnet` (8-bit clean), `rfc2217` (remote live changes to
@@ -66,6 +71,16 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   returns to the mapping's settings when the client leaves (see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md)). A telnet or RFC 2217 subnegotiation longer
   than 1 KiB (real ones are a few bytes) ends that client's session, and the log says why.
+  **Serial BREAK:** a telnet client's BREAK (IAC BRK: PuTTY's *Special Command → Break*,
+  `send brk` in telnet) and an RFC 2217 client's (SET-CONTROL BREAK on/off, or IAC BRK)
+  reach the serial line after the data sent before them (a telnet BREAK lasts 0.25 s); a
+  read-only mapping sends none, and a BREAK an RFC 2217 client leaves on is turned off when
+  it disconnects. Raw TCP has no in-band BREAK. Commands keep their order with the data:
+  what a client sends before an RFC 2217 setting change goes out at the old setting. An
+  RFC 2217 client is also answered on SIGNATURE (`ser2net`, or the mapping's **RFC 2217
+  signature**), on the BREAK / DTR / RTS and inbound flow control queries and on the
+  line/modem state masks; flow control is one mode at a time. An unsupported telnet option
+  is refused each time it is asked for.
 - **Modbus gateway:** bridges Modbus/TCP masters to serial Modbus/RTU slaves —
   multiple masters, transaction serialization on the shared bus + transaction-id
   integrity, and a `0x0B` (gateway-timeout) exception when an RTU slave doesn't answer.
@@ -95,30 +110,114 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Full serial config:** baud (incl. custom), data/stop bits, parity, flow control
-  (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, exclusive open, and RS-485 hardware
-  auto-RTS (Linux `TIOCSRS485`: enable + pre/post-TX delays + RTS-during-TX level).
-- **Live port list:** privilege-free polling + optional event hotplug (Linux pyudev /
-  Windows WM_DEVICECHANGE), falling back to polling. On Linux the kernel's placeholder
-  `ttyS` ports without hardware are hidden and the stable `/dev/serial/by-id` names are
-  shown and selectable. **IP picker** from the machine's own addresses (localhost / LAN /
-  0.0.0.0) or custom.
+  (none/RTS-CTS/XON-XOFF/DSR-DTR), RTS/DTR on open, port locking, and RS-485 hardware
+  auto-RTS (Linux `TIOCSRS485`: enable + pre/post-TX delays + RTS-during-TX level). RTS or
+  DTR set to `on` / `off` is in that state from the moment the port opens (`keep` leaves
+  the driver's default, on). On Windows a line set to `off` therefore never pulses; on
+  Linux the kernel itself raises DTR and RTS when a port is opened, so `off` only shortens
+  that pulse and can't keep a board that resets on DTR (an Arduino) from resetting at each
+  open. A setting the port doesn't take (RS-485 on most USB adapters, RTS/DTR on a port
+  without modem lines) doesn't stop the port from opening: the dashboard shows it under the
+  mapping's state and the mapping's log says it once, and a refused RS-485 mode is switched
+  off again so later changes of the port's settings (an RFC 2217 client's baud rate) work.
+- **Port locking (Linux, macOS):** **Lock the port (flock)**, on by default, keeps out other
+  ser2net mappings and programs that lock a port the same way (picocom, tio, miniterm), but
+  not minicom, programs that use no lock (`cat`, `stty`, scripts), a login prompt or
+  ModemManager. Two options, off by default, keep out more, as classic ser2net did:
+  **Keep other programs out while the port is open** (`TIOCEXCL`: another program's open
+  fails as busy, except for root's), and **Don't open a port another program has locked
+  with a UUCP lock file** (minicom, cu: `LCK..` files in `/run/lock` or `/var/lock`, only
+  read; ser2net makes none and never removes one; the dashboard names the program). On
+  Windows a port is always open in one program only, and these do nothing. In Docker a port
+  passed with `--device` is a device node of the container's own, and a flock locks the
+  node, so it isn't expected to keep out programs on the host (with `-v /dev:/dev` it is the
+  host's node); `TIOCEXCL` holds for the port itself.
+- **Live port list:** privilege-free. Every 2 s a cheap check tells whether a port came or
+  went (Linux: the tty devices in sysfs and the `/dev/serial` links; Windows: the COM
+  ports the registry lists), and the ports are enumerated again only then, when the UI or
+  the API shows a list older than 2 s, and at least every minute. On Linux every port of a
+  kernel serial driver is listed (`/proc/tty/drivers`), not only the names pyserial looks
+  for, so a board's own UARTs are there too (`ttymxc*`, `ttyLP*` on i.MX, `ttyTHS*` on
+  Jetson, `ttyPS*` on Zynq, `ttyMSM*`, `ttyMAX*`, a Raspberry Pi's `ttyS0` on kernels
+  before 6.5, ...). The kernel's placeholder `ttyS` ports without hardware are hidden, and
+  udev's names are shown and selectable: `/dev/serial/by-id` (by serial number: survives
+  re-plugging, in any USB socket) and `/dev/serial/by-path` (by USB socket: right while
+  the adapter stays in that socket). A by-id name is made from vendor, model and serial
+  number, so identical adapters without a serial number of their own (CH340, most PL2303,
+  clones that all carry one number) share one, which udev gives to one of them, and which
+  one can change at a reboot or a re-plug: the Ports page marks such adapters
+  (`same USB identity`, `by-id not unique`) and the form says so; bind those by USB
+  socket. In the mapping form, ↻ next to Device lists the ports again without closing the
+  form, and **Other device path…** takes a path that is not listed (a board's UART such as
+  `/dev/ttymxc1`, an adapter not plugged in yet, a `\\.\` name on Windows); a configured
+  link such as `/dev/serial0` is shown with the device it leads to
+  (`/dev/serial0 → /dev/ttyS0`) and counts as that port in use. **IP picker** from the
+  machine's own addresses (every interface, localhost, the LAN addresses of both families)
+  or custom.
+- **IPv4 and IPv6:** a mapping on `0.0.0.0` takes IPv4 clients only, one on `::` IPv6
+  clients only (TCP and UDP, on Linux and Windows alike); **All interfaces (IPv4 + IPv6)**
+  takes both (`"bind_ip": "0.0.0.0", "dual_stack": true` in `config.json` and the REST
+  API; a release before 2.9 reads it as `0.0.0.0`). As each of `0.0.0.0` and `::` is one
+  family, a mapping on one and another on the other can share a port. `::1` (IPv6
+  localhost) is a bind IP like `127.0.0.1`. IPv6 addresses are written in brackets next
+  to a port (`[::1]:4001`). A UDP mapping on `::` from an older release on Linux took
+  IPv4 datagrams too: it comes up with `dual_stack` on, so it still does (the start-up log
+  says so until the configuration is saved again), and so does one sent without
+  `dual_stack` (a REST API script, an older cluster node).
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
-  COM number still opens the right device.
+  COM number still opens the right device. Identical adapters without a serial number of
+  their own (CH340, most PL2303) and the channels of a multi-port chip (FT4232H) share one
+  identity: of those the configured port is opened when it is one of them, else one no
+  other mapping has open, and the dashboard says it had to guess. When the bound adapter is
+  not there and its port is now another USB adapter, that one is not opened: the mapping
+  shows `device missing` until the bound adapter is back or the mapping is bound to the new
+  one (untick and tick the box again, then save).
+- **A missing or busy serial device:** the mapping shows `device missing` while the device
+  isn't there (unplugged, not enumerated yet) and `reconnecting` right after an open port
+  went away or when it can't be opened for another reason; it is tried again every few
+  seconds (at most about 10 s apart), and at once when the port list sees a new device (a
+  re-plugged adapter is used within about 2 s). A mapping bound to a USB identity finds
+  its device in that list instead of enumerating the ports at every retry. The log says
+  the first failure and each change of the error, then the same error only every 15
+  minutes with how many attempts failed since when, and once the port opens again how long
+  it was down, instead of a line at every attempt (the same for a connect-out that keeps
+  failing). `/api/v1/status` counts failed opens (`open_failures`) and losses of the open
+  port (`device_lost`) apart; `reconnects` counts both, as before. Under the error the
+  dashboard says what it means when it can (`hint` in `/api/v1/status`; `last_error` stays
+  pyserial's text): for "Permission denied" the group the device belongs to, read from the
+  device itself (`dialout`, `uucp` on Arch, …), and what is missing (the user is not in
+  it, was added after ser2net started, the container lacks it: `--group-add <gid>`); for a
+  port in use, which mapping has it open, or what kind of lock another program holds.
+- **Listeners come up on their own:** a mapping whose address can't be used when it
+  starts (its IP is not assigned yet at boot, or the port is still taken) shows `error`
+  with "retrying in N s" and is started again, at most 30 s apart, until it works (a Stop
+  ends that). Its serial port and MQTT connection are opened only once its listener is up,
+  so the retries don't touch the device.
 - **Dozens of mappings:** add/edit/delete/start/stop from one screen, with live status;
   search, state filter, sorting and start/stop/restart of the selected mappings. The
   table only redraws when it changed (no flicker, selections stay).
 - **Per-mapping access control:** allowed IP/CIDR list, **high-priority** client IPs
   (a priority client evicts the oldest when the port is full), max connections,
-  kick-old-user, read-only, banner, open/close strings, `closeon` (a Modbus gateway uses
-  no banner, open/close strings or `closeon`).
+  kick-old-user (a new client evicts the oldest non-priority one, never a priority
+  client: while only priority clients are connected it is refused), read-only, banner,
+  open/close strings, `closeon` (a Modbus gateway uses no banner, open/close strings or
+  `closeon`).
 - **Connection lifecycle (per mapping, TCP):** **dead-peer detection via TCP keepalive**
   — a client or remote server that vanishes without a FIN/RST (power cut, cable pull,
   Wi-Fi/VPN/NAT drop) no longer stays `ESTABLISHED` forever: with the defaults (on ·
   60 s idle · 10 s interval · 3 probes) it is dropped within ~90 s and its slot freed —
   also while the device keeps sending (Linux `TCP_USER_TIMEOUT`). Plus a **connect
   timeout** for connect-out (default 10 s), an **idle timeout** and a **max connection
-  time** (e.g. 24 h); every disconnect is logged with its reason.
+  time** (e.g. 24 h); every disconnect is logged with its reason. By default TCP clients
+  stay connected while the serial device is unavailable (unplugged, reconnecting) and new
+  ones are taken; what they send meanwhile is dropped and counted (`bytes_dropped`). With
+  **Disconnect clients while the serial device is unavailable**
+  (`network.disconnect_without_device`, raw / telnet / rfc2217, off by default) they are
+  disconnected when the port goes away and new ones are turned away (after the short wait
+  an RFC 2217 client gets, `options.rfc2217_net_timeout_s`) until it is back, so a poller,
+  a SCADA master or a virtual-COM redirector sees the outage; a connect-out mapping then
+  connects only while its port is open.
 - **Observability:** per-mapping traffic trace (hex/timestamp, rotated files, downloadable
   from the UI), Prometheus `/metrics`, an audit log page, live log viewer, an in-browser
   **serial console** (xterm.js over WebSocket — watch traffic or type to the device) and a
@@ -130,8 +229,14 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   open, or a UDP datagram found the queue full) is counted as dropped (`bytes_dropped`,
   `ser2net_mapping_bytes_dropped_total`), flagged on the dashboard and logged.
 - **Notifications:** a webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) and/or
-  e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
-  come and go, or a sign-in fails; repeats are suppressed, a test message can be sent.
+  e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, a
+  connect-out mapping loses or regains its remote server, clients come and go, or a
+  sign-in fails; repeats are suppressed, a test message can be sent.
+- **Connect-out status:** a connect-out mapping's state stays the serial side's; its link
+  to the remote server is shown next to it ("link down" with the reason, which the
+  Problems filter counts; "connecting"), in `/api/v1/status` (`link`: `connecting` / `up`
+  / `down`, `link_error`, `link_since`, `connect_failures`) and in the fleet view. A link
+  closed and connected again at once (max connection time, idle timeout) is no outage.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with
@@ -169,12 +274,33 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
   broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status.
-  Needs `paho-mqtt` (optional; the bridge runs normally without it).
+  Needs `paho-mqtt` (optional; the bridge runs normally without it). A line ends at **LF**
+  (the default; a CR before it is left out), **CR** (scales, analyzers and other devices
+  that end their records with CR; an LF next to it is left out) or **CR or LF**
+  (`mqtt.line_end`); past 64 KiB without a line end the oldest bytes are dropped, and the
+  log says so once. **Write messages on `<topic>/tx` to the device** (`mqtt.tx_enabled`,
+  off by default) writes each message to the serial port as it is, in one piece between
+  what TCP clients send, and answers on `<topic>/tx/result` (`ok` / `error: …`: read-only,
+  too long, busy with 64 KiB waiting, port not open); a retained one is never written. A
+  **poll string** (`options.poll_string`, with `\r \n \t \\ \xHH`) is sent every **poll
+  interval** while the port is open and no TCP client is connected (or always, with **Also
+  while a TCP client is connected**), so a device that only answers queries reaches MQTT, a
+  trace or a UDP target without an external poller holding the TCP connection.
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as
-  warnings, and a connection that would be more open here (a gtlssh login or TLS client
-  certificates, TLS whose certificate is not on this host, a write-only device) comes in
-  disabled.
+  warnings, and a connection that would be more open here (a gtlssh login, TLS client
+  certificates without their `CA=` file on this host, TLS whose certificate is not on this
+  host, a write-only device) comes in disabled; `ssl(clientauth,CA=...)` with the CA file
+  here keeps checking client certificates (**Client CA certificate file**). ser2net's port locking carries over: 4.x `flock` (on by default) becomes **Lock
+  the port** plus **Keep other programs out**, `uucplock` (on by default; 3.x always)
+  **Don't open a port another program has locked**; one warning says what still differs
+  (a mapping holds its port open from its start, and makes no lock files). Listen
+  addresses keep their family (`ipv6,::1` stays `::1`, `ipv6`/`ipv6n4` without an address
+  is `::`); an accepter with neither (`tcp,2000`), on which ser2net took IPv4 and IPv6
+  clients, comes in on `0.0.0.0`, IPv4 only, and a warning names those to switch to **All
+  interfaces (IPv4 + IPv6)**. An RFC 2217 connection's signature (4.x `signature`, 3.x
+  `SIGNATURE`) becomes its **RFC 2217 signature**; `hangup-when-done` and `nobreak` are kept
+  but have no effect here (the port stays open between connections), and the import says so.
 - **Turkish / English UI:** pick **TR / EN** in the top bar (remembered per browser);
   otherwise the browser's language or the admin's default (Settings → Web UI access), which
   notifications use as well. Logs, the audit log and the REST API stay English.
@@ -186,14 +312,15 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 
 - **Python 3.10+** installed. Nothing else — dependencies ship in `vendor/wheels/` and
   install to `./lib` on first run (offline).
-- Linux: membership in the `dialout` group to **open** serial ports (listing ports
-  needs no privilege):
+- Linux: membership in the serial devices' group to **open** serial ports (listing ports
+  needs no privilege). It is `dialout` on Debian, Ubuntu, Raspberry Pi OS, Fedora, RHEL and
+  openSUSE, but `uucp` on Arch, Manjaro and EndeavourOS (which have no `dialout` group); a
+  device says which: `stat -L -c %G /dev/ttyUSB0`.
   ```bash
-  sudo usermod -aG dialout "$USER"   # then log out/in
+  sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # then log out/in
   ```
 - Windows: no extra privileges for COM ports.
-- Optional: `openssl` (self-signed TLS); `pyudev` (Linux) / `pywin32` (Windows) for
-  event-driven hotplug — polling is used otherwise.
+- Optional: `openssl` (self-signed TLS).
 
 ---
 
@@ -232,16 +359,17 @@ Every pull request and release proves it (`tests/test_standalone.py`): the bundl
 need nothing but OS-base libraries (glibc ≤ 2.28 / Windows system DLLs; Linux on x86_64
 and arm64), the binary must
 work with an empty `PATH` (no Python, no `openssl`), and the Linux one must run in clean
-AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04, openSUSE Leap 15.6 and Fedora
-containers.
+AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04/26.04, openSUSE Leap 15.6 and Fedora
+containers, including a serial port at a rate without a termios constant (250000 baud).
 
-Linux notes: `chmod +x ser2net-linux-x64`; serial ports usually need the `dialout`
-group. The binary unpacks itself to `$TMPDIR` (default `/tmp`) on start — if `/tmp` is
-mounted `noexec`, point `TMPDIR` at a directory that isn't. While it runs it keeps that
-copy locked and its access times fresh, so tmp cleaners (systemd-tmpfiles, tmpreaper)
-don't delete it under a long-running instance; a copy left behind by a killed process
-still ages out as usual. For certificate checks (MQTT over TLS, OIDC, LDAPS / StartTLS) it
-uses the distribution's CA bundle, or `SSL_CERT_FILE` if set.
+Linux notes: `chmod +x ser2net-linux-x64`; serial ports need the devices' group
+(`dialout`; `uucp` on Arch, see Requirements). The binary unpacks itself to `$TMPDIR`
+(default `/tmp`) on start — if `/tmp` is mounted `noexec`, point `TMPDIR` at a directory
+that isn't. While it runs it keeps that copy locked and its access times fresh, so tmp
+cleaners (systemd-tmpfiles, tmpreaper) don't delete it under a long-running instance; a
+copy left behind by a killed process still ages out as usual. For certificate checks (MQTT
+over TLS, OIDC, LDAPS / StartTLS) it uses the distribution's CA bundle, or `SSL_CERT_FILE`
+if set.
 
 `ser2net --about` shows the versions (Python, OpenSSL, components) — add it to bug
 reports. `ser2net --licenses` prints the license text of every component inside the
@@ -252,8 +380,9 @@ Linux (in an old-glibc container, so the result runs on older distributions too)
 `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`.
 
 On first run:
-1. The **console** asks which local IP the admin UI binds to (machine IPs or custom)
-   and a port (default 8080). Headless/service default is the safe **127.0.0.1**.
+1. The **console** asks which local IP the admin UI binds to (machine IPs, every
+   interface for IPv4, IPv6 or both, or custom) and a port (default 8080).
+   Headless/service default is the safe **127.0.0.1**.
 2. Open the printed URL; **set the admin password** on the first screen. Open it by the
    machine's IP address or `localhost`: reached through another host name (a reverse
    proxy, the Docker host's name) the setup page also asks for the one-time code in
@@ -282,11 +411,13 @@ docker compose up -d        # edit `devices:` and `ports:` in docker-compose.yml
 ```
 Without compose, use the `docker run` command in
 [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) (the published image,
-`--restart unless-stopped`, the mapping ports, a `/dev/serial/by-id` device, log limits).
+`--restart unless-stopped`, `--init`, the mapping ports, a `/dev/serial/by-id` device, log
+limits).
 Published image (amd64 + arm64, every release): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (or `:2.8`, `:2.8.1`); `docker-compose.yml` uses it.
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /
-`SER2NET_PORT` — the interactive picker can't run headless). Publish each mapping's port
+`SER2NET_PORT` — the interactive picker can't run headless; `SER2NET_BIND_IP=*` is every
+interface, IPv4 and IPv6). Publish each mapping's port
 too (a new mapping gets 4001), or use the host network. A serial device's group is taken
 from the device itself, so `--group-add` isn't needed for the usual device names. The
 process runs as the
@@ -313,11 +444,38 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
 - **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
-  its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
+  its clients, bytes in / out / dropped, reconnects (of those, failed opens of the serial
+  port, `ser2net_mapping_open_failures_total`, and losses of the open port,
+  `ser2net_mapping_device_lost_total`) and dropped slow clients (a connect-out
+  mapping also whether its link is up, `ser2net_mapping_link_up`, and its failed connect
+  attempts, `ser2net_mapping_connect_failures_total`); for the
   process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
   the admin UI's connections, TLS handshakes in progress and waiting for one to end, and
   the connections refused right after accept (`ser2net_connections_refused_total`, by
   reason).
+
+### Serial ports shared with other programs (Linux)
+
+Nothing keeps other programs off a serial port unless all of them lock it, and the kernel
+console, a login prompt and ModemManager use a port without asking. ser2net then shares
+the port's bytes with them (stray characters, Modbus timeouts), and a login prompt hangs
+the port up whenever it restarts. The Ports page marks such ports (**kernel console**,
+**login prompt**, **ModemManager**, and **no access** for a port ser2net may not open), and
+a mapping that has one open says so under its state (a port hung up and reopened at once
+is counted there as well).
+- **Kernel console, login prompt** (a Raspberry Pi's GPIO UART, a VM's serial console): on
+  a Raspberry Pi run `sudo raspi-config` → Interface Options → Serial Port, and answer *No*
+  to the login shell and *Yes* to the serial hardware. Elsewhere remove `console=ttyS0`
+  from the kernel command line, and turn the login prompt off:
+  `sudo systemctl mask --now serial-getty@ttyS0.service`.
+- **ModemManager** (desktop Ubuntu / Fedora; USB CDC `ttyACM*` devices such as an Arduino):
+  tell it to leave the device alone with a udev rule, for example
+  `/etc/udev/rules.d/99-ser2net.rules` with
+  `ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"`, then
+  `sudo udevadm control --reload && sudo udevadm trigger`.
+- **Permission denied:** the dashboard names the group the device belongs to and what is
+  missing (see Requirements); **busy:** the mapping of this ser2net that has the port open,
+  or the kind of lock another program holds.
 
 ---
 
@@ -354,9 +512,31 @@ The UI is **password-protected by default** and binds to **127.0.0.1** by defaul
 Exposing it to the network requires an explicit IP choice at startup and warns when
 bound without TLS. For LAN deployments, use TLS (`admin_ui.tls_*`) and per-mapping
 `allowed_client_ips`. Raw TCP is plaintext — be careful on untrusted networks. A bare
-`0.0.0.0`/`::` in an allow/priority list means "any client". A mapping's serial port is a
+`0.0.0.0`/`::` in an allow/priority list means "any client", IPv4 and IPv6 alike;
+`0.0.0.0/0` is every IPv4 client and `::/0` every IPv6 one. An IPv4-mapped entry
+(`::ffff:192.168.1.0/120`) matches the IPv4 addresses it maps. A mapping's serial port is a
 device path or COM name only; pyserial URL handlers (`socket://`, `rfc2217://`, `spy://`,
 `loop://`, ...) are not accepted as a port.
+
+**Per-mapping TLS:** a TLS listener (TCP server, Modbus gateway) presents its certificate and
+key; with a **Client CA certificate file** (`network.tls_client_ca`) it takes only clients
+whose certificate chains to a certificate in that file (mutual TLS, as stunnel `verify` or
+Modbus/TCP Security clients expect) and logs each client's certificate subject; the
+allow-list is still checked first. A connect-out link logs the SHA-256 fingerprint of the
+server's certificate at every connect and checks it with a **CA certificate file**
+(`network.tls_ca`: the certificate must chain to it and name the remote host) and/or a
+**server certificate fingerprint** (`network.tls_fingerprint`; list the new one too before
+a certificate change); its certificate and key are optional and presented to a server that
+asks for a client certificate. **Without a CA file or a fingerprint, connect-out TLS only
+encrypts:** anyone on the network path can pose as the server. A CA file is PEM (one or more
+certificates) or DER, and any certificate in it is trusted, a self-signed server's own one
+too. An encrypted key needs its password (**TLS key password**, `network.tls_key_password`;
+`admin_ui.tls_key_password` for the admin UI, under Settings → Admin TLS): ser2net never
+asks for one on the console, and without it the mapping, or the start for the admin UI's
+key, fails with an error that says so. The form and the REST API load a mapping's files when
+it is saved, never show the stored key password (a viewer API token gets it masked) and
+refuse a key that is the admin UI's own. Where certificates can't be managed, a VPN
+(WireGuard) or an stunnel in front of an untrusted network is the alternative.
 
 **Connection limits:** on a TLS mapping, a host not in `allowed_client_ips` is closed before
 the TLS handshake; a handshake must be over within 15 s, and at most 32 run at once from one
@@ -368,9 +548,10 @@ body then stops coming (the body gets that time plus a second per KiB that arriv
 whose client takes nothing of a response for that long (a console WebSocket is not
 timed), and takes at most `admin_ui.max_connections` (256) connections
 at once, `admin_ui.max_connections_per_ip` (64) from one address; its TLS handshake has the
-same limits as a mapping's. These keys are in `config.json` only (0 = no limit); behind a
-reverse proxy every user has the proxy's address, so raise the per-address limit if
-needed. When the process gets close to its open-file limit, new connections (to any
+same limits as a mapping's. An IPv6 client counts by its /64 network for these
+per-address limits (a host can use any address of its /64). These keys are in
+`config.json` only (0 = no limit); behind a reverse proxy every user has the proxy's
+address, so raise the per-address limit if needed. When the process gets close to its open-file limit, new connections (to any
 mapping or the UI) are refused with a log line, so serial ports, logs and the
 configuration keep the files they need.
 
@@ -390,7 +571,8 @@ so the broker's access rules (ACLs) are the authorization: let only the clients 
 switch outputs publish to the command topics, and connect to the broker with TLS and a
 username/password. **Read-only** refuses every write. The dashboard marks a mapping that
 takes MQTT writes with **CMD**, and with **CMD ⚠** (plus a warning in its log at start)
-when its broker connection has no TLS or no username. A Mosquitto `acl_file` for the base
+when its broker connection has no TLS or no username. The same holds for a serial mapping
+that writes `<topic>/tx` to the device (**CMD** too). A Mosquitto `acl_file` for the base
 topic `plant/line3`, for example:
 ```
 user ser2net
@@ -577,11 +759,16 @@ is no account at all; later starts ignore it.
 ## ⚙️ Run as a service
 
 - **Docker:** official `Dockerfile` + `docker-compose.yml` (see above and
-  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. A plain
-  `docker run` needs `--restart unless-stopped` for that (an existing container:
-  `docker update --restart unless-stopped ser2net`).
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `init: true` and
+  `stop_grace_period: 30s` (a stop reaches ser2net, which finishes within that), `/data`
+  volume. A plain `docker run` needs `--restart unless-stopped --init --stop-timeout 30` for
+  that (an existing container: `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
+  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives. On Arch,
+  Manjaro and EndeavourOS the serial group is `uucp` and there is no `dialout` group (the
+  unit would fail with `status=216/GROUP`): set it with `systemctl edit ser2net`
+  (`[Service]`, `SupplementaryGroups=`, then `SupplementaryGroups=uucp`; the unit's comment
+  has it).
   **Do not run as root.**
 - **Windows:** nothing else needed. From an elevated ("Run as administrator") prompt:
   ```bat
@@ -599,6 +786,15 @@ is no account at all; later starts ignore it.
   service too). **[`docs/WINDOWS.md`](docs/WINDOWS.md)** covers the
   firewall rule you need to reach it from other hosts, changing the address, upgrading and
   the SmartScreen warning on unsigned builds.
+- **Start order:** the admin UI comes first. Its TLS pair must load, or the start stops
+  (with the reason in `all.log`) before any serial port is opened, so a restart policy
+  can't reset DTR-sensitive boards in a loop. Its port is taken before the mappings start:
+  a mapping on the UI's address and port shows `error` instead of keeping the UI out. When
+  the UI's own address can't be used (another program has the port, or the IP is not
+  assigned yet at boot), the mappings start anyway and the UI tries again, at most 30 s
+  apart (`all.log` says so). A mapping can't be saved on the UI's TCP address and port, nor
+  a UDP one on the cluster's discovery port while discovery is on (form, REST API, cluster,
+  import; a copy's port skips them).
 - **Many mappings:** a running mapping keeps about three files open (its serial port, its
   listener and its log), plus one per connected client. At start ser2net raises its soft
   open-file limit toward the hard limit (at most 65536) and logs the result (`open files:
@@ -611,6 +807,13 @@ is no account at all; later starts ignore it.
   `SER2NET_WINDOWS_LOOP=proactor` (for the service: a system environment variable) switches
   to the proactor loop, which has no such limit; it is new, so test serial timing (e.g.
   Modbus RTU) with it before relying on it. The start-up log names the loop in use.
+- **Serial writes on Windows** wait for the device, as on Linux: at most 8 KiB per port are
+  handed to the driver at a time, so a fast network sender is slowed to the serial line's
+  speed instead of filling the driver's queue. A port with no traffic for a second is
+  polled every 10 ms instead of every 0.5 ms, and at once again every 0.5 ms when data comes
+  or goes (a reply after a request is not delayed). Should a serial driver misbehave with this,
+  `SER2NET_WINDOWS_SERIAL=pyserial` (for the service: a system environment variable) goes
+  back to how pyserial writes (no pacing); please report the adapter and driver.
 
 ---
 
@@ -634,7 +837,13 @@ inside aren't readable by other users:
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
   are reduced to the file name, which is logged at start-up.
-- `tls/` — certificate/key if self-signed is generated.
+- `tls/` — certificate/key if self-signed is generated. A relative TLS path (admin UI or a
+  mapping: certificate, key, CA files) is a file in the data directory, e.g. `tls/cert.pem`,
+  so it keeps working when the data directory moves. An absolute path that is no longer
+  there after a move or a restore on another machine (native to Docker `/data`, another
+  `--data-dir`, a backup from another host) and pointed into a `tls` folder is taken from
+  this data directory's `tls/` (logged at start-up, and config.json is saved with the new
+  path); backups and imports from before the move are handled the same way.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
 

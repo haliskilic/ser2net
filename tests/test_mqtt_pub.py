@@ -8,7 +8,9 @@ a command subscription handles a command when it is published, not the broker's 
 replay of it (unless accept_retained), and never an empty message. Also that paho's
 network thread waits with poll(), not select() (which refuses descriptors >= 1024), and
 with paho-mqtt installed: a publisher whose broker socket is above 1024 connects and
-publishes (to a minimal broker on 127.0.0.1).
+publishes (to a minimal broker on 127.0.0.1). aclose(), what a mapping's stop uses, sends
+the last message and stops paho's thread without holding up the event loop, and gives up
+waiting after its timeout when the broker takes nothing.
 
 Run: python3 tests/test_mqtt_pub.py
 """
@@ -288,11 +290,72 @@ def test_paho_publisher_above_fd_setsize():
           "publishes  OK")
 
 
+class StuckClient(FakeClient):
+    """paho with a broker that takes nothing: loop_stop() waits for the queued messages."""
+
+    def __init__(self):
+        super().__init__()
+        self.release = threading.Event()
+
+    def loop_stop(self):
+        self.release.wait(10)
+        super().loop_stop()
+
+
+async def _aclose_checks():
+    lines = []
+    ticks = 0
+
+    async def ticker():  # the event loop must keep running meanwhile
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    tick = asyncio.ensure_future(ticker())
+    try:
+        fake = FakeClient()
+        pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="t", qos=1),
+                            logger=lines.append, client=fake)
+        pub.connect()
+        lines.clear()
+        await pub.aclose()
+        assert ("t/status", b"offline", 1, True) in fake.published
+        assert fake.disconnected and not lines, lines
+        pub.feed(b"after close\n")  # closed: nothing more is published
+        assert not _pub(fake, "t")
+
+        stuck = StuckClient()
+        pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="t", qos=1),
+                            logger=lines.append, client=stuck)
+        pub.connect()
+        lines.clear()
+        t0, before = time.monotonic(), ticks
+        await pub.aclose(final=("spBv1.0/g/NDEATH/n", b"death", 1, False), timeout=0.3)
+        took = time.monotonic() - t0
+        assert ("spBv1.0/g/NDEATH/n", b"death", 1, False) in stuck.published
+        assert ("t/status", b"offline", 1, True) not in stuck.published
+        assert 0.25 < took < 1.0, f"aclose() took {took:.2f} s"
+        assert ticks - before >= 10, "aclose() held up the event loop"
+        assert lines == ["MQTT: the broker did not take the last messages within 0.3 s; "
+                         "closing without waiting for it"], lines
+        stuck.release.set()
+    finally:
+        tick.cancel()
+
+
+def test_aclose_does_not_hold_up_the_loop():
+    asyncio.run(_aclose_checks())
+    print("aclose(): last message sent, paho stopped off the event loop; a broker that takes "
+          "nothing is given up on after the timeout  OK")
+
+
 def main():
     test_lines_published_and_buffered()
     test_disabled_until_connected()
     test_will_is_set_for_lwt()
     test_retained_commands()
+    test_aclose_does_not_hold_up_the_loop()
     if os.name == "posix":
         test_poll_select_answers_like_select()
         test_poll_select_above_fd_setsize()

@@ -326,8 +326,9 @@ async def test_reopen_after_port_loss(slave_port):
 
 
 async def test_missing_port_at_start(slave_port):
-    """A port that can't be opened while the listener comes up is reported at once, not
-    shown as running until the next attempt, and masters get 0x0A at once."""
+    """A port that can't be opened once the listener is up is reported by the first
+    attempt (before the reconnect backoff's first pause), not shown as running until the
+    next one, and masters get 0x0A at once."""
     port = FakePort(slave_port)
     port.present = False
     real_open, serial_io.open_serial = serial_io.open_serial, port.open
@@ -336,6 +337,10 @@ async def test_missing_port_at_start(slave_port):
     try:
         await runner.start()
         st = runner.status
+        for _ in range(20):  # 0.4 s: the next attempt would come after 0.6 s
+            if st.state != "running":
+                break
+            await asyncio.sleep(0.02)
         assert st.state in ("reconnecting", "device-missing"), st.as_dict()
         assert "could not open" in st.last_error, st.as_dict()
         mr, mw = await asyncio.open_connection("127.0.0.1", gw_port)
@@ -344,7 +349,7 @@ async def test_missing_port_at_start(slave_port):
         assert await request(mr, mw, 1, RESPONSIVE_UNIT) == UNAVAILABLE_PDU
         assert loop.time() - started < runner._resp_timeout
         mw.close()
-        print(f"port missing at start: state={st.state} right after start(), 0x0A at once  OK")
+        print(f"port missing at start: state={st.state} from the first attempt, 0x0A at once  OK")
     finally:
         serial_io.open_serial = real_open
         await asyncio.wait_for(runner.stop(), timeout=10)

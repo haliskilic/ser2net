@@ -8,6 +8,10 @@ services:
     # build: .                                 # or build it from this checkout
     container_name: ser2net
     restart: unless-stopped
+    # a small init as PID 1 passes the stop signal on (and reaps child processes); a
+    # stop then gets 30 s, which ser2net's own shutdown budget stays within
+    init: true
+    stop_grace_period: 30s
     ports:
       - "8080:8080"   # web UI
       # Each mapping listens on the port you give it in the UI: publish every one
@@ -16,7 +20,9 @@ services:
     volumes:
       - ser2net-data:/data
     # Pass through the host serial device(s). USB-serial adapters renumber across
-    # replug; bind by stable /dev/serial/by-id/... when possible. The container takes
+    # replug; bind by stable /dev/serial/by-id/... when possible (identical adapters
+    # without their own serial number share one by-id name: use their
+    # /dev/serial/by-path/... names, the USB socket, instead). The container takes
     # each device's group from the device itself (its numeric GID differs between
     # distributions), so no group_add is needed while the container side keeps a serial
     # name (ttyUSB*, ttyACM*, ttyS*, ...). A device missing at start stops the container
@@ -47,7 +53,7 @@ services:
     #   - "c 188:* rmw"   # ttyUSB* (USB-serial adapters)
     #   - "c 166:* rmw"   # ttyACM* (USB CDC devices)
     # group_add:
-    #   - "${SERIAL_GID:-20}"   # the host's serial group: getent group dialout | cut -d: -f3
+    #   - "${SERIAL_GID:-20}"   # the host's serial GID: stat -L -c %g /dev/ttyUSB0
 
 volumes:
   ser2net-data:

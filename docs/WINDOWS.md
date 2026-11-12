@@ -128,6 +128,12 @@ It stops the service, asks for the address on the console, saves it and starts t
 service again with it. (Running `--reconfigure` on its own while the service runs is
 refused: the data directory allows only one running instance.)
 
+The service starts at boot without waiting for the network. When the admin UI's address
+(or a mapping's) can't be used yet at that point (a LAN IP that DHCP has not assigned yet,
+an unplugged cable, a port still held by another program), the service keeps running: the
+mappings start, and the admin UI and each such mapping try again on their own, at most
+30 s apart, until they can listen (`all.log` says so once, and again when they are up).
+
 ## One instance per data directory
 
 ser2net locks its data directory (`ser2net.lock`) while it runs, so a second instance on

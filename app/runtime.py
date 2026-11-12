@@ -31,8 +31,9 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
 from . import accounts, console, datalock, i18n, standalone
-from .config import ConfigError, ConfigStore
+from .config import ConfigError, ConfigStore, data_path, host_port
 from .engine import netguard
+from .engine.serial_link import Backoff
 from .state import AppState, write_audit_record
 from .web import httpguard
 from .web.server import build_app
@@ -47,17 +48,23 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
     port). Returns True if a bind IP was provided. Env wins on every start, so a
     container's compose/run config stays the source of truth across restarts.
 
-    Raises ConfigError for a SER2NET_BIND_IP that is not an IP address or a
+    SER2NET_BIND_IP=* is every interface, IPv4 and IPv6 (admin_ui.bind_ip "", as the
+    console's "All interfaces (IPv4 + IPv6)"); 0.0.0.0 is IPv4 only, :: IPv6 only.
+
+    Raises ConfigError for a SER2NET_BIND_IP that is not an IP address or * or a
     SER2NET_PORT outside 1-65535 (the UI could not start on either). A SER2NET_PORT
     that is not a number is ignored, as it always was, with a warning in `notes`."""
     ip = (os.environ.get("SER2NET_BIND_IP") or "").strip()
     if not ip:
         return False
-    try:
-        ipaddress.ip_address(ip)
-    except ValueError:
-        raise ConfigError(f"SER2NET_BIND_IP must be an IP address (e.g. 0.0.0.0), "
-                          f"not {ip!r}") from None
+    if ip == "*":
+        ip = ""
+    else:
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            raise ConfigError(f"SER2NET_BIND_IP must be an IP address (e.g. 0.0.0.0) or * "
+                              f"(every interface, IPv4 and IPv6), not {ip!r}") from None
     port = (os.environ.get("SER2NET_PORT") or "").strip()
     number = None
     if port:
@@ -133,7 +140,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     server starts with it, as a start without the env vars always has (a mapping that
     can't start fails on its own), and later saves only refuse what they change or add.
     The file is written back only when this start changes it (first run, --reconfigure,
-    a new env address, an upgrade's normalisation); a failing write is a warning too.
+    a new env address, an upgrade's normalisation, TLS files found in a moved data
+    directory: AppConfig.find_moved_tls_files); a failing write is a warning too.
     Fatal, with one line instead of a traceback: an unusable SER2NET_BIND_IP /
     SER2NET_PORT, a config.json that can't be read or parsed, a first run that can't
     create it."""
@@ -152,6 +160,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         raise SystemExit(f"ser2net: {store.path} is not a valid configuration ({e}) — fix "
                          f"it{restore}") from None
     notes = config.load_notes
+    moved = config.find_moved_tls_files(data_dir)
+    notes.extend(moved)
 
     try:
         env_set = _env_bind_override(config.admin_ui, notes)
@@ -171,7 +181,7 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     # instance_id (made by hand, or a downloaded backup put in its place): keep them, or
     # every restart would sign everyone out and give this node a new cluster id
     if ((first_run or reconfigure or env_set) and not store.matches(config)
-            or config.ids_created or admin):
+            or config.ids_created or admin or moved):
         try:
             # not validated: what this config breaks was accepted just above, so a check
             # could only fail on a file it looks for that went away since, and that must
@@ -245,11 +255,12 @@ def require_admin_tls(admin) -> None:
             raise SystemExit(f"ser2net: admin_ui.{field} in config.json must be a file name, "
                              f"not {path!r}")
         try:
-            with open(path, "rb"):
+            with open(data_path(path), "rb"):
                 pass
         except OSError as e:
             fix = ("" if isinstance(e, PermissionError)
-                   else " — fix admin_ui.tls_cert / tls_key in config.json")
+                   else " — fix admin_ui.tls_cert / tls_key in config.json (Settings → Admin "
+                        "TLS generates its certificate in the data directory's tls folder)")
             raise SystemExit(f"ser2net: cannot read the admin UI TLS {what}: "
                              f"{_os_error(e)}{fix}") from None
 
@@ -313,6 +324,27 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
 
 _as_service = False  # set by service_main so _serve can log the service-only warnings
 
+# The most a stop takes (only a device, broker or client that stops answering makes it
+# take long): the admin UI's responses still under way, then everything else. The Docker
+# compose file gives the container 30 s (stop_grace_period) before it is killed.
+SHUTDOWN_HTTP_TIMEOUT_S = 5
+SHUTDOWN_ENGINE_TIMEOUT_S = 20.0
+# The admin UI's address can't be used at start-up (another program has the port, or the
+# address is not on this machine yet): the mappings run meanwhile, and the UI tries again
+# after a backoff of at most this many seconds (as a mapping's listener does)
+UI_RETRY_MAX_S = 30.0
+
+
+async def stop_engine(state: AppState) -> None:
+    """state.stop_engine(), for at most SHUTDOWN_ENGINE_TIMEOUT_S: the mappings stop side
+    by side within their own budget (Supervisor.stop_all), so this only cuts off what
+    still hangs after that, and says so."""
+    try:
+        await asyncio.wait_for(state.stop_engine(), timeout=SHUTDOWN_ENGINE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        state.log(f"shutting down: still not done after {SHUTDOWN_ENGINE_TIMEOUT_S:g} s, "
+                  "exiting anyway")
+
 
 def service_main(config_path: str) -> int:
     """main() for the Windows service, which has no console: a start-up error that stops
@@ -336,10 +368,12 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     state = AppState(store, config)
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
-    state.log(f"ser2net starting — admin UI on {scheme}://{admin.bind_ip}:{admin.port}")
+    state.log(f"ser2net starting — admin UI on {scheme}://{host_port(admin.bind_ip, admin.port)}")
     for note in standalone.notes + config.load_notes + ([loop_note] if loop_note else []):
         state.log(note)
-    for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config)):
+    from .engine import serial_compat
+    for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config),
+                 serial_compat.unverified_note()):
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
@@ -368,40 +402,24 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         state.log("WARNING: LDAP sends the passwords unencrypted (ldap:// without StartTLS) — "
                   "use ldaps:// or StartTLS (Settings → LDAP / Active Directory).")
 
-    await state.start_engine()
-    app = build_app(state)
-
-    # the admin listener's connections: admitted (caps, budget) before TLS, which the
-    # protocol does itself, and each request head on a deadline (web/httpguard.py)
-    guard = state.admin_guard = httpguard.AdminGuard(admin, state.log)
-    uconfig = uvicorn.Config(
-        app,
-        host=admin.bind_ip,
-        port=admin.port,
-        loop="asyncio",
-        log_level="warning",
-        access_log=False,
-        http=httpguard.protocol_class(guard),
-    )
-    if admin.tls_enabled:
-        try:
-            guard.ssl = httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig)
-        except (OSError, ValueError) as e:  # ssl.SSLError is an OSError
-            state.log(f"admin UI: the TLS certificate could not be loaded: {e}")
-            await state.stop_engine()
-            raise
-    server = guard.server = uvicorn.Server(uconfig)
-    # uvicorn (>= 0.29) also traps SIGINT/SIGTERM while it serves, from the main
-    # thread only; both its handler and ours below just ask the server to exit.
-
     loop = asyncio.get_running_loop()
-    serve_task = asyncio.create_task(server.serve())
+    server: Optional[uvicorn.Server] = None
+    stop_asked = False
+    stopping = asyncio.Event()
 
     def _request_shutdown() -> None:
-        server.should_exit = True
+        nonlocal stop_asked
+        stop_asked = True
+        stopping.set()
+        if server is not None:
+            server.should_exit = True
 
-    # (not on Windows, and not outside the main thread — e.g. the Windows service
-    # thread; request_shutdown() covers those)
+    # Installed before the engine starts: a stop asked for meanwhile (a `docker stop` in
+    # the first seconds, where Python is PID 1 and a signal nobody handles is dropped) is
+    # kept, and the admin UI is then not started. uvicorn (>= 0.29) also traps SIGINT /
+    # SIGTERM while it serves, from the main thread only; both its handler and ours just
+    # ask the server to exit. (Not on Windows, and not outside the main thread, e.g. the
+    # Windows service thread: request_shutdown() covers those.)
     for sig in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(NotImplementedError, ValueError, RuntimeError, AttributeError):
             loop.add_signal_handler(sig, _request_shutdown)
@@ -412,15 +430,85 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     _shutdown_hooks.append(_from_other_thread)
     if _shutdown_requested.is_set():  # asked to stop before we were ready
         _request_shutdown()
+    guard = None
+    started = False
+    sockets: list = []
     try:
-        await serve_task
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        server.should_exit = True
-        with contextlib.suppress(Exception):
-            await serve_task
+        app = build_app(state)
+
+        # the admin listener's connections: admitted (caps, budget) before TLS, which the
+        # protocol does itself, and each request head on a deadline (web/httpguard.py)
+        guard = state.admin_guard = httpguard.AdminGuard(admin, state.log)
+        uconfig = uvicorn.Config(
+            app,
+            host=admin.bind_ip,
+            port=admin.port,
+            loop="asyncio",
+            log_level="warning",
+            access_log=False,
+            http=httpguard.protocol_class(guard),
+            # at a stop, a response still under way (a large trace download) gets this
+            # long; the WebSockets (console, hex view) are closed at once
+            timeout_graceful_shutdown=SHUTDOWN_HTTP_TIMEOUT_S,
+        )
+        # The admin UI comes before the mappings. Its TLS pair must load, or the start
+        # stops here, before any serial port is opened (a restart loop would otherwise
+        # reset DTR-sensitive devices every few seconds). Its port is taken (listening)
+        # first, so a mapping on the same address and port fails, where the UI shows it
+        # and it can be fixed, instead of keeping the UI from starting.
+        if admin.tls_enabled:
+            try:
+                guard.ssl = httpguard.ssl_context(admin.tls_cert, admin.tls_key, uconfig,
+                                                  admin.tls_key_password)
+            except (OSError, ValueError) as e:  # (tls.TlsFileError is a ValueError)
+                state.log(f"admin UI: the TLS certificate could not be loaded: {e} — "
+                          "ser2net stops (no mapping was started); fix admin_ui.tls_cert / "
+                          "tls_key (an encrypted key: tls_key_password) in config.json")
+                raise SystemExit(1) from None
+        sockets, ui_error = await _admin_sockets(admin, uconfig.backlog)
+        if ui_error:
+            state.log(f"admin UI: {ui_error} — the mappings start anyway; the admin UI tries "
+                      f"again (every {UI_RETRY_MAX_S:g} s at most)")
+        await state.start_engine()
+        started = True
+        backoff = Backoff(cap=UI_RETRY_MAX_S)
+        while not sockets and not stop_asked:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stopping.wait(), timeout=backoff.pause())
+            if stop_asked:
+                break
+            sockets, error = await _admin_sockets(admin, uconfig.backlog)
+            if sockets:
+                state.log(f"admin UI: listening on {host_port(admin.bind_ip, admin.port)} now")
+            elif error != ui_error:
+                ui_error = error
+                state.log(f"admin UI: {error} — trying again")
+        server = guard.server = uvicorn.Server(uconfig)
+        if stop_asked:
+            state.log("stop requested while starting — the admin UI is not started")
+        else:
+            serve_task = asyncio.create_task(server.serve(sockets=sockets))
+            try:
+                await serve_task
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                server.should_exit = True
+                with contextlib.suppress(Exception):
+                    await serve_task
     finally:
         _shutdown_hooks.remove(_from_other_thread)
-        guard.close()
-        state.log("shutting down — stopping all mappings")
-        await state.stop_engine()
+        for sock in sockets:  # (uvicorn closes them itself when it served them)
+            sock.close()
+        if guard is not None:
+            guard.close()
+        if started:
+            state.log("shutting down — stopping all mappings")
+            await stop_engine(state)
     return 0
+
+
+async def _admin_sockets(admin, backlog: int) -> tuple[list, str]:
+    """The admin UI's listening sockets (httpguard.listen), or [] and why not."""
+    try:
+        return await httpguard.listen(admin.bind_ip, admin.port, backlog), ""
+    except OSError as e:
+        return [], str(e)

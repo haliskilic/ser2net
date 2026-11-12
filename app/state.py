@@ -261,7 +261,8 @@ class AppState:
         self._mapping_loggers: dict[str, logging.Logger] = {}
         self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger,
                                      trace_dir=self.traces_dir)
-        self.ports = PortWatcher(interval=2.0)
+        # a serial port that appears wakes the mappings waiting to reopen theirs
+        self.ports = PortWatcher(interval=2.0, on_change=self.supervisor.ports_changed)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
         self.failed_logins = FailedLoginRecords(self.audit)  # their audit records

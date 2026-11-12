@@ -8,6 +8,8 @@ authenticated. Every response is JSON. The OpenAPI 3.0 description is served at
 """
 from __future__ import annotations
 
+import asyncio
+
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -23,15 +25,22 @@ REDACTED = "********"
 
 def _mapping_view(mapping, state) -> dict:
     """A mapping's full config plus its live runtime status. A read-only (viewer)
-    token doesn't get stored secrets (the MQTT password) — the same rule as the web
-    UI, where viewers can't open the edit form or the export. Operator/admin tokens
-    see the real value, so a GET -> PUT round trip keeps working for them."""
+    token doesn't get stored secrets (the MQTT password, the TLS key password) — the
+    same rule as the web UI, where viewers can't open the edit form or the export.
+    Operator/admin tokens see the real value, so a GET -> PUT round trip keeps working
+    for them (a PUT that sends the mask back keeps the stored TLS key password)."""
     view = mapping.to_dict()
-    if (ROLE_RANK.get(state.config.api_token_role, 0) < ROLE_RANK["operator"]
-            and view["mqtt"].get("password")):
-        view["mqtt"]["password"] = REDACTED
+    if ROLE_RANK.get(state.config.api_token_role, 0) < ROLE_RANK["operator"]:
+        for section, secret in (("mqtt", "password"), ("network", "tls_key_password")):
+            if view[section].get(secret):
+                view[section][secret] = REDACTED
     view["status"] = state.supervisor.status(mapping.id)
     return view
+
+
+async def _check_tls_files(mapping) -> None:
+    """MappingConfig.check_tls_files, off the event loop (it reads the files)."""
+    await asyncio.to_thread(mapping.check_tls_files)
 
 
 def build_api_routes(state):
@@ -59,8 +68,13 @@ def build_api_routes(state):
             mapping = MappingConfig.from_dict(body)
             mapping.validate()
             mapping.validate_input()
+            await _check_tls_files(mapping)
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
+                        or state.config.serial_conflict(mapping)  # a port another one uses
+                        or state.config.admin_key_reuse(mapping)):
+            return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
         async with state.config_lock:
             state.config.mappings.append(mapping)
             try:
@@ -89,10 +103,18 @@ def build_api_routes(state):
         body.pop("status", None)
         try:
             mapping = MappingConfig.from_dict(body)
+            stored = state.config.get_mapping(mid)
+            if mapping.network.tls_key_password == REDACTED and stored is not None:
+                mapping.network.tls_key_password = stored.network.tls_key_password
             mapping.validate()
             mapping.validate_input()
+            await _check_tls_files(mapping)
         except (ValueError, ConfigError) as e:
             return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
+        if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
+                        or state.config.serial_conflict(mapping)  # a port another one uses
+                        or state.config.admin_key_reuse(mapping)):
+            return JSONResponse({"error": "validation", "detail": conflict}, status_code=400)
         async with state.config_lock:
             existing = state.config.get_mapping(mid)
             if not existing:
@@ -123,7 +145,10 @@ def build_api_routes(state):
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
             return JSONResponse({"error": "unknown_action"}, status_code=400)
-        ok, name = await ops.apply_action(state, mid, action)
+        try:
+            ok, name = await ops.apply_action(state, mid, action)
+        except ConfigError as e:  # it can't be started (a serial port in use, ...)
+            return JSONResponse({"error": "validation", "detail": str(e)}, status_code=400)
         if not ok:
             return JSONResponse({"error": "not_found"}, status_code=404)
         state.log(f"api: mapping {action}: {name}")
@@ -134,7 +159,7 @@ def build_api_routes(state):
         return JSONResponse({"mappings": state.supervisor.all_status()})
 
     async def ports(request):
-        return JSONResponse({"ports": state.ports.get()})
+        return JSONResponse({"ports": await state.ports.current()})
 
     async def health(request):
         return JSONResponse({"status": "ok", "mappings": len(state.config.mappings)})
@@ -221,6 +246,8 @@ def openapi_spec(admin) -> dict:
                 ],
                 "post": {"summary": "Start/stop/restart a mapping", "security": bearer,
                          "responses": {"200": {"description": "action applied"},
+                                       "400": {"description": "it can't be started (e.g. "
+                                                              "its serial port is in use)"},
                                        "404": {"description": "not found"}}},
             },
         },

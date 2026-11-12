@@ -237,20 +237,30 @@ def test_refused_framing_is_not_kept():
 
 
 def test_refused_flow_control_is_undone():
-    # a driver that can't do XON/XOFF and RTS/CTS at once
+    # a driver without RTS/CTS: XON/XOFF is turned off first (one mode at a time), then
+    # RTS/CTS fails, so XON/XOFF is put back
     ser = DriverSerial(lambda ser: serial.SerialException("SetCommState failed")
-                       if ser._xonxoff and ser._rtscts else None)
+                       if ser._rtscts else None)
     ser.xonxoff = True
     s, logs = session_for(ser)
     s.from_network(sb(5, 3))  # use hardware flow control
     assert s.take_net_out() == CONTROL(2), "answer: the flow control in effect (XON/XOFF)"
     assert (ser._xonxoff, ser._rtscts) == (True, False)
     assert any("SET-CONTROL 03 failed" in ln for ln in logs), logs
-    s.from_network(sb(5, 1) + sb(5, 3))  # no flow control, then hardware: fine now
-    assert (ser._xonxoff, ser._rtscts) == (False, True)
-    assert s.take_net_out() == CONTROL(1) + CONTROL(3)
+    s.from_network(sb(5, 1) + sb(5, 0))  # no flow control, and the query: fine
+    assert (ser._xonxoff, ser._rtscts) == (False, False)
+    assert s.take_net_out() == CONTROL(1) + CONTROL(1)
+    # a port that has both: one mode at a time
+    ser = DriverSerial(lambda ser: None)
+    ser.xonxoff = True
+    s, logs = session_for(ser)
+    s.from_network(sb(5, 3))
+    assert (ser._xonxoff, ser._rtscts) == (False, True) and s.take_net_out() == CONTROL(3)
+    s.from_network(sb(5, 2))
+    assert (ser._xonxoff, ser._rtscts) == (True, False) and s.take_net_out() == CONTROL(2)
+    assert not logs, logs
     print("a flow control change the port refuses is undone and answered with what is in "
-          "effect  OK")
+          "effect; flow control is one mode at a time  OK")
 
 
 def test_failed_purge_is_acknowledged():

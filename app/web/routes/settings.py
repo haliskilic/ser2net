@@ -21,8 +21,10 @@ from ... import i18n, importer, optional
 from ...config import (
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
     WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
-    backup_time, new_pwd_version, parse_cluster_peer,
+    backup_time, data_path, host_port, new_pwd_version, parse_cluster_peer, serial_conflict,
+    tls_file_message,
 )
+from ...engine import tls
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
 from .. import auth, ldap_auth, selfsigned
@@ -195,14 +197,26 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
+        # never shown: a blank field keeps the stored password, unless the box removes it
+        password = (form.get("tls_key_password", "") or (
+            "" if _checkbox(form, "tls_key_password_clear")
+            else state.config.admin_ui.tls_key_password))
+        if cert and key:
+            # a pair that exists but doesn't load would stop the next start (runtime._serve)
+            try:
+                await asyncio.to_thread(_load_tls_pair, cert, key, password)
+            except tls.TlsFileError as e:
+                return await settings_get(request, error=_(
+                    "The TLS certificate and key could not be loaded: {0}").format(
+                    tls_file_message(e)))
         async with state.config_lock:
-            old = (state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key)
-            state.config.admin_ui.tls_cert = cert
-            state.config.admin_ui.tls_key = key
+            admin = state.config.admin_ui
+            old = (admin.tls_cert, admin.tls_key, admin.tls_key_password)
+            admin.tls_cert, admin.tls_key, admin.tls_key_password = cert, key, password
             try:
                 await state.asave()
             except ConfigError as e:
-                state.config.admin_ui.tls_cert, state.config.admin_ui.tls_key = old
+                admin.tls_cert, admin.tls_key, admin.tls_key_password = old
                 return await settings_get(request, error=str(e))
         ctx.audit(request, "admin_tls_set", cert)
         return await settings_get(request, ok=_("Admin TLS saved. Restart to apply."))
@@ -223,6 +237,7 @@ def routes(ctx: Ctx) -> list:
         async with state.config_lock:
             state.config.admin_ui.tls_cert = cert
             state.config.admin_ui.tls_key = key
+            state.config.admin_ui.tls_key_password = ""  # (the key it writes is not encrypted)
             await state.asave()
         ctx.audit(request, "admin_tls_generate", "")
         return await settings_get(request, ok=_("Self-signed certificate generated. Restart to "
@@ -703,12 +718,13 @@ def routes(ctx: Ctx) -> list:
         """Show what importing `plan` would change; nothing changes until it is applied."""
         current = state.config.mappings
         rows = importer.plan_rows(current, plan.mappings, mode)
-        candidate, _touched = importer.apply_import(current, plan.mappings, mode)
+        candidate, touched = importer.apply_import(current, plan.mappings, mode)
         problem = None
         try:
             dataclasses.replace(state.config, mappings=candidate).validate_for_save()
         except ConfigError as e:
             problem = str(e)
+        problem = problem or _own_port_conflict(state.config, touched, candidate)
         preview = {"token": _pending_put(_who(request), plan), "mode": mode, "rows": rows,
                    "source": plan.source, "warnings": plan.warnings, "problem": problem,
                    "count": len(plan.mappings)}
@@ -736,6 +752,8 @@ def routes(ctx: Ctx) -> list:
         async with state.config_lock:
             old = state.config.mappings
             new_maps, touched = importer.apply_import(old, plan.mappings, mode)
+            if conflict := _own_port_conflict(state.config, touched, new_maps):  # UI's port, ...
+                return await settings_get(request, error=_("Import rejected: {0}").format(conflict))
             state.config.mappings = new_maps
             try:
                 await state.asave()
@@ -913,6 +931,12 @@ def routes(ctx: Ctx) -> list:
             for f in dataclasses.fields(AppConfig):
                 if f.name not in keep:
                     setattr(cur, f.name, getattr(restored, f.name))
+            # a backup made before the data directory moved (or on another machine) names
+            # TLS files of the old one: those of this data directory's tls folder are used
+            moved = cur.find_moved_tls_files(state.data_dir)
+            if moved:
+                notes.append(_("TLS files the backup names in another data directory are "
+                               "used from this one's tls folder."))
             if with_accounts:
                 cur.secret_key = secrets.token_hex(32)
             else:  # both cluster keys are credentials: the key and the one still accepted
@@ -952,7 +976,7 @@ def routes(ctx: Ctx) -> list:
             i18n.reset(tok)
         state.log(f"configuration restored from backup {name} "
                   f"({'with' if with_accounts else 'without'} its accounts)")
-        for note in restored.load_notes:  # what loading the backup changed, as at start-up
+        for note in restored.load_notes + moved:  # what loading the backup changed, as at start-up
             state.log(note)
         ctx.audit(request, "config_backup_restore",
                   "; ".join([name, "accounts restored" if with_accounts else "accounts kept",
@@ -1140,6 +1164,24 @@ def routes(ctx: Ctx) -> list:
     ]
 
 
+def _own_port_conflict(config, mappings, result) -> str:
+    """The first of ``mappings`` (an import's new and changed ones) that can't listen next
+    to ser2net's own listeners (AppConfig.own_port_conflict) or would share a serial port
+    with another enabled one of ``result`` (the mappings after the import; serial_conflict),
+    "" when none."""
+    return next((c for m in mappings
+                 if (c := config.own_port_conflict(m) or serial_conflict(m, result))), "")
+
+
+def _load_tls_pair(cert: str, key: str, password: str) -> None:
+    """Load a certificate and key as the admin UI will, an encrypted key with ``password``
+    (raises tls.TlsFileError). A file that is missing is left to the save, which says
+    which one."""
+    if not (os.path.isfile(data_path(cert)) and os.path.isfile(data_path(key))):
+        return
+    tls.tls_context(server_side=True, cert=cert, key=key, password=password)
+
+
 def _key_hint(key: str) -> str:
     """Why the cluster key deserves a warning: "weak" (any host on the network can try
     to guess it offline from a beacon), "ascii" (nodes up to 2.8.0 can't use it) or ""."""
@@ -1171,7 +1213,7 @@ def _setting_changes(old, new) -> list[str]:
     o, n = old.admin_ui, new.admin_ui
     diff(_("Login required"), onoff(o.require_login), onoff(n.require_login))
     diff(_("Role for visitors without login"), o.anonymous_role, n.anonymous_role)
-    diff(_("Admin UI address"), f"{o.bind_ip}:{o.port}", f"{n.bind_ip}:{n.port}")
+    diff(_("Admin UI address"), host_port(o.bind_ip, o.port), host_port(n.bind_ip, n.port))
     diff(_("Admin TLS (HTTPS)"), onoff(o.tls_enabled), onoff(n.tls_enabled))
     for label, a, b in (("LDAP", old.ldap, new.ldap), ("OIDC", old.oidc, new.oidc)):
         diff(label, onoff(a.enabled), onoff(b.enabled))

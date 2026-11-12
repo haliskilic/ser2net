@@ -36,6 +36,8 @@ def title(event: str) -> str:
         "device_lost": _("serial device lost"),
         "device_back": _("serial device back"),
         "start_failed": _("mapping failed to start"),
+        "link_lost": _("connection to the remote server lost"),
+        "link_back": _("connection to the remote server back"),
         "client_connected": _("client connected"),
         "client_disconnected": _("client disconnected"),
         "login_failed": _("failed sign-in"),
@@ -46,7 +48,14 @@ _LOST = ("reconnecting", "device-missing")
 
 def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, str, str, str]]:
     """Events between two status snapshots: [(event, key, mapping name, detail)].
-    A mapping seen for the first time produces none (start-up)."""
+    A mapping seen for the first time produces none, unless it is in trouble: one that
+    failed at start-up (see baseline) or a new one that failed to start says so once, and
+    so does a connect-out link that is down.
+
+    A connect-out link (``link``) is lost when an attempt to connect fails while it was
+    up or connecting, and back when it is up again after that: a link that is closed and
+    at once connected again (a max connection time or idle timeout, the remote closing
+    it) goes through "connecting", not "down", so it is not reported."""
     events = []
     for mid, st in statuses.items():
         name = names.get(mid)
@@ -54,9 +63,14 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
             continue
         old = prev.get(mid)
         state, peers = st.get("state"), {c.get("peer") for c in st.get("clients") or []}
+        link = st.get("link") or ""
         if old is None:
+            if state == "error":
+                events.append(("start_failed", mid, name, st.get("last_error") or ""))
+            if link == "down":
+                events.append(("link_lost", mid, name, st.get("link_error") or ""))
             continue
-        old_state, old_peers = old
+        old_state, old_peers, old_link = old
         device = st.get("device") or ""
         if old_state == "running" and state in _LOST:
             events.append(("device_lost", mid, name, st.get("last_error") or device))
@@ -64,6 +78,10 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
             events.append(("device_back", mid, name, device))
         if state == "error" and old_state != "error":
             events.append(("start_failed", mid, name, st.get("last_error") or ""))
+        if link == "down" and old_link in ("up", "connecting"):
+            events.append(("link_lost", mid, name, st.get("link_error") or ""))
+        elif link == "up" and old_link == "down":
+            events.append(("link_back", mid, name, ", ".join(sorted(peers))))
         for p in sorted(peers - old_peers):
             events.append(("client_connected", f"{mid}:{p}", name, p))
         for p in sorted(old_peers - peers):
@@ -72,8 +90,17 @@ def status_events(prev: dict, statuses: dict, names: dict) -> list[tuple[str, st
 
 
 def snapshot(statuses: dict) -> dict:
-    return {mid: (st.get("state"), {c.get("peer") for c in st.get("clients") or []})
+    return {mid: (st.get("state"), {c.get("peer") for c in st.get("clients") or []},
+                  st.get("link") or "")
             for mid, st in statuses.items()}
+
+
+def baseline(statuses: dict) -> dict:
+    """The snapshot the watcher starts from (right after the mappings started): one that
+    failed to start, or whose connect-out link is down already, is left out, so that this
+    is reported (once) like a later failure."""
+    return {mid: snap for mid, snap in snapshot(statuses).items()
+            if snap[0] != "error" and snap[2] != "down"}
 
 
 def message(event: str, mapping: str, detail: str) -> tuple[str, str]:
@@ -152,7 +179,7 @@ class Notifier:
         return self.state.config.notifications
 
     async def start(self) -> None:
-        self._prev = snapshot(self.state.supervisor.all_status())
+        self._prev = baseline(self.state.supervisor.all_status())
         self._tasks = [asyncio.create_task(self._watch(), name="notify-watch"),
                        asyncio.create_task(self._worker(), name="notify-send")]
 

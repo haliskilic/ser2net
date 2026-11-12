@@ -303,6 +303,36 @@ def test_mapping_form_rfc2217_restore():
     print("mapping form: the RFC 2217 restore option, for RFC 2217 mappings only  OK")
 
 
+def test_mapping_form_port_lock():
+    """The port-lock options are offered for each serial side, each with its hidden presence
+    marker in the same block (so an older peer's form, which has neither, keeps the stored
+    values), ticked when on; the flock box says what it locks."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+    tpl = make_templates().env.get_template("_mapping_form.html")
+    for on in (False, True):
+        adv = {"tiocexcl": on, "respect_uucp_locks": on}
+        m = MappingConfig.from_dict({"id": "sb1", "name": "sb", "kind": "serialbridge",
+                                     "serial": {"port": "COM3", "advanced": adv},
+                                     "serial_b": {"port": "COM4", "advanced": adv}})
+        out = tpl.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                         ports=[], ips=[], error=None)
+        root = parse(out)
+        for prefix in ("serial_", "serial_b_"):
+            fields = {n.attrs["name"]: n for n in root.walk()
+                      if n.attrs.get("name", "").startswith(prefix)}
+            block = [next(a for a in fields[prefix + name].ancestors() if a.tag == "details")
+                     for name in ("port_lock_shown", "tiocexcl", "respect_uucp_locks")]
+            assert block[0] is block[1] is block[2], prefix
+            for name in ("tiocexcl", "respect_uucp_locks"):
+                assert ("checked" in fields[prefix + name].attrs) is on, (prefix, name)
+            assert ("open" in block[0].attrs) is on
+        assert "Lock the port (flock)" in out and "Exclusive open" not in out
+    print("mapping form: the port-lock options for each serial side, with their markers  OK")
+
+
 def test_mqtt_command_tags():
     """The dashboard tags a Modbus mapping whose writable points take MQTT commands CMD,
     as a warning (CMD ⚠) when its broker connection has no TLS or no username; a read-only
@@ -348,6 +378,44 @@ def test_mqtt_command_tags():
           "read-only is RO only  OK")
 
 
+def test_mqtt_tx_tags():
+    """A serial mapping that writes MQTT messages on <base_topic>/tx to the device is tagged
+    CMD too (CMD ⚠ and a form banner without TLS or a username); read-only or tx off: not."""
+    class Req:
+        class state:
+            csrf_token = "t"
+            user = None
+
+    def serial(mid, mqtt=None, **network):
+        return MappingConfig.from_dict({
+            "id": mid, "name": mid, "serial": {"port": "COM3"},
+            "network": dict({"protocol": "raw", "port": 4001}, **network),
+            "mqtt": dict({"enabled": True, "host": "b", "base_topic": "lab/scale",
+                          "tx_enabled": True}, **(mqtt or {}))})
+    env = make_templates().env
+    rows, form = env.get_template("_mappings_body.html"), env.get_template("_mapping_form.html")
+
+    def row(m):
+        out = rows.render(mappings=[m], statuses={}, can_edit=False)
+        check_table_contract(out, f"mappings table ({m.id})")
+        return out
+
+    def form_of(m):
+        return form.render(request=Req, mapping=m, is_new=False, modbus_points_json="",
+                           ports=[], ips=[], error=None)
+
+    out = row(serial("open"))
+    assert ">CMD ⚠</span>" in out and "tag tag-danger" in out, out
+    assert "&lt;topic&gt;/tx are written to the device" in out
+    assert 'class="banner warn"' in form_of(serial("open"))
+    secure = serial("secure", {"tls": True, "username": "u"})
+    assert ">CMD</span>" in row(secure) and "tag-danger" not in row(secure)
+    assert 'class="banner warn"' not in form_of(secure)
+    for m in (serial("ro", read_only=True), serial("off", {"tx_enabled": False})):
+        assert ">CMD" not in row(m) and 'class="banner warn"' not in form_of(m), m.id
+    print("CMD tag and the form warning for MQTT writes to a serial mapping (<topic>/tx)  OK")
+
+
 def test_mapping_form_kick_hint():
     """A server mapping with "Kick old client" on and no allow-list says, in its form, that any
     host reaching the port can take the connection over; with an allow-list, or without
@@ -380,8 +448,10 @@ def main():
     test_mapping_form_modbus_fields()
     test_mapping_form_udp_fields()
     test_mapping_form_rfc2217_restore()
+    test_mapping_form_port_lock()
     test_mapping_form_kick_hint()
     test_mqtt_command_tags()
+    test_mqtt_tx_tags()
     print("\nPASS: UI markup contract")
 
 

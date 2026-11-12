@@ -10,7 +10,7 @@ One module per area; each exposes ``routes(ctx)``:
   login      sign-in, logout, first-run setup, OIDC SSO
   settings   the Settings page and its forms, mappings export/import
   mappings   dashboard, mapping table/form/actions, log and console panels
-  console    the console WebSocket
+  console    the console and hex-view WebSockets, the console's serial BREAK
   cluster    LAN cluster view, remote control and remote edit
   system     /healthz, /metrics, serial port list
 Shared helpers live in common (Ctx), forms (form parsing) and ops (mapping operations).
@@ -36,8 +36,9 @@ def build_routes(templates, state, static_dir) -> list:
         *settings.routes(ctx),
         # JSON REST API (bearer-token auth, enforced in GuardMiddleware)
         *build_api_routes(state),
-        *mappings.routes(ctx),
+        # before mappings: its POST /api/mappings/{mid}/{action} would take .../break
         *console.routes(ctx),
+        *mappings.routes(ctx),
         *cluster.routes(ctx),
         *system.routes(ctx),
         Mount("/static", app=StaticFiles(directory=static_dir), name="static"),

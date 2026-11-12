@@ -125,6 +125,9 @@ def _serial_dict(form, prefix: str, strict: bool) -> dict:
             "rs485_delay_after_tx_ms": _num(form, prefix + "rs485_delay_after_tx_ms",
                                             0.0, strict=False, cast=float),
             "rs485_rts_level_for_tx": _checkbox(form, prefix + "rs485_rts_level_for_tx"),
+            **({"tiocexcl": _checkbox(form, prefix + "tiocexcl"),
+                "respect_uucp_locks": _checkbox(form, prefix + "respect_uucp_locks")}
+               if prefix + "port_lock_shown" in form else {}),
         },
     }
 
@@ -140,11 +143,21 @@ _OPTIONAL_FORM_FIELDS = {
     "network_keepalive_idle_s": ("network", ("tcp_keepalive", "keepalive_idle_s",
                                              "keepalive_interval_s", "keepalive_count")),
     "network_connect_timeout_s": ("network", ("connect_timeout_s",)),
+    # connect-out TLS: the server certificate's CA file and pin
+    "network_tls_ca": ("network", ("tls_ca",)),
+    "network_tls_fingerprint": ("network", ("tls_fingerprint",)),
+    # TLS listener: the CA file the clients' certificates must come from
+    "network_tls_client_ca": ("network", ("tls_client_ca",)),
     "opt_max_connection_time_s": ("options", ("max_connection_time_s",)),
     "opt_trace_max_mb": ("options", ("trace_max_mb", "trace_keep")),
     "mqtt_payload_format": ("mqtt", ("payload_format", "sparkplug_group_id", "sparkplug_node_id")),
     # a checkbox (absent when unticked) shown for plain-format Modbus points only
     "mqtt_apply_retained_set_shown": ("mqtt", ("apply_retained_set",)),
+    # serial lines (not a Modbus gateway): the line end, and writes from <base_topic>/tx
+    "mqtt_line_end": ("mqtt", ("line_end",)),
+    "mqtt_tx_shown": ("mqtt", ("tx_enabled",)),
+    # not a Modbus gateway: the poll string (its checkbox is absent when unticked)
+    "opt_poll_interval_s": ("options", ("poll_string", "poll_interval_s", "poll_with_clients")),
     # not offered for a Modbus gateway, which has no per-client output buffer and can't
     # send a banner or act on a close-on string (bytes outside Modbus frames)
     "network_client_queue_max": ("network", ("client_queue_max",)),
@@ -152,20 +165,39 @@ _OPTIONAL_FORM_FIELDS = {
     "opt_closeon": ("options", ("closeon",)),
     # a checkbox (absent when unticked) shown for RFC 2217 mappings only
     "opt_rfc2217_restore_on_disconnect_shown": ("options", ("rfc2217_restore_on_disconnect",)),
+    # shown for RFC 2217 mappings only
+    "opt_rfc2217_signature": ("options", ("rfc2217_signature",)),
+    # a checkbox (absent when unticked) shown for TCP raw / telnet / RFC 2217 mappings only
+    "network_disconnect_without_device_shown": ("network", ("disconnect_without_device",)),
     # UDP only: where the device's output goes
     "network_udp_peer_timeout_s": ("network", ("udp_peer_host", "udp_peer_port",
                                                "udp_peer_timeout_s")),
+    "network_udp_targets_shown": ("network", ("udp_targets", "udp_broadcast")),
+    # the bind IP choice "All interfaces (IPv4 + IPv6)": an older node's form doesn't
+    # offer it (_preserve_unmanaged_fields keeps it only while the bind IP is a wildcard)
+    "network_dual_stack_shown": ("network", ("dual_stack",)),
+    # checkboxes (absent when unticked) an older node's form doesn't have; a section with a
+    # dot is a section of a section
+    "serial_port_lock_shown": ("serial.advanced", ("tiocexcl", "respect_uucp_locks")),
+    "serial_b_port_lock_shown": ("serial_b.advanced", ("tiocexcl", "respect_uucp_locks")),
 }
+
+
+def _section(mapping, path: str):
+    for name in path.split("."):
+        mapping = getattr(mapping, name)
+    return mapping
 
 
 def _build_mapping_dict(form, strict: bool) -> dict:
     bind = form.get("network_bind_ip", "0.0.0.0")
     if bind == "custom":
         bind = form.get("network_bind_ip_custom", "").strip()
+    both = bind == netinfo.BOTH_FAMILIES  # every interface, IPv4 and IPv6
     network = {
         "mode": form.get("network_mode", "server"),
         "protocol": form.get("network_protocol", "raw"),
-        "bind_ip": bind or "0.0.0.0",
+        "bind_ip": "0.0.0.0" if both else bind or "0.0.0.0",
         "port": _num(form, "network_port", 4001, strict=strict),
         "remote_host": form.get("network_remote_host", "").strip(),
         "remote_port": (_num(form, "network_remote_port", 0, strict=strict)
@@ -178,6 +210,8 @@ def _build_mapping_dict(form, strict: bool) -> dict:
         "tls": _checkbox(form, "network_tls"),
         "tls_cert": form.get("network_tls_cert", "").strip(),
         "tls_key": form.get("network_tls_key", "").strip(),
+        # never shown in the form: blank keeps the stored one (_preserve_unmanaged_fields)
+        "tls_key_password": form.get("network_tls_key_password", ""),
     }
     if "network_keepalive_idle_s" in form:
         network.update(
@@ -186,6 +220,13 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             keepalive_interval_s=_num(form, "network_keepalive_interval_s", 10, strict=strict),
             keepalive_count=_num(form, "network_keepalive_count", 3, strict=strict),
         )
+    if "network_dual_stack_shown" in form:
+        network["dual_stack"] = both
+    if "network_disconnect_without_device_shown" in form:
+        network["disconnect_without_device"] = _checkbox(form, "network_disconnect_without_device")
+    for key in ("tls_ca", "tls_fingerprint", "tls_client_ca"):
+        if f"network_{key}" in form:
+            network[key] = form.get(f"network_{key}", "").strip()
     if "network_connect_timeout_s" in form:
         network["connect_timeout_s"] = _num(form, "network_connect_timeout_s", 10.0,
                                             strict=strict, cast=float)
@@ -199,6 +240,9 @@ def _build_mapping_dict(form, strict: bool) -> dict:
             udp_peer_timeout_s=(_num(form, "network_udp_peer_timeout_s", 0, strict=strict)
                                 if form.get("network_udp_peer_timeout_s") else 0),
         )
+    if "network_udp_targets_shown" in form:
+        network.update(udp_targets=_split(form.get("network_udp_targets", "")),
+                       udp_broadcast=_checkbox(form, "network_udp_broadcast"))
     options = {
         "idle_timeout_s": _num(form, "opt_idle_timeout_s", 0, strict=strict),
         "trace_both": form.get("opt_trace_both", "").strip(),
@@ -216,6 +260,14 @@ def _build_mapping_dict(form, strict: bool) -> dict:
     if "opt_rfc2217_restore_on_disconnect_shown" in form:
         options["rfc2217_restore_on_disconnect"] = _checkbox(
             form, "opt_rfc2217_restore_on_disconnect")
+    if "opt_rfc2217_signature" in form:
+        options["rfc2217_signature"] = form.get("opt_rfc2217_signature", "").strip()
+    if "opt_poll_interval_s" in form:
+        options.update(
+            poll_string=form.get("opt_poll_string", ""),
+            poll_interval_s=(_num(form, "opt_poll_interval_s", 0.0, strict=strict, cast=float)
+                             if form.get("opt_poll_interval_s") else 0.0),
+            poll_with_clients=_checkbox(form, "opt_poll_with_clients"))
     return {
         "id": form.get("id") or None,
         "name": (form.get("name", "").strip() if strict else form.get("name", "")),
@@ -241,6 +293,9 @@ def _build_mapping_dict(form, strict: bool) -> dict:
                if "mqtt_payload_format" in form else {}),
             **({"apply_retained_set": _checkbox(form, "mqtt_apply_retained_set")}
                if "mqtt_apply_retained_set_shown" in form else {}),
+            **({"line_end": form.get("mqtt_line_end", "lf")} if "mqtt_line_end" in form else {}),
+            **({"tx_enabled": _checkbox(form, "mqtt_tx_enabled")}
+               if "mqtt_tx_shown" in form else {}),
         },
         "modbus_poll": {
             "interval_s": _num(form, "modbus_poll_interval_s", 5.0, strict=False, cast=float),
@@ -288,8 +343,21 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
         for marker, (section, attrs) in _OPTIONAL_FORM_FIELDS.items():
             if marker not in form:
                 for attr in attrs:
-                    setattr(getattr(new_map, section), attr,
-                            getattr(getattr(existing, section), attr))
+                    setattr(_section(new_map, section), attr,
+                            getattr(_section(existing, section), attr))
+        net = new_map.network
+        if not form.get("network_tls_key_password", ""):
+            # the form never shows the stored TLS key password: a blank field (or a form
+            # without it: an older node's) keeps it, unless the remove box is ticked
+            net.tls_key_password = ("" if _checkbox(form, "network_tls_key_password_clear")
+                                    else existing.network.tls_key_password)
+        if "network_dual_stack_shown" not in form:
+            # an older node's form (which may list this node's choices all the same): the
+            # stored setting stays while the bind IP is a wildcard
+            if form.get("network_bind_ip") == netinfo.BOTH_FAMILIES:
+                net.dual_stack = True
+            elif not net.both_families:
+                net.dual_stack = False
     for prefix, cur, old in (("serial_", new_map.serial, existing.serial),
                              ("serial_b_", new_map.serial_b, existing.serial_b)):
         # the USB-identity binding is in the form now (ops.apply_usb_match); a form
@@ -307,18 +375,33 @@ def _preserve_unmanaged_fields(new_map, existing, form=None) -> None:
     o.modbus_response_timeout_s = prev.modbus_response_timeout_s
 
 
+def tls_password_view(stored: str, form=None) -> dict:
+    """What _mapping_form.html shows of a mapping's TLS key password: whether one is stored,
+    never the password itself; re-drawn after an error, what was typed and the remove box
+    (without these, the form goes by the mapping it shows)."""
+    return {"tls_pw_stored": bool(stored),
+            "tls_pw_typed": form.get("network_tls_key_password", "") if form is not None else "",
+            "tls_pw_clear": form is not None and _checkbox(form, "network_tls_key_password_clear")}
+
+
 def _form_error(render, request, state, form, message: str):
     """Re-render the mapping form with the submitted values and an error banner."""
+    existing = None
     try:
         mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
         # keep stored values for fields this form didn't post (else the re-rendered,
         # hidden inputs would carry defaults into the next save)
-        _preserve_unmanaged_fields(mapping, state.config.get_mapping(mapping.id), form)
+        existing = state.config.get_mapping(mapping.id)
+        _preserve_unmanaged_fields(mapping, existing, form)
     except Exception:
         mapping = MappingConfig(name=form.get("name", ""))
     is_new = not form.get("id")
+    ports = portlist.visible(state.ports.get())
     return render(request, "_mapping_form.html", status_code=400,
                   mapping=mapping, is_new=is_new,
                   modbus_points_json=_modbus_points_json(mapping),
-                  ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
-                  error=message)
+                  ports=ports, ips=netinfo.list_ip_candidates(),
+                  links=portlist.links(ports, (mapping.serial.port, mapping.serial_b.port)),
+                  error=message,
+                  **tls_password_view(existing.network.tls_key_password if existing else "",
+                                      form))

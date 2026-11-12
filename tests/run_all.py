@@ -78,6 +78,8 @@ PORTABLE = [
     "test_single_instance.py",
     "test_notifications.py",
     "test_ports_usb_identity.py",
+    "test_port_watcher.py",
+    "test_port_picker.py",
     "test_dashboard.py",
     "test_modbus_mqtt_write.py",
     "test_modbus_write.py",
@@ -87,12 +89,18 @@ PORTABLE = [
     "test_i18n.py",
     "test_mapping_ids.py",
     "test_serial_url_ports.py",
+    "test_serial_port_names.py",
     "test_cluster_peer_save.py",
     "test_access_policy.py",
     "test_traffic_counters.py",
     "test_protocol_parsers.py",
+    "test_protocol_commands.py",   # telnet / RFC 2217 BREAK, answers and command order
+    "test_console_break.py",       # the web console's BREAK; POSIX PTYs, skips on Windows
+    "test_device_unavailable.py",  # disconnect_without_device (stand-in port, loopback)
+    "test_serial_mqtt.py",         # MQTT line ends, <topic>/tx writes, the poll string
     "test_rfc2217_settings.py",
     "test_serial_fd_ceiling.py",  # POSIX PTYs (os.openpty); skips on Windows
+    "test_serial_compat.py",      # PTY parts POSIX only; the transport parts run on Windows too
     "test_fd_limits.py",
     "test_tls_admission.py",
     "test_admin_limits.py",
@@ -100,6 +108,15 @@ PORTABLE = [
     "test_cluster_peer_calls.py",
     "test_cluster_settings.py",
     "test_changelog.py",
+    "test_shutdown.py",         # SIGTERM-during-start part: POSIX
+    "test_listener_retry.py",
+    "test_admin_ui_first.py",
+    "test_connect_out_link.py",
+    "test_serial_diagnostics.py",  # PTY parts POSIX / Linux only; the rest runs on Windows too
+    "test_serial_retries.py",      # PTY parts POSIX only; the rest runs on Windows too
+    "test_ipv6.py",                # IPv6 parts skip where the machine has no IPv6 loopback
+    "test_tls_mapping.py",         # a mapping's TLS files; needs cryptography (SKIP without)
+    "test_tls_paths.py",           # TLS paths in a moved data directory; most need cryptography
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the

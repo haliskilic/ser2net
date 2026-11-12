@@ -11,15 +11,20 @@ parser, and turns every ser2net connection into a dict for MappingConfig.from_di
 What has no equivalent here (LEDs, rotators, mDNS, chardelay, ...) is reported as a
 warning that names the connection. A connection that would be more open here than in
 ser2net is imported disabled, with a warning that says why: its gtlssh login
-(certauth) or TLS client certificates (ssl clientauth) cannot be carried over, its TLS
-certificate is not on this host (with the files there it keeps TLS), the device only
+(certauth) cannot be carried over, its TLS client certificates (ssl clientauth) only with
+the CA file they are checked against (CA=) on this host, its TLS certificate is not on
+this host (with the files there it keeps TLS), the device only
 received data (wronly, rawlp, no-con-to-acc), its bind address or remaddr cannot be
 used here. A connection that cannot be represented at all (a network or IPMI
 connector, a unix-socket accepter) is skipped with a warning, so every returned dict
 passes MappingConfig.validate(). ser2net only opens a serial device while a client is
 connected, so several of its ports may share one device; a mapping here keeps its
 device open, so later connections on the same device are imported disabled, and a
-repeated listening port is skipped: the import can then be applied as a whole.
+repeated listening port is skipped: the import can then be applied as a whole. ser2net's
+locking carries over: 4.x flock (flock plus TIOCEXCL) and uucplock, on by default, become
+exclusive + tiocexcl and respect_uucp_locks (UUCP lock files are honoured, not made), 3.x
+UUCP locking respect_uucp_locks; one warning says what still differs (the port is held
+open, no lock files are made).
 """
 from __future__ import annotations
 
@@ -32,7 +37,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .config import (
-    MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, trace_file_name, url_port,
+    MAX_TIMER_S, RFC2217_SIGNATURE_MAX, ConfigError, MappingConfig, _ip_overlaps,
+    bind_ip_problem, canonical_device, canonical_ip, trace_file_name, url_port,
 )
 from .i18n import _
 
@@ -572,9 +578,12 @@ class _Conn:
     trace_mods: dict[tuple[str, str], bool] = field(default_factory=dict)
     access_given: bool = False                    # remaddr gave an address (a client limit)
     remaddr_set: bool = False                     # 3.x remaddr= (even empty): no default then
+    any_family: bool = False  # no family or address: ser2net listened on IPv4 and IPv6
     holds: list[str] = field(default_factory=list)  # why it comes in disabled (else more open)
     ssl: Optional[dict[str, Any]] = None             # the accepter's ssl layer (_ssl_layer)
     remctl: bool = False                                         # 3.x RFC2217 flag
+    flock: bool = True       # gensio serialdev flock (flock + TIOCEXCL), on by default
+    uucplock: bool = True    # gensio serialdev uucplock (UUCP lock files), on by default
     dropped: dict[str, None] = field(default_factory=dict)       # options with no equivalent
     notes: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)             # why it is not imported
@@ -690,29 +699,25 @@ def _listen_address(c: _Conn, fields: list[str]) -> bool:
         return False
     c.network["port"] = port
     c.network["bind_ip"] = _bind_ip(c, host, family)
+    if c.network["bind_ip"] == "::":
+        # IPv6 only, also for UDP where IPv6 sockets take IPv4 by default (MappingConfig.
+        # from_dict reads a UDP mapping on :: without the key as an older release ran it)
+        c.network["dual_stack"] = False
+    c.any_family = not family and not host.strip("[]")
     return True
 
 
 def _bind_ip(c: _Conn, host: str, family: str) -> str:
     """The bind IP for a listen host. Never wider than ser2net listened: a loopback
-    stays loopback, and an address that cannot be used here (a host name) gives
+    stays loopback (::1 too), and an address that cannot be used here (a host name) gives
     0.0.0.0 with the mapping imported disabled until its bind IP is set."""
     h = host.strip("[]")
-    if not h:
-        return "::" if family == "ipv6" else "0.0.0.0"
+    if not h:  # (ipv6n4: IPv6 without IPv4-mapped addresses)
+        return "::" if family in ("ipv6", "ipv6n4") else "0.0.0.0"
     if h.lower() == "localhost":
         return "127.0.0.1"
-    try:
-        ip: Optional[ipaddress.IPv4Address | ipaddress.IPv6Address] = ipaddress.ip_address(h)
-    except ValueError:
-        ip = None
-    if ip is not None and ip.version == 6 and ip.is_loopback:
-        c.note(_("listen address {0} (IPv6 loopback) is not accepted as a bind IP here: the "
-                 "mapping listens on 127.0.0.1").format(host))
-        return "127.0.0.1"
-    if ip is not None and not ip.is_multicast and not (
-            ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
-        return str(ip)
+    if not bind_ip_problem(h):
+        return canonical_ip(h)
     c.hold(_("listen address '{0}' cannot be used as a bind IP here: the mapping listens on "
              "0.0.0.0 and is imported disabled; set its bind IP, then enable it").format(host))
     return "0.0.0.0"
@@ -765,33 +770,46 @@ _SSL_FILES = {"key": "/etc/ser2net/ser2net.key", "cert": "/etc/ser2net/ser2net.c
 
 
 def _ssl_layer(opts: list[str], defaults: dict[str, str]) -> dict[str, Any]:
-    """ssl(key=..,cert=..,clientauth) -> {key, cert, clientauth}; what the layer leaves
-    out comes from the file's ssl defaults, then from ser2net's own files."""
-    found = {**_SSL_FILES, **defaults}
+    """ssl(key=..,cert=..,CA=..,clientauth) -> {key, cert, ca, clientauth}; what the layer
+    leaves out comes from the file's ssl defaults, then from ser2net's own files (no CA
+    file of its own)."""
+    found = {**_SSL_FILES, "ca": "", **defaults}
     auth = found.pop("clientauth", "").strip()
     clientauth = bool(auth) and _bool(auth) is not False  # a default without a value is off
     for o in opts:
         name, eq, value = o.partition("=")
         name = name.strip().lower()
-        if name in ("key", "cert"):
+        if name in ("key", "cert", "ca"):
             found[name] = value.strip()
         elif name == "clientauth":
             clientauth = not eq or _bool(value) is not False
     # an empty cert= means the certificate is in the key file
-    return {"key": found["key"], "cert": found["cert"] or found["key"], "clientauth": clientauth}
+    return {"key": found["key"], "cert": found["cert"] or found["key"], "ca": found["ca"],
+            "clientauth": clientauth}
 
 
 def _tls(c: _Conn) -> None:
     """The accepter's ssl layer: TLS with the same certificate when its files are on this
-    host, else the mapping comes in disabled rather than unencrypted. Client
-    certificates (clientauth) are not checked here: such a mapping comes in disabled."""
+    host, else the mapping comes in disabled rather than unencrypted. Client certificates
+    (clientauth) are checked against the CA file it names (CA=, also an ssl default) when
+    that file is on this host, else the mapping comes in disabled rather than open to
+    clients without a certificate."""
     s = c.ssl
     if s is None:
         return
     if s["clientauth"]:
-        c.hold(_("TLS client certificates (ssl clientauth) are not available here: the mapping "
-                 "is imported disabled rather than open to clients without a certificate; "
-                 "allow only known client IPs on it before you enable it"))
+        ca = s["ca"]
+        if ca and os.path.isabs(ca) and os.path.isfile(ca):
+            c.network["tls_client_ca"] = ca
+            c.note(_("TLS client certificates (ssl clientauth) are kept: clients need a "
+                     "certificate from the CA file '{0}'").format(ca))
+        else:
+            c.hold(_("TLS client certificates (ssl clientauth) are checked here only against "
+                     "a CA file on this host, and {0}: the mapping is imported disabled rather "
+                     "than open to clients without a certificate; set its client CA file "
+                     "before you enable it").format(
+                _("the ssl layer names none (CA=)") if not ca else
+                _("'{0}' is not a file on this host").format(ca)))
     if c.network["mode"] == "udp":
         c.hold(_("{0} (encryption) is not available here for this connection: the mapping "
                  "is imported disabled rather than unencrypted").format("ssl"))
@@ -865,7 +883,7 @@ def _serial_option(c: _Conn, tok: str) -> None:
             _write_only(c, tok)
         return
     if low not in _SERIAL_FLAGS + ("dtr", "rts", "rs485"):
-        if low not in ("custspeed", "uucplock", "flock", "readbuf"):  # nothing to do here
+        if low not in ("custspeed", "readbuf"):  # nothing to do here
             c.drop(tok)
         return
     if eq and flag and low in _SERIAL_FLAGS:
@@ -873,7 +891,7 @@ def _serial_option(c: _Conn, tok: str) -> None:
         if flag is None:
             c.note(_("serial option '{0}' has no true/false value, ignored").format(tok))
             return
-    if low in ("xonxoff", "rtscts"):
+    if low in ("xonxoff", "rtscts", "flock", "uucplock"):
         setattr(c, low, bool(flag))
     elif low in ("hangup-when-done", "hangup_when_done", "hupcl"):
         c.advanced["hangup_when_done"] = bool(flag)
@@ -897,7 +915,7 @@ def _serial_option(c: _Conn, tok: str) -> None:
 
 
 _SERIAL_FLAGS = ("xonxoff", "rtscts", "hangup-when-done", "hangup_when_done", "hupcl",
-                 "nobreak", "rdonly", "local")
+                 "nobreak", "rdonly", "local", "flock", "uucplock")
 
 
 def _write_only(c: _Conn, what: str) -> None:
@@ -1009,7 +1027,7 @@ def _option(c: _Conn, key: str, value: str) -> None:
             c.network["max_connections"] = int(n)
         else:
             c.note(_("max-connections '{0}' is not a number >= 1, ignored").format(value))
-    elif k in ("banner", "openstr", "closestr", "closeon"):
+    elif k in ("banner", "openstr", "closestr", "closeon", "signature"):
         c.strings[k] = value
     elif k in ("trace-both", "trace-read", "trace-write"):
         if value.strip():
@@ -1094,6 +1112,15 @@ def _finish(c: _Conn) -> None:
         c.note(_("both RTS/CTS and XON/XOFF are on: only RTS/CTS is imported (one flow control "
                  "per port here)"))
     c.serial["flowcontrol"] = "rtscts" if c.rtscts else "xonxoff" if c.xonxoff else "none"
+    # keeping other programs off the port, as ser2net did: 4.x (gensio) flock = flock plus
+    # TIOCEXCL, uucplock = UUCP lock files, both on unless turned off; 3.x used UUCP lock
+    # files only (unless started with -u, which the file doesn't say)
+    if c.v3:
+        c.advanced["respect_uucp_locks"] = True
+    else:
+        c.serial["exclusive"] = c.flock
+        c.advanced["tiocexcl"] = c.flock
+        c.advanced["respect_uucp_locks"] = c.uucplock
     if net["mode"] == "udp" and net["protocol"] != "raw":
         c.note(_("{0} over UDP is not supported here: imported as raw UDP").format(net['protocol']))
         net["protocol"] = "raw"
@@ -1104,6 +1131,21 @@ def _finish(c: _Conn) -> None:
         if key in c.strings:
             c.options[key] = _convert(c, c.strings[key], "banner" if key == "banner" else "bytes",
                                       key)
+    if "signature" in c.strings and net["protocol"] == "rfc2217":  # (only RFC 2217 sends it)
+        sig = _convert(c, c.strings["signature"], "bytes", "signature")
+        if len(sig) > RFC2217_SIGNATURE_MAX or re.search(r"[\x00-\x1f\x7f]", sig):
+            c.note(_("the RFC 2217 signature is not imported: here it is text of at most {0} "
+                     "characters, without control characters").format(RFC2217_SIGNATURE_MAX))
+        else:
+            c.options["rfc2217_signature"] = sig
+    for flag, name in (("hangup_when_done", "hangup-when-done"), ("nobreak", "nobreak")):
+        if c.advanced.get(flag):
+            # kept (the form keeps it too) but not acted on: the port stays open between
+            # connections, so it is never closed (DTR dropped) or opened (BREAK cleared)
+            # for one
+            c.note(_("{0} is kept in the mapping but has no effect here: the serial port "
+                     "stays open between connections").format(name.upper().replace("-", "_")
+                                                              if c.v3 else name))
     labels = ({"both": "tb", "read": "tr", "write": "tw"} if c.v3 else
               {k: f"trace-{k}" for k in ("both", "read", "write")})
     kind = next((k for k in ("both", "read", "write") if k in c.traces), "")
@@ -1159,7 +1201,7 @@ _SERIAL_DEFAULTS = {"speed", "nobreak", "rtscts", "xonxoff", "local", "hangup-wh
                     "dtr", "rts", "custspeed", "rs485", "uucplock", "flock", "wronly"}
 _OPTION_DEFAULTS = {"kickolduser", "max-connections", "remaddr", "telnet-brk-on-sync",
                     "chardelay", "trace-hexdump", "trace-timestamp", "trace-both-hexdump",
-                    "trace-both-timestamp"}
+                    "trace-both-timestamp", "signature"}
 
 
 _REFERENCE = {act: re.compile("[" + re.escape(act) + "$]") for act in ("*", "=", "*=")}
@@ -1235,7 +1277,7 @@ class _Yaml:
         self.connections = 0                 # connection entries read (MAX_CONNECTIONS)
         self.serial_defaults: dict[str, str] = {}
         self.option_defaults: dict[str, str] = {}
-        self.ssl_defaults: dict[str, str] = {}   # key / cert / clientauth of the ssl layer
+        self.ssl_defaults: dict[str, str] = {}   # key / cert / ca / clientauth of the ssl layer
 
     def text(self, node: Any, note: Callable[[str], None], what: str) -> str:
         if isinstance(node, (_YMap, list)):
@@ -1300,7 +1342,7 @@ class _Yaml:
 
     def default(self, name: str, value: str, cls: str) -> None:
         n, cls = name.strip().lower(), cls.strip().lower()
-        if n in ("key", "cert", "clientauth") and cls in ("", "ssl"):
+        if n in ("key", "cert", "ca", "clientauth") and cls in ("", "ssl"):
             self.ssl_defaults[n] = value.strip()  # for the accepters' ssl layers
             return
         if not n or cls not in ("", "serialdev", "sdev", "ser2net"):
@@ -1455,12 +1497,12 @@ class _V3:
             self.devices[name] = value.strip()
         elif kind == "TRACEFILE":
             self.tracefiles[name] = value.strip()
-        elif kind in ("LED", "SIGNATURE", "ROTATOR"):
-            what = {"LED": _("LEDs"), "SIGNATURE": _("RFC2217 signatures"), "ROTATOR": _("rotators")}
+        elif kind in ("LED", "ROTATOR"):
+            what = {"LED": _("LEDs"), "ROTATOR": _("rotators")}
             self.warnings.append(_("line {0}: {1} {2} is not imported ({3} are not supported "
                                    "here)").format(n, kind, name, what[kind]))
             self.strings[name] = (kind, value)
-        else:  # BANNER OPENSTR CLOSESTR CLOSEON RS485CONF
+        else:  # BANNER OPENSTR CLOSESTR CLOSEON SIGNATURE RS485CONF
             self.strings[name] = (kind, value)
 
     def port(self, n: int, line: str, m: re.Match[str]) -> None:
@@ -1541,12 +1583,12 @@ class _V3:
         named = self.strings.get(tok)
         if named is not None:
             kind, value = named
-            if kind in ("BANNER", "OPENSTR", "CLOSESTR", "CLOSEON"):
+            if kind in ("BANNER", "OPENSTR", "CLOSESTR", "CLOSEON", "SIGNATURE"):
                 c.strings[kind.lower()] = value
             elif kind == "RS485CONF":
                 c.note(_("RS485CONF {0} is not imported: set RS-485 in the mapping's serial "
                          "settings").format(tok))
-            return  # LED / SIGNATURE: reported where they are defined
+            return  # LED: reported where it is defined
         if not self.serial(c, tok.upper()):
             c.note(_("unknown option '{0}' ignored").format(tok))
 
@@ -1629,9 +1671,9 @@ def _from_v3(lines: list[tuple[int, str]], budget: _Budget) -> tuple[list[_Conn]
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[dict]:
+def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[_Conn]:
     """Drop what does not validate or listens where an earlier one does, make the names
-    unique and keep one active mapping per serial device."""
+    unique and keep one active mapping per serial device: the connections to import."""
     def warn(msg: str) -> None:
         budget.spend(len(msg))
         warnings.append(msg)
@@ -1667,14 +1709,15 @@ def _assemble(conns: list[_Conn], warnings: list[str], budget: _Budget) -> list[
         used.add(c.name)
         if c.name != base:
             warn(_("{0}: renamed to '{1}' (the name is used twice)").format(c.label, c.name))
-        if c.enabled and c.device in owner:
+        key = canonical_device(c.device)  # (com3 and COM3 are one port)
+        if c.enabled and key in owner:
             c.enabled = False
             warn(_("{0}: imported disabled: {1} is also used by '{2}', and a serial port can be "
                    "open in only one active mapping here")
-                 .format(c.label, c.device, owner[c.device]))
+                 .format(c.label, c.device, owner[key]))
         elif c.enabled:
-            owner[c.device] = c.name
-    return [c.to_dict() for c in kept]
+            owner[key] = c.name
+    return kept
 
 
 def looks_yaml(text: str) -> bool:
@@ -1712,7 +1755,8 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
                                 "(ser2net 4.x) or ser2net.conf (ser2net 3.x) file.").format(
                                     label or _("The file")))
         conns, warnings = _from_v3(lines, budget)
-    mappings = _assemble(conns, warnings, budget)
+    kept = _assemble(conns, warnings, budget)
+    mappings = [c.to_dict() for c in kept]
     if len(warnings) > _MAX_WARNINGS:
         more = len(warnings) - _MAX_WARNINGS
         del warnings[_MAX_WARNINGS:]
@@ -1720,6 +1764,18 @@ def parse_ser2net_config(text: str, filename: str = "") -> tuple[list[dict], lis
     if not mappings:
         warnings.append(_("No connection could be imported.") if conns else
                         _("The file has no ser2net connections to import."))
+    if mappings:
+        warnings.append(_("A mapping here opens its serial port when it starts and keeps it "
+                          "open (ser2net opened it only while a client was connected), and "
+                          "makes no UUCP lock files: programs that look for them, such as "
+                          "minicom, don't see the port as in use"))
+    wide = [c.name for c in kept if c.any_family]
+    if wide:
+        warnings.append(_("ser2net listened on IPv4 and IPv6 for an accepter that names no "
+                          "address family or address ({0}): imported on 0.0.0.0, which takes "
+                          "IPv4 clients only; pick “All interfaces (IPv4 + IPv6)” as the bind "
+                          "IP to take IPv6 clients too").format(
+            ", ".join(wide[:5]) + (", …" if len(wide) > 5 else "")))
     if any(_open_to_all(m) for m in mappings):
         warnings.append(_("ser2net may also have limited its clients with TCP wrappers "
                           "(/etc/hosts.allow, /etc/hosts.deny); those rules are not imported: a "

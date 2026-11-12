@@ -175,3 +175,9 @@ class SparkplugNode:
         if self._pub is not None:
             self._pub.close(final=self._ndeath())
             self._pub = None
+
+    async def aclose(self) -> None:
+        """close() without holding up the event loop (MqttPublisher.aclose)."""
+        pub, self._pub = self._pub, None
+        if pub is not None:
+            await pub.aclose(final=self._ndeath())

@@ -6,7 +6,11 @@ from starlette.routing import Route
 
 from ... import i18n
 from ...engine import netguard, portlist
+from ...i18n import _
 from .common import Ctx
+
+# the serial sides of a mapping form (GET /api/ports/select?prefix=)
+_PORT_FIELDS = ("serial_", "serial_b_")
 
 
 def routes(ctx: Ctx) -> list:
@@ -53,26 +57,47 @@ def routes(ctx: Ctx) -> list:
                 f"ser2net_mapping_bytes_out_total{{{lbl}}} {st.get('bytes_out', 0)}",
                 f"ser2net_mapping_bytes_dropped_total{{{lbl}}} {st.get('bytes_dropped', 0)}",
                 f"ser2net_mapping_reconnects_total{{{lbl}}} {st.get('reconnects', 0)}",
+                # of those: failed opens of the serial port, and losses of the open port
+                f"ser2net_mapping_open_failures_total{{{lbl}}} {st.get('open_failures', 0)}",
+                f"ser2net_mapping_device_lost_total{{{lbl}}} {st.get('device_lost', 0)}",
                 f"ser2net_mapping_dropped_clients_total{{{lbl}}} {st.get('dropped_clients', 0)}",
             ]
+            if m.kind == "net" and m.network.mode == "client":
+                # the connection out to the remote server (ser2net_mapping_running is the
+                # serial side's)
+                up = 1 if st.get("link") == "up" else 0
+                lines += [
+                    f"ser2net_mapping_link_up{{{lbl}}} {up}",
+                    f"ser2net_mapping_connect_failures_total{{{lbl}}} "
+                    f"{st.get('connect_failures', 0)}",
+                ]
         return PlainTextResponse("\n".join(lines) + "\n",
                                  media_type="text/plain; version=0.0.4")
 
     async def api_ports_json(request):
-        return JSONResponse(state.ports.get())
+        return JSONResponse(await state.ports.current())
 
-    async def api_ports_refresh(request):
-        ports = await state.ports.refresh_now()
-        selected = request.query_params.get("selected", "")
-        return render(request, "_serial_port_select.html", ports=ports, selected=selected)
+    async def api_ports_select(request):
+        """An open mapping form's Device field again, with the serial ports there are now
+        (its ↻ button): ?prefix=serial_|serial_b_&selected=<what the form has chosen>. For
+        operators, as the form is."""
+        if deny := ctx.require_role(request, "operator"):
+            return deny
+        prefix = request.query_params.get("prefix", "")
+        if prefix not in _PORT_FIELDS:
+            return PlainTextResponse(_("Unknown serial port field."), status_code=400)
+        selected = request.query_params.get("selected", "")[:1024]
+        ports = portlist.visible(await state.ports.current())
+        return render(request, "_serial_port_select.html", fragment=True, prefix=prefix,
+                      selected=selected, ports=ports, links=portlist.links(ports, (selected,)))
 
     async def api_ports_table(request):
-        ports = state.ports.get()
+        ports = await state.ports.current()
         show_all = request.query_params.get("all") == "1"
         shown = portlist.visible(ports, show_all)
         return render(request, "_ports_table.html", ports=shown, show_all=show_all,
                       hidden=len(ports) - len(portlist.visible(ports)),
-                      in_use=state.supervisor.devices_in_use())
+                      in_use=portlist.used(shown, state.supervisor.devices_in_use()))
 
     async def set_language(request):
         """/lang/tr?next=/settings: remember the visitor's UI language (a cookie), then
@@ -92,7 +117,7 @@ def routes(ctx: Ctx) -> list:
         Route("/healthz", healthz),
         Route("/metrics", metrics),
         Route("/api/ports.json", api_ports_json),
-        Route("/api/ports/refresh", api_ports_refresh, methods=["POST"]),
+        Route("/api/ports/select", api_ports_select),
         Route("/api/ports/table", api_ports_table),
     ]
 

@@ -2,6 +2,8 @@
 validate + persist + apply, without any HTTP concerns."""
 from __future__ import annotations
 
+import asyncio
+
 from ...config import ConfigError, MappingConfig, valid_mapping_id
 from ...engine import portlist
 from ...i18n import _
@@ -26,9 +28,13 @@ def apply_usb_match(mapping: MappingConfig, form, ports: list, existing=None) ->
         if not _checkbox(form, prefix + "usb_match"):
             settings.match = {}
             continue
-        port = portlist.find(ports, settings.port)
+        port = portlist.find(ports, settings.port, resolve=True)  # (this node's ports)
         if port is not None and port.get("vid") and port.get("pid"):
-            settings.match = {k: port[k] for k in ("vid", "pid", "serial_number") if port.get(k)}
+            # a binding to a USB socket too (location, set through the REST API or by hand)
+            # stays one, to the socket the adapter is in now
+            keys = ("vid", "pid", "serial_number") + (
+                ("location",) if old is not None and old.identity.get("location") else ())
+            settings.match = {k: port[k] for k in keys if port.get(k)}
         elif port is None and old is not None and old.match:
             settings.match = dict(old.match)  # unplugged now: keep what it was bound to
         else:
@@ -53,11 +59,16 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
         if posted_id and existing is None:
             return False, _gone()
         _preserve_unmanaged_fields(mapping, existing, form)
-        apply_usb_match(mapping, form, state.ports.get(), existing)
+        apply_usb_match(mapping, form, await state.ports.current(), existing)
         mapping.validate()
         mapping.validate_input()
+        await asyncio.to_thread(mapping.check_tls_files)  # (reads the files)
     except (ValueError, ConfigError) as e:
         return False, str(e)
+    if conflict := (state.config.own_port_conflict(mapping)  # the admin UI's port, ...
+                    or state.config.serial_conflict(mapping)  # a port another one uses
+                    or state.config.admin_key_reuse(mapping)):
+        return False, conflict
     # Hold the lock only to mutate + persist config; release it BEFORE the
     # (potentially slow) supervisor call so other admin requests aren't blocked
     # while a serial port is being (re)opened.
@@ -82,7 +93,9 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str]:
 async def apply_action(state, mid, action) -> tuple[bool, str]:
     """Start/stop/restart a local mapping by id. Returns (ok, name-or-error).
     Shared by the UI action endpoint, the cluster remote-control endpoint and the
-    REST API."""
+    REST API. Raises ConfigError (and changes nothing) when the mapping can't be
+    started: it would share a serial port with a running one, config.json can't be
+    saved."""
     async with state.config_lock:
         m = state.config.get_mapping(mid)
         if not m:
@@ -90,6 +103,8 @@ async def apply_action(state, mid, action) -> tuple[bool, str]:
         was = m.enabled
         m.enabled = action != "stop"
         try:
+            if m.enabled and not was and (clash := state.config.serial_conflict(m)):
+                raise ConfigError(clash)
             await state.asave()
         except Exception:  # not saved, so nothing changed (e.g. starting it shares a serial port)
             m.enabled = was

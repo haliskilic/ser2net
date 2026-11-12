@@ -19,9 +19,12 @@ import hashlib
 import ipaddress
 import json
 import math
+import ntpath
 import os
+import posixpath
 import re
 import secrets
+import socket
 import tempfile
 import time
 import unicodedata
@@ -213,6 +216,51 @@ def trace_file_name(value: Any) -> str:
     return name or TRACE_DEFAULT_NAME
 
 
+# The data directory (the folder of config.json, set by ConfigStore): where a relative
+# TLS file path in the configuration points. Before 2.9 such a path was looked up from the
+# working directory (/app in Docker, the service's folder, System32 for the Windows
+# service), so a data directory that moved or was restored elsewhere lost its files.
+_data_dir: Optional[str] = None
+
+
+def set_data_dir(path: Optional[str]) -> None:
+    global _data_dir
+    _data_dir = os.path.abspath(path) if path else None
+
+
+def data_path(path: Any, data_dir: Optional[str] = None) -> str:
+    """The file a TLS path from the configuration names: an absolute path as it is, a
+    relative one in the data directory (``data_dir``, else ConfigStore's). A relative path
+    found only from the working directory, where releases before 2.9 looked for it, is
+    still used from there."""
+    path = str(path or "")
+    base = data_dir or _data_dir
+    if not path or os.path.isabs(path) or ntpath.isabs(path) or not base:
+        return path  # (a Windows path is no file in the data directory elsewhere either)
+    inside = os.path.join(base, path)
+    if os.name == "nt":  # "tls/cert.pem" -> <data>\tls\cert.pem (the way Windows reads it)
+        inside = os.path.normpath(inside)
+    if not os.path.exists(inside) and os.path.exists(path):
+        return path
+    return inside
+
+
+def moved_tls_file(path: Any, data_dir: str) -> str:
+    """Where a TLS file of a data directory that was moved, or restored on another machine,
+    is now: for an absolute ``path`` that is not there and lies in a folder named "tls"
+    (where Settings → Admin TLS generates its certificate: <data dir>/tls/), the file of
+    that name in ``data_dir``'s tls folder, if it is there; else "". A path written on
+    Windows is read on any OS, and one written elsewhere on Windows."""
+    text = str(path or "")
+    if not text or not (posixpath.isabs(text) or ntpath.isabs(text)) or os.path.exists(text):
+        return ""
+    folder, name = ntpath.split(text)  # (ntpath takes "/" and "\\" both)
+    if not name or ntpath.basename(folder).lower() != "tls":
+        return ""
+    found = os.path.join(data_dir, "tls", name)
+    return found if os.path.isfile(found) and found != text else ""
+
+
 def normalize_cidr(value: str) -> str:
     """Treat a bare wildcard address as 'any'. Users typing 0.0.0.0 / :: in an
     allow/priority list mean 'all clients', not a single /32 or /128 host."""
@@ -222,6 +270,70 @@ def normalize_cidr(value: str) -> str:
     if v == "::":
         return "::/0"
     return v
+
+
+# the bind IPs of a listener on every interface: 0.0.0.0 takes IPv4 clients, :: IPv6 ones
+# (IPV6_V6ONLY); NetworkSettings.dual_stack makes either take both
+WILDCARDS = ("0.0.0.0", "::")
+
+
+def canonical_ip(value: Any) -> Any:
+    """An IP address as it is stored: in its canonical form ('0:0:0:0:0:0:0:1' is '::1'),
+    an IPv4-mapped IPv6 address ('::ffff:10.0.0.5') as the IPv4 address it stands for
+    (that is what a listener on it can take). Anything else is returned as it is, for
+    validation to report."""
+    if not isinstance(value, str):
+        return value
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return value
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        return str(ip.ipv4_mapped)
+    return str(ip)
+
+
+@functools.lru_cache(maxsize=None)
+def _ipv6_takes_ipv4() -> bool:
+    """Whether an IPv6 socket on this system takes IPv4 too unless told otherwise
+    (IPV6_V6ONLY off by default: Linux unless net.ipv6.bindv6only is set, not Windows).
+    Before 2.9 a UDP mapping on :: kept that default."""
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s:
+            return not s.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY)
+    except (OSError, AttributeError):  # no IPv6 here
+        return False
+
+
+def shown_host(host: Any) -> str:
+    """A host as host:port writes it: an IPv6 address in brackets, the admin UI's ""
+    (every interface) as *."""
+    h = "" if host is None else str(host)
+    if not h:
+        return "*"
+    return f"[{h}]" if ":" in h and not h.startswith("[") else h
+
+
+def host_port(host: Any, port: Any) -> str:
+    """host:port as the log and the UI write it ([::1]:4001; see shown_host)."""
+    return f"{shown_host(host)}:{port}"
+
+
+def bind_ip_problem(value: Any) -> str:
+    """Why ``value`` can't be a listener's bind IP ("" when it can): it is not an IP
+    address, or it is a multicast address or a reserved one other than the wildcard
+    and loopback addresses (0.0.0.0, ::, ::1). An IPv4-mapped IPv6 address is judged by
+    its IPv4 address (Python releases differ in how is_reserved reads one). The one rule
+    for a mapping's bind IP and for the console's custom admin UI address."""
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return _("Invalid bind IP: {0}.").format(repr(value))
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_multicast or (ip.is_reserved and not (ip.is_loopback or ip.is_unspecified)):
+        return _("Bind IP cannot be a multicast/reserved address.")
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +347,13 @@ class SerialAdvanced:
     rs485_rts_level_for_tx: bool = True
     hangup_when_done: bool = False
     nobreak: bool = False
+    # keeping other programs off the port (POSIX; Windows opens a port for one program
+    # only anyway). `exclusive` (flock) keeps out only programs that flock the port too:
+    #   tiocexcl: while the port is open, other programs' opens fail (TIOCEXCL; not root's)
+    #   respect_uucp_locks: don't open a port another program has a UUCP lock file on
+    #     (minicom, cu: LCK..<tty> in /run/lock or /var/lock; read only, none is made)
+    tiocexcl: bool = False
+    respect_uucp_locks: bool = False
 
 
 @dataclass
@@ -285,6 +404,95 @@ class SerialSettings:
         """ser2net-style compact descriptor, e.g. '9600N81'."""
         return f"{self.baudrate}{self.parity}{self.bytesize}{int(self.stopbits)}"
 
+    @property
+    def identity(self) -> dict[str, Any]:
+        """The USB identity this port is bound to (usb_identity of ``match``), {} if none."""
+        return usb_identity(self.match)
+
+
+# the keys of a serial port's `match` (the USB identity it is bound to) the engine knows;
+# any other key (a typo, "VID") is not used, so it can't make every port match
+MATCH_KEYS = ("vid", "pid", "serial_number", "location")
+
+
+def usb_identity(match: Any) -> dict[str, Any]:
+    """The known keys of a serial port's ``match`` that are set (MATCH_KEYS); {} when none
+    is: the port is opened by its name."""
+    if not isinstance(match, dict):
+        return {}
+    return {k: match[k] for k in MATCH_KEYS if match.get(k)}
+
+
+def identity_text(match: Any) -> str:
+    """A USB identity as the UI shows it: VID:PID [serial number] (@ location)."""
+    want = usb_identity(match)
+    text = f"{want.get('vid', '*')}:{want.get('pid', '*')}"
+    if want.get("serial_number"):
+        text += f" [{want['serial_number']}]"
+    if want.get("location"):
+        text += f" @ {want['location']}"
+    return text
+
+
+_COM_NAME = re.compile(r"(?:\\\\\.\\|//\./)?(COM\d+)", re.I)
+
+
+def canonical_device(name: Any) -> Any:
+    """A serial port name in the form two names of one port have in common, for comparing
+    them (never for storing: what the user set is kept as it is). Windows opens 'com3',
+    'COM3', '\\\\.\\COM3' and '//./COM3' alike, so all are 'COM3'; the name's shape decides,
+    not this machine's OS (a cluster peer's ports are compared here too). Any other name is
+    returned unchanged ('\\\\.\\CNCA0' of com0com keeps its prefix, POSIX paths their case)."""
+    m = _COM_NAME.fullmatch(name) if isinstance(name, str) else None
+    return m.group(1).upper() if m else name
+
+
+def _serial_clash(m: "MappingConfig", mappings: list["MappingConfig"]) -> Optional[tuple]:
+    """The first serial port enabled mapping ``m`` shares with another enabled one of
+    ``mappings``: (other mapping, m's side, the other's side), None when none. Shared means
+    the same port in the canonical spelling (canonical_device) with the same USB identity
+    binding (none, or the same one: both would open the same device)."""
+    if not m.enabled:
+        return None
+
+    def uses(mapping):
+        return [(canonical_device(s.port),
+                 sorted((k, str(v).casefold()) for k, v in s.identity.items()), s)
+                for s in mapping.serial_sides() if s.port]
+
+    mine = uses(m)
+    for other in mappings:
+        if other.id == m.id or not other.enabled:
+            continue
+        for key, ident, side in mine:
+            for okey, oident, oside in uses(other):
+                if key == okey and ident == oident:
+                    return other, side, oside
+    return None
+
+
+def serial_conflict(m: "MappingConfig", mappings: list["MappingConfig"]) -> str:
+    """Why mapping ``m`` can't be enabled as it is next to ``mappings`` ("" when it can): an
+    enabled one uses the same serial port, in any spelling Windows opens alike ('com3' is
+    'COM3'), bound to no USB identity or to the same one. Checked where a mapping is created,
+    changed or started (the form, the REST API, a cluster peer, an import), never by
+    validate(): a stored pair must not stop a start or another save (from_dict notes it)."""
+    clash = _serial_clash(m, mappings)
+    if clash is None:
+        return ""
+    other, side, oside = clash
+    if side.identity:
+        return _("Mappings '{0}' and '{1}' are both bound to the USB identity {2} on serial "
+                 "port {3}: they would open the same device, and a serial port can only be "
+                 "opened by one mapping.").format(other.name, m.name, identity_text(side.match),
+                                                  side.port)
+    if side.port != oside.port:
+        return _("Mappings '{0}' and '{1}' both use serial port {2} (written {3} in '{1}') — a "
+                 "serial port can only be opened by one mapping.").format(
+            other.name, m.name, oside.port, side.port)
+    return _("Mappings '{0}' and '{1}' both use serial port {2} — a serial "
+             "port can only be opened by one mapping.").format(other.name, m.name, side.port)
+
 
 def url_port(port: Any) -> bool:
     """True for a serial port value that pyserial would open with a URL handler instead
@@ -292,6 +500,26 @@ def url_port(port: Any) -> bool:
     hwgrep:// ...), which is what pyserial's serial_for_url dispatches on. A mapping only
     opens serial devices (COM3, \\\\.\\COM10, /dev/ttyUSB0, /dev/serial/by-id/...)."""
     return isinstance(port, str) and "://" in port
+
+
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def port_problem(port: Any) -> str:
+    """Why ``port`` can't be set as a mapping's serial port ("" when it can). One permissive
+    rule for every edit (a path typed in the form, the REST API, an import, a cluster peer):
+    a URL is refused (url_port: ser2net opens serial devices only), and so is a name with a
+    control character in it (a pasted line break); device paths (/dev/..., a link to one,
+    any absolute path), Windows names (COM3, \\\\.\\CNCA0) and a placeholder for a port
+    found by its USB identity ("auto") pass. Never checked by validate(): a stored port must
+    keep loading (a URL one is refused when it is opened, see engine/serial_io.refuse_url)."""
+    if url_port(port):
+        return _("Serial port {0} is a URL, not a device: ser2net opens serial devices only "
+                 "(URLs such as socket:// or spy:// are not supported).").format(port)
+    if isinstance(port, str) and _CONTROL_CHARS.search(port):
+        return _("Serial port {0} has a control character in it (a line break?): type the "
+                 "device's path again.").format(repr(port))
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +532,12 @@ NET_MODES = ("server", "client", "udp")
 class NetworkSettings:
     mode: str = "server"  # server (listen) | client (connect-out) | udp
     protocol: str = "raw"  # raw | telnet | rfc2217
+    # A listener on 0.0.0.0 takes IPv4 clients only, one on :: IPv6 clients only. With
+    # dual_stack a wildcard bind IP (either of the two) takes both: the picker's "All
+    # interfaces (IPv4 + IPv6)". It means nothing with another address (edits refuse
+    # that); a release without it listens on the bind IP alone.
     bind_ip: str = "0.0.0.0"
+    dual_stack: bool = False
     port: int = 4001
     # client mode: the connect-out target (UDP does not use these: see udp_peer_host)
     remote_host: str = ""
@@ -318,8 +551,21 @@ class NetworkSettings:
     # without a datagram from it (the output then goes nowhere until someone sends);
     # 0 = never.
     udp_peer_timeout_s: int = 0
+    # UDP: more destinations that always get the device's output too (whoever sends, and
+    # before anyone has), each "IP:port" ("[IPv6]:port"): e.g. an NMEA 0183 feed to a LAN's
+    # broadcast address. Sending to a broadcast address needs udp_broadcast (SO_BROADCAST).
+    udp_targets: list[str] = field(default_factory=list)
+    udp_broadcast: bool = False
     max_connections: int = 1
     kick_old_user: bool = False
+    # TCP (raw / telnet / rfc2217, server and connect-out): while the serial port is not
+    # open (unplugged, reconnecting) clients are disconnected and new ones refused, after
+    # the short wait for the port that an RFC 2217 client gets (options.
+    # rfc2217_net_timeout_s); a connect-out mapping connects only while the port is open.
+    # Off (default): clients stay connected and are taken, and what they send for the
+    # device meanwhile is dropped (counted in bytes_dropped); RFC 2217 sessions follow a
+    # reopened port.
+    disconnect_without_device: bool = False
     allowed_client_ips: list[str] = field(default_factory=list)
     # High-priority clients: when the port is at capacity, a connection from one of
     # these IPs/CIDRs is admitted by kicking an existing client (oldest non-priority
@@ -343,20 +589,46 @@ class NetworkSettings:
     # seconds and retry. 0 = no limit of our own (the OS gives up after ~21 s on
     # Windows, ~2 min on Linux).
     connect_timeout_s: float = 10.0
-    # Per-mapping TLS for the data bridge (server/client TCP). Both files required.
+    # Per-mapping TLS for the data bridge (server/client TCP), see engine/tls.py. A listener
+    # needs tls_cert and tls_key; with the CA file tls_client_ca it asks every client for a
+    # certificate that chains to it, and ends the handshake of one without such a
+    # certificate (the allow-list still applies). A connect-out link presents them (when
+    # set) to a server that asks for a client certificate, and checks the server's
+    # certificate: it must chain to a certificate in the CA file tls_ca and name
+    # remote_host, and/or be one of the SHA-256 fingerprints in tls_fingerprint (with
+    # neither, the link only encrypts). tls_key_password decrypts an encrypted key (never
+    # asked for on a terminal); edits load the files with it (MappingConfig.check_tls_files).
     tls: bool = False
     tls_cert: str = ""
     tls_key: str = ""
+    tls_key_password: str = ""
+    tls_ca: str = ""
+    tls_fingerprint: str = ""
+    tls_client_ca: str = ""
 
     @property
     def listens(self) -> bool:
         return self.mode in ("server", "udp")
 
+    @property
+    def both_families(self) -> bool:
+        """The listener takes IPv4 and IPv6 clients: dual_stack (true itself, not text
+        that reads as true) with a wildcard bind IP."""
+        return self.dual_stack is True and canonical_ip(self.bind_ip) in WILDCARDS
+
+    @property
+    def bind_shown(self) -> str:
+        """The bind IP as the UI shows it before the port: * for every interface of both
+        families, an IPv6 address in brackets."""
+        return "*" if self.both_families else shown_host(self.bind_ip)
+
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "NetworkSettings":
         d = dict(d or {})
         known = {f.name for f in dataclasses.fields(NetworkSettings)}
-        return NetworkSettings(**{k: v for k, v in d.items() if k in known})
+        net = NetworkSettings(**{k: v for k, v in d.items() if k in known})
+        net.bind_ip = canonical_ip(net.bind_ip)  # (AppConfig.from_dict notes a change)
+        return net
 
     def validate(self) -> None:
         if self.mode not in NET_MODES:
@@ -365,14 +637,8 @@ class NetworkSettings:
             raise ConfigError(_("Protocol must be one of {0}.").format(PROTOCOLS))
 
         if self.listens:
-            try:
-                ip = ipaddress.ip_address(self.bind_ip)
-            except ValueError:
-                raise ConfigError(_("Invalid bind IP: {0}.").format(repr(self.bind_ip))) from None
-            # 0.0.0.0 and :: are the "all interfaces" wildcards and must be allowed
-            # even though :: reports is_reserved=True.
-            if ip.is_multicast or (ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
-                raise ConfigError(_("Bind IP cannot be a multicast/reserved address."))
+            if problem := bind_ip_problem(self.bind_ip):
+                raise ConfigError(problem)
             if not isinstance(self.port, int) or not (1 <= self.port <= 65535):
                 raise ConfigError(_("TCP/UDP port must be between 1 and 65535."))
         else:  # client (connect-out)
@@ -406,10 +672,13 @@ class NetworkSettings:
         if self.tls:
             if self.mode == "udp":
                 raise ConfigError(_("TLS is not applicable to UDP mappings."))
-            if not (self.tls_cert and self.tls_key):
+            if self.listens and not (self.tls_cert and self.tls_key):
                 raise ConfigError(_("Enable TLS requires both a certificate and a key."))
+            if bool(self.tls_cert) != bool(self.tls_key):  # connect-out: both or neither
+                raise ConfigError(_("Connect-out TLS: set both a certificate and a key (for a "
+                                    "server that asks for a client certificate), or neither."))
             for p in (self.tls_cert, self.tls_key):
-                if not os.path.isfile(p):
+                if p and not os.path.isfile(data_path(p)):
                     raise ConfigError(_("TLS file not found: {0}").format(p))
         for label, lst in ((_("allowed"), self.allowed_client_ips),
                            (_("priority"), self.priority_client_ips)):
@@ -440,6 +709,43 @@ def udp_peer_address(net: NetworkSettings) -> Optional[tuple[str, int]]:
     return host, port
 
 
+UDP_TARGETS_MAX = 32
+
+
+def udp_target(entry: Any) -> tuple[str, int]:
+    """One UDP target, "IP:port" or "[IPv6]:port", as (IP, port). Raises ValueError when it
+    is not a host's IP address (or a broadcast / multicast one) and a port."""
+    text = str(entry).strip() if isinstance(entry, str) else ""
+    host, sep, port = text.rpartition(":")
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    elif ":" in host:  # an IPv6 address needs its brackets ([fd00::1]:5000)
+        sep = ""
+    try:
+        if not sep:
+            raise ValueError
+        ip = ipaddress.ip_address(host)
+        number = int(port)
+    except ValueError:
+        raise ValueError(f"UDP target {entry!r} is not an IP address and a port "
+                         "(IP:port, [IPv6]:port)") from None
+    if ip.is_unspecified:
+        raise ValueError(f"UDP target {entry!r} is not a host's address")
+    if not 1 <= number <= 65535:
+        raise ValueError(f"UDP target {entry!r}: the port is not between 1 and 65535")
+    return str(ip), number
+
+
+def udp_targets(net: NetworkSettings) -> list[tuple[str, int]]:
+    """A UDP mapping's targets (udp_targets), each once. Raises ValueError for a stored one
+    that is malformed (edits refuse it: MappingConfig.validate_input), so the mapping fails
+    to start rather than leaving a destination out without a word."""
+    entries = net.udp_targets
+    if not isinstance(entries, list):
+        raise ValueError("udp_targets is not a list of IP:port entries")
+    return list(dict.fromkeys(udp_target(e) for e in entries))
+
+
 def udp_peer_timeout(net: NetworkSettings) -> float:
     """A UDP mapping's peer timeout in seconds, 0 = never. A stored value that is not a
     number of seconds reads as 0, today's behaviour (edits refuse one: validate_input)."""
@@ -452,6 +758,9 @@ def udp_peer_timeout(net: NetworkSettings) -> float:
 # ---------------------------------------------------------------------------
 # Per-mapping options
 # ---------------------------------------------------------------------------
+RFC2217_SIGNATURE_MAX = 128  # characters (an edit's rule)
+
+
 @dataclass
 class MappingOptions:
     banner: str = ""
@@ -477,9 +786,20 @@ class MappingOptions:
     # rate, data bits, parity, stop bits and flow control (off: what the client set stays
     # until the port is reopened). RTS/DTR are left alone: toggling them can reset a device.
     rfc2217_restore_on_disconnect: bool = False
+    # RFC2217: what a client's SIGNATURE request is answered with (blank: "ser2net")
+    rfc2217_signature: str = ""
     # Modbus gateway: how long to wait for an RTU slave's reply before returning a
     # Modbus exception (0x0B gateway-target-failed) to the TCP master.
     modbus_response_timeout_s: float = 1.0
+    # Serial-to-network mappings (not a Modbus gateway): send poll_string to the device
+    # every poll_interval_s seconds while its port is open (0 = off), e.g. a scale's or an
+    # analyzer's query, so its answers reach MQTT, a trace or a UDP target without a
+    # program polling it. \r \n \t \\ and \xHH stand for those bytes (poll_bytes).
+    # Skipped while a TCP client is connected (it does the asking then), unless
+    # poll_with_clients.
+    poll_string: str = ""
+    poll_interval_s: float = 0.0
+    poll_with_clients: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MappingOptions":
@@ -505,6 +825,9 @@ class MappingOptions:
 # Per-mapping MQTT publishing (optional northbound to an IIoT broker)
 # ---------------------------------------------------------------------------
 MQTT_FORMATS = ("plain", "sparkplug_b")
+# what ends a serial line published to MQTT (MqttSettings.line_end)
+MQTT_LINE_ENDS = ("lf", "cr", "any")
+MQTT_TX_MAX_BYTES = 64 * 1024  # an MQTT write (<base_topic>/tx) at most, and all waiting
 
 
 @dataclass
@@ -528,6 +851,15 @@ class MqttSettings:
     # it is published (Sparkplug NCMD / DCMD are never retained, so a retained one is
     # always ignored).
     apply_retained_set: bool = False
+    # Serial lines (not a Modbus gateway): what ends a line. "lf" (default): \n, a \r just
+    # before it is left out (as before); "cr": \r, a \n next to it left out; "any": \r or
+    # \n (\r\n is one line end). A stored value that is none of these reads as "lf".
+    line_end: str = "lf"
+    # Serial lines (not a Modbus gateway): write each message on <base_topic>/tx to the
+    # serial port as it is, and answer on <base_topic>/tx/result ("ok" / "error: ...").
+    # Read-only refuses them; a retained one (the broker's copy, sent again after each
+    # (re)connect) is ignored. Off: MQTT only publishes.
+    tx_enabled: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "MqttSettings":
@@ -649,7 +981,7 @@ class MappingConfig:
         # every way into the config (file, import, form, REST, cluster) passes here, so an
         # id that is not a valid mapping id never gets further (see _mapping_id_from)
         d = dict(d or {})
-        return MappingConfig(
+        m = MappingConfig(
             id=_mapping_id_from(d.get("id")),
             name=d.get("name", ""),
             enabled=bool(d.get("enabled", True)),
@@ -661,6 +993,15 @@ class MappingConfig:
             mqtt=MqttSettings.from_dict(d.get("mqtt", {})),
             modbus_poll=ModbusPoll.from_dict(d.get("modbus_poll", {})),
         )
+        net = d.get("network")
+        if (isinstance(net, dict) and "dual_stack" not in net and m.kind == "net"
+                and m.network.mode == "udp" and m.network.bind_ip == "::"
+                and _ipv6_takes_ipv4()):
+            # Written by (or for) a release without dual_stack, whose UDP socket on :: kept
+            # the OS default: on Linux it took IPv4 datagrams too. IPV6_V6ONLY is set now
+            # (NetworkSettings.dual_stack), so such a mapping keeps doing what it did here.
+            m.network.dual_stack = True
+        return m
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -701,6 +1042,14 @@ class MappingConfig:
                 and not self.network.read_only
                 and any(p.writable for p in self.modbus_poll.points))
 
+    @property
+    def accepts_mqtt_tx(self) -> bool:
+        """MQTT messages on <base_topic>/tx are written to the serial port: a serial-to-network
+        mapping (not a Modbus gateway) with MQTT and tx_enabled on and Read-only off. Who may
+        send them is up to the broker's access rules."""
+        return (self.kind == "net" and self.network.protocol != "modbus" and self.mqtt.enabled
+                and self.mqtt.tx_enabled is True and not self.network.read_only)
+
     def validate_input(self) -> None:
         """The rules for a mapping that is being created or changed (web form, REST API,
         import, cluster), checked there in addition to validate(). validate() must not
@@ -708,12 +1057,73 @@ class MappingConfig:
         every start), so a stored value they forbid is refused where it is used instead
         (a URL serial port: when the mapping starts, see engine/serial_io.refuse_url)."""
         for side in self.serial_sides():
-            if url_port(side.port):
-                raise ConfigError(_("Serial port {0} is a URL, not a device: ser2net opens serial "
-                                    "devices only (URLs such as socket:// or spy:// are not "
-                                    "supported).").format(side.port))
-        if self.kind == "net" and self.network.mode == "udp":
+            if problem := port_problem(side.port):
+                raise ConfigError(problem)
+        if (self.kind == "serialbridge" and self.serial.port
+                and canonical_device(self.serial.port) == canonical_device(self.serial_b.port)):
+            raise ConfigError(_("Serial-to-serial bridge needs two different ports."))
+        net = self.network
+        if self.kind == "net" and net.listens and net.dual_stack is True and not net.both_families:
+            raise ConfigError(_("Listening for IPv4 and IPv6 clients (dual_stack) needs the bind "
+                                "IP 0.0.0.0 or ::, not {0}.").format(net.bind_ip))
+        if self.kind == "net" and net.mode == "udp":
             self._validate_udp_peer()
+        sig = self.options.rfc2217_signature
+        if not isinstance(sig, str) or len(sig) > RFC2217_SIGNATURE_MAX or _CONTROL_CHARS.search(sig):
+            raise ConfigError(_("The RFC 2217 signature must be text of at most {0} characters, "
+                                "without control characters.").format(RFC2217_SIGNATURE_MAX))
+        if self.kind == "net" and self.network.protocol != "modbus":
+            self._validate_lines_and_poll()
+        if self.kind == "net" and net.tls and net.mode == "client":
+            from .engine.tls import parse_pins
+            try:
+                parse_pins(net.tls_fingerprint)
+            except ValueError as e:
+                raise ConfigError(_("TLS server fingerprint: {0} is not a SHA-256 fingerprint "
+                                    "(64 hex digits, with or without colons).").format(
+                    repr(str(e)))) from None
+
+    def check_tls_files(self) -> None:
+        """An edit's check (mapping form, so also a cluster peer's save on the node it is
+        for; REST API; an import, as a warning), not part of validate()/validate_input(),
+        which can't load files: a TLS mapping's certificate, key and CA file must load as
+        the mapping will load them (engine/tls.py), its key decrypted with tls_key_password,
+        so a key that needs a password, a wrong password, a key that is not the
+        certificate's or a CA file without a certificate is refused here rather than found
+        out when the mapping starts. Raises ConfigError."""
+        net = self.network
+        if not (self.kind == "net" and net.tls and net.mode != "udp"):
+            return
+        from .engine.tls import TlsFileError, mapping_context
+        try:
+            mapping_context(net)
+        except TlsFileError as e:
+            raise ConfigError(tls_file_message(e)) from None
+
+    def _validate_lines_and_poll(self) -> None:
+        """A serial-to-network mapping's MQTT line end and writes, and its poll string (an
+        edit's rules: a stored value they refuse reads as off / "lf")."""
+        mq = self.mqtt
+        if mq.enabled and mq.line_end not in MQTT_LINE_ENDS:
+            raise ConfigError(_("The MQTT line end must be one of {0}.").format(MQTT_LINE_ENDS))
+        if mq.enabled and mq.tx_enabled is True and mqtt_topic_problem(mq.base_topic):
+            raise ConfigError(_("The MQTT base topic can't contain '+', '#' or the null "
+                                "character: no message can be published to such a topic."))
+        o = self.options
+        interval = o.poll_interval_s
+        if not _is_number(interval) or not (interval == 0 or 0.1 <= interval <= 86400):
+            raise ConfigError(_("The poll interval must be 0 (off) or between 0.1 and 86400 "
+                                "seconds."))
+        try:
+            data = poll_bytes(o.poll_string)
+        except ValueError:
+            raise ConfigError(_(r"The poll string can have only \r \n \t \\ or \xHH after a "
+                                "backslash.")) from None
+        if len(data) > POLL_STRING_MAX:
+            raise ConfigError(_("The poll string can be at most {0} bytes.").format(
+                POLL_STRING_MAX))
+        if interval and not data:
+            raise ConfigError(_("A poll interval needs a poll string to send."))
 
     def _validate_udp_peer(self) -> None:
         """A UDP mapping's reply address and peer timeout (an edit's rules: a stored
@@ -734,13 +1144,109 @@ class MappingConfig:
                 bind_v4 = ipaddress.ip_address(net.bind_ip).version == 4
             except ValueError:
                 bind_v4 = False  # validate() reports a bad bind IP
-            if ip.version == 6 and bind_v4:
+            if ip.version == 6 and bind_v4 and not net.both_families:
                 raise ConfigError(_("The UDP reply address {0} is IPv6, but the mapping listens "
                                     "on an IPv4 address ({1}).").format(host, net.bind_ip))
+            if ip.version == 4 and not bind_v4 and not net.both_families:
+                raise ConfigError(_("The UDP reply address {0} is IPv4, but the mapping listens "
+                                    "on an IPv6 address ({1}). To reach IPv4 addresses from "
+                                    ":: pick “All interfaces (IPv4 + IPv6)”.").format(
+                    host, net.bind_ip))
         timeout = net.udp_peer_timeout_s
         if not _is_number(timeout) or not (0 <= timeout <= MAX_TIMER_S):
             raise ConfigError(_("{0} must be between 0 (off) and {1} seconds.").format(
                 _("Peer timeout"), MAX_TIMER_S))
+        self._validate_udp_targets()
+
+    def _validate_udp_targets(self) -> None:
+        """A UDP mapping's targets: IP:port entries of the family the mapping listens on, at
+        most UDP_TARGETS_MAX; 255.255.255.255 needs udp_broadcast (an edit's rules: a stored
+        malformed one makes the mapping fail to start, see udp_targets)."""
+        net = self.network
+        if not isinstance(net.udp_targets, list):
+            raise ConfigError(_("The UDP targets must be a list of IP:port entries."))
+        if len(net.udp_targets) > UDP_TARGETS_MAX:
+            raise ConfigError(_("At most {0} UDP targets can be set.").format(UDP_TARGETS_MAX))
+        try:
+            bind_v4 = ipaddress.ip_address(net.bind_ip).version == 4
+        except ValueError:
+            bind_v4 = False  # validate() reports a bad bind IP
+        for entry in net.udp_targets:
+            try:
+                host, _port = udp_target(entry)
+            except ValueError:
+                raise ConfigError(_("UDP target {0} is not an IP address and a port (IP:port, "
+                                    "[IPv6]:port).").format(repr(entry))) from None
+            ip = ipaddress.ip_address(host)
+            if not net.both_families and (ip.version == 6) == bind_v4:
+                raise ConfigError(_("UDP target {0} is IPv{1}, but the mapping listens on {2}.")
+                                  .format(entry, ip.version, net.bind_ip))
+            if host == "255.255.255.255" and net.udp_broadcast is not True:
+                raise ConfigError(_("UDP target {0} is the broadcast address: tick “Allow "
+                                    "broadcast”.").format(entry))
+
+
+POLL_STRING_MAX = 1024  # bytes (an edit's rule)
+_POLL_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{2}|[rnt\\])|\\")
+
+
+def poll_bytes(text: Any) -> bytes:
+    r"""options.poll_string as the bytes sent: UTF-8, with \r \n \t \\ and \xHH for those
+    bytes. Raises ValueError for another backslash sequence (an edit refuses it; a stored
+    one: the poll is off)."""
+    if not isinstance(text, str):
+        raise ValueError("not text")
+    out = bytearray()
+    pos = 0
+    for m in _POLL_ESCAPE.finditer(text):
+        out += text[pos:m.start()].encode("utf-8")
+        esc = m.group(1)
+        if esc is None:
+            raise ValueError(f"unknown escape at character {m.start() + 1} (use \\r \\n "
+                             "\\t \\\\ or \\xHH)")
+        out += (bytes([int(esc[1:], 16)]) if esc[0] == "x"
+                else {"r": b"\r", "n": b"\n", "t": b"\t", "\\": b"\\"}[esc])
+        pos = m.end()
+    out += text[pos:].encode("utf-8")
+    return bytes(out)
+
+
+def mqtt_topic_problem(base_topic: Any) -> bool:
+    """'+' / '#' (wildcards: a message can't be published to them, and a subscription would
+    take every matching topic) or U+0000 in a base topic."""
+    return any(c in str(base_topic) for c in "+#\x00")
+
+
+def mqtt_tx_topics(m: "MappingConfig") -> list[tuple[str, str, Any]]:
+    """The topics a serial-to-network mapping's MQTT writes use, as (topic, use, None): use
+    "tx" (the command topic it takes writes from) and "tx_result" (its answers); none when
+    it takes no writes (tx_enabled off, MQTT off, a Modbus gateway). The plain-format topic
+    rules of the Modbus gateway (no wildcard, the status topic reserved) apply to them."""
+    mq = m.mqtt
+    if not (m.kind == "net" and m.network.protocol != "modbus" and mq.enabled
+            and mq.tx_enabled is True):
+        return []
+    base = str(mq.base_topic).rstrip("/")
+    return [(f"{base}/tx", "tx", None), (f"{base}/tx/result", "tx_result", None)]
+
+
+def tls_file_message(e: Any) -> str:
+    """The UI's text for an engine.tls.TlsFileError."""
+    if e.kind == "unreadable":
+        return _("The TLS file {0} can't be read: {1}").format(e.path, e.detail)
+    if e.kind == "password":
+        return _("The TLS key {0} is password-protected: enter its password (TLS key "
+                 "password).").format(e.path)
+    if e.kind == "unusable":
+        return _("The TLS certificate {0} can't be used with its key ({1}). Is the key "
+                 "password right, and is it the certificate's key?").format(e.path, e.detail)
+    if e.kind == "no_cert":
+        return _("Enable TLS requires both a certificate and a key.")
+    if e.kind == "ca_unreadable":
+        return _("The CA file {0} can't be read: {1}").format(e.path, e.detail)
+    if e.kind == "ca_empty":
+        return _("The CA file {0} holds no certificate (PEM or DER).").format(e.path)
+    return str(e)
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +1258,8 @@ class AdminUI:
     port: int = 8080
     tls_cert: str = ""
     tls_key: str = ""
+    # decrypts an encrypted tls_key (engine/tls.py: never asked for on a terminal)
+    tls_key_password: str = ""
     # Web-UI login can be switched off from Settings (trusted networks only): visitors
     # without a session then act with anonymous_role. Signing in still works, and the
     # REST API keeps its bearer token.
@@ -1024,9 +1532,10 @@ class ClusterSettings:
             parse_cluster_peer(entry)  # raises ConfigError on a bad entry
 
 
-NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed",
+NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back",
                  "client_connected", "client_disconnected", "login_failed")
-NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed")
+# (a saved events list is kept as it is: these are what a config without one gets)
+NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed", "link_lost", "link_back")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
 SMTP_SECURITY = ("starttls", "ssl", "none")
 
@@ -1270,6 +1779,19 @@ class AppConfig:
                     f"mapping '{m.name}': its id {old_id!r} is not a valid mapping id (1-64 "
                     f"letters, digits or '_'), so it is now {m.id}: the REST API and /metrics "
                     "use the new id, and its log and traces start afresh under it")
+            raw_net = (raw or {}).get("network") or {}
+            if m.network.dual_stack is True and "dual_stack" not in raw_net:  # (from_dict)
+                cfg.load_notes.append(
+                    f"mapping '{m.name}': a UDP mapping on :: now takes IPv6 datagrams only, "
+                    "unless it listens for IPv4 and IPv6 (dual_stack); this one took IPv4 "
+                    "datagrams too on this system, so it is set to do so")
+            raw_bind = raw_net.get("bind_ip")
+            if isinstance(raw_bind, str) and raw_bind != m.network.bind_ip:
+                cfg.load_notes.append(
+                    f"mapping '{m.name}': its bind IP {raw_bind!r} is now written "
+                    f"{m.network.bind_ip!r}"
+                    + (" (an IPv4-mapped IPv6 address: the listener takes that IPv4 address)"
+                       if ":" in raw_bind and ":" not in m.network.bind_ip else ""))
             old = str(((raw or {}).get("options") or {}).get("trace_both") or "").strip()
             if old and old != m.options.trace_both:
                 cfg.load_notes.append(
@@ -1282,7 +1804,37 @@ class AppConfig:
                         f"mapping '{m.name}': its serial port {side.port!r} is a URL, not a "
                         "device; URL ports are no longer opened, so the mapping does not start "
                         "until a serial device is set")
+                odd = sorted(str(k) for k in side.match if k not in MATCH_KEYS) \
+                    if isinstance(side.match, dict) else []
+                if odd:
+                    cfg.load_notes.append(
+                        f"mapping '{m.name}': the USB identity of serial port {side.port!r} "
+                        f"(match) has keys ser2net does not know ({', '.join(odd)}), which are "
+                        f"not used; it knows {', '.join(MATCH_KEYS)}"
+                        + ("" if side.identity else ", and none of them is set, so the port "
+                           "is opened by its name"))
+        enabled: list[MappingConfig] = []
+        for m in cfg.mappings:
+            clash = _serial_clash(m, enabled)
+            if clash is not None:
+                other, side, oside = clash
+                if side.identity:
+                    cfg.load_notes.append(
+                        f"mappings '{other.name}' and '{m.name}' are both bound to the USB "
+                        f"identity {identity_text(side.match)} on serial port {side.port!r}: "
+                        "only one of them can open it")
+                elif side.port != oside.port:  # (the same name is a problem validate() reports)
+                    cfg.load_notes.append(
+                        f"mappings '{other.name}' and '{m.name}' both use serial port "
+                        f"{oside.port!r} (written {side.port!r} in '{m.name}'): only one of "
+                        "them can open it")
+            if m.enabled:
+                enabled.append(m)
         return cfg
+
+    def serial_conflict(self, m: MappingConfig) -> str:
+        """serial_conflict of ``m`` next to this config's mappings."""
+        return serial_conflict(m, self.mappings)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1385,6 +1937,96 @@ class AppConfig:
     def get_mapping(self, mapping_id: str) -> Optional[MappingConfig]:
         return next((m for m in self.mappings if m.id == mapping_id), None)
 
+    def find_moved_tls_files(self, data_dir: Optional[str] = None) -> list[str]:
+        """TLS files that are not where the config says, because the data directory was
+        moved or restored elsewhere (a native install moved to Docker's /data, a Windows
+        service given another --data-dir, a backup restored on another machine), taken from
+        the tls folder of ``data_dir`` (else ConfigStore's; moved_tls_file): the admin UI's
+        certificate and key (the pair Settings → Admin TLS generates is always there), and
+        a mapping's. A pair is taken only when both of its files are found. Changes the
+        config (to absolute paths, which older releases read the same) and returns what it
+        did, one log line each."""
+        base = data_dir or _data_dir
+        notes: list[str] = []
+        if not base:
+            return notes
+
+        def take(owner: Any, label: str, attrs: tuple[str, ...]) -> None:
+            paths = [getattr(owner, a) for a in attrs]
+            if not all(paths):
+                return
+            found = [moved_tls_file(p, base) for p in paths]
+            if not all(found):
+                return
+            for attr, old, new in zip(attrs, paths, found, strict=True):
+                setattr(owner, attr, new)
+                notes.append(f"{label}{attr}: {old!r} is not there; {new!r} of this data "
+                             "directory is used (the data directory was moved or restored)")
+
+        take(self.admin_ui, "admin_ui.", ("tls_cert", "tls_key"))
+        for m in self.mappings:
+            label = f"mapping '{m.name}': "
+            take(m.network, label, ("tls_cert", "tls_key"))
+            for attr in ("tls_ca", "tls_client_ca"):
+                take(m.network, label, (attr,))
+        return notes
+
+    def admin_key_reuse(self, m: MappingConfig) -> str:
+        """Why mapping ``m`` can't be saved with its TLS key ("" when it can): the key is the
+        admin UI's own key file, so the mapping would present the admin UI's certificate on
+        another port of this host, and browsers send a site's cookies to every port of it.
+        Checked where a mapping is created or changed (the form, so also a cluster peer's
+        save on its own node, and the REST API), never by validate(): a stored one keeps
+        loading and saving."""
+        net, admin = m.network, self.admin_ui
+        if not (m.kind == "net" and net.tls and net.tls_key and admin.tls_key):
+            return ""
+        try:
+            same = os.path.samefile(data_path(net.tls_key), data_path(admin.tls_key))
+        except (OSError, TypeError, ValueError):  # one of them is missing: not the same file
+            return ""
+        if not same:
+            return ""
+        return _("The TLS key {0} is the admin UI's own key. Give the mapping a certificate "
+                 "and key of its own.").format(net.tls_key)
+
+    def own_port_conflict(self, m: MappingConfig) -> str:
+        """Why mapping ``m`` can't listen where it is set to next to ser2net's own
+        listeners ("" when it can): a TCP listener on the admin UI's address and port, or a
+        UDP one on the LAN cluster's discovery port while discovery is on (it would get the
+        other nodes' beacons). Checked where a mapping is created or changed (the form, the
+        REST API, a cluster peer, an import, a copy), never by validate(): a stored clash
+        must not stop a start or another save, and the admin UI wins at start-up anyway
+        (it listens before the mappings start), so such a mapping only fails to start."""
+        if m.kind != "net" or not m.network.listens:
+            return ""
+        net = m.network
+        if net.mode == "server":
+            admin = self.admin_ui
+            # "" binds every interface of both families (as asyncio and uvicorn read it),
+            # "localhost" both loopback addresses
+            ips = {"": ["0.0.0.0", "::"], "localhost": ["127.0.0.1", "::1"]}.get(
+                admin.bind_ip, [admin.bind_ip])
+            if net.port == admin.port and any(
+                    _ip_overlaps(ip, net.bind_ip, b_both=net.both_families) for ip in ips):
+                return _("Mapping '{0}': TCP port {1} on {2} is the admin UI's port ({3}:{4}), "
+                         "so the mapping could not listen there. Pick another port.").format(
+                    m.name, net.port, net.bind_shown, shown_host(admin.bind_ip), admin.port)
+            return ""
+        cluster = self.cluster
+        try:
+            discovery = int(cluster.discovery_port)
+        except (TypeError, ValueError):
+            return ""
+        # discovery listens on IPv4 (0.0.0.0): an IPv6-only listener doesn't get its beacons
+        if (cluster.active and cluster.discovery and net.port == discovery and _ip_overlaps(
+                "0.0.0.0", net.bind_ip, b_both=net.both_families)):
+            return _("Mapping '{0}': UDP port {1} is the LAN cluster's discovery port, so the "
+                     "mapping would get the other nodes' beacons. Pick another port (or "
+                     "another discovery port under Settings → LAN cluster).").format(
+                m.name, net.port)
+        return ""
+
     def validate(self) -> None:
         """Validate every part (the admin UI settings, each section, each mapping) and the
         cross-mapping invariants (unique IP:port, one mapping per serial port); raises
@@ -1401,7 +2043,7 @@ class AppConfig:
         if bool(cert) != bool(key):
             raise ConfigError(_("Set both TLS certificate and key, or neither."))
         for path in (p for p in (cert, key) if p):
-            if not os.path.isfile(path):
+            if not os.path.isfile(data_path(path)):
                 raise ConfigError(_("TLS file not found or not readable: {0}").format(path))
 
         # Admin UI bind IP (set via the console / --reconfigure, or a hand-edited
@@ -1441,7 +2083,7 @@ class AppConfig:
         by the resource and both mapping ids."""
         found = []
         serial_users: list[tuple[str, MappingConfig]] = []          # (device, mapping)
-        listeners: list[tuple[str, str, int, MappingConfig]] = []   # (proto, bind_ip, port, mapping)
+        listeners: list[tuple[str, int, MappingConfig]] = []   # (proto, port, mapping)
         for m in self.mappings:
             # A serial port can only be opened by one mapping. Flag two ENABLED
             # mappings that target the same literal device (skip dynamic VID/PID
@@ -1466,13 +2108,17 @@ class AppConfig:
             # A TCP listener and a UDP listener CAN share the same port number (they
             # bind different transports), so the clash key includes the transport.
             proto = "udp" if m.network.mode == "udp" else "tcp"
-            # 0.0.0.0 collides with everything on that port; treat any overlap as a clash.
-            for sproto, bip, bport, other in listeners:
-                if sproto == proto and bport == m.network.port and _ip_overlaps(bip, m.network.bind_ip):
-                    found.append((f"{proto} {m.network.port} {other.id} {m.id}", ConfigError(
+            # A wildcard collides with every address of its family on that port (of both,
+            # when it takes both: see _ip_overlaps); treat any overlap as a clash.
+            net = m.network
+            for sproto, bport, other in listeners:
+                onet = other.network
+                if sproto == proto and bport == net.port and _ip_overlaps(
+                        onet.bind_ip, net.bind_ip, onet.both_families, net.both_families):
+                    found.append((f"{proto} {net.port} {other.id} {m.id}", ConfigError(
                         _("Mappings '{0}' and '{1}' both use {2} port {3} on overlapping "
-                          "addresses ({4} / {5}).").format(other.name, m.name, proto.upper(), m.network.port, bip, m.network.bind_ip))))
-            listeners.append((proto, m.network.bind_ip, m.network.port, m))
+                          "addresses ({4} / {5}).").format(other.name, m.name, proto.upper(), net.port, onet.bind_ip, net.bind_ip))))
+            listeners.append((proto, net.port, m))
         return found
 
     def _broken(self) -> list[tuple[str, str, Any]]:
@@ -1599,11 +2245,26 @@ def _expire_days(value: Any) -> int:
     return 0 if days <= 0 else min(max(days, EXPIRE_DAYS_MIN), EXPIRE_DAYS_MAX)
 
 
-def _ip_overlaps(a: str, b: str) -> bool:
-    if a == b:
+def _ip_overlaps(a: str, b: str, a_both: bool = False, b_both: bool = False) -> bool:
+    """Whether listeners on bind IPs ``a`` and ``b`` (on one port) need the same address:
+    the same address however it is written ('::' and '0:0:0:0:0:0:0:0'), or a wildcard and
+    an address of its family. A listener on :: takes IPv6 only (IPV6_V6ONLY, TCP and UDP),
+    so it can share a port with one on 0.0.0.0 or another IPv4 address; one that takes both
+    families (``a_both`` / ``b_both``: NetworkSettings.both_families) overlaps either."""
+    xs = list(WILDCARDS) if a_both else [a]
+    ys = list(WILDCARDS) if b_both else [b]
+    return any(_address_overlaps(x, y) for x in xs for y in ys)
+
+
+def _address_overlaps(a: str, b: str) -> bool:
+    x, y = canonical_ip(a), canonical_ip(b)
+    if x == y:
         return True
-    wildcards = {"0.0.0.0", "::"}
-    return a in wildcards or b in wildcards
+    try:
+        ax, ay = ipaddress.ip_address(x), ipaddress.ip_address(y)
+    except ValueError:
+        return False  # not an address (validate() says so): only the same text overlaps
+    return ax.version == ay.version and (ax.is_unspecified or ay.is_unspecified)
 
 
 # ---------------------------------------------------------------------------
@@ -1624,6 +2285,7 @@ class ConfigStore:
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
         directory = os.path.dirname(self.path)
+        set_data_dir(directory)  # (relative TLS paths: data_path)
         os.makedirs(directory, exist_ok=True)
         # config.json holds the password hash + secret_key; keep the dir private on
         # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).
