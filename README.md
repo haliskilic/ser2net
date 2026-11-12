@@ -634,8 +634,12 @@ number.`). Koruyucu bir ayar (`read_only`, `tls`) yalnızca JSON `true` / `false
 reddedilir (`network.read_only: use true or false (JSON booleans), not a string.`), böyle bir
 dosyanın içe aktarılması da. Elle düzenlenmiş bir `config.json`'da koruyucu bir ayardaki
 (`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`) metin, 2.9.0 öncesindeki gibi
-boş değilse onu açık tutar ve açılışta not düşülür. Ayar olmayan anahtarlar yok sayılır ve
-yanıttaki `warnings` listesinde adlandırılır. Beklenmeyen bir sunucu hatası da JSON bir `500`
+boş değilse onu açık tutar ve açılışta not düşülür. Yalnızca JSON `true` ile bir şeyi açan
+ayarlar (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
+MQTT'nin `tx_enabled`'ı, `proxy_hsts`, `mask_personal_data`, `email_separately`) de metni
+reddeder; elle düzenlenmiş bir `config.json`'da metin onları kapalı bırakır ve açılışta not
+düşülür. Ayar olmayan anahtarlar yok sayılır ve yanıttaki `warnings` listesinde
+adlandırılır. Beklenmeyen bir sunucu hatası da JSON bir `500`
 döner.
 Kaydedilemeyen bir değişiklik hiçbir şeyi değiştirmez: yapılandırma doğrulanmıyorsa — örneğin
 çalışan bir eşlemeyle aynı seri portu kullanacak bir başlatmada — `400` (`validation`),

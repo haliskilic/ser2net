@@ -609,8 +609,11 @@ number.`). A protective switch (`read_only`, `tls`) takes only JSON `true` / `fa
 refused (`network.read_only: use true or false (JSON booleans), not a string.`), and so is an
 import of such a file. In a hand-edited `config.json`, text in a protective switch
 (`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`) keeps it on unless empty, as
-before 2.9.0, with a start-up note. Keys that are not settings are ignored and named in the
-response's `warnings` list. An unexpected server error is a JSON `500` too.
+before 2.9.0, with a start-up note. The switches that turn something on only when set to
+JSON `true` (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`,
+the MQTT `tx_enabled`, `proxy_hsts`, `mask_personal_data`, `email_separately`) refuse text as
+well; in a hand-edited `config.json` it leaves them off, with a start-up note. Keys that are
+not settings are ignored and named in the response's `warnings` list. An unexpected server error is a JSON `500` too.
 A change that can't be saved changes nothing: `400` (`validation`) when the configuration
 would not validate — a start that would share a serial port with a running mapping, for
 example — and `500` (`save_failed`) when `config.json` can't be written (a full or
