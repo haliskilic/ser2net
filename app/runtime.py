@@ -12,6 +12,7 @@ runs the ProactorEventLoop instead, which has no such limit (event_loop_choice).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
 import ipaddress
 import logging
@@ -31,11 +32,12 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
 from . import accounts, console, datalock, i18n, standalone
-from .config import ConfigError, ConfigStore, data_path, host_port
+from .config import (NODE_NAME_ENV, ConfigError, ConfigStore, data_path, host_port, node_name,
+                     node_name_problem)
 from .engine import netguard
 from .engine.serial_link import Backoff
 from .state import AppState, write_audit_record
-from .web import httpguard
+from .web import httpguard, proxy
 from .web.server import build_app
 
 
@@ -168,7 +170,7 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     except ConfigError as e:
         raise SystemExit(f"ser2net: {e}") from None
     if (first_run or reconfigure) and not env_set:
-        bind_ip, port = console.choose_admin_bind(config.admin_ui)
+        bind_ip, port = console.choose_admin_bind(config.admin_ui, notes)
         config.admin_ui.bind_ip = bind_ip
         config.admin_ui.port = port
     admin, note = accounts.provision_from_env(config, os.environ)
@@ -322,6 +324,49 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
     loop.set_exception_handler(handler)
 
 
+# Threads of the loop's default pool (asyncio.to_thread, run_in_executor(None)).
+WORKER_THREADS = 32
+
+
+def use_worker_threads(loop: asyncio.AbstractEventLoop) -> None:
+    """Give the loop a default thread pool of WORKER_THREADS threads. Python's own has
+    min(32, CPUs + 4): 8 on a Raspberry Pi 4, 5-6 on a small VM. That pool opens, closes
+    and flushes serial ports (pyserial-asyncio-fast always uses it), saves config.json
+    while the config lock is held, scans the port list and reads logs, and also waits
+    for slow network calls (a connect-out mapping's DNS lookup while DNS is down), so a
+    few of those would hold up every other job. Password checks and directory sign-ins
+    have a limit of their own (auth.SlowWork), so more threads don't mean more scrypt
+    jobs at once."""
+    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(
+        max_workers=WORKER_THREADS, thread_name_prefix="ser2net"))
+
+
+def node_name_notes(env: Optional[Mapping[str, str]] = None) -> list[str]:
+    """The start-up warning for a SER2NET_NODE_NAME that can't be used (none otherwise)."""
+    raw = ((os.environ if env is None else env).get(NODE_NAME_ENV) or "").strip()
+    if raw and (why := node_name_problem(raw)) is not None:
+        return [f"WARNING: {NODE_NAME_ENV} {raw[:80]!r} is not used: {why}"]
+    return []
+
+
+def plain_http_warning(admin, published: str = "") -> str:
+    """The start-up warning for an admin UI that answers plain HTTP on a network address
+    ('' when there is none), behind a TLS reverse proxy (`published`: the public URL) too:
+    the port itself is still plain HTTP."""
+    if admin.bind_ip in ("127.0.0.1", "::1", "localhost") or admin.tls_enabled:
+        return ""
+    if published.startswith("https://"):
+        return (f"WARNING: the admin UI is published as {published} through a TLS reverse "
+                f"proxy, but it also answers plain HTTP on {host_port(admin.bind_ip, admin.port)} — "
+                "passwords and session cookies sent there travel unencrypted. Let only the "
+                "proxy reach that port (Docker: publish it as 127.0.0.1:8080:8080, or not "
+                "at all).")
+    return ("WARNING: admin UI is bound to a network address over plain HTTP — the password "
+            "and session cookies travel unencrypted. Configure TLS (admin_ui.tls_cert/"
+            "tls_key), or bind to 127.0.0.1 (in Docker: publish the port to this host only) "
+            "and put a TLS reverse proxy in front (docs/REVERSE-PROXY.md).")
+
+
 _as_service = False  # set by service_main so _serve can log the service-only warnings
 
 # The most a stop takes (only a device, broker or client that stops answering makes it
@@ -368,8 +413,15 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     state = AppState(store, config)
     admin = config.admin_ui
     scheme = "https" if admin.tls_enabled else "http"
-    state.log(f"ser2net starting — admin UI on {scheme}://{host_port(admin.bind_ip, admin.port)}")
-    for note in standalone.notes + config.load_notes + ([loop_note] if loop_note else []):
+    published = proxy.public_url(admin)
+    name = node_name(admin)
+    state.log(f"ser2net starting{f' as {name!r}' if name else ''} — admin UI on "
+              f"{scheme}://{host_port(admin.bind_ip, admin.port)}"
+              + (f", published as {published} "
+                 f"({proxy.PUBLIC_URL_ENV if proxy.public_url_from_env() else 'admin_ui.public_url'})"
+                 if published else ""))
+    for note in (standalone.notes + config.load_notes + ([loop_note] if loop_note else [])
+                 + proxy.start_notes(admin) + node_name_notes()):
         state.log(note)
     from .engine import serial_compat
     for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config),
@@ -377,6 +429,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
+    use_worker_threads(asyncio.get_running_loop())
     for lang in i18n.missing_catalogs():
         state.log(f"WARNING: the '{lang}' UI translation is missing from {i18n.LOCALE_DIR} "
                   "— the web UI shows English to visitors who pick it")
@@ -385,10 +438,8 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if warning := winservice.location_warning():
             state.log(warning)
     state.prepare_first_run()
-    if admin.bind_ip not in ("127.0.0.1", "::1", "localhost") and not admin.tls_enabled:
-        state.log("WARNING: admin UI is bound to a network address over plain HTTP — "
-                  "the password and session cookies travel unencrypted. Configure TLS "
-                  "(admin_ui.tls_cert/tls_key) or bind to 127.0.0.1.")
+    if warning := plain_http_warning(admin, published):
+        state.log(warning)
     if config.password_set and not admin.require_login:
         state.log(f"WARNING: web UI login is switched off — visitors without a session get "
                   f"the '{admin.anonymous_role}' role (Settings → Web UI access).")
@@ -450,6 +501,10 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
             # at a stop, a response still under way (a large trace download) gets this
             # long; the WebSockets (console, hex view) are closed at once
             timeout_graceful_shutdown=SHUTDOWN_HTTP_TIMEOUT_S,
+            # X-Forwarded-For / -Proto are taken by app/web/proxy.py, from trusted proxies
+            # only (uvicorn's own would believe them from 127.0.0.1 and ::1, and any text as
+            # an address)
+            proxy_headers=False,
         )
         # The admin UI comes before the mappings. Its TLS pair must load, or the start
         # stops here, before any serial port is opened (a restart loop would otherwise

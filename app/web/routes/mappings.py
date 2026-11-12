@@ -16,7 +16,15 @@ from ...engine import netinfo, portlist
 from ...i18n import _
 from . import ops
 from .common import TRIGGER, Ctx, console_interactive, sees_to_device
-from .forms import _form_error, _modbus_points_json
+from .forms import _form_error, _modbus_points_json, mqtt_password_view
+
+
+def _port_taken(error: str) -> bool:
+    """Does a mapping's start error say that its port is in use (EADDRINUSE: errno 98 on
+    Linux, 48 on macOS, 10048 on Windows)?"""
+    text = error.lower()
+    return "address already in use" in text or any(f"[errno {n}]" in text
+                                                   for n in (98, 48, 10048))
 
 
 def routes(ctx: Ctx) -> list:
@@ -99,8 +107,8 @@ def routes(ctx: Ctx) -> list:
         return Response("", headers=TRIGGER)
 
     # ---------------- mapping form ----------------
-    # The form is for editing (operator+), and it renders stored secrets (the MQTT
-    # password) into the page, so viewers get 403 — the UI never offers it to them.
+    # The form is for editing (operator+), so viewers get 403 — the UI never offers it to
+    # them. It shows every setting but the MQTT password, which it only says is stored.
     async def mapping_form_new(request):
         if deny := require_role(request, "operator"):
             return deny
@@ -122,7 +130,7 @@ def routes(ctx: Ctx) -> list:
                       mapping=m, is_new=False, modbus_points_json=_modbus_points_json(m),
                       ports=ports, ips=netinfo.list_ip_candidates(),
                       links=portlist.links(ports, (m.serial.port, m.serial_b.port)),
-                      error=None)
+                      error=None, **mqtt_password_view(m.mqtt.password))
 
     async def mapping_log(request):
         mid = request.path_params["mid"]
@@ -188,11 +196,18 @@ def routes(ctx: Ctx) -> list:
         if deny := require_role(request, "operator"):
             return deny
         form = await request.form()
-        ok, msg = await ops.save_mapping_from_form(state, form)
+        started: dict = {}
+        ok, msg = await ops.save_mapping_from_form(state, form, started)
         if not ok:
             return _form_error(render, request, state, form, msg)
         state.log(f"mapping saved: {msg}")
         ctx.audit(request, "mapping_save", msg)
+        if started.get("ok") is False:
+            # saved, but it didn't start: say why where the form was (its row shows it too)
+            error = str(started.get("detail") or "")
+            return render(request, "_mapping_start_failed.html", headers=TRIGGER,
+                          mapping_name=msg, error=error, port_taken=_port_taken(error),
+                          retrying=bool(started.get("retrying")))
         return Response("", headers=TRIGGER)
 
     async def mapping_delete(request):

@@ -248,10 +248,11 @@ def peer_label(transport: Any) -> str:
 
 
 def address_key(ip: str) -> str:
-    """What the per-address limits count a source under: an IPv6 address by its /64
-    network (a host, or a LAN, gets a whole /64 and can use any address in it, so one
-    client can't get past a limit by moving to the next address), an IPv4 address (also
-    written IPv4-mapped) as it is, anything else unchanged."""
+    """What the per-address limits (the connection caps here, the web UI's sign-in limits
+    in web/auth.py) count a source under: an IPv6 address by its /64 network (a host, or a
+    LAN, gets a whole /64 and can use any address in it, so one client can't get past a
+    limit by moving to the next address), an IPv4 address (also written IPv4-mapped) as it
+    is, anything else unchanged."""
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:

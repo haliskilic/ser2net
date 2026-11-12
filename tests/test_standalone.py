@@ -70,6 +70,7 @@ sys.path.insert(0, ROOT)
 
 from app import __version__, standalone  # noqa: E402
 from app.web.auth import hash_password  # noqa: E402
+from _server import ui_cookie  # noqa: E402
 
 BIN = os.path.abspath(os.environ["SER2NET_STANDALONE_BIN"]) if os.environ.get("SER2NET_STANDALONE_BIN") else ""
 IMAGE = os.environ.get("SER2NET_STANDALONE_IMAGE", "")
@@ -757,7 +758,8 @@ class Session:
         self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar), NoRedirect)
 
     def csrf(self):
-        return next((c.value for c in self.jar if c.name == "ser2net_csrf"), "")
+        name = ui_cookie("ser2net_csrf", urllib.parse.urlsplit(self.base).port)
+        return next((c.value for c in self.jar if c.name == name), "")
 
     def request(self, path, fields=None, timeout=30):
         data = urllib.parse.urlencode(fields).encode() if fields is not None else None

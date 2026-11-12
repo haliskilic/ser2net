@@ -9,6 +9,7 @@ import io
 import json
 import os
 import secrets
+import socket
 import time
 import types
 import unicodedata
@@ -19,15 +20,18 @@ from starlette.routing import Route
 
 from ... import i18n, importer, optional
 from ...config import (
-    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, NOTIFY_EVENTS, ROLES, SMTP_SECURITY, UI_LANGUAGES,
-    WEBHOOK_FORMATS, AppConfig, ClusterSettings, ConfigError, NotificationSettings, User,
-    backup_time, data_path, host_port, new_pwd_version, parse_cluster_peer, serial_conflict,
-    tls_file_message,
+    EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, NODE_NAME_ENV, NODE_NAME_MAX,
+    NOTIFY_EVENTS, REQUEST_LOG_MODES, ROLES, SMTP_SECURITY, UI_LANGUAGES, WEBHOOK_FORMATS,
+    LOGIN_NOTICE_MAX, LOGIN_NOTICE_URL_MAX, AppConfig, ClusterSettings, ConfigError,
+    NotificationSettings, User, backup_time, clean_login_notice, data_path, host_port,
+    login_notice_problem, login_notice_url_problem, new_pwd_version, node_name_from_env,
+    node_name_problem, normalize_public_url, parse_cluster_peer, proxy_entry_problem,
+    public_url_problem, serial_conflict, split_proxy_entries, tls_file_message,
 )
 from ...engine import tls
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
-from .. import auth, ldap_auth, selfsigned
+from .. import auth, ldap_auth, oidc_auth, proxy, selfsigned
 from .common import Ctx, csrf_failed
 from .forms import (
     _checkbox, _ldap_from_form, _oidc_from_form, _password_problem, _username_problem,
@@ -70,11 +74,25 @@ def routes(ctx: Ctx) -> list:
                            new_cluster_key=None, restore_preview=None):
         me = current_user(request)
         backups = state.store.backups() if me is not None and me.role == "admin" else []
+        # names in a backup that are no account now (deleted since): Settings can take
+        # them out of every backup
+        current = {u.username for u in state.config.users}
+        gone_accounts = sorted({a["username"] for b in backups for a in b["accounts"]
+                                if a["username"] and a["username"] not in current})
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
+        # the redirect URI a sign-in started from this page's address would send
+        published = proxy.public_url(state.config.admin_ui)
+        oidc_redirect = oidc_auth.redirect_uri(state.config.oidc, request, published)
         return render(request, "settings.html", ok=ok, error=error,
                       import_preview=import_preview, restore_preview=restore_preview,
-                      backups=backups,
-                      admin=state.config.admin_ui,
+                      backups=backups, backup_gone_accounts=gone_accounts,
+                      admin=state.config.admin_ui, hsts_max=HSTS_MAX_AGE_MAX,
+                      hostname=socket.gethostname(), node_name_max=NODE_NAME_MAX,
+                      request_log_modes=REQUEST_LOG_MODES, login_notice_max=LOGIN_NOTICE_MAX,
+                      login_notice_url_max=LOGIN_NOTICE_URL_MAX,
+                      node_name_env=NODE_NAME_ENV if node_name_from_env() else "",
+                      public_url=published, public_url_env=bool(proxy.public_url_from_env()),
+                      trusted=proxy.trusted_entries(state.config.admin_ui),
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
                       new_api_token=new_api_token, new_cluster_key=new_cluster_key,
@@ -85,6 +103,10 @@ def routes(ctx: Ctx) -> list:
                       ldap=state.config.ldap, ldap_problem=ldap_problem,
                       ldap_tls_problem=state.ldap_tls_problem,
                       oidc=state.config.oidc, oidc_problem=oidc_problem,
+                      oidc_redirect_uri=oidc_redirect,
+                      oidc_redirect_auto=not state.config.oidc.redirect_uri.strip() and not published,
+                      oidc_redirect_public=not state.config.oidc.redirect_uri.strip() and bool(published),
+                      oidc_redirect_http=oidc_auth.redirect_uri_is_plain_http(oidc_redirect),
                       group_warnings={src: [w for (s, _k), w in sorted(state.group_warnings.items())
                                             if s == src] for src in ("ldap", "oidc")},
                       **_cluster_view(),
@@ -120,12 +142,24 @@ def routes(ctx: Ctx) -> list:
         cur = form.get("current", "")
         new = form.get("password", "")
         new2 = form.get("password2", "")
-        if user is None or not await asyncio.to_thread(auth.verify_password, cur, user.password_hash):
+        if user is None:
             return await settings_get(request, error=_("Current password is incorrect."))
+        # wrong current passwords count like failed sign-ins under this name (a session
+        # someone else got hold of must not be a way to guess the password itself)
+        if state.name_limiter.blocked(user.username):
+            return await settings_get(request, error=_("Too many attempts. Wait a few minutes "
+                                                       "and try again."))
+        state.name_limiter.record_failure(user.username)
+        if not await state.password_work.run(auth.verify_password, cur, user.password_hash):
+            state.log(f"password change for {user.username} refused: wrong current password "
+                      f"(from {ctx.client_ip(request)})")
+            ctx.audit(request, "password_change_failed", user.username)
+            return await settings_get(request, error=_("Current password is incorrect."))
+        state.name_limiter.reset(user.username)
         err = _password_problem(new, new2)
         if err:
             return await settings_get(request, error=err)
-        new_hash = await asyncio.to_thread(auth.hash_password, new)
+        new_hash = await state.password_work.run(auth.hash_password, new)
         async with state.config_lock:
             user.password_hash = new_hash
             user.pwd_version += 1
@@ -197,10 +231,18 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         cert, key = form.get("tls_cert", "").strip(), form.get("tls_key", "").strip()
+        ui = state.config.admin_ui
         # never shown: a blank field keeps the stored password, unless the box removes it
         password = (form.get("tls_key_password", "") or (
-            "" if _checkbox(form, "tls_key_password_clear")
-            else state.config.admin_ui.tls_key_password))
+            "" if _checkbox(form, "tls_key_password_clear") else ui.tls_key_password))
+        hsts = ui.hsts_max_age   # kept when the form has no such field (an older page)
+        if "hsts_max_age" in form:
+            raw = str(form.get("hsts_max_age") or "").strip()
+            if not (raw.isascii() and raw.isdigit() and int(raw) <= HSTS_MAX_AGE_MAX):
+                return await settings_get(request, error=_(
+                    "The HSTS max-age must be a whole number of seconds from 0 to {0}.")
+                    .format(HSTS_MAX_AGE_MAX))
+            hsts = int(raw)
         if cert and key:
             # a pair that exists but doesn't load would stop the next start (runtime._serve)
             try:
@@ -210,15 +252,18 @@ def routes(ctx: Ctx) -> list:
                     "The TLS certificate and key could not be loaded: {0}").format(
                     tls_file_message(e)))
         async with state.config_lock:
-            admin = state.config.admin_ui
-            old = (admin.tls_cert, admin.tls_key, admin.tls_key_password)
-            admin.tls_cert, admin.tls_key, admin.tls_key_password = cert, key, password
+            old = (ui.tls_cert, ui.tls_key, ui.hsts_max_age, ui.tls_key_password)
+            ui.tls_cert, ui.tls_key, ui.hsts_max_age = cert, key, hsts
+            ui.tls_key_password = password
             try:
                 await state.asave()
             except ConfigError as e:
-                admin.tls_cert, admin.tls_key, admin.tls_key_password = old
+                ui.tls_cert, ui.tls_key, ui.hsts_max_age, ui.tls_key_password = old
                 return await settings_get(request, error=str(e))
-        ctx.audit(request, "admin_tls_set", cert)
+        if hsts != old[2]:
+            state.log(f"admin TLS: HSTS max-age set to {hsts} s"
+                      + (" (max-age=0: browsers forget it)" if hsts == 0 else ""))
+        ctx.audit(request, "admin_tls_set", cert + ("" if hsts == old[2] else f" (HSTS {hsts} s)"))
         return await settings_get(request, ok=_("Admin TLS saved. Restart to apply."))
 
     async def settings_tls_generate(request):
@@ -288,6 +333,122 @@ def routes(ctx: Ctx) -> list:
         ctx.audit(request, "web_access",
                     "login-required" if require_login else f"open:{role}")
         return await settings_get(request, ok=ok)
+
+    # ---------------- the notice on the sign-in page ----------------
+    async def settings_login_notice_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        ui = state.config.admin_ui
+        text = str(form.get("login_notice", ui.login_notice))
+        url = str(form.get("login_notice_url", ui.login_notice_url)).strip()
+        if problem := login_notice_problem(text) or login_notice_url_problem(url):
+            return await settings_get(request, error=problem)
+        text = clean_login_notice(text)
+        async with state.config_lock:
+            old = (ui.login_notice, ui.login_notice_url)
+            ui.login_notice, ui.login_notice_url = text, url
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.login_notice, ui.login_notice_url = old
+                return await settings_get(request, error=str(e))
+        what = (f"{len(text)} characters" if text else "none") + f", link {url or 'none'}"
+        if (text, url) != old:
+            state.log(f"sign-in notice set: {what}")
+        ctx.audit(request, "login_notice_set", what)
+        return await settings_get(request, ok=_("Sign-in notice saved.") if text or url else
+                                  _("Sign-in notice removed."))
+
+    # ---------------- this instance's name ----------------
+    async def settings_node_name_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        ui = state.config.admin_ui
+        if "node_name" not in form:   # the environment sets it (the field is disabled)
+            return await settings_get(request)
+        name = str(form.get("node_name") or "")
+        if problem := node_name_problem(name):
+            return await settings_get(request, error=problem)
+        name = name.strip()
+        async with state.config_lock:
+            old, ui.node_name = ui.node_name, name
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.node_name = old
+                return await settings_get(request, error=str(e))
+        if name != old:
+            state.log(f"instance name set to {name!r}" if name else
+                      "instance name cleared: the host name is used")
+        ctx.audit(request, "node_name_set", name or "(host name)")
+        return await settings_get(request, ok=_("Instance name saved."))
+
+    # ---------------- which web UI requests all.log records ----------------
+    async def settings_request_log_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        mode = str(form.get("request_log") or "")
+        if mode not in REQUEST_LOG_MODES:
+            return await settings_get(request, error=_("Choose which web UI requests all.log "
+                                                       "records."))
+        ui = state.config.admin_ui
+        async with state.config_lock:
+            old, ui.request_log = ui.request_log, mode
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.request_log = old
+                return await settings_get(request, error=str(e))
+        if mode != old:  # logged before "off" would keep this request's own line out
+            state.log(f"web UI requests in all.log: {mode} (was {old})")
+        ctx.audit(request, "request_log_set", mode)
+        return await settings_get(request, ok=_("Saved: which web UI requests all.log records."))
+
+    # ---------------- behind a reverse proxy ----------------
+    async def settings_proxy_post(request):
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        ui = state.config.admin_ui
+        # a field the form doesn't have (disabled: the environment sets it) keeps its value
+        url, entries = ui.public_url, list(ui.trusted_proxies)
+        if "public_url" in form:
+            raw = str(form.get("public_url") or "").strip()
+            if problem := public_url_problem(raw):
+                return await settings_get(request, error=problem)
+            url = normalize_public_url(raw)
+        if "trusted_proxies" in form:
+            entries = list(dict.fromkeys(split_proxy_entries(str(form.get("trusted_proxies") or ""))))
+            if problem := next(filter(None, map(proxy_entry_problem, entries)), None):
+                return await settings_get(request, error=problem)
+        hsts = _checkbox(form, "proxy_hsts")
+        async with state.config_lock:
+            old = (ui.public_url, list(ui.trusted_proxies), ui.proxy_hsts)
+            ui.public_url, ui.trusted_proxies, ui.proxy_hsts = url, entries, hsts
+            try:
+                await state.asave()
+            except ConfigError as e:
+                ui.public_url, ui.trusted_proxies, ui.proxy_hsts = old
+                return await settings_get(request, error=str(e))
+        changes = [what for what, changed in (
+            (f"public URL {url or '(none)'}", url != old[0]),
+            (f"trusted proxies {' '.join(entries) or '(none)'}", entries != old[1]),
+            (f"HSTS through the proxy {'on' if hsts else 'off'}", hsts != old[2])) if changed]
+        if changes:
+            state.log(f"reverse proxy settings: {'; '.join(changes)}")
+        ctx.audit(request, "reverse_proxy_set", "; ".join(changes) or "unchanged")
+        return await settings_get(request, ok=_("Reverse proxy settings saved."))
 
     async def settings_sessions_revoke_all(request):
         """A new session key: every web UI session ends at once, including sessions
@@ -494,7 +655,7 @@ def routes(ctx: Ctx) -> list:
                or taken())
         if err:
             return await settings_get(request, error=err)
-        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
+        pw_hash = await state.password_work.run(auth.hash_password, pw)
         async with state.config_lock:
             if err := taken():  # created while the password was hashed
                 return await settings_get(request, error=err)
@@ -559,6 +720,13 @@ def routes(ctx: Ctx) -> list:
         if target.source != "local":
             ok += " " + _("They are signed out; while {0} still gives them a role, their next "
                           "sign-in makes a new account.").format(target.source.upper())
+        names = {u.username for u in gone}
+        kept = sum(1 for b in await asyncio.to_thread(state.store.backups)
+                   if any(a["username"] in names for a in b["accounts"]))
+        if kept:
+            ok += " " + _("{0} configuration backups still hold it (made before the deletion; a "
+                          "restore with accounts would bring it back): Configuration backups "
+                          "below can remove it from them.").format(kept)
         return await settings_get(request, ok=ok)
 
     async def settings_users_expiry(request):
@@ -638,7 +806,7 @@ def routes(ctx: Ctx) -> list:
 
         if err := problem() or _password_problem(pw, pw2):
             return await settings_get(request, error=err)
-        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
+        pw_hash = await state.password_work.run(auth.hash_password, pw)
         async with state.config_lock:
             if err := problem():  # changed while the password was hashed
                 return await settings_get(request, error=err)
@@ -762,6 +930,7 @@ def routes(ctx: Ctx) -> list:
                 return await settings_get(request, error=_("Import rejected: {0}").format(e))
         if mode == "replace":
             await state.supervisor.stop_all()
+            state.forget_mappings({m.id for m in old} - {m.id for m in new_maps})
             await state.supervisor.start_all(state.config)
         else:
             for m in touched:
@@ -787,6 +956,9 @@ def routes(ctx: Ctx) -> list:
         except ValueError:
             raise ConfigError(_("SMTP port and repeat interval must be numbers.")) from None
         url, pw = form.get("notify_webhook_url", "").strip(), form.get("notify_smtp_password", "")
+        # the personal-data boxes: a form without them (a page opened before the upgrade)
+        # keeps what is stored
+        privacy = "notify_privacy_fields" in form
         return NotificationSettings.from_dict({
             "enabled": _checkbox(form, "notify_enabled"),
             "events": [e for e in NOTIFY_EVENTS if _checkbox(form, f"notify_event_{e}")],
@@ -801,6 +973,10 @@ def routes(ctx: Ctx) -> list:
             "smtp_security": form.get("notify_smtp_security", "starttls"),
             "smtp_username": form.get("notify_smtp_username", "").strip(),
             "smtp_password": pw if pw else old.smtp_password,   # blank => keep the stored one
+            "mask_personal_data": (_checkbox(form, "notify_mask_personal_data") if privacy
+                                   else old.mask_personal_data),
+            "email_separately": (_checkbox(form, "notify_email_separately") if privacy
+                                 else old.email_separately),
         })
 
     async def settings_notifications_post(request):
@@ -818,8 +994,13 @@ def routes(ctx: Ctx) -> list:
                 state.config.notifications = old
                 return await settings_get(request, error=str(e))
         new = state.config.notifications
-        state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)})")
-        ctx.audit(request, "notification_settings", "enabled" if new.enabled else "disabled")
+        state.log(f"notification settings saved (enabled={new.enabled}, events={','.join(new.events)}, "
+                  f"personal data {'masked' if new.mask_personal_data else 'sent'}, e-mail "
+                  f"{'to each recipient' if new.email_separately else 'to all recipients at once'})")
+        ctx.audit(request, "notification_settings", "; ".join(
+            ["enabled" if new.enabled else "disabled"]
+            + (["personal data masked"] if new.mask_personal_data else [])
+            + (["e-mail to each recipient"] if new.email_separately else [])))
         if form.get("then") == "test":
             errors = await state.notifier.deliver("test", "", _("If you can read this, "
                                                     "ser2net can reach you."))
@@ -964,6 +1145,7 @@ def routes(ctx: Ctx) -> list:
         if with_accounts:
             state.revoked_sessions.clear()  # signed with the old key: dead anyway
         await state.supervisor.stop_all()
+        state.forget_mappings({m.id for m in previous["mappings"]} - {m.id for m in cur.mappings})
         await state.supervisor.start_all(state.config)
         await state.cluster.stop()
         await state.cluster.start()
@@ -994,6 +1176,57 @@ def routes(ctx: Ctx) -> list:
         if mine is not None:
             set_session(resp, request, mine)
         return resp
+
+    async def backup_delete(request):
+        """Delete one backup (`name`), or every one (`all`)."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        name = str(form.get("name") or "")
+        async with state.config_lock:   # no save makes or prunes a backup meanwhile
+            try:
+                if _checkbox(form, "all"):
+                    gone = await asyncio.to_thread(state.store.delete_backups)
+                else:
+                    await asyncio.to_thread(state.store.delete_backup, name)
+            except ConfigError as e:
+                return await settings_get(request, error=str(e))
+            except OSError as e:
+                return await settings_get(request, error=_("Could not delete: {0}").format(e))
+        if _checkbox(form, "all"):
+            state.log(f"all configuration backups deleted ({gone})")
+            ctx.audit(request, "config_backups_delete_all", f"{gone} backups")
+            return await settings_get(request, ok=_("{0} configuration backups deleted.").format(gone))
+        state.log(f"configuration backup {name} deleted")
+        ctx.audit(request, "config_backup_delete", name)
+        return await settings_get(request, ok=_("Backup of {0} UTC deleted.").format(backup_time(name)))
+
+    async def backup_remove_account(request):
+        """Take an account that no longer exists out of every backup that still has it."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        username = str(form.get("username") or "")
+        async with state.config_lock:
+            if any(u.username == username for u in state.config.users):
+                return await settings_get(request, error=_(
+                    "'{0}' is an account now: delete it under Users first.").format(username))
+            try:
+                changed = await asyncio.to_thread(state.store.remove_account, username)
+            except OSError as e:
+                return await settings_get(request, error=_("Could not change the backups: "
+                                                           "{0}").format(e))
+        if not changed:
+            return await settings_get(request, error=_("No backup holds an account named "
+                                                       "'{0}'.").format(username))
+        state.log(f"account {username!r} removed from {changed} configuration backups")
+        ctx.audit(request, "config_backup_account_remove", f"{username}: {changed} backups")
+        return await settings_get(request, ok=_("'{0}' was removed from {1} configuration "
+                                                "backups.").format(username, changed))
 
     async def backup_restore_mappings(request):
         """Restore only a backup's mappings, through the import preview (replace)."""
@@ -1133,6 +1366,10 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/tls", settings_tls_post, methods=["POST"]),
         Route("/settings/tls/generate", settings_tls_generate, methods=["POST"]),
         Route("/settings/access", settings_access_post, methods=["POST"]),
+        Route("/settings/proxy", settings_proxy_post, methods=["POST"]),
+        Route("/settings/node-name", settings_node_name_post, methods=["POST"]),
+        Route("/settings/request-log", settings_request_log_post, methods=["POST"]),
+        Route("/settings/login-notice", settings_login_notice_post, methods=["POST"]),
         Route("/settings/sessions/revoke-all", settings_sessions_revoke_all, methods=["POST"]),
         Route("/settings/api-token", settings_api_token_post, methods=["POST"]),
         Route("/settings/api-token/revoke", settings_api_token_revoke, methods=["POST"]),
@@ -1160,6 +1397,8 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/audit.csv", audit_csv),
         Route("/settings/backups/restore", backup_restore, methods=["POST"]),
         Route("/settings/backups/restore-mappings", backup_restore_mappings, methods=["POST"]),
+        Route("/settings/backups/delete", backup_delete, methods=["POST"]),
+        Route("/settings/backups/remove-account", backup_remove_account, methods=["POST"]),
         Route("/settings/backups/{name}", backup_download),
     ]
 
@@ -1214,7 +1453,13 @@ def _setting_changes(old, new) -> list[str]:
     diff(_("Login required"), onoff(o.require_login), onoff(n.require_login))
     diff(_("Role for visitors without login"), o.anonymous_role, n.anonymous_role)
     diff(_("Admin UI address"), host_port(o.bind_ip, o.port), host_port(n.bind_ip, n.port))
+    diff(_("Instance name"), o.node_name or "—", n.node_name or "—")
     diff(_("Admin TLS (HTTPS)"), onoff(o.tls_enabled), onoff(n.tls_enabled))
+    diff(_("HSTS max-age (seconds)"), o.hsts_max_age, n.hsts_max_age)
+    diff(_("Public URL"), o.public_url or "—", n.public_url or "—")
+    diff(_("Trusted proxies"), " ".join(o.trusted_proxies) or "—",
+         " ".join(n.trusted_proxies) or "—")
+    diff(_("HSTS through the reverse proxy"), onoff(o.proxy_hsts), onoff(n.proxy_hsts))
     for label, a, b in (("LDAP", old.ldap, new.ldap), ("OIDC", old.oidc, new.oidc)):
         diff(label, onoff(a.enabled), onoff(b.enabled))
         diff(f"{label} · {_('Default role')}", role(a.default_role), role(b.default_role))

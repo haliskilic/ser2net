@@ -57,7 +57,7 @@ import urllib.parse
 import urllib.request
 
 from . import netinfo
-from ..config import parse_cluster_peer, peer_host
+from ..config import node_label, parse_cluster_peer, peer_host
 
 BEACON_INTERVAL = 5.0   # seconds between outbound beacons
 PEER_TTL = 20.0         # a peer is dropped if not heard from within this window
@@ -399,7 +399,9 @@ class ClusterDiscovery:
     # ----- beacon (de)serialization -----
     def _beacon_body(self) -> str:
         ip, port, scheme = self.advertised()
-        payload = {"v": PROTOCOL, "id": self.config.instance_id, "name": socket.gethostname(),
+        # "name": the instance's name (Settings -> Admin interface), else the host name
+        payload = {"v": PROTOCOL, "id": self.config.instance_id,
+                   "name": node_label(self.config.admin_ui),
                    "ip": ip, "port": port, "scheme": scheme, "t": round(time.time(), 3),
                    "b": self.boot,                     # this process (see _accept / _same_id)
                    "ips": netinfo.own_ipv4()[:32]}     # where its packets may come from
@@ -647,7 +649,7 @@ class ClusterDiscovery:
             self.discovery_error = ""
             self._running = True
             self.log(f"cluster: on, auto-discovery off (manual peers only) as "
-                     f"'{socket.gethostname()}' ({self.config.instance_id[:8]})")
+                     f"'{node_label(self.config.admin_ui)}' ({self.config.instance_id[:8]})")
             return
         loop = asyncio.get_running_loop()
         try:  # validate() rejects a bad one at save time; this guards a hand-edited config
@@ -684,7 +686,7 @@ class ClusterDiscovery:
         self.discovery_error = ""
         self._running = True
         self._beacon_task = asyncio.create_task(self._beacon_loop(), name="cluster-beacon")
-        self.log(f"cluster: discovery on UDP {port} as '{socket.gethostname()}' "
+        self.log(f"cluster: discovery on UDP {port} as '{node_label(self.config.admin_ui)}' "
                  f"({self.config.instance_id[:8]})")
 
     async def stop(self) -> None:

@@ -50,12 +50,14 @@ wait_healthy() {
     fail "not healthy after 60 s (status: $s)"
 }
 proc_status() { docker exec s2n-smoke sh -c 'grep -E "^(Uid|Gid|Groups):" /proc/1/status'; }
+# the CSRF cookie's value in $JAR (on a port other than 8080 its name ends in _<8 hex>)
+csrf_of_jar() { awk '$6 ~ /^ser2net_csrf(_[0-9a-f]+)?$/ {print $7}' "$JAR"; }
 # sign in through the form (the session stays in $JAR); prints the HTTP status (303 = signed in)
 sign_in() {
     local csrf
     : > "$JAR"
     curl -fsS -c "$JAR" -b "$JAR" -o /dev/null "http://127.0.0.1:$PORT/login"
-    csrf=$(awk '$6=="ser2net_csrf"{print $7}' "$JAR")
+    csrf=$(csrf_of_jar)
     curl -sS -c "$JAR" -b "$JAR" -o /dev/null -w '%{http_code}' \
         --data-urlencode "username=$1" --data-urlencode "password=$2" \
         --data-urlencode "_csrf=$csrf" "http://127.0.0.1:$PORT/login"
@@ -63,7 +65,7 @@ sign_in() {
 # an HTMX-style POST in that session; prints the HTTP status
 ui_post() {
     curl -sS -c "$JAR" -b "$JAR" -o /dev/null -w '%{http_code}' -X POST \
-        -H "X-CSRF-Token: $(awk '$6=="ser2net_csrf"{print $7}' "$JAR")" "http://127.0.0.1:$PORT$1"
+        -H "X-CSRF-Token: $(csrf_of_jar)" "http://127.0.0.1:$PORT$1"
 }
 
 echo "== 1. fresh volume"

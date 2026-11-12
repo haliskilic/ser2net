@@ -9,13 +9,14 @@ import time
 from starlette.responses import RedirectResponse
 from starlette.routing import Route
 
+from ... import notify
 from ...config import (
     AccountNameError, ConfigError, User, external_name, external_name_problem, fold,
     new_pwd_version,
 )
-from ...engine import netinfo
+from ...engine import netguard, netinfo
 from ...i18n import _
-from .. import auth, ldap_auth, oidc_auth
+from .. import auth, ldap_auth, oidc_auth, proxy
 from .common import Ctx, csrf_failed
 from .forms import _password_problem, _username_problem
 
@@ -108,12 +109,14 @@ def routes(ctx: Ctx) -> list:
         state.log(f"{source.upper()}: {username!r} signed out everywhere: their groups give "
                   f"no role any more")
 
-    def _record_failure(ip: str, user: str, notice: str, action: str = "login_failed",
-                        detail: str = "") -> None:
+    def _record_failure(ip: str, user: str, source: str = "", reason: str = "",
+                        action: str = "login_failed", detail: str = "") -> None:
         """The audit record (bounded: state.failed_logins) and the notification of a
-        failed or refused sign-in."""
+        failed or refused sign-in (notify.sign_in_detail: personal data left out there
+        when Settings -> Notifications says so)."""
         state.failed_logins.add(ip, user, action, detail)
-        state.notifier.emit("login_failed", ip, "", notice)
+        state.notifier.emit("login_failed", ip, "", notify.sign_in_detail(
+            state.config.notifications, user, ip, source, reason))
 
     def _name_refused(request, source: str, username: str) -> str | None:
         """A sign-in through the directory (LDAP) or the identity provider (OIDC) that
@@ -140,8 +143,8 @@ def routes(ctx: Ctx) -> list:
                     "claim" if source == "oidc" else "")
             state.log(f"{what} login denied for {username!r}: no account can have this name "
                       f"here: {why}{hint}")
-        _record_failure(ip, username, f"{what} user {username!r} from {ip}: "
-                        + (f"the name of a {taken.kind} account" if taken else why),
+        _record_failure(ip, username, what,
+                        f"the name of a {taken.kind} account" if taken else why,
                         f"{source}_login_denied",
                         f"{taken.kind} account {taken.username}" if taken else why)
         if taken and taken.source == "local":
@@ -182,20 +185,12 @@ def routes(ctx: Ctx) -> list:
         return user
 
     # ---------------- OIDC single sign-on ----------------
-    def _oidc_redirect_uri(request) -> str:
-        cfg_uri = state.config.oidc.redirect_uri.strip()
-        if cfg_uri:
-            return cfg_uri
-        scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
-        host = (request.headers.get("x-forwarded-host") or request.headers.get("host")
-                or request.url.netloc)
-        return f"{scheme}://{host}/auth/oidc/callback"
-
     async def oidc_login(request):
         oidc = state.config.oidc
         if not oidc.enabled:
-            return RedirectResponse("/login", status_code=303)
-        redirect_uri = _oidc_redirect_uri(request)
+            return proxy.redirect(request, "/login")
+        redirect_uri = oidc_auth.redirect_uri(oidc, request,
+                                              proxy.public_url(state.config.admin_ui))
         st, nonce = secrets.token_urlsafe(16), secrets.token_urlsafe(16)
         verifier = oidc_auth.new_code_verifier()   # PKCE
         try:
@@ -210,13 +205,17 @@ def routes(ctx: Ctx) -> list:
             state.log(f"OIDC login init failed: {e}")
             return render(request, "login.html", status_code=502, error=None,
                           oidc_enabled=True, oidc_error=_("SSO provider is unreachable."))
+        # the address the provider sends the browser back to, which it must have registered:
+        # when it refuses it, the user stays on the provider's error page
+        state.log(f"OIDC login init from {client_ip(request)}: redirect URI {redirect_uri!r}"
+                  + ("" if oidc.redirect_uri.strip() else
+                     " (made from the request; Settings → Single sign-on (OIDC) shows it)"))
         resp = RedirectResponse(url, status_code=303)
-        resp.set_cookie(OIDC_COOKIE,
+        auth.set_cookie(resp, request, state.config, OIDC_COOKIE,
                         auth.sign_payload(state.config.secret_key,
                                           {"s": st, "n": nonce, "r": redirect_uri, "v": verifier},
                                           ttl_seconds=600),
-                        max_age=600, httponly=True, samesite="lax",
-                        secure=state.config.admin_ui.tls_enabled, path="/auth/oidc")
+                        max_age=600, path="/auth/oidc")
         return resp
 
     def _same(given: str, expected) -> bool:
@@ -251,8 +250,9 @@ def routes(ctx: Ctx) -> list:
     async def oidc_callback(request):
         oidc = state.config.oidc
         if not oidc.enabled:
-            return RedirectResponse("/login", status_code=303)
-        data = auth.read_payload(state.config.secret_key, request.cookies.get(OIDC_COOKIE))
+            return proxy.redirect(request, "/login")
+        stash = auth.cookie(request, OIDC_COOKIE, path="/auth/oidc")
+        data = auth.read_payload(state.config.secret_key, stash)
         if (error := request.query_params.get("error")) is not None:
             return _provider_error(request, data, error)
         code = request.query_params.get("code", "")
@@ -285,10 +285,24 @@ def routes(ctx: Ctx) -> list:
         refused.discard(_person("oidc", username))
         state.log(f"login: {user.username} ({role}, oidc) from {client_ip(request)}")
         ctx.audit(request, "oidc_login", user.username, user=user.username)
-        resp = RedirectResponse("/", status_code=303)
+        resp = proxy.redirect(request, "/")
         set_session(resp, request, user)
-        resp.delete_cookie(OIDC_COOKIE, path="/auth/oidc")
+        ctx.new_csrf_token(request)
+        auth.delete_cookie(resp, request, state.config, OIDC_COOKIE, path="/auth/oidc")
         return resp
+
+    # sign-ins not tried because too many were being checked already: logged once a minute
+    busy_note = netguard.LogEvery(lambda msg: state.log(msg))
+
+    def _note_name_paused(label: str, username: str) -> None:
+        """Log when failed attempts (from any address) pause sign-ins under a name: that is
+        what keeps someone guessing one account's password from many addresses below the
+        directory's own lock-out."""
+        lim = state.name_limiter
+        if lim.blocked(username):
+            name = "a name that is no account's" if label == auth.UNKNOWN_USER else repr(label)
+            state.log(f"sign-ins under {name} are refused for now: {lim.max_attempts} "
+                      f"failed in {lim.window_s // 60} minutes (from any address)")
 
     def _is_account_name(name: str) -> bool:
         """Is `name` an account's (letter case aside)? Only then does a failed sign-in
@@ -296,14 +310,40 @@ def routes(ctx: Ctx) -> list:
         folded = name.casefold()
         return any(u.username.casefold() == folded for u in state.config.users)
 
+    async def _renew_hash(user: User, password: str) -> None:
+        """A local account's password hash from an older version (a lower scrypt cost) is
+        made again with today's cost once its password has been checked. Best effort:
+        the sign-in works even when this can't be saved (it is tried again at the next
+        one), and the account's sessions stay (pwd_version is unchanged)."""
+        if state.password_work.busy():
+            return
+        old = user.password_hash
+        new = await state.password_work.run(auth.hash_password, password)
+        async with state.config_lock:
+            if state.config.get_user(user.username) is not user or user.password_hash != old:
+                return  # changed meanwhile
+            user.password_hash = new
+            try:  # only this hash changes: an unrelated setting must not stop it
+                await asyncio.to_thread(state.store.save, state.config, validate=False)
+            except OSError as e:
+                user.password_hash = old
+                state.log(f"could not save the renewed password hash of {user.username!r}: {e}")
+                return
+        state.log(f"the password hash of {user.username!r} was renewed with today's scrypt cost")
+
+    def _too_many(request):
+        return render(request, "login.html", status_code=429,
+                      error=_("Too many attempts. Wait a few minutes and try again."),
+                      oidc_enabled=state.config.oidc.enabled)
+
     def _login_failed(request, ip: str, username: str):
-        """Count, log, record and notify a failed sign-in; the sign-in page again. A
-        name that is no account's is recorded as auth.UNKNOWN_USER: what was typed may
-        well be a password."""
+        """Log, record and notify a failed sign-in (login_post counted it already); the
+        sign-in page again. A name that is no account's is recorded as
+        auth.UNKNOWN_USER: what was typed may well be a password."""
         label = username if _is_account_name(username) else auth.UNKNOWN_USER
-        state.rate_limiter.record_failure(ip)
         state.log(f"failed login for {label!r} from {ip}")
-        _record_failure(ip, label, f"user {label!r} from {ip}")
+        _record_failure(ip, label)
+        _note_name_paused(label, username)
         return render(request, "login.html", status_code=401,
                       error=_("Invalid username or password."),
                       oidc_enabled=state.config.oidc.enabled)
@@ -314,24 +354,41 @@ def routes(ctx: Ctx) -> list:
         if not auth.csrf_token_matches(request, form.get("_csrf")):
             return csrf_failed()
         if state.rate_limiter.blocked(ip):
-            return render(request, "login.html", status_code=429,
-                          error=_("Too many attempts. Wait a few minutes and try again."),
-                          oidc_enabled=state.config.oidc.enabled)
+            return _too_many(request)
         # username defaults to "admin" so single-user (password-only) logins keep working
         username = (form.get("username") or "admin").strip() or "admin"
         password = form.get("password", "")
         if len(username) > auth.LOGIN_NAME_MAX:  # no account has such a name: not tried
+            state.rate_limiter.record_failure(ip)
             return _login_failed(request, ip, username)
+        if state.name_limiter.blocked(username):  # from any address: that name only
+            return _too_many(request)
         user = state.config.get_user(username)
+        local = user is not None and user.source == "local"
+        directory = not local and state.config.ldap.enabled
+        work = state.directory_work if directory else state.password_work
+        if work.busy():  # not tried, not counted
+            busy_note(f"sign-in from {ip} not tried: {work.limit + work.queue} "
+                      f"{'directory sign-ins' if directory else 'password checks'} are "
+                      "running or waiting already")
+            return render(request, "login.html", status_code=429,
+                          error=_("Too many sign-ins at the same time. Try again in a "
+                                  "moment."),
+                          oidc_enabled=state.config.oidc.enabled)
+        # counted as failed before the password is checked, in the same step as the checks
+        # above (no await between them): concurrent attempts can't all get past the limits
+        # while the first ones are still being checked. A sign-in that works resets them.
+        state.rate_limiter.record_failure(ip)
+        state.name_limiter.record_failure(username)
         authed = None
         # local account: verify the scrypt hash off the event loop (it's slow on purpose)
-        if user is not None and user.source == "local":
-            if await asyncio.to_thread(auth.verify_password, password, user.password_hash):
+        if local:
+            if await work.run(auth.verify_password, password, user.password_hash):
                 authed = user
         # LDAP/AD: for unknown users (or LDAP shadow accounts) when LDAP is enabled
-        elif state.config.ldap.enabled:
+        elif directory:
             username = external_name(username)
-            groups = await asyncio.to_thread(
+            groups = await work.run(
                 ldap_auth.authenticate, state.config.ldap, username, password, state.log,
                 on_tls_problem=_note_tls_problem)
             if groups is not None:
@@ -347,12 +404,18 @@ def routes(ctx: Ctx) -> list:
                     refused.discard(_person("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
+        else:  # no such local account, no directory: the work of a wrong password
+            await work.run(auth.verify_password, password, auth.DUMMY_HASH)
         if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
+            state.name_limiter.reset(authed.username)
+            if local and auth.needs_rehash(authed.password_hash):
+                await _renew_hash(authed, password)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")
             ctx.audit(request, "login", f"{authed.role}, {authed.source}", user=authed.username)
-            resp = RedirectResponse("/", status_code=303)
+            resp = proxy.redirect(request, "/")
             set_session(resp, request, authed)
+            ctx.new_csrf_token(request)
             return resp
         return _login_failed(request, ip, username)
 
@@ -378,14 +441,15 @@ def routes(ctx: Ctx) -> list:
             return csrf_failed()
         # the cookie is a signed token: end it on the server too, so a copy of it is
         # refused from now on (not just deleted in this browser)
-        token = request.cookies.get(auth.SESSION_COOKIE)
+        token = auth.cookie(request, auth.SESSION_COOKIE)
         full = state.revoked_sessions.add(state.config.secret_key, token)
         if full is not None and auth.session_user(state.config, token) is not None:
             await _sign_out_everywhere(full)
         if not ctx.is_anonymous(request):  # an open-access visitor had no session to end
             ctx.audit(request, "logout")
-        resp = RedirectResponse("/login", status_code=303)
-        resp.delete_cookie(auth.SESSION_COOKIE, path="/")
+        resp = proxy.redirect(request, "/login")
+        auth.delete_cookie(resp, request, state.config, auth.SESSION_COOKIE)
+        ctx.new_csrf_token(request)
         return resp
 
     # ---------------- first-run setup ----------------
@@ -427,7 +491,7 @@ def routes(ctx: Ctx) -> list:
         err = _username_problem(username) or _password_problem(pw, pw2)
         if err:
             return setup_page(request, 400, err)
-        pw_hash = await asyncio.to_thread(auth.hash_password, pw)
+        pw_hash = await state.password_work.run(auth.hash_password, pw)
         async with state.config_lock:
             # checked again here: another setup request may have finished while this one
             # was sending its form or hashing — it must not replace that admin
@@ -442,13 +506,14 @@ def routes(ctx: Ctx) -> list:
                     return setup_page(request, 400, str(e))
         if claimed:
             state.log(f"first-run setup from {ip} ignored: the admin account exists already")
-            return RedirectResponse("/login", status_code=303)
+            return proxy.redirect(request, "/login")
         state.first_run_done()
         user = state.config.get_user(username)
         state.log(f"first-run setup complete; admin user '{username}' created")
         ctx.audit(request, "first_run_setup", username, user=username)
-        resp = RedirectResponse("/", status_code=303)
+        resp = proxy.redirect(request, "/")
         set_session(resp, request, user)
+        ctx.new_csrf_token(request)
         return resp
 
     return [

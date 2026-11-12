@@ -43,7 +43,7 @@ import time
 import urllib.parse
 
 from _optional import need
-from _server import Browser, Server
+from _server import Browser, Server, ui_cookie
 
 from app.web import auth, oidc_auth
 from app.web.auth import hash_password
@@ -72,8 +72,8 @@ def signed_in(srv, token) -> bool:
     """Does a browser with only this session cookie get the settings page?"""
     b = Browser(srv.base)
     b.jar.set_cookie(http.cookiejar.Cookie(
-        0, "ser2net_session", token, None, False, "127.0.0.1", False, False, "/", True,
-        False, None, False, None, None, {}))
+        0, ui_cookie("ser2net_session", srv.port), token, None, False, "127.0.0.1", False, False,
+        "/", True, False, None, False, None, None, {}))
     st, headers, _ = b.get("/settings")
     assert st == 200 or (st == 303 and headers.get("Location") == "/login"), st
     return st == 200
@@ -389,8 +389,8 @@ def oidc_provider_answers(srv, provider):
                             {"s": state, "n": nonce, "r": redirect}, ttl_seconds=600)
     b.jar.clear()
     b.jar.set_cookie(http.cookiejar.Cookie(
-        0, "ser2net_oidc", old, None, False, "127.0.0.1", False, False, "/auth/oidc", True,
-        False, None, False, None, None, {}))
+        0, ui_cookie("ser2net_oidc", srv.port, path="/auth/oidc"), old, None, False, "127.0.0.1",
+        False, False, "/auth/oidc", True, False, None, False, None, None, {}))
     provider.claims = {"preferred_username": "pkce.user", "groups": ["ser2net-viewers"],
                        "nonce": nonce}
     st, _, _ = b.get("/auth/oidc/callback?" + urllib.parse.urlencode({"code": "C", "state": state}))

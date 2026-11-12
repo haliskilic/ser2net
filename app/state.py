@@ -6,8 +6,11 @@ atomically before the supervisor is reconciled.
 
 All activity (logins/logouts, serial port open/close, client connect/disconnect,
 mapping start/stop/edit, HTTP requests, errors) is funneled through ``log()`` and
-written to ``all.log`` next to ``config.json``. Deleting config.json + all.log
-fully resets the system — those are the only two state files.
+written to ``all.log`` next to ``config.json`` (and to stdout, unless
+SER2NET_LOG_STDOUT=off). The data directory holds more state: audit.log(.1), the rotated
+all.log.N, backups/, logs/, traces/ and tls/. Deleting config.json alone resets the
+accounts, settings and mappings but leaves those (audit.log and backups/ are shown to the
+next admin); a clean start is ser2net stopped and the data directory deleted.
 """
 from __future__ import annotations
 
@@ -24,13 +27,15 @@ from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from . import accounts
-from .config import AppConfig, ConfigStore, User, lock_down_dir, mapping_file, valid_mapping_id
+from .config import (
+    AppConfig, ConfigStore, User, fold, lock_down_dir, mapping_file, valid_mapping_id,
+)
 from .engine.cluster import ClusterDiscovery
 from .engine.portlist import PortWatcher
 from .engine.supervisor import Supervisor
 from .notify import Notifier
 from .signins import SignIns
-from .web.auth import LoginRateLimiter, RevokedSessions
+from .web.auth import LoginRateLimiter, RevokedSessions, SlowWork
 
 # Per-mapping log retention (automatic maintenance).
 LOG_MAX_BYTES = 100 * 1024 * 1024     # cap each mapping log at 100 MB
@@ -60,6 +65,22 @@ VIEW_REPEAT_S = 300
 VIEW_RECORDS = 50
 # first-run setup through a host name that isn't this machine's needs this file's code
 SETUP_CODE_FILE = "setup-code.txt"
+# SER2NET_LOG_STDOUT=off: the log lines go only to all.log, not to stdout as well (where
+# systemd's journal or Docker's container log keep a copy of their own)
+LOG_STDOUT_ENV = "SER2NET_LOG_STDOUT"
+
+
+def log_stdout(environ=None) -> tuple[bool, str]:
+    """(whether the log lines also go to stdout, a warning for a value that is neither
+    on nor off — then they do, as without it)."""
+    raw = ((os.environ if environ is None else environ).get(LOG_STDOUT_ENV) or "").strip()
+    value = raw.lower()
+    if value in ("", "on", "1", "yes", "true"):
+        return True, ""
+    if value in ("off", "0", "no", "false"):
+        return False, ""
+    return True, (f"WARNING: {LOG_STDOUT_ENV}={raw[:40]!r} is not on or off; the log lines "
+                  "also go to stdout")
 
 
 # characters that must not reach an audit record: control characters (tab / CR / LF and
@@ -257,7 +278,10 @@ class AppState:
         self.logs_dir = os.path.join(self.data_dir, "logs")
         # traffic traces: the ONLY place a trace is written (see config.trace_file_name)
         self.traces_dir = os.path.join(self.data_dir, "traces")
-        self._logger = self._setup_logging(self.log_path)
+        stdout, stdout_problem = log_stdout()
+        self._logger = self._setup_logging(self.log_path, stdout=stdout)
+        if stdout_problem:
+            self._logger.info(stdout_problem)
         self._mapping_loggers: dict[str, logging.Logger] = {}
         self.supervisor = Supervisor(logger=self.log, logger_factory=self.make_mapping_logger,
                                      trace_dir=self.traces_dir)
@@ -265,6 +289,13 @@ class AppState:
         self.ports = PortWatcher(interval=2.0, on_change=self.supervisor.ports_changed)
         self.cluster = ClusterDiscovery(self.config, self.log)
         self.rate_limiter = LoginRateLimiter()
+        # failed sign-ins (and password changes) per user name, letter case aside, from
+        # any address: they pause that name only, never for good, and stay below the
+        # usual directory lock-out thresholds (LDAP accounts)
+        self.name_limiter = LoginRateLimiter(max_attempts=10, window_s=900, key=fold)
+        # password hashing and checks, directory (LDAP) sign-ins: a few at a time
+        self.password_work = SlowWork(limit=2, queue=8)
+        self.directory_work = SlowWork(limit=4, queue=16)
         self.failed_logins = FailedLoginRecords(self.audit)  # their audit records
         self.view_records = ViewRecords(self.audit)          # console / hex view opens
         self.revoked_sessions = RevokedSessions()  # sessions ended by a logout
@@ -304,7 +335,9 @@ class AppState:
             lock_down_dir(d)
 
     @staticmethod
-    def _setup_logging(log_path: str) -> logging.Logger:
+    def _setup_logging(log_path: str, stdout: bool = True) -> logging.Logger:
+        """The 'ser2net' logger: all.log, and stdout too unless `stdout` is False (also
+        then when all.log can't be opened, so the lines still go somewhere)."""
         logger = logging.getLogger("ser2net")
         logger.setLevel(logging.INFO)
         logger.handlers.clear()
@@ -326,6 +359,9 @@ class AppState:
             logger.addHandler(fileh)
         except OSError as e:
             logger.warning(f"could not open log file {log_path}: {e}")
+        else:
+            if not stdout:
+                logger.removeHandler(console)
         return logger
 
     def log(self, msg: str) -> None:
@@ -425,13 +461,21 @@ class AppState:
         lines = data.decode("utf-8", errors="replace").splitlines()
         return lines[-limit:][::-1]
 
+    def forget_mappings(self, mapping_ids) -> None:
+        """Close the log files of mappings that are gone (an import replaced them, a
+        backup was restored) and forget their loggers, which would keep each file open
+        until a restart. The files themselves stay until the next start removes them
+        (prune_mapping_logs)."""
+        for mid in mapping_ids:
+            lg = self._mapping_loggers.pop(mid, None)
+            if lg is not None:
+                for h in list(lg.handlers):
+                    with _suppress(Exception):
+                        h.close()
+                    lg.removeHandler(h)
+
     def delete_mapping_log(self, mapping_id: str) -> None:
-        lg = self._mapping_loggers.pop(mapping_id, None)
-        if lg is not None:
-            for h in list(lg.handlers):
-                with _suppress(Exception):
-                    h.close()
-                lg.removeHandler(h)
+        self.forget_mappings([mapping_id])
         # the log file may never have been created (FileNotFoundError)
         with _suppress(OSError, ValueError):
             os.remove(self.mapping_log_path(mapping_id))
@@ -458,9 +502,9 @@ class AppState:
                 os.remove(path)
 
     def prune_mapping_logs(self) -> None:
-        """Delete per-mapping log files whose mapping no longer exists. This keeps
-        the 'delete config.json + all.log to reset' model: a missing/empty config
-        leaves no live mappings, so all per-mapping logs are pruned on next start."""
+        """Delete per-mapping log files whose mapping no longer exists: after config.json
+        was deleted (no mappings), all of them go at the next start. Trace files and the
+        rest of the data directory are left as they are."""
         valid = {m.id for m in self.config.mappings}
         try:
             names = os.listdir(self.logs_dir)

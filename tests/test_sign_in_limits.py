@@ -39,7 +39,7 @@ import tempfile
 import time
 
 from _optional import need
-from _server import Browser, Server
+from _server import Browser, Server, ui_cookie
 
 import app.state as st
 from app.config import AppConfig, ConfigStore, LdapSettings
@@ -415,6 +415,9 @@ async def _directory_refusals(d: str) -> None:
         "notifications": {"enabled": True, "events": ["login_failed"], "repeat_s": 0},
         "ldap": {"enabled": True, "server_uri": "ldap://127.0.0.1:1",
                  "user_dn_template": "uid={username},ou=people,dc=ex,dc=com"}})
+    # more attempts under one name than its own limit lets through (test_login_throttle):
+    # here only the records count
+    state.name_limiter.max_attempts = 100
     app = build_app(state)
     limit = st.FAILED_LOGIN_RECORDS
     for i in range(limit + 5):  # the directory knows "ADMIN": the local admin's name
@@ -505,13 +508,14 @@ def test_rate_limiter_bounds():
     for i in range(2000):
         assert not lim.blocked(f"10.1.{i // 256}.{i % 256}")
     assert not lim._fails, "checking an address must not keep it"
-    for i in range(lim.MAX_ADDRESSES + 500):
-        lim.record_failure(f"2001:db8::{i:x}")
+    for i in range(lim.MAX_ADDRESSES + 500):     # each in a /64 of its own
+        lim.record_failure(f"2001:db8:{i:x}::1")
     assert len(lim._fails) == lim.MAX_ADDRESSES
-    assert "2001:db8::0" not in lim._fails and f"2001:db8::{lim.MAX_ADDRESSES + 499:x}" in lim._fails
-    lim.record_failure("2001:db8::1f4")          # failing again: kept longest
-    lim.record_failure("2001:db8::ffff")
-    assert "2001:db8::1f4" in lim._fails and "2001:db8::1f5" not in lim._fails
+    assert "2001:db8::/64" not in lim._fails
+    assert f"2001:db8:{lim.MAX_ADDRESSES + 499:x}::/64" in lim._fails
+    lim.record_failure("2001:db8:1f4::1")          # failing again: kept longest
+    lim.record_failure("2001:db8:ffff::1")
+    assert "2001:db8:1f4::/64" in lim._fails and "2001:db8:1f5::/64" not in lim._fails
     for _ in range(10):
         lim.record_failure("10.9.9.9")
     assert len(lim._fails["10.9.9.9"]) == 3 and lim.blocked("10.9.9.9")
@@ -562,7 +566,7 @@ def test_live():
         csrf = b.csrf()
         head = (f"POST /login HTTP/1.1\r\nHost: 127.0.0.1:{srv.port}\r\nConnection: close\r\n"
                 f"Content-Type: application/x-www-form-urlencoded\r\n"
-                f"Cookie: ser2net_csrf={csrf}\r\nContent-Length: {MB}")
+                f"Cookie: {ui_cookie('ser2net_csrf', srv.port)}={csrf}\r\nContent-Length: {MB}")
         assert _raw(srv.port, head, b"_csrf=" + csrf.encode() + b"&username=") == 413
         st_, _h, _p = b.post("/login", {"username": "Typed-Into-The-Name-Field", "password": "x"})
         assert st_ == 401

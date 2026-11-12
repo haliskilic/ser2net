@@ -47,6 +47,8 @@ def free_port():
 UI = free_port()
 BASE = f"http://127.0.0.1:{UI}"
 
+from _server import ui_cookie  # noqa: E402
+
 
 def wait_port(port, timeout=15):
     end = time.time() + timeout
@@ -71,7 +73,7 @@ class Session:
                                               _NoRedirect)
 
     def csrf(self):
-        return next((c.value for c in self.jar if c.name == "ser2net_csrf"), "")
+        return next((c.value for c in self.jar if c.name == ui_cookie("ser2net_csrf", UI)), "")
 
     def request(self, path, data=None, host=None, headers=None):
         """(status, body, location) — redirects are not followed."""
