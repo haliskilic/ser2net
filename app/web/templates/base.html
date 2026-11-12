@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ request.state.csrf_token }}">
   <title>{% block title %}ser2net{% endblock %}</title>
+  {# not deferred: the saved theme is set before the first paint (no dark flash) #}
+  <script src="/static/theme.js?v={{ asset_version }}"></script>
   <link rel="stylesheet" href="/static/xterm.css?v={{ asset_version }}">
   <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
   <link rel="icon" href="data:,">

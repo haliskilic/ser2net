@@ -10,14 +10,8 @@ function tr(key, fallback) {
   return s;
 }
 
-// 0) Theme: apply the saved light/dark preference as early as possible, and toggle
-//    it (persisted in localStorage) when a [data-theme-toggle] control is clicked.
-(function () {
-  try {
-    if (localStorage.getItem("ser2net-theme") === "light")
-      document.documentElement.setAttribute("data-theme", "light");
-  } catch (e) {}
-})();
+// 0) Theme: toggle the light/dark theme (persisted in localStorage) when a
+//    [data-theme-toggle] control is clicked; theme.js applies the saved one, in <head>.
 document.addEventListener("click", function (e) {
   if (!e.target.closest("[data-theme-toggle]")) return;
   var toLight = document.documentElement.getAttribute("data-theme") !== "light";
