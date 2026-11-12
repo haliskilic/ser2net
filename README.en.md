@@ -138,7 +138,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   time, in the order they came, and take turns on the bus with the poll and the Modbus/TCP
   masters; the answers on `.../set/result` keep that order. At most 32 wait for the bus: a
   command beyond them gets `error: busy`, and one that waited more than 10 s for its turn
-  is not written (`error: expired`).
+  is not written (`error: expired`). Stopping the mapping (also a save, a restart or an
+  import that changes it) answers every write before the MQTT connection closes: the one
+  on the bus may finish (at most 2 s; else `error: cancelled: mapping stopped (sent,
+  outcome unknown)` or `(not sent)`), the ones still waiting get `error: cancelled: mapping
+  stopped`, and a command that comes meanwhile gets `error: mapping stopped`; the log
+  says which were not made.
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).

@@ -140,7 +140,11 @@ düzenlemeye gerek yok.
   tek tek yapılır ve hatta poll ile Modbus/TCP master'larıyla sırayla erişir;
   `.../set/result` cevapları da bu sırayı korur. Hat için en çok 32 yazma bekler: fazlası
   `error: busy` alır, sırası gelene kadar 10 sn'den uzun bekleyen bir yazma yapılmaz
-  (`error: expired`).
+  (`error: expired`). Eşlemeyi durdurmak (onu değiştiren bir kayıt, yeniden başlatma ya da
+  içe aktarma da) MQTT bağlantısı kapanmadan önce her yazmayı cevaplar: hattaki yazma
+  bitebilir (en çok 2 sn; bitmezse `error: cancelled: mapping stopped (sent, outcome
+  unknown)` ya da `(not sent)`), bekleyenler `error: cancelled: mapping stopped`, bu
+  sırada gelen bir komut `error: mapping stopped` alır; yapılmayan yazmalar loglanır.
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
