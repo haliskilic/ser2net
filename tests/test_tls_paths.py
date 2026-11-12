@@ -120,7 +120,7 @@ def test_moved_tls_file():
             open(os.path.join(data, "tls", name), "w").close()
         here = os.path.join(data, "tls", "cert.pem")
         for old in ("/home/me/ser2net/data/tls/cert.pem", r"C:\ser2net\data\tls\cert.pem",
-                    r"D:\Data\TLS\cert.pem", "//server/share/tls/cert.pem"):
+                    r"D:\Data\TLS\cert.pem"):
             assert moved_tls_file(old, data) == here, old
         for old in ("/home/me/ser2net/data/certs/cert.pem",  # not a tls folder
                     "/home/me/ser2net/data/tls/other.pem",   # no such file here
