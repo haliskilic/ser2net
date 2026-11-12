@@ -1035,15 +1035,16 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 
 **Gizli değerler:** `config.json` LDAP bind parolasını, OIDC client secret'ı, SMTP
 parolasını, webhook URL'sini (çoğu zaman içinde bir token vardır), her eşlemenin MQTT broker
-parolasını, cluster anahtarını (tüm düğümlerin eşlemelerini okumaya ve değiştirmeye yeter)
-ve oturum anahtarı `secret_key`'i (aynı dosyadaki hesaplarla birlikte geçerli bir oturum
-üretmeye yeter) açık metin olarak tutar. Yerel parolalar scrypt hash'i, REST API token'ı da
-yalnızca hash'i olarak saklanır. `backups/` aynı dosyanın önceki kopyalarını tutar (indirilen
-bir yedekte oturum anahtarı yoktur), eşleme dışa aktarımı da MQTT parolalarını içerir. Bu
-makinede bunları yalnızca ser2net'in çalıştığı hesap okuyabilir; her kopyayı — kopyalanan
-bir veri klasörünü ya da Docker volume'unu, bir disk ya da VM imajını, indirilen bir yedeği,
-bir dışa aktarımı — bir parola kasası gibi koruyun. Böyle bir kopya sızarsa neyin
-değiştirileceği [SECURITY.md](SECURITY.md)'de (*Saklanan gizli değerler*) yazar.
+parolasını, TLS anahtar parolalarını (bir eşlemenin ve yönetim arayüzünün), cluster
+anahtarını (tüm düğümlerin eşlemelerini okumaya ve değiştirmeye yeter) ve oturum anahtarı
+`secret_key`'i (aynı dosyadaki hesaplarla birlikte geçerli bir oturum üretmeye yeter) açık
+metin olarak tutar. Yerel parolalar scrypt hash'i, REST API token'ı da yalnızca hash'i olarak
+saklanır. `backups/` aynı dosyanın önceki kopyalarını tutar (indirilen bir yedekte oturum
+anahtarı yoktur), eşleme dışa aktarımı da MQTT ve TLS anahtar parolalarını içerir. Bu
+makinede bunları yalnızca ser2net'in çalıştığı hesap okuyabilir; her kopyayı — kopyalanan bir
+veri klasörünü ya da Docker volume'unu, bir disk ya da VM imajını, indirilen bir yedeği, bir
+dışa aktarımı — bir parola kasası gibi koruyun. Böyle bir kopya sızarsa neyin değiştirileceği
+[SECURITY.md](SECURITY.md)'de (*Saklanan gizli değerler*) yazar.
 
 **Kişisel veriler:** hesap adları (LDAP ya da SSO adı çoğu zaman bir e-posta adresidir), IP
 adresleri, girişler ve başarısız girişler `config.json`, `backups/`, `all.log*` (ve onun
