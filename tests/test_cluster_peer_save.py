@@ -96,6 +96,29 @@ def test_unchanged_trace_kept_as_stored():
     print("an unchanged trace field keeps the peer's stored value verbatim  OK")
 
 
+def test_older_peer_keeps_what_the_form_leaves_out():
+    # this node's form doesn't offer the banner, close-on string or client buffer for a
+    # Modbus gateway; a peer before 2.8.1 sets them from every form, so it gets its own
+    peer = {"options": {"trace_both": "", "banner": "Hi", "closeon": "BYE\r\n"},
+            "network": {"client_queue_max": 8192}}
+    modbus = form(network_protocol="modbus", network_port="502")
+    for version, sent in (("2.8.0", {"opt_banner": "Hi", "opt_closeon": "BYE\r\n",
+                                     "network_client_queue_max": "8192"}),
+                          ("2.8.1", {}), ("2.9.0", {})):
+        fields, err = _peer_save_fields(modbus, peer, version)
+        assert err is None, err
+        got = {k: v for k, v in fields if k in ("opt_banner", "opt_closeon",
+                                                "network_client_queue_max")}
+        assert got == sent, (version, got)
+    # a close-on string posted back as a one-line field shows it: the peer's own value
+    fields, _err = _peer_save_fields(form(opt_closeon="BYE"), peer, "2.9.0")
+    assert dict(fields)["opt_closeon"] == "BYE\r\n", fields
+    fields, _err = _peer_save_fields(form(opt_closeon="QUIT"), peer, "2.9.0")
+    assert dict(fields)["opt_closeon"] == "QUIT", fields
+    print("an older peer gets its stored banner/close-on/client buffer the form leaves out; "
+          "an unchanged close-on keeps its line breaks  OK")
+
+
 def main():
     test_version_gate()
     test_requires_existing_mapping()
@@ -104,6 +127,7 @@ def main():
     test_trace_sanitised()
     test_trace_new_name_refused_pre_2_8()
     test_unchanged_trace_kept_as_stored()
+    test_older_peer_keeps_what_the_form_leaves_out()
     print("\nPASS: fleet-view edit proxy forwards only known, validated fields")
 
 

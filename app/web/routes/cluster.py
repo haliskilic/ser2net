@@ -28,7 +28,8 @@ from ...i18n import _
 from .. import auth
 from . import ops
 from .common import Ctx, csrf_failed
-from .forms import _build_mapping_dict, form_context, mapping_for_rerender
+from .forms import (_TEXT_INPUTS, _as_text_input, _build_mapping_dict, form_context,
+                    mapping_for_rerender)
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
@@ -40,14 +41,37 @@ _PEER_FORM_PREFIXES = ("serial_", "network_", "opt_", "mqtt_", "modbus_")
 PEER_MAX_BODY = 1024 * 1024
 
 
+# Fields a node before 2.8.1 sets from every form it saves (it has no presence marker
+# for them), which this node's form leaves out for a Modbus gateway (it doesn't use
+# them): forwarded with the peer's stored values, so the edit doesn't reset them there.
+#   form field -> (config section, attribute)
+_READ_BEFORE_2_8_1 = {
+    "opt_banner": ("options", "banner"),
+    "opt_closeon": ("options", "closeon"),
+    "network_client_queue_max": ("network", "client_queue_max"),
+}
+
+
+def _peer_version(version) -> tuple[int, int, int] | None:
+    """(2, 8, 1) for a peer's reported "2.8.1" ("v2.8.1", "2.8.1rc1" ...); None when it
+    reports none (a node before 2.6.0) or something else."""
+    parts = re.findall(r"\d+", version if isinstance(version, str) else "")
+    if len(parts) < 2:
+        return None
+    major, minor, patch = (int(p) for p in (parts + ["0"])[:3])
+    return major, minor, patch
+
+
+def _peer_older(version, than: tuple[int, int, int]) -> bool:
+    """True when a peer's reported version is older than *than*, or unknown."""
+    v = _peer_version(version)
+    return v is None or v < than
+
+
 def _peer_below_2_8(version: str) -> bool:
     """True when a peer's reported version is older than 2.8 (or unknown): such a node
     stores a trace file name as a path and opens it, so it must not be handed a new one."""
-    parts = re.findall(r"\d+", version or "")
-    try:
-        return (int(parts[0]), int(parts[1])) < (2, 8)
-    except (IndexError, ValueError):
-        return True
+    return _peer_older(version, (2, 8, 0))
 
 
 def _peer_save_fields(form, peer_mapping, peer_version):
@@ -56,6 +80,9 @@ def _peer_save_fields(form, peer_mapping, peer_version):
     value the browser added), the submission is validated locally (so a URL serial port
     never reaches the peer), and the trace file is reduced to a sanitised name — kept as
     the peer stored it when unchanged, and refused as a new name for a pre-2.8 peer.
+    A one-line field posted back unchanged keeps the peer's stored value (line breaks
+    the field can't show), and a peer before 2.8.1 gets its stored values for the fields
+    it reads from every form but this form leaves out (_READ_BEFORE_2_8_1).
     Returns (fields, None) or (None, error)."""
     if not peer_mapping:
         return None, _("This mapping no longer exists on the peer; reload the fleet view.")
@@ -73,10 +100,19 @@ def _peer_save_fields(form, peer_mapping, peer_version):
             return None, _("This cluster node is older than 2.8 and would store a trace file "
                            "name as a path. Upgrade it to 2.8 or newer before setting a trace "
                            "file for it here.")
-    fields = [(k, v) for k, v in form.multi_items()
+    def stored(section, attr):
+        return (peer_mapping.get(section) or {}).get(attr)
+
+    unchanged = {field: value for field, (section, attr) in _TEXT_INPUTS.items()
+                 if isinstance(value := stored(section, attr), str)
+                 and form.get(field) == _as_text_input(value)}
+    fields = [(k, unchanged.get(k, v)) for k, v in form.multi_items()
               if k != "opt_trace_both"
               and (k in _PEER_FORM_FIELDS or k.startswith(_PEER_FORM_PREFIXES))]
     fields.append(("opt_trace_both", out_trace))
+    if _peer_older(peer_version, (2, 8, 1)):
+        fields += [(field, str(value)) for field, (section, attr) in _READ_BEFORE_2_8_1.items()
+                   if field not in form and (value := stored(section, attr)) is not None]
     return fields, None
 
 
