@@ -302,8 +302,10 @@ jobs:
     env:
       SER2NET_OPTIONAL_TESTS: "1"   # a missing paho-mqtt fails these tests instead of skipping
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt cryptography paho-mqtt==1.6.1
@@ -455,7 +457,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [lint, typecheck, workflows, audit, vendor, ui, test, coverage, systemd, offline, offline-armv7, docker, standalone]
+    needs: [lint, typecheck, workflows, audit, vendor, ui, test, paho1, coverage, systemd, offline, offline-armv7, docker, standalone]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
