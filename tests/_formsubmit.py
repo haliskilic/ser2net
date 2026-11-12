@@ -10,6 +10,9 @@ first line break of a <textarea> dropped), an input's value as its type sanitize
 number), and the form data set is built as the HTML spec says: no disabled control,
 no unticked checkbox, the selected options of a select that are not disabled.
 
+invalid() lists what the browser's constraint validation refuses (htmx doesn't submit
+such a form): an empty required field, a number outside min/max or off its step.
+
 run_app_js() repeats app.js on a swapped-in fragment: syncCustomInputs (a
 <select data-custom> enables its "Custom..." input only while "custom" is picked),
 then applyShowWhen (each [data-show-when="field=v1,v2"] element in document order:
@@ -199,6 +202,38 @@ class Form:
             if kind in ("checkbox", "radio") and "checked" not in el.attrs:
                 continue
             out.append((name, self.value(el)))
+        return out
+
+    def invalid(self) -> list:
+        """What constraint validation refuses (name: why) among the enabled controls."""
+        out = []
+        for el in self._all(*CONTROLS):
+            name = el.attrs.get("name", "?")
+            if el.disabled or self._in_disabled_fieldset(el):
+                continue
+            kind = el.attrs.get("type", "text").lower() if el.tag == "input" else el.tag
+            if kind in ("hidden", "submit", "button", "reset", "image"):
+                continue
+            value = self.value(el)
+            if "required" in el.attrs and (value == "" or (
+                    kind == "checkbox" and "checked" not in el.attrs)):
+                out.append(f"{name}: required")
+            if kind != "number" or value == "":
+                continue
+            v = float(value)
+            low, high = el.attrs.get("min"), el.attrs.get("max")
+            if low not in (None, "") and v < float(low):
+                out.append(f"{name}: {value} < min {low}")
+            if high not in (None, "") and v > float(high):
+                out.append(f"{name}: {value} > max {high}")
+            step = el.attrs.get("step", "1")
+            if step != "any":
+                # the step base: min, else the value attribute (so a value alone always fits)
+                base = float(low) if low not in (None, "") else float(
+                    el.attrs.get("value") or 0) if _FLOAT.fullmatch(el.attrs.get("value", "")) else 0.0
+                n = (v - base) / float(step)
+                if abs(n - round(n)) > 1e-9:
+                    out.append(f"{name}: {value} is off its step {step}")
         return out
 
     @staticmethod

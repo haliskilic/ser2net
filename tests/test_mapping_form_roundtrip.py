@@ -10,7 +10,8 @@ the stored value (app/web/routes/forms.py: _OPTIONAL_FORM_FIELDS, _UNMANAGED_FIE
     default — a setting they don't cover yet gets a value of its type here;
   * each mapping is rendered into the real _mapping_form.html, posted back unchanged as
     a browser posts it (tests/_formsubmit.py: app.js show-when rules, disabled blocks,
-    unticked boxes, one-line inputs) and parsed as a save parses it: it comes back
+    unticked boxes, one-line inputs; the browser must accept every value: min, max,
+    step) and parsed as a save parses it: it comes back
     identical, but for the settings that don't apply to its kind (_form_cases.IRRELEVANT);
   * the same through the form shown again after an error, locally and in the fleet view,
     and through the fleet view's edit of a peer's mapping (what peer-save forwards);
@@ -158,15 +159,22 @@ class Recorder(FormData):
         return super().__contains__(key)
 
 
+def posted(page: str) -> list:
+    """What a browser posts for the form in *page*, which it must be able to submit."""
+    form = Form(page).run_app_js()
+    assert not form.invalid(), f"the browser would refuse to submit the form: {form.invalid()}"
+    return form.data()
+
+
 def local_save(stored: MappingConfig, page: str) -> MappingConfig:
     """mappings.mapping_save -> ops.save_mapping_from_form, on this node."""
-    return forms.mapping_from_form(Recorder(browser_post(page)), stored, cases.PORTS)
+    return forms.mapping_from_form(Recorder(posted(page)), stored, cases.PORTS)
 
 
 def remote_save(stored: MappingConfig, page: str) -> MappingConfig:
     """cluster.cluster_peer_save (this node) -> mapping-save on the peer: the fields it
     forwards, parsed there against the peer's stored mapping."""
-    fields, err = _peer_save_fields(FormData(browser_post(page)), stored.to_dict(), "9.9.9")
+    fields, err = _peer_save_fields(FormData(posted(page)), stored.to_dict(), "9.9.9")
     assert err is None, err
     return forms.mapping_from_form(Recorder(fields), stored, cases.PORTS)
 
