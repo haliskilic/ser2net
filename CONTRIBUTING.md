@@ -36,7 +36,9 @@ The `ci-ok` job passes only when every other CI job passed (the not-required new
 leg aside); it is the check a merge waits for, so a new job in `ci.yml` goes into its
 `needs` (`tests/test_ci_gate.py` checks that). Between pull requests,
 `.github/workflows/scheduled.yml` re-runs the dependency audit daily and the Docker image
-build weekly.
+build weekly. Every action in the workflows is pinned to a full commit SHA with its version
+in a comment (`uses: actions/checkout@<sha>  # v7.0.1`); Dependabot updates both, and zizmor
+and `tests/test_release_pipeline.py` fail on a tag reference.
 
 `tests/test_dead_peer.py` blackholes a loopback flow with iptables; run it with
 `SER2NET_BLACKHOLE_TESTS=1` only in a throwaway network namespace or VM, never on a
@@ -89,8 +91,29 @@ minor release ahead.
 Short imperative subjects with a prefix: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
 `deps:`, `refactor:` (optionally a scope, e.g. `fix(modbus): …`). Keep a pull request to
 one topic and describe in it what changes for users. Releases are cut by the
-maintainer: version in `app/__init__.py`, `CHANGELOG.md`, an annotated `vX.Y.Z` tag;
-`.github/workflows/release.yml` builds, tests and publishes the executables.
+maintainer (below).
+
+### Releases
+The version goes into `app/__init__.py` and a dated `## [X.Y.Z] — YYYY-MM-DD` section into
+`CHANGELOG.md`; once that is merged, an annotated `vX.Y.Z` tag (`vX.Y.Z-rc.N` for a
+pre-release) on the merge commit starts `.github/workflows/release.yml`:
+1. the tag is checked: its form, equal to `"v"` + `__version__`, the CHANGELOG section
+   (`python tools/release_guard.py tag vX.Y.Z` checks these three locally), and the commit
+   is on `main`;
+2. the whole CI runs on the tagged commit (`ci.yml`, the checks `ci-ok` gates merges on);
+   its standalone build is what gets released;
+3. the image is built for amd64 + arm64, pushed to GHCR by digest only (no tag) and that
+   digest is smoke-tested natively on both architectures;
+4. only then are the files attested and the GitHub release created with them (by `gh`; the
+   jobs that can write releases or attestations run GitHub's own actions only), and the
+   tested image gets its tags `X.Y.Z`, `X.Y` and `latest`. A pre-release gets only its own
+   image tag, is marked as a pre-release and never becomes "Latest".
+
+One release runs at a time. A job that failed for a passing reason is re-run (*Re-run
+failed jobs* keeps the built files and the pushed image digest); a release that needs a
+code change gets a new patch version instead of a moved tag. **Actions → Release → Run workflow** is a dry run of the same
+pipeline on any branch: it attests, releases and tags nothing (it leaves one untagged image
+version on GHCR).
 
 ## Türkçe
 
@@ -120,7 +143,10 @@ workflow denetimi (`zizmor`).
 hariç); birleştirme onu bekler, bu yüzden `ci.yml`'ye eklenen her iş onun `needs` listesine
 de girer (`tests/test_ci_gate.py` bunu denetler). Pull request'ler arasında
 `.github/workflows/scheduled.yml` bağımlılık denetimini her gün, Docker imajını her hafta
-yeniden çalıştırır.
+yeniden çalıştırır. Workflow'lardaki her action, sürümü bir yorumda olacak şekilde tam bir
+commit SHA'sına sabitlenir (`uses: actions/checkout@<sha>  # v7.0.1`); ikisini de
+Dependabot günceller, tag ile verilen bir referansta zizmor ve
+`tests/test_release_pipeline.py` başarısız olur.
 
 `tests/test_dead_peer.py` iptables ile loopback trafiği kestiği için
 `SER2NET_BLACKHOLE_TESTS=1` ile yalnızca silinebilir bir ağ ad alanında (network namespace)
@@ -164,4 +190,28 @@ açığı çıkınca (py3.10 bağımlılık denetimi bunu bildirir) bırakılır
 ### Commit ve pull request
 Kısa, emir kipinde ve önekli başlıklar: `feat:`, `fix:`, `test:`, `docs:`, `ci:`,
 `deps:`, `refactor:`. Bir pull request tek konu içersin ve kullanıcılar için neyin
-değiştiğini anlatsın. Sürümleri proje sahibi çıkarır.
+değiştiğini anlatsın. Sürümleri proje sahibi çıkarır (aşağıda).
+
+### Sürümler
+Sürüm `app/__init__.py`'ye, tarihli bir `## [X.Y.Z] — YYYY-MM-DD` bölümü `CHANGELOG.md`'ye
+yazılır; bu birleştirilince merge commit'ine atılan açıklamalı bir `vX.Y.Z` tag'i
+(ön sürüm için `vX.Y.Z-rc.N`) `.github/workflows/release.yml`'yi başlatır:
+1. tag denetlenir: biçimi, `"v"` + `__version__`'a eşitliği, CHANGELOG bölümü (bu
+   üçünü yerelde `python tools/release_guard.py tag vX.Y.Z` denetler) ve commit'in
+   `main` üzerinde olması;
+2. tag'lenen commit'te CI'ın tamamı çalışır (`ci.yml`, birleştirmede `ci-ok`'un beklediği
+   kontroller); yayımlanan, onun standalone derlemesidir;
+3. imaj amd64 + arm64 için derlenir, GHCR'a yalnızca digest ile (tag'siz) gönderilir ve
+   bu digest iki mimaride de emülasyonsuz smoke test'ten geçer;
+4. ancak bundan sonra dosyalar attest edilir ve GitHub release'i onlarla oluşturulur
+   (`gh` ile; release ya da attestation yazabilen işlerde yalnızca GitHub'ın kendi
+   action'ları çalışır), test edilen imaj da `X.Y.Z`, `X.Y` ve `latest` tag'lerini alır.
+   Ön sürüm yalnızca kendi imaj tag'ini alır, ön sürüm olarak işaretlenir ve hiçbir zaman
+   "Latest" olmaz.
+
+Aynı anda tek release çalışır. Geçici bir nedenle başarısız olan iş yeniden çalıştırılır
+(*Re-run failed jobs* derlenmiş dosyaları ve gönderilmiş imaj digest'ini korur); kod
+değişikliği gereken bir release tag taşınarak değil, yeni bir yama sürümüyle düzeltilir.
+**Actions → Release → Run workflow** aynı akışı herhangi bir dalda
+deneme olarak çalıştırır: hiçbir şeyi attest etmez, yayımlamaz ya da tag'lemez (GHCR'da
+tag'siz bir imaj sürümü bırakır).
