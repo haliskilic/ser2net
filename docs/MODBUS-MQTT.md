@@ -105,7 +105,7 @@ A message on `<topic>/<point>/set` writes that one point, and its answer goes to
 | Answer | When |
 |---|---|
 | `ok` | written; the point is read back and published |
-| `error: …` | refused or failed: `mapping is read-only`, `busy` (32 writes wait already), `expired` (waited more than 10 s), `too large: …` (over 64 KiB), outside `min` / `max` / `allowed`, a slave exception, `no reply from unit N within T s` |
+| `error: …` | refused or failed: `mapping is read-only`, `busy` (32 writes wait already), `expired: …` (waited more than 10 s for the bus), `too large: …` (over 64 KiB), outside `min` / `max` / `allowed`, a slave exception, `no reply from unit N within T s` |
 | `{"id": "abc", "ok": true, "value": 21.5}` | a JSON request that was written (`value`: read back, `null` if it can't be) |
 | `{"id": "abc", "ok": false, "error": "…"}` | a JSON request that wasn't |
 
