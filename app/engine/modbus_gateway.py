@@ -42,8 +42,9 @@ import json
 import math
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from ..config import MappingConfig, ModbusPoint, modbus_response_timeout
 from . import modbus, netguard, sockopts
@@ -78,6 +79,14 @@ NOTE_EVERY_S = 60.0
 # Edge mode: a unit none of whose points has answered in this many poll cycles in a row (or
 # while the serial port is gone) is offline, and polled with one point per cycle from then on.
 UNIT_OFFLINE_AFTER = 3
+# Writes from MQTT / Sparkplug B: one task per mapping writes them in the order they came,
+# one at a time (a write and its read-back take their turns on the bus with the poll and
+# the masters, whatever the number of commands). At most this many wait for the bus; a
+# command beyond them is refused (busy).
+WRITE_QUEUE_MAX = 32
+# A write that waited this long for its turn is not written any more (expired): the bus is
+# too slow for the commands coming in, and whoever sent it has likely given up on it.
+WRITE_EXPIRE_S = 10.0
 
 
 def _next_timer(idle_s: float, deadline: Optional[float]) -> Optional[float]:
@@ -102,6 +111,16 @@ class _Master:
         self.close_reason = self.close_reason or reason
         with contextlib.suppress(Exception):
             self.writer.transport.abort()
+
+
+@dataclass(eq=False)
+class _Write:
+    """A write from MQTT / Sparkplug B, waiting for the bus (or on it)."""
+    point: ModbusPoint
+    value: Any
+    done: Optional[Callable[[Optional[str], Any], None]] = None  # (error, value read back)
+    refused: Optional[str] = None   # refused when it came: answered in its turn, not written
+    queued: float = field(default_factory=time.monotonic)
 
 
 class NoReply(ValueError):
@@ -164,7 +183,8 @@ class ModbusGatewayRunner:
         self._traffic: set = set()            # live hex view observers
         self._mqtt: Optional[MqttPublisher] = None  # optional MQTT publisher for register polling
         self._sparkplug: Optional[SparkplugNode] = None  # payload format sparkplug_b
-        self._write_tasks: set = set()
+        self._writes: deque[_Write] = deque()  # MQTT writes waiting for the bus, in order
+        self._writer: Optional[asyncio.Task] = None  # writes them, one at a time
         self._poll_task: Optional[asyncio.Task] = None
         # plain MQTT: the command topic of each writable point, matched exactly (a point
         # name is never read back out of a topic)
@@ -282,8 +302,11 @@ class ModbusGatewayRunner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_task
             self._poll_task = None
-        for t in list(self._write_tasks):
-            t.cancel()
+        if self._writer is not None:
+            self._writer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._writer
+            self._writer = None
         if self._sparkplug is not None:
             sparkplug, self._sparkplug = self._sparkplug, None
             self._mqtt = None
@@ -545,13 +568,14 @@ class ModbusGatewayRunner:
             self._sparkplug.forget(names)
 
     # ---------------- writes from MQTT (plain <topic>/<point>/set, Sparkplug DCMD) ----
-    async def write_point(self, point, value) -> None:
+    async def write_point(self, point, value) -> Any:
         """Write one value to one writable point, and nothing beyond it: a coil takes a
         bool (FC5), a holding register a number, encoded as the point's own type (FC6 for
         a 16-bit type, FC16 for the two registers of a 32-bit one). Check the slave's
-        reply, then read the point back and publish it; a point on unit 0 is a broadcast,
-        carried out by every slave and answered by none, so it is not read back. A read-only
-        mapping writes nothing (checked here, at write time, for every command path)."""
+        reply, then read the point back and publish it; returns that value (None if it was
+        not read back). A point on unit 0 is a broadcast, carried out by every slave and
+        answered by none, so it is not read back. A read-only mapping writes nothing
+        (checked here, at write time, for every command path)."""
         if self.mapping.network.read_only:
             raise ValueError("mapping is read-only")
         if not point.writable:
@@ -576,27 +600,60 @@ class ModbusGatewayRunner:
         if point.unit == modbus.BROADCAST:
             self._log(f"wrote '{point.name}' = {value!r} (broadcast to unit 0, FC{pdu[0]}; "
                       "not read back)")
-            return
+            return None
         self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]})")
-        with contextlib.suppress(Exception):
+        try:
             value = await self._read_point(point)
-            self._publish_values({point.name: value}, {point.name: _now_ms()})
+        except Exception:
+            return None
+        self._publish_values({point.name: value}, {point.name: _now_ms()})
+        return value
 
-    def _write_soon(self, point, value, done=None) -> None:
-        """Schedule write_point from an MQTT callback (already on the loop); ``done``
-        gets None or the error message."""
-        async def run():
-            err = None
+    def _write_soon(self, point, value, done=None, refused: Optional[str] = None) -> None:
+        """Queue a write from MQTT (called on the loop): the writes are made one at a time,
+        in the order they came (see WRITE_QUEUE_MAX). ``done`` gets (None or the error,
+        the value read back or None) once it is over; a write ``refused`` when it came (the
+        error) is answered in its turn as well, so the answers keep the commands' order."""
+        w = _Write(point, value, done, refused)
+        if len(self._writes) >= WRITE_QUEUE_MAX:
+            self._note("write busy", point.unit, f"write to '{point.name}' refused: "
+                       f"{WRITE_QUEUE_MAX} writes are waiting for the bus already (busy)")
+            self._finish(w, "busy")
+            return
+        self._writes.append(w)
+        if self._writer is None or self._writer.done():
+            self._writer = asyncio.create_task(self._run_writes(),
+                                               name=f"modbus-write:{self.mapping.name}")
+
+    async def _run_writes(self) -> None:
+        """The mapping's writer: the queued writes, one at a time, in the order they came."""
+        while self._writes:
+            w = self._writes.popleft()
+            err, value = await self._run_write(w)
+            self._finish(w, err, value)
+
+    async def _run_write(self, w: _Write) -> tuple[Optional[str], Any]:
+        if w.refused is not None:
+            return w.refused, None
+        waited = time.monotonic() - w.queued
+        if waited > WRITE_EXPIRE_S:
+            self._note("write expired", w.point.unit, f"write '{w.point.name}' = "
+                       f"{shown(w.value)} not made: it waited {waited:.1f} s for the bus "
+                       "(expired)")
+            return f"expired: waited {waited:.1f} s for the bus", None
+        try:
+            return None, await self.write_point(w.point, w.value)
+        except Exception as e:
+            err = str(e) or type(e).__name__
+            self._log(f"write '{w.point.name}' = {shown(w.value)} failed: {err}")
+            return err, None
+
+    def _finish(self, w: _Write, err: Optional[str], value: Any = None) -> None:
+        if w.done is not None:
             try:
-                await self.write_point(point, value)
-            except Exception as e:
-                err = str(e) or type(e).__name__
-                self._log(f"write '{point.name}' = {shown(value)} failed: {err}")
-            if done is not None:
-                done(err)
-        task = asyncio.create_task(run(), name=f"modbus-write:{point.name}")
-        self._write_tasks.add(task)
-        task.add_done_callback(self._write_tasks.discard)
+                w.done(err, value)
+            except Exception as e:  # (an answer that can't be sent must not stop the writer)
+                self._log(f"write '{w.point.name}': the answer was not sent: {e}")
 
     def _on_set_message(self, topic: str, payload: bytes) -> None:
         """Plain MQTT: a value for one writable point on its <base_topic>/<point>/set; the
@@ -604,19 +661,21 @@ class ModbusGatewayRunner:
         point = self._set_points.get(topic)
         if point is None or self._mqtt is None:
             return
-        result = topic + "/result"
+        mqtt, result = self._mqtt, topic + "/result"
+
+        def answer(err: Optional[str], _value: Any = None) -> None:
+            mqtt.publish_raw(result, b"ok" if err is None else f"error: {err}".encode())
         if self.mapping.network.read_only:
-            self._log(f"write '{point.name}' from MQTT refused: the mapping is read-only")
-            self._mqtt.publish_raw(result, b"error: mapping is read-only")
+            self._note("write read-only", point.unit,
+                       f"write '{point.name}' from MQTT refused: the mapping is read-only")
+            self._write_soon(point, None, answer, refused="mapping is read-only")
             return
         try:
             value = parse_write_payload(payload, point)
         except ValueError as e:
-            self._mqtt.publish_raw(result, f"error: {e}".encode())
+            self._write_soon(point, None, answer, refused=str(e))
             return
-        mqtt = self._mqtt
-        self._write_soon(point, value, lambda err: mqtt.publish_raw(
-            result, b"ok" if err is None else f"error: {err}".encode()))
+        self._write_soon(point, value, answer)
 
     # ---------------- reading the RTU line ----------------
     async def _settle(self, reader) -> None:

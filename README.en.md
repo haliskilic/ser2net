@@ -134,6 +134,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   unless **Re-apply a retained /set after every connect** is ticked; a retained Sparkplug
   NCMD/DCMD is always ignored, an empty message (clearing a retained one) is not a
   command, and a command published while ser2net is not connected is not delivered later.
+- **MQTT commands (edge mode):** writes from `/set` and Sparkplug DCMD are made one at a
+  time, in the order they came, and take turns on the bus with the poll and the Modbus/TCP
+  masters; the answers on `.../set/result` keep that order. At most 32 wait for the bus: a
+  command beyond them gets `error: busy`, and one that waited more than 10 s for its turn
+  is not written (`error: expired`).
 - **Client-side virtual COM:** recipes to surface a remote port as a local `COMx`/`tty`
   (pySerial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) — see
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).

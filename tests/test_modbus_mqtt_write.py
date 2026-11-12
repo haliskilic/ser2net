@@ -24,6 +24,10 @@ anywhere without a broker or hardware. Checks:
   * Read-only refuses MQTT / Sparkplug writes as well (checked when a command arrives),
     and the start-up log warns about commands over a broker link without TLS / username;
   * a writable point on unit 0 is a broadcast: written (ok), not read back, never polled;
+  * writes are made one at a time, in the order the commands came (an answer for a
+    command refused on arrival keeps its place), and take turns on the bus with the poll;
+    at most 32 wait, a command beyond them is answered error: busy, and one that waited
+    too long for the bus error: expired;
   * a write that comes while a poll is reading the unit's points (the slave sends it when
     the poll asks for the setpoint) is not followed by the value the poll read before it:
     plain and Sparkplug B report new, then new again, never new, old, new.
@@ -51,6 +55,7 @@ COILS = {0: False, 1: False, 2: False}
 DISCRETE = {5: True}
 SEEN = []   # every request PDU the fake slave got
 ON_REQUEST = []  # callables the fake slave calls with each request PDU before it answers
+HOLD_WRITES = []  # an asyncio.Event here: the fake slave answers a write once it is set
 
 
 def free_port():
@@ -101,6 +106,8 @@ async def fake_slave(reader, writer):
                 buf.clear()
                 for hook in list(ON_REQUEST):
                     hook(pdu)
+                if HOLD_WRITES and pdu[0] in (5, 6, 15, 16):
+                    await HOLD_WRITES[0].wait()
                 reply = answer(pdu)
                 if unit != modbus.BROADCAST:  # a broadcast is carried out, never answered
                     writer.write(modbus.rtu_wrap(unit, reply))
@@ -668,6 +675,99 @@ async def test_sparkplug(slave_port):
         sw.close()
 
 
+async def test_write_queue(slave_port):
+    """MQTT writes go to the bus one at a time, in the order they came, taking turns with
+    the poll; the answers come back in that order (a refused command's too). At most 32
+    wait: a command beyond them is answered error: busy. One that waited too long for the
+    bus is not written (error: expired)."""
+    from app.engine import modbus_gateway
+    fake, logs = FakeMqtt(), []
+    r, sw = await gateway("plain", slave_port, fake, logs=logs)
+    r._resp_timeout = 5.0  # the slave holds its answers to writes for a while here
+    result = "plant/a/setpoint/set/result"
+    poll = asyncio.create_task(r._poll_loop())
+    hold = asyncio.Event()
+    HOLD_WRITES.append(hold)
+    asked = []  # what reached the slave (SEEN: what it answered)
+    ON_REQUEST.append(asked.append)
+
+    def held():  # a write is on the bus, waiting for the slave's answer
+        return any(p[0] == 6 for p in asked)
+
+    def answers():
+        return [p for t, p in fake.published if t == result]
+    try:
+        assert await wait(lambda: last(fake, "plant/a/temp") == b"23.5")
+        SEEN.clear()
+        for payload in (b"1", b"abc", b"3"):
+            r._mqtt.handle_message("plant/a/setpoint/set", payload)
+        await asyncio.sleep(0.2)
+        assert answers() == [], "answered before the write ahead of it"
+        hold.set()
+        assert await wait(lambda: len(answers()) == 3), answers()
+        assert answers()[0] == b"ok" and answers()[1].startswith(b"error: not a number") \
+            and answers()[2] == b"ok", answers()
+        assert [p for p in SEEN if p[0] == 6] == [modbus.write_single_register_pdu(10, n)
+                                                  for n in (1, 3)], SEEN
+        print("plain: writes one at a time in arrival order; a refused command's answer "
+              "keeps its place  OK")
+
+        # one write on the bus (held), 32 waiting, then two more: busy
+        hold.clear()
+        fake.published.clear()
+        SEEN.clear()
+        asked.clear()
+        for n in range(1 + modbus_gateway.WRITE_QUEUE_MAX + 2):
+            r._mqtt.handle_message("plant/a/setpoint/set", str(100 + n).encode())
+            if n == 0:
+                assert await wait(held)
+        assert answers() == [b"error: busy"] * 2, answers()
+        assert sum("32 writes are waiting for the bus already (busy)" in m for m in logs) == 1
+        hold.set()
+        assert await wait(lambda: len(answers()) == 2 + 1 + modbus_gateway.WRITE_QUEUE_MAX,
+                          t=20), len(answers())
+        assert answers()[2:] == [b"ok"] * (1 + modbus_gateway.WRITE_QUEUE_MAX)
+        writes = [i for i, p in enumerate(SEEN) if p[0] == 6]
+        assert [SEEN[i] for i in writes] == [modbus.write_single_register_pdu(10, 100 + n)
+                                             for n in range(1 + modbus_gateway.WRITE_QUEUE_MAX)]
+        polled = [p for p in SEEN[writes[0]:writes[-1]] if p[0] in (1, 2, 4)]
+        assert polled, "the poll did not get the bus while the writes were made"
+        print("plain: 32 writes wait at most (beyond: error: busy, logged once); the poll "
+              "takes turns with them  OK")
+
+        # a write that waited longer than WRITE_EXPIRE_S for its turn is not made
+        hold.clear()
+        fake.published.clear()
+        SEEN.clear()
+        asked.clear()
+        saved, modbus_gateway.WRITE_EXPIRE_S = modbus_gateway.WRITE_EXPIRE_S, 0.2
+        try:
+            r._mqtt.handle_message("plant/a/setpoint/set", b"7")
+            assert await wait(held)
+            r._mqtt.handle_message("plant/a/setpoint/set", b"8")
+            await asyncio.sleep(0.4)
+            hold.set()
+            assert await wait(lambda: len(answers()) == 2), answers()
+        finally:
+            modbus_gateway.WRITE_EXPIRE_S = saved
+        assert answers()[0] == b"ok" and answers()[1].startswith(b"error: expired: waited "), \
+            answers()
+        assert REGS[10] == 7 and [p for p in SEEN if p[0] == 6] == [
+            modbus.write_single_register_pdu(10, 7)], SEEN
+        assert any("write 'setpoint' = 8 not made: it waited" in m for m in logs), logs
+        print("plain: a write that waited too long for the bus -> error: expired, not "
+              "written  OK")
+    finally:
+        HOLD_WRITES.clear()
+        ON_REQUEST.remove(asked.append)
+        r._stop.set()
+        poll.cancel()
+        with suppress(BaseException):
+            await poll
+        await r.stop()
+        sw.close()
+
+
 async def test_no_stale_value_after_write(slave_port):
     """The poll publishes a unit's values once all its points are read. A write that comes
     in between (here: sent when the poll asks for the setpoint, so it lands two reads later)
@@ -732,6 +832,7 @@ async def main():
         await test_read_only(port)
         await test_broadcast_point(port)
         await test_sparkplug(port)
+        await test_write_queue(port)
         await test_no_stale_value_after_write(port)
     finally:
         srv.close()
