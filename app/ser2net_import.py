@@ -9,8 +9,9 @@ carries a small reader for the YAML subset ser2net configs use plus a 3.x line
 parser, and turns every ser2net connection into a dict for MappingConfig.from_dict
 (each warning about one is a Note that knows its mapping: the preview shows it there).
 
-What has no equivalent here (LEDs, rotators, mDNS, chardelay, ...) is reported as a
-warning that names the connection. A connection that would be more open here than in
+What has no equivalent here (LEDs, rotators, mDNS, ...) is reported as a warning that
+names the connection; chardelay (how ser2net batches what it reads) is dropped without
+one: data is forwarded as it arrives here. A connection that would be more open here than in
 ser2net is imported disabled, with a warning that says why: its gtlssh login
 (certauth) cannot be carried over, its TLS client certificates (ssl clientauth) only with
 the CA file they are checked against (CA=) on this host, its TLS certificate is not on
@@ -21,7 +22,10 @@ connector, a unix-socket accepter) is skipped with a warning, so every returned 
 passes MappingConfig.validate(). ser2net only opens a serial device while a client is
 connected, so several of its ports may share one device; a mapping here keeps its
 device open, so later connections on the same device are imported disabled, and a
-repeated listening port is skipped: the import can then be applied as a whole. ser2net's
+repeated listening port is skipped: the import can then be applied as a whole. As the
+device stays open, an openstr is sent once when it opens, not for each client (a note says
+so), and hangup-when-done / nobreak are kept but do nothing (a note too). A listening port
+this process can't use (below 1024 on Linux without the capability) gets a note. ser2net's
 locking carries over: 4.x flock (flock plus TIOCEXCL) and uucplock, on by default, become
 exclusive + tiocexcl and respect_uucp_locks (UUCP lock files are honoured, not made), 3.x
 UUCP locking respect_uucp_locks; one warning says what still differs (the port is held
@@ -33,6 +37,7 @@ import ipaddress
 import os
 import re
 import socket
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -41,6 +46,7 @@ from .config import (
     MAX_TIMER_S, RFC2217_SIGNATURE_MAX, ConfigError, MappingConfig, _ip_overlaps,
     bind_ip_problem, canonical_device, canonical_ip, trace_file_name, url_port,
 )
+from .engine import bindhint
 from .i18n import _
 
 # What one file may cost. A ser2net configuration is a few KB, but aliases, defines and
@@ -1223,6 +1229,15 @@ def _finish(c: _Conn) -> None:
             c.note(_("{0} is kept in the mapping but has no effect here: the serial port "
                      "stays open between connections").format(name.upper().replace("-", "_")
                                                               if c.v3 else name))
+    if c.options.get("openstr"):
+        c.note(_("openstr is sent once, when the serial port opens (at the mapping's start, "
+                 "and when it is opened again after the device was lost), not each time a "
+                 "client connects"))
+    if (start := _privileged_below(net)) is not None:
+        c.note(_("port {0} is below {1}: as ser2net runs now, it can't listen there (Linux "
+                 "needs the CAP_NET_BIND_SERVICE capability: README, Ports below 1024); give "
+                 "it the capability or change the port before enabling the mapping")
+               .format(net.get("port"), start))
     labels = ({"both": "tb", "read": "tr", "write": "tw"} if c.v3 else
               {k: f"trace-{k}" for k in ("both", "read", "write")})
     kind = next((k for k in ("both", "read", "write") if k in c.traces), "")
@@ -1259,6 +1274,21 @@ def _finish(c: _Conn) -> None:
             c.note(why, security=True)
     if c.dropped:
         c.note(_("not imported (no equivalent here): {0}").format(", ".join(c.dropped)))
+
+
+def _privileged_below(net: dict, platform: Optional[str] = None) -> Optional[int]:
+    """The first port anyone may listen on (bindhint.unprivileged_port_start), when the
+    listening mapping `net` wants a port below it that this process may not use (Linux,
+    not root, without CAP_NET_BIND_SERVICE: the systemd unit's account); else None."""
+    platform = sys.platform if platform is None else platform
+    port = net.get("port")
+    if (not platform.startswith("linux") or net.get("mode") not in ("server", "udp")
+            or not isinstance(port, int)):
+        return None
+    start = bindhint.unprivileged_port_start()
+    if not 0 < port < start or bindhint.may_bind_low_ports():
+        return None
+    return start
 
 
 def _high_bytes(c: _Conn, key: str, escapes: str) -> None:
