@@ -34,7 +34,9 @@ a TLS listener it also applies the mapping's allow-list before the handshake (a 
 host never gets one) and does the handshake itself (``start_tls``): the mapping sees the
 connection only once it is done, and decides about capacity, kicking and "Busy" then.
 When the listener can't take its address it raises ``BindError``; ``udp_socket`` makes a
-UDP mapping's socket, with the same error.
+UDP mapping's socket, with the same error. Nor can it take one that overlaps a socket
+``reserve`` holds (the admin UI's): Windows lets a listener on a wildcard address share a
+port with one on a specific address, where Linux refuses the second bind.
 
 Address families: a listener on :: takes IPv6 clients only, on every OS (IPV6_V6ONLY: asyncio
 sets it for TCP, ``udp_socket`` for UDP); one that takes both (network.dual_stack on a
@@ -51,6 +53,7 @@ import selectors
 import socket
 import sys
 import time
+import weakref
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Union
 
 from ..config import WILDCARDS, canonical_ip, host_port
@@ -705,8 +708,62 @@ async def start_server(client_connected_cb: Callable, host: Union[str, Sequence[
     Raises BindError when the address and port can't be taken."""
     listener = Listener(client_connected_cb, ssl, allowed, log or (lambda _m: None), limit)
     try:
-        listener.server = await asyncio.get_running_loop().create_server(
-            lambda: _Gate(listener), host, port)
+        server = await asyncio.get_running_loop().create_server(
+            lambda: _Gate(listener), host, port, start_serving=False)
     except OSError as e:
         raise BindError.of(e) from e
+    clash = _reserved_clash(server.sockets)
+    if clash:
+        server.close()
+        raise BindError.of(OSError(errno.EADDRINUSE, clash))
+    listener.server = server
+    await server.start_serving()
     return listener
+
+
+# Sockets that later listeners may not share an address and port with (reserve), with what
+# holds them. Windows lets a listener on a wildcard address share a port with one on a
+# specific address of its family (that one keeps its address's connections, the other gets
+# the rest) and, without SO_EXCLUSIVEADDRUSE on the first, the reverse too; Linux refuses
+# the second bind while the first listens. start_server refuses it on every OS, so a mapping
+# on the admin UI's address and port fails (and is retried) instead of running next to it.
+_reserved: weakref.WeakKeyDictionary[socket.socket, str] = weakref.WeakKeyDictionary()
+
+
+def reserve(sockets: Sequence[socket.socket], holder: str) -> None:
+    """Keep the addresses and ports of ``sockets`` (bound) from the listeners start_server
+    makes afterwards while they are open; ``holder`` names them in the error ("the admin
+    UI")."""
+    for sock in sockets:
+        _reserved[sock] = holder
+
+
+def _reserved_clash(sockets: Sequence[Any]) -> str:
+    """Why one of ``sockets`` (bound, not listening yet) can't listen: it shares the port of
+    a reserved socket on an overlapping address (the same one, or a wildcard of its family);
+    "" when none does."""
+    for sock in sockets:
+        try:
+            ip, port = sock.getsockname()[:2]
+        except OSError:
+            continue
+        for held, holder in list(_reserved.items()):
+            if held.fileno() == -1 or held.family != sock.family:
+                continue
+            try:
+                held_ip, held_port = held.getsockname()[:2]
+            except OSError:
+                continue
+            if held_port == port and _overlaps(held_ip, ip):
+                return (f"error while attempting to bind on address {host_port(ip, port)}: "
+                        f"address already in use ({holder} listens on "
+                        f"{host_port(held_ip, held_port)})")
+    return ""
+
+
+def _overlaps(a: str, b: str) -> bool:
+    try:
+        x, y = ipaddress.ip_address(a), ipaddress.ip_address(b)
+    except ValueError:
+        return a == b
+    return x == y or x.is_unspecified or y.is_unspecified
