@@ -50,6 +50,9 @@ COMMON_BAUDRATES = (
     115200, 230400, 460800, 921600,
 )
 MAX_TIMER_S = 365 * 86400  # upper bound for the per-connection timers (one year)
+# a mapping's no-data alarm (MappingOptions.no_data_alarm_s): looked at every 2 s
+NO_DATA_MIN_S = 10
+NO_DATA_MAX_S = 7 * 86400
 # web-UI sign-in session lifetime (AppConfig.session_timeout_s)
 SESSION_TIMEOUT_DEFAULT_S = 8 * 3600
 SESSION_TIMEOUT_MIN_S = 5 * 60
@@ -784,6 +787,12 @@ class MappingOptions:
     # Modbus gateway: how long to wait for an RTU slave's reply before returning a
     # Modbus exception (0x0B gateway-target-failed) to the TCP master.
     modbus_response_timeout_s: float = 1.0
+    # No-data alarm (notify.py: no_data / data_back, the dashboard, /metrics): the serial
+    # port is open but the device has sent nothing for this many seconds (0 = off,
+    # else NO_DATA_MIN_S..NO_DATA_MAX_S); with no_data_reply_only, only while something
+    # sent to it gets no answer (a device that speaks when asked, e.g. Modbus RTU).
+    no_data_alarm_s: int = 0
+    no_data_reply_only: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any], notes: Optional[list[FieldNote]] = None,
@@ -793,7 +802,23 @@ class MappingOptions:
         opts = MappingOptions(**_read_fields(MappingOptions, d, notes, path))
         opts.idle_timeout_s = _legacy_seconds(opts.idle_timeout_s)
         opts.trace_both = trace_file_name(opts.trace_both)
+        opts._limit_no_data_alarm(notes, path)
         return opts
+
+    def _limit_no_data_alarm(self, notes: list[FieldNote], path: str) -> None:
+        """A no-data alarm outside 0 / NO_DATA_MIN_S..NO_DATA_MAX_S takes the nearest value
+        it can have, with a note (loading notes it, an edit warns)."""
+        value = self.no_data_alarm_s
+        if value == 0 or NO_DATA_MIN_S <= value <= NO_DATA_MAX_S:
+            return
+        used = 0 if value < 0 else min(max(value, NO_DATA_MIN_S), NO_DATA_MAX_S)
+        notes.append(FieldNote(
+            path + "no_data_alarm_s", "replaced", value, used,
+            why=f"{path}no_data_alarm_s {value} is not 0 (off) or {NO_DATA_MIN_S}.."
+                f"{NO_DATA_MAX_S} seconds: {used} is used",
+            warning=_("The no-data alarm must be 0 (off) or {0} to {1} seconds: {2} is "
+                      "used.").format(NO_DATA_MIN_S, NO_DATA_MAX_S, used)))
+        self.no_data_alarm_s = used
 
     def validate(self) -> None:
         for label, value in ((_("Idle timeout"), self.idle_timeout_s),
@@ -1423,7 +1448,8 @@ class ClusterSettings:
 
 
 NOTIFY_EVENTS = ("device_lost", "device_back", "start_failed",
-                 "client_connected", "client_disconnected", "login_failed", "disk_low")
+                 "client_connected", "client_disconnected", "login_failed", "disk_low",
+                 "no_data", "data_back", "peer_offline", "peer_back", "service_started")
 NOTIFY_DEFAULT_EVENTS = ("device_lost", "device_back", "start_failed")
 WEBHOOK_FORMATS = ("json", "slack", "teams", "discord", "telegram")
 SMTP_SECURITY = ("starttls", "ssl", "none")
@@ -1433,8 +1459,10 @@ SMTP_SECURITY = ("starttls", "ssl", "none")
 class NotificationSettings:
     """Event notifications (app/notify.py): a webhook and/or e-mail when a serial
     device disappears or comes back, a mapping fails to start, clients connect or
-    disconnect, or a sign-in fails. Off by default; the same event for the same
-    mapping is sent at most once per repeat_s."""
+    disconnect, a sign-in fails, the data disk is almost full, a device sends nothing
+    (a mapping's no-data alarm), a cluster node goes offline or ser2net has started.
+    Off by default; the same event for the same mapping is sent at most once per
+    repeat_s."""
     enabled: bool = False
     events: list[str] = field(default_factory=lambda: list(NOTIFY_DEFAULT_EVENTS))
     repeat_s: int = 300

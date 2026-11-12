@@ -529,6 +529,13 @@ class RunnerStatus:
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
+    # what the device sends (watch_traffic): time.time() of the last byte seen from it,
+    # and, by time.monotonic(), since when it has sent nothing (from the port's opening)
+    # and since when what was sent to it has had no answer
+    last_rx: float = 0.0
+    _seen: tuple[int, int] = (0, 0)
+    _quiet_since: Optional[float] = None
+    _unanswered_since: Optional[float] = None
 
     def set_clients(self, clients) -> None:
         """Publish the connected clients (each has peer, connected_at and priority)."""
@@ -539,7 +546,28 @@ class RunnerStatus:
             key=lambda d: d["connected_at"],
         )
 
+    def watch_traffic(self, now: float) -> None:
+        """Compare the counters with the last look (as_dict, every POLL_S at least: the
+        notifier's): new bytes from the device end its silence; bytes to it with no reply
+        since begin a wait for one. Precise to that interval, which the no-data alarm
+        (at least NO_DATA_MIN_S) allows, and nothing is added to the data path."""
+        seen, self._seen = self._seen, (self.bytes_in, self.bytes_out)
+        if self.state != "running":
+            self._quiet_since = self._unanswered_since = None
+            return
+        if self.bytes_in != seen[0]:
+            self.last_rx = time.time()
+            self._quiet_since = now
+            self._unanswered_since = None
+        elif self._quiet_since is None:  # the port opened (or a first look): from now
+            self._quiet_since = now
+        if self.bytes_out != seen[1] and self.bytes_in == seen[0] and \
+                self._unanswered_since is None:
+            self._unanswered_since = now
+
     def as_dict(self) -> dict:
+        mono = time.monotonic()
+        self.watch_traffic(mono)
         now = time.time()
         clients = [
             {"peer": c["peer"], "duration": fmt_duration(now - c["connected_at"]),
@@ -559,7 +587,17 @@ class RunnerStatus:
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
             "trace_error": self.trace_error,
+            # the device: when it last sent something (None: not yet), how long it has sent
+            # nothing and how long what was sent to it has had no answer (s; None: not
+            # running / nothing waits for an answer)
+            "last_rx": self.last_rx or None,
+            "rx_idle_s": _since(self._quiet_since, mono),
+            "reply_wait_s": _since(self._unanswered_since, mono),
         }
+
+
+def _since(mark: Optional[float], now: float) -> Optional[float]:
+    return None if mark is None else round(now - mark, 1)
 
 
 def log_ignored_settings(mapping: MappingConfig, log) -> None:

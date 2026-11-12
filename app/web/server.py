@@ -236,6 +236,8 @@ def make_templates() -> Jinja2Templates:
         asset_version=__version__,
     )
     templates.env.filters["softbreak"] = softbreak
+    from ..notify import no_data_for
+    templates.env.globals["no_data_for"] = no_data_for  # a mapping's no-data alarm, now
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")

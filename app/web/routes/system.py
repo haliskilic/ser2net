@@ -9,6 +9,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, RedirectRespons
 from starlette.routing import Route
 
 from ... import __version__, i18n, storage
+from ...notify import no_data_for
 from ...engine import netguard, portlist
 from .common import Ctx
 
@@ -61,6 +62,7 @@ def routes(ctx: Ctx) -> list:
             running = 1 if st.get("state") == "running" else 0
             lines += [
                 *mapping_state_metrics(m, st, lbl),
+                *device_traffic_metrics(m, st, lbl),
                 f"ser2net_mapping_running{{{lbl}}} {running}",
                 f"ser2net_mapping_clients{{{lbl}}} {st.get('client_count', 0)}",
                 # bytes read from / written to the serial device, counted once at the device;
@@ -139,6 +141,11 @@ METRIC_INFO = {
     "ser2net_mapping_state": ("gauge", "1 for the mapping's state now (label state), 0 for "
                                        "the others"),
     "ser2net_mapping_running": ("gauge", "1 while the mapping runs"),
+    "ser2net_mapping_last_rx_timestamp_seconds": ("gauge", "When the serial device last sent "
+                                                           "something (Unix time; 0: not since "
+                                                           "the start)"),
+    "ser2net_mapping_no_data": ("gauge", "1 while the device is past the mapping's no-data "
+                                         "alarm"),
     "ser2net_mapping_clients": ("gauge", "Clients connected to the mapping"),
     "ser2net_mapping_bytes_in_total": ("counter", "Bytes read from the serial device"),
     "ser2net_mapping_bytes_out_total": ("counter", "Bytes written to the serial device"),
@@ -188,6 +195,16 @@ def mapping_state_metrics(mapping, status: dict, lbl: str) -> list[str]:
     return [f"ser2net_mapping_enabled{{{lbl}}} {1 if mapping.enabled else 0}"] + [
         f'ser2net_mapping_state{{{lbl},state="{_metric_label(s)}"}} {1 if s == now else 0}'
         for s in states]
+
+
+def device_traffic_metrics(mapping, status: dict, lbl: str) -> list[str]:
+    """When the device last sent something, and, with its no-data alarm on, whether it is
+    past it (notify.no_data_for)."""
+    lines = [f"ser2net_mapping_last_rx_timestamp_seconds{{{lbl}}} "
+             f"{float(status.get('last_rx') or 0):.3f}"]
+    if mapping.options.no_data_alarm_s:
+        lines.append(f"ser2net_mapping_no_data{{{lbl}}} {1 if no_data_for(mapping, status) else 0}")
+    return lines
 
 
 def _series(line: str) -> str:

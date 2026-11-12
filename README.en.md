@@ -137,7 +137,16 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   e-mail (SMTP) when a device is lost or comes back, a mapping fails to start, clients
   come and go, a sign-in fails, or the data disk is almost full (below the free space at
   which traces pause; all.log warns in any case); repeats are suppressed, a test message
-  can be sent.
+  can be sent. Off until chosen in Settings: **no data from a device** (a mapping's
+  *No-data alarm* in its options: the port is open but the device has sent nothing for
+  that many seconds, or, for a device that speaks only when asked, what was sent to it got
+  no answer; also shown on the dashboard, in the mapping's log and in `/metrics`, with
+  the time of the device's last byte, `ser2net_mapping_last_rx_timestamp_seconds`) and
+  data from it again, a **cluster node offline** (a node heard from that is no longer
+  heard from for 20 s, or a configured peer that misses two answers a minute apart) and
+  back, and **ser2net started** (15 s after a start: which mappings run, and whether the
+  previous run was ended by the event loop watchdog). The same events are logged in
+  all.log whether or not they are sent.
 - **Security:** password (set on first access, scrypt), CSRF, signed-cookie sessions,
   login rate-limiting, strict security headers; sessions end at logout, on a password
   change, per user or for everyone (Settings), and a lost password is reset with

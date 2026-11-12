@@ -117,6 +117,7 @@ PORTABLE = [
     "test_console_log.py",     # the console copy of the log is written off the event loop
     "test_error_logs.py",      # library warnings, 500s, reset at the banner, all.log rotation blocked
     "test_liveness.py",        # event loop watchdog, hang.log, sd_notify, readiness hooks
+    "test_health_events.py",   # no-data alarm, offline cluster nodes, start-up summary
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
@@ -134,6 +135,7 @@ SOCAT = [
     "test_v2_web.py",
     "test_web_e2e.py",
     "test_serial_reconnect.py",
+    "test_no_data_alarm.py",
 ]
 
 

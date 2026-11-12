@@ -56,7 +56,7 @@ _OPTIONS = {
     "trace_both": "plc1.trace", "trace_hexdump": True, "trace_timestamp": False,
     "trace_max_mb": 2.5, "trace_keep": 7, "rfc2217_poll_modem_interval_s": 2.0,
     "rfc2217_net_timeout_s": 9.0, "rfc2217_restore_on_disconnect": True,
-    "modbus_response_timeout_s": 2.5}
+    "modbus_response_timeout_s": 2.5, "no_data_alarm_s": 300, "no_data_reply_only": True}
 _MQTT = {
     "enabled": True, "host": "broker.example", "port": 8883, "base_topic": "ser2net/plc1",
     "qos": 2, "tls": True, "username": "plc", "password": "p@ss w'rd\"<&>",

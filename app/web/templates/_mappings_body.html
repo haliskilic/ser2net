@@ -41,6 +41,8 @@
         {% if st and st.last_error and state in ('error','device-missing','reconnecting') %}
           <div class="err-small" title="{{ st.last_error }}">{{ st.last_error|softbreak }}</div>
         {% endif %}
+        {% set quiet = no_data_for(m, st) %}
+        {% if quiet %}<div class="err-small" title="{{ _('the mapping’s no-data alarm: %(n)s s', n=m.options.no_data_alarm_s) }}">⚠ {{ _("no data from the device for %(n)s s", n=quiet) if not m.options.no_data_reply_only else _("no answer from the device for %(n)s s", n=quiet) }}</div>{% endif %}
       </td>
       <td data-label="{{ _('Clients') }}">
         {{ st.client_count if st else 0 }}{% if m.network.max_connections > 1 %}/{{ m.network.max_connections }}{% endif %}
