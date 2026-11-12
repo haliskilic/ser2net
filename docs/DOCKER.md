@@ -50,6 +50,12 @@ release tag).
   Non-interactive: `docker exec -i ser2net ... --set-password admin < password.txt`.
   `... --sign-out-all` ends every web UI session. `docker exec` runs as root; the command
   switches to the owner of `/data` before writing, so file ownership stays right.
+- **`config.json` changed in the volume:** `docker kill -s HUP ser2net` (or
+  `docker exec ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --reload`, or
+  Settings → *Configuration backups* → *Reload config.json*) has ser2net read it again
+  without a restart: mappings whose settings didn't change keep their clients, a file that
+  doesn't validate changes nothing (the log says why). The admin UI address comes from
+  `SER2NET_BIND_IP` / `SER2NET_PORT`, which a reload keeps.
 
 ## Plain docker run
 

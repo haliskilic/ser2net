@@ -550,6 +550,15 @@ class Listener:
     def sockets(self):
         return self.server.sockets
 
+    @property
+    def ssl(self) -> Any:
+        """The TLS context new connections get (None: plain TCP)."""
+        return self._ssl
+
+    @ssl.setter
+    def ssl(self, context: Any) -> None:  # a renewed certificate (app/tlsreload.py)
+        self._ssl = context
+
     def close(self) -> None:
         self.server.close()
         for transport, task in list(self._handshakes.items()):

@@ -157,13 +157,27 @@ It stops the service, asks for the address on the console, saves it and starts t
 service again with it. (Running `--reconfigure` on its own while the service runs is
 refused: the data directory allows only one running instance.)
 
+## Changing config.json while the service runs
+
+After editing `config.json` (by hand or with a deployment tool), have the running service
+read it again — no restart, mappings whose settings didn't change keep their clients:
+
+```bat
+"C:\Program Files\ser2net\ser2net.exe" --reload --data-dir C:\ProgramData\ser2net
+```
+
+(or Settings → *Configuration backups* → *Reload config.json*). A file that doesn't
+validate changes nothing; `all.log` says why. A renewed admin UI certificate at the same
+paths is read by a reload too. A new admin UI address needs the reinstall above.
+
 ## One instance per data directory
 
 ser2net locks its data directory (`ser2net.lock`) while it runs, so a second instance on
 the **same** data directory refuses to start rather than two processes overwriting each
 other's `config.json` — a plain `--reconfigure` while the service runs, too.
-`--set-password` and `--sign-out-all` (account recovery) are not refused: while the service
-runs they hand the change to it, which applies it at once; while it is stopped they take
+`--set-password`, `--sign-out-all` (account recovery) and `--reload` are not refused: while
+the service runs they hand the request to it, which applies it at once; while it is stopped
+`--reload` has nothing to do, and the other two take
 the lock for the moment they change `config.json`, and a service that starts meanwhile
 waits for them.
 `--install-service` only checks the lock, after stopping the service it upgrades. To run a

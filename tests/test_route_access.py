@@ -100,6 +100,7 @@ ROUTES = {
     ("GET", "/settings/audit.csv"): (ADMIN, NONE),
     ("POST", "/settings/backups/restore"): (ADMIN, FORM),
     ("POST", "/settings/backups/restore-mappings"): (ADMIN, FORM),
+    ("POST", "/settings/config/reload"): (ADMIN, FORM),
     ("GET", "/settings/backups/{name}"): (ADMIN, NONE),
     # ---- api.py: the REST API (bearer token, checked in GuardMiddleware) ----
     ("GET", "/api/v1/health"): (TOKEN_PUBLIC, NONE),

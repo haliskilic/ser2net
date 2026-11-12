@@ -382,7 +382,8 @@ with a `PUT` or `DELETE` to change the mapping only if nobody changed it since (
 Start and stop are idempotent: starting a mapping that already runs with its settings, or
 stopping a stopped one, changes nothing (`"changed": false`; its clients, serial port and
 MQTT connection stay) — use `restart` to restart a running mapping, e.g. to send its open
-string again or to load a replaced TLS certificate. A `PUT` with the mapping's own settings
+string again (a renewed TLS certificate at the same paths is also read by a reload of
+`config.json`, without dropping clients). A `PUT` with the mapping's own settings
 changes nothing either.
 A value may be sent as text (`"9600"`, `"false"` is false); one that is not of the setting's
 type is refused with `400` and the setting's path (`serial.baudrate: "fast" is not a whole
@@ -661,7 +662,8 @@ is no account at all; later starts ignore it.
   `docker run` needs `--restart unless-stopped` for that (an existing container:
   `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — a dedicated unprivileged user,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives.
+  `SupplementaryGroups=dialout`, `Restart=on-failure`, hardening directives;
+  `systemctl reload ser2net` reads `config.json` again (see Configuration & state files).
   **Do not run as root.** Optional: the drop-in `systemd/ser2net.service.d/notify.conf`
   (`Type=notify`, `WatchdogSec=120`) makes systemd count ser2net as started only once its
   mappings run and its UI listens, and restart it when its event loop stops answering
@@ -788,6 +790,25 @@ Mapping ids (the `<id>` above, also used by the REST API) are 1–64 letters, di
 new mappings get 12 hex digits. An id in any other form (hand-edited or imported) is
 replaced when the config is loaded or the file is imported; the start-up log or the import
 preview says so.
+
+**Changing `config.json` while ser2net runs:** ser2net reads it at start-up and then works
+from its copy in memory. After an edit by hand or by a tool (Ansible, a copied file), have it
+read the file again — no restart: `systemctl reload ser2net` or `kill -HUP <pid>` (SIGHUP,
+Linux/macOS; `docker kill -s HUP ser2net`), `ser2net --reload` with the same `--data-dir`
+(any platform, also for the Windows service and in a container) or Settings →
+*Configuration backups* → *Reload config.json*. The file is checked as an edit is: when it
+can't be read or doesn't validate (a value of the wrong type in a changed mapping, two
+mappings on one port, no user accounts, a TLS pair that doesn't load) nothing changes and
+`all.log` says why. Otherwise it is applied part by part: a mapping whose settings didn't
+change keeps running with its clients (one that should run but doesn't is started), a
+changed one restarts, a removed one stops, a new one starts; the cluster restarts only when
+its settings changed. The admin UI's certificate files and those of unchanged TLS mappings
+are read again for new connections (a renewed certificate: e.g. certbot's
+`--deploy-hook "systemctl reload ser2net"`). The admin UI's address takes effect only at the
+next start (the log, the reply and Settings say so), as do `--data-dir` / `--config` and the
+environment variables. In a terminal, SIGHUP from the terminal closing still ends ser2net
+(cleanly). The log line and the audit record (`config_reload`) say what changed. Saves made in
+the UI meanwhile write the configuration in use, so reload first.
 
 Deleting `config.json` + `all.log` fully resets the system (the next start deletes the
 logs and traces of mappings that no longer exist; `backups/` is never restored by itself —
