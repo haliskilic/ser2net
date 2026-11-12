@@ -91,6 +91,75 @@ docker run -d --name ser2net --restart unless-stopped \
   published port are the real perimeter — don't publish `8080` to an untrusted network
   without TLS. These env vars win on every start, so compose stays the source of truth.
 
+## Behind a reverse proxy
+
+For TLS on a LAN or the Internet, a reverse proxy in front of the container is the usual
+choice (or set `admin_ui.tls_*`). The web UI refuses forms, and the console and hex-view
+WebSockets, that a page of another site sends: the browser must say the request comes from
+this UI's own page (`Sec-Fetch-Site`, sent over HTTPS only) or send an `Origin` that is the
+address in `Host`, `X-Forwarded-Host` or `Forwarded: host=`, port included. So the proxy
+must:
+
+- pass the address the browser uses (host name, and its port if it isn't 80/443) as `Host`,
+  or as `X-Forwarded-Host`;
+- pass WebSocket upgrades through (the console and the hex view);
+- send `X-Forwarded-Proto` (an SSO redirect URI left blank is made from it).
+
+A proxy that rewrites `Host` to the container's address and sends no `X-Forwarded-Host`
+works only over HTTPS, in browsers that send `Sec-Fetch-Site`; over plain HTTP every form
+then fails with 403 and the console shows `[console disconnected]`, and all.log has a
+`refused …` line (a page of another site) with the `Origin` and the addresses the UI saw.
+Keep the UI port off the network when the proxy is in front: publish it to the proxy only
+(`127.0.0.1:8080:8080`), or not at all when the proxy runs in the same Docker network.
+
+**nginx** (`$http_host` is what the browser sent, port included; nginx's default,
+`Host $proxy_host`, is the upstream's address):
+
+```nginx
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }   # in http { }
+
+server {
+    listen 443 ssl;
+    server_name ser2net.example.com;
+    # ssl_certificate / ssl_certificate_key …
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+}
+```
+
+**Apache** 2.4.47 or later (`mod_proxy_http` and `mod_headers`; older versions need
+`mod_proxy_wstunnel` for the WebSockets):
+
+```apache
+<VirtualHost *:443>
+    ServerName ser2net.example.com
+    # SSLEngine on, SSLCertificateFile / SSLCertificateKeyFile …
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+    ProxyPass        / http://127.0.0.1:8080/ upgrade=websocket
+    ProxyPassReverse / http://127.0.0.1:8080/
+</VirtualHost>
+```
+
+**IIS** with Application Request Routing and URL Rewrite: install the *WebSocket
+Protocol* feature, keep the browser's host name (ARR's default replaces it):
+
+```bat
+%windir%\system32\inetsrv\appcmd.exe set config -section:system.webServer/proxy -preserveHostHeader:true /commit:apphost
+```
+
+and let the rewrite rule (to `http://127.0.0.1:8080/{R:1}`) set the server variable
+`HTTP_X_FORWARDED_PROTO` to `https` (add it to the site's allowed server variables).
+
+**Caddy** (`reverse_proxy 127.0.0.1:8080`) and **Traefik** keep `Host`, pass WebSockets
+and send `X-Forwarded-Proto` by default; nothing to add.
+
 ## Serial devices
 
 - **Access.** Pass each port with `--device` (compose `devices:`). A device keeps its
@@ -161,7 +230,8 @@ docker run -d --name ser2net --restart unless-stopped \
   remove that part when you can. An unusable `SER2NET_BIND_IP` / `SER2NET_PORT`, an
   unreadable or broken `config.json` and a missing admin UI certificate still stop the
   start, with a one-line message.
-- **TLS.** Put a reverse proxy (or set `admin_ui.tls_*`) in front for LAN/Internet
-  exposure; raw data bridges are plaintext unless per-mapping TLS is enabled.
+- **TLS.** Put a reverse proxy ([Behind a reverse proxy](#behind-a-reverse-proxy)) or set
+  `admin_ui.tls_*` for LAN/Internet exposure; raw data bridges are plaintext unless
+  per-mapping TLS is enabled.
 - **Dependencies** are installed from PyPI into the image, so the container runs with
   `--no-bootstrap` (the bundled `vendor/wheels` offline path is for air-gapped hosts).
