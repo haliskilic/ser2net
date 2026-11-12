@@ -103,6 +103,7 @@ PORTABLE = [
     "test_changelog.py",
     "test_ci_gate.py",          # ci.yml: ci-ok needs every job; required names kept
     "test_release_pipeline.py",  # release.yml gates, SHA-pinned actions
+    "test_release_guard.py",    # release tag = version, CHANGELOG section, image tags
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
