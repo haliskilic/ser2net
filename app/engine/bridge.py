@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import io
 import ipaddress
 import os
 import queue
@@ -132,8 +133,10 @@ def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
     return mapping_file(trace_dir, mapping.id, f"-{mapping.options.trace_both}")
 
 
-def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log) -> Optional["Tracer"]:
-    """The mapping's tracer when tracing is on (None when off or unavailable)."""
+def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log,
+                status: Optional["RunnerStatus"] = None) -> Optional["Tracer"]:
+    """The mapping's tracer when tracing is on (None when off or unavailable). `status`:
+    the runner's, whose trace_error the tracer keeps up to date."""
     if not mapping.options.trace_both:
         return None
     if not trace_dir:
@@ -144,10 +147,9 @@ def open_tracer(mapping: MappingConfig, trace_dir: Optional[str], log) -> Option
     except ValueError as e:
         log(f"trace not written: {e}")
         return None
-    tracer = Tracer(path, mapping.options, log=log)
-    if not tracer.active:
-        return None
-    log(f"tracing traffic to {tracer.path}")
+    tracer = Tracer(path, mapping.options, log=log, status=status)
+    if not tracer.error:  # else it said why, and keeps trying
+        log(f"tracing traffic to {tracer.path}")
     return tracer
 
 
@@ -157,45 +159,66 @@ class Tracer:
 
     ``write()`` only queues the chunk (with its arrival time); a writer thread formats,
     writes and flushes in batches and rotates the file once it passes ``max_bytes``
-    (<file>.1 ... <file>.<keep>; keep=0 starts the file over). If the disk can't keep
+    (<file>.1 ... <file>.<keep>; keep=0 begins a new file). If the disk can't keep
     up, at most QUEUE_MAX_BYTES wait in memory: newer chunks are dropped and the
-    trace says how many bytes are missing."""
+    trace says how many bytes are missing.
+
+    When the file can't be opened or written (the traces folder was removed, the disk is
+    full, no file descriptor is left, another program holds the file), the trace pauses
+    instead of ending: `error` says why (also the runner's status.trace_error), write()
+    only counts the bytes, the writer tries again every RETRY_S seconds (making the folder
+    again), and once it writes again the trace says how many bytes are missing. The log
+    says so at most once per LOG_EVERY_S."""
 
     QUEUE_MAX_BYTES = 8 * 1024 * 1024
     BATCH = 256
+    RETRY_S = 5.0
+    LOG_EVERY_S = 600.0
 
-    def __init__(self, path: str, options, log=None) -> None:
+    def __init__(self, path: str, options, log=None,
+                 status: Optional["RunnerStatus"] = None) -> None:
         self.path = path
         self._hex = options.trace_hexdump
         self._ts = options.trace_timestamp
         self._max_bytes = max(1, int(options.trace_max_mb * 1024 * 1024))
         self._keep = int(options.trace_keep)
         self._log = log or (lambda _m: None)
+        self._log_failure = _LogEvery(self._log, self.LOG_EVERY_S)
+        self._log_rotation = _LogEvery(self._log, self.LOG_EVERY_S)
+        self._log_resumed = _LogEvery(self._log, self.LOG_EVERY_S)
+        self._status = status
         self._q: queue.SimpleQueue = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._queued = 0      # bytes waiting for the writer
         self._dropped = 0     # bytes dropped since the last line written
-        self._fh = None
+        self._drop_reason = ""
+        self._closing = False  # aclose() was called: nothing more is queued
+        self._resumed = False  # opened again after an error: logged once it writes
+        self.error = ""        # why the trace is not written now ("" while it is)
+        self._fh: Optional[io.BufferedWriter] = None
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            self._fh = open(path, "ab")
+            self._reopen()
         except OSError as e:
-            self._log(f"trace disabled: cannot open {path}: {e}")
-            return
+            self._failed(e)
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name=f"trace:{os.path.basename(path)}")
         self._thread.start()
 
     @property
     def active(self) -> bool:
-        return self._fh is not None
+        """The trace is on (it may be paused, see `error`), not closed."""
+        return not self._closing
 
     def write(self, direction: str, data: bytes) -> None:
-        if self._fh is None or not data:
+        if not data or self._closing:
             return
         with self._lock:
+            if self.error:  # paused: only counted (the trace says so once it goes on)
+                self._dropped += len(data)
+                return
             if self._queued + len(data) > self.QUEUE_MAX_BYTES:
                 self._dropped += len(data)
+                self._drop_reason = "the trace file could not keep up"
                 return
             self._queued += len(data)
         self._q.put((time.time(), direction, bytes(data)))
@@ -206,76 +229,146 @@ class Tracer:
             return f"{prefix}{direction} [{len(data)}] {data.hex(' ')}\n".encode()
         return prefix.encode() + direction.encode() + b" " + data + b"\n"
 
+    def _lines(self, ts: float, direction: str, data: bytes) -> list:
+        """The trace lines of one chunk, each with the traffic bytes it stands for: what
+        was not traced before it (if anything), then the chunk."""
+        with self._lock:
+            self._queued -= len(data)
+            dropped, self._dropped = self._dropped, 0
+            reason = self._drop_reason
+        lines = []
+        if dropped:
+            lines.append((self._format(ts, "!!", f"{dropped} bytes not traced "
+                                       f"({reason})".encode()), dropped))
+        lines.append((self._format(ts, direction, data), len(data)))
+        return lines
+
     def _run(self) -> None:
         stop = False
         while not stop:
-            batch = [self._q.get()]
+            try:  # paused: wake up to try the file again
+                first = self._q.get(timeout=self.RETRY_S) if self.error else self._q.get()
+            except queue.Empty:
+                try:
+                    self._reopen()
+                except OSError as e:
+                    self._failed(e)
+                continue
+            batch = [first]
             while len(batch) < self.BATCH:
                 try:
                     batch.append(self._q.get_nowait())
                 except queue.Empty:
                     break
-            out = []
-            for item in batch:
-                if item is None:
-                    stop = True
-                    continue
-                ts, direction, data = item
-                with self._lock:
-                    self._queued -= len(data)
-                    dropped, self._dropped = self._dropped, 0
-                if dropped:
-                    out.append(self._format(ts, "!!", f"{dropped} bytes not traced "
-                                            "(the trace file could not keep up)".encode()))
-                out.append(self._format(ts, direction, data))
-            if out:
+            out: list = []
+            try:
+                for item in batch:
+                    if item is None:
+                        stop = True
+                    else:
+                        out.extend(self._lines(*item))
                 self._append(out)
-        with contextlib.suppress(Exception):
-            if self._fh is not None:
-                self._fh.close()
-        self._fh = None
+            except Exception as e:  # never end the writer: the trace would stop unnoticed
+                self._failed(e)
+        self._close_file()
+        self._set_error("")
 
     def _append(self, lines: list) -> None:
-        """Write a batch of lines; rotate as soon as the file reaches its size."""
+        """Write a batch of lines; rotate as soon as the file reaches its size. When that
+        fails, the trace pauses and the lines not written are counted as not traced."""
+        if not lines:
+            return
+        done = 0  # lines written
         try:
-            pending: list = []
-            size = self._fh.tell() if self._fh is not None else 0
-            for line in lines:
-                pending.append(line)
+            fh = self._fh if self._fh is not None else self._reopen()
+            size = fh.tell()
+            start = 0
+            for i, (line, _n) in enumerate(lines):
                 size += len(line)
                 if size >= self._max_bytes:
-                    self._write(pending)
-                    pending = []
+                    self._write(lines[start:i + 1])
+                    done = start = i + 1
                     self._rotate()
                     size = 0
-            if pending:
-                self._write(pending)
-        except OSError as e:
-            self._log(f"trace write failed ({self.path}): {e}")
+            if start < len(lines):
+                self._write(lines[start:])
+            done = len(lines)
+        except Exception as e:  # OSError mostly; ValueError for a file closed under it
+            self._failed(e, lines[done:])
+            return
+        if self._resumed:
+            self._resumed = False
+            self._log_resumed(f"trace written again ({self.path})")
 
     def _write(self, lines: list) -> None:
-        if self._fh is not None:
-            self._fh.write(b"".join(lines))
-            self._fh.flush()
+        if self._fh is None:
+            raise OSError(f"{self.path} is not open")
+        self._fh.write(b"".join(line for line, _n in lines))
+        self._fh.flush()
 
     def _rotate(self) -> None:
-        if self._fh is not None:
-            self._fh.close()
+        """Move the file to <file>.1 (the older ones up), or with keep=0 delete it, and
+        begin a new one. Never cut in place, so a download still reading the file gets
+        all of it (POSIX; on Windows a file open for a download can't be renamed or
+        deleted: the trace goes on in the same file until it can). Raises OSError when
+        the new file can't be opened."""
+        fh, self._fh = self._fh, None
+        if fh is not None:
+            fh.close()
         try:
             if self._keep > 0:
                 for i in range(self._keep, 0, -1):
                     src = self.path if i == 1 else f"{self.path}.{i - 1}"
                     if os.path.exists(src):
                         os.replace(src, f"{self.path}.{i}")
-            self._fh = open(self.path, "wb" if self._keep == 0 else "ab")
+            else:
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(self.path)
         except OSError as e:  # e.g. Windows: a rotated file is open for download
-            self._log(f"trace rotation failed ({self.path}): {e}; continuing in the same file")
-            self._fh = open(self.path, "ab")
+            self._log_rotation(f"trace rotation failed ({self.path}): {e}; "
+                               "continuing in the same file")
+        self._reopen()
+
+    def _reopen(self) -> io.BufferedWriter:
+        """Open the file to append, making its folder again (it may have been removed).
+        Raises OSError."""
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), mode=0o700, exist_ok=True)
+        self._fh = open(self.path, "ab")
+        if self.error:
+            self._resumed = True
+            self._set_error("")
+        return self._fh
+
+    def _close_file(self) -> None:
+        fh, self._fh = self._fh, None
+        if fh is not None:
+            with contextlib.suppress(Exception):
+                fh.close()
+
+    def _set_error(self, text: str) -> None:
+        with self._lock:
+            self.error = text
+        if self._status is not None:
+            self._status.trace_error = text
+
+    def _failed(self, e: BaseException, lost=()) -> None:
+        """Opening or writing the file failed: close it, count the lines `lost` as not
+        traced and pause until the file can be opened again."""
+        self._close_file()
+        reason = (e.strerror if isinstance(e, OSError) and e.strerror else str(e)) \
+            or type(e).__name__
+        with self._lock:
+            self._dropped += sum(n for _line, n in lost)
+            self._drop_reason = "the trace file could not be written"
+        self._set_error(reason)
+        self._log_failure(f"trace not written ({self.path}): {reason}; trying again every "
+                          f"{self.RETRY_S:g} s (the trace will say how much is missing)")
 
     async def aclose(self) -> None:
         """Flush what is queued, close the file. Waits for the writer off the loop."""
-        if self._fh is None:
+        if self._closing:
             return
+        self._closing = True
         self._q.put(None)
         await asyncio.to_thread(self._thread.join, 10)
 
@@ -297,6 +390,7 @@ class RunnerStatus:
     dropped_clients: int = 0   # clients dropped because their output queue overflowed
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
     last_error: str = ""
+    trace_error: str = ""   # why the mapping's trace is not written now (bridge.Tracer)
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
@@ -329,6 +423,7 @@ class RunnerStatus:
             "dropped_clients": self.dropped_clients,
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
+            "trace_error": self.trace_error,
         }
 
 
@@ -591,6 +686,11 @@ class MappingRunner:
         """The open pyserial object (None while the port is closed)."""
         return self._link.serial
 
+    @property
+    def tracer(self) -> Optional[Tracer]:
+        """The trace writer while the mapping runs with tracing on."""
+        return self._tracer
+
     def _log(self, msg: str) -> None:
         # The logger (a per-mapping logger from AppState) adds the "[name]" prefix
         # for the global all.log and also writes to this mapping's own log file.
@@ -621,7 +721,7 @@ class MappingRunner:
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
-        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log, self.status)
         log_ignored_settings(self.mapping, self._log)
 
         if self.mapping.kind == "serialbridge":

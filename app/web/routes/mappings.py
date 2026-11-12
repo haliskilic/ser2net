@@ -162,9 +162,11 @@ def routes(ctx: Ctx) -> list:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
         files = await asyncio.to_thread(_trace_files, mid)
         o = m.options
+        st = state.supervisor.status(mid) or {}
         return render(request, "_mapping_traces.html", mid=mid, mapping_name=m.name, files=files,
                       tracing=bool(o.trace_both), current=f"{mid}-{o.trace_both}",
-                      max_mb="%g" % o.trace_max_mb, keep=o.trace_keep, hexdump=o.trace_hexdump)
+                      max_mb="%g" % o.trace_max_mb, keep=o.trace_keep, hexdump=o.trace_hexdump,
+                      trace_error=st.get("trace_error", ""))
 
     async def mapping_trace_file(request):
         """Download one of a mapping's trace files — only a name from its own list."""

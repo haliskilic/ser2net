@@ -9,11 +9,14 @@ Checks:
     mapping's file, no path tricks); the table offers Trace only when tracing is on;
     traces record what is sent to the device, so viewers neither get the button nor
     the files (403);
-  * the dashboard has the search / filter / sort / bulk toolbar.
+  * the dashboard has the search / filter / sort / bulk toolbar;
+  * a trace that can't be written (here: a file where the traces folder should be) is
+    named in the table and in the trace panel.
 
 Run: python3 tests/test_dashboard.py
 """
 import os
+import time
 
 from _server import Browser, Server, free_port
 
@@ -86,7 +89,27 @@ def main():
             st, _, body = v.get(path)
             assert st == 403 and "requires the operator role" in body, (path, st, body[:80])
         print("traces: viewers get no Trace button, and the list and files answer 403  OK")
+    trace_error_shown()
     print("\nPASS: dashboard (204 refresh, bulk actions, trace files)")
+
+
+def trace_error_shown():
+    users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
+              "pwd_version": 1}]
+    srv = Server({"users": users, "mappings": [m("aaaaaaaaaab1", "Traced", trace_both="t.log")]})
+    with open(os.path.join(srv.data, "traces"), "w", encoding="utf-8") as fh:
+        fh.write("not a folder")
+    with srv:
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        end = time.time() + 10  # the mapping waits for its serial port, its trace can't open
+        while "trace not written" not in (body := b.get("/api/status")[2]):
+            assert time.time() < end, body[-600:]
+            time.sleep(0.2)
+        st, _, page = b.get("/api/mappings/aaaaaaaaaab1/traces")
+        assert st == 200 and "Not recording now: File exists" in page, page[:600]
+        assert "trace not written" in srv.output(), srv.output()[-1500:]
+    print("trace that can't be written: named in the table, the panel and all.log  OK")
 
 
 if __name__ == "__main__":

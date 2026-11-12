@@ -21,6 +21,7 @@ import stat
 import sys
 import threading
 import time
+import traceback
 from typing import Callable, Mapping, Optional
 
 # asyncio.Runner is native on Python 3.11+. On 3.10 use the pure-Python backport
@@ -311,6 +312,27 @@ def _log_loop_errors(loop: asyncio.AbstractEventLoop, log) -> None:
     loop.set_exception_handler(handler)
 
 
+def _log_thread_errors(log) -> None:
+    """A thread that ends with an exception (a trace writer, the port list or Windows
+    hot-plug watcher) is named in all.log too, at most once a minute, not only on stderr,
+    which the Windows service doesn't have: such a thread does nothing from then on.
+    Python's own report still follows on stderr."""
+    say = netguard.LogEvery(log)
+    previous = threading.excepthook
+
+    def hook(args) -> None:
+        if args.exc_type is not SystemExit:  # which ends a thread quietly
+            frames = traceback.extract_tb(args.exc_traceback) if args.exc_traceback else []
+            where = (f" (at {os.path.basename(frames[-1].filename)}:{frames[-1].lineno})"
+                     if frames else "")
+            name = args.thread.name if args.thread is not None else "?"
+            say(f"thread {name!r} stopped by an error: {args.exc_type.__name__}: "
+                f"{args.exc_value}{where}")
+        previous(args)
+
+    threading.excepthook = hook
+
+
 _as_service = False  # set by service_main so _serve can log the service-only warnings
 
 
@@ -343,6 +365,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
+    _log_thread_errors(state.log)
     for lang in i18n.missing_catalogs():
         state.log(f"WARNING: the '{lang}' UI translation is missing from {i18n.LOCALE_DIR} "
                   "— the web UI shows English to visitors who pick it")

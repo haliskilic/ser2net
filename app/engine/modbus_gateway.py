@@ -106,6 +106,11 @@ class ModbusGatewayRunner:
         if self.log:
             self.log(msg)
 
+    @property
+    def tracer(self) -> Optional[Tracer]:
+        """The trace writer while the mapping runs with tracing on."""
+        return self._tracer
+
     # ---- console monitors (watch the raw bus) ----
     def add_monitor(self, mon) -> None:
         self._monitors.add(mon)
@@ -135,7 +140,7 @@ class ModbusGatewayRunner:
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
-        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log, self.status)
         net = self.mapping.network
         # the port is read per transaction; the link only watches for it going away
         self._serial_task = asyncio.create_task(

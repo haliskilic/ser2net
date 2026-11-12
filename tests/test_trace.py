@@ -8,26 +8,35 @@ network bytes appended to it. Checks:
   * a v2.7.1 config with such paths loads unchanged otherwise and says what moved;
   * write() only queues: a slow disk can't stall the caller, and what can't be
     written is reported in the trace instead of silently missing;
-  * rotation keeps at most trace_keep old files of about trace_max_mb each;
+  * rotation keeps at most trace_keep old files of about trace_max_mb each, and never cuts
+    a file in place (a download still reading it gets all of it, also with keep=0);
+  * a file that can't be opened or written pauses the trace instead of ending its writer
+    thread: the status says why, nothing is queued meanwhile, the writer tries again,
+    and the trace then says how many bytes are missing; a removed traces folder is made
+    again; a thread that dies anyway is named in all.log;
   * deleting a mapping deletes its traces.
 Cross-platform; no serial hardware (the runner's serial port doesn't exist).
 
 Run: python3 tests/test_trace.py
 """
 import asyncio
+import contextlib
+import errno
+import io
 import json
 import os
 import shutil
 import socket
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import AppConfig, ConfigError, MappingConfig, MappingOptions, trace_file_name
-from app.engine.bridge import MappingRunner, Tracer, trace_path
+from app.engine.bridge import MappingRunner, RunnerStatus, Tracer, trace_path
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
 
@@ -153,6 +162,140 @@ async def test_tracer_never_blocks(tmp):
           "the loss is written into the trace  OK")
 
 
+async def wait_for(cond, timeout=5.0):
+    end = time.monotonic() + timeout
+    while not cond():
+        if time.monotonic() > end:
+            raise AssertionError("timed out")
+        await asyncio.sleep(0.01)
+
+
+async def test_keep0_never_cuts_in_place(tmp):
+    """keep=0 begins a new file: a reader that opened the old one (a download) still gets
+    every byte it saw (POSIX: the old file is deleted, not cut; Windows: it can't be while
+    open, so the trace goes on in it)."""
+    path = os.path.join(tmp, "k0.log")
+    t = Tracer(path, _Opts(max_mb=0.002, keep=0, hexdump=False))  # ~2 KB per file
+    t.write("ser>net", b"o" * 1000)
+    await wait_for(lambda: os.path.isfile(path) and os.path.getsize(path) > 1000)
+    with open(path, "rb") as reader:
+        seen = os.fstat(reader.fileno()).st_size
+        for _ in range(6):
+            t.write("ser>net", b"n" * 1000)  # passes the size: a new file begins
+        await t.aclose()
+        got = reader.read(seen)
+    assert len(got) == seen and got.endswith(b"o" * 1000 + b"\n"), (len(got), seen)
+    assert os.path.getsize(path) < 4200 and not os.path.exists(path + ".1")
+    print("tracer: keep=0 begins a new file, a reader of the old one gets all of it  OK")
+
+
+class _FailingTracer(Tracer):
+    """A trace whose file can't be opened while `broken` (no file descriptor left)."""
+    RETRY_S = 0.05
+    broken = False
+
+    def _reopen(self):
+        if self.broken:
+            raise OSError(errno.EMFILE, "Too many open files", self.path)
+        return super()._reopen()
+
+
+class _WriteCrashTracer(Tracer):
+    """Its first write fails with an error that is no OSError."""
+    RETRY_S = 0.05
+    crashed = False
+
+    def _write(self, lines):
+        if not self.crashed:
+            self.crashed = True
+            raise RuntimeError("unexpected")
+        super()._write(lines)
+
+
+async def test_tracer_survives_failures(tmp):
+    """Both opens of a rotation fail (the old code then wrote to a closed file, and its
+    writer thread died with every later chunk queued until the mapping restarted)."""
+    path = os.path.join(tmp, "fail.log")
+    logs = []
+    status = RunnerStatus()
+    t = _FailingTracer(path, _Opts(max_mb=0.001, keep=1, hexdump=False),  # ~1 KB per file
+                       log=logs.append, status=status)
+    t.broken = True
+    for _ in range(3):
+        t.write("ser>net", b"a" * 600)  # the second passes the size: the reopen fails
+    await wait_for(lambda: t.error)
+    assert "Too many open files" in t.error and status.trace_error == t.error, t.error
+    assert status.as_dict()["trace_error"] == t.error
+    assert any("trace not written" in ln and "trying again" in ln for ln in logs), logs
+    for _ in range(100):
+        t.write("ser>net", b"b" * 100)  # paused: counted, not queued
+    assert t._queued == 0 and t._q.qsize() == 0, (t._queued, t._q.qsize())
+    assert t._thread.is_alive()
+    t.broken = False
+    await wait_for(lambda: not t.error)  # the writer tried the file again by itself
+    t.write("net>ser", b"after")
+    await t.aclose()
+    assert not t._thread.is_alive() and status.trace_error == ""
+    content = open(path, "rb").read()
+    # the third chunk (lost with the failed rotation, or counted) and the 100 paused ones
+    assert b"10600 bytes not traced (the trace file could not be written)" in content, content
+    assert content.endswith(b"net>ser after\n"), content[-80:]
+    assert any("trace written again" in ln for ln in logs), logs
+    assert sum("trace not written" in ln for ln in logs) == 1, logs  # at most every 10 min
+
+    path = os.path.join(tmp, "crash.log")
+    t = _WriteCrashTracer(path, _Opts(hexdump=False), log=logs.append)
+    t.write("ser>net", b"lost")
+    await wait_for(lambda: t.crashed and not t.error)
+    t.write("ser>net", b"kept")
+    await t.aclose()
+    content = open(path, "rb").read()
+    assert b"4 bytes not traced" in content and content.endswith(b"ser>net kept\n"), content
+    print("tracer: a failed reopen or write pauses the trace (status says why, nothing "
+          "queued), the writer tries again and the trace says what is missing  OK")
+
+
+async def test_tracer_folder_removed(tmp):
+    """The traces folder removed while a trace runs: the next rotation makes it again."""
+    if os.name == "nt":
+        print("tracer: removed traces folder  SKIP (Windows can't remove an open file)")
+        return
+    folder = os.path.join(tmp, "traces")
+    path = os.path.join(folder, "x.log")
+    logs = []
+    t = Tracer(path, _Opts(max_mb=0.001, keep=2, hexdump=False), log=logs.append)
+    t.write("ser>net", b"first")
+    await wait_for(lambda: os.path.getsize(path) > 0)
+    shutil.rmtree(folder)
+    for _ in range(4):
+        t.write("ser>net", b"c" * 600)
+    t.write("net>ser", b"end")
+    await t.aclose()
+    assert not t.error and os.path.isfile(path + ".1"), (t.error, logs)
+    assert open(path, "rb").read().endswith(b"net>ser end\n")
+    if os.name == "posix":
+        assert (os.stat(folder).st_mode & 0o777) == 0o700, oct(os.stat(folder).st_mode)
+    print("tracer: a traces folder removed while tracing is made again (owner only)  OK")
+
+
+def test_thread_errors_logged():
+    from app import runtime
+    logs = []
+    before = threading.excepthook
+    try:
+        runtime._log_thread_errors(logs.append)
+        with contextlib.redirect_stderr(io.StringIO()) as err:  # Python's own report
+            th = threading.Thread(target=lambda: 1 / 0, name="trace:demo")
+            th.start()
+            th.join()
+    finally:
+        threading.excepthook = before
+    assert len(logs) == 1 and "thread 'trace:demo' stopped by an error: ZeroDivisionError" \
+        in logs[0] and "test_trace.py:" in logs[0], logs
+    assert "ZeroDivisionError" in err.getvalue()
+    print("a thread that dies is named in all.log, not only on stderr  OK")
+
+
 async def test_runner_confined(tmp):
     """A mapping whose trace_both points at another file: the runner writes into the
     traces dir only. The serial device doesn't exist; the network side still starts."""
@@ -214,13 +357,19 @@ async def main():
         os.makedirs(os.path.join(tmp, "a"))
         os.makedirs(os.path.join(tmp, "b"))
         os.makedirs(os.path.join(tmp, "c"))
+        for sub in ("d", "e", "f"):
+            os.makedirs(os.path.join(tmp, sub))
         await test_tracer_format_and_rotation(os.path.join(tmp, "a"))
         await test_tracer_never_blocks(os.path.join(tmp, "b"))
+        await test_keep0_never_cuts_in_place(os.path.join(tmp, "d"))
+        await test_tracer_survives_failures(os.path.join(tmp, "e"))
+        await test_tracer_folder_removed(os.path.join(tmp, "f"))
+        test_thread_errors_logged()
         await test_runner_confined(os.path.join(tmp, "c"))
         test_state_files(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print("\nPASS: traces confined to data/traces, off-loop writer, rotation")
+    print("\nPASS: traces confined to data/traces, off-loop writer, rotation, failures")
 
 
 if __name__ == "__main__":

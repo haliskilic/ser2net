@@ -694,7 +694,10 @@ inside aren't readable by other users:
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs
-  are reduced to the file name, which is logged at start-up.
+  are reduced to the file name, which is logged at start-up. A trace that can't be written
+  (folder removed, disk full, no file handle left) pauses instead of stopping: the
+  dashboard row and the Trace panel say why, ser2net tries again every few seconds (making
+  the folder again) and the trace then notes how many bytes are missing.
 - `tls/` — certificate/key if self-signed is generated.
 - `setup-code.txt` — the one-time code for first-run setup through a host name; it exists
   only until the first admin account does.
