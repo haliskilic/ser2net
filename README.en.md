@@ -124,7 +124,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   0.0.0.0) or custom.
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
-  COM number still opens the right device.
+  COM number still opens the right device. Identical adapters without a serial number of
+  their own (CH340, most PL2303) and the channels of a multi-port chip (FT4232H) share one
+  identity: of those the configured port is opened when it is one of them, else one no
+  other mapping has open, and the dashboard says it had to guess. When the bound adapter is
+  not there and its port is now another USB adapter, that one is not opened: the mapping
+  shows `device missing` until the bound adapter is back or the mapping is bound to the new
+  one (untick and tick the box again, then save).
 - **A missing or busy serial device:** the mapping shows `device missing` while the device
   isn't there (unplugged, not enumerated yet) and `reconnecting` right after an open port
   went away or when it can't be opened for another reason; it is tried again every few

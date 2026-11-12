@@ -12,7 +12,7 @@
     </select>
   </label>
   <input type="hidden" name="{{ prefix }}usb_match_shown" value="1">
-  <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.match %}checked{% endif %}> {{ _("Find this device by its USB identity if its name changes") }} <span class="muted">({{ _("COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number") }}{% if s.match %} · {{ _("bound to") }} <span class="mono">{{ s.match.vid }}:{{ s.match.pid }}{% if s.match.serial_number %} [{{ s.match.serial_number }}]{% endif %}</span>{% endif %})</span></label>
+  <label class="chk"><input type="checkbox" name="{{ prefix }}usb_match" {% if s.identity %}checked{% endif %}> {{ _("Find this device by its USB identity if its name changes") }} <span class="muted">({{ _("COMx / ttyUSBx renumbering after re-plugging · VID:PID + serial number") }}{% if s.identity %} · {{ _("bound to") }} <span class="mono">{{ identity_text(s.match) }}</span>{% endif %})</span></label>
   <div class="grid3">
     <label>{{ _("Baud rate") }}
       <select name="{{ prefix }}baudrate" data-custom="{{ prefix }}custom_baud">

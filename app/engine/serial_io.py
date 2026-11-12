@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import sys
 import weakref
 from typing import Any, Optional
 
-from ..config import SerialSettings, url_port
+from ..config import SerialSettings, identity_text, url_port, usb_identity
 from . import portdiag, portlist
 
 # StreamReader high-water for the serial side. The default (64 KB) makes the reader
@@ -24,62 +25,83 @@ from . import portdiag, portlist
 SERIAL_STREAM_LIMIT = 1024 * 1024
 
 
-def _match_port(p: Any, want: dict[str, Any]) -> bool:
-    def hexid(v: Any) -> str | None:
-        return f"{v:04x}" if isinstance(v, int) else None
-
-    if want.get("vid") and hexid(getattr(p, "vid", None)) != str(want["vid"]).lower():
-        return False
-    if want.get("pid") and hexid(getattr(p, "pid", None)) != str(want["pid"]).lower():
-        return False
-    if want.get("serial_number") and getattr(p, "serial_number", None) != want["serial_number"]:
-        return False
-    if want.get("location") and getattr(p, "location", None) != want["location"]:
-        return False
-    return True
-
-
 def _match_listed(p: dict[str, Any], want: dict[str, Any]) -> bool:
-    """_match_port for a port of portlist's list (its IDs are hex strings already)."""
+    """Whether port ``p`` of portlist's list (IDs as hex strings) has the USB identity
+    ``want`` (config.usb_identity: only known keys). A serial number is compared in any
+    letter case (Linux and Windows may read one adapter's apart)."""
     for key in ("vid", "pid"):
         if want.get(key) and (p.get(key) or "") != str(want[key]).lower():
             return False
-    for key in ("serial_number", "location"):
-        if want.get(key) and p.get(key) != want[key]:
-            return False
+    if want.get("serial_number") and (
+            str(p.get("serial_number") or "").casefold() != str(want["serial_number"]).casefold()):
+        return False
+    if want.get("location") and p.get("location") != want["location"]:
+        return False
     return True
+
+
+class ForeignDevice(OSError):
+    """The port a mapping is set to is another USB device now, and the one it is bound to is
+    not there: it is not opened (errno ENODEV: the state is device-missing)."""
+
+
+def _enumerate() -> list[dict[str, Any]]:
+    """The serial ports with their USB identities, enumerated now (blocking)."""
+    from serial.tools import list_ports
+
+    return [portlist._normalize(p) for p in list_ports.comports()]
+
+
+def resolve(settings: SerialSettings,
+            ports: Optional[list[dict[str, Any]]] = None) -> tuple[str, list[str]]:
+    """The device to open for ``settings``, and the ports that have the USB identity it is
+    bound to (sorted; [] for a port opened by its name). ``ports`` is portlist's list; without
+    it the ports are enumerated (blocking).
+
+    Of several ports with that identity (identical adapters without their own serial number,
+    the channels of an FT4232H), the configured port is opened when it is one of them (also
+    through a /dev/serial/by-id or by-path link), else the first one no other mapping of this
+    process has open. When no port has it and the configured port is now another USB device,
+    ForeignDevice is raised instead of opening that one; a configured port that is not there
+    or has no USB identity is opened by its name (and fails as missing when it is not
+    there)."""
+    want = usb_identity(settings.match)
+    if not want:
+        return settings.port, []
+    listed = _enumerate() if ports is None else ports
+    matches = sorted(p["device"] for p in listed if p.get("device") and _match_listed(p, want))
+    if matches:
+        mine = next((d for d in matches if portlist.same_port(settings.port, d)), None)
+        if mine is None:
+            free = [d for d in matches if not portdiag.holder(d)]
+            mine = (free or matches)[0]
+        return mine, matches
+    here = portlist.find(listed, settings.port, resolve=True)
+    if here is not None and here.get("vid"):
+        raise ForeignDevice(
+            errno.ENODEV,
+            f"could not open port {settings.port}: it is another USB device now "
+            f"({identity_text(here)}), not the one this mapping is bound to "
+            f"({identity_text(want)}), so it is not opened; plug that one in, or bind the "
+            "mapping to this one in its form")
+    return settings.port, []
 
 
 def resolve_device(settings: SerialSettings,
                    ports: Optional[list[dict[str, Any]]] = None) -> str:
-    """Return the device path to open, preferring a stable-id match if configured: from
-    ``ports`` (portlist's list) when given, else by enumerating the ports (blocking)."""
-    want = {k: v for k, v in (settings.match or {}).items() if v}
-    if want:
-        if ports is not None:
-            for d in ports:
-                if _match_listed(d, want):
-                    return d["device"]
-        else:
-            from serial.tools import list_ports
-
-            for p in list_ports.comports():
-                if _match_port(p, want):
-                    return p.device
-        # match not currently present -> fall back to the literal path (will error
-        # at open if truly absent, which the supervisor reports as device-missing)
-    return settings.port
+    """The device path to open for ``settings`` (resolve)."""
+    return resolve(settings, ports)[0]
 
 
-async def _resolve(settings: SerialSettings) -> str:
-    """resolve_device without blocking the event loop: from the port list the PortWatcher
-    keeps (fresh within a poll or two), else enumerated in a thread."""
-    if not any((settings.match or {}).values()):
-        return settings.port
+async def _resolve(settings: SerialSettings) -> tuple[str, list[str]]:
+    """resolve without blocking the event loop: from the port list the PortWatcher keeps
+    (fresh within a poll or two), else enumerated in a thread."""
+    if not settings.identity:
+        return settings.port, []
     ports = portlist.recent()
     if ports is not None:
-        return resolve_device(settings, ports)
-    return await asyncio.to_thread(resolve_device, settings)
+        return resolve(settings, ports)
+    return await asyncio.to_thread(resolve, settings)
 
 
 def refuse_url(device: str) -> None:
@@ -124,9 +146,13 @@ async def open_serial(settings: SerialSettings):
     login prompt). A refused RS-485 mode is also taken back, as pyserial keeps it and would
     fail every later change of the port's settings with it (an RFC 2217 client's baud
     rate)."""
-    device = await _resolve(settings)
+    device, matches = await _resolve(settings)
     refuse_url(device)  # the one place every serial port is opened
     found: list[portdiag.Note] = await portdiag.about_port(device)
+    if len(matches) > 1 and not portlist.same_port(settings.port, device):
+        # a guess: identical adapters (no serial number of their own) can't be told apart
+        found.append(portdiag.Note("identity_shared", (
+            identity_text(settings.match), len(matches), device)))
     kwargs: dict[str, Any] = port_settings(settings)
     # `exclusive` is POSIX-only in pyserial; Windows ports are exclusive anyway.
     if sys.platform != "win32":

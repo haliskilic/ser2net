@@ -315,7 +315,11 @@ def _rdev(ser: Any) -> Optional[int]:
 
 def explain(e: BaseException, settings: SerialSettings) -> Optional[portdiag.Note]:
     """portdiag.explain for the device ``settings`` opens (blocking: run it in a thread)."""
-    return portdiag.explain(e, serial_io.resolve_device(settings, portlist.recent()))
+    try:
+        device = serial_io.resolve_device(settings, portlist.recent())
+    except OSError:  # (serial_io.ForeignDevice: nothing to add to its own text)
+        return None
+    return portdiag.explain(e, device)
 
 
 class NoteLog:

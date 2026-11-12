@@ -18,7 +18,7 @@
         data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}">
       <td class="col-name">{% if can_edit %}<input type="checkbox" class="row-select" value="{{ m.id }}" aria-label="{{ _('select %(name)s', name=m.name) }}"> {% endif %}{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">{{ _("disabled") }}</span>{% endif %}</td>
       <td data-label="{{ _('Serial') }}">
-        <div class="mono">{{ m.serial.port|softbreak }}{% if m.serial.match %} <span class="tag" title="{{ _('found by its USB identity %(id)s', id=m.serial.match.vid ~ ':' ~ m.serial.match.pid ~ ((' [' ~ m.serial.match.serial_number ~ ']') if m.serial.match.serial_number else '')) }}">USB-ID</span>{% endif %}</div>
+        <div class="mono">{{ m.serial.port|softbreak }}{% if m.serial.identity %} <span class="tag" title="{{ _('found by its USB identity %(id)s', id=identity_text(m.serial.match)) }}">USB-ID</span>{% endif %}</div>
         {% if st and st.device and st.device != m.serial.port %}<div class="sub mono" title="{{ _('device opened now') }}">→ {{ st.device|softbreak }}</div>{% endif %}
         <div class="sub mono">{{ m.serial.compact() }}{% if m.serial.flowcontrol != 'none' %} · {{ m.serial.flowcontrol }}{% endif %}</div>
       </td>

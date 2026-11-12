@@ -292,6 +292,48 @@ class SerialSettings:
         """ser2net-style compact descriptor, e.g. '9600N81'."""
         return f"{self.baudrate}{self.parity}{self.bytesize}{int(self.stopbits)}"
 
+    @property
+    def identity(self) -> dict[str, Any]:
+        """The USB identity this port is bound to (usb_identity of ``match``), {} if none."""
+        return usb_identity(self.match)
+
+
+# the keys of a serial port's `match` (the USB identity it is bound to) the engine knows;
+# any other key (a typo, "VID") is not used, so it can't make every port match
+MATCH_KEYS = ("vid", "pid", "serial_number", "location")
+
+
+def usb_identity(match: Any) -> dict[str, Any]:
+    """The known keys of a serial port's ``match`` that are set (MATCH_KEYS); {} when none
+    is: the port is opened by its name."""
+    if not isinstance(match, dict):
+        return {}
+    return {k: match[k] for k in MATCH_KEYS if match.get(k)}
+
+
+def identity_text(match: Any) -> str:
+    """A USB identity as the UI shows it: VID:PID [serial number] (@ location)."""
+    want = usb_identity(match)
+    text = f"{want.get('vid', '*')}:{want.get('pid', '*')}"
+    if want.get("serial_number"):
+        text += f" [{want['serial_number']}]"
+    if want.get("location"):
+        text += f" @ {want['location']}"
+    return text
+
+
+_COM_NAME = re.compile(r"(?:\\\\\.\\|//\./)?(COM\d+)", re.I)
+
+
+def canonical_device(name: Any) -> Any:
+    """A serial port name in the form two names of one port have in common, for comparing
+    them (never for storing: what the user set is kept as it is). Windows opens 'com3',
+    'COM3', '\\\\.\\COM3' and '//./COM3' alike, so all are 'COM3'; the name's shape decides,
+    not this machine's OS (a cluster peer's ports are compared here too). Any other name is
+    returned unchanged ('\\\\.\\CNCA0' of com0com keeps its prefix, POSIX paths their case)."""
+    m = _COM_NAME.fullmatch(name) if isinstance(name, str) else None
+    return m.group(1).upper() if m else name
+
 
 def url_port(port: Any) -> bool:
     """True for a serial port value that pyserial would open with a URL handler instead
@@ -1290,6 +1332,15 @@ class AppConfig:
                         f"mapping '{m.name}': its serial port {side.port!r} is a URL, not a "
                         "device; URL ports are no longer opened, so the mapping does not start "
                         "until a serial device is set")
+                odd = sorted(str(k) for k in side.match if k not in MATCH_KEYS) \
+                    if isinstance(side.match, dict) else []
+                if odd:
+                    cfg.load_notes.append(
+                        f"mapping '{m.name}': the USB identity of serial port {side.port!r} "
+                        f"(match) has keys ser2net does not know ({', '.join(odd)}), which are "
+                        f"not used; it knows {', '.join(MATCH_KEYS)}"
+                        + ("" if side.identity else ", and none of them is set, so the port "
+                           "is opened by its name"))
         return cfg
 
     def to_dict(self) -> dict[str, Any]:

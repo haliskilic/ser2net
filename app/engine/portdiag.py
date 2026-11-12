@@ -377,6 +377,12 @@ _TEXTS: dict[str, Callable[..., str]] = {
     "modemmanager": lambda _, name: _(
         "ModemManager may probe {0} (it sends AT commands to new ttyACM devices): a udev rule "
         "that sets ID_MM_DEVICE_IGNORE=1 for it keeps it away").format(name),
+    # a port bound to a USB identity that several connected ports have (serial_io.resolve)
+    "identity_shared": lambda _, ident, n, device: _(
+        "{1} connected ports have the USB identity this port is bound to ({0}), and the "
+        "configured port is not one of them: {2} was opened. Identical adapters without a "
+        "serial number of their own can't be told apart by it: set the port to the "
+        "adapter's name under “By USB socket” (/dev/serial/by-path)").format(ident, n, device),
     "hangups": lambda _, n: _(
         "hung up {0} time(s) while open, and could be reopened at once: another program may "
         "be using this port (a login prompt on it?)").format(n),
