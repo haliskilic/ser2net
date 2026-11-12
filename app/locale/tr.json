@@ -838,5 +838,7 @@
   "Legacy authentication": "Eski kimlik doğrulama",
   "Automatic discovery": "Otomatik keşif",
   "An account named {0} here signs in another way (through the directory or SSO), so you can't sign in under that name like this. Ask an admin to delete that account first.": "Burada {0} adında başka bir yolla (dizin ya da SSO ile) giriş yapan bir hesap var; bu yüzden bu adla bu şekilde giriş yapamazsın. Bir admin'den önce o hesabı silmesini iste.",
-  "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış."
+  "Your other sessions are already signed out.": "Diğer oturumların zaten kapatılmış.",
+  "retrying in %(n)s s": "%(n)s sn sonra yeniden denenecek",
+  "retrying now": "şimdi yeniden deneniyor"
 }

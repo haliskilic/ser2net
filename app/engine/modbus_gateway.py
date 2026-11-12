@@ -135,40 +135,42 @@ class ModbusGatewayRunner:
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
-        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
         net = self.mapping.network
-        # the port is read per transaction; the link only watches for it going away
-        self._serial_task = asyncio.create_task(
-            self._link.run(self._link.hold_open), name=f"modbus-serial:{self.mapping.name}")
+        # the listener first (as MappingRunner.start): a start that fails there has opened
+        # neither the serial port nor a broker connection, so it can be tried again
+        self._server = await netguard.start_server(
+            self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
+            allowed=self._access.allowed, log=self._log)
+        self._log(f"modbus gateway listening on {net.bind_ip}:{net.port}"
+                  f" ({'TLS, ' if net.tls else ''}{sockopts.describe(net)})")
         try:
-            self._server = await netguard.start_server(
-                self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
-                allowed=self._access.allowed, log=self._log)
-            self._log(f"modbus gateway listening on {net.bind_ip}:{net.port}"
-                      f" ({'TLS, ' if net.tls else ''}{sockopts.describe(net)})")
+            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+            self.status.state = "running"  # the serial side reports its own from here on
+            self.status.last_error = ""
+            # the port is read per transaction; the link only watches for it going away
+            self._serial_task = asyncio.create_task(
+                self._link.run(self._link.hold_open), name=f"modbus-serial:{self.mapping.name}")
+            self._log_policy()
+            # optional edge mode: poll Modbus registers off the bus and publish to MQTT
+            # (plain topics, or as a Sparkplug B edge node); writable points take values back
+            if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:
+                mq = self.mapping.mqtt
+                if mq.payload_format == "sparkplug_b":
+                    from .sparkplug_node import SparkplugNode
+                    self._sparkplug = SparkplugNode(self.mapping, self._log, self._write_soon)
+                    self._mqtt = self._sparkplug.publisher()
+                else:
+                    from .mqtt_pub import MqttPublisher
+                    self._mqtt = MqttPublisher(
+                        mq, logger=self._log,
+                        subscriptions=dict.fromkeys(self._set_points, self._on_set_message),
+                        accept_retained=bool(mq.apply_retained_set))
+                self._mqtt.connect()
+                self._poll_task = asyncio.create_task(
+                    self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
         except BaseException:
             await self.stop()
             raise
-        self._log_policy()
-        # optional edge mode: poll Modbus registers off the bus and publish to MQTT
-        # (plain topics, or as a Sparkplug B edge node); writable points take values back
-        if self.mapping.mqtt.enabled and self.mapping.modbus_poll.points:
-            mq = self.mapping.mqtt
-            if mq.payload_format == "sparkplug_b":
-                from .sparkplug_node import SparkplugNode
-                self._sparkplug = SparkplugNode(self.mapping, self._log, self._write_soon)
-                self._mqtt = self._sparkplug.publisher()
-            else:
-                from .mqtt_pub import MqttPublisher
-                self._mqtt = MqttPublisher(
-                    mq, logger=self._log,
-                    subscriptions=dict.fromkeys(self._set_points, self._on_set_message),
-                    accept_retained=bool(mq.apply_retained_set))
-            self._mqtt.connect()
-            self._poll_task = asyncio.create_task(
-                self._poll_loop(), name=f"modbus-poll:{self.mapping.name}")
-        if self.status.state == "stopped":  # the serial side has not reported yet
-            self.status.state = "running"
 
     async def stop(self) -> None:
         self._stop.set()

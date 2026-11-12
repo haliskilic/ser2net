@@ -110,6 +110,11 @@ düzenlemeye gerek yok.
   (+ seri no) ile bağlanır; çıkarılıp takılınca `ttyUSB0`→`ttyUSB1` ya da COM numarası
   değişse de eşleme doğru cihazı açar.
 - **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
+- **Dinleyiciler kendiliğinden açılır:** başlarken adresini kullanamayan bir eşleme
+  (açılışta IP henüz atanmamış ya da port hâlâ dolu) `error` durumunda "N sn sonra yeniden
+  denenecek" gösterir ve çalışana kadar en fazla 30 sn arayla yeniden başlatılır (Durdur
+  bunu bitirir). Seri portu ve MQTT bağlantısı ancak dinleyicisi açıldıktan sonra açılır;
+  denemeler cihaza dokunmaz.
 - **Onlarca eşleme:** tek ekrandan ekle/düzenle/sil/başlat/durdur, canlı durum; arama,
   durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat.
   Tablo yalnızca değiştiğinde yenilenir (titreme yok, seçimler korunur).

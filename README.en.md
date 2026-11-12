@@ -105,6 +105,11 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Find a device by its USB identity:** tick the box in the mapping form and the adapter
   is bound by VID:PID (+ serial number), so re-plugging it as `ttyUSB1` or under another
   COM number still opens the right device.
+- **Listeners come up on their own:** a mapping whose address can't be used when it
+  starts (its IP is not assigned yet at boot, or the port is still taken) shows `error`
+  with "retrying in N s" and is started again, at most 30 s apart, until it works (a Stop
+  ends that). Its serial port and MQTT connection are opened only once its listener is up,
+  so the retries don't touch the device.
 - **Dozens of mappings:** add/edit/delete/start/stop from one screen, with live status;
   search, state filter, sorting and start/stop/restart of the selected mappings. The
   table only redraws when it changed (no flicker, selections stay).
