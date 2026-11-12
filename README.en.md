@@ -735,8 +735,8 @@ so the hour repeated when daylight saving time ends stays apart and a container'
 can't pass for local time. Lines written before 2.9 have no offset; the first 19 characters
 are the same, so old and new lines in one file read alike (in older versions too). Lines in
 trace files keep `YYYY-MM-DD HH:MM:SS` in the server's local time (the panels name its
-zone), backups are named in UTC, and the live hex view shows the browser's time and says
-which zone. A log shipper that matches the old format with a regular expression needs
+zone), backups are named in UTC, and the live hex view shows the server's times in the
+browser's time zone and says which. A log shipper that matches the old format with a regular expression needs
 the optional offset (`[+-]HH:MM`) after the seconds. In Docker the zone is UTC unless `TZ`
 is set ([`docs/DOCKER.md`](docs/DOCKER.md)).
 
