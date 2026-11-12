@@ -202,7 +202,7 @@ def test_only_a_server_start_refreshes():
     bs = load_bootstrap(Scratch.root)
     bs._pip_install = no_pip
     bs.ensure(refresh_lib=False)
-    assert any("next ser2net start" in n for n in bs.notes), bs.notes
+    assert any("next ser2netweb start" in n for n in bs.notes), bs.notes
     bs = load_bootstrap(Scratch.root)
     bs.warn_if_stale()
     assert any("--no-bootstrap" in n for n in bs.notes), bs.notes
@@ -248,7 +248,7 @@ def test_record():
 
 
 def _holder(lib: str):
-    """A process with an extension module of lib/ loaded (a running ser2net), or None
+    """A process with an extension module of lib/ loaded (a running ser2netweb), or None
     when lib/ has none for this platform."""
     exts = [p for p in glob.glob(os.path.join(lib, "**", "*"), recursive=True)
             if p.endswith((".so", ".pyd"))]
@@ -278,7 +278,7 @@ def test_lib_in_use_not_refreshed():
         bs._pip_install = no_pip
         assert bs.lib_in_use(), "the other process's loaded extension is seen"
         assert bs.refresh() is False
-        assert any("not refreshing ./lib" in n and "another ser2net" in n for n in bs.notes)
+        assert any("not refreshing ./lib" in n and "another ser2netweb" in n for n in bs.notes)
         assert bs.main([]) == 1, "python3 bootstrap.py refuses while lib/ is in use"
     finally:
         holder.stdin.close()

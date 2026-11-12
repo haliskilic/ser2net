@@ -1234,7 +1234,7 @@ def _finish(c: _Conn) -> None:
                  "and when it is opened again after the device was lost), not each time a "
                  "client connects"))
     if (start := _privileged_below(net)) is not None:
-        c.note(_("port {0} is below {1}: as ser2net runs now, it can't listen there (Linux "
+        c.note(_("port {0} is below {1}: as ser2netweb runs now, it can't listen there (Linux "
                  "needs the CAP_NET_BIND_SERVICE capability: README, Ports below 1024); give "
                  "it the capability or change the port before enabling the mapping")
                .format(net.get("port"), start))

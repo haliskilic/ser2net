@@ -1,7 +1,7 @@
 """Saving or starting a mapping that then doesn't start says so.
 
 The save answered as if all was well even when the mapping could not start (its port held
-by another program - another ser2net instance on the machine - or its TLS files missing):
+by another program - another ser2netweb instance on the machine - or its TLS files missing):
 only the dashboard row showed it. Checks:
   * a mapping saved on a port another socket listens on: kept in config.json, the form
     closes (empty answer, the table refreshed) and the answer's notice (X-Notice, the

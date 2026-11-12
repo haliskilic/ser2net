@@ -1,6 +1,6 @@
 """Where log records go besides all.log: the console; and other libraries' records.
 
-The console copy of the ser2net log (stdout) is written by a thread of its own
+The console copy of the ser2netweb log (stdout) is written by a thread of its own
 (ConsoleQueueHandler): a console that doesn't take output (a click into a Windows console
 window with QuickEdit on pauses it until Esc or Enter; a paused terminal; a pipe nobody
 reads) must not hold up the event loop, and with it every bridge. A line is still on the
@@ -180,7 +180,7 @@ _CONSOLE_ONLY = ("asyncio",)
 
 
 class LibraryLogHandler(logging.Handler):
-    """On the root logger: a WARNING or ERROR of another library goes to the ser2net log
+    """On the root logger: a WARNING or ERROR of another library goes to the ser2netweb log
     (all.log and the console) as "[WARNING: |ERROR: ]<logger>: <message>", a traceback
     below it, each message at most once per LIBRARY_REPEAT_S (the next one says how many
     were held back: a port scan makes uvicorn warn once per connection)."""
@@ -215,7 +215,7 @@ class LibraryLogHandler(logging.Handler):
         pass  # (stderr may be the console that blocks; the record is lost, nothing else)
 
     def _line(self, record: logging.LogRecord) -> Optional[str]:
-        """The record as a line of the ser2net log, or None while its message is held
+        """The record as a line of the ser2netweb log, or None while its message is held
         back."""
         key = (record.name, str(record.msg)[:200])
         if key not in self._next and len(self._next) >= LIBRARY_KEYS_MAX:
@@ -242,7 +242,7 @@ class LibraryLogHandler(logging.Handler):
 
 
 def route_library_logs(logger: logging.Logger) -> LibraryLogHandler:
-    """Send other libraries' warnings and errors to ``logger`` (the ser2net log), in place
+    """Send other libraries' warnings and errors to ``logger`` (the ser2netweb log), in place
     of a handler a previous call installed."""
     root = logging.getLogger()
     for handler in list(root.handlers):

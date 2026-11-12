@@ -91,7 +91,7 @@ async def metrics_text(state) -> str:
     a web UI session and at /api/v1/metrics to an API token."""
     statuses = state.supervisor.all_status()
     lines = [
-        "# ser2net metrics",
+        "# ser2netweb metrics",
         "ser2net_up 1",
         *process_metrics(state),
         f"ser2net_mappings_total {len(state.config.mappings)}",
@@ -180,9 +180,9 @@ async def metrics_text(state) -> str:
 # The # HELP and # TYPE of each series /metrics answers (text exposition format 0.0.4).
 # The names stay as they are, ser2net_mappings_total too (a gauge despite its suffix).
 METRIC_INFO = {
-    "ser2net_up": ("gauge", "1 while ser2net answers"),
+    "ser2net_up": ("gauge", "1 while ser2netweb answers"),
     "ser2net_build_info": ("gauge", "The version that runs (labels), always 1"),
-    "ser2net_start_time_seconds": ("gauge", "When this ser2net process started (Unix time)"),
+    "ser2net_start_time_seconds": ("gauge", "When this ser2netweb process started (Unix time)"),
     "ser2net_event_loop_lag_seconds": ("gauge", "How late the event loop's last heartbeat "
                                                 "was (a loop that is held up)"),
     "ser2net_event_loop_stalls_total": ("counter", "Heartbeats of the event loop 2 s or more "

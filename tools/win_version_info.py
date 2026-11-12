@@ -16,8 +16,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 COMPANY = "Halis KILIÇ"
-DESCRIPTION = "ser2net — serial-to-network bridge with a web UI"
-PRODUCT = "ser2net"
+DESCRIPTION = "ser2netweb — serial-to-network bridge with a web UI"
+PRODUCT = "ser2netweb"
 ORIGINAL_FILENAME = "ser2net.exe"
 
 
@@ -87,7 +87,7 @@ def main(argv: list[str]) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(render(__version__))
-    print(f"wrote {out} (ser2net {__version__})")
+    print(f"wrote {out} (ser2netweb {__version__})")
     return 0
 
 

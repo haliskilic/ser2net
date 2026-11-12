@@ -73,7 +73,7 @@ def _kind(error) -> str:
 def explain(error, about: str = "") -> str | None:
     """A short sentence, in the page's language, for what `error` (an exception, or the
     text an error left in a status) means and what to do; None for an error it doesn't
-    know. `about`: "serial" (a serial device), "file" (a file ser2net reads or writes),
+    know. `about`: "serial" (a serial device), "file" (a file ser2netweb reads or writes),
     "net" (a connection out); "" decides by the text (a mapping's last error)."""
     if error is None or error == "":
         return None
@@ -108,7 +108,7 @@ def explain(error, about: str = "") -> str | None:
     if kind == "denied":
         if about == "serial":
             return _("No permission to open the serial device: on Linux, add the user "
-                     "ser2net runs as to the dialout group; on Windows, another program "
+                     "ser2netweb runs as to the dialout group; on Windows, another program "
                      "may have the port open.")
         if about == "listen":
             return _("No permission to listen on this port: ports below 1024 need extra "

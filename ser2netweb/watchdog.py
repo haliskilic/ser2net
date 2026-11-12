@@ -178,10 +178,10 @@ class LoopWatchdog:
         with contextlib.suppress(Exception):
             # straight to the file and to stderr: the log's own handlers may be what blocks
             with open(os.path.join(self.data_dir, "all.log"), "a", encoding="utf-8") as fh:
-                fh.write(f"{line} — ser2net exits ({EXIT_CODE}) to be started again; the "
+                fh.write(f"{line} — ser2netweb exits ({EXIT_CODE}) to be started again; the "
                          f"threads' stacks are in {self.hang_log}\n")
         with contextlib.suppress(Exception):
-            print(f"ser2net: {line} — exiting; see {self.hang_log}", file=sys.stderr, flush=True)
+            print(f"ser2netweb: {line} — exiting; see {self.hang_log}", file=sys.stderr, flush=True)
         self._exit(EXIT_CODE)
 
 
@@ -194,7 +194,7 @@ def start(data_dir: str, log: Callable[[str], None],
     dog = LoopWatchdog(data_dir, log, limit)
     dog.start()
     if limit > 0:
-        log(f"event loop watchdog: on — ser2net exits (to be started again) when its event "
+        log(f"event loop watchdog: on — ser2netweb exits (to be started again) when its event "
             f"loop does not run for {limit:g} s ({ENV}=0: off)")
     else:
         log(f"event loop watchdog: off ({ENV}=0)")

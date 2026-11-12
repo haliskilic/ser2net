@@ -12,7 +12,7 @@
     <tr>
       <td class="mono col-name">{{ p.device|softbreak }}{% if p.hardware is false %} <span class="tag">{{ _("no hardware") }}</span>{% endif %}
         {%- for w in p.warnings or [] if w in port_warnings %} <span class="tag tag-warn" title="{{ port_warnings[w][1] }}">{{ port_warnings[w][0] }}</span>{% endfor %}
-        {%- if p.access is false %} <span class="tag tag-warn" title="{{ _('ser2net may not open this port: the account it runs as is not in the group the device belongs to (see Requirements in the README).') }}">{{ _("no access") }}</span>{% endif %}
+        {%- if p.access is false %} <span class="tag tag-warn" title="{{ _('ser2netweb may not open this port: the account it runs as is not in the group the device belongs to (see Requirements in the README).') }}">{{ _("no access") }}</span>{% endif %}
         {%- if p.same_identity %} <span class="tag tag-warn" title="{{ _('%(ports)s have the same USB identity (VID:PID and serial number): “Find this device by its USB identity” can’t tell them apart. Bind such adapters by USB socket (/dev/serial/by-path).', ports=p.same_identity | join(', ')) }}">{{ _("same USB identity") }}</span>{% endif %}
         {%- if p.ambiguous %} <span class="tag tag-warn" title="{{ _('This adapter has no by-id name of its own: an identical one (no serial number of its own, or the same one) shares it, and which of them gets it can change at a reboot or a re-plug. Use its by-path name (its USB socket).') }}">{{ _("by-id not unique") }}</span>{% endif %}
         {% if p.by_id %}<div class="sub mono" title="{{ _('by serial number: survives re-plugging; not unique for identical adapters') }}">{{ p.by_id|softbreak }}</div>{% endif %}

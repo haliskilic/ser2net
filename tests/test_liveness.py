@@ -62,7 +62,7 @@ def test_blocked_loop_exits():
         assert "the event loop did not run for" in hang.splitlines()[0], hang[:200]
         assert "Thread" in hang and "<string>" in hang, hang  # the blocked main thread's stack
         with open(os.path.join(d, "all.log"), encoding="utf-8") as fh:
-            assert "ser2net exits (70) to be started again" in fh.read()
+            assert "ser2netweb exits (70) to be started again" in fh.read()
         assert "the event loop did not run for" in p.stderr
         print(f"blocked event loop: hang.log with the stacks, all.log line, exit 70 after "
               f"{took:.1f} s  OK")

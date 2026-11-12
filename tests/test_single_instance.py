@@ -1,4 +1,4 @@
-"""One ser2net per data directory (ser2netweb.datalock), tested on Linux and Windows alike.
+"""One ser2netweb per data directory (ser2netweb.datalock), tested on Linux and Windows alike.
 
 A second instance on the same data directory would save its own config.json over the
 first's and lose its edits. runtime.main() takes an exclusive lock on <data>/ser2net.lock
@@ -171,7 +171,7 @@ def test_a_start_waits_for_a_brief_holder():
         except SystemExit as e:
             assert "already running with the data directory" in str(e.code), e.code
         assert time.monotonic() - t < 5, "an ordinary holder must be refused without the wait"
-        print("... and refuses, saying so, when it takes too long; another ser2net is refused "
+        print("... and refuses, saying so, when it takes too long; another ser2netweb is refused "
               "at once  OK")
     finally:
         datalock.BRIEF_WAIT_S = saved

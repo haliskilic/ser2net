@@ -3,7 +3,7 @@
 Endpoints are discovered from the issuer's /.well-known/openid-configuration. The
 returned id_token is validated — signature via the issuer's JWKS, plus iss / aud /
 exp / nonce, its times with CLOCK_SKEW_S of tolerance — using authlib.jose (do NOT
-hand-roll JWT validation). A claim (groups_claim) maps to a ser2net role, reusing the
+hand-roll JWT validation). A claim (groups_claim) maps to a ser2netweb role, reusing the
 LDAP group→role logic (whole group names only: ldap_auth.group_matches).
 
 The code request carries PKCE (S256; the verifier travels in the signed state cookie).
@@ -29,7 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .. import optional
+from .. import optional, user_agent
 from ..config import external_name
 from .ldap_auth import role_for_groups  # shared group/claim -> role mapping
 
@@ -137,7 +137,8 @@ def _opener() -> urllib.request.OpenerDirector:
 
 
 def _get_json(url: str, timeout: float = 8):
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})  # noqa: S310 - https (secure_url)
+    req = urllib.request.Request(  # noqa: S310 - https (secure_url)
+        url, headers={"Accept": "application/json", "User-Agent": user_agent()})
     with _opener().open(req, timeout=timeout) as r:
         return json.loads(r.read())
 
@@ -146,7 +147,8 @@ def _post_form(url: str, data: dict, timeout: float = 8):
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(url, data=body, method="POST",  # noqa: S310 - https (secure_url)
                                  headers={"Content-Type": "application/x-www-form-urlencoded",
-                                          "Accept": "application/json"})
+                                          "Accept": "application/json",
+                                          "User-Agent": user_agent()})
     try:
         with _opener().open(req, timeout=timeout) as r:
             return json.loads(r.read())

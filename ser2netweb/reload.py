@@ -1,5 +1,5 @@
-"""Reading config.json again while ser2net runs: SIGHUP (POSIX: `systemctl reload ser2net`,
-`kill -HUP`, `docker kill -s HUP`), `ser2net --reload` (any platform, the Windows service
+"""Reading config.json again while ser2netweb runs: SIGHUP (POSIX: `systemctl reload ser2net`,
+`kill -HUP`, `docker kill -s HUP`), `ser2netweb --reload` (any platform, the Windows service
 too) and Settings -> Configuration backups -> Reload.
 
 The file is read as at start-up (the typed reader and its load notes) and checked as an edit
@@ -155,7 +155,7 @@ def _refusals(cur: AppConfig, new: AppConfig) -> tuple[list[str], dict[str, Any]
         problems.append(f"the mapping id {mid} is used more than once")
     if cur.users and not new.users:
         problems.append("it has no user accounts: the first-run setup page would be open to "
-                        "anyone who can reach the UI (restart ser2net to begin afresh)")
+                        "anyone who can reach the UI (restart ser2netweb to begin afresh)")
     elif cur.usable_admin_count() and not new.usable_admin_count():
         problems.append("no admin could sign in afterwards (LDAP/OIDC accounts need their "
                         "sign-in method on)")
@@ -163,7 +163,7 @@ def _refusals(cur: AppConfig, new: AppConfig) -> tuple[list[str], dict[str, Any]
         old = cur.get_mapping(m.id)
         if old is None or old.to_dict() != m.to_dict():
             # what an edit of the mapping is held to as well: its own rules, its TLS files
-            # and MQTT TLS files (they must load), and nothing that clashes with ser2net's
+            # and MQTT TLS files (they must load), and nothing that clashes with ser2netweb's
             # own ports, a serial port another mapping uses, the admin UI's TLS key or what
             # another enabled mapping uses on its MQTT broker (ops.edit_conflict)
             try:

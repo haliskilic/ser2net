@@ -1,10 +1,10 @@
-"""Run ser2net as a Windows service, with the Windows API itself (ctypes) — neither
+"""Run ser2netweb as a Windows service, with the Windows API itself (ctypes) — neither
 pywin32 nor a wrapper program (NSSM, Shawl) is needed.
 
     ser2net.exe --install-service [--data-dir DIR] [--service-name NAME] [--reconfigure]
     ser2net.exe --uninstall-service [--service-name NAME]
 
-``--install-service`` registers ser2net to start at boot as LocalSystem, restart 5 s
+``--install-service`` registers ser2netweb to start at boot as LocalSystem, restart 5 s
 after it dies or exits with an error, and starts it. A standalone exe copies itself to
 %ProgramFiles%\\ser2net first and runs from there; a new service keeps its data in
 %ProgramData%\\ser2net. Both folders are left to SYSTEM and Administrators alone: nobody
@@ -231,7 +231,7 @@ def split_command_line(cmd: str) -> list[str]:
 
 def parse_service_command(cmd: str) -> Optional[dict]:
     """What a registered command line says (executable, script, --service-name, --data-dir,
-    --config), or None when it isn't one ser2net installed (no --service)."""
+    --config), or None when it isn't one ser2netweb installed (no --service)."""
     argv = split_command_line(cmd or "")
     if "--service" not in argv:
         return None
@@ -362,7 +362,7 @@ def admin_only(owner: Optional[str], aces) -> bool:
 def service_folder(owner: Optional[str], aces) -> bool:
     """Pure decision (any OS): a folder as --install-service leaves a service's data
     directory, or one inheriting from it: admin_only(), and no OWNER RIGHTS entry.
-    lock_down_dir() leaves it as it is (its grant for the account running ser2net would
+    lock_down_dir() leaves it as it is (its grant for the account running ser2netweb would
     let that account's unelevated programs change what the service runs). A folder made
     private to the account that created it — Python's mkdir(mode=0o700) gives SYSTEM,
     Administrators and OWNER RIGHTS — is that account's own, even when an elevated
@@ -926,7 +926,7 @@ def _check_adoptable(data_dir: str, config_path: str) -> None:
             sec = read_security(p)
             if sec is not None and foreign_owner(sec[0], me):
                 raise ServiceError(
-                    f"{p} belongs to {sid_name(sec[0])}, not to an administrator, so ser2net "
+                    f"{p} belongs to {sid_name(sec[0])}, not to an administrator, so ser2netweb "
                     f"won't take over {data_dir}: someone else may have put a configuration "
                     f"there. Check it; if it is yours, take it over (takeown /f \"{root}\" /r "
                     f"/d y, then icacls \"{root}\" /setowner *{ADMINS_SID} /t /c), otherwise "
@@ -1033,7 +1033,7 @@ def install(name: str, data_dir: Optional[str] = None, config: Optional[str] = N
             previous = _query_registration(api, svc)
             registered = parse_service_command(previous.binary_path)
             if registered is None:
-                raise ServiceError(f"A service named '{name}' exists but doesn't run ser2net "
+                raise ServiceError(f"A service named '{name}' exists but doesn't run ser2netweb "
                                    f"({previous.binary_path}). Pick another --service-name.")
         elif _win.get_last_error() != ERROR_SERVICE_DOES_NOT_EXIST:
             raise _fail("Opening the service")
@@ -1403,7 +1403,7 @@ def run(name: str, main: Callable[[], int], stop: Callable[[], None],
     if not api.dll.StartServiceCtrlDispatcherW(table):
         if _win.get_last_error() == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT:
             raise ServiceError("--service is used by the Windows Service Control Manager. Run "
-                               "ser2net without it, or install the service with --install-service.")
+                               "ser2netweb without it, or install the service with --install-service.")
         raise _fail("Connecting to the Service Control Manager")
     return result["code"]
 

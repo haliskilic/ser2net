@@ -1,5 +1,5 @@
 {% extends "_shell.html" %}
-{% block title %}{% if node_name %}{{ node_name }} · {% endif %}{{ _("Settings") }} — ser2net{% endblock %}
+{% block title %}{% if node_name %}{{ node_name }} · {% endif %}{{ _("Settings") }} — ser2netweb{% endblock %}
 {% block main %}
 {% set is_admin = me and me.role == 'admin' %}
 {% set is_operator = me and me.role in ['operator', 'admin'] %}
@@ -29,7 +29,7 @@
 {{ r }} ({% if r == 'admin' %}{{ _("everything") }}{% elif r == 'operator' %}{{ _("manage mappings") }}{% else %}{{ _("read-only") }}{% endif %})
 {%- endmacro %}
 {% macro package_problem(p, what) -%}
-<div class="banner warn">{% if p.missing and p.frozen %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is missing from this executable, which should contain it; please report this. Local accounts still work.', what=what, package=p.dist) }}{% elif p.missing %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is not installed, so it won’t work until you install it: <span class="mono">%(command)s</span>. Local accounts still work.', what=what, package=p.dist, command=p.hint) }}{% else %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is installed and failed to import, so it won’t work until that is fixed and ser2net restarted. Local accounts still work. The error: <span class="mono">%(error)s</span>', what=what, package=p.dist, error=p.error) }}{% if p.override %} {{ _('%(name)s loads modules from <span class="mono">%(folder)s</span> first; check the copy there.', name=p.override_env, folder=p.override) }}{% endif %}{% endif %}</div>
+<div class="banner warn">{% if p.missing and p.frozen %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is missing from this executable, which should contain it; please report this. Local accounts still work.', what=what, package=p.dist) }}{% elif p.missing %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is not installed, so it won’t work until you install it: <span class="mono">%(command)s</span>. Local accounts still work.', what=what, package=p.dist, command=p.hint) }}{% else %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is installed and failed to import, so it won’t work until that is fixed and ser2netweb restarted. Local accounts still work. The error: <span class="mono">%(error)s</span>', what=what, package=p.dist, error=p.error) }}{% if p.override %} {{ _('%(name)s loads modules from <span class="mono">%(folder)s</span> first; check the copy there.', name=p.override_env, folder=p.override) }}{% endif %}{% endif %}</div>
 {%- endmacro %}
 
 <section class="panel panel-narrow" id="account">
@@ -65,15 +65,15 @@
   {{ feedback('admin-interface') }}
   <p>{{ _('Listening on <span class="mono">%(address)s</span>', address=serving_address) }}
      {% if serving_tls %}<span class="tag">TLS</span>{% else %}<span class="tag">HTTP</span>{% endif %}</p>
-  {% if pending_address %}<div class="banner warn">{{ _('config.json sets <span class="mono">%(address)s</span>: the admin UI moves there when ser2net starts again.', address=pending_address) }}</div>{% endif %}
+  {% if pending_address %}<div class="banner warn">{{ _('config.json sets <span class="mono">%(address)s</span>: the admin UI moves there when ser2netweb starts again.', address=pending_address) }}</div>{% endif %}
   {% if pending_tls %}<div class="banner warn">{{ _('The admin TLS settings saved are used from the next start.') }}</div>{% endif %}
   {% if public_url %}<p>{{ _('Published as <a class="mono" href="%(url)s">%(url)s</a> (Settings → Reverse proxy)', url=public_url) }}</p>{% endif %}
   {% if address_hint == 'env' %}
-  <p class="muted">{{ _('The address comes from <span class="mono">SER2NETWEB_BIND_IP</span> / <span class="mono">SER2NETWEB_PORT</span> (for a container: its environment), which win over config.json at every start: change them there and start ser2net (the container) again.') }}</p>
+  <p class="muted">{{ _('The address comes from <span class="mono">SER2NETWEB_BIND_IP</span> / <span class="mono">SER2NETWEB_PORT</span> (for a container: its environment), which win over config.json at every start: change them there and start ser2netweb (the container) again.') }}</p>
   {% elif address_hint == 'service' %}
   <p class="muted">{{ _('To change the address, run <span class="mono">%(command)s</span> from an elevated prompt: it stops the service, asks for the address and starts the service again.', command=address_command) }}</p>
   {% else %}
-  <p class="muted">{{ _('To change the address, stop ser2net and start it as the account it runs as with <span class="mono">%(command)s</span>, which asks for the address; or change <span class="mono">admin_ui.bind_ip</span> / <span class="mono">port</span> in config.json and restart ser2net.', command=address_command) }}</p>
+  <p class="muted">{{ _('To change the address, stop ser2netweb and start it as the account it runs as with <span class="mono">%(command)s</span>, which asks for the address; or change <span class="mono">admin_ui.bind_ip</span> / <span class="mono">port</span> in config.json and restart ser2netweb.', command=address_command) }}</p>
   {% endif %}
   {% if is_admin %}
   {% with admin = submitted.node or admin %}
@@ -88,7 +88,7 @@
   {% endwith %}
   {% endif %}
   <p>{{ _('Server time: <span class="mono">%(utc)s UTC</span> · local <span class="mono">%(local)s</span> (%(zone)s)', utc=server_utc, local=server_local[:19], zone=server_zone()) }}</p>
-  {% if clock_behind %}<div class="banner warn">{% if clock_behind.what == 'backup' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the newest configuration backup (%(when)s UTC): it is probably wrong, or it was ahead when that backup was made.", now=server_utc, when=clock_behind.when) }}{% elif clock_behind.what == 'config' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the last change to config.json (%(when)s UTC): it is probably wrong.", now=server_utc, when=clock_behind.when) }}{% else %}{{ _("The server’s clock reads %(now)s UTC, before this version of ser2net was made (%(when)s): it is wrong.", now=server_utc, when=clock_behind.when[:10]) }}{% endif %} {{ _("Logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. ser2net never sets the clock: set it on the server, or let its time sync (NTP) do it.") }}</div>{% endif %}
+  {% if clock_behind %}<div class="banner warn">{% if clock_behind.what == 'backup' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the newest configuration backup (%(when)s UTC): it is probably wrong, or it was ahead when that backup was made.", now=server_utc, when=clock_behind.when) }}{% elif clock_behind.what == 'config' %}{{ _("The server’s clock reads %(now)s UTC, earlier than the last change to config.json (%(when)s UTC): it is probably wrong.", now=server_utc, when=clock_behind.when) }}{% else %}{{ _("The server’s clock reads %(now)s UTC, before this version of ser2netweb was made (%(when)s): it is wrong.", now=server_utc, when=clock_behind.when[:10]) }}{% endif %} {{ _("Logs, the audit log and backups get wrong times, and sign-ins and certificate checks can fail. ser2netweb never sets the clock: set it on the server, or let its time sync (NTP) do it.") }}</div>{% endif %}
   <div class="banner warn" data-clock-skew hidden></div>
 </section>
 
@@ -173,7 +173,7 @@
     <label>{{ _("Delete log and audit records and configuration backups older than (days)") }} <span class="muted">({{ _("0 = only the size limits, the default · up to %(max)s", max=log_days_max) }})</span>
       <input type="number" name="log_max_age_days" min="0" max="{{ log_days_max }}" value="{{ log_days }}" required>
     </label>
-    <p class="muted">{{ _("Off by default: all.log (10 MB × 6 files), audit.log (5 MB × 2) and the newest 50 configuration backups are kept within their sizes however old they are, and a mapping’s log keeps 15 days (always its last 1000 lines). With a number of days, all.log and audit.log begin a new file once their first record is a fifth of that old and delete a file once its first record is older (so at least four fifths of the period stay, sizes allowing; audit.log then keeps up to 6 files), a mapping’s log keeps no more days than that, and older backups go, but never the newest %(min)s. Checked at once and then every hour; a clock set ahead while ser2net runs deletes nothing early. The copy of the log on the standard output (Docker, journald) has its own limits.", min=backups_min) }}</p>
+    <p class="muted">{{ _("Off by default: all.log (10 MB × 6 files), audit.log (5 MB × 2) and the newest 50 configuration backups are kept within their sizes however old they are, and a mapping’s log keeps 15 days (always its last 1000 lines). With a number of days, all.log and audit.log begin a new file once their first record is a fifth of that old and delete a file once its first record is older (so at least four fifths of the period stay, sizes allowing; audit.log then keeps up to 6 files), a mapping’s log keeps no more days than that, and older backups go, but never the newest %(min)s. Checked at once and then every hour; a clock set ahead while ser2netweb runs deletes nothing early. The copy of the log on the standard output (Docker, journald) has its own limits.", min=backups_min) }}</p>
     <button class="btn" type="submit">{{ _("Save") }}</button>
   </form>
   {% endwith %}
@@ -283,11 +283,11 @@
 <section class="panel panel-narrow" id="ldap">
   <div class="panel-head"><h2>LDAP / Active Directory</h2></div>
   {{ feedback('ldap') }}
-  <p class="muted mb-sm">{{ _('Authenticate users against a directory; their group membership maps to a ser2net role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).') }} {{ _('Setup for Active Directory and OpenLDAP: <span class="mono">docs/SSO.md</span>.') }}</p>
+  <p class="muted mb-sm">{{ _('Authenticate users against a directory; their group membership maps to a ser2netweb role. Local accounts above keep working. Needs <span class="mono">ldap3</span> (optional).') }} {{ _('Setup for Active Directory and OpenLDAP: <span class="mono">docs/SSO.md</span>.') }}</p>
   {% if ldap_problem %}{{ package_problem(ldap_problem, _("LDAP sign-in")) }}{% endif %}
   {% if ldap.enabled and ldap_tls_problem %}{{ tls_problem(ldap_tls_problem) }}{% endif %}
-  {% if ldap.enabled and ldap.uses_tls and not ldap.tls_verify %}<div class="banner warn">{{ _('The directory server’s certificate is not checked: anyone on the network between ser2net and the directory could read the passwords and sign in as anyone. Set the CA certificate file below and untick “Don’t check the server certificate” as soon as you can.') }}</div>
-  {% elif ldap.enabled and ldap.sends_plaintext %}<div class="banner warn">{{ _('Passwords go to the directory unencrypted (ldap:// without StartTLS): anyone on the network between ser2net and the directory can read them. Use ldaps:// or tick StartTLS.') }}</div>{% endif %}
+  {% if ldap.enabled and ldap.uses_tls and not ldap.tls_verify %}<div class="banner warn">{{ _('The directory server’s certificate is not checked: anyone on the network between ser2netweb and the directory could read the passwords and sign in as anyone. Set the CA certificate file below and untick “Don’t check the server certificate” as soon as you can.') }}</div>
+  {% elif ldap.enabled and ldap.sends_plaintext %}<div class="banner warn">{{ _('Passwords go to the directory unencrypted (ldap:// without StartTLS): anyone on the network between ser2netweb and the directory can read them. Use ldaps:// or tick StartTLS.') }}</div>{% endif %}
   {% for w in group_warnings.ldap %}{{ group_warning(w) }}{% endfor %}
   {% with ldap = submitted.ldap or ldap %}
   <form method="post" action="{{ base }}/settings/ldap" class="authform">
@@ -324,11 +324,11 @@
       </label>
     </div>
     <div class="grid3">
-      <label>{{ _("Admin group") }} <input type="text" name="ldap_admin_group" value="{{ ldap.admin_group }}" placeholder="ser2net-admins"></label>
-      <label>{{ _("Operator group") }} <input type="text" name="ldap_operator_group" value="{{ ldap.operator_group }}" placeholder="ser2net-operators"></label>
-      <label>{{ _("Viewer group") }} <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2net-viewers"></label>
+      <label>{{ _("Admin group") }} <input type="text" name="ldap_admin_group" value="{{ ldap.admin_group }}" placeholder="ser2netweb-admins"></label>
+      <label>{{ _("Operator group") }} <input type="text" name="ldap_operator_group" value="{{ ldap.operator_group }}" placeholder="ser2netweb-operators"></label>
+      <label>{{ _("Viewer group") }} <input type="text" name="ldap_viewer_group" value="{{ ldap.viewer_group }}" placeholder="ser2netweb-viewers"></label>
     </div>
-    <p class="muted">{{ _('A group setting is the whole name of one group, in any letter case (Turkish İ/ı too): its name (the CN, such as <span class="mono">ser2net-admins</span>) or its full DN. Part of a name, such as <span class="mono">admins</span> for ser2net-admins, doesn’t match.') }}</p>
+    <p class="muted">{{ _('A group setting is the whole name of one group, in any letter case (Turkish İ/ı too): its name (the CN, such as <span class="mono">ser2netweb-admins</span>) or its full DN. Part of a name, such as <span class="mono">admins</span> for ser2netweb-admins, doesn’t match.') }}</p>
     <input type="hidden" name="ldap_nested_groups_shown" value="1">
     <label class="chk"><input type="checkbox" name="ldap_nested_groups" {% if ldap.nested_groups %}checked{% endif %}> {{ _("Also count nested groups (Active Directory: groups the user is in through another group)") }}</label>
     <button class="btn primary" type="submit">{{ _("Save LDAP") }}</button>
@@ -339,12 +339,12 @@
 <section class="panel panel-narrow" id="oidc">
   <div class="panel-head"><h2>{{ _("Single sign-on (OIDC)") }}</h2></div>
   {{ feedback('oidc') }}
-  <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2net role. Needs <span class="mono">authlib</span> (optional).') }} {{ _('Keycloak, Entra ID and Google settings: <span class="mono">docs/SSO.md</span>.') }}</p>
+  <p class="muted mb-sm">{{ _('OpenID Connect SSO (Keycloak, Entra ID, Google, Okta…). A claim maps to a ser2netweb role. Needs <span class="mono">authlib</span> (optional).') }} {{ _('Keycloak, Entra ID and Google settings: <span class="mono">docs/SSO.md</span>.') }}</p>
   {% if oidc_problem %}{{ package_problem(oidc_problem, _("Single sign-on (OIDC)")) }}{% endif %}
   <p class="mb-sm" id="oidc-redirect" data-uri="{{ oidc_redirect_uri }}"{% if oidc_redirect_auto %} data-auto{% endif %}>{{ _("Redirect URI to register at the identity provider:") }} <span class="mono">{{ oidc_redirect_uri }}</span>
     <span class="muted">({% if oidc_redirect_public %}{{ _("Redirect URI below is blank, so it is made from the public URL (Settings → Reverse proxy)") }}{% elif oidc_redirect_auto %}{{ _("Redirect URI below is blank, so it is made from the address in this page’s request") }}{% else %}{{ _("as set below") }}{% endif %})</span></p>
   {% if (oidc_redirect_auto or oidc_redirect_public) and oidc_redirect_http %}<div class="banner warn">{{ _("This redirect URI starts with http://: most identity providers accept http:// only for localhost. Use HTTPS (Admin TLS, or a reverse proxy with TLS) and register the https:// address.") }}</div>{% endif %}
-  <div class="banner warn" id="oidc-redirect-mismatch" hidden>{{ _('This browser has the page at another address, for which the redirect URI is <span class="mono" data-browser-uri></span>: a reverse proxy in between changed the address ser2net sees. If users sign in at this browser’s address, enter that value as Redirect URI below and register it at the identity provider.') }}</div>
+  <div class="banner warn" id="oidc-redirect-mismatch" hidden>{{ _('This browser has the page at another address, for which the redirect URI is <span class="mono" data-browser-uri></span>: a reverse proxy in between changed the address ser2netweb sees. If users sign in at this browser’s address, enter that value as Redirect URI below and register it at the identity provider.') }}</div>
   {% for w in group_warnings.oidc %}{{ group_warning(w) }}{% endfor %}
   {% with oidc = submitted.oidc or oidc %}
   <form method="post" action="{{ base }}/settings/oidc" class="authform">
@@ -365,11 +365,11 @@
     </div>
     <p class="muted mb-sm">{{ _('Both are read from the ID token only, as top-level claims: Keycloak needs a mapper with “Add to ID token” (its realm roles are nested and can’t be read), and Entra ID sends the groups’ Object IDs, which are what the group settings below then name.') }}</p>
     <div class="grid3">
-      <label>{{ _("Admin group") }} <input type="text" name="oidc_admin_group" value="{{ oidc.admin_group }}" placeholder="ser2net-admins"></label>
+      <label>{{ _("Admin group") }} <input type="text" name="oidc_admin_group" value="{{ oidc.admin_group }}" placeholder="ser2netweb-admins"></label>
       <label>{{ _("Operator group") }} <input type="text" name="oidc_operator_group" value="{{ oidc.operator_group }}"></label>
       <label>{{ _("Viewer group") }} <input type="text" name="oidc_viewer_group" value="{{ oidc.viewer_group }}"></label>
     </div>
-    <p class="muted">{{ _('A group setting is the whole name of one group as the provider sends it, in any letter case (Turkish İ/ı too); of a path, the last part is enough: <span class="mono">ser2net-admins</span> matches <span class="mono">/team/ser2net-admins</span>. Part of a name, such as <span class="mono">admins</span> for ser2net-admins, doesn’t match.') }}</p>
+    <p class="muted">{{ _('A group setting is the whole name of one group as the provider sends it, in any letter case (Turkish İ/ı too); of a path, the last part is enough: <span class="mono">ser2netweb-admins</span> matches <span class="mono">/team/ser2netweb-admins</span>. Part of a name, such as <span class="mono">admins</span> for ser2netweb-admins, doesn’t match.') }}</p>
     <label>{{ _("Default role") }} <span class="muted">({{ _("if no group matched") }})</span>
       <select name="oidc_default_role">
         <option value="" {% if not oidc.default_role %}selected{% endif %}>{{ _("— deny login —") }}</option>
@@ -384,7 +384,7 @@
 <section class="panel panel-narrow" id="cluster-settings">
   <div class="panel-head"><h2>{{ _("LAN cluster") }}</h2></div>
   {{ feedback('cluster-settings') }}
-  <p class="muted mb-sm">{{ _('Discover other ser2net nodes on the local network (signed UDP broadcast — no mDNS) and show every node’s mappings in one table on the dashboard, each row tagged with its host (name + IP). Set the <em>same shared key</em> on every node so they trust each other; with the key, operators can start/stop/restart a peer’s mappings from the unified view. This node’s ID: <span class="mono">%(id)s</span>.', id=instance_id[:8]) }}</p>
+  <p class="muted mb-sm">{{ _('Discover other ser2netweb nodes on the local network (signed UDP broadcast — no mDNS) and show every node’s mappings in one table on the dashboard, each row tagged with its host (name + IP). Set the <em>same shared key</em> on every node so they trust each other; with the key, operators can start/stop/restart a peer’s mappings from the unified view. This node’s ID: <span class="mono">%(id)s</span>.', id=instance_id[:8]) }}</p>
   {% for c in cluster_copies %}
   <div class="banner warn">{{ _("Another node uses this node’s identity: %(name)s at %(addr)s — probably a copy of this installation (its data folder, disk or VM image). Give one of the two a new identity (below).", name=c.name, addr=c.addr) }}</div>
   {% endfor %}
@@ -465,7 +465,7 @@
         'data_back': _("Data from that device again"),
         'peer_offline': _("Cluster node offline (not heard from, or a configured peer that doesn’t answer)"),
         'peer_back': _("Cluster node back"),
-        'service_started': _("ser2net started (which mappings run)"),
+        'service_started': _("ser2netweb started (which mappings run)"),
         'unit_offline': _("Modbus unit stopped answering (a gateway's polling: no reply to any of its points in 3 polls in a row)"),
         'unit_back': _("Modbus unit answering again"),
       } %}
@@ -534,10 +534,10 @@
 <section class="panel panel-narrow" id="tls">
   <div class="panel-head"><h2>{{ _("Admin TLS (HTTPS)") }}</h2></div>
   {{ feedback('tls') }}
-  <p class="muted mb-sm">{{ _("Encrypts this management UI. A change applies to new connections at once (the files are read when you save, and again when ser2net reloads config.json); connections already open keep theirs.") }}</p>
+  <p class="muted mb-sm">{{ _("Encrypts this management UI. A change applies to new connections at once (the files are read when you save, and again when ser2netweb reloads config.json); connections already open keep theirs.") }}</p>
   {% set cert = tls_certificate %}
-  {% if cert and cert.problem == 'unreadable' %}<div class="banner warn">{{ _("The certificate file can’t be read (%(error)s): ser2net can’t start with TLS until it can.", error=cert.detail) }}</div>
-  {% elif cert and cert.problem == 'not_pem' %}<div class="banner warn">{{ _("The certificate file holds no PEM certificate: ser2net can’t start with TLS like this.") }}</div>
+  {% if cert and cert.problem == 'unreadable' %}<div class="banner warn">{{ _("The certificate file can’t be read (%(error)s): ser2netweb can’t start with TLS until it can.", error=cert.detail) }}</div>
+  {% elif cert and cert.problem == 'not_pem' %}<div class="banner warn">{{ _("The certificate file holds no PEM certificate: ser2netweb can’t start with TLS like this.") }}</div>
   {% elif cert and cert.problem %}<p class="muted mb-sm">{{ _('Install the <span class="mono">cryptography</span> package to see the certificate’s details here.') }}</p>
   {% elif cert %}
   <p class="mb-sm">{{ _('Certificate: <span class="mono">%(subject)s</span>', subject=cert.subject|softbreak) }}{% if cert.self_signed %} <span class="tag">{{ _("self-signed") }}</span>{% endif %}
@@ -574,9 +574,9 @@
   {% with admin = submitted.proxy or admin %}
   <form method="post" action="{{ base }}/settings/proxy" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <label>{{ _("Public URL") }} <span class="muted">({{ _("the address users open, such as https://ser2net.example.com, or https://gw.example.com/ser2net to serve the UI under that path too · blank: none") }})</span>
+    <label>{{ _("Public URL") }} <span class="muted">({{ _("the address users open, such as https://ser2netweb.example.com, or https://gw.example.com/ser2netweb to serve the UI under that path too · blank: none") }})</span>
       {% if public_url_env %}<input type="url" value="{{ public_url }}" disabled>
-      {% else %}<input type="url" name="public_url" value="{{ admin.public_url }}" placeholder="https://ser2net.example.com" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
+      {% else %}<input type="url" name="public_url" value="{{ admin.public_url }}" placeholder="https://ser2netweb.example.com" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
     {% if public_url_env %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name=public_url_env) }}</p>{% endif %}
     <label>{{ _("Trusted proxies") }} <span class="muted">({{ _("IP addresses or networks of the proxies, such as 127.0.0.1 or 172.18.0.0/16 · blank: none") }})</span>
       {% if trusted_env %}<input type="text" value="{{ trusted[0]|join(' ') }}" disabled>
@@ -630,7 +630,7 @@
   </form>
   {% endif %}
   <h3 class="mt-sm">{{ _("More tokens") }}</h3>
-  <p class="muted mb-sm">{{ _('Give each client its own token: a read-only one for monitoring, one that may change mappings for automation. Each has a name — the audit log shows it as <span class="mono">api-token:NAME</span> — a role and, if you like, an expiry; revoking one leaves the others working. The token above works as before. When a token was last used is known since ser2net started.') }}</p>
+  <p class="muted mb-sm">{{ _('Give each client its own token: a read-only one for monitoring, one that may change mappings for automation. Each has a name — the audit log shows it as <span class="mono">api-token:NAME</span> — a role and, if you like, an expiry; revoking one leaves the others working. The token above works as before. When a token was last used is known since ser2netweb started.') }}</p>
   {% if api_token_rows %}
   <div class="table-scroll">
   <table class="grid th-wrap">
@@ -726,7 +726,7 @@
   <form method="post" action="{{ base }}/settings/config/import" enctype="multipart/form-data" class="authform">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
     <input type="hidden" name="step" value="preview">
-    <label>{{ _("Mappings file") }} <span class="muted">({{ _('a ser2net export or config.json — or a classic ser2net <span class="mono">ser2net.yaml</span> / <span class="mono">ser2net.conf</span> to migrate from') }})</span>
+    <label>{{ _("Mappings file") }} <span class="muted">({{ _('a ser2netweb export or config.json — or a classic ser2net <span class="mono">ser2net.yaml</span> / <span class="mono">ser2net.conf</span> to migrate from') }})</span>
       <input type="file" name="file" accept="application/json,.json,.yaml,.yml,.conf,text/plain" required>
     </label>
     <label class="chk"><input type="radio" name="mode" value="merge" checked> {{ _("Merge — update mappings with the same name, add the others, keep the rest") }}</label>
@@ -744,16 +744,16 @@
   <div class="panel-head"><h2>{{ _("Configuration backups") }}</h2></div>
   {{ feedback('backups') }}
   <p class="muted mb-sm">{{ _('Every change keeps the <span class="mono">config.json</span> it writes in the data folder’s <span class="mono">backups/</span>, and the one it replaces if that isn’t there yet (the newest 50; the one in use is marked), so the current configuration is kept there too, also when an older version takes over. Starting or stopping a mapping takes no backup of its own (the newest one is updated), so it doesn’t push out the backups of real changes. Restoring one brings back its mappings and settings after showing what changes for sign-in and access; the user accounts, the REST API token and the cluster key stay as they are unless you restore them too. A restore can be undone. Backups contain password hashes and secrets: only admins see them, and a download leaves out the session key.') }}</p>
-  {% if outside_edit %}<div class="banner warn">{{ _('config.json was changed outside ser2net (%(time)s) and is not in use: reload it to apply it. A change saved here before that replaces it; the edited file is then kept in the backups below.', time=outside_edit) }}</div>{% endif %}
-  {% if outside_gone %}<div class="banner warn">{{ _('config.json is gone from the data folder: ser2net goes on with the configuration in use and writes it again at the next change.') }}</div>{% endif %}
-  {% if replaced_edit and replaced_edit.backup %}<div class="banner warn">{{ _('A change saved at %(saved)s replaced a config.json edited outside ser2net (%(edited)s). The edited file is kept as <span class="mono">%(backup)s</span>: <a href="%(link)s">restore it</a> to use it.', saved=replaced_edit.saved, edited=replaced_edit.edited, backup=replaced_edit.backup, link=base ~ '/settings?restore=' ~ replaced_edit.backup ~ '#backups') }}</div>
-  {% elif replaced_edit %}<div class="banner warn">{{ _('A change saved at %(saved)s replaced a config.json edited outside ser2net (%(edited)s); its backup could not be written (all.log says why).', saved=replaced_edit.saved, edited=replaced_edit.edited) }}</div>{% endif %}
+  {% if outside_edit %}<div class="banner warn">{{ _('config.json was changed outside ser2netweb (%(time)s) and is not in use: reload it to apply it. A change saved here before that replaces it; the edited file is then kept in the backups below.', time=outside_edit) }}</div>{% endif %}
+  {% if outside_gone %}<div class="banner warn">{{ _('config.json is gone from the data folder: ser2netweb goes on with the configuration in use and writes it again at the next change.') }}</div>{% endif %}
+  {% if replaced_edit and replaced_edit.backup %}<div class="banner warn">{{ _('A change saved at %(saved)s replaced a config.json edited outside ser2netweb (%(edited)s). The edited file is kept as <span class="mono">%(backup)s</span>: <a href="%(link)s">restore it</a> to use it.', saved=replaced_edit.saved, edited=replaced_edit.edited, backup=replaced_edit.backup, link=base ~ '/settings?restore=' ~ replaced_edit.backup ~ '#backups') }}</div>
+  {% elif replaced_edit %}<div class="banner warn">{{ _('A change saved at %(saved)s replaced a config.json edited outside ser2netweb (%(edited)s); its backup could not be written (all.log says why).', saved=replaced_edit.saved, edited=replaced_edit.edited) }}</div>{% endif %}
   <form method="post" action="{{ base }}/settings/config/reload" class="authform mb-sm">
     <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
-    <p class="muted mb-sm">{{ _('<span class="mono">config.json</span> changed by hand or by a tool (Ansible …) is used once ser2net reads it again: here, with <span class="mono">ser2net --reload</span>, or on Linux with SIGHUP (<span class="mono">systemctl reload ser2net</span>). Mappings whose settings didn’t change keep running with their clients; certificate files are read again. A file that doesn’t validate changes nothing (all.log says why); a new admin UI address waits for the next start.') }}</p>
+    <p class="muted mb-sm">{{ _('<span class="mono">config.json</span> changed by hand or by a tool (Ansible …) is used once ser2netweb reads it again: here, with <span class="mono">ser2netweb --reload</span>, or on Linux with SIGHUP (<span class="mono">systemctl reload ser2net</span>). Mappings whose settings didn’t change keep running with their clients; certificate files are read again. A file that doesn’t validate changes nothing (all.log says why); a new admin UI address waits for the next start.') }}</p>
     <button class="btn" type="submit">{{ _("Reload config.json") }}</button>
   </form>
-  {% if newer_writer %}<div class="banner warn">{{ _('At start-up, config.json had been written by ser2net %(newer)s, a newer version than this one (%(this)s). What only that version knows is not used here, and it is left out when this version saves config.json. The backups below keep the file as that version left it: restore it after upgrading again.', newer=newer_writer, this=app_version) }}</div>{% endif %}
+  {% if newer_writer %}<div class="banner warn">{{ _('At start-up, config.json had been written by ser2netweb %(newer)s, a newer version than this one (%(this)s). What only that version knows is not used here, and it is left out when this version saves config.json. The backups below keep the file as that version left it: restore it after upgrading again.', newer=newer_writer, this=app_version) }}</div>{% endif %}
   {% if unknown_keys %}<div class="banner warn">{{ _('At start-up, config.json had settings this version doesn’t know: %(keys)s. They are not used here, and they are left out when config.json is saved; the backups below keep the file with them.', keys=(unknown_keys[:10] | join(', ')) ~ (' …' if unknown_keys | length > 10 else '')) }}</div>{% endif %}
   {% if restore_preview %}
   {% set rp = restore_preview %}
@@ -786,7 +786,7 @@
     {% for bk in backups %}
       <tr>
         <td class="mono">{{ bk.time }}</td>
-        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}<br><span class="muted">{{ _("written by ser2net %(version)s", version=bk.written_by) if bk.written_by else _("written by 2.8.1 or older") }}</span>{% if bk.file_time %}<br><span class="muted">{{ _("saved at %(time)s UTC, when the clock was behind the newest backup", time=bk.file_time) }}</span>{% endif %}{% if bk.current %} <span class="tag">{{ _("in use") }}</span>{% endif %}
+        <td>{{ _("%(mappings)s mappings, %(users)s users", mappings=bk.mappings if bk.mappings is not none else '?', users=bk.users if bk.users is not none else '?') }}<br><span class="muted">{{ _("written by ser2netweb %(version)s", version=bk.written_by) if bk.written_by else _("written by 2.8.1 or older") }}</span>{% if bk.file_time %}<br><span class="muted">{{ _("saved at %(time)s UTC, when the clock was behind the newest backup", time=bk.file_time) }}</span>{% endif %}{% if bk.current %} <span class="tag">{{ _("in use") }}</span>{% endif %}
           {% if bk.accounts %}<details class="muted"><summary>{{ _("Accounts") }}</summary><span class="mono">{% for a in bk.accounts %}{{ a.username }} ({{ a.role }}{% if a.source != 'local' %}, {{ a.source|upper }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}</span></details>{% endif %}</td>
         <td class="col-actions">
           <div class="row-actions">

@@ -1,4 +1,4 @@
-# ser2net — serial-to-network bridge with a web admin UI.
+# ser2netweb — serial-to-network bridge with a web admin UI.
 # Build:  docker build -t ser2net .
 # Run:    docker compose up -d (docker-compose.yml), or the `docker run` command in
 #         docs/DOCKER.md: restart policy, mapping ports, serial devices, log limits.
@@ -39,10 +39,10 @@ RUN set -e; \
         pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements-lock.txt; \
     fi
 
-# ser2net runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
+# ser2netweb runs as this unprivileged account (tools/docker-entrypoint.sh drops to it;
 # it also takes over a /data volume that an older, root-running image wrote). /data is
 # private from the start, so a new volume is that also with a folder mounted inside it
-# (ser2net locks only a data directory that holds nothing but its own files).
+# (ser2netweb locks only a data directory that holds nothing but its own files).
 RUN groupadd --system --gid 10001 ser2net \
  && useradd --system --uid 10001 --gid ser2net --home-dir /data --no-create-home \
       --shell /usr/sbin/nologin ser2net \

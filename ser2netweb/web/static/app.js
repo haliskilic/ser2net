@@ -1,4 +1,4 @@
-// ser2net admin UI — minimal vanilla JS (no framework, CSP-friendly).
+// ser2netweb admin UI — minimal vanilla JS (no framework, CSP-friendly).
 
 // UI texts in the page's language (base.html puts them on <body data-i18n>)
 var I18N = (function () {
@@ -336,7 +336,7 @@ window.addEventListener("load", function () {
 });
 
 // 2e) Settings → Single sign-on: with no Redirect URI set, the one shown is made from
-//     the address the request reached ser2net with. When a reverse proxy changed that
+//     the address the request reached ser2netweb with. When a reverse proxy changed that
 //     address, show the redirect URI for this browser's address too.
 document.addEventListener("DOMContentLoaded", function () {
   var shown = document.querySelector("#oidc-redirect[data-auto]");

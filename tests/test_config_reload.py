@@ -1,4 +1,4 @@
-"""config.json read again while ser2net runs: SIGHUP (POSIX), `ser2net --reload` and
+"""config.json read again while ser2netweb runs: SIGHUP (POSIX), `ser2netweb --reload` and
 Settings -> Configuration backups -> Reload config.json.
 
   * an edit made by hand is applied part by part: an unchanged mapping keeps running with
@@ -10,11 +10,11 @@ Settings -> Configuration backups -> Reload config.json.
     changes nothing: the log says why, the client stays;
   * a changed admin UI address is reported as waiting for the next start (Settings too),
     the UI keeps listening where it does;
-  * `ser2net --reload` reloads the running instance (any platform) and fails when none
+  * `ser2netweb --reload` reloads the running instance (any platform) and fails when none
     runs; the Settings button reloads, admins only;
   * an unchanged TLS mapping reads its renewed certificate files for new connections
     (cryptography makes them);
-  * an edit made outside ser2net is noticed (all.log, Settings); a save made before it is
+  * an edit made outside ser2netweb is noticed (all.log, Settings); a save made before it is
     reloaded goes ahead (never refused), keeps the edited file in backups/ and names it
     (all.log, the audit log, Settings with a restore link);
   * a backup restore is applied the same way (an unchanged mapping keeps its client).
@@ -106,7 +106,7 @@ def reload_lines(srv, after: int) -> list[str]:
 def sighup(srv, mark: int) -> str:
     srv.proc.send_signal(signal.SIGHUP)
     wait(lambda: reload_lines(srv, mark), "the reload's log line")
-    assert srv.proc.poll() is None, "SIGHUP must not end ser2net"
+    assert srv.proc.poll() is None, "SIGHUP must not end ser2netweb"
     return reload_lines(srv, mark)[-1]
 
 
@@ -199,7 +199,7 @@ def test_reload() -> None:
         assert names(srv) == ["A", "B2", "D"], names(srv)
         assert clients(srv, "a1") == 1
         print("hand edit + reload: unchanged A keeps its client, B restarted on its new port, "
-              "C gone, D listens; SIGHUP keeps ser2net running  OK")
+              "C gone, D listens; SIGHUP keeps ser2netweb running  OK")
 
         b = Browser(srv.base)
         b.login("admin", PW)
@@ -253,12 +253,12 @@ def test_reload() -> None:
               "admin only  OK")
 
         code, out = cli_reload(srv.data)
-        assert code == 0 and out.startswith("ser2net: config.json reloaded: ") and \
-            "(done by the running ser2net)" in out, out
+        assert code == 0 and out.startswith("ser2netweb: config.json reloaded: ") and \
+            "(done by the running ser2netweb)" in out, out
         with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
             audit = fh.read()
         assert "config_reload" in audit and "config_reload_refused" in audit, audit[-1500:]
-        print("ser2net --reload: the running instance reloads (exit 0); audit records  OK")
+        print("ser2netweb --reload: the running instance reloads (exit 0); audit records  OK")
         data, log = srv.data, srv.output()
         assert "Traceback" not in log, log[-3000:]
     finally:
@@ -269,7 +269,7 @@ def test_reload() -> None:
     try:
         code, out = cli_reload(data)
         assert code == 1 and "not running" in out, out
-        print("ser2net --reload without a running instance: exit 1, nothing to reload  OK")
+        print("ser2netweb --reload without a running instance: exit 1, nothing to reload  OK")
     finally:
         shutil.rmtree(srv.tmp, ignore_errors=True)
 
@@ -331,7 +331,7 @@ def test_mapping_tls_renewal() -> None:
 
 
 def test_terminal_hangup() -> None:
-    """Started in a terminal: `kill -HUP` reloads, the terminal closing ends ser2net cleanly
+    """Started in a terminal: `kill -HUP` reloads, the terminal closing ends ser2netweb cleanly
     (the kernel's SIGHUP to the session it leads)."""
     if not (HAS_SIGHUP and sys.platform.startswith("linux")):
         print("SKIP: the terminal hang-up part needs a Linux pseudo-terminal")
@@ -361,10 +361,10 @@ def test_terminal_hangup() -> None:
         master = -1
         proc.wait(timeout=20)
         out = srv.output()
-        assert "SIGHUP: the terminal ser2net was started in was closed — shutting down" in out \
+        assert "SIGHUP: the terminal ser2netweb was started in was closed — shutting down" in out \
             and "shutting down — stopping all mappings" in out, out[-1500:]
         assert proc.returncode == 0, proc.returncode
-        print("in a terminal: the terminal closing ends ser2net cleanly (exit 0)  OK")
+        print("in a terminal: the terminal closing ends ser2netweb cleanly (exit 0)  OK")
     finally:
         if master >= 0:
             os.close(master)
@@ -372,7 +372,7 @@ def test_terminal_hangup() -> None:
 
 
 def test_outside_edit_store() -> None:
-    """ConfigStore: an edit made outside ser2net is seen (not a touch), and a save that
+    """ConfigStore: an edit made outside ser2netweb is seen (not a touch), and a save that
     replaces it keeps it in backups/ and reports it, also a start/stop's save."""
     from ser2netweb.config import AppConfig, ConfigStore
 
@@ -402,7 +402,7 @@ def test_outside_edit_store() -> None:
     assert info and info["backup"] and reported == [info], (info, reported)
     with open(os.path.join(store.backup_dir, info["backup"]), encoding="utf-8") as fh:
         assert fh.read() == edited, "the edited file is kept"
-    assert any(ln.startswith("WARNING: config.json had been changed outside ser2net") and
+    assert any(ln.startswith("WARNING: config.json had been changed outside ser2netweb") and
                os.path.join("backups", info["backup"]) in ln for ln in lines), lines
     # a start or stop (backup=False) keeps an outside edit too
     with open(path, "w", encoding="utf-8") as fh:
@@ -431,26 +431,26 @@ def test_outside_edit_server() -> None:
         cfg = srv.saved_config()
         cfg["external_users_expire_days"] = 30
         write_config(srv, cfg)
-        wait(lambda: "WARNING: config.json was changed outside ser2net (" in srv.output(),
+        wait(lambda: "WARNING: config.json was changed outside ser2netweb (" in srv.output(),
              "the notice in all.log", 15)
         st, _, page = b.get("/settings")
-        assert "config.json was changed outside ser2net (" in page and "is not in use" in page
+        assert "config.json was changed outside ser2netweb (" in page and "is not in use" in page
         # a change saved here before a reload: goes ahead, keeps and names the edited file
         st, _, page = b.post("/settings/retention", {"trace_max_age_days": "5",
                                                      "log_max_age_days": "0"})
         assert st == 200, st
         assert srv.saved_config().get("external_users_expire_days") != 30
         log = srv.output()
-        assert "WARNING: config.json had been changed outside ser2net (" in log, log[-1500:]
+        assert "WARNING: config.json had been changed outside ser2netweb (" in log, log[-1500:]
         st, _, page = b.get("/settings")
-        assert "replaced a config.json edited outside ser2net" in page, page[-3000:]
+        assert "replaced a config.json edited outside ser2netweb" in page, page[-3000:]
         name = page.split('/settings?restore=')[1].split('#')[0]
         with open(os.path.join(srv.data, "backups", name), encoding="utf-8") as fh:
             assert json.load(fh)["external_users_expire_days"] == 30
         with open(os.path.join(srv.data, "audit.log"), encoding="utf-8") as fh:
             audit = fh.read()
         assert "config_outside_edit_replaced" in audit and name in audit, audit[-800:]
-        assert "config.json was changed outside ser2net (" not in page
+        assert "config.json was changed outside ser2netweb (" not in page
         print("server: an outside edit is noted in all.log and Settings; a save made before a "
               "reload goes ahead, keeps the edited file (named in all.log, the audit log and "
               "Settings, with a restore link)  OK")
@@ -460,11 +460,11 @@ def test_outside_edit_server() -> None:
         write_config(srv, cfg)
         st, _, page = b.post("/settings/config/reload", {})
         assert "config.json was read again and applied" in page
-        assert "outside ser2net" not in page, "a reloaded file is the one in use"
+        assert "outside ser2netweb" not in page, "a reloaded file is the one in use"
         st, _, page = b.post("/settings/retention", {"trace_max_age_days": "6",
                                                      "log_max_age_days": "0"})
         assert srv.saved_config()["external_users_expire_days"] == 31
-        assert srv.output().count("WARNING: config.json had been changed outside ser2net") == 1
+        assert srv.output().count("WARNING: config.json had been changed outside ser2netweb") == 1
         print("server: once reloaded, the file is the one in use: later saves keep its "
               "changes and report nothing  OK")
     finally:

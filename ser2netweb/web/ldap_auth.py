@@ -1,7 +1,7 @@
 """Optional LDAP / Active Directory authentication, layered on the RBAC model.
 
 A user authenticates by binding to the directory; their group membership maps to a
-ser2net role. On success a 'shadow' local User (source='ldap', no password) is
+ser2netweb role. On success a 'shadow' local User (source='ldap', no password) is
 upserted so the rest of the system — sessions, role checks, the Users panel — works
 uniformly; the role is refreshed from LDAP groups on every login.
 
@@ -35,13 +35,13 @@ IN_CHAIN_RULE = "1.2.840.113556.1.4.1941"
 # names one group, and only its whole name matches — never a part of it. Letter case and
 # extra spaces don't count (fold). It matches a group the directory or the identity
 # provider reports when it is
-#   * the same text: a full DN, compared RDN by RDN (cn=ser2net-admins,ou=groups,
+#   * the same text: a full DN, compared RDN by RDN (cn=ser2netweb-admins,ou=groups,
 #     dc=corp,dc=local), or the value exactly as the provider sends it;
-#   * the group's own name: the value of a DN's first RDN (ser2net-admins), the last
-#     segment of a path (Keycloak sends /team/ser2net-admins) or the part after a
+#   * the group's own name: the value of a DN's first RDN (ser2netweb-admins), the last
+#     segment of a path (Keycloak sends /team/ser2netweb-admins) or the part after a
 #     DOMAIN\ prefix (AD FS);
-#   * the leading RDNs of the DN (cn=ser2net-admins,ou=groups) or the trailing segments
-#     of a path (team/ser2net-admins); a setting starting with / is the whole path.
+#   * the leading RDNs of the DN (cn=ser2netweb-admins,ou=groups) or the trailing segments
+#     of a path (team/ser2netweb-admins); a setting starting with / is the whole path.
 GROUP_SETTINGS = (("admin_group", "admin"), ("operator_group", "operator"),
                   ("viewer_group", "viewer"))
 
@@ -169,7 +169,7 @@ def role_decision(groups, settings) -> RoleDecision:
 
 
 def role_for_groups(groups, settings) -> str | None:
-    """Highest ser2net role granted by a user's groups, or None to deny (the user
+    """Highest ser2netweb role granted by a user's groups, or None to deny (the user
     authenticated but is in no mapped group and no default_role is set)."""
     return role_decision(groups, settings).role
 
@@ -239,10 +239,10 @@ def _tls(settings, ldap3):
 
 
 _VERIFY_FAILED = re.compile(r"certificate verify failed: (.+?)(?: \(_ssl\.c:\d+\)|$)")
-_RECOVERY = ("Local accounts still sign in; if no admin can, `ser2net --set-password NAME` "
+_RECOVERY = ("Local accounts still sign in; if no admin can, `ser2netweb --set-password NAME` "
              "with a new NAME creates a local admin account.")
 _INSECURE = ("Not checking the certificate (ldap.tls_verify: false) is insecure: anyone on "
-             "the network between ser2net and the directory could read the passwords.")
+             "the network between ser2netweb and the directory could read the passwords.")
 
 
 def tls_failure(exc) -> str | None:

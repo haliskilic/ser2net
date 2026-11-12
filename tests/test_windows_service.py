@@ -55,7 +55,7 @@ def test_command_line():
     assert cmd == ('C:\\Python312\\python.exe C:\\src\\ser2netweb.py --service --service-name plant-2 '
                    '--data-dir D:\\s2n\\ --config "D:\\cfg dir\\c.json"'), cmd
     assert winservice._quote('a "b"\\') == '"a \\"b\\"\\\\"'
-    for bad in ("", "a b", "x" * 65, "a/b", "ser2net;calc"):
+    for bad in ("", "a b", "x" * 65, "a/b", "ser2netweb;calc"):
         try:
             winservice.check_name(bad)
         except winservice.ServiceError:
@@ -508,7 +508,7 @@ def test_install_flow_with_a_fake_scm():
 
         # 4. loading the configuration stops the install: the service is started again
         def broken(path):
-            raise SystemExit("ser2net: config.json is not a valid configuration")
+            raise SystemExit("ser2netweb: config.json is not a valid configuration")
         scm = FakeSCM([], existing_cmd=old_cmd)
         try:
             run(scm, prepare=broken)
@@ -887,7 +887,7 @@ def test_real_service():
 
         p = subprocess.run(base + ["--data-dir", data, "--set-password", "admin"],
                            input="svc-pass-2\n", capture_output=True, text=True, timeout=120)
-        assert p.returncode == 0 and "done by the running ser2net" in p.stdout, p.stdout + p.stderr
+        assert p.returncode == 0 and "done by the running ser2netweb" in p.stdout, p.stdout + p.stderr
         Browser(f"http://127.0.0.1:{port}").login("admin", "svc-pass-2")
         # the request folder the (elevated) command made: SYSTEM may read and delete what
         # is in it, no other account has an entry (its owner is whatever the token gives)
@@ -941,7 +941,7 @@ def test_real_service():
         p = subprocess.run(base + ["--data-dir", data, "--set-password", "admin"],
                            input="svc-pass-3\n", capture_output=True, text=True, timeout=120)
         assert p.returncode == 0 and "new password set" in p.stdout, p.stdout + p.stderr
-        assert "done by the running ser2net" not in p.stdout, p.stdout
+        assert "done by the running ser2netweb" not in p.stdout, p.stdout
         sec = winservice.read_security(data)
         assert sec is not None and winservice.service_folder(*sec), read_security_text(data)
         for path in (os.path.join(data, "config.json"), os.path.join(data, "backups")):

@@ -1,7 +1,7 @@
-"""Configuration data model + atomic JSON persistence for ser2net.
+"""Configuration data model + atomic JSON persistence for ser2netweb.
 
 The model is deliberately split into explicit typed fields (borrowed from
-ser2net's connection model) rather than gensio stack-strings, so the web UI can
+the classic ser2net's connection model) rather than gensio stack-strings, so the web UI can
 present every option directly and validate it.
 
 Persistence is plain stdlib JSON with an atomic write (tempfile -> fsync ->
@@ -179,7 +179,7 @@ def lock_down_dir(directory: str) -> None:
 
 def lock_down_file(path: str) -> None:
     """Restrict one file to its owner, for config.json in a folder lock_down_dir() is not
-    applied to (ConfigStore: a folder that isn't ser2net's own). POSIX: chmod 0600.
+    applied to (ConfigStore: a folder that isn't ser2netweb's own). POSIX: chmod 0600.
     Windows: inherited ACEs removed, Full for the current user, SYSTEM and Administrators.
     Best effort, as lock_down_dir(); a file a service's --install-service left admin-only
     is left as it is."""
@@ -211,7 +211,7 @@ def _icacls_private(path: str, grants: list[str]) -> None:
         subprocess.run(cmd, capture_output=True, timeout=15, check=False)
 
 
-# What ser2net itself puts in its data directory (the folder of config.json, which may have
+# What ser2netweb itself puts in its data directory (the folder of config.json, which may have
 # another name with --config): all.log and audit.log with their rotated copies, logs/,
 # traces/, backups/, tls/ (a generated certificate), admin-requests/ (ser2netweb/accounts.py), the
 # instance lock (ser2netweb/datalock.py), setup-code.txt (ser2netweb/state.py), the Sparkplug B bdSeq
@@ -227,7 +227,7 @@ _OWN_NAME = re.compile(r"(?:all|audit)\.log(?:\.\d+|\.tmp)?|(?:hang|service)\.lo
 
 
 def foreign_entries(directory: str, config_name: str = "config.json") -> Optional[list[str]]:
-    """The names in `directory` that ser2net doesn't put there itself (sorted; [] for a data
+    """The names in `directory` that ser2netweb doesn't put there itself (sorted; [] for a data
     directory of its own), or None when it can't be listed."""
     try:
         names = os.listdir(directory)
@@ -894,13 +894,13 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 def port_problem(port: Any) -> str:
     """Why ``port`` can't be set as a mapping's serial port ("" when it can). One permissive
     rule for every edit (a path typed in the form, the REST API, an import, a cluster peer):
-    a URL is refused (url_port: ser2net opens serial devices only), and so is a name with a
+    a URL is refused (url_port: ser2netweb opens serial devices only), and so is a name with a
     control character in it (a pasted line break); device paths (/dev/..., a link to one,
     any absolute path), Windows names (COM3, \\\\.\\CNCA0) and a placeholder for a port
     found by its USB identity ("auto") pass. Never checked by validate(): a stored port must
     keep loading (a URL one is refused when it is opened, see engine/serial_io.refuse_url)."""
     if url_port(port):
-        return _("Serial port {0} is a URL, not a device: ser2net opens serial devices only "
+        return _("Serial port {0} is a URL, not a device: ser2netweb opens serial devices only "
                  "(URLs such as socket:// or spy:// are not supported).").format(port)
     if isinstance(port, str) and _CONTROL_CHARS.search(port):
         return _("Serial port {0} has a control character in it (a line break?): type the "
@@ -2472,8 +2472,8 @@ class AdminUI:
     # Admin TLS.
     hsts_max_age: int = HSTS_MAX_AGE_DEFAULT
     # Behind a reverse proxy (Settings -> Reverse proxy; ser2netweb/web/proxy.py). public_url: the
-    # address users open, such as https://ser2net.example.com, or with a path the UI is then
-    # also served under (https://gw.example.com/ser2net); '' = none. trusted_proxies: the
+    # address users open, such as https://ser2netweb.example.com, or with a path the UI is then
+    # also served under (https://gw.example.com/ser2netweb); '' = none. trusted_proxies: the
     # addresses / networks whose X-Forwarded-For and X-Forwarded-Proto are believed; none by
     # default. proxy_hsts: HSTS (hsts_max_age) also on HTTPS requests through a proxy.
     public_url: str = ""
@@ -2651,7 +2651,7 @@ def _public_url_parts(value: str):
     a public URL, or the problem (a str) with it."""
     text = value.strip()
     bad = _("The public URL must be an http:// or https:// address with a host name, such "
-            "as https://ser2net.example.com.")
+            "as https://ser2netweb.example.com.")
     if any(c.isspace() or ord(c) < 32 or c == "\\" for c in text) or not text.isascii():
         return bad
     if "?" in text or "#" in text:
@@ -2678,7 +2678,7 @@ def _public_url_parts(value: str):
     segments = path.split("/")[1:] if path else []
     if any(not _URL_PATH_SEGMENT.fullmatch(s) or s in (".", "..") for s in segments):
         return _("The public URL’s path may only have letters, digits and . _ ~ - between "
-                 "its slashes, such as /ser2net.")
+                 "its slashes, such as /ser2netweb.")
     if segments and segments[0].lower() in RESERVED_PATHS:
         return _("The public URL’s path can’t start with /{0}: that is a page of this UI.") \
             .format(segments[0])
@@ -2692,7 +2692,7 @@ def public_url_problem(value: Any) -> str | None:
     name, query or fragment."""
     if not isinstance(value, str):
         return _("The public URL must be an http:// or https:// address with a host name, "
-                 "such as https://ser2net.example.com.")
+                 "such as https://ser2netweb.example.com.")
     if not value.strip():
         return None
     parts = _public_url_parts(value)
@@ -2796,7 +2796,7 @@ ROLE_RANK = {"viewer": 1, "operator": 2, "admin": 3}
 @dataclass
 class LdapSettings:
     """LDAP / Active Directory authentication. Users authenticate by binding to the
-    directory; their group membership maps to a ser2net role. Two bind modes:
+    directory; their group membership maps to a ser2netweb role. Two bind modes:
       - direct: user_dn_template (e.g. 'uid={username},ou=people,dc=ex,dc=com' or the
         AD UPN '{username}@corp.local'); the credentials bind as that DN. An AD sign-in
         name (user@domain, DOMAIN\\user) isn't a DN: the account is then found by
@@ -2865,7 +2865,7 @@ class LdapSettings:
 class OidcSettings:
     """OpenID Connect single sign-on (authorization-code flow). Endpoints are
     discovered from the issuer's /.well-known/openid-configuration. A claim
-    (groups_claim) maps to a ser2net role, like the LDAP group mapping: a group setting
+    (groups_claim) maps to a ser2netweb role, like the LDAP group mapping: a group setting
     is the whole value, or its last part (/team/name, DOMAIN\\name)."""
     enabled: bool = False
     issuer: str = ""                 # e.g. https://accounts.google.com or a Keycloak realm URL
@@ -3038,7 +3038,7 @@ class NotificationSettings:
     device disappears or comes back, a mapping fails to start, clients connect or
     disconnect, a sign-in fails, the data disk is almost full, a device sends nothing
     (a mapping's no-data alarm), a cluster node goes offline, a polled Modbus unit stops or
-    starts answering again, or ser2net has started. Off by default; the same event for the
+    starts answering again, or ser2netweb has started. Off by default; the same event for the
     same mapping is sent at most once per repeat_s."""
     enabled: bool = False
     events: list[str] = field(default_factory=lambda: list(NOTIFY_DEFAULT_EVENTS))
@@ -3377,7 +3377,7 @@ class AppConfig:
         if isinstance(writer, str) and _newer_version(writer, __version__):
             cfg.newer_writer = writer[:40]
             cfg.load_notes.append(
-                f"config.json was written by ser2net {cfg.newer_writer}, a newer version than "
+                f"config.json was written by ser2netweb {cfg.newer_writer}, a newer version than "
                 f"this one ({__version__}): what only {cfg.newer_writer} knows is not used here "
                 "and is left out when this version saves config.json. backups/ keeps the file "
                 f"as {cfg.newer_writer} left it: restore it there after upgrading again")
@@ -3419,7 +3419,7 @@ class AppConfig:
                 cfg.load_notes.append(
                     f"user {u.username!r}: totp_secret is not a base32 secret of at least 16 "
                     "characters, so no two-factor code matches it and the account can't sign "
-                    f"in. `ser2net --set-password {u.username}` sets a new password and turns "
+                    f"in. `ser2netweb --set-password {u.username}` sets a new password and turns "
                     "two-factor sign-in off")
         for names in (n for n in spellings.values() if len(n) > 1):
             cfg.load_notes.append(
@@ -3463,7 +3463,7 @@ class AppConfig:
             raw_options = raw_options if isinstance(raw_options, dict) else {}
             old = str(raw_options.get("trace_both") or "").strip()
             # before 2.8 (written without trace_max_mb) a trace was a path: a bare name was a
-            # file in ser2net's working directory, so it moved too
+            # file in ser2netweb's working directory, so it moved too
             if old and (old != m.options.trace_both or "trace_max_mb" not in raw_options):
                 cfg.load_notes.append(
                     f"mapping '{m.name}': its trace file is now traces/{m.id}-{m.options.trace_both} "
@@ -3488,7 +3488,7 @@ class AppConfig:
                 if odd:
                     cfg.load_notes.append(
                         f"mapping '{m.name}': the USB identity of serial port {side.port!r} "
-                        f"(match) has keys ser2net does not know ({', '.join(odd)}), which are "
+                        f"(match) has keys ser2netweb does not know ({', '.join(odd)}), which are "
                         f"not used; it knows {', '.join(MATCH_KEYS)}"
                         + ("" if side.identity else ", and none of them is set, so the port "
                            "is opened by its name"))
@@ -3689,7 +3689,7 @@ class AppConfig:
                  "and key of its own.").format(net.tls_key)
 
     def own_port_conflict(self, m: MappingConfig) -> str:
-        """Why mapping ``m`` can't listen where it is set to next to ser2net's own
+        """Why mapping ``m`` can't listen where it is set to next to ser2netweb's own
         listeners ("" when it can): a TCP listener on the admin UI's address and port, or a
         UDP one on the LAN cluster's discovery port while discovery is on (it would get the
         other nodes' beacons). Checked where a mapping is created or changed (the form, the
@@ -4037,7 +4037,7 @@ class ConfigStore:
     Settings -> Configuration backups.
 
     The store remembers what config.json held when it last read or wrote it. A save that
-    finds something else there replaces an edit made outside ser2net (by hand, a tool)
+    finds something else there replaces an edit made outside ser2netweb (by hand, a tool)
     that was not reloaded: the save goes ahead (sign-ins, starts and stops must not fail
     for it), the edited file is kept in backups/ first as any replaced version is, and
     the replacement is reported (replaced_edit, a WARNING via log, on_replaced).
@@ -4051,8 +4051,8 @@ class ConfigStore:
         os.makedirs(directory, exist_ok=True)
         # config.json holds the password hash + secret_key; keep the dir private on
         # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance), when
-        # it is ser2net's own: just made, or holding only what ser2net puts there. Any
-        # other folder (sudo ser2net --config /etc/ser2net.json) keeps its permissions:
+        # it is ser2netweb's own: just made, or holding only what ser2netweb puts there. Any
+        # other folder (sudo ser2netweb --config /etc/ser2net.json) keeps its permissions:
         # only the config file is made private (on every save), and the start-up log
         # warns when other accounts can use the folder.
         self.notes: list[str] = []  # for the start-up log, with the config's load_notes
@@ -4064,14 +4064,14 @@ class ConfigStore:
             if self.exists():
                 lock_down_file(self.path)
             if others_can_use(directory):
-                what = ("can't be listed" if other is None else "holds files ser2net didn't "
+                what = ("can't be listed" if other is None else "holds files ser2netweb didn't "
                         f"put there ({', '.join(other[:3])}{', ...' if len(other) > 3 else ''})")
                 self.notes.append(
                     f"WARNING: {directory}, the folder of {os.path.basename(self.path)}, "
                     f"{what}, so its permissions are left as they are instead of making it "
                     "private to this account, and other accounts can use it. The "
                     "configuration file, backups/, logs/ and traces/ are kept private; give "
-                    "ser2net a folder of its own for the rest (--data-dir <folder> without "
+                    "ser2netweb a folder of its own for the rest (--data-dir <folder> without "
                     "--config; README: Configuration & state files)")
         self.backup_dir = os.path.join(directory, "backups")
         # what each backup holds, by name: ((size, mtime_ns), _backup_summary()) - see backups()
@@ -4081,7 +4081,7 @@ class ConfigStore:
         self.log: Any = lambda _msg: None
         self._clock_noted = False
         self._seen: Optional[_Seen] = None
-        # the last edit made outside ser2net that a save replaced: {"edited": its mtime,
+        # the last edit made outside ser2netweb that a save replaced: {"edited": its mtime,
         # "saved": when, "backup": the backup's name ("" when none could be written)};
         # on_replaced(that) is called too (AppState: an audit record)
         self.replaced_edit: Optional[dict] = None
@@ -4113,7 +4113,7 @@ class ConfigStore:
 
     def changed_on_disk(self) -> Optional[float]:
         """When config.json holds something other than what this store last read or wrote
-        (an edit made outside ser2net, which is not in use until it is reloaded): when it
+        (an edit made outside ser2netweb, which is not in use until it is reloaded): when it
         was changed (its mtime; 0.0 when the file is gone). Else None. Blocking: a stat, and
         a read only when the stat differs from what was seen."""
         seen = self._seen
@@ -4180,7 +4180,7 @@ class ConfigStore:
             self._add_backup(data)  # (newest already, unless backups/ was emptied)
             self._seen = current_seen
             return True
-        # an edit made outside ser2net, which this save replaces (kept, and reported)
+        # an edit made outside ser2netweb, which this save replaces (kept, and reported)
         outside = (current_seen is not None and self._seen is not None
                    and current_seen.digest != self._seen.digest)
         kept, replaces, kept_as = True, None, ""
@@ -4216,13 +4216,13 @@ class ConfigStore:
         return kept
 
     def _replaced(self, edited: _Seen, backup: str) -> None:
-        """Report that a save replaced an edit made outside ser2net (see the class doc)."""
+        """Report that a save replaced an edit made outside ser2netweb (see the class doc)."""
         mtime = edited.key[0] / 1e9 if edited.key else 0.0
         when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)) if mtime else "?"
         self.replaced_edit = {"edited": mtime, "saved": time.time(), "backup": backup}
         where = (os.path.join("backups", backup) if backup
                  else "nowhere: its backup could not be written (see above)")
-        self.log(f"WARNING: config.json had been changed outside ser2net ({when}) and was not "
+        self.log(f"WARNING: config.json had been changed outside ser2netweb ({when}) and was not "
                  "reloaded; this save replaced it with the configuration in use. The edited "
                  f"file is kept as {where}: restore it under Settings → Configuration backups, "
                  "or edit config.json again and reload it")

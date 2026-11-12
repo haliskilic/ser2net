@@ -1,4 +1,4 @@
-"""TLS certificates that change while ser2net runs: new connections get a context built from
+"""TLS certificates that change while ser2netweb runs: new connections get a context built from
 the settings and files as they are now, connections already open keep theirs, and no
 listener is restarted (the admin UI's AdminGuard and a mapping's netguard.Listener read
 their context at each accept).

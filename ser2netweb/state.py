@@ -11,7 +11,7 @@ SER2NETWEB_LOG_STDOUT=off). The data directory holds more state: audit.log(.1), 
 all.log.N, backups/, logs/, traces/ and tls/. Deleting config.json alone resets the
 accounts, settings and mappings but leaves those (audit.log and backups/ are shown to the
 next admin; the next start prunes the per-mapping logs and traces that no mapping owns
-any more); a clean start is ser2net stopped and the data directory deleted.
+any more); a clean start is ser2netweb stopped and the data directory deleted.
 """
 from __future__ import annotations
 
@@ -739,14 +739,14 @@ class AppState:
         self.started_mono = time.monotonic()  # the same for how long it runs (uptime)
         # the admin UI listener's connection guard (runtime.py; None in tests without one),
         # the address it listens on, and how its TLS context is made from the settings
-        # while ser2net runs (Settings -> Admin TLS); without them a TLS change waits for
+        # while ser2netweb runs (Settings -> Admin TLS); without them a TLS change waits for
         # the next start
         self.admin_guard: Any = None
         self.admin_served: tuple[str, int] | None = None
         self.admin_tls: Any = None
         # why the admin TLS settings saved last are not served yet ("": they are)
         self.admin_tls_waiting = ""
-        # the Windows service's name when ser2net runs as one (runtime.service_main)
+        # the Windows service's name when ser2netweb runs as one (runtime.service_main)
         self.service_name = ""
         # reloads of config.json under way (SIGHUP: ser2netweb/reload.py)
         self.reloads: set[asyncio.Task] = set()
@@ -1275,7 +1275,7 @@ class AppState:
             self.log(f"first-run setup in the browser is closed: "
                      f"{envvars.source(accounts.PASSWORD_FILE_ENV, environ)} / "
                      f"{envvars.source(accounts.ADMIN_USER_ENV, environ)} is set but created "
-                     "no admin (see above). Fix it and restart, or run: ser2net --set-password "
+                     "no admin (see above). Fix it and restart, or run: ser2netweb --set-password "
                      "<name>")
             return
         self.setup_code = "-".join(secrets.token_hex(2) for _ in range(5))
@@ -1288,7 +1288,7 @@ class AppState:
             where = f"can't be used (could not write {self.setup_code_path}: {e})"
         self.log("no admin account yet: open the web UI by this machine's IP address or "
                  f"localhost to create one (through another host name the setup page {where}), "
-                 "or run: ser2net --set-password <name>")
+                 "or run: ser2netweb --set-password <name>")
 
     def setup_code_ok(self, value: str) -> bool:
         """The one-time code, letter case, dashes and spaces aside (compared as bytes: a
@@ -1303,14 +1303,14 @@ class AppState:
         with _suppress(OSError):
             os.remove(self.setup_code_path)
 
-    # ---------------- config.json changed outside ser2net ----------------
+    # ---------------- config.json changed outside ser2netweb ----------------
     def _outside_edit_replaced(self, info: dict) -> None:
         """ConfigStore.on_replaced (in the thread that saves): the audit record."""
         self.audit("local", "config_outside_edit_replaced",
                    f"kept as backups/{info['backup']}" if info["backup"] else "no backup")
 
     async def check_config_file(self, now: float | None = None) -> None:
-        """Say once (all.log) when config.json was changed outside ser2net and is not in
+        """Say once (all.log) when config.json was changed outside ser2netweb and is not in
         use: it takes a reload, or the next save replaces it. Looked at every
         CONFIG_CHECK_S."""
         now = time.monotonic() if now is None else now
@@ -1323,16 +1323,16 @@ class AppState:
             return
         self._outside_edit = (now, changed)
         if changed == 0.0:
-            self.log("WARNING: config.json is gone from the data directory; ser2net goes on "
+            self.log("WARNING: config.json is gone from the data directory; ser2netweb goes on "
                      "with the configuration in use and writes it again at the next change")
             return
         when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(changed))
-        self.log(f"WARNING: config.json was changed outside ser2net ({when}) and is not in "
-                 "use: reload it (systemctl reload ser2net, kill -HUP, ser2net --reload or "
+        self.log(f"WARNING: config.json was changed outside ser2netweb ({when}) and is not in "
+                 "use: reload it (systemctl reload ser2net, kill -HUP, ser2netweb --reload or "
                  "Settings → Configuration backups). A change saved here before that "
                  "replaces it (the edited file is then kept in backups/)")
 
-    # ---------------- `ser2net --set-password` / `--sign-out-all` while running ----------------
+    # ---------------- `ser2netweb --set-password` / `--sign-out-all` while running ----------------
     async def _account_requests_loop(self) -> None:
         while True:
             await asyncio.sleep(accounts.POLL_S)
@@ -1351,7 +1351,7 @@ class AppState:
     async def _apply_account_request(self, request) -> tuple[bool, str]:
         if request is None:
             return False, "the request was unreadable or too old; run the command again"
-        if request.get("action") == "reload":  # `ser2net --reload`
+        if request.get("action") == "reload":  # `ser2netweb --reload`
             from .reload import reload_config
             return await reload_config(self, "command line", user=accounts.ACTOR)
         async with self.config_lock:

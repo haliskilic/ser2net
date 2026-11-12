@@ -170,7 +170,7 @@ def main():
         st, h, raw = admin.get("/settings/audit.csv?user=op1&excel=1", raw=True)
         assert st == 200 and raw.startswith(b"\xff\xfe"), raw[:20]
         assert "charset=utf-16" in h.get("Content-Type", "") and \
-            "ser2net-audit-excel.csv" in h.get("Content-Disposition", ""), dict(h)
+            "ser2netweb-audit-excel.csv" in h.get("Content-Disposition", ""), dict(h)
         text = raw.decode("utf-16")
         assert list(csv.reader(io.StringIO(text), delimiter="\t")) == rows, "the same rows"
         assert "KAZAN DAİRESİ İSTANBUL" in text and "\t" in text and "," not in text.split("\r\n")[0]

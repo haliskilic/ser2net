@@ -6,7 +6,7 @@
 # 1. bootstrap.py installs vendor/wheels into ./lib with pip --no-index; without a psutil
 #    wheel for this machine it installs the set without it, and says so;
 # 2. the app imports its dependencies from ./lib, and ser2netweb.py --about runs;
-# 3. ser2net starts from ./lib on a fresh data directory and answers /healthz (the
+# 3. ser2netweb starts from ./lib on a fresh data directory and answers /healthz (the
 #    interface lists then come from the standard library); then it is stopped.
 # ./lib and the data directory are removed again.
 set -eu

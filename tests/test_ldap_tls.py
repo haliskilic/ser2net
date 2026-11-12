@@ -9,7 +9,7 @@ test CA made here (_pki.py):
     bind;
   * refused before any password is sent: a certificate from another CA, none trusted
     by the system, one for another name — each logged with what to set
-    (ldap.ca_file, the server URI, `ser2net --set-password`), the reason found also
+    (ldap.ca_file, the server URI, `ser2netweb --set-password`), the reason found also
     when the host has several addresses;
   * ldap.tls_verify false (the insecure opt-out) accepts any certificate;
   * an unreadable or certificate-less ca_file is reported, and nothing is sent;
@@ -112,7 +112,7 @@ def test_messages():
     for part in ("the certificate of the directory server ldaps://dc.corp.local was not accepted "
                  "(self-signed certificate)", "nothing was sent",
                  "Settings → LDAP / Active Directory → CA certificate file (ldap.ca_file",
-                 "ldap.tls_verify: false) is insecure", "`ser2net --set-password NAME`"):
+                 "ldap.tls_verify: false) is insecure", "`ser2netweb --set-password NAME`"):
         assert part in text, (part, text)
     text = str(ldap_auth.TlsProblem("certificate", "unable to get local issuer certificate",
                                     s.server_uri, "/etc/ser2net/ca.pem"))
@@ -347,7 +347,7 @@ def test_web(pki, folder):
             assert st == 401 and "Invalid username or password." in page, st
             log = all_log(srv)
             assert f"LDAP: the certificate of the directory server {d.uri} was not accepted" in log
-            assert "`ser2net --set-password NAME`" in log and d.binds == [], log[-1500:]
+            assert "`ser2netweb --set-password NAME`" in log and d.binds == [], log[-1500:]
             admin = Browser(srv.base)
             admin.login("admin", PW)
             _, _, page = admin.get("/settings")

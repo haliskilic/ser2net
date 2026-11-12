@@ -162,7 +162,7 @@ def routes(ctx: Ctx) -> list:
         gone_accounts = sorted({a["username"] for b in backups for a in b["accounts"]
                                 if a["username"] and a["username"] not in current})
         disk = await asyncio.to_thread(storage.usage, state.data_dir) if admin else None
-        # config.json edited outside ser2net: not in use yet, or replaced by a save since
+        # config.json edited outside ser2netweb: not in use yet, or replaced by a save since
         outside = await asyncio.to_thread(state.store.changed_on_disk) if admin else None
         replaced = state.store.replaced_edit if admin else None
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
@@ -1292,7 +1292,7 @@ def routes(ctx: Ctx) -> list:
                      if secrets_in else ""))
         return Response(
             json_text(data, indent=2), media_type="application/json; charset=utf-8",
-            headers={"Content-Disposition": "attachment; filename=ser2net-mappings.json"})
+            headers={"Content-Disposition": "attachment; filename=ser2netweb-mappings.json"})
 
     # ---- import: the form first shows a preview (step=preview), then applies it in
     #      "merge" or "replace" mode. A POST without step (scripts written for 2.7)
@@ -1553,9 +1553,9 @@ def routes(ctx: Ctx) -> list:
             return Response(("\ufeff" + buf.getvalue()).encode("utf-16-le"),
                             media_type="text/csv; charset=utf-16",
                             headers={"Content-Disposition":
-                                     "attachment; filename=ser2net-audit-excel.csv"})
+                                     "attachment; filename=ser2netweb-audit-excel.csv"})
         return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
-                        headers={"Content-Disposition": "attachment; filename=ser2net-audit.csv"})
+                        headers={"Content-Disposition": "attachment; filename=ser2netweb-audit.csv"})
 
     # ---------------- configuration backups (admin) ----------------
     async def backup_download(request):
@@ -1753,7 +1753,7 @@ def routes(ctx: Ctx) -> list:
             "'{0}' was removed from {1} configuration backups.", changed).format(username, changed))
 
     async def config_reload(request):
-        """Read config.json again and apply it, as SIGHUP / `ser2net --reload` do
+        """Read config.json again and apply it, as SIGHUP / `ser2netweb --reload` do
         (ser2netweb/reload.py): for an edit made outside the UI (by hand, Ansible ...)."""
         if deny := require_role(request, "admin"):
             return deny
@@ -2126,7 +2126,7 @@ def _unreadable(e: BaseException) -> str:
         return _("it is not UTF-8 text")
     if isinstance(e, OSError):
         return explain(e, "file") or str(e)
-    return _("it is not a ser2net configuration")
+    return _("it is not a ser2netweb configuration")
 
 
 def _csv_cell(value: str) -> str:

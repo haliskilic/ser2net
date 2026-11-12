@@ -42,7 +42,7 @@ if (-not (Test-Path $PY)) { throw "interpreter not found at $PY after extraction
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
 # license texts of the native libraries PBS links into the interpreter (OpenSSL, libffi,
-# zlib, ...), from the same release tag — so `ser2net --licenses` covers them on Windows
+# zlib, ...), from the same release tag — so `ser2netweb --licenses` covers them on Windows
 # too (the python.org build folded these into its own LICENSE.txt; PBS keeps them apart).
 $licdir = "build\licenses-native"
 New-Item -ItemType Directory -Force -Path $licdir | Out-Null

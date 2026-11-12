@@ -1,5 +1,5 @@
 """The optional packages (requirements-optional.txt: paho-mqtt, ldap3, authlib,
-cryptography): ser2net runs without them, and a feature that needs one says why it
+cryptography): ser2netweb runs without them, and a feature that needs one says why it
 can't work.
 
 It says so truthfully: "not installed" only when Python finds no such package at all.
@@ -37,7 +37,7 @@ class Problem:
             return f"{self.override_env} puts {self.override} first: check the {self.dist} there"
         if self.frozen:
             return f"this executable should contain {self.dist}; please report it"
-        return f"pip install -r {REQUIREMENTS}" + ("" if self.missing else ", then restart ser2net")
+        return f"pip install -r {REQUIREMENTS}" + ("" if self.missing else ", then restart ser2netweb")
 
     def __str__(self) -> str:
         what = (f"{self.dist} is not installed" if self.missing else

@@ -2,7 +2,7 @@
 
 On Linux a process that isn't root may listen on a port below
 net.ipv4.ip_unprivileged_port_start (1024 unless changed) only with the
-CAP_NET_BIND_SERVICE capability. The systemd unit runs ser2net as such a user, and so
+CAP_NET_BIND_SERVICE capability. The systemd unit runs ser2netweb as such a user, and so
 does the Docker image (uid 10001) on the host network, so Modbus/TCP's 502 or a web UI on
 80 fails with EACCES: "permission denied", with neither the cause nor the fix. On Windows
 the same error (WSAEACCES, 10013) means another program holds the port exclusively, or
@@ -33,7 +33,7 @@ _EXPLAIN = {
         "AmbientCapabilities=CAP_NET_BIND_SERVICE; Docker on the host network: "
         "SER2NETWEB_LOW_PORTS=1), or use port {start} or above (README: Ports below 1024)"),
     EXCLUDED_PORT: (
-        "Windows doesn't let ser2net use this port: another program holds it, or Windows "
+        "Windows doesn't let ser2netweb use this port: another program holds it, or Windows "
         "reserves it (netsh interface ipv4 show excludedportrange protocol=tcp); pick "
         "another port"),
 }

@@ -1,4 +1,4 @@
-"""Times as ser2net writes them into its files, and what it can tell about the system
+"""Times as ser2netweb writes them into its files, and what it can tell about the system
 clock (it never sets the clock: that is the operating system's time sync, see the README).
 
 ``stamp()`` is the server's local time with its offset from UTC, as all.log, stdout, the
@@ -30,7 +30,7 @@ import time
 _FORMAT = "%Y-%m-%d %H:%M:%S"
 _OFFSET = re.compile(r"[+-](\d\d):(\d\d)")
 
-# No ser2net with this code ran before this day, so a clock that reads earlier is wrong.
+# No ser2netweb with this code ran before this day, so a clock that reads earlier is wrong.
 # It never has to move with a release: on an installation that ran for a while, the
 # newest backup and config.json's time are later anyway.
 FLOOR = calendar.timegm((2026, 11, 1, 0, 0, 0, 0, 0, 0))
@@ -116,7 +116,7 @@ def warning(store, now: float | None = None) -> str:
     what, when = found
     reads = f"WARNING: the system clock reads {utc_text(now)} UTC"
     if what == "release":
-        head = f"{reads}, before this version of ser2net was made ({utc_text(when)[:10]}): it is wrong"
+        head = f"{reads}, before this version of ser2netweb was made ({utc_text(when)[:10]}): it is wrong"
     elif what == "backup":
         head = (f"{reads}, earlier than the newest configuration backup ({utc_text(when)} "
                 "UTC): it is probably wrong (or it was ahead when that backup was made)")
@@ -124,5 +124,5 @@ def warning(store, now: float | None = None) -> str:
         head = (f"{reads}, earlier than config.json was last written ({utc_text(when)} UTC): "
                 "it is probably wrong")
     return (f"{head}. Logs, the audit log and backups get wrong times, and sign-ins and "
-            "certificate checks can fail. ser2net never sets the clock: set it, or let the "
+            "certificate checks can fail. ser2netweb never sets the clock: set it, or let the "
             "system's time sync (NTP) do it (README: Time synchronisation)")

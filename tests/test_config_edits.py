@@ -12,7 +12,7 @@ clash. Checks:
     keep_on_failure keeps a change that can't be saved;
   * a start that would share a serial port is refused with the reason (UI 400, REST 400
     validation, bulk 400 naming how many) and nothing stays enabled; later saves work;
-  * a TLS file that goes missing while ser2net runs no longer blocks other saves; an
+  * a TLS file that goes missing while ser2netweb runs no longer blocks other saves; an
     edit of that mapping is still refused;
   * config.json can't be written: the password, the API token, a deletion stay as they
     were, with "Could not save config.json" (REST: 500 save_failed); a stop still stops

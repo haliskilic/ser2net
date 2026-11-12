@@ -10,7 +10,7 @@
 * The public URL (admin_ui.public_url, SER2NETWEB_PUBLIC_URL for one run instead): the address
   users open. A page of its origin is this UI's own (forms, the console: auth.cross_site),
   a blank SSO redirect URI is made from it, notifications link to it.
-* Its path, when it has one (https://gw.example.com/ser2net): the UI is served under it
+* Its path, when it has one (https://gw.example.com/ser2netweb): the UI is served under it
   too, behind a proxy that passes the path on, or one that strips it and sends exactly that
   path as X-Forwarded-Prefix. A request without it is served at '/' as before (the LAN,
   cluster peers, the health check). Links, redirects and cookies follow the path a request

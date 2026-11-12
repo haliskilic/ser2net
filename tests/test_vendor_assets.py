@@ -48,7 +48,7 @@ def test_record_matches_the_files():
         assert "The xterm.js authors" in fh.read()
     statics = {f for f in os.listdir(os.path.join(ROOT, "ser2netweb", "web", "static"))}
     recorded = {os.path.basename(d) for d in doc["ser2net"]["files"]}
-    # ser2net's own: the page script and style, the theme switch, the Modbus points editor
+    # ser2netweb's own: the page script and style, the theme switch, the Modbus points editor
     assert statics - recorded == {"app.css", "app.js", "theme.js", "points.js"}, \
         "every third-party file is recorded"
     print(f"vendor/npm/package.json records {len(recorded)} files of {len(pkgs)} packages  OK")

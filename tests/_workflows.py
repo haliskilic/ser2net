@@ -1,6 +1,6 @@
 """Readers for .github/workflows/*.yml, shared by the CI and release pipeline tests.
 
-The tests run where only the standard library (and ser2net's requirements) is installed,
+The tests run where only the standard library (and ser2netweb's requirements) is installed,
 so there is no YAML parser: the workflows keep a plain block layout (two-space indents,
 job ids at two spaces, their keys at four), which these helpers rely on.
 """

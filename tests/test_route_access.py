@@ -201,7 +201,7 @@ WRITE_METHODS = ("POST", "PUT", "DELETE", "PATCH")
 ROLE_DENIED = "Forbidden: requires the {0} role."
 CSRF_DENIED = "CSRF validation failed. Reload the page."
 CROSS_SITE_DENIED = ("Refused: this request was sent by a page of another web site. If you used "
-                     "ser2net’s own page, its address must reach ser2net unchanged (behind a "
+                     "ser2netweb’s own page, its address must reach ser2netweb unchanged (behind a "
                      "reverse proxy: as Host or X-Forwarded-Host).")
 PEER_DENIED = "Sign in to manage other cluster nodes."
 DENIALS = {ROLE_DENIED.format("operator"), ROLE_DENIED.format("admin"), CSRF_DENIED, PEER_DENIED}

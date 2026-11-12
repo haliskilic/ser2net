@@ -1,8 +1,8 @@
-"""The serial port classes ser2net opens, and the asyncio transport and stream built on them.
+"""The serial port classes ser2netweb opens, and the asyncio transport and stream built on them.
 
-ser2net opens every port itself, with ``serial_class()``, and builds pyserial-asyncio-fast's
+ser2netweb opens every port itself, with ``serial_class()``, and builds pyserial-asyncio-fast's
 transport itself (``Transport``), instead of letting serial_for_url pick the class and
-open_serial_connection make the transport: the fixes below therefore apply to ser2net's own
+open_serial_connection make the transport: the fixes below therefore apply to ser2netweb's own
 ports only, not to pyserial process-wide.
 
 pyserial-asyncio-fast's SerialTransport watches a port with the event loop's own file
@@ -55,7 +55,7 @@ the device as on POSIX. SER2NETWEB_WINDOWS_SERIAL=pyserial keeps pyserial's own 
     POLL_IDLE_AFTER_S, back to 0.5 ms as soon as data arrives or is written (a reply
     usually follows a write).
 
-How ser2net carries fixes for upstream code (CONTRIBUTING.md, "Third-party code"): each
+How ser2netweb carries fixes for upstream code (CONTRIBUTING.md, "Third-party code"): each
 override names the upstream issue or commit it mirrors and is removed once a release has
 the fix; tests/test_serial_compat.py pins the upstream code each one replaces (a release
 that changes it fails there) and fails once upstream fixes _write_ready itself. At run
@@ -440,7 +440,7 @@ def serial_class() -> type:
 
 
 class Transport(_saf.SerialTransport):
-    """pyserial-asyncio-fast's transport with ser2net's fixes (see the module docstring)."""
+    """pyserial-asyncio-fast's transport with ser2netweb's fixes (see the module docstring)."""
 
     # upstream's: False, or (Windows) the TimerHandle of the next poll; typed bool there
     _has_reader: Any
@@ -538,7 +538,7 @@ def unverified_note() -> str:
              for name, mod, want in VERIFIED if getattr(mod, "__version__", None) != want]
     if not other:
         return ""
-    note = (f"WARNING: serial ports: {', '.join(other)} — ser2net's fixes for these "
+    note = (f"WARNING: serial ports: {', '.join(other)} — ser2netweb's fixes for these "
             "libraries were not checked against this version")
     if transport_class() is not Transport:
         note += ("; pyserial-asyncio-fast lacks what they build on, so its own transport is "

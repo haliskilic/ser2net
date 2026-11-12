@@ -9,7 +9,7 @@ reported truthfully (ser2netweb/optional.py):
   * LDAP / OIDC sign-in and MQTT publishing with such a package log that line and fail
     cleanly — a sign-in gets 401, never a 500;
   * Settings shows it for LDAP / OIDC (a real import, not find_spec), and
-    `ser2net --about` lists pyserial-asyncio-fast and pyasn1 and says "failed to import"
+    `ser2netweb --about` lists pyserial-asyncio-fast and pyasn1 and says "failed to import"
     with the error instead of "not installed".
 
 The fake packages come in through sys.path / SER2NETWEB_LIB_OVERRIDE, so this runs without
@@ -106,7 +106,7 @@ def test_classification():
             p = optional.problem(exc, "ldap3")
             assert not p.missing, exc
             assert str(p) == (f"ldap3 is installed but failed to import: {type(exc).__name__}: "
-                              f"{exc} ({PIP}, then restart ser2net)"), p
+                              f"{exc} ({PIP}, then restart ser2netweb)"), p
         # the package names: paho-mqtt is paho.mqtt; authlib.jose missing is not "no authlib"
         assert optional.problem(missing_module("paho"), "paho-mqtt", "paho.mqtt").missing
         assert optional.problem(missing_module("paho.mqtt"), "paho-mqtt", "paho.mqtt").missing
@@ -148,17 +148,17 @@ def test_features_with_broken_packages():
         assert ldap_auth.authenticate(s, "alice", "pw", logs.append) is None
         assert logs[-1] == ("LDAP login disabled: ldap3 is installed but failed to import: "
                             f"TypeError: this ldap3 is incompatible ({PIP}, then restart "
-                            "ser2net)"), logs
+                            "ser2netweb)"), logs
         o = OidcSettings(enabled=True, issuer="https://idp.invalid", client_id="c")
         assert oidc_auth.complete(o, "https://h/cb", "CODE", "N", logs.append) is None
         assert logs[-1] == ("OIDC sign-in disabled: authlib is installed but failed to import: "
                             "ModuleNotFoundError: No module named 'authlib.jose' "
-                            f"({PIP}, then restart ser2net)"), logs
+                            f"({PIP}, then restart ser2netweb)"), logs
         pub = MqttPublisher(MqttSettings(enabled=True, host="127.0.0.1"), logs.append)
         assert pub.connect() is False
         assert logs[-1] == ("MQTT publishing disabled: paho-mqtt is installed but failed to "
                             "import: ModuleNotFoundError: No module named "
-                            f"'s2n_test_missing_dependency' ({PIP}, then restart ser2net)"), logs
+                            f"'s2n_test_missing_dependency' ({PIP}, then restart ser2netweb)"), logs
         # the mapping status says so too (dashboard: "MQTT off: ...")
         assert pub.state["state"] == "off" and "failed to import" in pub.state["error"], \
             pub.state
@@ -229,10 +229,10 @@ def test_about_paths():
             r"~\AppData\x"
         assert entry._where(r"D:\x", [("~", r"C:\Users\ayse")]) == r"D:\x"   # another drive
     labels = [label for label, _folder in entry._known_roots({"SER2NETWEB_LIB_OVERRIDE": " o "})]
-    assert labels[0] == "<override>" and "<ser2net>" in labels and "<python>" in labels, labels
+    assert labels[0] == "<override>" and "<ser2netweb>" in labels and "<python>" in labels, labels
     assert "<override>" not in [lb for lb, _f in entry._known_roots({})]
     assert all(os.path.dirname(f) != f for _lb, f in entry._known_roots({})), "a whole drive"
-    print("--about: folders under the override, the bundle, ser2net, Python or the home "
+    print("--about: folders under the override, the bundle, ser2netweb, Python or the home "
           "folder are written as labels; others as they are  OK")
 
 

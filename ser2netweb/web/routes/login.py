@@ -82,7 +82,7 @@ def routes(ctx: Ctx) -> list:
                   f"{d.role or 'no access'} instead of {d.partial_role}. A group setting has to "
                   f"name the whole group: set it to {ldap_auth.group_name(group)!r} or {whole} "
                   f"under Settings → {section} ({source}.{setting} in config.json). If no "
-                  f"admin can sign in any more, `ser2net --set-password NAME` with a new NAME "
+                  f"admin can sign in any more, `ser2netweb --set-password NAME` with a new NAME "
                   f"creates a local admin account.")
         state.group_warnings[(source, setting)] = {
             "setting": setting, "value": value, "group": group,
@@ -205,7 +205,7 @@ def routes(ctx: Ctx) -> list:
             return None
         if before and not state.config.usable_admin_count():
             state.log(f"WARNING: {source.upper()} gives {user.username!r} the role {role}, so "
-                      f"no admin account can sign in any more. `ser2net --set-password "
+                      f"no admin account can sign in any more. `ser2netweb --set-password "
                       f"NAME` with a new NAME creates a local admin account.")
         return user
 
@@ -264,7 +264,7 @@ def routes(ctx: Ctx) -> list:
         _oidc_failed(request, f"the identity provider refused it ({code})"
                      + ("" if ours else ", not for a sign-in started in this browser"))
         if error == "access_denied":
-            status, message = 403, _("The identity provider didn’t let you sign in to ser2net. "
+            status, message = 403, _("The identity provider didn’t let you sign in to ser2netweb. "
                                      "Ask its administrator to give your account access.")
         elif error in ("temporarily_unavailable", "server_error"):
             status, message = 503, _("The identity provider can’t sign you in right now. Try "
@@ -531,7 +531,7 @@ def routes(ctx: Ctx) -> list:
                 state.log(f"first-run setup refused: wrong setup code from {ip} "
                           f"(host {auth.foreign_host(request.headers)!r})")
                 return setup_page(request, 403, _("That setup code is not right. It is in "
-                                                  "setup-code.txt in ser2net’s data folder."), typed)
+                                                  "setup-code.txt in ser2netweb’s data folder."), typed)
         username = (form.get("username") or "admin").strip() or "admin"
         pw = form.get("password", "")
         pw2 = form.get("password2", "")

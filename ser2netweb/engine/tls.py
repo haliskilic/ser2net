@@ -118,7 +118,7 @@ def tls_context(*, server_side: bool, cert: Any = "", key: Any = "", password: A
                 check_hostname: bool = True) -> ssl.SSLContext:
     """A TLS context made from files. Raises TlsFileError.
 
-    ``server_side``: ser2net presents ``cert`` (with ``key``, decrypted with ``password``),
+    ``server_side``: ser2netweb presents ``cert`` (with ``key``, decrypted with ``password``),
     which it must have; with ``ca``, a client must present a certificate that chains to a
     certificate in that file, or its handshake fails.
     Otherwise (a client): the server's certificate is checked when ``verify`` is true, or

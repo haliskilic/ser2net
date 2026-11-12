@@ -86,7 +86,7 @@ def test_no_store(srv) -> None:
 
 
 CROSS_SITE = ("Refused: this request was sent by a page of another web site. If you used "
-              "ser2net’s own page, its address must reach ser2net unchanged (behind a "
+              "ser2netweb’s own page, its address must reach ser2netweb unchanged (behind a "
               "reverse proxy: as Host or X-Forwarded-Host).")
 
 

@@ -122,7 +122,7 @@ def main():
             rec = next(ln.rstrip("\n").split("\t") for ln in fh
                        if "\tapi_config_import_merge\t" in ln)
         # (with what the import left as it was: the settings the body doesn't have)
-        assert rec[3].startswith("3 mappings (ser2net export)") and rec[4] == "api-token", rec
+        assert rec[3].startswith("3 mappings (ser2netweb export)") and rec[4] == "api-token", rec
         print("import merge: added + updated in one save (one backup), ids kept, audited  OK")
 
         # ---- replace with a clash: refused as a whole ----

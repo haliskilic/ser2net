@@ -1,6 +1,6 @@
 """The web UI's cookie names keep instances on one host name apart.
 
-Browsers keep cookies per host name, not per port or scheme, so two ser2net instances
+Browsers keep cookies per host name, not per port or scheme, so two ser2netweb instances
 reached as http://host:8080 and http://host:8081 (side-by-side services, containers,
 SSH tunnels to localhost, the fleet view's Open link to a peer on the same address) used
 to share one session, CSRF, language and SSO cookie: signing in to one signed the other

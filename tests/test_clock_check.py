@@ -99,7 +99,7 @@ def test_behind():
         assert clock.FLOOR <= time.time(), "the floor can't be in the future"
         line = clock.warning(store, utc(2009, 1, 1, 0, 0, 5))
         assert line.startswith("WARNING: the system clock reads 2009-01-01 00:00:05 UTC, "
-                               "before this version of ser2net was made (2026-11-01)"), line
+                               "before this version of ser2netweb was made (2026-11-01)"), line
         assert "never sets the clock" in line and clock.warning(store) == ""
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -201,7 +201,7 @@ def test_settings():
             assert "The server’s clock reads " in text and \
                 "earlier than the newest configuration backup" in text, \
                 text[text.find("Admin interface"):][:1200]
-            assert "ser2net never sets the clock" in text
+            assert "ser2netweb never sets the clock" in text
             viewer = page("watcher")
             assert "Server time: " in viewer and "The server’s clock reads" not in viewer, \
                 "the warning names the newest backup's time: admins only"

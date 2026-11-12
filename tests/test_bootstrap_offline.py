@@ -3,7 +3,7 @@
 psutil is the one pinned package that isn't pure Python, and vendor/wheels has it for
 Linux x86_64 and Windows x64 only. It used to be required, so `pip install --no-index`
 failed as a whole on ARM Linux (32-bit Raspberry Pi OS included), macOS, musl and ARM or
-32-bit Windows Python, and ser2net never started there without the network. Checked here,
+32-bit Windows Python, and ser2netweb never started there without the network. Checked here,
 with the real pip and vendor/wheels in a scratch folder:
 - without a psutil wheel for this machine the set installs without it, in one pip run,
   with one line saying so; everything required imports and the next start does nothing;

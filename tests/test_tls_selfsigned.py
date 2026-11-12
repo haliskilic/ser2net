@@ -304,7 +304,7 @@ def test_certificate_info():
         cert, key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
         selfsigned.generate(cert, key)
         info = certinfo.read(cert)
-        assert info.subject == "ser2net" and info.self_signed, info
+        assert info.subject == "ser2netweb" and info.self_signed, info
         assert {"localhost", "127.0.0.1", "::1"} <= set(info.names), info.names
         assert info.state() == "valid" and 823 <= info.days_left() <= 824, info
         with NoCryptography():
@@ -372,13 +372,13 @@ def test_certificate_info():
         try:
             assert certinfo.read(os.path.join("tls", "cert.pem")) == info
             assert runtime.tls_certificate_note(os.path.join("tls", "cert.pem")).startswith(
-                "admin UI TLS certificate: ser2net, self-signed")
+                "admin UI TLS certificate: ser2netweb, self-signed")
         finally:
             config.set_data_dir(None)
         print("certinfo: a relative certificate path is read from the data directory  OK")
 
         line = runtime.tls_certificate_note(cert)
-        assert line.startswith("admin UI TLS certificate: ser2net, self-signed, valid ") and \
+        assert line.startswith("admin UI TLS certificate: ser2netweb, self-signed, valid ") and \
             re.search(r"\b\d+ days left$", line), line
         line = runtime.tls_certificate_note(paths["old"])
         assert line.startswith("WARNING: admin UI TLS certificate: old, self-signed, valid ") \
@@ -467,7 +467,7 @@ def test_settings_shows_certificate():
         page = settings_page()
         assert "Self-signed certificate generated" in page, page[:400]
         assert "which can’t be right" in page, page[page.find("banner"):][:600]
-        assert certinfo.read(cfg.admin_ui.tls_cert).subject == "ser2net"
+        assert certinfo.read(cfg.admin_ui.tls_cert).subject == "ser2netweb"
         page = settings_page()
         assert "self-signed</span>" in page and re.search(r">\d+ days left<", page), page
         status, _ = asyncio.run(_call(app, "POST", "/settings/tls/generate", cookie, form))

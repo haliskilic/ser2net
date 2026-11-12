@@ -1,5 +1,5 @@
 {% extends "_shell.html" %}
-{% block title %}{{ _("Two-factor sign-in") }} — ser2net{% endblock %}
+{% block title %}{{ _("Two-factor sign-in") }} — ser2netweb{% endblock %}
 {% block main %}
 <section class="panel panel-narrow">
   <div class="panel-head"><h2>{{ _("Two-factor sign-in") }}</h2><a class="btn sm" href="{{ base }}/settings">{{ _("← Settings") }}</a></div>
@@ -35,7 +35,7 @@
   </form>
   {% endif %}
   {% if not refusal %}
-  <p class="muted mt-sm">{{ _('Lost the app or the device? An admin can turn two-factor sign-in off for you in Settings → Users. On the server, <span class="mono">ser2net --set-password NAME</span> sets a new password and turns it off — also for the only admin.') }}</p>
+  <p class="muted mt-sm">{{ _('Lost the app or the device? An admin can turn two-factor sign-in off for you in Settings → Users. On the server, <span class="mono">ser2netweb --set-password NAME</span> sets a new password and turns it off — also for the only admin.') }}</p>
   {% endif %}
 </section>
 {% endblock %}

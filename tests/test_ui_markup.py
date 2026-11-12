@@ -340,7 +340,7 @@ PM_OPT_OUT = ("data-1p-ignore", "data-lpignore", "data-bwignore")
 
 
 def test_secret_fields():
-    """A browser or password manager fills the saved ser2net sign-in into an empty password
+    """A browser or password manager fills the saved ser2netweb sign-in into an empty password
     field that looks like the half of a login form; saved there, the admin password would
     end up in config.json as the MQTT, LDAP, OIDC or SMTP password, the cluster key or a TLS
     key password (an unencrypted key never needs one, so nothing would refuse it)."""

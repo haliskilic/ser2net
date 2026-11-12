@@ -1,4 +1,4 @@
-"""`ser2net --healthcheck`: is the web UI of this data directory's instance answering?
+"""`ser2netweb --healthcheck`: is the web UI of this data directory's instance answering?
 
 Used by the Docker image's HEALTHCHECK, also handy for systemd or monitoring scripts.
 Reads the admin UI address from config.json (SER2NETWEB_BIND_IP / SER2NETWEB_PORT, or their

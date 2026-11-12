@@ -1,4 +1,4 @@
-"""What ser2net keeps on disk: the free space it needs, and the clock its retention goes by.
+"""What ser2netweb keeps on disk: the free space it needs, and the clock its retention goes by.
 
 Traces can fill a disk (up to trace_max_mb x (1 + trace_keep) per mapping), and a full
 disk keeps config.json, the logs and the audit log from being written. Below ``floor()``
@@ -11,7 +11,7 @@ when it gets low (notify.Notifier).
 Retention deletes by age (the mapping logs' 15 days, Settings -> Retention). ``now()`` is
 the time it compares with: the system clock, but never ahead of the system clock at
 start-up plus the time this process has run (measured with a clock no step changes). A
-clock stepped ahead while ser2net runs (a typo, a bad time source) so deletes nothing
+clock stepped ahead while ser2netweb runs (a typo, a bad time source) so deletes nothing
 early; one stepped back is followed at once (that only keeps more). After a restart the
 system clock counts again: by then the step is either corrected or a real one.
 """
@@ -96,7 +96,7 @@ def folder_bytes(folder: str, prefixes=None) -> int:
 
 
 def usage(data_dir: str) -> dict:
-    """The data folder's disk and what ser2net keeps there: free and total bytes of the
+    """The data folder's disk and what ser2netweb keeps there: free and total bytes of the
     disk (None when they can't be read), the floor traces pause below, and the bytes of the
     traces (traces/) and of the logs (logs/, all.log*, audit.log*). Blocking: a few
     directory listings."""

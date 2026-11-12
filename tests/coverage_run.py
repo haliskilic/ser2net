@@ -1,4 +1,4 @@
-"""Run the whole test suite under coverage.py — including the ser2net servers the
+"""Run the whole test suite under coverage.py — including the ser2netweb servers the
 tests start as subprocesses — and combine the data.
 
     pip install coverage

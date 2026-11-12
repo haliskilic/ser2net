@@ -279,7 +279,7 @@ def test_planner():
     rows = [r["action"] for r in plan_rows(cur, incoming, "replace")]
     assert rows.count("remove") == 2 and rows.count("add") == 3, rows
     plan = parse_mappings_file(json.dumps({"users": [], "mappings": [mapping("x" * 12, "X", 1)]}).encode())
-    assert plan.source == "ser2net config.json" and plan.warnings
+    assert plan.source == "ser2netweb config.json" and plan.warnings
     for raw in (b"\xff\xfe", b"not json", b'{"no": "mappings"}', b'{"mappings": [1]}'):
         try:
             parse_mappings_file(raw)
@@ -374,7 +374,7 @@ def test_classic_merge():
     assert (merged[1].network.mode, merged[1].network.protocol) == ("udp", "raw")
     merged[1].network.validate()
 
-    # a ser2net export or config.json still replaces the mapping (as before)
+    # a ser2netweb export or config.json still replaces the mapping (as before)
     export = json.dumps({"mappings": [dict(m.to_dict(), id="ffffffffff09") for m in first]})
     plan4 = parse_mappings_file(export.encode())
     assert not plan4.classic

@@ -1,4 +1,4 @@
-# ser2net — example compose deployment.
+# ser2netweb — example compose deployment.
 #   docker compose up -d
 # Edit `devices` to match the serial port(s) you are bridging and `ports` to match
 # your mappings. More (plain `docker run`, networking, hot-plug): docs/DOCKER.md
@@ -13,7 +13,7 @@ services:
     # hostname: line-1
     restart: unless-stopped
     # a small init as PID 1 passes the stop signal on (and reaps child processes); a
-    # stop then gets 30 s, which ser2net's own shutdown budget stays within
+    # stop then gets 30 s, which ser2netweb's own shutdown budget stays within
     init: true
     stop_grace_period: 30s
     ports:
@@ -41,7 +41,7 @@ services:
       # Settings -> Admin interface, else the host name):
       # SER2NETWEB_NODE_NAME: "line-1"
       # TZ: "Europe/Istanbul"   # the zone of log, audit and trace times (default: UTC)
-    # ser2net also writes its log to /data/all.log (rotated); cap Docker's own copy
+    # ser2netweb also writes its log to /data/all.log (rotated); cap Docker's own copy
     logging:
       driver: json-file
       options:

@@ -1,7 +1,7 @@
 """The bind-IP pickers and the cluster beacons find this machine's interfaces, also where
 /proc/net is hidden (ser2netweb/engine/netinfo.py, ser2netweb/engine/cluster.py).
 
-The systemd unit runs ser2net with ProcSubset=pid, which hides /proc/net: psutil's
+The systemd unit runs ser2netweb with ProcSubset=pid, which hides /proc/net: psutil's
 net_if_stats() (it reads /proc/net/dev) then fails, while net_if_addrs() (getifaddrs, over
 netlink, which the unit allows) still works. Without its own handling the whole psutil
 branch fell back to the host name's addresses (usually only 127.0.1.1, so the pickers

@@ -86,7 +86,7 @@ def grouped(secret: str) -> str:
     return " ".join(secret[i:i + 4] for i in range(0, len(secret), 4))
 
 
-def otpauth_uri(secret: str, account: str, issuer: str = "ser2net") -> str:
+def otpauth_uri(secret: str, account: str, issuer: str = "ser2netweb") -> str:
     """The otpauth:// link authenticator apps take (pasted, or as a QR code made of it)."""
     label = quote(f"{issuer}:{account}", safe="")
     query = urlencode({"secret": secret, "issuer": issuer, "algorithm": "SHA1",
