@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import lang_switch %}
+{% from "_footer.html" import site_footer with context %}
 {% block title %}{{ _("Two-factor sign-in") }} — ser2net{% endblock %}
 {% block body %}
 <div class="auth-wrap">
@@ -18,4 +19,5 @@
     <p class="muted mt-sm"><a href="{{ base }}/login">{{ _("Sign in again") }}</a> · {{ _("Lost your authenticator? An admin can turn two-factor sign-in off for your account.") }}</p>
   </div>
 </div>
+{{ site_footer(false) }}
 {% endblock %}

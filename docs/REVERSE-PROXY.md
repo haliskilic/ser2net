@@ -3,8 +3,10 @@
 A reverse proxy (nginx, Apache, Caddy, Traefik, IIS) in front of the web UI is the usual way
 to give it HTTPS with a certificate your browsers already trust, or one name for several
 services. ser2net itself then speaks plain HTTP to the proxy only. This page is what the
-web UI needs from the proxy, the settings for it in **Settings → Reverse proxy**, tested
-examples and what to look for when something doesn't work.
+web UI needs from the proxy, the settings for it in **Settings → Reverse proxy**, examples
+and what to look for when something doesn't work. (The examples follow what
+`tests/test_reverse_proxy.py` checks with a stand-in proxy; the configurations themselves
+are not run in CI.)
 
 Only the web UI goes through the proxy. The mapping ports (raw TCP, telnet, RFC 2217,
 Modbus TCP) are not HTTP: clients keep connecting to them directly. LAN-cluster nodes call
@@ -46,9 +48,10 @@ each other's UI port directly too (next section).
 
 Changes apply at once. While an environment variable sets a value, the page shows it
 read-only; the stored value applies again once the variable is removed (it is not written
-to `config.json`). With nothing set, the web UI behaves as before, except that
-X-Forwarded-For and X-Forwarded-Proto are no longer believed from anyone (see
-[Upgrading from 2.8](#upgrading-from-28)).
+to `config.json`). With nothing set, three things differ from 2.8 (see
+[Upgrading from 2.8](#upgrading-from-28)): X-Forwarded-For and X-Forwarded-Proto are no
+longer believed from anyone, the cookies have other names, and a form or WebSocket that a
+page of another site sends is refused (`Origin` or `Sec-Fetch-Site`).
 
 **Public URL** — `http://` or `https://`, a host name or IP address, optionally a port and a
 path; no user name, query or fragment, and a path may not start like one of the UI's own
@@ -101,12 +104,14 @@ under Settings → Admin TLS, on responses to requests that came over HTTPS
 port, for that long: a direct `http://name:8080` stops opening in them. Off by default; the
 proxy can send the header itself instead (examples below).
 
-**Secure cookies** need no setting: the session, CSRF, language and SSO cookies are Secure
+**Secure cookies** need no setting: the session, CSRF, language, SSO and two-factor
+(`ser2net_2fa`, between the password and the code) cookies are Secure
 whenever the browser used HTTPS: with admin TLS, or when the request's first
 `X-Forwarded-Proto` (or `Forwarded: proto=`) is `https`, from any client — that header can
 only make cookies stricter. So nginx's `proxy_cookie_flags` isn't needed (nginx before
 1.19.3, as on Ubuntu 22.04, doesn't have it). Over HTTPS the cookies are named `__Host-…`
-(`__Secure-…` under a path), and on a port other than 8080 their names carry a tag of the
+(`__Secure-…` under a path; the SSO and two-factor cookies, which have a path of their own,
+always `__Secure-…`), and on a port other than 8080 their names carry a tag of the
 port, so the Secure cookies of `https://ser2net.example.com` never get in the way of
 `http://ser2net.example.com:8080`. The names follow the `Host` (port) the UI sees and the
 scheme, which is one more reason to pass the browser's address on unchanged.
@@ -250,3 +255,11 @@ shows `127.0.0.1` for every user (the audit log, the per-address sign-in limit) 
 from you; their names change to `__Host-…` (and on a port other than 8080 carry a tag of
 it), and a sign-in from 2.8 is moved to the new name at its next page, so nobody has to
 sign in again.
+
+**A plain-HTTP proxy that rewrites `Host`** (nginx's default `proxy_set_header Host
+$proxy_host`, a `proxy_pass http://127.0.0.1:8080` without `Host $http_host`) worked with
+2.8; from 2.9 every form and console of the UI through it gets 403, because the `Origin`
+the browser sends is not the address the UI sees. Pass `Host $http_host` (or
+`X-Forwarded-Host`), or set the public URL. Over HTTPS the browser's `Sec-Fetch-Site:
+same-origin` alone lets a form through, so a TLS proxy usually goes on working; all.log
+names every refused `Origin` with the address the UI saw.

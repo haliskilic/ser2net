@@ -14,8 +14,8 @@ every package on amd64 and arm64, is the hash-locked wheel. A pre-release (`X.Y.
 CRITICAL ones with a fix go to the repository's code scanning) and checks whether the base
 image (`python:3.12-slim-trixie`: CPython 3.12 on Debian 13) has moved since `:latest` was
 built. If it has, it rebuilds the latest release from its tag on the new base — the same
-ser2net code and the same hash-locked Python packages — smoke-tests it natively on both
-architectures and moves `:X.Y` and `:latest` to it. `:X.Y.Z` always stays the image its
+ser2net code and the same hash-locked Python packages — smoke-tests it on every platform
+`:latest` has (amd64 and arm64 natively, arm/v7 under QEMU) and moves `:X.Y` and `:latest` to it. `:X.Y.Z` always stays the image its
 release published. So `:latest` / `:X.Y` get Debian, OpenSSL and CPython 3.12.x fixes within
 a week; an auto-updater (Watchtower and the like) restarts the container when that happens.
 Use `:X.Y.Z` (or a digest) to change only when you decide to. The base is a Debian codename
@@ -176,7 +176,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   host's numeric group inside the container — 20 on Debian/Ubuntu, 18 on Fedora/RHEL —
   and the entrypoint gives the server the group of every device it finds under a serial
   name (`/dev/ttyUSB*`, `ttyACM*`, `ttyS*`, `ttyAMA*`, `ttymxc*`, … `/dev/rfcomm*`,
-  `/dev/serial/by-id/*`), so no `--group-add` is needed (a console's `tty` group is never
+  `/dev/serial/by-id/*`, `/dev/serial/by-path/*`), so no `--group-add` is needed (a console's `tty` group is never
   added). A device passed under another name inside the container
   (`--device /dev/ttyUSB0:/dev/plc`) still needs `--group-add` with the host's numeric
   serial GID, read from the device (`--group-add "$(stat -L -c %g /dev/ttyUSB0)"`: `-L`
@@ -196,6 +196,8 @@ and session key. README, *Several instances on one machine*, has the whole check
   and mappings bound to a USB identity then see a re-plugged adapter too.
 - USB passthrough into containers is only reliable on Linux hosts (not Docker Desktop on
   Windows/macOS — there, run ser2net natively or bridge via RFC2217).
+- A port that won't open, a host service on the same device (ModemManager, brltty, a login
+  prompt), a Raspberry Pi UART: [`LINUX-SERIAL.md`](LINUX-SERIAL.md).
 
 ## Notes
 
@@ -213,7 +215,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   `/data/hang.log`), and the restart policy starts it again; `SER2NET_LOOP_WATCHDOG` sets
   the limit in seconds (`0` = off). A busy container is not affected: it gets back to its
   loop within about a second, and `docker pause` is not counted.
-- **Logs.** Every log line goes to `/data/all.log` (rotated, 10 MB × 5) and to the
+- **Logs.** Every log line goes to `/data/all.log` (rotated at 10 MB, 5 old files kept) and to the
   container's output, which Docker keeps without a limit by default: cap it with
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), use the `local`
   driver (`--log-driver local`: compressed, capped at 100 MB by default), or set either for

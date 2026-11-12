@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import lang_switch %}
+{% from "_footer.html" import site_footer with context %}
 {% block title %}{{ _("Sign in") }} — ser2net{% endblock %}
 {% block body %}
 <div class="auth-wrap">
@@ -27,4 +28,5 @@
     </form>
   </div>
 </div>
+{{ site_footer(false) }}
 {% endblock %}

@@ -54,8 +54,9 @@ The service starts at boot as LocalSystem, restarts 5 s after a failure, and the
 asks once for the admin UI address. Then open the printed URL and set the admin password.
 
 Manage it with `sc stop ser2net` / `sc start ser2net`, or *Services* (`services.msc`).
-Run several instances side by side with `--service-name NAME` (each needs its own
-`--data-dir`). Remove one with `--uninstall-service` (the data directory is kept):
+Run several instances side by side with `--service-name NAME`: from the standalone exe a
+named service gets `C:\Program Files\ser2net\NAME.exe` and `C:\ProgramData\ser2net\NAME` by
+itself (from a source checkout give each its own `--data-dir`). Remove one with `--uninstall-service` (the data directory is kept):
 
 ```bat
 ser2net-windows-x64.exe --uninstall-service
@@ -140,6 +141,16 @@ Remove it with:
 ```bat
 netsh advfirewall firewall delete rule name="ser2net"
 ```
+
+A named service (`--service-name NAME`) needs a rule of its own for its exe,
+`C:\Program Files\ser2net\NAME.exe`; `--install-service` prints it with the rule name it
+uses.
+
+Two environment variables change how ser2net uses Windows (for the service: system
+environment variables, then restart it): `SER2NET_WINDOWS_LOOP=proactor` lifts the
+512-socket limit of the default event loop, and `SER2NET_WINDOWS_SERIAL=pyserial` goes back
+to pyserial's own serial writes if a virtual COM driver misbehaves with the paced ones
+(README → *Run as a service*).
 
 ser2net does not open the firewall for you (secure by default). Prefer binding the admin
 UI to `127.0.0.1` and reaching it over SSH / a reverse proxy if you don't need it on the

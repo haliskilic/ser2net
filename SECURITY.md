@@ -45,7 +45,7 @@ untrusted networks prefer TCP with TLS, or a firewall.
 `config.json` keeps in plain text what ser2net has to use itself: the LDAP bind password,
 the OIDC client secret, the SMTP password, the webhook URL, each mapping's MQTT broker
 password and MQTT client key password, the TLS key passwords (a mapping's, the admin UI's),
-the cluster key, the
+the cluster key (and, during a planned key change, the previous one), the
 session key (`secret_key`) that signs sign-ins and the two-factor sign-in key of each
 account that uses it. Local passwords are scrypt hashes; the REST API tokens are stored
 only as hashes. `backups/` holds earlier copies of the file (a
@@ -131,8 +131,9 @@ güvenlik duvarını tercih edin.
 ### Saklanan gizli değerler
 `config.json`, ser2net'in kendisinin kullanması gereken gizli değerleri açık metin tutar:
 LDAP bind parolası, OIDC client secret, SMTP parolası, webhook URL'si, her eşlemenin MQTT
-broker parolası, TLS anahtar parolaları (bir eşlemenin, yönetim arayüzünün), cluster
-anahtarı, oturumları imzalayan oturum anahtarı (`secret_key`) ve iki adımlı giriş
+broker parolası ve MQTT istemci anahtarı parolası, TLS anahtar parolaları (bir eşlemenin,
+yönetim arayüzünün), cluster anahtarı (planlı bir anahtar değişikliği sırasında öncekiyle
+birlikte), oturumları imzalayan oturum anahtarı (`secret_key`) ve iki adımlı giriş
 kullanan her hesabın anahtarı. Yerel parolalar scrypt hash'i olarak, REST API token'ları
 yalnızca hash'leri olarak saklanır. `backups/` dosyanın önceki
 kopyalarını tutar (indirilen bir yedekte oturum anahtarı yoktur), eşleme dışa aktarımı

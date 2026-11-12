@@ -52,7 +52,8 @@ services:
     # without publishing it, and LAN cluster discovery works. The web UI then binds
     # SER2NET_BIND_IP on the host itself (0.0.0.0 = all its interfaces; set the LAN
     # address to keep it off the others), and ports below 1024 (e.g. Modbus 502) can't
-    # be opened by the unprivileged process.
+    # be opened by the unprivileged process unless SER2NET_LOW_PORTS=1 is set
+    # (docs/DOCKER.md, "Ports and networking").
     # network_mode: host
     #
     # Hot-plug instead of `devices:` (remove those): every serial adapter is seen, also

@@ -14,13 +14,15 @@ rules since 2023 require a hardware or cloud key store), so both supported optio
 cloud signing services. Check each provider's eligibility and pricing yourself — they
 decide who qualifies.
 
-The workflow's `windows` job (and the jobs that call it in `ci.yml` and `release.yml`)
-already grant `actions: read` — the SignPath action hands `GITHUB_TOKEN` to its connector
+The workflow (`standalone.yml`, at its top level) and the jobs that call it in `ci.yml` and
+`release.yml` already grant `actions: read` — the SignPath action hands `GITHUB_TOKEN` to its connector
 to download the build artifact, which needs that scope even on a public repo. The exe
-carries a version resource and the ser2net icon, so Windows shows a publisher/version
-instead of nothing. You can rehearse the signing *plumbing* (version resource + the
+carries a version resource and the ser2net icon, so Explorer's *Details* tab shows the
+product, publisher and version (SmartScreen and UAC still say "Unknown publisher" until it
+is signed). You can rehearse the signing *plumbing* (version resource + the
 verify/copy steps) without an account by running the workflow by hand: **Actions →
-Standalone → Run workflow**, with **sign_dry_run** ticked. It signs the exe with a
+Standalone → Run workflow**, with **sign_dry_run** ticked (it runs only while the
+`WINDOWS_SIGNING` variable is empty, before a provider is set up). It signs the exe with a
 throwaway self-signed certificate on the runner and checks the signature is valid. It does
 not exercise the provider, so it is only a smoke test of the steps, not of your account.
 
@@ -89,7 +91,7 @@ setting `WINDOWS_SIGNING` = `azure`, or keep the secret short-lived.
 - Signature (Windows PowerShell): `Get-AuthenticodeSignature .\ser2net-windows-x64.exe`
 - Checksums: `sha256sum -c SHA256SUMS --ignore-missing` (Linux) or
   `Get-FileHash .\ser2net-windows-x64.exe` (compare with `SHA256SUMS`)
-- Build provenance (any file of the release, needs the GitHub CLI):
+- Build provenance (the three executables, needs the GitHub CLI):
   `gh attestation verify ser2net-windows-x64.exe -R haliskilic/ser2net`; add
   `--signer-workflow haliskilic/ser2net/.github/workflows/release.yml` to also require
   that the release workflow made it (only its tag runs attest anything)

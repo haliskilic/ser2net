@@ -516,7 +516,15 @@ def mapping_schemas() -> dict:
         "A serial<->network (kind net) or serial<->serial (kind serialbridge) mapping. In a "
         "POST or PUT, every field left out gets the default shown here (PUT replaces the "
         "whole mapping); PATCH changes only the fields it names. A value may be sent as text "
-        "(\"9600\", \"false\"); one that is not of the setting's type is refused (400).")
+        "(\"9600\", \"false\"); one that is not of the setting's type is refused (400). "
+        "The MQTT topics and payloads, the Modbus point keys and the Sparkplug B model: "
+        "docs/MODBUS-MQTT.md in the source tree.")
+    out["MqttSettings"]["description"] = (
+        "A mapping's MQTT connection: what it publishes and takes on which topic, and the "
+        "Sparkplug B model, in docs/MODBUS-MQTT.md.")
+    out["ModbusPoint"]["description"] = (
+        "A Modbus point polled (and written) by a gateway mapping: address 0-based, the "
+        "types, word orders and limits in docs/MODBUS-MQTT.md.")
     return out
 
 

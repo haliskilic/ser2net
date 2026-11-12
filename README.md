@@ -16,21 +16,21 @@ web arayüzünden yönetilen, çapraz-platform (Windows + Linux) saf-Python köp
 
 ## 📸 Ekran Görüntüleri
 
-**Pano — onlarca eşleme, canlı durum, algılanan portlar ve LAN cluster paneli:**
+**Pano — eşlemeler, canlı durum, arama ve toplu işlemler, LAN cluster paneli:**
 
-![Pano](docs/screenshots/02-dashboard.png)
+![Pano](docs/screenshots/tr/02-dashboard.png)
 
 **LAN cluster — tüm düğümlerin eşlemeleri tek tabloda; düğüm sağlığı + uzaktan başlat/durdur:**
 
-![Cluster](docs/screenshots/06-cluster.png)
+![Cluster](docs/screenshots/tr/06-cluster.png)
 
-| Eşleme ekleme (tüm seri/ağ seçenekleri) | Tarayıcı-içi seri konsol (xterm.js) |
+| Eşleme ekleme (tüm seri/ağ seçenekleri) | Tarayıcı-içi seri konsol, hex görünümü |
 |---|---|
-| ![Eşleme formu](docs/screenshots/03-add-mapping.png) | ![Konsol](docs/screenshots/05-console.png) |
+| ![Eşleme formu](docs/screenshots/tr/03-add-mapping.png) | ![Konsol](docs/screenshots/tr/05-console.png) |
 
-| Ayarlar (parola · TLS · cluster · yedek) | Giriş |
+| Ayarlar → Bildirimler | Giriş |
 |---|---|
-| ![Ayarlar](docs/screenshots/04-settings.png) | ![Giriş](docs/screenshots/01-login.png) |
+| ![Ayarlar](docs/screenshots/tr/04-settings.png) | ![Giriş](docs/screenshots/tr/01-login.png) |
 
 ---
 
@@ -50,6 +50,15 @@ düzenlemeye gerek yok.
 - Uzak baud/parity değişimi gereken cihazlar için RFC2217
 - İki seri portu birbirine köprüleme (serial↔serial)
 
+**Rehberler** (`docs/` altında, İngilizce): [Docker](docs/DOCKER.md) ·
+[Windows](docs/WINDOWS.md) · [Linux seri portları](docs/LINUX-SERIAL.md) ·
+[reverse proxy](docs/REVERSE-PROXY.md) ·
+[MQTT, Modbus noktaları ve Sparkplug B](docs/MODBUS-MQTT.md) ·
+[LDAP / AD ve OIDC ile giriş](docs/SSO.md) ·
+[klasik ser2net'ten geçiş](docs/MIGRATING-FROM-SER2NET.md) ·
+[istemcide sanal COM port](docs/VIRTUAL-COM.md) · [gizlilik](docs/PRIVACY.md) ·
+[kod imzalama](docs/SIGNING.md).
+
 ---
 
 ## ✨ Özellikler
@@ -58,7 +67,7 @@ düzenlemeye gerek yok.
   **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**
   (istemci sertifikaları, CA dosyası ya da parmak iziyle sunucu denetimi: bkz. Güvenlik). UDP,
   cihazın çıktısını izinli bir IP'den gelen son datagram'ın göndericisine ya da her zaman
-  sabit bir **yanıt adresine** (IP + port) gönderir; **karşı uç zaman aşımı** sessiz kalan
+  sabit bir yanıt adresine (**Yanıt gönderilecek IP** ve **Yanıt gönderilecek port**) gönderir; **karşı uç zaman aşımı** sessiz kalan
   göndericiyi unutturur. **Cihazın çıktısını ayrıca şuraya gönder** çıktıyı her zaman (kimse
   göndermeden önce de, kim gönderirse göndersin) alan başka hedefleri listeler
   (`udp_targets`, `IP:port`): bir yerel ağın yayın adresinde UDP 10110'a NMEA 0183 akışı
@@ -130,8 +139,8 @@ düzenlemeye gerek yok.
   gibi) da yanıttır; böyle bir nokta hata vermeye başladığında (en çok dakikada bir) ve
   yeniden okunduğunda unit'iyle birlikte loglanır. Modbus/TCP master'larının istekleri
   bundan etkilenmez. Her unit'in durumu status'ta (REST API) ve `/metrics`'te yer alır;
-  pano yanıt vermeyen unit'leri gösterir, **Modbus unit'i yanıt vermiyor / yeniden yanıt
-  veriyor** bildirimleri (işaretlenene kadar kapalı) haber verir ve düz MQTT bu durumu
+  pano yanıt vermeyen unit'leri gösterir, **Modbus unit'i yanıt vermeyi kesti** bildirimleri
+  (ve yeniden yanıt vermesi; işaretlenene kadar kapalı) haber verir ve düz MQTT bu durumu
   `<topic>/unit<N>/status`'a retained olarak yayınlayabilir (`online` / `offline`; eşleme
   formunda **Her unit'in durumunu yayınla**; eşleme durduğunda son durumu korur, bu yüzden
   `<topic>/status` ile birlikte okunmalı). İstenirse **Sparkplug B** edge node olarak, her
@@ -159,7 +168,7 @@ düzenlemeye gerek yok.
   tek tek yapılır ve hatta poll ile Modbus/TCP master'larıyla sırayla erişir;
   `.../set/result` cevapları da bu sırayı korur. Hat için en çok 32 yazma bekler: fazlası
   `error: busy` alır, sırası gelene kadar 10 sn'den uzun bekleyen bir yazma yapılmaz
-  (`error: expired`). 64 KiB'tan büyük bir `/set` `error: too large: …` alır; 256 KiB'tan
+  (`error: expired: …`). 64 KiB'tan büyük bir `/set` `error: too large: …` alır; 256 KiB'tan
   büyük bir Sparkplug NCMD/DCMD, cihazının nokta sayısından çok metrik taşıyan bir DCMD ve
   64'ten çok metrikli bir NCMD yok sayılır; bir komutun dışarıda bıraktıkları (cihazın
   yazılabilir noktası olmayan metrikler, null'lar) tek satırda, en çok dakikada bir
@@ -173,8 +182,9 @@ düzenlemeye gerek yok.
   düz `ok` / `error: …` alır. Bir yazmaya yanıt vermeyen unit `error: no reply from unit N
   within T s` verir. Sparkplug B'de yazılabilir bir noktaya gelen her DCMD'den sonra nokta
   geri okunur ve değişmiş olsun olmasın DDATA ile gönderilir (yazma reddedildiğinde ya da
-  slave exception ile yanıt verdiğinde de); böylece host sonucu görür. Yanıt vermeyen bir
-  unit ise bunun yerine offline olur (DDEATH). Bir nokta MQTT'nin ona yazabileceği
+  slave exception ile yanıt verdiğinde de); böylece host sonucu görür (unit 0'daki ve
+  yalnızca yazılan noktalar hiç geri okunmaz). Yanıt vermeyen bir unit için DDATA
+  gönderilmez; 3 okuma üst üste yanıt vermezse offline olur (DDEATH). Bir nokta MQTT'nin ona yazabileceği
   değerleri sınırlayabilir (isteğe bağlı, nokta JSON'unda): `"min"` ve `"max"` (noktanın
   kendi biriminde, yayınlandığı gibi) ve `"allowed": [0, 1, 2]` (yalnızca açılabilen bir
   coil için `[true]`); bunların dışındaki bir değer hatta ulaşmadan reddedilir (`error:
@@ -183,7 +193,7 @@ düzenlemeye gerek yok.
   atar. `"poll": false` yazılabilir bir noktayı, okunamayan bir komut register'ı için
   yalnızca yazılan bir nokta yapar: hiç okunmaz, yazıldıktan sonra geri okunmaz. Tamsayı
   tipleri ondalıklı bir değeri yuvarlar (eşitlikte çifte: `12.5` → 12) ve cevap yine `ok`
-  olur; yazmanın log satırı yazılan ham değeri gösterir (`raw value 13`). **Güvenli
+  olur; yazmanın log satırı yazılan ham değeri gösterir (`raw value 12`). **Güvenli
   çıkışlar:** ser2net, broker ya da host gidince kendiliğinden güvenli bir değer yazmaz.
   Bunun için heartbeat kullanın: host birkaç saniyede bir `/set` (ya da DCMD) ile bir
   holding register'a artan bir sayaç yazar, PLC'nin kendi mantığı (bir watchdog
@@ -212,7 +222,10 @@ düzenlemeye gerek yok.
   içe aktarma, küme düzenlemesi): `"unit": "1"` ve `"scale": "0.1"` sayı, `"writable":
   "false"` false sayılır; kullanılamayanlar (sayı olmayan bir scale, formda `"adress"` gibi
   yanlış yazılmış bir anahtar) noktanın adını veren bir mesajla reddedilir; form geçersiz
-  JSON'un nerede bozulduğunu (satır ve sütun) söyler ve yazılanı korur. **Komşu noktaları
+  JSON'un nerede bozulduğunu (satır ve sütun) söyler ve yazılanı korur. 2.9'da eklenen
+  anahtarlar (`word_order`, `bit`, `length`, `min`, `max`, `allowed`, `poll`) yalnızca doğru
+  tipte alınır; gateway'in kullanamadığı kayıtlı bir değer (elle düzenleme) yok sayılır,
+  yerine varsayılan kullanılır ve açılışta eşlemenin log'una bir uyarı yazılır. **Komşu noktaları
   tek istekle oku** (varsayılan kapalı), bir birimin aynı fonksiyondaki yakın noktalarını
   tek istekle okur (en çok 125 register ya da 2000 coil, arada verilen sayıda kullanılmayan
   register olabilir): 9600 baud'da 100 nokta okuma başına birkaç saniye yerine saniyenin bir
@@ -226,11 +239,15 @@ düzenlemeye gerek yok.
   ile yanıtlar (birçok master ağ geçidinin arkasındaki cihazı 255 ya da 0 ile adresler).
   Retry eklenmez: yanıt vermeyi kesen bir birim döngü başına bir kez okunur (yukarıya
   bakın). v2.8 bir düğüm (ya da oradan yapılan bir küme düzenlemesi) veya sürüm düşürme
-  `word_order`, `bit`, `length`, blok okuma ve birim yönlendirme ayarlarını atar; o
-  sürümlerde yeni tiplerin okunması hata verir.
+  `word_order`, `bit`, `length`, `"poll": false` (yalnızca yazılan nokta orada yeniden
+  okunur), blok okuma ve birim yönlendirme ayarlarını atar; o sürümlerde yeni tiplerin
+  okunması hata verir. Bütün topic'ler, payload'lar, yazmalar ve Sparkplug B metrikleri
+  tablolar halinde, bir REST API örneğiyle (İngilizce):
+  [`docs/MODBUS-MQTT.md`](docs/MODBUS-MQTT.md).
 - **Client-side sanal COM:** uzaktaki portu yerel `COMx`/`tty` olarak göstermek için
-  reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
-  bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
+  reçeteler (pyserial `rfc2217://`; Linux'ta rfc2217 eşlemesi için ttynvt, raw eşleme için
+  `socat`; Windows'ta com0com + hub4com'un `com2tcp-rfc2217.bat`'ı, HW VSP3) — bkz.
+  [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
   kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, port kilitleme ve RS-485
   donanım auto-RTS (Linux `TIOCSRS485`: aç + TX öncesi/sonrası gecikme + TX'te RTS seviyesi).
@@ -271,7 +288,7 @@ düzenlemeye gerek yok.
   adı üretici, model ve seri numarasından oluşur; bu yüzden kendi seri numarası olmayan
   özdeş adaptörler (CH340, çoğu PL2303, hepsi aynı numarayı taşıyan klonlar) tek bir adı
   paylaşır, udev onu birine verir ve hangisine verdiği reboot ya da yeniden takmayla
-  değişebilir: Portlar sayfası böyle adaptörleri işaretler (`aynı USB kimliği`,
+  değişebilir: *Algılanan seri portlar* listesi böyle adaptörleri işaretler (`aynı USB kimliği`,
   `by-id benzersiz değil`), form da bunu söyler; bunları USB soketine göre bağlayın.
   Eşleme formunda Cihaz'ın yanındaki ↻ formu kapatmadan portları yeniden listeler, **Başka
   bir cihaz yolu…** ise listede olmayan bir yolu alır (bir kartın `/dev/ttymxc1` gibi
@@ -316,7 +333,10 @@ düzenlemeye gerek yok.
   olduğu grubu, cihazın kendisinden okuyarak (`dialout`, Arch'ta `uucp`, …), ve neyin eksik
   olduğunu (kullanıcı o grupta değil, ser2net başladıktan sonra eklendi, container'da o grup
   yok: `--group-add <gid>`); kullanımdaki bir port için onu hangi eşlemenin açık tuttuğunu
-  ya da başka bir programın ne tür bir kilit tuttuğunu.
+  ya da başka bir programın ne tür bir kilit tuttuğunu. Aynı `hint`, sistemin bir dinleyicinin
+  portunu neden reddettiğini de söyler (`CAP_NET_BIND_SERVICE` olmadan 1024 altı, Windows'un
+  tuttuğu bir port): REST API'de İngilizce, panoda sayfanın dilinde ve genel cümlenin
+  yerine.
 - **Dinleyiciler kendiliğinden açılır:** başlarken adresini kullanamayan bir eşleme
   (açılışta IP henüz atanmamış ya da port hâlâ dolu) `error` durumunda "N sn sonra yeniden
   denenecek" gösterir ve çalışana kadar en fazla 30 sn arayla yeniden başlatılır (Durdur
@@ -345,8 +365,8 @@ düzenlemeye gerek yok.
   kablo çekilmesi, Wi-Fi/VPN/NAT düşmesi) artık sonsuza dek `ESTABLISHED` kalmaz:
   varsayılan ayarlarla (açık · 60 sn boşta · 10 sn aralık · 3 deneme) ~90 sn içinde
   düşürülür ve yuvası boşalır — cihaz veri gönderirken de (Linux `TCP_USER_TIMEOUT`).
-  Ayrıca dışa bağlanmada **bağlantı zaman aşımı** (varsayılan 10 sn), **idle timeout**
-  ve **maksimum bağlantı süresi** (ör. 24 sa); her kopuş nedeniyle loglanır. Varsayılan
+  Ayrıca dışa bağlanmada **bağlantı zaman aşımı** (varsayılan 10 sn), **Boşta zaman aşımı**
+  ve **En uzun bağlantı süresi** (ör. 24 sa); her kopuş nedeniyle loglanır. Varsayılan
   olarak seri cihaz yokken (çıkarılmış, yeniden bağlanıyor) TCP istemcileri bağlı kalır ve
   yenileri kabul edilir; bu arada gönderdikleri atılır ve sayılır (`bytes_dropped`).
   **Seri cihaz yokken istemcilerin bağlantısını kes** (`network.disconnect_without_device`,
@@ -356,7 +376,7 @@ düzenlemeye gerek yok.
   SCADA master'ı ya da sanal COM yönlendiricisi kesintiyi görür. Dışarı bağlanan eşleme de
   o zaman yalnızca portu açıkken bağlanır.
 - **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp, döner dosyalar,
-  arayüzden indirilir), Prometheus `/metrics`, audit log ekranı, canlı log görüntüleyici,
+  arayüzden indirilir), Prometheus `/metrics`, denetim kaydı ekranı, canlı log görüntüleyici,
   **tarayıcı-içi seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz) ve
   iki yönlü, zaman damgalı **canlı hex görünümü**. Panodaki **Gelen / Giden** sayaçları
   (`/api/v1/status`'ta `bytes_in` / `bytes_out`, `/metrics`'te
@@ -365,12 +385,12 @@ düzenlemeye gerek yok.
   sayılır (serial↔serial: A → B / B → A). Ağdan gelip cihaza yazılamayan veri (port açık
   değilken ya da bir UDP datagram'ı kuyruğu dolu bulduğunda) atılmış sayılır
   (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`), panoda işaretlenir ve loglanır.
-- **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, dışa bağlanan
-  bir eşleme uzak sunucusunu kaybettiğinde/yeniden bulduğunda, istemci bağlanıp düştüğünde,
-  hatalı girişte ya da veri diski neredeyse dolduğunda (trace'lerin beklediği boş alanın
-  altına inince; all.log her durumda uyarır) webhook (JSON, Slack, Microsoft Teams, Discord,
-  Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir. Ayarlar'da
-  seçilene kadar kapalı olanlar: **cihazdan veri gelmemesi** (eşlemenin seçeneklerindeki
+- **Bildirimler:** webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) ve/veya e-posta
+  (SMTP). Varsayılan olarak açık olanlar: cihaz koptuğunda/geri geldiğinde, eşleme
+  başlamadığında, dışa bağlanan bir eşleme uzak sunucusunu kaybettiğinde/yeniden
+  bulduğunda. Ayarlar'da istenirse işaretlenenler: istemci bağlanıp düştüğünde, hatalı
+  girişte, veri diski neredeyse dolduğunda (trace'lerin beklediği boş alanın altına inince;
+  all.log her durumda uyarır), **cihazdan veri gelmemesi** (eşlemenin seçeneklerindeki
   *Veri yok alarmı*: port açık ama cihaz o kadar saniyedir hiçbir şey göndermedi ya da
   yalnızca sorulunca konuşan bir cihaz için kendisine gönderilen yanıtsız kaldı; panoda,
   eşlemenin log'unda ve `/metrics`'te de görünür, cihazın son baytının zamanı
@@ -380,14 +400,14 @@ düzenlemeye gerek yok.
   **ser2net'in başlaması** (bir açılıştan 15 sn sonra: hangi eşlemelerin çalıştığı ve önceki
   çalışmayı event loop watchdog'unun sonlandırıp sonlandırmadığı) ve bir gateway'in periyodik
   okuduğu bir **Modbus unit'inin yanıt vermeyi kesmesi** (3 okuma üst üste hiçbir noktasına
-  yanıt vermemesi) ve yeniden yanıt vermesi. Bu olaylar gönderilsin ya da gönderilmesin
-  all.log'a yazılır.
+  yanıt vermemesi) ve yeniden yanıt vermesi. Tekrarlar bastırılır, test mesajı
+  gönderilebilir. Bu olaylar gönderilsin ya da gönderilmesin all.log'a yazılır.
   Genel URL ayarlıysa (Ayarlar → Reverse proxy) her mesaj onunla biter, JSON biçiminde de
   bir `url` alanı olur. İstemci olayları istemcinin IP adresini, hatalı giriş hesap adını
   (ya da `(unknown user)`) ve IP adresini gönderir; *Kişisel verileri gönderme* seçeneği
   adresleri yalnızca ağlarıyla (`10.0.5.x`, IPv6 /48) gönderir, hesap adlarını hiç
   göndermez; e-posta her alıcıya ayrı da gönderilebilir. Mesajlar *Web arayüzü erişimi*
-  altında seçilen varsayılan dilde yazılır. SMTP kullanıcı adı ve parolasında ya da webhook
+  altında seçilen varsayılan dilde yazılır (o ayar tarayıcının dili iken İngilizce). SMTP kullanıcı adı ve parolasında ya da webhook
   adresinde Türkçe (ASCII dışı) harfler olabilir: kimlik bilgileri UTF-8 olarak (SMTP AUTH
   PLAIN / LOGIN / CRAM-MD5), adres IDNA ve yüzde kodlamasıyla gönderilir.
 - **Dışa bağlanma durumu:** dışa bağlanan bir eşlemenin durumu seri tarafı göstermeye devam
@@ -410,10 +430,11 @@ düzenlemeye gerek yok.
 - **LDAP / Active Directory auth (opsiyonel):** kullanıcılar dizine bind ederek doğrulanır;
   LDAP grup üyeliği role eşlenir. Yerel hesaplarla birlikte çalışır; `ldap3` gerektirir.
   LDAPS / StartTLS'te sunucunun sertifikası denetlenir (sistemin CA'ları ya da kendi CA
-  dosyanız).
+  dosyanız). Active Directory ve OpenLDAP kurulumu (İngilizce): [`docs/SSO.md`](docs/SSO.md).
 - **OIDC tek-oturum (SSO, opsiyonel):** Keycloak/Entra ID/Google/Okta ile PKCE'li
   authorization-code akışı; id_token doğrulanır (imza/iss/aud/exp/nonce), claim→rol eşlenir.
-  `authlib` gerektirir.
+  `authlib` gerektirir. Keycloak, Entra ID ve Google ayarları, `all.log`'da nelere
+  bakılacağı (İngilizce): [`docs/SSO.md`](docs/SSO.md).
 - **REST API:** otomasyon için JSON API (`/api/v1`) — eşleme CRUD, başlat/durdur/yeniden,
   durum ve portlar; **bearer-token** kimlik doğrulama (rol seçilebilir — `viewer`
   salt-okunur); OpenAPI 3.0 (`/api/v1/openapi.json`). Token, Ayarlar'dan üretilir.
@@ -466,7 +487,9 @@ düzenlemeye gerek yok.
   sertifikası sistemin güvendiği bir CA'ya — **CA sertifika dosyası** (PEM ya da DER)
   verilmişse yalnızca o dosyadaki bir CA'ya — bağlanmalı ve broker'ın host adını (DNS adı
   ya da IP adresi) taşımalı; **Broker'ın host adını doğrula** kapalıyken host adını
-  taşımayan bir sertifika da kabul edilir (yine de güvenilen bir CA'dan gelmeli). Bir
+  taşımayan bir sertifika da kabul edilir (yine de güvenilen bir CA'dan gelmeli). CA
+  dosyasındaki her sertifikaya olduğu gibi güvenilir: bir ara CA ya da self-signed bir
+  broker'ın kendi sertifikası yeter. Bir
   **istemci sertifikası** (PEM; anahtarı ayrı dosyada ya da aynı dosyada, şifreli anahtar
   **parolasıyla**) sertifika isteyen broker'a sunulur (karşılıklı TLS, ör. AWS IoT Core);
   form kayıtlı anahtar parolasını hiç göstermez (boş bırakılan alan onu korur, *Kayıtlı
@@ -502,11 +525,11 @@ düzenlemeye gerek yok.
   seri porta yazar ve `<topic>/tx/result`'a yanıt verir (`ok` / `error: …`: salt okunur, çok
   uzun, 64 KiB beklerken meşgul, port açık değil); retained mesaj hiçbir zaman yazılmaz. Bir
   **sorgu dizesi** (`options.poll_string`, `\r \n \t \\ \xHH` ile) port açıkken ve bağlı
-  TCP istemcisi yokken (ya da **Bir TCP istemcisi bağlıyken de** ile her zaman) her **sorgu
-  aralığında** gönderilir; böylece yalnızca sorguya yanıt veren bir cihaz, TCP bağlantısını
+  TCP istemcisi yokken (ya da **Bir TCP istemcisi bağlıyken de** ile her zaman) her **okuma
+  aralığında** (*Okuma aralığı (sn)*) gönderilir; böylece yalnızca sorguya yanıt veren bir cihaz, TCP bağlantısını
   tutan harici bir poller olmadan MQTT'ye, bir trace'e ya da bir UDP hedefine ulaşır.
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
-  Ayarlar → içe aktarma ile önizlemeli olarak alınır; önizleme her eşlemenin içe aktarma
+  Ayarlar → *Eşlemeleri dışa / içe aktar* ile önizlemeli olarak alınır; önizleme her eşlemenin içe aktarma
   sonrası halini (açık ya da kapalı, TLS, her istemci ya da kaç izinli adres, salt okunur)
   kendi uyarılarıyla birlikte kendi satırında gösterir, uygulandığında uyarılar log'a
   yazılır. Karşılığı olmayan seçenekler uyarı olarak gösterilir, burada daha açık hale
@@ -527,14 +550,17 @@ düzenlemeye gerek yok.
   `hangup-when-done` ve `nobreak` saklanır ama burada etkisi yoktur (port bağlantılar
   arasında açık kalır), içe aktarma da bunu söyler. Aynı dosya sonradan yeniden
   birleştirilirse yalnızca dosyanın söyledikleri alınır, eşlemelerde burada ayarlananlar
-  korunur (TLS, bind IP, izinli istemciler, USB kimliği, RS-485, MQTT, Modbus noktaları;
-  kapalı bir eşleme kapalı kalır); hiçbir eşleme daha açık hale gelmez ve önizleme her
-  güncellemenin neyi değiştirip neyi koruduğunu listeler.
+  korunur (USB kimliği, RS-485, MQTT, Modbus noktaları; kapalı bir eşleme kapalı kalır; RFC
+  2217 imzası yalnızca ilk içe aktarmayla gelir); bind IP, izinli istemciler ve salt okunur
+  ayarı dosyadan yalnızca eşlemeyi daha açık yapmıyorsa alınır, TLS hiç kapatılmaz: hiçbir
+  eşleme daha açık hale gelmez ve önizleme her güncellemenin neyi değiştirip neyi
+  koruduğunu listeler.
 - **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.
   Bildirimler varsayılan dille gider; log'lar, audit log ve REST API İngilizce kalır.
-- **Tamamen offline:** tüm bağımlılıklar wheel olarak birlikte gelir; internet gerekmez.
+- **Tamamen offline:** gerekli bağımlılıklar wheel olarak birlikte gelir, internet gerekmez
+  (isteğe bağlı olanlar için *Offline kurulum*'a bakın; standalone binary hepsini içerir).
 
 ---
 
@@ -546,6 +572,10 @@ düzenlemeye gerek yok.
   sisteminde ve işlemcide. Daha eski bir `python3` (RHEL / AlmaLinux / Rocky 8 ve 9) bir
   mesajla reddedilir: daha yenisini kurun (`sudo dnf install python3.11`; `./start.sh` onu
   bulur) ya da standalone binary'yi kullanın.
+  CI 3.10–3.14'ü dener; ömrünü doldurmuş bir Python (3.10), onun için sabitlenmiş bir
+  bağımlılıkta onu destekleyen hiçbir sürümün düzeltmediği bilinen bir açık çıkana kadar
+  desteklenir ve bırakılması bir ara sürüm önceden duyurulur
+  ([CONTRIBUTING → Python sürümleri](CONTRIBUTING.md#python-sürümleri)).
 - Linux'ta seri portu **açmak** için kullanıcının seri cihazların grubunda olması gerekir
   (port **listelemek** için ayrıcalık gerekmez). Bu grup Debian, Ubuntu, Raspberry Pi OS,
   Fedora, RHEL ve openSUSE'de `dialout`, Arch, Manjaro ve EndeavourOS'ta ise `uucp`'dir (bu
@@ -554,12 +584,21 @@ düzenlemeye gerek yok.
   ```bash
   sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # ardından oturumu kapatıp aç
   ```
+  Açılmayan bir port, kaybolan bir cihaz, Raspberry Pi UART'ı:
+  [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md) (İngilizce).
 - Windows'ta COM portları için ek yetki gerekmez.
-- (Opsiyonel) TLS self-signed üretimi için `openssl`.
+- (Opsiyonel) self-signed yönetim sertifikası üretmek için `cryptography`
+  (`requirements-optional.txt`); yoksa varsa `openssl` komutu kullanılır.
 
 ---
 
 ## 🚀 Kurulum & Çalıştırma
+
+| Yol | Nerede çalışır | Ne gerekir |
+|---|---|---|
+| [Standalone binary](#standalone-binary-başka-hiçbir-şey-kurmak-gerekmez) | Windows x64; glibc ≥ 2.28 olan Linux x86_64 ve arm64 (64-bit işletim sistemli Raspberry Pi 3/4/5) | hiçbir şey |
+| [Docker](#docker) | Linux host'lar: amd64, arm64, arm/v7 (32-bit Raspberry Pi OS) | Docker |
+| Kaynaktan (aşağıda) | her işletim sistemi ve işlemci: macOS, 32-bit ARM, ARM üzerinde Windows da | pip'li Python 3.10+; paketlenmiş wheel'lerle offline |
 
 ```bash
 # Linux / macOS / Raspberry Pi (her işlemci)
@@ -612,9 +651,9 @@ Linux notları:
   kilitli tutar ve erişim zamanlarını tazeler; böylece systemd-tmpfiles, tmpreaper gibi
   geçici dosya temizleyicileri uzun süre çalışan bir binary'nin dosyalarını silmez.
   Öldürülen bir sürecin geride bıraktığı kopya ise her zamanki gibi temizlenir.
-- Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS) için dağıtımın CA
-  paketini, ayarlıysa `SSL_CERT_FILE`'ı kullanır (MQTT eşlemesi ya da LDAP için bir CA
-  dosyası verilmemişse).
+- Sertifika kontrolleri (TLS üzerinden MQTT, OIDC, LDAPS / StartTLS, HTTPS webhook'lar,
+  TLS'li SMTP) için dağıtımın CA paketini, ayarlıysa `SSL_CERT_FILE` / `SSL_CERT_DIR`'i
+  kullanır (MQTT eşlemesi ya da LDAP için bir CA dosyası verilmemişse).
 
 `ser2net --about` sürümleri (Python, OpenSSL, bileşenler) ve her bileşenin nereden
 yüklendiğini gösterir; bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `<bundle>`,
@@ -647,6 +686,29 @@ Bind IP'yi sonradan değiştirmek:
 ```bash
 python3 ser2net.py --reconfigure
 ```
+
+### Komut satırı seçenekleri
+`python3 ser2net.py [seçenekler]`, `ser2net-linux-x64 [seçenekler]`,
+`ser2net-windows-x64.exe [seçenekler]` (`--help` hepsini listeler):
+
+| Seçenek | Ne yapar |
+|---|---|
+| `--data-dir KLASÖR` | `config.json`, yedekleri, log'lar ve trace'lerin yeri (varsayılan: `ser2net.py`'nin ya da binary'nin yanındaki `data/`); ser2net'e kendine ait bir klasör verin |
+| `--config DOSYA` | başka bir yerdeki `config.json`; veri klasörü o zaman onun klasörüdür |
+| `--reconfigure` | yönetim arayüzünün adresini ve portunu konsolda yeniden sorar, sonra başlar |
+| `--online` | bağımlılık kurulumu `vendor/wheels/`'te olmayan bir wheel için PyPI'ye başvurabilir (kaynak kurulum) |
+| `--no-bootstrap` | bağımlılık kurulumunu atlar (paketler zaten yüklü) |
+| `--version` | sürümü yazıp çıkar |
+| `--about` | Python, OpenSSL ve bileşenlerin sürümlerini ve her birinin nereden yüklendiğini yazar |
+| `--licenses` | ser2net'in ve içindeki her bileşenin lisans metinlerini yazar |
+| `--healthcheck` | bu veri klasörünün çalışan kopyası `/healthz`'e yanıt veriyorsa 0, vermiyorsa 1 ile çıkar |
+| `--set-password KULLANICI` | yerel bir hesabın parolasını belirler (hesap yoksa admin olarak açar), oturumlarını kapatır ve iki adımlı girişini kapatır; ser2net çalışırken de |
+| `--sign-out-all` | web arayüzündeki bütün oturumları kapatır (yeni oturum anahtarı) |
+| `--reload` | bu veri klasörüyle çalışan ser2net'in `config.json`'u yeniden uygulamasını sağlar (SIGHUP ve `systemctl reload` da aynısını yapar) |
+| `--install-service`, `--uninstall-service`, `--service-name AD`, `--allow-unsafe-location` | Windows servisi ([`docs/WINDOWS.md`](docs/WINDOWS.md)) |
+
+`--set-password`, `--sign-out-all`, `--reload`, `--about`, `--licenses`, `--version` ve
+`--healthcheck` işini yapıp çıkar; diğerleri ser2net'i başlatır.
 
 ### Offline kurulum (internetsiz makine)
 Bağımlılıklar `vendor/wheels/` içinde bulunur; `ser2net.py` ilk açılışta bunları
@@ -686,7 +748,7 @@ açılır ve nedenini log'una yazar (`WARNING: … ./lib …`); bu sürüm eski 
 çalıştığı hesapla çalıştırın, ör. `sudo -u ser2net python3 /opt/ser2net/bootstrap.py`);
 `--no-bootstrap` kullanılıyorsa her yükseltmeden sonra yol budur ve `lib/` güncel olmadıkça
 açılış log'u uyarır. Çalışan bir ser2net'in yanında da çalışabilen tek seferlik komutlar
-(`--set-password`, `--sign-out-all`, `--about`, `--install-service`) `lib/`'e dokunmaz,
+(`--set-password`, `--sign-out-all`, `--reload`, `--about`, `--install-service`) `lib/`'e dokunmaz,
 yalnızca uyarır.
 
 ### Docker
@@ -705,20 +767,42 @@ Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` 
 ayarlanır — başsız ortamda interaktif seçici çalışamaz; `SER2NET_BIND_IP=*` IPv4 ve IPv6
 tüm arayüzler demektir). Her eşlemenin portunu da yayınlayın
 (yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
-alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç root olarak değil, `ser2net`
-kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
+alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç hiçbir zaman root olarak
+çalışmaz: `ser2net` kullanıcısıyla (uid 10001) ya da bind mount edilen `/data` klasörünün
+sahibiyle (veya verilen `--user` ile) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
 volume'u ilk açılışta otomatik devralınır, bind mount edilen bir klasörde eski imajın root
-olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez.
+olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir şey yapmak gerekmez
+(host ağında 1024 altında bir eşleme portu varsa `SER2NET_LOW_PORTS=1` gerekir, bkz.
+[`docs/DOCKER.md`](docs/DOCKER.md#ports-and-networking)).
 İmajda `HEALTHCHECK` var (`ser2net --healthcheck`). Reverse proxy arkasında
 `SER2NET_PUBLIC_URL` ve `SER2NET_TRUSTED_PROXIES`, Ayarlar → Reverse proxy'nin yaptığını
 yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 [`docs/DOCKER.md`](docs/DOCKER.md).
 
+### Klasik ser2net'ten geçiş
+Klasik `ser2net` servisinden (dağıtımın paketi) mi geliyorsunuz? Onun
+`/etc/ser2net/ser2net.yaml` ya da `/etc/ser2net.conf` dosyasını **Ayarlar → Eşlemeleri
+dışa / içe aktar** bölümünden içe aktarın: önizleme her bağlantıyı dönüşeceği eşleme olarak,
+hangilerinin devre dışı geldiğini ve nedenini, neyin farklı çalıştığını gösterir. Uygulamadan
+önce (uygulamak etkin eşlemeleri başlatır):
+- aynı portları ve cihazları tutan klasik servisi durdurup devre dışı bırakın
+  (`sudo systemctl disable --now ser2net`); onun unit'inin adı da `ser2net.service`, bu
+  yüzden paketini kaldırın ya da bunu `ser2net@.service` örneği olarak çalıştırın;
+- 1024 altındaki portlar için servise `CAP_NET_BIND_SERVICE` yetkisini verin ya da portları
+  yukarı taşıyın (klasik servis çoğunlukla root olarak çalışırdı; Servis olarak çalıştırma
+  altında *1024 altı portlar*);
+- TLS / istemci sertifikası satırlarını ve devre dışı gelenleri kontrol edin.
+
+Bir eşleme seri cihazını açık tutar: açılış dizgesi (openstr) her istemci için değil, port
+açıldığında bir kez gönderilir ve oturumlar arasında başka programlar cihazı kullanamaz.
+Adımlar, farklar ve seçenek tablosu (İngilizce):
+[`docs/MIGRATING-FROM-SER2NET.md`](docs/MIGRATING-FROM-SER2NET.md).
+
 ---
 
 ## 🖥️ Kullanım
 
-- **Eşleme ekle:** Ad, tür (Serial↔Network / Serial↔Serial), seri port + parametreler,
+- **Eşleme ekle:** Ad, tür (Seri ↔ Ağ / Seri ↔ Seri), seri port + parametreler,
   ağ modu (server/client/udp), protokol, bind/remote IP:port, erişim kuralları.
 - **Başlat/Durdur/Yeniden başlat/Kopyala/Sil:** her satırda. Bağlı istemci varken
   Durdur ve Yeniden başlat önce sorar (istemcilerin bağlantısı kesilir; durdurulan eşleme
@@ -727,13 +811,16 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
   (taşıma protokolü ve adresine göre, ser2net'in kendi portlarından biri değil; 65535'ten
   sonra aşağı doğru aranır), MQTT client ID'si yok, base topic `<topic>-copy` (`-copy-2`,
   …) ve yeni adından türeyen bir Sparkplug B edge düğüm ID'si; böylece seri portu
-  değiştirilince orijinalin yanında çalışabilir.
+  değiştirilince orijinalin yanında çalışabilir. Eşlemesi başlamayan bir kaydetme, Başlat
+  ya da Yeniden başlat nedenini tek bir bildirimde söyler (portunu başka bir program
+  dinliyorsa ne yapılacağıyla, bir dinleyici yeniden denenirken de orada dinleyebilir
+  olunca başlatılacağıyla).
 - **Düzenle:** eşleme değişmeden önce açılmış bir düzenleme formu (başka bir kullanıcı ya da
   sekme, bir başlatma ya da durdurma, REST API) kaydedilmez: girdiğin değerler ve bir notla
   geri gelir; yeniden kaydetmek o değişikliklerin yerine bunları yazar. Eşlemesi bu arada
   silinmiş bir form yeni bir eşleme olarak geri gelir.
 - **Log:** eşlemenin geçmiş logu (en yeni üstte, restart sonrası kalıcı).
-- **Monitor:** tarayıcıda canlı seri terminal (xterm.js); salt okunur olmayan ağ
+- **İzle:** tarayıcıda canlı seri terminal (xterm.js); salt okunur olmayan ağ
   eşlemelerinde operator'ler cihaza yazabilir (Modbus gateway konsolu yalnızca hattı izler
   ve hex görünümünde açılır); konsoldaki **BREAK gönder** düğmesi, telnet istemcisinin
   BREAK'i gibi seri hattı 0,25 sn break durumunda tutar (denetim kaydına `mapping_break`
@@ -748,11 +835,13 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir, indirilir ve silinir (tek
   dosya ya da tümü, denetim kaydına yazılır). Tracing açıkken ve kapatıldıktan sonra da
   dosya kaldığı sürece görünür.
-- **Ayarlar:** parola değiştir, **iki adımlı giriş**, **web arayüzü erişimi** (giriş zorunlu /
+- **Ayarlar:** *Parolanı değiştir*, **iki adımlı giriş**, **web arayüzü erişimi** (giriş zorunlu /
   parolasız rol), admin TLS (yol ver veya self-signed üret; daha önce üretilen çift `*.bak`
   olarak saklanır; yeni bağlantılar hemen kullanır, yeniden başlatma gerekmez), **REST API
   token'ları** üret/iptal et ya da ilk token'ın yalnızca rolünü değiştir (tek seferlik
-  token'ın Kopyala düğmesi var), mapping **yedek al/yükle** (JSON), durum ve **bu kurulumun
+  token'ın Kopyala düğmesi var), **Eşlemeleri dışa / içe aktar** (JSON), **Yapılandırma
+  yedekleri** (kayıtlı bir `config.json`'u geri yükle; *config.json'u yeniden yükle*),
+  **Saklama süresi** ve **bu kurulumun
   adı** (Yönetim arayüzü; ya da `SER2NET_NODE_NAME`): bildirimler, tarayıcı sekmesi, üst bar
   ve LAN cluster'ın filo görünümü, aynı makinedeki kurulumların paylaştığı host adı yerine
   bunu kullanır; genel JSON webhook'u ayrıca `hostname` ve `instance_id` alır. Yönetim
@@ -760,9 +849,12 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
   açılışı bekleyen adres ve bu kurulumda adresin nasıl değiştiği görünür (Docker:
   `SER2NET_BIND_IP` / `SER2NET_PORT`; Windows servisi: `--reconfigure` ile yeniden kurulum;
   diğerleri: `--reconfigure` ile başlatma). Kaydedilen bir form sayfaya, kendi bölümüne döner
-  ve sonucu orada yazar; sayfayı yenilemek ya da Geri formu yeniden göndermez (yeni bir token
-  üretmez, yedeği yeniden yüklemez). Reddedilen bir form, nedeniyle birlikte yazılanları
-  korur (parola ve anahtarlar yeniden yazılır).
+  ve sonucu orada yazar (`/settings#<bölüm>`'e `303`); sayfayı yenilemek ya da Geri formu
+  yeniden göndermez (yeni bir token üretmez, yedeği yeniden yüklemez). Reddedilen bir form
+  (`400`), nedeniyle birlikte yazılanları korur (parola ve anahtarlar yeniden yazılır).
+  Arayüzü HTTP ile HTTPS arasında değiştiren bir TLS değişikliği, devam edilecek adresi
+  söyleyen sayfanın kendisiyle yanıt verir. İki adımlı giriş sayfası da aynı şekilde
+  çalışır.
 - **/metrics:** Prometheus formatında metrikler (web arayüzü oturumuyla; REST API
   token'ıyla: `/api/v1/metrics`, bkz. REST API): eşleme başına etkin olup olmadığı
   (`ser2net_mapping_enabled`: bilerek durdurulan eşleme 0'dır, hata veren eşlemeyle
@@ -782,8 +874,11 @@ yapar ([`docs/REVERSE-PROXY.md`](docs/REVERSE-PROXY.md)). Ayrıntılar:
   periyodik okuduğu her unit için yanıt verip vermediği (`ser2net_modbus_unit_up`) ve
   başarısız okumaları (`ser2net_modbus_unit_poll_errors_total`); MQTT'ye yayın yapan bir
   eşlemenin broker'ına bağlı olup olmadığı (`ser2net_mqtt_connected`) ve broker'a teslim
-  edemediği mesajlar (`ser2net_mqtt_messages_dropped_total`). Her serinin `# HELP` ve
-  `# TYPE` satırı vardır. Oturum olmadan gelen bir scraper `401` alır (tarayıcı giriş
+  edemediği mesajlar (`ser2net_mqtt_messages_dropped_total`); ayrıca `ser2net_up`, eşleme
+  sayısı (`ser2net_mappings_total`), bir eşlemenin veri yok alarmında olup olmadığı
+  (`ser2net_mapping_no_data`) ve event loop'un geciken kalp atışları
+  (`ser2net_event_loop_stalls_total`, gecikmesi `ser2net_event_loop_lag_seconds`). Her
+  serinin `# HELP` ve `# TYPE` satırı vardır. Oturum olmadan gelen bir scraper `401` alır (tarayıcı giriş
   sayfasına yönlenir) ve başarılı scrape'ler `all.log`'a yazılmaz.
 
 ### Başka programlarla paylaşılan seri portlar (Linux)
@@ -792,8 +887,9 @@ Programların hepsi kilit kullanmadıkça hiçbir şey diğer programları bir s
 tutmaz; çekirdek konsolu, oturum açma istemi (login prompt) ve ModemManager da bir portu
 sormadan kullanır. ser2net bu durumda portun baytlarını onlarla paylaşır (araya karışan
 karakterler, Modbus timeout'ları), oturum açma istemi de her yeniden başladığında portu
-kapatır (hang-up). Portlar sayfası böyle portları işaretler (**çekirdek konsolu**, **oturum
-açma istemi**, **ModemManager**, ser2net'in açamayacağı bir port için de **erişim yok**);
+kapatır (hang-up). Panodaki *Algılanan seri portlar* listesi böyle portları işaretler
+(**çekirdek konsolu**, **oturum açma istemi**, **ModemManager**, ser2net'in açamayacağı bir
+port için de **erişim yok**);
 böyle bir portu açık tutan eşleme de bunu durumunun altında söyler (kapatılıp hemen yeniden
 açılan port da orada sayılır).
 - **Çekirdek konsolu, oturum açma istemi** (Raspberry Pi'nin GPIO UART'ı, bir VM'nin seri
@@ -810,12 +906,24 @@ açılan port da orada sayılır).
   Gereklilikler); **meşgul port:** portu bu ser2net'in hangi eşlemesinin açık tuttuğunu ya da
   başka bir programın ne tür bir kilit tuttuğunu söyler.
 
+**Linux seri port sorun giderme** ([`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md), İngilizce):
+panoda görünen mesajlardan nedene giden bir tablo (`[Errno 13] Permission denied`: grup;
+`[Errno 16] Device or resource busy` ya da TIOCEXCL: ModemManager, klasik ser2net ya da
+brltty portu tutuyor; `Could not exclusively lock port`: başka bir ser2net ya da picocom /
+tio; `device missing` / `[Errno 2]`: cihaz yok ya da adı değişti), seri grubunun
+bulunması (`stat -L -c %G /dev/ttyUSB0`, systemd'de `SupplementaryGroups=`, Docker'da
+sayısal GID), udev kuralları, kararlı cihaz adları (`/dev/serial/by-id`, `by-path`, USB
+kimliği), portu kimin tuttuğu (`fuser`, `lsof`, `LCK..` dosyaları), ModemManager, brltty
+(Ubuntu'da CH340 adaptörlerini kapar) ve Raspberry Pi UART'ları (`/dev/serial0`; Pi 3/4'ün
+mini UART'ı parity desteklemez, Modbus RTU 8E1 için `dtoverlay=disable-bt` ile PL011
+gerekir).
+
 ---
 
 ## 🔌 REST API
 
 Tarayıcı arayüzünün yanında, otomasyon için JSON bir API (`/api/v1`). Kimlik doğrulama
-`Authorization: Bearer <token>` ile yapılır; token'ı **Ayarlar → REST API token**'dan
+`Authorization: Bearer <token>` ile yapılır; token'ı **Ayarlar → REST API token'ı** bölümünden
 üretin (yalnızca bir kez gösterilir). Tam tanım: `GET /api/v1/openapi.json`.
 
 ```bash
@@ -836,7 +944,10 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://HOST:8080/api/v1/mappings/
 Uç noktalar: `GET/POST /mappings`, `GET/PUT/PATCH/DELETE /mappings/{id}`,
 `POST /mappings/{id}/{start|stop|restart}`, `POST /import`, `GET /status`, `GET /ports`,
 `GET /metrics`, `GET /info` (ser2net'in sürümü, API'nin sürümü ve sunduğu `features`),
-`GET /health` (kimlik doğrulamasız), `GET /openapi.json`.
+`GET /health` ve `GET /openapi.json` (ikisi de kimlik doğrulamasız). Web arayüzünün kendi uç
+noktaları (`/api/status`: panonun tablosu; `X-Content-Hash`'ini geri gönderen sayfaya `204`
+ya da yalnızca değişen sayaçlarla yanıt verir) tarayıcı içindir: script'ler `/api/v1`
+kullanır.
 
 **`PUT` eşlemenin tamamını değiştirir.** Gövdenin içermediği her alan, yeni bir eşlemedeki
 gibi varsayılanını alır: `0.0.0.0` üzerinde 4001 portunu dinler, istemci izin listesi yoktur,
@@ -874,7 +985,8 @@ düşülür. Ayar olmayan anahtarlar yok sayılır ve yanıttaki `warnings` list
 adlandırılır. Beklenmeyen bir sunucu hatası da JSON bir `500`
 döner.
 Kaydedilemeyen bir değişiklik hiçbir şeyi değiştirmez: yapılandırma doğrulanmıyorsa — örneğin
-çalışan bir eşlemeyle aynı seri portu kullanacak bir başlatmada — `400` (`validation`),
+etkin başka bir eşlemeyle aynı seri portu, MQTT client ID'sini, Sparkplug B edge node'unu ya
+da komut topic'ini kullanacak bir başlatmada — `400` (`validation`),
 `config.json` yazılamıyorsa (dolu ya da salt okunur disk) `500` (`save_failed`) döner.
 Durdurma her zaman durdurur; `config.json` yazılamıyorsa yanıttaki `warning`, eşlemenin
 ser2net yeniden başlayınca yine çalışacağını söyler.
@@ -911,7 +1023,7 @@ sırları (MQTT parolası ve istemci anahtarı parolası, bir eşlemenin TLS ana
 bu maskeyi geri gönderen bir `PUT` ya da `PATCH` kayıtlı parolayı korur. `config.json`'daki `api_token_role` bir rol değilse `viewer` sayılır
 ve açılış log'u bunu yazar.
 
-**Her istemciye ayrı token:** **Ayarlar → REST API token → Diğer token'lar**'da bir admin, bu
+**Her istemciye ayrı token:** **Ayarlar → REST API token'ı → Diğer token'lar**'da bir admin, bu
 token'ın yanına adlı token'lar ekler; her birinin kendi rolü (`viewer` yalnızca okur,
 `operator` değiştirebilir de) ve istenirse gün olarak bir bitiş süresi olur — örneğin
 Prometheus ya da bir pano için salt okunur bir token, kurulum script'i için yazabilen bir
@@ -956,11 +1068,12 @@ parmak izi olmadan dışarı bağlanan TLS yalnızca şifreler:** ağ yolundaki 
 sunucu gibi gösterebilir. CA dosyası PEM (bir ya da daha çok sertifika) ya da DER olabilir
 ve içindeki her sertifikaya güvenilir, kendinden imzalı bir sunucunun kendi sertifikası da.
 Şifreli bir anahtar parolasını ister (**TLS anahtar parolası**, `network.tls_key_password`;
-yönetim arayüzü için Ayarlar → Admin TLS altında `admin_ui.tls_key_password`): ser2net
+yönetim arayüzü için Ayarlar → *Yönetim arayüzü için TLS (HTTPS)* altında *Anahtar
+parolası*, `admin_ui.tls_key_password`): ser2net
 konsolda asla parola sormaz; parola yoksa eşleme, yönetim arayüzünün anahtarındaysa açılış,
 bunu söyleyen bir hatayla durur. Form ve REST API bir eşlemenin dosyalarını kaydederken
-yükler, kayıtlı anahtar parolasını hiç göstermez (viewer API token'ı maskeli alır) ve
-yönetim arayüzünün kendi anahtarını reddeder. Sertifika yönetilemeyen yerlerde güvenilmeyen
+yükler ve yönetim arayüzünün kendi anahtarını reddeder; form kayıtlı anahtar parolasını hiç
+göstermez, REST API de viewer token'ına maskeli verir. Sertifika yönetilemeyen yerlerde güvenilmeyen
 ağın önünde bir VPN (WireGuard) ya da stunnel seçenektir.
 
 **HSTS:** admin TLS açıkken sayfalar ve REST API yanıtları bir yıllık `max-age` ile
@@ -968,7 +1081,7 @@ ağın önünde bir VPN (WireGuard) ya da stunnel seçenektir.
 değil, sertifika uyarısı geçilerek de değil) gelen bir tarayıcı, her ziyaretten sonra bu süre
 boyunca o ad için her portta yalnızca https:// kullanır: aynı addaki düz HTTP ya da
 self-signed başka web arayüzleri o tarayıcıda açılmaz, TLS kapatılınca bu arayüz de.
-**Ayarlar → Admin TLS → HSTS max-age** (`admin_ui.hsts_max_age`, 0 ile 63072000 saniye
+**Ayarlar → Yönetim arayüzü için TLS (HTTPS) → HSTS max-age (saniye)** (`admin_ui.hsts_max_age`, 0 ile 63072000 saniye
 arası) bunu hemen değiştirir; 0, tarayıcıların bunu unutmasını sağlayan `max-age=0`
 gönderir. TLS'yi kapatmadan önce 0 yapın ve kullanıcıların arayüzü bir kez açmasını bekleyin.
 
@@ -1031,11 +1144,11 @@ user historian
 topic read plant/line3/#
 ```
 
-**Parolasız erişim (isteğe bağlı):** yalnızca güvenilir ağlar için, bir admin
-**Ayarlar → Web arayüzü erişimi**'nden giriş zorunluluğunu kapatıp ziyaretçilere bir rol
+**Açık erişim (isteğe bağlı):** yalnızca güvenilir ağlar için, bir admin
+**Ayarlar → Web arayüzü erişimi**'nden *Web arayüzü için giriş (parola) zorunlu olsun* işaretini kaldırıp ziyaretçilere bir rol
 (`viewer` salt-okunur / `operator` / `admin`) verebilir. Oturum açmak yine mümkündür
 (kendi rolünüz geçerli olur), RBAC ve CSRF aynen uygulanır, **REST API her zaman
-token ister**. Parolasız erişim yalnızca arayüze **IP adresi, `localhost` veya makinenin
+token ister**. Açık erişim yalnızca arayüze **IP adresi, `localhost` veya makinenin
 kendi adıyla** gelindiğinde geçerlidir — başka bir alan adıyla (ör. DNS-rebinding yapan
 kötü niyetli bir sayfa) gelen istekler giriş ekranına yönlendirilir. Ters proxy arkasında
 proxy özgün adı `X-Forwarded-Host` ile iletmelidir (iletmiyorsa girişi açık tutun).
@@ -1054,7 +1167,8 @@ kaydına yazılır (`login_notice_set`). Varsayılan olarak hiçbiri yoktur.
 
 **Başka sitelerden gelen istekler:** tarayıcı bir değişikliği (web arayüzüne giden her
 POST, PUT, PATCH ya da DELETE) başka bir sitenin sayfasının gönderdiğini söylüyorsa istek
-403 ile reddedilir: `Sec-Fetch-Site` `same-origin` değilse ya da `Origin` arayüze gelinen
+403 ile reddedilir: `Sec-Fetch-Site` `same-origin` (ya da adres çubuğuna yazılınca gelen
+`none`) değilse ya da `Origin` arayüze gelinen
 adres değilse — aynı host'un başka bir portu ve kardeş bir alt alan adı da başka site
 sayılır. Bu, CSRF token'ına ek bir kontroldür; token her giriş ve çıkıştan sonra yenilenir
 ve oturum kadar geçerli kalır. Ters proxy arkasında proxy, tarayıcının kullandığı adresi
@@ -1068,8 +1182,8 @@ tarayıcının el sıkışması, bu arayüzün kendi sayfasından geldiğini sö
 `X-Forwarded-Host` veya `Forwarded: host=` içindeki adresse ya da genel URL ise kabul edilir.
 Bu yüzden proxy tarayıcının adresini iletmeli — nginx'te `proxy_set_header Host $http_host;`,
 Apache'de `ProxyPreserveHost On`, IIS ARR'de `preserveHostHeader` (Caddy ve Traefik bunu zaten
-yapar) — ve WebSocket yükseltmesini geçirmelidir; düz HTTP'de tarayıcılar `Sec-Fetch-Site`
-göndermediği için orada yalnızca adres belirleyicidir. all.log reddedilen `Origin`'i ve
+yapar) — ve WebSocket yükseltmesini geçirmelidir; düz HTTP'de (`localhost` dışında)
+tarayıcılar `Sec-Fetch-Site` göndermediği için orada yalnızca adres belirleyicidir. all.log reddedilen `Origin`'i ve
 arayüzün gördüğü adresleri dakikada en fazla bir kez yazar. Gerisi **Ayarlar → Reverse
 proxy**'de: **genel URL** (kullanıcıların açtığı adres; origin'i arayüzün kendi adresi
 sayılır, boş bir SSO redirect URI'si ondan oluşturulur, bildirimler ona bağlantı verir ve
@@ -1088,21 +1202,23 @@ bir şey eksik olduğunda all.log'un ne yazdığı (İngilizce):
 OWASP'ın en düşük önerisi; hash maliyetini kendisi taşır, böylece maliyet ileride
 artırılabilir). 2.8.1 ya da daha eski bir sürümün yaptığı hash çalışmaya devam eder ve o
 hesabın bir sonraki girişinde bugünkü maliyetle yenilenir (oturumları sürer; `config.json`
-kaydedilir, öncekisi `backups/`'a gider). Parolalar Unicode NFKC olarak karşılaştırılır:
+kaydedilir ve her kayıtta olduğu gibi `backups/`'ta tutulur). Parolalar Unicode NFKC olarak karşılaştırılır:
 aksanı tek karakter ya da iki karakter olan bir harf (macOS'tan ya da bir PDF'ten
 yapıştırılan metin), bölünmez boşlukla normal boşluk, tam genişlikli karakterler aynı
 parolayı verir. Dizine (LDAP) parola yazıldığı gibi gider. **2.8.1'e ya da daha eski bir
-sürüme dönerken:** o sürümler yenilenen hash'leri okuyamaz, yani 2.9 ile giriş yapmış bir
-hesap orada giriş yapamaz: `ser2net --set-password AD` ile (2.8.1) yeni parola verin; böyle
+sürüme dönerken:** o sürümler 2.9'un yaptığı hash'leri okuyamaz, yani 2.9 altında giriş
+yapmış ya da parolası belirlenmiş bir hesap orada giriş yapamaz: `ser2net --set-password AD` ile (2.8.1) yeni parola verin; böyle
 bir komutu olmayan 2.8.0 ve öncesinde `backups/` içinden yükseltmeden önceki bir
 `config.json`'u geri koyun.
 
-**Oturumlar:** çıkış yapınca o oturum sunucuda da biter (çerezin bir kopyası da artık
+**Oturumlar:** oturum olmadan açılan bir sayfa giriş sayfasına, girişten sonra da o sayfaya
+geri gider (`/login?next=<sayfa>`); `/metrics` bunu bir tarayıcı için yapar, bir scraper'a
+`401` döner. Çıkış yapınca o oturum sunucuda da biter (çerezin bir kopyası da artık
 çalışmaz). **Ayarlar → Kullanıcılar**'da admin bir kullanıcının tüm oturumlarını kapatabilir
 ya da yerel bir kullanıcıya yeni parola verebilir (bu da oturumlarını kapatır); herkes
 *Diğer oturumlarımı kapat* ile kendi diğer oturumlarını kapatabilir. **Ayarlar → Web arayüzü
-erişimi → Herkesin oturumunu kapat** yeni bir oturum anahtarı üretip admin'in kendi oturumu
-dışındaki tüm oturumları bir anda kapatır; `config.json`'un ya da bir yedeğin kopyası sızmış
+erişimi → Herkesin oturumunu kapat** yeni bir oturum anahtarı üretip tüm oturumları bir anda
+kapatır (düğmeye basan admin o tarayıcıda yeniden giriş yapmış olur); `config.json`'un ya da bir yedeğin kopyası sızmış
 olabilirse bunu kullanın (indirilen yedeklerde anahtar yer almaz). LDAP ya da OIDC
 kapalıyken o hesapların oturumları geçersizdir. Tarayıcılar çerezleri porta göre değil host
 adına göre tutar; bu yüzden 8080 dışındaki bir portta arayüzün çerez adlarına portun bir
@@ -1132,21 +1248,27 @@ eşleme ve tür başına 5 dakikada bir kez kaydedilir; 10 dakikada en çok 50 b
 fazlası aynı şekilde toplanır (all.log her biri için bir satır tutar). Hesap (açık erişimde:
 adres) ve eşleme başına aynı anda en çok 4 konsol ve hex görünümü (birlikte) açık olabilir;
 eşleme başına 16, toplam 64. Trafiği atılırken 30 saniye hiçbir şey almayan biri kapatılır.
-Cihaza yazan bir
+Konsolun WebSocket'i neden kapandığını söyler (sayfa da gösterir): `1013` çok fazla açık,
+`4001` eşleme durdu ya da yeniden başladı (sayfa yeniden bağlanır), `4002` çıkış yapıldı ya da
+erişim değişti, `4003` 30 sn hiçbir şey almadı, `4004` eşleme silindi, `1008` en başta
+reddedildi (oturum yok ya da başka bir sitenin sayfası). Cihaza yazan bir
 konsolun kapanışı da kaydedilir (`console_close`, bayt sayısıyla; yazılanın kendisi asla).
 Başarısız bir SSO girişi (kimlik sağlayıcı reddetti, yanıtı doğrulanamadı ya da grupları bir rol
 vermiyor) kısa bir nedenle `oidc_login_failed` olarak kaydedilir ve yerel ya da LDAP girişi gibi
 bildirilir; aynı sınır geçerlidir. Token'ı yüzünden reddedilen bir REST API isteği (token yok,
 yanlış ya da süresi dolmuş) adres başına dakikada bir kez `api_auth_failed` olarak kaydedilir
 (sonraki kayıt aradakilerin sayısını söyler), 10 dakikada en çok 20 kez. Sayfaya ulaşmadan
-reddedilen bir istek (oturum yok, CSRF kontrolü başarısız, oturumsuz ya da başka bir siteden
-gelen WebSocket) adres ve yanıt başına dakikada bir all.log satırı alır; sonraki satır aradaki
-sayıyı söyler. Adlardaki satır sonları ve diğer kontrol karakterleri (bir eşleme adı, dizinden
+reddedilen bir istek (oturum yok, CSRF kontrolü başarısız, oturumsuz bir WebSocket) adres
+ve yanıt başına dakikada bir all.log satırı alır, sonraki satır aradaki sayıyı söyler; başka
+bir siteden gelen WebSocket'ler toplamda dakikada bir satır alır. Bu kayıtlar ve konsol
+sınırları bir adresi olduğu gibi sayar; bağlantı, el sıkışma ve giriş sınırları bir IPv6
+/64'ünü tek adres sayar. Adlardaki satır sonları ve diğer kontrol karakterleri (bir eşleme adı, dizinden
 gelen bir kullanıcı adı) all.log'a, stdout'a, eşleme log'larına, denetim kaydına ve bildirim
 başlıklarına boşluk olarak yazılır; böylece kendi başına bir satır başlatamazlar. 256
-karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, kurulum ve
-çıkış formları 64 KB, yapılandırma içe aktarma 16 MB, geri kalan her şey (formlar, REST API)
-2 MB; daha büyüğü HTTP 413 alır.
+karakterden uzun adlar denenmez. İstek gövdeleri de sınırlıdır: giriş, iki adımlı giriş,
+kurulum ve çıkış formları 64 KB, yapılandırma içe aktarma (form ya da REST API) 16 MB, bir
+küme düğümünün isteği 1 MB, geri kalan her şey (formlar, REST API) 2 MB; daha büyüğü HTTP
+413 alır.
 
 **LDAP / OIDC grupları → roller:** bir grup ayarı (admin / operator / viewer grubu) tek bir
 grubu adlandırır ve yalnızca o grubun adının tamamıyla eşleşir, asla bir parçasıyla değil.
@@ -1229,17 +1351,18 @@ Sertifika sistemin güvendiği bir CA'dan gelmeli (Linux / Docker: CA paketi; Wi
 deposu, domain üyesi bir makinede AD CA'sı genellikle zaten oradadır) ve sunucu URI'sindeki
 host adını içermelidir: sertifikanın verildiği adı kullanın (`ldaps://dc01.corp.local`; IP
 adresini yalnızca sertifika o adresi içeriyorsa). Kendi CA'nız (Active Directory Certificate
-Services) ya da self-signed bir sertifika için **Ayarlar → LDAP → CA sertifika dosyası**'na o
-CA'nın sertifikasını girin: PEM ya da Windows'un dışa aktardığı DER (Docker: dosyayı `/data`
-volume'una koyun); o zaman yalnızca bu dosyadaki sertifikalara güvenilir. Kabul edilmeyen bir
+Services) ya da self-signed bir sertifika için **Ayarlar → LDAP / Active Directory → CA
+sertifika dosyası**'na o CA'nın sertifikasını tam yoluyla girin: PEM ya da Windows'un dışa
+aktardığı DER (Docker: dosyayı `/data` volume'una koyup `/data/corp-ca.pem` girin; bir
+eşlemenin TLS dosyalarının aksine göreli bir yol veri klasöründe aranmaz); o zaman yalnızca bu dosyadaki sertifikalara güvenilir. Kabul edilmeyen bir
 sertifika, nedeni ve ne ayarlanacağıyla all.log'a yazılır, Ayarlar da gösterir; o bağlantı
 üzerinden hiçbir şey gönderilmez. *Sunucu sertifikasını denetleme* denetimi kapatır, bu
 güvensizdir: ser2net ile dizin arasındaki ağdaki herkes parolaları okuyup herhangi biri olarak
 giriş yapabilir. Kapalıyken, ayrıca parolalar şifrelenmeden gidiyorsa (StartTLS olmadan
 `ldap://`) Ayarlar ve açılış logu uyarır. TLS üzerinden ser2net başka bir sunucuya
 yönlendirmeyi (referral) izlemez (o sunucunun sertifikası denetlenmeden kalırdı): URI'yi
-kullanıcıları ve gruplarını tutan bir sunucuya yöneltin. **2.8 ya da daha eski bir sürümden
-yükseltince**, sertifikaya güvenilmiyorsa LDAP girişi durur: CA sertifika dosyasını ayarlayın
+kullanıcıları ve gruplarını tutan bir sunucuya yöneltin. **2.8.0 ya da daha eski bir
+sürümden yükseltince**, sertifikaya güvenilmiyorsa LDAP girişi durur: CA sertifika dosyasını ayarlayın
 (yerel hesaplar çalışmaya devam eder; yerel admin yoksa `ser2net --set-password AD` ile bir
 tane oluşturun).
 
@@ -1278,10 +1401,12 @@ sahibine geçer):
 |---|---|
 | kaynak / Linux binary (systemd) | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --data-dir /opt/ser2net/data --set-password admin` (`ser2net-standalone.service` ile binary: `sudo -u ser2net /usr/local/bin/ser2net --data-dir /var/lib/ser2net --set-password admin`; elle başlatılan: `./ser2net-linux-x64 --set-password admin`) |
 | Windows (yönetici komut istemi; servis çalışırken de) | `ser2net-windows-x64.exe --data-dir C:\ProgramData\ser2net --set-password admin` (servisin veri klasörü: `sc qc ser2net` gösterir) |
+| bir `ser2net@.service` örneği | `sudo -u ser2net python3 /opt/ser2net/ser2net.py --no-bootstrap --data-dir /var/lib/ser2net/<ad> --set-password admin` |
 | Docker | `docker exec -it ser2net python /app/ser2net.py --no-bootstrap --data-dir /data --set-password admin` |
 
 **Tarayıcısız ilk admin:** ilk açılıştan önce `ser2net --set-password admin` çalıştırın
-(`config.json`'u oluşturur; `--reconfigure` ya da `SER2NET_BIND_IP` aksini söylemedikçe
+(systemd altındaki bir kaynak kurulumda servisin `data/`'yı oluşturan ilk açılışından sonra;
+`config.json`'u oluşturur; `--reconfigure` ya da `SER2NET_BIND_IP` aksini söylemedikçe
 arayüz `127.0.0.1:8080`'de dinler) ya da Docker'da `SER2NET_ADMIN_PASSWORD_FILE`'ı parolayı
 içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` (varsayılan
 `admin`). Değişken yalnızca hiç hesap yokken kullanılır, sonraki açılışlar onu yok sayar.
@@ -1299,7 +1424,7 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 - **İşlemi kim yaptı:** uzaktan başlat/durdur/yeniden başlat ya da düzenleme iki düğümün de
   denetim kaydına yazılır: tarayıcının giriş yaptığı düğümde kullanıcının adıyla, değişen
   düğümde `cluster-peer:DÜĞÜM/KULLANICI` olarak — gönderen düğümün adı (kurulum adı, yoksa
-  host adı; boşluksuz) ve kullanıcısı, o düğümün imzalı istekte bildirdiği gibi (cluster anahtarına sahip bir düğümün beyanı,
+  host adı; boşluk ve `/` olmadan) ve kullanıcısı, o düğümün imzalı istekte bildirdiği gibi (cluster anahtarına sahip bir düğümün beyanı,
   değişen düğümün bir hesabı değil). 2.8.1 ya da daha eski bir düğümden gelen istek
   `cluster-peer` olarak kalır.
 - **Eski düğümler (eski kimlik doğrulama):** 2.8.0 ya da daha eski sürümle çalışan
@@ -1324,8 +1449,8 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   *Sızdıysa* — *kabul et* işaretini kaldırın, böylece eski anahtar hemen reddedilir, ve
   anahtarı her düğümde değiştirin; o zamana kadar filo görünümü değiştirilmemiş düğümler için
   **cluster anahtarı reddedildi** gösterir, bir uyarı da farklı bir anahtarla yayın yapan
-  düğümleri listeler. Yalnızca manuel eşlerin kullanıldığı yerlerde *otomatik keşif*
-  kapatılabilir.
+  düğümleri listeler. Yalnızca manuel eşlerin kullanıldığı yerlerde *Diğer düğümleri
+  otomatik bul (UDP broadcast)* kapatılabilir.
 
 ### Kümeyi yükseltme
 
@@ -1337,8 +1462,10 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   göstermez; bir eşe yalnızca sürümünün yapabildikleri sunulur (2.6.0'dan önce: yalnızca
   izleme; 2.6.0: başlat, durdur, yeniden başlat, düzenleme yok).
 - **Eski düğümlerden gelen düzenlemeler:** 2.9.0 düğümü, eski bir düğümün formunun
-  gönderemediklerini korur: MQTT client ID'si (2.9.0'dan önce alanı yok), USB kimliği ve
-  Modbus noktalarının `writable` değeri (2.8.0'dan önce), RS-485 (2.6.1 / 2.6.2). Eski bir
+  gönderemediği her ayarı korur; örneğin MQTT client ID'si (2.9.0'dan önce alanı yok), USB
+  kimliği ve Modbus noktalarının `writable` değeri (2.8.0'dan önce), RS-485 (2.6.1 / 2.6.2)
+  ve bu sürümün ayarları (veri yok alarmı, MQTT TLS, noktaların seçenekleri, birim
+  yönlendirme …). Eski bir
   düğümü düzenlerken o düğümün kendi trace yolunu değiştirmeden geri gönderir; formunun Modbus
   gateway için göstermediği ayarları da (banner, close-on dizgisi, istemci tamponu) gönderir.
 - **Yayınlanmış sürümler değişmez:** 2.9.0'dan önceki bir düğüm**den** 2.9.0'dan önceki
@@ -1360,14 +1487,18 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   kapanır), `/data` volume. Düz `docker run` ile çalıştırıyorsanız
   `--restart unless-stopped --init --stop-timeout 30` ekleyin (var olan bir container için:
   `docker update --restart unless-stopped ser2net`).
-- **Linux (systemd):** iki unit var. İkisi de ser2net'i ayrı, yetkisiz bir kullanıcıyla
-  (`ser2net`; seri portlar için `dialout` grubunda) çalıştırır, hata durumunda 3 sn sonra
-  yeniden başlatır ve sandbox içinde tutar (salt okunur sistem, kendine ait `/tmp`, sistem
-  çağrısı filtresi). **root ile çalıştırmayın.** `systemctl reload ser2net` `config.json`'u
-  yeniden okur (bkz. Yapılandırma & durum dosyaları). Arch, Manjaro ve EndeavourOS'ta seri
-  grup `uucp`'dir ve `dialout` grubu yoktur (unit `status=216/GROUP` ile başlamaz): grubu
+- **Linux (systemd):** üç unit var — `ser2net.service` (kaynak kurulum),
+  `ser2net-standalone.service` (Linux binary) ve şablon `ser2net@.service` (birden çok
+  kurulum). Hepsi ser2net'i ayrı, yetkisiz bir kullanıcıyla (`ser2net`; seri portlar için
+  `dialout` grubunda) çalıştırır, hata durumunda 3 sn sonra yeniden başlatır ve sandbox
+  içinde tutar (salt okunur sistem, kendine ait `/tmp`, sistem çağrısı filtresi). **root ile
+  çalıştırmayın.** `systemctl reload ser2net` (ya da `ser2net@<ad>`) `config.json`'u yeniden
+  okur (bkz. Yapılandırma & durum dosyaları). Arch, Manjaro ve EndeavourOS'ta seri grup
+  `uucp`'dir ve `dialout` grubu yoktur (unit `status=216/GROUP` ile başlamaz): grubu
   `systemctl edit ser2net` ile ayarla (`[Service]`, `SupplementaryGroups=`, ardından
-  `SupplementaryGroups=uucp`; unit'in yorumunda yazıyor).
+  `SupplementaryGroups=uucp`; `ser2net.service`'in yorumunda yazıyor). `ser2net-install.sh`
+  böyle bir sistemde durur (`dialout` grubu ister): orada binary'yi elle kurun. Port
+  açılmıyorsa: [`docs/LINUX-SERIAL.md`](docs/LINUX-SERIAL.md).
   - `/opt/ser2net` altında *kaynak kurulum*: `systemd/ser2net.service`.
     ```bash
     sudo useradd --system --user-group --home-dir /opt/ser2net -M -s /usr/sbin/nologin ser2net
@@ -1412,15 +1543,24 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
     Environment=SER2NET_BIND_IP=0.0.0.0 SER2NET_PORT=8080
     ```
     İlk parolayı tarayıcıda ya da `--set-password` ile belirleyin (Güvenlik altındaki
-    tablo). Bu tür komutları `ser2net` kullanıcısıyla çalıştırın (`sudo -u ser2net …`),
-    düz root ile değil; root, servisin okuyamayacağı dosyalar bırakır. Log'lar:
+    tablo). Bu tür komutları `ser2net` kullanıcısıyla çalıştırın (`sudo -u ser2net …`): hesap
+    komutları (`--set-password`, `--sign-out-all`, `--reload`) root ile çalıştırılınca
+    kendiliğinden veri dizininin sahibine geçer, ama root ile bir açılış ya da
+    `--reconfigure` servisin okuyamayacağı dosyalar bırakır. Log'lar:
     `journalctl -u ser2net` ve veri dizinindeki `all.log`.
-  - Birden çok kurulum için: `systemd/ser2net@.service` şablonu (aşağıda). İsteğe bağlı:
-    `systemd/ser2net.service.d/notify.conf` drop-in'i (`Type=notify`, `WatchdogSec=120`)
-    systemd'nin ser2net'i ancak eşlemeleri çalışıp arayüzü dinlemeye başladığında (ya da
-    yeniden denemeye geçtiğinde) başlamış saymasını ve event loop'u yanıt vermeyi bırakınca
-    yeniden başlatmasını sağlar (2.9.0'dan eski bir sürüme dönmeden önce kaldırın: eski
-    sürümler hazır olduğunu bildirmez).
+  - Birden çok kurulum için: `systemd/ser2net@.service` şablonu (aşağıda).
+  - İsteğe bağlı: `systemd/ser2net.service.d/notify.conf` drop-in'i (`Type=notify`,
+    `WatchdogSec=120`) systemd'nin ser2net'i ancak eşlemeleri çalışıp arayüzü dinlemeye
+    başladığında (ya da yeniden denemeye geçtiğinde) başlamış saymasını ve event loop'u yanıt
+    vermeyi bırakınca yeniden başlatmasını sağlar. Ne unit'ler ne `ser2net-install.sh` onu
+    kurar, release dosyası da değildir (kaynak ağacından alın):
+    ```bash
+    sudo mkdir -p /etc/systemd/system/ser2net.service.d
+    sudo cp systemd/ser2net.service.d/notify.conf /etc/systemd/system/ser2net.service.d/
+    sudo systemctl daemon-reload && sudo systemctl restart ser2net
+    ```
+    (bir örnek için: `ser2net@.service.d`). 2.9.0'dan eski bir sürüme dönmeden önce kaldırın:
+    eski sürümler hazır olduğunu bildirmez.
 - **1024 altı portlar** (Modbus/TCP'nin 502'si, 80 ya da 443'te web arayüzü): Linux bu
   portlarda yalnızca root'un ya da `CAP_NET_BIND_SERVICE` yetkisi olan bir sürecin
   dinlemesine izin verir; iki unit de ser2net'i yetkisiz bir kullanıcıyla çalıştırır. Böyle
@@ -1542,10 +1682,15 @@ farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle g
 - **Linux (systemd):** `systemd/ser2net@.service` şablonu her ad için bir kurulum çalıştırır;
   verisi `/var/lib/ser2net/<ad>` altında, adresi `/etc/ser2net/<ad>.env` içinde durur
   (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8081`); kurulum adı bildirimlerdeki adı olur.
-  Paketlenmiş bağımlılıkları bir kez, her yükseltmeden sonra da yeniden kurun (`ser2net`
-  kullanıcısıyla `python3 /opt/ser2net/bootstrap.py`: kurulumlar `--no-bootstrap` ile başlar
-  ve `lib/` güncel değilken açılış log'ları uyarır), sonra
-  `systemctl enable --now ser2net@line1 ser2net@line2`.
+  Unit'i ve paketlenmiş bağımlılıkları bir kez, bağımlılıkları her yükseltmeden sonra da
+  yeniden kurun (kurulumlar `--no-bootstrap` ile başlar ve `lib/` güncel değilken açılış
+  log'ları uyarır):
+  ```bash
+  sudo cp /opt/ser2net/systemd/ser2net@.service /etc/systemd/system/ && sudo systemctl daemon-reload
+  sudo install -d -o ser2net -g ser2net /opt/ser2net/lib
+  sudo -u ser2net python3 /opt/ser2net/bootstrap.py        # her yükseltmeden sonra yeniden
+  sudo systemctl enable --now ser2net@line1 ser2net@line2
+  ```
 - **Docker:** her kurulum için ayrı bir container; her birinin kendi volume'ü,
   `container_name`'i ve yayınlanan portları (`8081:8080`), adı için de `SER2NET_NODE_NAME`
   (ya da `hostname:`) ([docs/DOCKER.md](docs/DOCKER.md)).
@@ -1554,8 +1699,10 @@ farklı host adlarıyla (IP adresi ve ad) ya da ayrı tarayıcı profilleriyle g
 
 ser2net her tarihi sistem saatinden alır ve saati hiçbir zaman ayarlamaz (systemd unit'i
 bunu yasaklar: `ProtectClock=true`). Yanlış bir saat `all.log`, `audit.log`, trace'ler ve
-yedek adlarına yanlış zaman yazar; 15 günlük log kırpmasında ve en yeni 50 yedeğin
-budanmasında yanlış satırların ya da yedeklerin kalmasına veya silinmesine yol açabilir;
+yedek adlarına yanlış zaman yazar; 15 günlük log kırpmasında ve bir saklama süresi ayarlıysa
+eski log'ların ve yedeklerin silinmesinde yanlış satırların ya da yedeklerin kalmasına veya
+silinmesine yol açabilir (en yeni 50 yedek adlarına göre seçilir, geri giden saat bunu
+değiştirmez);
 tarih kontrollerini de bozar: oturumlar, iki adımlı giriş kodları, SSO ve TLS sertifikaları
 (MQTT, SMTP, webhook'lar, SSO ve saat yanlışken üretilmiş bir self-signed sertifika). Bir
 şeyin ne kadar süredir çalıştığı (uptime, bağlantı süreleri, cluster'ın eş listesi) hiçbir
@@ -1653,7 +1800,8 @@ klasörünü verin:
   kalmaz, boyutlar izin verdikçe sürenin en az beşte dördü kalır (audit.log o zaman en fazla
   6 dosya tutar) — eşleme log'ları 15 günlerinin en fazla bu kadarını tutar ve daha eski bir
   zamanla adlandırılmış yapılandırma yedekleri silinir, en yeni 5 yedek hiçbir zaman.
-  Hemen ve her saat kontrol edilir; ser2net çalışırken ileri alınan bir saat hiçbir şeyi
+  Süre kaydedilince hemen (eşleme log'ları bir sonraki saatlik kontrolde), sonra her saat
+  kontrol edilir; ser2net çalışırken ileri alınan bir saat hiçbir şeyi
   erken sildirmez (yaşlar açılıştaki saatle çalışılan süreden hesaplanır). 2.9 öncesinden
   bir yedeği geri yüklemek süreyi 0'a (kapalı) döndürür. Her log satırının standart
   çıktıdaki kopyasını onu toplayan tutar: Docker'da `docker-compose.yml`'deki `logging:`
@@ -1679,13 +1827,16 @@ klasörünü verin:
   gerekmediklerinde Trace panelinden silin (yazılmakta olan dosya bir sonraki trafikle
   yeniden başlar) ya da Ayarlar → *Saklama süresi* ile belli bir gün sayısı boyunca
   yazılmayanların silinmesini sağlayın (varsayılan olarak kapalı; her saat kontrol edilir;
+  aynı panel diskteki boş yeri ve trace'lerin ne zaman beklediğini gösterir, `/metrics`'te
+  `ser2net_data_free_bytes` var, *veri diski neredeyse dolu* bildirimi de haber verebilir;
   bir eşlemenin sürekli yazdığı dosya o kadar gün önceki trafiği tuttuğunda yeni bir dosyaya
   geçer, böylece o da son yazılmasından o kadar gün sonra silinir).
   Bir eşleme silinince trace'leri de silinir; değiştirerek içe aktarma (replace) ya da geri yüklemeyle kaldırılan
   eşlemelerinkiler sonraki açılışa kadar kalır (geri alınan bir geri yükleme onları bulur),
   açılış onları siler ve kaç dosya olduğunu log'a yazar.
-- `tls/` — self-signed üretilirse sertifika/anahtar. Göreli bir TLS yolu (yönetim arayüzü
-  ya da eşleme: sertifika, anahtar, CA dosyaları) veri klasöründeki bir dosyadır, örneğin
+- `tls/` — self-signed üretilirse sertifika/anahtar. Göreli bir TLS yolu (yönetim arayüzü,
+  bir eşleme ya da onun MQTT bağlantısı: sertifika, anahtar, CA dosyaları; LDAP CA dosyası
+  değil) veri klasöründeki bir dosyadır, örneğin
   `tls/cert.pem`; böylece veri klasörü taşınınca da çalışır. Taşımadan ya da başka bir
   makinede geri yüklemeden sonra (yerelden Docker `/data`'ya, başka bir `--data-dir`,
   başka bir host'tan yedek) artık orada olmayan ve bir `tls` klasörünü gösteren mutlak bir
@@ -1696,6 +1847,12 @@ klasörünü verin:
 - `sparkplug-bdseq.json` — her Sparkplug B edge node'unun (grup/düğüm) son oturumunun
   `bdSeq`'i; yeniden başlatmadan sonra numara buradan devam eder. Silinirse sonraki
   açılış 0'dan başlar.
+- `hang.log` (ve `hang.log.1`) — event loop watchdog'u ser2net'i sonlandırdığında bütün
+  thread'lerin stack'i (bkz. Servis olarak çalıştırma); `service.log` (ve `.1`) — Windows
+  servisinin kendi log'u (yukarıda, `all.log` ile).
+- `ser2net.lock` — ser2net çalışırken tutulur, böylece ikinci bir ser2net aynı veri dizinini
+  kullanamaz; `admin-requests/` — `--set-password`, `--sign-out-all` ve `--reload`'un
+  isteklerini çalışan ser2net'e bıraktığı yer (aşağıya bakın).
 
 **Gizli değerler:** `config.json` LDAP bind parolasını, OIDC client secret'ı, SMTP
 parolasını, webhook URL'sini (çoğu zaman içinde bir token vardır), her eşlemenin MQTT broker
@@ -1734,21 +1891,26 @@ düzenli ifadeyle yakalayan bir log toplayıcının saniyeden sonraki isteğe ba
 ([`docs/DOCKER.md`](docs/DOCKER.md)).
 
 Eşleme ID'leri (yukarıdaki `<id>`; REST API'de de kullanılır) 1–64 harf, rakam ya da `_`
-içerir; yeni eşlemeler 12 hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
+içerir ve bir Windows aygıt adı (`con`, `nul`, `com1`, `lpt1` …) olamaz; yeni eşlemeler 12
+hex haneli bir ID alır. Başka biçimdeki bir ID (elle düzenlenmiş
 ya da içe aktarılmış) config yüklenirken ya da dosya içe aktarılırken değiştirilir; açılış
 logu ya da içe aktarma önizlemesi bunu belirtir.
 
 **ser2net çalışırken `config.json`'u değiştirmek:** ser2net dosyayı açılışta okur, sonra
 bellekteki kopyasıyla çalışır. Elle ya da bir araçla (Ansible, kopyalanan bir dosya) yapılan
 bir düzenlemeden sonra dosyayı yeniden okutun — yeniden başlatma gerekmez:
-`systemctl reload ser2net` ya da `kill -HUP <pid>` (SIGHUP, Linux/macOS;
-`docker kill -s HUP ser2net`), aynı `--data-dir` ile `ser2net --reload` (her platformda;
-Windows servisi ve konteyner için de) ya da Ayarlar → *Yapılandırma yedekleri* →
+`systemctl reload ser2net` (bir örnek: `systemctl reload ser2net@<ad>`; üç unit'te de
+`ExecReload` var) ya da `kill -HUP <pid>` (SIGHUP, Linux/macOS; `docker kill -s HUP ser2net`),
+aynı `--data-dir` ile `ser2net --reload` (binary'nin unit'i için `/var/lib/ser2net`, bir örnek
+için `/var/lib/ser2net/<ad>`; her platformda, Windows servisi ve konteyner için de) ya da Ayarlar → *Yapılandırma yedekleri* →
 *config.json'u yeniden yükle*. Dosya bir düzenleme gibi denetlenir: okunamıyor ya da
 doğrulanmıyorsa (değişen bir eşlemede yanlış tipte bir değer, aynı portu kullanan iki eşleme,
-hiç kullanıcı hesabı olmaması, yüklenemeyen bir TLS çifti, aynı broker'da etkin başka bir
-eşlemenin kullandığı bir MQTT client ID'si) hiçbir şey değişmez ve nedeni
-`all.log`'a yazılır. Aksi halde parça parça uygulanır: ayarları değişmeyen bir eşleme
+hiç kullanıcı hesabı olmaması, yüklenemeyen bir TLS çifti, kullanılamayan MQTT TLS dosyaları,
+aynı broker'da etkin başka bir eşlemenin kullandığı bir MQTT client ID'si, komut topic'i ya da
+Sparkplug B düğümü) hiçbir şey değişmez ve nedeni `all.log`'a yazılır. Diğer değerler açılıştaki
+gibi okunur: sayı yerine yazılmış metin dönüştürülür, kullanılamayan bir değer varsayılanını
+alır, `all.log`'da bir yükleme notuyla (bkz. REST API: *Bir değer metin olarak da
+gönderilebilir*). Aksi halde parça parça uygulanır: ayarları değişmeyen bir eşleme
 istemcileriyle çalışmayı sürdürür (çalışması gerekip çalışmayan başlatılır), değişen yeniden
 başlar, kaldırılan durur, yeni olan başlar; küme yalnızca ayarları değiştiyse yeniden başlar.
 Yönetim arayüzünün ve değişmeyen TLS eşlemelerinin sertifika dosyaları yeni bağlantılar için
@@ -1766,7 +1928,7 @@ kaydetmeden önce yeniden yükleyin.
 
 **Sıfırdan başlamak:** ser2net'i durdurun, sonra veri dizinini (ya da içindeki her şeyi)
 silin; üretilmiş sertifikayı yeniden kullanmak için `tls/`'i bırakın. Yalnızca `config.json`'u
-silmek hesapları, ayarları ve eşlemeleri sıfırlar, ama `audit.log` (ve `audit.log.1`),
+silmek hesapları, ayarları ve eşlemeleri sıfırlar, ama `audit.log` (ve döndürülmüş kopyaları),
 dönmüş `all.log.1`–`.5` ve `backups/` kalır (artık olmayan eşlemelerin log'ları ve
 trace'leri bir sonraki açılışta silinir); ilk kurulumu sonra kim tamamlarsa o denetim kaydını — önceki kullanıcıların
 adlarını, adreslerini ve başarısız girişlerini — ve önceki hesapları ve gizli değerleri
@@ -1786,6 +1948,9 @@ noktalarını (fn 1/2) da reddeder, bu yüzden bunları içeren bir config orada
 değiştirdikten sonra da yeni dosya `backups/`'ta durur: yeniden yükselttikten sonra Ayarlar →
 *Yapılandırma yedekleri*'nden geri yükleyin. Daha yeni bir sürümün yazdığı (`written_by`) ya
 da bu sürümün bilmediği ayarları içeren bir `config.json`, açılışta ve o sayfada bildirilir.
+Bu sürümün systemd unit'leriyle 2.9.0'dan önceki bir sürüm `systemctl reload`'da kapanır
+(SIGHUP'ı durdurma sayardı) ve systemd onu durmuş bırakır: eski sürümün unit'ini geri koyun
+ve böyle bir sürümün hiç yanıtlamadığı `notify.conf` drop-in'ini kaldırın.
 
 **Bir kurulumu kopyalamak** (disk ya da VM imajı, kopyalanan veri klasörü ya da Docker
 volume'u): `config.json` düğümün kimliğini tutar — cluster ID'sini (`instance_id`) ve
@@ -1805,9 +1970,9 @@ altında görünür; yenilemeleri başarısız olan panel *güncel değil* diye 
 formu kaydedilmemiş değişiklikleri atmadan önce sorar. Konsolda **Shift+Tab** klavye odağını
 konsoldan çıkarır (Tab cihaza gider).
 **İçe aktarma:** önce önizleme gösterilir; *birleştir* (aynı adlı eşlemeleri güncelle,
-yenileri ekle) ya da *hepsini değiştir* seçilir. Daha eski bir sürümün dışa aktarımında
+yenileri ekle) ya da *Değiştir* seçilir. Daha eski bir sürümün dışa aktarımında
 olmayan ayarlar (ör. 2.7'nin Modbus noktalarında `writable`, trace rotasyonu, Sparkplug B)
-önizlemede adlarıyla gösterilir; birleştirmede mevcut değerlerini korur, *hepsini değiştir*
+önizlemede adlarıyla gösterilir; birleştirmede mevcut değerlerini korur, *Değiştir*
 ile varsayılanları alır. 2.7 betiklerinin tek adımlı içe aktarması (`step=preview` olmadan
 gelen POST) JSON dosyasıyla yine bütün eşlemeleri değiştirir; klasik ser2net dosyası
 yalnızca önizlemeyle alınır.
@@ -1825,28 +1990,10 @@ python3 tests/run_all.py            # taşınabilir takım (Windows + Linux)
 python3 tests/run_all.py --socat    # + socat tabanlı veri-yolu testleri (Linux)
 python3 tests/run_all.py -v         # geçen testlerin çıktısını da göster
 ```
-socat (Linux) ile sanal seri portlar kullanılır; donanım gerekmez. Tek tek de
-çalıştırılabilir, örn. `python3 tests/test_rest_api.py`. CI (GitHub Actions) her pull
-request'te ruff, mypy, `pip-audit`, çevrimdışı wheel kontrolü, tam test matrisi
-(ubuntu/windows × Python 3.10–3.14; her leg çevrimdışı ilk kurulumu da dener, 3.15
-birleştirmeyi engellemeden çalışır) ve coverage koşar
-(`python3 tests/coverage_run.py`: testlerin başlattığı sunucular da ölçülür). Geliştirme
-ortamı ve kurallar için [CONTRIBUTING.md](CONTRIBUTING.md).
-
-`tests/test_dead_peer.py` ölü bağlantı tespitini **gerçek yarı-açık (half-open) TCP
-bağlantılarıyla** da sınar: `SER2NET_BLACKHOLE_TESTS=1` verildiğinde bir loopback
-akışının paketlerini düşürür (Linux: root/şifresiz sudo + `iptables`; Windows: Yönetici
-+ `pip install pydivert`). Güvenlik duvarını değiştirdiği için yerelde isteğe bağlıdır
-(Linux'ta tek kullanımlık bir network namespace içinde çalıştırmak önerilir); CI'da
-her iki işletim sisteminde de her zaman koşar.
-
-`tests/test_ui_layout.py` web arayüzünü gerçek bir tarayıcıda (Playwright + Chromium)
-çok uzun eşleme adları ve cihaz yollarıyla, masaüstünden telefona farklı genişliklerde
-açar. Panelinin dışına taşan bir şey olursa başarısız olur
-(`pip install playwright && python -m playwright install chromium`; CI'da `ui` işi).
-`tests/test_standalone.py` derlenmiş bir binary'yi sınar
-(`SER2NET_STANDALONE_BIN=dist/ser2net`). CI'da bunu `standalone.yml` workflow'u yapar;
-her sürüm de aynı workflow'dan geçer.
+socat (Linux) ile sanal seri portlar kullanılır; donanım gerekmez, tek dosyalar doğrudan da
+çalışır (`python3 tests/test_rest_api.py`). Tarayıcıdaki yerleşim testi, yarı-açık TCP testi,
+standalone binary testi, CI'ın neleri koştuğu ve geliştirme ortamı:
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
@@ -1861,6 +2008,14 @@ Birlikte gelen üçüncü-taraf bileşenler kendi lisanslarını korur — bkz. 
 binary'deki tam metinler: `ser2net --licenses`. LGPL lisanslı ldap3 binary'de kaynak
 dosyaları olarak durur; `SER2NET_LIB_OVERRIDE=<klasör>` ile başka bir sürümü yüklenebilir.
 Güvenlik açığı bildirimi: [SECURITY.md](SECURITY.md).
+
+Web arayüzünün her sayfası lisansla ve bir **Kaynak kodu** bağlantısıyla biter (giriş
+yapılmışsa sürümle ve **Lisanslar** sayfasıyla da: bu kopyanın taşıdığı lisans metinleri —
+LICENSE, NOTICE, ticari lisans ve üçüncü taraf bildirimleri, bir binary'de ise onun
+`THIRD-PARTY-LICENSES.txt`'i). Başkalarının ağ üzerinden kullandığı değiştirilmiş bir sürüm
+onlara kendi kaynak kodunu sunmalıdır (AGPL-3.0 13. madde): bağlantıyı `SER2NET_SOURCE_URL`
+ile ona yöneltin (`https://git.example.com/bizim-ser2net`; http(s) adresi olmayan bir değer
+kullanılmaz, açılışta uyarı verilir).
 
 Katkılar memnuniyetle karşılanır! İlk pull request'inde tek seferlik bir [Katkıcı Lisans Sözleşmesi (CLA)](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823) imzalaman istenir; katkının telif hakkı sende kalır.
 
