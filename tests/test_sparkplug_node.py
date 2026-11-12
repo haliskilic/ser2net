@@ -7,10 +7,13 @@ _paho_on_disconnect(). Checks:
     poll that ends meanwhile only updates the values the births then carry;
   * report by exception: a NaN that stays NaN is not sent again on every poll;
   * bdSeq is an Int64 metric in NBIRTH and NDEATH (the Will);
+  * a metric is stamped with the time its value was read, in DDATA and in every DBIRTH
+    (a rebirth doesn't restamp old values as current); DBIRTH lists metrics oldest first;
 
 Run: python3 tests/test_sparkplug_node.py
 """
 import math
+import time
 
 from _server import ROOT  # noqa: F401  (sys.path setup)
 
@@ -128,9 +131,33 @@ def test_nan_sent_once():
     print("a NaN point is reported once, not on every poll  OK")
 
 
+def test_read_timestamps():
+    node, pub, client = node_with()
+    t0 = int(time.time() * 1000) - 60_000            # read a minute ago
+    node.update({"setpoint": 5, "temp": 20.0}, {"setpoint": t0 + 10, "temp": t0})
+    before = int(time.time() * 1000)
+    pub.handle_connect()
+    birth = sent(client, "DBIRTH", "unit1")[-1]
+    assert [(m.name, m.timestamp) for m in birth.metrics] == [("temp", t0), ("setpoint", t0 + 10)]
+    level = sent(client, "DBIRTH", "unit2")[-1].metrics[0]
+    assert level.is_null and level.timestamp >= before, "a null is stamped with the birth"
+    node.update({"temp": 20.5, "setpoint": 5}, {"temp": t0 + 500, "setpoint": t0 + 600})
+    ddata = sent(client, "DDATA", "unit1")[-1]
+    assert [(m.name, m.timestamp) for m in ddata.metrics] == [("temp", t0 + 500)], ddata
+    assert ddata.timestamp >= before, "the payload is stamped when it is sent"
+    node.birth()                                      # a rebirth: last read times, not now
+    birth = sent(client, "DBIRTH", "unit1")[-1]
+    assert [(m.name, m.timestamp) for m in birth.metrics] == [("temp", t0 + 500),
+                                                              ("setpoint", t0 + 600)], birth
+    node.update({"level": 3})                         # no stamp given: now
+    assert sent(client, "DDATA", "unit2")[-1].metrics[0].timestamp >= before
+    print("metrics carry their read time (DDATA, DBIRTH, rebirth); DBIRTH oldest first  OK")
+
+
 def main():
     test_no_data_before_births()
     test_nan_sent_once()
+    test_read_timestamps()
     print("\nPASS: Sparkplug B edge node session state")
 
 

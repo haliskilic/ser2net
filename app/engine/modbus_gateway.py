@@ -294,9 +294,11 @@ class ModbusGatewayRunner:
         rpdu = await self._transaction(p.unit, req)
         return modbus.decode_value(modbus.response_data(rpdu, p.fn), p.dtype, p.scale)
 
-    def _publish_values(self, values: dict) -> None:
+    def _publish_values(self, values: dict, stamps: Optional[dict] = None) -> None:
+        """Publish values read off the bus; ``stamps``: when each was read (ms since the
+        epoch), which Sparkplug B reports as the metric's timestamp."""
         if self._sparkplug is not None:
-            self._sparkplug.update(values)
+            self._sparkplug.update(values, stamps)
         elif self._mqtt is not None:
             for name, v in values.items():
                 text = ("1" if v else "0") if isinstance(v, bool) else str(v)
@@ -307,7 +309,7 @@ class ModbusGatewayRunner:
         publish the decoded values (to <base_topic>/<point name>, or as Sparkplug B)."""
         poll = self.mapping.modbus_poll
         while not self._stop.is_set():
-            values = {}
+            values, stamps = {}, {}
             # while the port is gone there is nothing to read (the link logs the outage); a
             # point on unit 0 is never read: no slave answers a broadcast
             points = ([p for p in poll.points if p.unit != modbus.BROADCAST]
@@ -315,10 +317,11 @@ class ModbusGatewayRunner:
             for p in points:
                 try:
                     values[p.name] = await self._read_point(p)
+                    stamps[p.name] = _now_ms()
                 except Exception as e:  # one bad point must not stop the loop
                     self._log(f"poll '{p.name}': {e}")
             if values:
-                self._publish_values(values)
+                self._publish_values(values, stamps)
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=poll.interval_s)
                 break
@@ -358,7 +361,8 @@ class ModbusGatewayRunner:
             return
         self._log(f"wrote '{point.name}' = {value!r} (unit {point.unit}, FC{pdu[0]})")
         with contextlib.suppress(Exception):
-            self._publish_values({point.name: await self._read_point(point)})
+            value = await self._read_point(point)
+            self._publish_values({point.name: value}, {point.name: _now_ms()})
 
     def _write_soon(self, point, value, done=None) -> None:
         """Schedule write_point from an MQTT callback (already on the loop); ``done``
@@ -660,6 +664,10 @@ class ModbusGatewayRunner:
             refused = f", {master.refused} request(s) refused (read-only)" if master.refused else ""
             self._log(f"modbus master disconnected: {peer} after {held} — {reason}{refused} "
                       f"({len(self._clients)} total)")
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _names(names: list[str]) -> str:
