@@ -22,6 +22,7 @@ import math
 import os
 import re
 import secrets
+import socket
 import tempfile
 import time
 import unicodedata
@@ -243,6 +244,18 @@ def canonical_ip(value: Any) -> Any:
     if ip.version == 6 and ip.ipv4_mapped is not None:
         return str(ip.ipv4_mapped)
     return str(ip)
+
+
+@functools.lru_cache(maxsize=None)
+def _ipv6_takes_ipv4() -> bool:
+    """Whether an IPv6 socket on this system takes IPv4 too unless told otherwise
+    (IPV6_V6ONLY off by default: Linux unless net.ipv6.bindv6only is set, not Windows).
+    Before 2.9 a UDP mapping on :: kept that default."""
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s:
+            return not s.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY)
+    except (OSError, AttributeError):  # no IPv6 here
+        return False
 
 
 def host_port(host: Any, port: Any) -> str:
@@ -914,6 +927,11 @@ class MappingConfig:
             if ip.version == 6 and bind_v4 and not net.both_families:
                 raise ConfigError(_("The UDP reply address {0} is IPv6, but the mapping listens "
                                     "on an IPv4 address ({1}).").format(host, net.bind_ip))
+            if ip.version == 4 and not bind_v4 and not net.both_families:
+                raise ConfigError(_("The UDP reply address {0} is IPv4, but the mapping listens "
+                                    "on an IPv6 address ({1}). To reach IPv4 addresses from "
+                                    ":: pick “All interfaces (IPv4 + IPv6)”.").format(
+                    host, net.bind_ip))
         timeout = net.udp_peer_timeout_s
         if not _is_number(timeout) or not (0 <= timeout <= MAX_TIMER_S):
             raise ConfigError(_("{0} must be between 0 (off) and {1} seconds.").format(
@@ -1448,7 +1466,16 @@ class AppConfig:
                     f"mapping '{m.name}': its id {old_id!r} is not a valid mapping id (1-64 "
                     f"letters, digits or '_'), so it is now {m.id}: the REST API and /metrics "
                     "use the new id, and its log and traces start afresh under it")
-            raw_bind = ((raw or {}).get("network") or {}).get("bind_ip")
+            raw_net = (raw or {}).get("network") or {}
+            if (m.kind == "net" and m.network.mode == "udp" and m.network.bind_ip == "::"
+                    and "dual_stack" not in raw_net and _ipv6_takes_ipv4()):
+                # what the socket got from the OS before (IPV6_V6ONLY is set now)
+                m.network.dual_stack = True
+                cfg.load_notes.append(
+                    f"mapping '{m.name}': a UDP mapping on :: now takes IPv6 datagrams only, "
+                    "unless it listens for IPv4 and IPv6 (dual_stack); this one took IPv4 "
+                    "datagrams too on this system, so it is set to do so")
+            raw_bind = raw_net.get("bind_ip")
             if isinstance(raw_bind, str) and raw_bind != m.network.bind_ip:
                 cfg.load_notes.append(
                     f"mapping '{m.name}': its bind IP {raw_bind!r} is now written "
@@ -1630,7 +1657,7 @@ class AppConfig:
             return ""
         # discovery listens on IPv4 (0.0.0.0): an IPv6-only listener doesn't get its beacons
         if (cluster.active and cluster.discovery and net.port == discovery and _ip_overlaps(
-                "0.0.0.0", net.bind_ip, b_both=net.both_families, udp=True)):
+                "0.0.0.0", net.bind_ip, b_both=net.both_families)):
             return _("Mapping '{0}': UDP port {1} is the LAN cluster's discovery port, so the "
                      "mapping would get the other nodes' beacons. Pick another port (or "
                      "another discovery port under Settings → LAN cluster).").format(
@@ -1718,14 +1745,13 @@ class AppConfig:
             # A TCP listener and a UDP listener CAN share the same port number (they
             # bind different transports), so the clash key includes the transport.
             proto = "udp" if m.network.mode == "udp" else "tcp"
-            # A wildcard collides with every address of its family on that port (and, for
-            # UDP, :: with IPv4 too: see _ip_overlaps); treat any overlap as a clash.
+            # A wildcard collides with every address of its family on that port (of both,
+            # when it takes both: see _ip_overlaps); treat any overlap as a clash.
             net = m.network
             for sproto, bport, other in listeners:
                 onet = other.network
                 if sproto == proto and bport == net.port and _ip_overlaps(
-                        onet.bind_ip, net.bind_ip, onet.both_families, net.both_families,
-                        udp=proto == "udp"):
+                        onet.bind_ip, net.bind_ip, onet.both_families, net.both_families):
                     found.append((f"{proto} {net.port} {other.id} {m.id}", ConfigError(
                         _("Mappings '{0}' and '{1}' both use {2} port {3} on overlapping "
                           "addresses ({4} / {5}).").format(other.name, m.name, proto.upper(), net.port, onet.bind_ip, net.bind_ip))))
@@ -1856,16 +1882,14 @@ def _expire_days(value: Any) -> int:
     return 0 if days <= 0 else min(max(days, EXPIRE_DAYS_MIN), EXPIRE_DAYS_MAX)
 
 
-def _ip_overlaps(a: str, b: str, a_both: bool = False, b_both: bool = False,
-                 udp: bool = False) -> bool:
+def _ip_overlaps(a: str, b: str, a_both: bool = False, b_both: bool = False) -> bool:
     """Whether listeners on bind IPs ``a`` and ``b`` (on one port) need the same address:
     the same address however it is written ('::' and '0:0:0:0:0:0:0:0'), or a wildcard and
-    an address of its family. A TCP listener on :: takes IPv6 only (IPV6_V6ONLY), so it can
-    share a port with one on 0.0.0.0 or another IPv4 address; one that takes both families
-    (``a_both`` / ``b_both``: NetworkSettings.both_families) overlaps either. A UDP socket
-    on :: follows the OS (Linux: IPv4 too), so ``udp`` counts it as both."""
-    xs = list(WILDCARDS) if a_both or (udp and canonical_ip(a) == "::") else [a]
-    ys = list(WILDCARDS) if b_both or (udp and canonical_ip(b) == "::") else [b]
+    an address of its family. A listener on :: takes IPv6 only (IPV6_V6ONLY, TCP and UDP),
+    so it can share a port with one on 0.0.0.0 or another IPv4 address; one that takes both
+    families (``a_both`` / ``b_both``: NetworkSettings.both_families) overlaps either."""
+    xs = list(WILDCARDS) if a_both else [a]
+    ys = list(WILDCARDS) if b_both else [b]
     return any(_address_overlaps(x, y) for x in xs for y in ys)
 
 

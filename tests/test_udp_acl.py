@@ -285,8 +285,9 @@ async def test_reply_address():
     assert not [m for m in logs if "udp peer" in m], logs
     assert udp.bridge.describe() == "device output to 10.0.0.9:4001"
 
-    # an IPv4 reply address on a socket bound to an IPv6 address: sent v4-mapped
-    runner = _make_runner(bind_ip="::", udp_peer_host="10.0.0.9", udp_peer_port=4001)
+    # an IPv4 reply address on a socket for both families (one IPv6 socket): sent v4-mapped
+    runner = _make_runner(bind_ip="::", dual_stack=True, udp_peer_host="10.0.0.9",
+                          udp_peer_port=4001)
     async with _Udp(runner, family=socket.AF_INET6) as udp:
         udp.device_says(b"x")
     assert udp.transport.sent == [(b"x", ("::ffff:10.0.0.9", 4001))], udp.transport.sent
@@ -345,8 +346,10 @@ def test_reply_address_validation():
         raise AssertionError(f"accepted: {m.network}")
 
     for ok in (mapping(), mapping(udp_peer_host="192.168.1.20", udp_peer_port=4001),
-               mapping(udp_peer_timeout_s=60), mapping(bind_ip="::", udp_peer_host="10.0.0.1",
-                                                      udp_peer_port=9)):
+               mapping(udp_peer_timeout_s=60),
+               mapping(bind_ip="::", dual_stack=True, udp_peer_host="10.0.0.1", udp_peer_port=9),
+               mapping(dual_stack=True, udp_peer_host="fd00::1", udp_peer_port=9),
+               mapping(bind_ip="::", udp_peer_host="fd00::1", udp_peer_port=9)):
         ok.validate()
         ok.validate_input()
     refused(mapping(udp_peer_host="plc.local", udp_peer_port=4001), "must be a host's IP address")
@@ -354,6 +357,11 @@ def test_reply_address_validation():
     refused(mapping(udp_peer_host="10.0.0.1"), "reply port must be between 1 and 65535")
     refused(mapping(udp_peer_host="10.0.0.1", udp_peer_port=70000), "between 1 and 65535")
     refused(mapping(udp_peer_host="fd00::1", udp_peer_port=9), "is IPv6, but the mapping listens")
+    # :: takes IPv6 only (IPV6_V6ONLY): an IPv4 reply address can't be reached from it
+    refused(mapping(bind_ip="::", udp_peer_host="10.0.0.1", udp_peer_port=9),
+            "is IPv4, but the mapping listens on an IPv6 address")
+    refused(mapping(bind_ip="2001:db8::5", dual_stack=False, udp_peer_host="10.0.0.1",
+                    udp_peer_port=9), "is IPv4, but the mapping listens")
     refused(mapping(udp_peer_timeout_s=-1), "Peer timeout must be between 0")
     # other modes ignore leftovers, and validate() never refuses them (a stored config loads)
     tcp = MappingConfig.from_dict({"name": "t", "serial": {"port": "COM3"},

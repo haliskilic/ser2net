@@ -15,6 +15,7 @@ from unittest import mock
 
 from _server import ROOT  # noqa: F401  (puts the app on sys.path)
 
+from app import config as config_mod
 from app import console
 from app.config import (
     AppConfig, ConfigError, MappingConfig, NetworkSettings, _ip_overlaps, bind_ip_problem,
@@ -123,6 +124,30 @@ def test_overlap_any_spelling():
     print("overlap check: any spelling of an address or wildcard  OK")
 
 
+def test_udp_wildcard_kept():
+    """A UDP mapping on :: took IPv4 datagrams too where the OS makes IPv6 sockets dual-stack
+    (Linux): IPV6_V6ONLY is now set, so a config from before keeps that behaviour as
+    dual_stack, said once in a load note; one that has the key (or another OS) is left."""
+    legacy = {"mappings": [
+        {"name": "u6", "network": {"mode": "udp", "bind_ip": "::", "port": 1}},
+        {"name": "u6-long", "network": {"mode": "udp", "bind_ip": "0:0:0:0:0:0:0:0", "port": 2}},
+        {"name": "u6-new", "network": {"mode": "udp", "bind_ip": "::", "dual_stack": False,
+                                       "port": 3}},
+        {"name": "t6", "network": {"mode": "server", "bind_ip": "::", "port": 4}},
+        {"name": "u4", "network": {"mode": "udp", "bind_ip": "0.0.0.0", "port": 5}}]}
+    for dual_default, expect in ((True, [True, True, False, False, False]),
+                                 (False, [False] * 5)):
+        with mock.patch.object(config_mod, "_ipv6_takes_ipv4", lambda d=dual_default: d):
+            cfg = AppConfig.from_dict(legacy)
+        assert [m.network.dual_stack for m in cfg.mappings] == expect, (dual_default, cfg.mappings)
+        notes = [n for n in cfg.load_notes if "takes IPv6 datagrams only" in n]
+        assert len(notes) == sum(expect) and all("'u6" in n for n in notes), notes
+        assert not [p for p in cfg.problems() if "overlapping" in p]
+    saved = AppConfig.from_dict(legacy).to_dict()["mappings"][0]["network"]
+    assert "dual_stack" in saved, "saved with the key: decided once"
+    print("UDP on :: from an older config: dual_stack where the OS made it take IPv4 too  OK")
+
+
 def test_dual_stack_setting():
     both = NetworkSettings(bind_ip="0.0.0.0", dual_stack=True)
     assert both.both_families and NetworkSettings(bind_ip="::", dual_stack=True).both_families
@@ -164,6 +189,9 @@ def test_family_aware_overlaps():
     assert problems({"bind_ip": "::", "dual_stack": True}, {"bind_ip": "127.0.0.1"})
     assert problems({"bind_ip": "::"}, {"bind_ip": "::1"})
     assert not problems({"bind_ip": "0.0.0.0", "dual_stack": True}, {"bind_ip": "0.0.0.0", "port": 4002})
+    # UDP alike: :: takes IPv6 only on every OS now (IPV6_V6ONLY set, not the OS default)
+    assert not problems({"bind_ip": "0.0.0.0"}, {"bind_ip": "::"}, kind="udp")
+    assert problems({"bind_ip": "0.0.0.0"}, {"bind_ip": "::", "dual_stack": True}, kind="udp")
 
     def conflict(admin=("127.0.0.1", 4001), cluster=None, **net):
         cfg = AppConfig.from_dict({"admin_ui": {"bind_ip": admin[0], "port": admin[1]},
@@ -179,6 +207,7 @@ def test_family_aware_overlaps():
     assert not conflict(cluster=keyed, mode="udp", bind_ip="2001:db8::5"), "no IPv4 beacons there"
     assert conflict(cluster=keyed, mode="udp", bind_ip="::1", dual_stack=True) == "", "not a wildcard"
     assert conflict(cluster=keyed, mode="udp", bind_ip="::", dual_stack=True)
+    assert not conflict(cluster=keyed, mode="udp", bind_ip="::"), ":: gets no IPv4 beacons"
     print("overlaps: a TCP wildcard clashes with its own family only, a dual-stack one with "
           "both; the admin UI and discovery checks use the same rule  OK")
 
@@ -236,6 +265,24 @@ async def _listeners():
             assert not await _refused("::1", port)
         finally:
             await r.stop()
+        # UDP on :: alone: IPv6 senders only, whatever the OS default
+        r = MappingRunner(mapping(port=0, mode="udp", bind_ip="::"), logger=log)
+        await r.start()
+        try:
+            sock = r._udp_transport.get_extra_info("socket")
+            assert sock.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY) == 1
+            assert any("UDP on [::]:0, IPv6 clients only" in x for x in lines), lines
+            port = sock.getsockname()[1]
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as c:
+                c.sendto(b"x", ("127.0.0.1", port))  # nobody listens there for IPv4
+            with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as c:
+                c.sendto(b"x", ("::1", port))
+                await _wait(lambda: r.status.clients)
+            await asyncio.sleep(0.1)
+            assert [c["peer"].startswith("::1") for c in r.status.clients] == [True], \
+                r.status.clients
+        finally:
+            await r.stop()
         # UDP for both: one socket on :: that takes IPv4 senders too
         r = MappingRunner(mapping(port=0, mode="udp", dual_stack=True), logger=log)
         await r.start()
@@ -269,6 +316,7 @@ def main():
     test_console_custom_ip()
     test_written_canonically()
     test_overlap_any_spelling()
+    test_udp_wildcard_kept()
     test_dual_stack_setting()
     test_family_aware_overlaps()
     test_listeners()
