@@ -505,8 +505,9 @@ class SparkplugNode:
                 value -= 1 << 32
             self._write(point, value)
         if ignored:
+            what = "a writable point" if len(ignored) == 1 else "writable points"
             self._note(f"DCMD ignored {dev}", f"Sparkplug DCMD for {_listed(dev, ignored)} "
-                       f"ignored (not {'a writable point' if len(ignored) == 1 else 'writable points'})")
+                       f"ignored (not {what})")
         if nulls:
             self._note(f"DCMD null {dev}", f"Sparkplug DCMD for {_listed(dev, nulls)} "
                        "ignored: null, no value to write")
