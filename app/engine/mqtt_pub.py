@@ -9,7 +9,9 @@ paho-mqtt is an OPTIONAL dependency (not in the offline bootstrap): if it isn't
 installed or fails to import, publishing is disabled with a log line saying which
 (app.optional) and the bridge runs normally.
 The paho client runs its own network thread (loop_start) and ``publish()`` is
-thread-safe, so feeding it from the asyncio serial loop never blocks the loop. Its
+thread-safe, so feeding it from the asyncio serial loop never blocks the loop; a mapping's
+stop closes it with aclose(), which waits for that thread off the loop (at most
+MQTT_CLOSE_TIMEOUT_S). Its
 connection to the broker is logged when it changes (connecting, connected, refused, can't
 connect, lost; each reason once until it changes) and kept in ``MqttPublisher.state``
 (the mapping status' ``mqtt``). That
@@ -24,6 +26,7 @@ import errno
 import math
 import select
 import sys
+import threading
 import time
 from collections.abc import Collection
 from typing import Any, Callable, Optional
@@ -40,6 +43,8 @@ STALE_WILL_S = 1.5 * KEEPALIVE_S + 5
 # QoS 1/2 messages paho keeps while the broker is away (about 2 KB each), per mapping;
 # beyond that it refuses new ones (MQTT_ERR_QUEUE_SIZE) until the broker takes the backlog
 MAX_QUEUED_MESSAGES = 10000
+# aclose(): how long a mapping's stop waits for the broker to take the last messages
+MQTT_CLOSE_TIMEOUT_S = 3.0
 _NO_CONN = 4      # paho's MQTT_ERR_NO_CONN: a QoS 0 message with no connection is dropped
 _QUEUE_SIZE = 15  # paho's MQTT_ERR_QUEUE_SIZE
 
@@ -302,7 +307,7 @@ class MqttPublisher:
     def handle_connect(self) -> None:
         """After every (re)connect: the retained "online" birth, the subscriptions again,
         then the owner's callback."""
-        if self._client is None:
+        if not self._connected or self._client is None:  # a late callback after close()
             return
         self._sessions += 1
         self._set_state("connected")
@@ -361,8 +366,8 @@ class MqttPublisher:
     def handle_message(self, topic: str, payload: bytes, retained: bool = False) -> None:
         """A message on a subscribed topic (on the event loop); ``retained``: the broker
         sent it from its retained store (paho's ``msg.retain``), not live."""
-        if not payload:  # clears a retained message; never a command
-            return
+        if not self._connected or not payload:  # closed; or it clears a retained message,
+            return                              # which is never a command
         handler = self._subs.get(topic)
         if handler is None:  # a subscription with a wildcard
             handler = next((h for t, h in self._subs.items() if _matches(t, topic)), None)
@@ -409,22 +414,68 @@ class MqttPublisher:
 
     def close(self, final: Optional[tuple] = None) -> None:
         """Disconnect; ``final`` = (topic, payload, qos, retain) to send first instead of
-        the retained "offline" status (Sparkplug B: an NDEATH)."""
-        if self._client is None:
+        the retained "offline" status (Sparkplug B: an NDEATH). Waits for paho's network
+        thread, which stops only once the broker has taken what is queued or the
+        connection failed: from the event loop, use aclose()."""
+        client = self._last_messages(final)
+        if client is not None:
+            _stop_client(client)
+
+    async def aclose(self, final: Optional[tuple] = None,
+                     timeout: float = MQTT_CLOSE_TIMEOUT_S) -> None:
+        """close() without holding up the event loop: paho's network thread is stopped
+        from a thread of its own (paho waits there until the broker took the last
+        messages, a QoS 1 one acknowledged, or the connection failed, which with a broker
+        that stopped answering lasts until the keepalive gives up), waited for at most
+        ``timeout`` seconds. What the broker has not taken by then is lost; its Last-Will
+        still tells subscribers that the link is gone."""
+        client = self._last_messages(final)
+        if client is None:
             return
+        loop = asyncio.get_running_loop()
+        stopped = loop.create_future()
+
+        def done() -> None:
+            if not stopped.done():
+                stopped.set_result(None)
+
+        def stop() -> None:
+            _stop_client(client)
+            with contextlib.suppress(RuntimeError):  # the loop has closed meanwhile
+                loop.call_soon_threadsafe(done)
+
+        threading.Thread(target=stop, name="mqtt-close", daemon=True).start()
+        try:
+            await asyncio.wait_for(stopped, timeout)
+        except asyncio.TimeoutError:
+            self._log(f"MQTT: the broker did not take the last messages within {timeout:g} s; "
+                      "closing without waiting for it")
+
+    def _last_messages(self, final: Optional[tuple]) -> Any:
+        """Queue the last messages and hand over the client (None: not connected). paho's
+        callbacks that come later change nothing (_connected is False), and a restart
+        under way stops short (_closing)."""
+        client, self._client = self._client, None
+        if client is None:
+            return None
         self._closing = True
         self._connected = False
         if self._rebirth is not None:
             self._rebirth.cancel()
             self._rebirth = None
-        if final is not None:
-            self._publish(final[0], final[1], qos=final[2], retain=final[3])
-        elif self._birth:
-            self._publish(self._status_topic, b"offline", retain=True)
-        with contextlib.suppress(Exception):
-            self._client.loop_stop()
-            self._client.disconnect()
-        self._client = None
+        topic, payload, qos, retain = final or (self._status_topic, b"offline", None, True)
+        if final is not None or self._birth:
+            with contextlib.suppress(Exception):
+                client.publish(topic, payload, qos=self._s.qos if qos is None else qos,
+                               retain=retain)
+        return client
+
+
+def _stop_client(client: Any) -> None:
+    """Stop paho's network thread (it first sends what is queued), then disconnect."""
+    with contextlib.suppress(Exception):
+        client.loop_stop()
+        client.disconnect()
 
 
 class PollSelect:

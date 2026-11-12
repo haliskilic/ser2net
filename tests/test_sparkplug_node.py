@@ -19,7 +19,9 @@ _paho_on_disconnect(). Checks:
     which waits again; an older 3.0 STATE, junk and a rebirth request while the host is
     offline are ignored; a bad stored id is logged and ignored; edits refuse '/', '+', '#';
     the form keeps the field when it is not posted; stopping during the restart leaves no
-    connection behind.
+    connection behind;
+  * aclose() (a mapping's stop): NDEATH with the session's bdSeq, then paho stopped, off
+    the event loop; a restart under way is cancelled.
 
 Run: python3 tests/test_sparkplug_node.py
 """
@@ -407,12 +409,31 @@ async def test_primary_host():
           "when not posted  OK")
 
 
+async def test_aclose():
+    node, pub, client = node_with()
+    pub.handle_connect()
+    bdseq = node.bdseq
+    pending = asyncio.ensure_future(asyncio.sleep(10))  # a restart under way
+    node._restart = pending
+    await node.aclose()
+    await asyncio.sleep(0)
+    assert pending.cancelled(), "the restart must not outlive the mapping"
+    deaths = sent(client, "NDEATH")
+    assert len(deaths) == 1 and values(deaths[0]) == {"bdSeq": bdseq}, deaths
+    assert client.calls == ["loop_stop", "disconnect"], client.calls
+    assert node._pub is None
+    await node.aclose()                               # stopped already: nothing more
+    assert len(sent(client, "NDEATH")) == 1 and len(client.calls) == 2
+    print("aclose(): NDEATH with the session's bdSeq, paho stopped, a restart cancelled  OK")
+
+
 def main():
     test_no_data_before_births()
     test_nan_sent_once()
     test_read_timestamps()
     test_bdseq_across_runs()
     asyncio.run(test_primary_host())
+    asyncio.run(test_aclose())
     print("\nPASS: Sparkplug B edge node session state")
 
 

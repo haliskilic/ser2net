@@ -16,7 +16,10 @@ network thread waits with poll(), not select() (which refuses descriptors >= 102
 with paho-mqtt installed: a publisher whose broker socket is above 1024 connects and
 publishes (to a minimal broker on 127.0.0.1), and at QoS 0 the retained status reads
 "online" after the first connect and again after the broker lost the connection (and
-published the Will).
+published the Will). aclose(), what a mapping's stop uses, sends the last message and stops
+paho's thread without holding up the event loop, and gives up waiting after its timeout
+when the broker takes nothing (also through the runners' stop() and a Sparkplug node);
+paho callbacks that come after it change nothing.
 
 Run: python3 tests/test_mqtt_pub.py
 """
@@ -332,7 +335,9 @@ def test_retained_commands():
 
     subs = {"plant/a/pump/set": handler, "spBv1.0/g/DCMD/n/+": handler}
     pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="plant/a"),
-                        logger=logs.append, client=FakeClient(), subscriptions=subs)
+                        logger=lambda _m: None, client=FakeClient(), subscriptions=subs)
+    pub.connect()
+    pub._log = logs.append
     pub.handle_message("plant/a/pump/set", b"on", retained=True)
     pub.handle_message("spBv1.0/g/DCMD/n/unit1", b"\x0a\x00", retained=True)
     assert got == [] and sum("ignored the retained message" in m for m in logs) == 2, logs
@@ -352,8 +357,10 @@ def test_retained_commands():
     got.clear()
     logs.clear()
     opted = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="plant/a"),
-                          logger=logs.append, client=FakeClient(), subscriptions=subs,
+                          logger=lambda _m: None, client=FakeClient(), subscriptions=subs,
                           accept_retained=True)
+    opted.connect()
+    opted._log = logs.append
     opted.handle_message("plant/a/pump/set", b"on", retained=True)
     opted.handle_message("plant/a/pump/set", b"", retained=True)
     assert got == [("plant/a/pump/set", b"on")], got
@@ -536,6 +543,137 @@ def test_paho_birth_at_qos0():
           "reconnect (over the Will), 'offline' at close  OK")
 
 
+class StuckClient(FakeClient):
+    """paho with a broker that takes nothing: loop_stop() waits for the queued messages."""
+
+    def __init__(self):
+        super().__init__()
+        self.release = threading.Event()
+
+    def loop_stop(self):
+        self.release.wait(10)
+        super().loop_stop()
+
+
+async def _aclose_checks():
+    lines = []
+    ticks = 0
+
+    async def ticker():  # the event loop must keep running meanwhile
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    tick = asyncio.ensure_future(ticker())
+    try:
+        fake = FakeClient()
+        got = []
+        pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="t", qos=1),
+                            logger=lines.append, client=fake,
+                            subscriptions={"t/x/set": lambda t, p: got.append(p)})
+        pub.connect()
+        lines.clear()
+        await pub.aclose()
+        assert ("t/status", b"offline", 1, True) in fake.published
+        assert fake.disconnected and not lines, lines
+        pub.feed(b"after close\n")  # closed: nothing more is published
+        assert not _pub(fake, "t")
+        published = list(fake.published)
+        pub._paho_on_message(None, None, Msg("t/x/set", b"1", False))  # late callbacks
+        pub._paho_on_connect(None, None, {}, 0)
+        await asyncio.sleep(0.05)
+        pub.handle_message("t/x/set", b"1")
+        pub.handle_connect()
+        assert got == [] and fake.published == published and not lines, (got, lines)
+
+        stuck = StuckClient()
+        pub = MqttPublisher(MqttSettings(enabled=True, host="h", base_topic="t", qos=1),
+                            logger=lines.append, client=stuck)
+        pub.connect()
+        lines.clear()
+        t0, before = time.monotonic(), ticks
+        await pub.aclose(final=("spBv1.0/g/NDEATH/n", b"death", 1, False), timeout=0.3)
+        took = time.monotonic() - t0
+        assert ("spBv1.0/g/NDEATH/n", b"death", 1, False) in stuck.published
+        assert ("t/status", b"offline", 1, True) not in stuck.published
+        assert 0.25 < took < 1.0, f"aclose() took {took:.2f} s"
+        assert ticks - before >= 10, "aclose() held up the event loop"
+        assert lines == ["MQTT: the broker did not take the last messages within 0.3 s; "
+                         "closing without waiting for it"], lines
+        stuck.release.set()
+        await pub.aclose()  # closed already: nothing
+    finally:
+        tick.cancel()
+
+
+def test_aclose_does_not_hold_up_the_loop():
+    asyncio.run(_aclose_checks())
+    print("aclose(): last message sent, paho stopped off the event loop; a broker that takes "
+          "nothing is given up on after the timeout; late callbacks do nothing  OK")
+
+
+async def _runner_stop_checks():
+    from app.config import MappingConfig
+    from app.engine.bridge import MappingRunner
+    from app.engine.modbus_gateway import ModbusGatewayRunner
+    from app.engine.sparkplug_node import SparkplugNode
+
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    tick = asyncio.ensure_future(ticker())
+    mq = {"enabled": True, "host": "h", "base_topic": "t", "qos": 1}
+    points = {"interval_s": 1, "points": [{"name": "temp", "unit": 1, "fn": 3}]}
+    runners, clients = [], []
+    for kind in ("serial lines", "Modbus plain", "Sparkplug B"):
+        stuck = StuckClient()
+        if kind == "serial lines":
+            m = MappingConfig.from_dict({"name": "m", "serial": {"port": "x"}, "mqtt": mq})
+            r = MappingRunner(m, logger=lambda _m: None)
+        else:
+            m = MappingConfig.from_dict({
+                "name": "gw", "serial": {"port": "x"}, "modbus_poll": points,
+                "network": {"protocol": "modbus", "port": 1502},
+                "mqtt": dict(mq, payload_format="sparkplug_b" if "Sparkplug" in kind
+                             else "plain")})
+            r = ModbusGatewayRunner(m, logger=lambda _m: None)
+        if kind == "Sparkplug B":
+            r._sparkplug = SparkplugNode(m, lambda _m: None, lambda p, v: None)
+            r._mqtt = r._sparkplug.publisher()
+        else:
+            r._mqtt = MqttPublisher(m.mqtt, logger=lambda _m: None)
+        r._mqtt._client = stuck
+        r._mqtt.connect()
+        runners.append(r)
+        clients.append(stuck)
+    try:
+        t0, before = time.monotonic(), ticks
+        await asyncio.gather(*(r.stop() for r in runners))  # each waits MQTT_CLOSE_TIMEOUT_S
+        took = time.monotonic() - t0
+        assert mqtt_pub.MQTT_CLOSE_TIMEOUT_S - 0.1 < took < mqtt_pub.MQTT_CLOSE_TIMEOUT_S + 1.5, \
+            took
+        assert ticks - before >= 100, f"stop() held up the event loop ({ticks - before} ticks)"
+        for r, stuck in zip(runners, clients):
+            assert r._mqtt is None and stuck.published, stuck.published
+            assert r.status.as_dict()["mqtt"] == {}
+    finally:
+        for stuck in clients:
+            stuck.release.set()
+        tick.cancel()
+
+
+def test_runner_stop_does_not_wait_for_paho():
+    asyncio.run(_runner_stop_checks())
+    print("stop() of a serial-line mapping, a Modbus gateway (plain, Sparkplug B): paho "
+          "stopped off the event loop, given up on after the timeout  OK")
+
+
 def main():
     test_lines_published_and_buffered()
     test_disabled_until_connected()
@@ -546,6 +684,8 @@ def main():
     test_retained_commands()
     test_paho_birth_at_qos0()
     test_paho_queue_limit()
+    test_aclose_does_not_hold_up_the_loop()
+    test_runner_stop_does_not_wait_for_paho()
     if os.name == "posix":
         test_poll_select_answers_like_select()
         test_poll_select_above_fd_setsize()

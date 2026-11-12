@@ -233,8 +233,10 @@ düzenlemeye gerek yok.
   1/2'de eşleme başına en çok 10 000 mesaj bekler ve yeniden bağlanınca gönderilir — bunun
   ötesinde en yeniler atılır (sayılır, kesinti başına bir kez loglanır) — periyodik okunan
   Modbus değerlerinde ise her noktanın yalnızca son değeri tutulur (kesintiden sonra eski
-  okumalar art arda gönderilmez). `paho-mqtt` gerektirir (opsiyonel; yoksa köprü normal
-  çalışır).
+  okumalar art arda gönderilmez). Bir eşlemeyi durdurmak ya da yeniden başlatmak,
+  broker'ın son mesajı (`offline` ya da Sparkplug NDEATH) almasını en çok 3 s bekler
+  (ötesinde aynısını Last-Will söyler); bu sırada diğer eşlemeler ve arayüz beklemez.
+  `paho-mqtt` gerektirir (opsiyonel; yoksa köprü normal çalışır).
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
   olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
