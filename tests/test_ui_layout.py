@@ -183,9 +183,15 @@ def main():
                           "advertise_ip": "127.0.0.1"},
               "mappings": demo_mappings("B-", free_port())}
     # a second (long-named) account: the Users table's row buttons + the set-password form
+    # (with two-factor sign-in: its tag and the "Turn off 2FA" button too)
     others = [{"username": "night-shift.operator.building-b.east", "role": "operator",
-               "password_hash": hash_password(PASSWORD), "pwd_version": 1}]
+               "password_hash": hash_password(PASSWORD), "pwd_version": 1,
+               "totp_secret": "A" * 32}]
+    # a long-named, expired REST API token: the token table
+    tokens = [{"id": "0123456789abcdef", "name": "prometheus-scraper.building-b.east-wing",
+               "sha256": "a" * 64, "role": "viewer", "created": 1700000000, "expires": 1700086400}]
     node_a = {"admin_ui": {"bind_ip": "127.0.0.1", "port": ui_a}, "users": users + others,
+              "api_tokens": tokens,
               "cluster": {"enabled": True, "key": key, "discovery_port": free_port(),
                           "peers": [f"127.0.0.1:{ui_b}"]},
               "mappings": demo_mappings("", raw_a)}
@@ -256,6 +262,9 @@ def main():
                     page.goto(f"{base}/settings?restore=config-20260101T000000Z.json#backups")
                     page.wait_for_selector("#backups h3")
                     check(f"{lang} restore preview @{w}")
+                    page.goto(f"{base}/settings/totp")   # the key and the otpauth:// link
+                    page.wait_for_selector("section.panel .token-box")
+                    check(f"{lang} two-factor setup @{w}")
 
             # the cluster panel polls every 5 s: not from a hidden tab, and at once when
             # the tab is shown again
