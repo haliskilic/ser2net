@@ -7,10 +7,10 @@ missing.
 """
 from __future__ import annotations
 
-import ipaddress
 import socket
 from typing import Any
 
+from ..config import bind_ip_problem, canonical_ip
 from ..i18n import _
 
 try:
@@ -92,8 +92,9 @@ def list_ip_candidates() -> list[dict[str, Any]]:
 
 
 def validate_ip(value: str) -> str:
-    """Validate a user-entered IP; returns it normalized or raises ValueError."""
-    ip = ipaddress.ip_address(value)  # raises ValueError on bad input
-    if ip.is_multicast or ip.is_reserved:
-        raise ValueError("Address cannot be multicast/reserved.")
-    return str(ip)
+    """Check a user-entered bind IP by the mappings' rule (config.bind_ip_problem: the
+    wildcards and loopback addresses of both families are fine); returns it normalized or
+    raises ValueError."""
+    if problem := bind_ip_problem(value):
+        raise ValueError(problem)
+    return canonical_ip(value)

@@ -231,7 +231,6 @@
   "lines publish here; status at &lt;topic&gt;/status": "satırlar buraya yayınlanır; durum &lt;topic&gt;/status altında",
   "Linux <span class=\"mono\">TIOCSRS485</span>; the driver must support it": "Linux <span class=\"mono\">TIOCSRS485</span>; sürücünün desteklemesi gerekir",
   "listen address '{0}' cannot be used as a bind IP here: the mapping listens on 0.0.0.0 and is imported disabled; set its bind IP, then enable it": "dinleme adresi '{0}' burada dinleme IP'si olarak kullanılamaz: eşleme 0.0.0.0'da dinler ve kapalı olarak içe aktarıldı; dinleme IP'sini ayarla, sonra aç",
-  "listen address {0} (IPv6 loopback) is not accepted as a bind IP here: the mapping listens on 127.0.0.1": "dinleme adresi {0} (IPv6 loopback) burada dinleme IP'si olarak kabul edilmiyor: eşleme 127.0.0.1'de dinler",
   "Listen port": "Dinleme portu",
   "listen port '{0}' is not a port number between 1 and 65535": "dinleme portu '{0}', 1 ile 65535 arasında bir port numarası değil",
   "Listening on <span class=\"mono\">%(address)s</span>": "<span class=\"mono\">%(address)s</span> adresinde dinliyor",

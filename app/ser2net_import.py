@@ -36,8 +36,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .config import (
-    MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, canonical_device, trace_file_name,
-    url_port,
+    MAX_TIMER_S, ConfigError, MappingConfig, _ip_overlaps, bind_ip_problem, canonical_device,
+    canonical_ip, trace_file_name, url_port,
 )
 from .i18n import _
 
@@ -702,24 +702,15 @@ def _listen_address(c: _Conn, fields: list[str]) -> bool:
 
 def _bind_ip(c: _Conn, host: str, family: str) -> str:
     """The bind IP for a listen host. Never wider than ser2net listened: a loopback
-    stays loopback, and an address that cannot be used here (a host name) gives
+    stays loopback (::1 too), and an address that cannot be used here (a host name) gives
     0.0.0.0 with the mapping imported disabled until its bind IP is set."""
     h = host.strip("[]")
     if not h:
         return "::" if family == "ipv6" else "0.0.0.0"
     if h.lower() == "localhost":
         return "127.0.0.1"
-    try:
-        ip: Optional[ipaddress.IPv4Address | ipaddress.IPv6Address] = ipaddress.ip_address(h)
-    except ValueError:
-        ip = None
-    if ip is not None and ip.version == 6 and ip.is_loopback:
-        c.note(_("listen address {0} (IPv6 loopback) is not accepted as a bind IP here: the "
-                 "mapping listens on 127.0.0.1").format(host))
-        return "127.0.0.1"
-    if ip is not None and not ip.is_multicast and not (
-            ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
-        return str(ip)
+    if not bind_ip_problem(h):
+        return canonical_ip(h)
     c.hold(_("listen address '{0}' cannot be used as a bind IP here: the mapping listens on "
              "0.0.0.0 and is imported disabled; set its bind IP, then enable it").format(host))
     return "0.0.0.0"

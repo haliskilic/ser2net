@@ -224,6 +224,39 @@ def normalize_cidr(value: str) -> str:
     return v
 
 
+def canonical_ip(value: Any) -> Any:
+    """An IP address as it is stored: in its canonical form ('0:0:0:0:0:0:0:1' is '::1'),
+    an IPv4-mapped IPv6 address ('::ffff:10.0.0.5') as the IPv4 address it stands for
+    (that is what a listener on it can take). Anything else is returned as it is, for
+    validation to report."""
+    if not isinstance(value, str):
+        return value
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return value
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        return str(ip.ipv4_mapped)
+    return str(ip)
+
+
+def bind_ip_problem(value: Any) -> str:
+    """Why ``value`` can't be a listener's bind IP ("" when it can): it is not an IP
+    address, or it is a multicast address or a reserved one other than the wildcard
+    and loopback addresses (0.0.0.0, ::, ::1). An IPv4-mapped IPv6 address is judged by
+    its IPv4 address (Python releases differ in how is_reserved reads one). The one rule
+    for a mapping's bind IP and for the console's custom admin UI address."""
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return _("Invalid bind IP: {0}.").format(repr(value))
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_multicast or (ip.is_reserved and not (ip.is_loopback or ip.is_unspecified)):
+        return _("Bind IP cannot be a multicast/reserved address.")
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Serial side
 # ---------------------------------------------------------------------------
@@ -472,7 +505,9 @@ class NetworkSettings:
     def from_dict(d: dict[str, Any]) -> "NetworkSettings":
         d = dict(d or {})
         known = {f.name for f in dataclasses.fields(NetworkSettings)}
-        return NetworkSettings(**{k: v for k, v in d.items() if k in known})
+        net = NetworkSettings(**{k: v for k, v in d.items() if k in known})
+        net.bind_ip = canonical_ip(net.bind_ip)  # (AppConfig.from_dict notes a change)
+        return net
 
     def validate(self) -> None:
         if self.mode not in NET_MODES:
@@ -481,14 +516,8 @@ class NetworkSettings:
             raise ConfigError(_("Protocol must be one of {0}.").format(PROTOCOLS))
 
         if self.listens:
-            try:
-                ip = ipaddress.ip_address(self.bind_ip)
-            except ValueError:
-                raise ConfigError(_("Invalid bind IP: {0}.").format(repr(self.bind_ip))) from None
-            # 0.0.0.0 and :: are the "all interfaces" wildcards and must be allowed
-            # even though :: reports is_reserved=True.
-            if ip.is_multicast or (ip.is_reserved and str(ip) not in ("0.0.0.0", "::")):
-                raise ConfigError(_("Bind IP cannot be a multicast/reserved address."))
+            if problem := bind_ip_problem(self.bind_ip):
+                raise ConfigError(problem)
             if not isinstance(self.port, int) or not (1 <= self.port <= 65535):
                 raise ConfigError(_("TCP/UDP port must be between 1 and 65535."))
         else:  # client (connect-out)
@@ -1388,6 +1417,13 @@ class AppConfig:
                     f"mapping '{m.name}': its id {old_id!r} is not a valid mapping id (1-64 "
                     f"letters, digits or '_'), so it is now {m.id}: the REST API and /metrics "
                     "use the new id, and its log and traces start afresh under it")
+            raw_bind = ((raw or {}).get("network") or {}).get("bind_ip")
+            if isinstance(raw_bind, str) and raw_bind != m.network.bind_ip:
+                cfg.load_notes.append(
+                    f"mapping '{m.name}': its bind IP {raw_bind!r} is now written "
+                    f"{m.network.bind_ip!r}"
+                    + (" (an IPv4-mapped IPv6 address: the listener takes that IPv4 address)"
+                       if ":" in raw_bind and ":" not in m.network.bind_ip else ""))
             old = str(((raw or {}).get("options") or {}).get("trace_both") or "").strip()
             if old and old != m.options.trace_both:
                 cfg.load_notes.append(
@@ -1782,10 +1818,14 @@ def _expire_days(value: Any) -> int:
 
 
 def _ip_overlaps(a: str, b: str) -> bool:
-    if a == b:
+    """Whether listeners on bind IPs ``a`` and ``b`` (on one port) need the same address:
+    the same address however it is written ('::' and '0:0:0:0:0:0:0:0'), or a wildcard
+    and any address."""
+    x, y = canonical_ip(a), canonical_ip(b)
+    if x == y:
         return True
     wildcards = {"0.0.0.0", "::"}
-    return a in wildcards or b in wildcards
+    return x in wildcards or y in wildcards
 
 
 # ---------------------------------------------------------------------------
