@@ -222,7 +222,7 @@ def routes(ctx: Ctx) -> list:
         deleted, failed = await state.delete_trace_files(m.id, None if name is None else [name])
         if deleted:
             detail = f"{m.name}/{deleted[0]}" if name is not None else \
-                f"{m.name}: {', '.join(deleted)}"
+                f"{m.name}: {len(deleted)} file(s): {', '.join(deleted)}"
             state.log(f"trace file(s) deleted: {detail}")
             ctx.audit(request, "trace_delete", detail)
         ok = _("Deleted {0} trace file(s).").format(len(deleted)) if deleted else ""

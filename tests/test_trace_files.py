@@ -143,8 +143,8 @@ def delete_traces():
             records = [ln.split("\t") for ln in fh.read().splitlines() if "\ttrace_delete\t" in ln]
         details = [r[3] for r in records]
         assert details[:2] == [f"A/{A}-old.log", f"A/{A}-a.log"], records
-        assert details[2].startswith("B: ") and \
-            sorted(details[2][3:].split(", ")) == [f"{B}-b.log", f"{B}-b.log.1"], records
+        assert details[2].startswith("B: 2 file(s): ") and \
+            sorted(details[2][14:].split(", ")) == [f"{B}-b.log", f"{B}-b.log.1"], records
         assert {r[4] for r in records} == {"op"}, records
         print("delete all: every file of the mapping, audited; then no Trace button for a "
               "mapping that doesn't trace  OK")
