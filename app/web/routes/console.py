@@ -7,9 +7,14 @@ arrives within FLUSH_S of a chunk goes in one WebSocket message with it.
 
 The page asks for protocol 2 with ?v=2 (a socket without it gets what 2.8 sent):
   - text messages from the server are notices, JSON: {"dropped": n} — n bytes of traffic
-    were dropped before what comes next (the viewer did not keep up);
+    were dropped before what comes next (the viewer did not keep up); {"state": "stopped"}
+    — once, at the start: the mapping is not running (nothing comes until it is started,
+    which ends this socket with CLOSE_STOPPED: the page connects again);
   - the hex view packs its records, [direction u8][time f64 BE][length u32 BE][bytes]
     one after the other (version 1: one record per message, without the length).
+
+A refused handshake (no session, another site's page) gets HTTP 403. After the handshake
+a close says why, with one of the CLOSE_* codes and a reason.
 """
 from __future__ import annotations
 
@@ -44,9 +49,12 @@ FRAME_MAX_BYTES = 64 * 1024
 FLUSH_S = 0.016  # about one screen refresh: what comes this soon after a chunk goes with it
 STALL_S = 30.0
 CLOSE_WAIT_S = 5.0  # a close the client takes nothing of is given up after this long
-# close codes after the handshake
-CLOSE_BUSY = 1013  # past a VIEWERS_* limit ("try again later")
-CLOSE_SLOW = 4003  # took nothing for STALL_S while its traffic was being dropped
+# close codes after the handshake (app.js says what they mean)
+CLOSE_BUSY = 1013     # past a VIEWERS_* limit ("try again later")
+CLOSE_STOPPED = 4001  # the mapping stopped or restarted (its runner let the viewer go)
+CLOSE_ACCESS = 4002   # signed out, session ended or role changed
+CLOSE_SLOW = 4003     # took nothing for STALL_S while its traffic was being dropped
+CLOSE_GONE = 4004     # no such mapping (deleted)
 
 
 def routes(ctx: Ctx) -> list:
@@ -88,17 +96,14 @@ def routes(ctx: Ctx) -> list:
         ws_user, token = await _authorize(websocket)
         if ws_user is None:
             return None
-        mid = websocket.path_params["mid"]
-        mapping = state.config.get_mapping(mid)
-        if state.supervisor.get_runner(mid) is None or mapping is None:
-            await websocket.close(code=1011)
-            return None
         await websocket.accept()
-        # the mapping's runner as it is now, with nothing awaited until the monitor is in:
-        # a restart while the handshake went on replaced the one looked up above
+        # looked up once accepted, with nothing awaited until the monitor is in: the
+        # runner that feeds it is the mapping's current one (a restart replaces it)
+        mid = websocket.path_params["mid"]
         runner = state.supervisor.get_runner(mid)
-        if runner is None:  # deleted meanwhile
-            await _close(websocket, 1011)
+        mapping = state.config.get_mapping(mid)
+        if runner is None or mapping is None:
+            await _close(websocket, CLOSE_GONE, "no such mapping")
             return None
         peer = websocket.client.host if websocket.client else "?"
         who = _who(websocket)
@@ -106,12 +111,15 @@ def routes(ctx: Ctx) -> list:
             refused(f"[{mapping.name}] {kind} of {ws_user.username} ({peer}) refused: {why}")
             await _close(websocket, CLOSE_BUSY, why)
             return None
-        return _Accepted(ws_user, token, mapping, runner, peer, who)
+        return _Accepted(ws_user, token, mapping, runner, peer, who,
+                         v2=websocket.query_params.get("v") == "2")
 
     async def _serve(websocket, v: _Accepted, mon, sender, receiver) -> tuple[int, str]:
         """Serve an accepted viewer until it ends: `sender` returns (its feed ended: the
         mapping stopped), `receiver` returns (the browser closed it), its access changed,
         or it stalled (_Feed.stalled). The close code and reason for that."""
+        if v.v2 and v.runner.status.state in ("stopped", "error"):
+            await websocket.send_json({"state": "stopped"})  # nothing comes until it starts
 
         async def access_watch():
             # A viewer outlives the check at connect: end it once its access is gone (login
@@ -124,9 +132,9 @@ def routes(ctx: Ctx) -> list:
                 if now is None or now.role != v.user.role:
                     return
 
-        ends = {asyncio.create_task(sender()): (1000, ""),
+        ends = {asyncio.create_task(sender()): (CLOSE_STOPPED, "mapping stopped or restarted"),
                 asyncio.create_task(receiver()): None,  # nothing more to say to it
-                asyncio.create_task(access_watch()): (1000, "access changed"),
+                asyncio.create_task(access_watch()): (CLOSE_ACCESS, "access changed"),
                 asyncio.create_task(mon.stalled.wait()):
                     (CLOSE_SLOW, f"took nothing for {STALL_S:g} s")}
         try:
@@ -157,12 +165,11 @@ def routes(ctx: Ctx) -> list:
         # viewers get an observe-only console; writing to the device needs operator+
         interactive = console_interactive(v.user, v.mapping)
         mon, (code, reason) = _Monitor(), (1000, "")
-        v2 = websocket.query_params.get("v") == "2"
 
         async def sender():
             while True:
                 chunks, dropped, ended = await mon.take()
-                if dropped and v2:
+                if dropped and v.v2:
                     await websocket.send_json({"dropped": dropped})
                 if chunks:
                     await websocket.send_bytes(b"".join(chunks))
@@ -203,14 +210,13 @@ def routes(ctx: Ctx) -> list:
             return
         to_device = sees_to_device(v.user, v.mapping)
         mon, (code, reason) = _TrafficMonitor(to_device=to_device), (1000, "")
-        v2 = websocket.query_params.get("v") == "2"
 
         async def sender():
             while True:
                 records, dropped, ended = await mon.take()
-                if dropped and v2:
+                if dropped and v.v2:
                     await websocket.send_json({"dropped": dropped})
-                if v2 and records:
+                if v.v2 and records:
                     await websocket.send_bytes(b"".join(
                         struct.pack(">BdI", direction, ts, len(data)) + data
                         for direction, ts, data in records))
@@ -244,14 +250,15 @@ def routes(ctx: Ctx) -> list:
 
 class _Accepted:
     """A console or hex view past its handshake (routes._admit): who opened it (`user`,
-    the session `token`; `peer`: its address, `who`: the key it is counted by) and the
-    mapping and runner it watches."""
+    the session `token`; `peer`: its address, `who`: the key it is counted by), the
+    mapping and runner it watches, and whether the page speaks protocol 2 (`v2`)."""
 
-    __slots__ = ("user", "token", "mapping", "runner", "peer", "who")
+    __slots__ = ("user", "token", "mapping", "runner", "peer", "who", "v2")
 
-    def __init__(self, user, token, mapping, runner, peer: str, who: tuple) -> None:
+    def __init__(self, user, token, mapping, runner, peer: str, who: tuple,
+                 v2: bool = False) -> None:
         self.user, self.token, self.mapping, self.runner = user, token, mapping, runner
-        self.peer, self.who = peer, who
+        self.peer, self.who, self.v2 = peer, who, v2
 
 
 async def _close(websocket, code: int = 1000, reason: str = "") -> None:

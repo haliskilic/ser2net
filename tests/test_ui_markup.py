@@ -601,6 +601,35 @@ def test_keyboard_and_screen_readers():
           "filters, error banners as alerts  OK")
 
 
+def test_console_says_why():
+    """The console panel: a Modbus gateway's opens in the hex view (data-mode); the typing
+    hint is for the text view only (app.js hides [data-text-only] in the hex view); a
+    console that ends says why — a refused handshake (the browser only sees 1006), each
+    close code routes/console.py sends — and connects again after a restart; its notices
+    (dropped bytes, mapping not running) and those texts are translated (base.html)."""
+    from app.web.routes import console as routes_console
+
+    tpl = make_templates().env.get_template("_console.html")
+    term = next(n for n in parse(tpl.render(mid="a", mapping_name="a", hex_first=True)).walk()
+                if n.attrs.get("id") == "term")
+    assert term.attrs.get("data-mode") == "hex", term.attrs
+    term = next(n for n in parse(tpl.render(mid="a", mapping_name="a", interactive=True)).walk()
+                if n.attrs.get("id") == "term")
+    assert term.attrs.get("data-mode") == "text", term.attrs
+    js = open(os.path.join(ROOT, "app", "web", "static", "app.js"), encoding="utf-8").read()
+    assert '"[data-text-only]"' in js and 'n.hidden = mode === "hex"' in js
+    assert 'path + "?v=2"' in js, "the page asks for protocol 2"
+    for name in ("CLOSE_BUSY", "CLOSE_STOPPED", "CLOSE_ACCESS", "CLOSE_SLOW", "CLOSE_GONE"):
+        assert f"case {getattr(routes_console, name)}:" in js, f"app.js does not explain {name}"
+    assert "ev.code === %d" % routes_console.CLOSE_STOPPED in js, "connects again after a restart"
+    base = open(os.path.join(ROOT, "app", "web", "templates", "base.html"), encoding="utf-8").read()
+    for key in ("dropped", "ws_not_running", "ws_reconnected", "ws_reconnecting", "ws_refused",
+                "ws_busy", "ws_stopped", "ws_access", "ws_slow", "ws_gone"):
+        assert f"'{key}': _(" in base and f'tr("{key}"' in js, key
+    print("console: a Modbus gateway's opens in hex, the typing hint only in the text view, "
+          "every close says why (translated), connects again after a restart  OK")
+
+
 def test_unsaved_form_is_guarded():
     """A form shown again after a failed save holds values that are not saved: it comes
     marked dirty (data-dirty), so app.js asks before Cancel, another panel or leaving the
@@ -650,6 +679,7 @@ def main():
     test_polled_controls_keep_their_ids()
     test_panel_openers_scroll_it_into_view()
     test_keyboard_and_screen_readers()
+    test_console_says_why()
     test_unsaved_form_is_guarded()
     test_app_js_inserts_no_server_html()
     print("\nPASS: UI markup contract")

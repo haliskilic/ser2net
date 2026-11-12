@@ -12,13 +12,20 @@ feed the bridges fill to the WebSocket's close (no socat, no serial device).
     mapping, VIEWERS_PER_MAPPING, VIEWERS_TOTAL; one more is closed with 1013 and why;
   - what arrives within FLUSH_S goes out in one message; with protocol 2 (?v=2) the hex
     view packs its records ([dir][time][length][bytes] ...) and a viewer is told how many
-    bytes were dropped (a JSON notice), without it everything is as in 2.8.
+    bytes were dropped (a JSON notice), without it everything is as in 2.8;
+  - after the handshake a close says why: the mapping stopped or restarted (4001), access
+    changed (4002), stalled (4003), no such mapping (4004), too many (1013); a page that
+    asks for protocol 2 is told when the mapping is not running.
 
-The handlers run here against stand-ins for the WebSocket, the runner and the app state.
+End to end (a real server, no serial device): a Modbus gateway's console is observe-only
+and opens in the hex view; the close codes and the notice over real WebSockets.
+The other parts run the handlers against stand-ins for the WebSocket, the runner and
+the app state.
 
 Run: python3 tests/test_console_feed.py
 """
 import asyncio
+import json
 import os
 import struct
 import sys
@@ -27,6 +34,8 @@ import types
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from _server import Browser, Server, free_port  # noqa: E402
 
 from app.config import AppConfig, MappingConfig  # noqa: E402
 from app.engine.bridge import FROM_DEVICE, TO_DEVICE, MappingRunner  # noqa: E402
@@ -298,7 +307,7 @@ def test_stalled_viewer():
         await settle()
         h.cfg.get_user("admin").pwd_version += 1
         await asyncio.wait_for(task, console.CONSOLE_ACCESS_RECHECK_S + 2)
-        assert w.closed == (1000, "access changed") and not runner.traffic, w.closed
+        assert w.closed == (4002, "access changed") and not runner.traffic, w.closed
     saved = console.STALL_S, console.CLOSE_WAIT_S, console.CONSOLE_ACCESS_RECHECK_S
     console.STALL_S, console.CLOSE_WAIT_S, console.CONSOLE_ACCESS_RECHECK_S = 0.3, 0.3, 0.1
     try:
@@ -362,7 +371,7 @@ def test_batches():
             mon.feed(b"last")
         runner.stop()
         await asyncio.wait_for(asyncio.gather(*tasks[:1]), 2)
-        assert con.frames[-1] == b"last" and con.closed, con.frames[-1:]
+        assert con.frames[-1] == b"last" and con.closed[0] == 4001, (con.frames[-1:], con.closed)
         for s in (hex1, hex2):
             s.leave()
         await asyncio.wait_for(asyncio.gather(*tasks), 2)
@@ -400,6 +409,90 @@ def test_drop_notices():
     print("protocol 2: a viewer is told how many bytes were dropped, before what follows  OK")
 
 
+def test_close_reasons():
+    async def run():
+        h = Harness()
+        gone = h.socket("nosuchmapping")
+        await asyncio.wait_for(h.console(gone), 2)
+        assert gone.accepted and gone.closed == (4004, "no such mapping"), gone.closed
+        runner = h.runners["m1"]
+        runner.status.state = "stopped"
+        new, old = h.socket(), h.socket()
+        new.query_params = {"v": "2"}
+        tasks = [asyncio.create_task(h.traffic(s)) for s in (new, old)]
+        await settle()
+        assert new.frames == [{"state": "stopped"}] and old.frames == [], (new.frames, old.frames)
+        runner.stop()  # started: the placeholder runner lets its viewers go
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
+        assert new.closed == old.closed == (4001, "mapping stopped or restarted"), new.closed
+    asyncio.run(run())
+    print("closes say why (4001 stopped/restarted, 4004 no such mapping); protocol 2: told "
+          "when the mapping is not running  OK")
+
+
+PW = "console-feed-pass-1"
+
+
+def test_live():
+    from websockets.exceptions import ConnectionClosed
+    from websockets.sync.client import connect
+
+    from app.web.auth import hash_password
+
+    def mapping(mid, name, enabled=True, **network):
+        return {"id": mid, "name": name, "enabled": enabled, "kind": "net",
+                "serial": {"port": f"/dev/ser2net-console-feed-{mid}"},
+                "network": dict({"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
+                                 "port": free_port()}, **network)}
+
+    config = {"users": [{"username": "admin", "password_hash": hash_password(PW),
+                         "role": "admin", "pwd_version": 1}],
+              "mappings": [mapping("cf0000000001", "Raw"),
+                           mapping("cf0000000002", "Gateway", protocol="modbus"),
+                           mapping("cf0000000003", "Off", enabled=False)]}
+    with Server(config) as srv:
+        b = Browser(srv.base)
+        b.login("admin", PW)
+        cookie = {"Cookie": f"ser2net_session={b.cookie('ser2net_session').value}"}
+        ws = "ws" + srv.base[len("http"):] + "/api/mappings/"
+
+        st, _, page = b.get("/api/mappings/cf0000000002/console-view")
+        assert st == 200 and 'data-mode="hex"' in page and 'data-interactive="0"' in page, page
+        assert "type to send to the device" not in page and "read-only" in page
+        st, _, page = b.get("/api/mappings/cf0000000001/console-view")
+        assert 'data-mode="text"' in page and 'data-interactive="1"' in page
+        print("a Modbus gateway's console: read-only for an admin too, opens in the hex view  OK")
+
+        def closed(conn, seconds=5):
+            try:
+                while True:
+                    conn.recv(timeout=seconds)
+            except ConnectionClosed as e:
+                return e.rcvd.code, e.rcvd.reason
+            except TimeoutError:
+                return None
+
+        with connect(ws + "nosuchmapping/console", additional_headers=cookie) as conn:
+            assert closed(conn) == (4004, "no such mapping")
+        with connect(ws + "cf0000000003/traffic?v=2", additional_headers=cookie) as conn:
+            assert json.loads(conn.recv(timeout=5)) == {"state": "stopped"}
+        with connect(ws + "cf0000000003/traffic", additional_headers=cookie) as conn:
+            assert closed(conn, 1) is None, "protocol 1: no notice"
+        socks = [connect(ws + "cf0000000001/console", additional_headers=cookie)
+                 for _ in range(4)]
+        with connect(ws + "cf0000000001/traffic", additional_headers=cookie) as conn:
+            code, reason = closed(conn)
+            assert code == 1013 and "for one user" in reason, (code, reason)
+        st, _, _ = b.post("/api/mappings/cf0000000001/stop", htmx=True)
+        assert st == 200
+        for conn in socks:
+            assert closed(conn) == (4001, "mapping stopped or restarted")
+            conn.close()
+        assert "[Raw] console closed (127.0.0.1): mapping stopped or restarted" in srv.output()
+    print("live: 4004 for no such mapping, the not-running notice, 1013 past the limit, "
+          "4001 when the mapping is stopped  OK")
+
+
 def main():
     test_end_of_a_full_feed()
     test_runners_end_their_viewers()
@@ -408,6 +501,8 @@ def main():
     test_stalled_viewer()
     test_batches()
     test_drop_notices()
+    test_close_reasons()
+    test_live()
     print("\nPASS: console and hex-view feeds")
 
 
