@@ -37,6 +37,7 @@ CHECKS = {
     "ok banner (the one-time token)": ((".banner", ".banner.ok"), PAGE),
     "warning banner (open access)": ((".banner", ".banner.warn"), PAGE),
     "short error text": ((".err-small",), PAGE),
+    "short warning text (a port's hint)": ((".warn-small",), PAGE),
     "muted text": ((".muted",), PAGE),
     "link": (("a",), PAGE),
     "link button": (("button.link",), PAGE),

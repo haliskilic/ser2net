@@ -145,7 +145,7 @@ table.grid tr.notes-row td { padding-top: 0; }
 }
 /* the same, for what to know about a port that works (a setting it did not take) */
 .warn-small {
-  color: var(--amber); font-size: 11px; margin-top: 3px; max-width: 16rem;
+  color: var(--warn); font-size: 11px; margin-top: 3px; max-width: 16rem;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
 .clients { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
