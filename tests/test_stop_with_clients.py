@@ -271,10 +271,16 @@ async def test_close_of_a_peer_that_reads_nothing():
     peer.setblocking(False)
     try:
         writer = await asyncio.wait_for(got, 5)
-        for _ in range(200):  # far more than the peer's and the kernel's buffers hold
-            writer.write(b"q" * 65536)
-        await asyncio.sleep(0.2)
-        assert writer.transport.get_write_buffer_size() > 0
+        # far more than the peer's and the kernel's buffers hold. (Windows' Proactor loop
+        # hands what is queued to one overlapped send, which the OS may take whole while
+        # its buffer is not full yet: the next round's sends then wait.)
+        for _round in range(5):
+            for _ in range(200):
+                writer.write(b"q" * 65536)
+            await asyncio.sleep(0.2)
+            if writer.transport.get_write_buffer_size() > 0:
+                break
+        assert writer.transport.get_write_buffer_size() > 0, "the OS took it all"
         with mock.patch.object(bridge, "TCP_CLOSE_TIMEOUT_S", 0.5):
             t0 = time.monotonic()
             await bridge._close_client(writer)
