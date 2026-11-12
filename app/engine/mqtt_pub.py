@@ -20,6 +20,7 @@ import contextlib
 import errno
 import math
 import select
+import sys
 from typing import Any, Callable, Optional
 
 from .. import optional
@@ -228,6 +229,8 @@ class PollSelect:
         """select.select(), with its errors for a bad argument: TypeError for something
         that is not a descriptor, ValueError for a negative one, OSError (EBADF) for one
         that is not open."""
+        if sys.platform == "win32":  # no poll() there: use_poll installs this on POSIX only
+            return select.select(rlist, wlist, xlist, timeout)
         if timeout is not None and timeout < 0:
             raise ValueError("timeout must be non-negative")
         lists = [[(_fd(o), o) for o in objs] for objs in (rlist, wlist, xlist)]

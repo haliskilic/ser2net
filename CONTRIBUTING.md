@@ -23,7 +23,7 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 | What | Command |
 |---|---|
 | Lint | `ruff check .` |
-| Types | `mypy` (settings in `mypy.ini`) |
+| Types | `mypy` and `mypy --platform win32` (settings in `mypy.ini`) |
 | Tests (any OS) | `python tests/run_all.py -v` |
 | + serial data path (Linux, needs `socat`) | `python tests/run_all.py --socat -v` |
 | Coverage | `pip install coverage && python tests/coverage_run.py && coverage report` |
@@ -96,7 +96,7 @@ python ser2net.py --no-bootstrap --data-dir /tmp/s2n-dev
 
 ### Kontroller
 Yukarıdaki tablodaki komutların hepsi her pull request'te CI'da çalışır: `ruff check .`,
-`mypy`, `python tests/run_all.py -v` (Linux'ta `socat` ile `--socat`), coverage, tarayıcı
+`mypy` (ayrıca `--platform win32` ile), `python tests/run_all.py -v` (Linux'ta `socat` ile `--socat`), coverage, tarayıcı
 yerleşim testi, çevrimdışı wheel kontrolü ve `pip-audit`. `tests/test_dead_peer.py`
 iptables ile loopback trafiği kestiği için `SER2NET_BLACKHOLE_TESTS=1` ile yalnızca
 silinebilir bir ağ ad alanında (network namespace) ya da sanal makinede çalıştırın.

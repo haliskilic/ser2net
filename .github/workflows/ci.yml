@@ -38,6 +38,10 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt mypy==2.4.1
       - run: mypy
+      # the Windows-only code paths, and POSIX-only calls (fcntl, os.getuid, ...) that
+      # reach code Windows runs too
+      - name: mypy --platform win32
+        run: mypy --platform win32
 
   audit:
     name: dependency audit py${{ matrix.python-version }}
