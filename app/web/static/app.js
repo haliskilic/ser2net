@@ -228,6 +228,31 @@ document.addEventListener("submit", function (e) {
   if (q && !window.confirm(q)) e.preventDefault();
 });
 
+// 2d) Settings. A form that did its work is answered with a redirect to the page, at the
+//     form's section; one that was refused, with the page itself (what was typed shown
+//     again, the reason in the form's section), whose <main data-page-url> names the
+//     page's own address. That goes in the address bar, so a reload or Back loads the
+//     page instead of posting the form again. Either way the form's message
+//     ([data-feedback]) takes the keyboard focus, with its section in view - once the
+//     page has loaded: the browser's own scroll to the #section of the address moves
+//     the focus to the page itself, after DOMContentLoaded.
+document.addEventListener("DOMContentLoaded", function () {
+  var main = document.querySelector("main[data-page-url]");
+  if (main && window.history && history.replaceState) {
+    try { history.replaceState(history.state, "", main.getAttribute("data-page-url")); } catch (e) {}
+  }
+});
+window.addEventListener("load", function () {
+  setTimeout(function () {
+    var msg = document.querySelector("[data-feedback]");
+    var active = document.activeElement;
+    if (!msg || (active && active !== document.body)) return;   // the user is somewhere already
+    var section = msg.closest("section");
+    if (section) section.scrollIntoView();
+    msg.focus({ preventScroll: true });
+  }, 0);
+});
+
 // 3) Unsaved changes in the mapping form. The form is "dirty" once a field was changed
 //    (an input / change event, nothing else: a form nobody touched never asks) or when it
 //    came back from a failed save (data-dirty="1": the values shown are not saved).

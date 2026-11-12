@@ -65,6 +65,7 @@ PORTABLE = [
     "test_ui_contrast.py",    # status colours readable in both themes (WCAG AA)
     "test_live_table.py",     # polled tables: 204 / counters only / whole table, off the loop
     "test_confirmations.py",  # disruptive actions ask first (only those)
+    "test_settings_prg.py",   # Settings forms: redirect after a change, a refused one refilled
     "test_tls_selfsigned.py",
     "test_standalone.py",     # binary part needs a build; CI 'standalone' workflow runs it
     "test_vendor_wheels.py",

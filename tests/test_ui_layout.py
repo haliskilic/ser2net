@@ -462,6 +462,101 @@ def feedback_checks(browser, base, problems):
     ctx.close()
 
 
+def settings_checks(browser, base, problems, config_path):
+    """The Settings forms in a browser (a context of its own): a refused form comes back
+    filled in, at its own address (a reload loads the page, it doesn't post the form
+    again), with its message focused; a new API token is on the page a redirect leads to,
+    and a reload neither shows it again nor makes another; TR / EN after a save works."""
+    ctx = browser.new_context(viewport={"width": 1280, "height": 700})
+    page = ctx.new_page()
+    errors, sent = [], []
+    page.on("console", lambda m: m.type == "error" and errors.append(m.text))
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.on("dialog", lambda d: d.accept())
+    page.on("request", lambda r: r.resource_type == "document" and sent.append(
+        (r.method, r.url[len(base):].split("#")[0])))
+
+    def bad(what):
+        problems.append(f"settings: {what}")
+
+    def here():
+        return page.evaluate("location.pathname + location.search + location.hash")
+
+    def focused():
+        try:   # (app.js gives it the focus once the page has loaded)
+            page.wait_for_function("document.activeElement.matches('[data-feedback]')", timeout=3000)
+        except Exception:
+            pass
+        return page.evaluate("(() => { const a = document.activeElement; const s = a && a.closest('section');"
+                             " const r = a.getBoundingClientRect(); return a && a.matches('[data-feedback]') && s"
+                             " ? [s.id, a.className, r.top >= 0 && r.bottom <= innerHeight] : null; })()")
+
+    def token_hash():
+        with open(config_path, encoding="utf-8") as fh:
+            return json.load(fh).get("api_token_hash", "")
+
+    page.goto(f"{base}/login")
+    page.fill("input[name=username]", USER)
+    page.fill("input[name=password]", PASSWORD)
+    page.click("button[type=submit]")
+    page.wait_for_url(f"{base}/")
+
+    # a refused form: shown again with what was typed, at /settings#oidc
+    page.goto(f"{base}/settings")
+    form = page.locator("form[action='/settings/oidc']")
+    form.locator("input[name=oidc_enabled]").check()
+    form.locator("input[name=oidc_issuer]").fill("http://idp.typed.example")
+    form.locator("input[name=oidc_client_id]").fill("typed-client")
+    form.locator("input[name=oidc_client_secret]").fill("typed-secret")
+    with page.expect_navigation():
+        form.locator("button[type=submit]").click()
+    page.wait_for_load_state()
+    if here() != "/settings#oidc":
+        bad(f"a refused form's page is at {here()!r}, not /settings#oidc")
+    if focused() != ["oidc", "banner error", True]:
+        bad(f"a refused form's message is not focused in view: {focused()}")
+    if page.locator("form[action='/settings/oidc'] input[name=oidc_issuer]").input_value() != \
+            "http://idp.typed.example":
+        bad("the refused OIDC form lost what was typed")
+    del sent[:]
+    page.reload()
+    page.wait_for_load_state()
+    if sent != [("GET", "/settings")] or page.query_selector("[data-feedback]"):
+        bad(f"reloading a refused form's page did not just load the page: {sent}")
+
+    # a new API token: on the page the redirect leads to; a reload shows (and makes) no other
+    del sent[:]
+    with page.expect_navigation():
+        page.locator("form[action='/settings/api-token'] button.primary").click()
+    page.wait_for_load_state()
+    box = page.query_selector("#api-token .token-box")
+    if here() != "/settings#api-token" or box is None:
+        bad(f"no new token on the page after Generate token ({here()!r})")
+    if [m for m, _u in sent] != ["POST", "GET"]:
+        bad(f"Generate token was not answered with a redirect: {sent}")
+    if focused() != ["api-token", "banner ok", True]:
+        bad(f"the new token's message is not focused in view: {focused()}")
+    stored = token_hash()
+    del sent[:]
+    page.reload()
+    page.wait_for_load_state()
+    if sent != [("GET", "/settings")] or page.query_selector(".token-box") or token_hash() != stored:
+        bad(f"reloading the new token's page posted again or showed it again: {sent}")
+
+    # TR / EN right after a save: the page in Turkish (it used to be a plain 405)
+    with page.expect_navigation():
+        page.locator("form[action='/settings/api-token'] button[formaction='/settings/api-token/role']").click()
+    with page.expect_navigation():
+        page.click(".lang-switch a[hreflang=tr]")
+    page.wait_for_load_state()
+    if not page.url.endswith("/settings") or page.evaluate("document.documentElement.lang") != "tr":
+        bad(f"TR after a save led to {page.url}")
+    page.goto(f"{base}/lang/en?next=/settings")
+    problems.extend(f"settings: browser error: {e}" for e in errors
+                    if "Failed to load resource" not in e)
+    ctx.close()
+
+
 def skip(why):
     if REQUIRED:
         raise AssertionError(f"SER2NET_UI_TESTS=1 but {why}")
@@ -600,6 +695,10 @@ def main():
             n = len(problems)
             feedback_checks(browser, base, problems)
             print(f"dashboard feedback, focus, unsaved changes, console: "
+                  f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
+            n = len(problems)
+            settings_checks(browser, base, problems, os.path.join(nodes[0][1], "config.json"))
+            print(f"settings forms: redirect after a change, refused form refilled, reload: "
                   f"{'OK' if len(problems) == n else f'{len(problems) - n} problem(s)'}")
             browser.close()
 

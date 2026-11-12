@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% from "_macros.html" import lang_switch %}
 {% block body %}
+{#- this page's address (page_url: the one a page sent as the answer to a form names) #}
+{% set here = page_url or (request.url.path ~ ('?' ~ request.url.query if request.url.query else '')) %}
 <header class="topbar">
   <div class="brand">⇄ ser2net</div>
   <nav>
@@ -9,10 +11,10 @@
     {% set u = request.state.user %}
     {% if u and u.source == 'anonymous' %}<span class="muted mono who" title="{{ _('login is switched off — open access') }}">{{ _("no login · %(role)s", role=u.role) }}</span>
     {% elif u %}<span class="muted mono who" title="{{ _('signed in as %(user)s · %(role)s', user=u.username, role=u.role) }}">{{ u.username }} · {{ u.role }}</span>{% endif %}
-    {{ lang_switch(request, request.state.lang) }}
+    {{ lang_switch(request, request.state.lang, here) }}
     <button class="link" type="button" data-theme-toggle title="{{ _('Toggle light / dark theme') }}" aria-label="{{ _('Toggle theme') }}">◐</button>
     {% if u and u.source == 'anonymous' %}
-    <a href="/login{% if request.url.path != '/' %}?next={{ (request.url.path ~ ('?' ~ request.url.query if request.url.query else ''))|urlencode }}{% endif %}">{{ _("Sign in") }}</a>
+    <a href="/login{% if request.url.path != '/' %}?next={{ here|urlencode }}{% endif %}">{{ _("Sign in") }}</a>
     {% else %}
     <form method="post" action="/logout" class="inline">
       <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
@@ -21,7 +23,8 @@
     {% endif %}
   </nav>
 </header>
-<main>
+{#- data-page-url: app.js puts it in the address bar, so a reload doesn't post the form again #}
+<main{% if page_url %} data-page-url="{{ page_url }}"{% endif %}>
   {% block main %}{% endblock %}
 </main>
 {# what an action did and why a request failed (app.js "feedback"): live regions, so

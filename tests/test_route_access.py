@@ -148,7 +148,7 @@ ROUTES = {
     ("MOUNT", "/static"): (PUBLIC, NONE),
 }
 
-# what the handler of an "account" route answers an open-access visitor (200, no change)
+# what the handler of an "account" route answers an open-access visitor (400, no change)
 ACCOUNT_REFUSALS = {
     "/settings/password": "Sign in to change your password.",
     "/settings/sessions/signout-others": "Sign in to manage your sessions.",
@@ -382,7 +382,7 @@ def check_session_route(who: Client, method: str, path: str, access: str, csrf: 
         elif want == "peer":
             ok = st == 403 and body.strip() == PEER_DENIED
         elif want == "account":
-            ok = st == 200 and ACCOUNT_REFUSALS[path] in body
+            ok = st == 400 and ACCOUNT_REFUSALS[path] in body
         else:
             ok = st == 403 and body.strip() == ROLE_DENIED.format(want)
     if want != "allowed":
@@ -522,7 +522,9 @@ def _live(srv) -> None:
                 assert st not in (401, 403) and st < 500, f"{method} {probe} -> {st} {text[:80]}"
 
     check_token(VIEWER_TOKEN, may_write=False)
-    st, _, page = admin.send("POST", "/settings/api-token", fields={"api_token_role": "operator"})
+    st, h, _ = admin.send("POST", "/settings/api-token", fields={"api_token_role": "operator"})
+    assert st == 303 and h.get("Location") == "/settings#api-token", st   # the page shows it
+    page = admin.get("/settings")[2]
     check_token(re.search(r"s2n_[A-Za-z0-9_\-]+", page).group(0), may_write=True)
     print("REST API: no / a wrong token or a session cookie -> 401, a viewer token can't write, "
           "an operator token can  OK")
@@ -539,15 +541,15 @@ def _live(srv) -> None:
 
     # ---- open access: visitors without a session get a role ----
     for role, rank in (("viewer", 1), ("operator", 2)):
-        st, _, page = admin.send("POST", "/settings/access", fields={"anonymous_role": role})
-        assert st == 200 and "Open access enabled" in page, st
+        st, _, _ = admin.send("POST", "/settings/access", fields={"anonymous_role": role})
+        assert st == 303 and "Open access enabled" in admin.get("/settings")[2], st
         visitor = Client(base, f"open-access visitor ({role})", rank, False)
         for route in routes:
             check_session_route(visitor, *route)
         check_websockets(srv, visitor, accepted=True)
     st, _, _ = admin.send("POST", "/settings/access", fields={"require_login": "on",
                                                              "anonymous_role": "viewer"})
-    assert st == 200 and srv.saved_config()["admin_ui"]["require_login"] is True
+    assert st == 303 and srv.saved_config()["admin_ui"]["require_login"] is True
     check_websockets(srv, Client(base, "no session (login required again)"), accepted=False)
     print(f"open access: visitors as viewer and as operator over all {len(routes)} routes; no "
           "peer actions, no account pages, nothing above their role  OK")
