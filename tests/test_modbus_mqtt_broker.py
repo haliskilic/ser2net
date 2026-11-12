@@ -10,6 +10,9 @@ the Will, retained messages and reconnects all run as they do in service. Checks
     one is; stop: "offline";
   * stop with writes waiting (a silent slave): every one is answered, in order, and the
     answers reach the broker before the "offline";
+  * a burst of /set while the slave holds a write: 32 wait, the rest get error: busy, the
+    waiting ones are written in order; a /set over 64 KiB gets error: too large, a DCMD
+    over 256 KiB is ignored (logged);
   * Sparkplug B: the NDEATH Will (bdSeq 0, QoS 1), NBIRTH (bdSeq 0) and a DBIRTH per unit;
     a DCMD from the broker writes its point and the new value comes back in a DDATA; the
     link dropped: the broker publishes the NDEATH Will, the next session's Will and NBIRTH
@@ -50,6 +53,7 @@ class Slave:
         self.regs = {0: 0x41BC, 1: 0, 10: 5}
         self.coils = {0: False}
         self.silent = False
+        self.hold: asyncio.Event | None = None  # set: answers to writes wait for it
         self.requests: list = []
         self.port = 0
         self._server = None
@@ -98,6 +102,8 @@ class Slave:
                     self.requests.append((unit, pdu))
                     if self.silent:
                         continue
+                    if self.hold is not None and pdu[0] in (5, 6, 15, 16):
+                        await self.hold.wait()
                     writer.write(modbus.rtu_wrap(unit, self.answer(pdu)))
                     await writer.drain()
 
@@ -210,6 +216,42 @@ async def stop_checks(broker):
     print("stop with writes waiting: each answered, in order, before 'offline'  OK")
 
 
+async def flood_checks(broker):
+    from app.engine.modbus_gateway import SET_MAX_BYTES, WRITE_QUEUE_MAX
+    from app.engine.sparkplug_node import CMD_MAX_BYTES
+    result = "plant/a/setpoint/set/result"
+    async with Slave() as slave, gateway(broker, slave, timeout=5.0):
+        assert await until(lambda: "plant/a/setpoint/set" in broker.subscriptions)
+        slave.hold = asyncio.Event()
+        broker.publish("plant/a/setpoint/set", b"100")
+        assert await until(lambda: any(pdu[0] == 6 for _u, pdu in slave.requests))
+        for n in range(WRITE_QUEUE_MAX + 3):
+            broker.publish("plant/a/setpoint/set", str(101 + n).encode())
+        assert await until(lambda: broker.payloads(result) == [b"error: busy"] * 3), \
+            broker.payloads(result)
+        slave.hold.set()
+        assert await until(lambda: len(broker.payloads(result)) == 3 + 1 + WRITE_QUEUE_MAX)
+        assert broker.payloads(result)[3:] == [b"ok"] * (1 + WRITE_QUEUE_MAX)
+        written = [struct.unpack(">H", pdu[3:5])[0] for _u, pdu in slave.requests
+                   if pdu[0] == 6]
+        assert written == list(range(100, 101 + WRITE_QUEUE_MAX)), written
+        broker.publish("plant/a/setpoint/set", b"7" * (SET_MAX_BYTES + 1))
+        assert await until(lambda: broker.payloads(result)[-1].startswith(
+            b"error: too large: "))
+    print("burst of /set: 32 wait, the rest error: busy, written in order; a /set over "
+          "64 KiB -> error: too large  OK")
+
+    logs = []
+    async with Slave() as slave, gateway(broker, slave, "sparkplug_b", logs=logs):
+        assert await until(lambda: "spBv1.0/ser2net/DCMD/edge/+" in broker.subscriptions)
+        broker.publish(node_topic("DCMD", "unit1"), command(sparkplug.Metric(
+            name="setpoint", datatype=sparkplug.DataType.String, value="x" * CMD_MAX_BYTES)))
+        assert await until(lambda: any("Sparkplug DCMD for unit1 ignored: " in m
+                                       and "a command may have" in m for m in logs)), logs
+        assert not slave.writes()
+    print("a DCMD over 256 KiB is ignored and logged  OK")
+
+
 def node_topic(kind, dev=None):
     return sparkplug.topic("ser2net", kind, "edge", dev)
 
@@ -267,6 +309,8 @@ async def main():
         await plain_checks(broker)
     with MqttBroker() as broker:
         await stop_checks(broker)
+    with MqttBroker() as broker:
+        await flood_checks(broker)
     with MqttBroker() as broker:
         await sparkplug_checks(broker)
 

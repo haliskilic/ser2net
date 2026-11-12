@@ -138,7 +138,13 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   time, in the order they came, and take turns on the bus with the poll and the Modbus/TCP
   masters; the answers on `.../set/result` keep that order. At most 32 wait for the bus: a
   command beyond them gets `error: busy`, and one that waited more than 10 s for its turn
-  is not written (`error: expired`). Stopping the mapping (also a save, a restart or an
+  is not written (`error: expired`). A `/set` over 64 KiB gets `error: too large: …`; a
+  Sparkplug NCMD/DCMD over 256 KiB, a DCMD with more metrics than its device has points and
+  an NCMD with more than 64 are ignored, and what a command leaves out (metrics that are not
+  writable points of the device, nulls) is logged in one line, at most once a minute. A
+  rebirth asked for less than 2 s after the last births goes out once those 2 s are up. The
+  broker's own limits (Mosquitto `message_size_limit`) and ACLs remain the first guard.
+  Stopping the mapping (also a save, a restart or an
   import that changes it) answers every write before the MQTT connection closes: the one
   on the bus may finish (at most 2 s; else `error: cancelled: mapping stopped (sent,
   outcome unknown)` or `(not sent)`), the ones still waiting get `error: cancelled: mapping

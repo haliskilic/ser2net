@@ -433,12 +433,14 @@ def _decode_metric(data: bytes) -> Metric:
     return metric
 
 
-def decode_payload(data: bytes) -> Payload:
+def decode_payload(data: bytes, max_metrics: int | None = None) -> Payload:
     """Parse Sparkplug B protobuf bytes into a Payload. Values are converted by each
     metric's datatype (signed types sign-extended, range-checked); a metric without a
     datatype -- as NDATA/NCMD metrics are normally sent -- or with a datatype this codec
     doesn't model keeps its plain wire value (int_value as unsigned 32-bit, etc.).
-    Unknown fields are skipped; truncated or malformed input raises ValueError."""
+    Unknown fields are skipped; truncated or malformed input raises ValueError, and so do
+    more than ``max_metrics`` metrics, as soon as the one too many is seen (the rest is
+    not decoded)."""
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError(f"decode_payload needs bytes, got {type(data).__name__}")
     payload = Payload(timestamp=None, metrics=[], seq=None)
@@ -450,6 +452,8 @@ def decode_payload(data: bytes) -> Payload:
                 payload.seq = raw
         elif wire_type == _LEN:
             if number == 2:
+                if max_metrics is not None and len(payload.metrics) >= max_metrics:
+                    raise ValueError(f"more than {max_metrics} metric(s)")
                 payload.metrics.append(_decode_metric(raw))
             elif number == 4:
                 payload.uuid = _utf8(raw, "payload uuid")
