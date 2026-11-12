@@ -212,7 +212,12 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Deployment:** official **Docker** image + `docker-compose`; **systemd** unit;
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT publishing (optional):** publish each mapping's serial lines to an MQTT
-  broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status.
+  broker (host/port/topic/QoS/TLS/credentials) with a retained birth/death status:
+  `<topic>/status` reads `online` after every connect to the broker (a reconnect too),
+  and `offline` when the mapping stops or, as the Last-Will, when the broker loses the
+  connection. With a blank client ID the broker can't tie a new connection to the one
+  that broke, whose Will it may publish only after the new `online` (it waits up to 1.5 ×
+  the 30 s keepalive), so `online` is sent once more 50 s after each connect.
   Needs `paho-mqtt` (optional; the bridge runs normally without it).
 - **Migrating from classic ser2net:** `ser2net.yaml` (4.x) and `ser2net.conf` (3.x) files
   import through Settings with a preview; options without an equivalent are listed as
