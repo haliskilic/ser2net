@@ -556,8 +556,8 @@ scrape_configs:
       - targets: ["HOST:8080"]
 ```
 The token has the role chosen when it was generated: a `viewer` token may only read (GET)
-and gets stored secrets (the MQTT password) masked as `********`; a `PUT` that sends that
-mask back keeps the stored password. An `api_token_role` in `config.json` that is not a
+and gets stored secrets (the MQTT password, a mapping's TLS key password) masked as
+`********`; a `PUT` or `PATCH` that sends that mask back keeps the stored password. An `api_token_role` in `config.json` that is not a
 role counts as `viewer`, and the start-up log says so.
 
 **One token per client:** under **Settings → REST API token → More tokens** an admin adds
@@ -1144,8 +1144,9 @@ inside aren't readable by other users:
 secret, the SMTP password, the webhook URL (which often carries a token), each mapping's
 MQTT broker password, the TLS key passwords (a mapping's and the admin UI's), the cluster
 key (enough to read and change the mappings of every node) and the session key `secret_key`
-(with the accounts in the same file, enough to make a valid sign-in). Local passwords are
-kept as scrypt hashes and the REST API token only as a hash. `backups/` holds earlier copies
+(with the accounts in the same file, enough to make a valid sign-in), and the two-factor
+sign-in key of each account that uses it. Local passwords are kept as scrypt hashes and the
+REST API tokens only as hashes. `backups/` holds earlier copies
 of the same file (a downloaded backup leaves out the session key), and the mappings export
 holds the MQTT and TLS key passwords. On this machine only the account ser2net runs as can
 read them; treat every copy — a copied data folder or Docker
