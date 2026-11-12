@@ -8,7 +8,9 @@ metrics are that unit's poll points:
     and the "Node Control/Rebirth" metric, then a DBIRTH per device with every point
     (its datatype, last value or null);
   * each poll publishes a DDATA per device with the points whose value changed (report
-    by exception); seq counts on across NBIRTH, DBIRTH and DDATA: 0…255, 0, …;
+    by exception); seq counts on across NBIRTH, DBIRTH and DDATA: 0…255, 0, …. Data is
+    published only once the session's NBIRTH and DBIRTHs are out: a poll that ends
+    between a (re)connect and the births only updates the values the births carry;
   * DCMD: a metric named like a writable point of that device is written to the bus
     (through the gateway's write_point), unless the mapping is read-only (then the
     command is logged and refused); NCMD: "Node Control/Rebirth" = true
@@ -54,6 +56,7 @@ class SparkplugNode:
         self.bdseq = 0
         self.seq = 0
         self._sessions = 0           # connects seen (the first one keeps bdSeq 0)
+        self._born = False           # this MQTT session's NBIRTH and DBIRTHs are out
         self._log = log
         self._write = write          # gateway._write_soon(point, value)
         self._pub: MqttPublisher | None = None
@@ -68,7 +71,10 @@ class SparkplugNode:
 
     def _will(self) -> tuple:
         """Called before the first connect and after every disconnect (paho's thread):
-        a new session gets the next bdSeq, and the Will carries it."""
+        a new session gets the next bdSeq, and the Will carries it. Nothing is published
+        as data until that session's births are out (paho sends a publish as soon as it
+        has a socket, before the broker has accepted the connection)."""
+        self._born = False
         if self._sessions:
             self.bdseq = (self.bdseq + 1) % 256
         self._sessions += 1
@@ -109,12 +115,16 @@ class SparkplugNode:
             self.seq = sparkplug.next_seq(self.seq)
             self._publish(self.topic("DBIRTH", dev),
                           [self._metric(n, self.values.get(n)) for n in names])
+        self._born = True
 
     def update(self, values: dict) -> None:
-        """A DDATA per device with the metrics whose value changed since the last report."""
+        """A DDATA per device with the metrics whose value changed since the last report.
+        Before the session's births the values are only kept: the births carry them."""
         changed = {n for n, v in values.items() if n in self.points and self.values.get(n) != v}
         for n in changed:
             self.values[n] = values[n]
+        if not self._born:
+            return
         for dev, names in self.devices.items():
             metrics = [self._metric(n, self.values[n]) for n in names if n in changed]
             if metrics:
