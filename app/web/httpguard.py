@@ -22,7 +22,12 @@ holds what its connections share:
   - a send deadline: a connection whose client takes nothing of what it was sent for
     admin_ui.request_timeout_s is aborted (also while it closes after a response);
   - a connection that runs out of time is aborted, not closed (a TLS close would wait for
-    the client). A WebSocket (the console) is not timed once it is upgraded.
+    the client). A WebSocket (the console) is not timed once it is upgraded;
+  - a request answered before its body was all in (a refusal) whose client asked to close
+    the connection: the rest of the body is read (and dropped) under the request deadline
+    before the connection closes (``_Transport``). Closed at once, the socket would reset
+    the connection, with the body still coming or unread in it, and a client on Windows
+    then loses the answer it has not read yet.
 
 ``listen`` makes the listener's sockets (listening already) before the mappings start,
 for uvicorn.Server.serve(sockets=...).
@@ -36,7 +41,7 @@ import os
 import socket
 import ssl
 import sys
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 import h11
 from uvicorn.protocols.http.h11_impl import H11Protocol
@@ -98,6 +103,32 @@ class AdminGuard:
             task.cancel()
 
 
+class _Transport:
+    """The transport uvicorn's protocol and its request cycles are given: the connection's
+    own, but a close() while the client is still sending the body of a request that was
+    answered already (``GuardedH11Protocol._body_coming``) only marks it closing; the rest
+    of the body is read and dropped, and the connection closed once it is in
+    (``GuardedH11Protocol.data_received``) or at the request deadline. A second close()
+    closes it at once (a shutdown)."""
+
+    def __init__(self, transport: Any, protocol: "GuardedH11Protocol") -> None:
+        self._transport = transport
+        self._protocol = protocol
+        self.lingering = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._transport, name)
+
+    def is_closing(self) -> bool:
+        return self.lingering or self._transport.is_closing()
+
+    def close(self) -> None:
+        if not self.lingering and self._protocol._body_coming():
+            self.lingering = True
+            return
+        self._transport.close()
+
+
 class GuardedH11Protocol(H11Protocol):
     """H11Protocol with admission, TLS after admission, a request deadline and a send
     deadline."""
@@ -107,6 +138,8 @@ class GuardedH11Protocol(H11Protocol):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._accepted: Any = None  # the accepted socket's transport (TLS: the one under it)
+        self._served_transport: Any = None  # the one uvicorn serves (TLS: the TLS one)
+        self._closing: Optional[_Transport] = None  # what uvicorn is given in its place
         self._served = False  # H11Protocol.connection_made ran: uvicorn serves it
         self._upgraded = False  # a WebSocket now: not timed any more
         # the request deadline: for its head ("head"), then for its body ("body"), whose
@@ -138,10 +171,16 @@ class GuardedH11Protocol(H11Protocol):
             return
         self._served = True
         super().connection_made(transport)
+        self._served_transport = transport
+        self._closing = _Transport(transport, self)
+        self.transport = cast(asyncio.Transport, self._closing)  # (FlowControl keeps the real one)
         self._follow_request(0, fresh=True)
 
     def data_received(self, data: bytes) -> None:
         if not self._served:
+            return
+        if self._lingering():
+            self._drop_body(data)
             return
         super().data_received(data)
         self._follow_request(len(data))
@@ -150,12 +189,41 @@ class GuardedH11Protocol(H11Protocol):
         super().on_response_complete()
         if self.transport.is_closing():
             self._watch_send()  # what is left of the response still has to go out
+        if self._lingering():
+            self.flow.resume_reading()  # (uvicorn returns before this for a closing one)
         self._follow_request(0, fresh=True)  # the next request has the same time
 
     def handle_websocket_upgrade(self, event: h11.Request) -> None:
         self._upgraded = True
         self._stop_timers()
+        self.transport = self._served_transport  # the WebSocket protocol gets the real one
         super().handle_websocket_upgrade(event)
+
+    def _lingering(self) -> bool:
+        return self._closing is not None and self._closing.lingering
+
+    def _body_coming(self) -> bool:
+        """Whether the client is still sending the body of a request (that was answered:
+        uvicorn closes the connection after the answer). The wait ends with the body, with
+        the client's own close (one that sent "Expect: 100-continue" may send no body after
+        the answer) or at the request deadline: not without one."""
+        return (self._served and not self._upgraded and self.guard.request_timeout > 0
+                and self.conn.their_state is h11.SEND_BODY)
+
+    def _drop_body(self, data: bytes) -> None:
+        """More of the body of an answered request on a closing connection: dropped; the
+        connection closes once the body is all in (or anything else comes)."""
+        try:
+            self.conn.receive_data(data)
+            while isinstance(event := self.conn.next_event(), h11.Data):
+                pass
+        except h11.RemoteProtocolError:
+            event = None
+        if event is h11.NEED_DATA:
+            self._follow_request(len(data))
+        else:
+            self._stop_request_timer()
+            self._served_transport.close()
 
     def pause_writing(self) -> None:
         super().pause_writing()
@@ -248,7 +316,7 @@ class GuardedH11Protocol(H11Protocol):
         if not (self.flow.write_paused or self.transport.is_closing()):
             return None
         unsent = 0
-        for transport in {self.transport, self._accepted}:  # TLS: both layers' buffers
+        for transport in {self._served_transport, self._accepted}:  # TLS: both layers' buffers
             with contextlib.suppress(Exception):  # (one that is gone holds nothing)
                 unsent += transport.get_write_buffer_size()
         return self._resumed, unsent
