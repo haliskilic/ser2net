@@ -33,11 +33,25 @@ document.addEventListener("htmx:configRequest", function (e) {
 });
 
 // 1a) Detected-ports panel: "show / hide the ports without hardware" sticks across the
-//     5-second refreshes (the polling element carries the choice).
+//     5-second refreshes and the Refresh button (the panel carries the choice; it is the
+//     target of both requests, the button their element).
 document.addEventListener("htmx:configRequest", function (e) {
-  var el = e.detail.elt;
+  var el = e.detail.target || e.detail.elt;
   if (el && el.id === "ports-table" && el.getAttribute("data-show-all") === "1")
     e.detail.parameters["all"] = "1";
+});
+
+// 1a') Mapping form: ↻ next to Device lists the serial ports again (an adapter plugged in
+//      after the form was opened), keeping what is chosen and the rest of the form.
+document.addEventListener("click", function (e) {
+  var b = e.target.closest ? e.target.closest("[data-port-rescan]") : null;
+  if (!b || !window.htmx) return;
+  var pick = b.closest(".port-pick"), prefix = b.getAttribute("data-port-rescan");
+  var field = pick ? pick.querySelector('[name="' + prefix + 'port"]') : null;
+  if (!pick) return;
+  htmx.ajax("GET", "/api/ports/select?prefix=" + encodeURIComponent(prefix) +
+            "&selected=" + encodeURIComponent(field ? field.value : ""),
+            {target: pick, swap: "outerHTML"});
 });
 document.addEventListener("click", function (e) {
   var b = e.target.closest ? e.target.closest("[data-ports-all]") : null;
@@ -74,6 +88,26 @@ function syncCustomInputs(root) {
   });
 }
 
+// 2a) Device "Other device path…": while that option is chosen the text box under the
+//     select has the select's name ({prefix}port), so the typed path is posted as the field
+//     itself (an older cluster peer saves it as it is) and the select is not posted.
+function syncPortPaths(root, focus) {
+  (root || document).querySelectorAll("select[data-port-field]").forEach(function (sel) {
+    var name = sel.getAttribute("data-port-field");
+    var input = sel.parentNode.querySelector("[data-port-typed]");
+    if (!input) return;
+    var opt = sel.options[sel.selectedIndex];
+    var typed = !!(opt && opt.hasAttribute("data-port-other"));
+    if (typed) { sel.removeAttribute("name"); input.setAttribute("name", name); }
+    else { sel.setAttribute("name", name); input.removeAttribute("name"); }
+    sel.required = !typed && sel.hasAttribute("data-required");
+    input.required = typed && sel.hasAttribute("data-required");
+    input.hidden = !typed;
+    input.disabled = !typed;
+    if (typed && focus) input.focus();
+  });
+}
+
 // 2b) data-show-when="field=v1,v2": show the element only when the form control
 //     named `field` has one of those values; hidden blocks are also disabled so
 //     their inputs neither submit nor block validation (CSP-safe; no inline JS).
@@ -101,6 +135,9 @@ document.addEventListener("change", function (e) {
   if (e.target.matches && e.target.matches("select[data-custom]")) {
     syncCustomInputs(e.target.parentNode);
   }
+  if (e.target.matches && e.target.matches("select[data-port-field]")) {
+    syncPortPaths(e.target.parentNode, true);
+  }
   if (e.target.matches && e.target.matches("select")) {
     applyShowWhen(e.target);
   }
@@ -110,11 +147,13 @@ document.addEventListener("change", function (e) {
 document.addEventListener("htmx:afterSwap", function (e) {
   syncCustomInputs(e.target);
   applyShowWhen(e.target);
+  syncPortPaths(document);  // (↻ swaps the Device field out: its target is gone)
   initTerm(e.target);
 });
 document.addEventListener("DOMContentLoaded", function () {
   syncCustomInputs(document);
   applyShowWhen(document);
+  syncPortPaths(document);
 });
 
 // 2c) <form data-confirm="question">: ask before submitting (plain forms; htmx

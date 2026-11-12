@@ -210,7 +210,6 @@
 ### Icebox / conditional
 - Thread-per-port serial backend — only if a real Windows high-throughput /
   tight-timing need emerges (current asyncio path handles 24+ full-duplex fine)
-- Per-mapping TLS client certificate verification (mTLS) for data bridges
 - Pluggable persistent session store
 
 > Note: mDNS/zeroconf advertising is intentionally **not** on the roadmap; LAN cluster

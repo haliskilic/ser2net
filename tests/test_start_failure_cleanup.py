@@ -1,10 +1,10 @@
 """A failed start() must not leak the serial supervisor task (H4).
 
-start() creates the serial supervisor task FIRST, then brings up the network
-side. If the network side fails (address-in-use, bad TLS cert, ...), the old
-code left the serial task running — it kept the serial device open forever, so
-no other mapping could ever use that port. This test forces a start() failure
-(missing TLS cert) and asserts the runner cleaned itself up.
+start() brings up the listener first and only then the serial supervisor task, so a
+start whose network side fails (address-in-use, bad TLS cert, ...) has opened no serial
+device. The old code started the serial task first and left it running — it kept the
+serial device open forever, so no other mapping could ever use that port. This test
+forces a start() failure (missing TLS cert) and asserts nothing is left behind.
 
 Run: python3 tests/test_start_failure_cleanup.py
 """
@@ -77,9 +77,15 @@ async def test_missing_device_reported_at_start():
     try:
         await runner.start()
         st = runner.status
+        # the serial side tries the port once the listener is up; its first attempt says
+        # so (0.4 s: the next attempt would come after 0.6 s)
+        for _ in range(20):
+            if st.state != "running":
+                break
+            await asyncio.sleep(0.02)
         assert st.state in ("reconnecting", "device-missing"), st.as_dict()
         assert "could not open" in st.last_error, st.as_dict()
-        print(f"missing device at start: state={st.state} right after start()  OK")
+        print(f"missing device at start: state={st.state} from the first attempt  OK")
     finally:
         serial_io.open_serial = real_open
         await asyncio.wait_for(runner.stop(), timeout=10)

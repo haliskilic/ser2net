@@ -128,6 +128,7 @@ ROUTES = {
     # ---- routes/console.py (the to-device direction: see test_traffic_feed) ----
     ("WS", "/api/mappings/{mid}/console"): (VIEWER, ORIGIN),
     ("WS", "/api/mappings/{mid}/traffic"): (VIEWER, ORIGIN),
+    ("POST", "/api/mappings/{mid}/break"): (OPERATOR, HEADER),  # the console's serial BREAK
     # ---- routes/cluster.py ----
     ("GET", "/api/cluster/status"): (VIEWER, NONE),  # open-access visitors: this node only
     ("GET", "/api/cluster/local"): (CLUSTER_KEY, NONE),
@@ -142,7 +143,7 @@ ROUTES = {
     ("GET", "/healthz"): (PUBLIC, NONE),
     ("GET", "/metrics"): (VIEWER, NONE),
     ("GET", "/api/ports.json"): (VIEWER, NONE),
-    ("POST", "/api/ports/refresh"): (VIEWER, HEADER),
+    ("GET", "/api/ports/select"): (OPERATOR, NONE),
     ("GET", "/api/ports/table"): (VIEWER, NONE),
     ("MOUNT", "/static"): (PUBLIC, NONE),
 }

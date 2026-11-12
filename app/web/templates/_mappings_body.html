@@ -11,35 +11,51 @@
   {% for m in mappings %}
     {% set st = statuses.get(m.id) %}
     {% set state = st.state if st else ('stopped' if not m.enabled else 'stopped') %}
-    {% set problem = state in ('error', 'device-missing', 'reconnecting') %}
+    {% set link_down = st and st.link == 'down' %}
+    {% set problem = state in ('error', 'device-missing', 'reconnecting') or link_down %}
     <tr data-mid="{{ m.id }}" data-name="{{ m.name|lower }}" data-state="{{ 'problem' if problem else state }}"
-        data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
+        data-search="{{ (m.name ~ ' ' ~ m.serial.port ~ ' ' ~ m.serial_b.port ~ ' ' ~ m.network.bind_ip ~ ' ' ~ m.network.bind_shown ~ ':' ~ m.network.port ~ ' ' ~ m.network.remote_host ~ ' ' ~ m.network.protocol ~ ' ' ~ (st.device if st else ''))|lower }}"
         data-port="{{ m.network.port if m.kind == 'net' and m.network.mode != 'client' else m.network.remote_port }}">
       <td class="col-name">{% if can_edit %}<input type="checkbox" class="row-select" value="{{ m.id }}" aria-label="{{ _('select %(name)s', name=m.name) }}"> {% endif %}{{ m.name|softbreak }}{% if not m.enabled %} <span class="tag">{{ _("disabled") }}</span>{% endif %}</td>
       <td data-label="{{ _('Serial') }}">
-        <div class="mono">{{ m.serial.port|softbreak }}{% if m.serial.match %} <span class="tag" title="{{ _('found by its USB identity %(id)s', id=m.serial.match.vid ~ ':' ~ m.serial.match.pid ~ ((' [' ~ m.serial.match.serial_number ~ ']') if m.serial.match.serial_number else '')) }}">USB-ID</span>{% endif %}</div>
+        <div class="mono">{{ m.serial.port|softbreak }}{% if m.serial.identity %} <span class="tag" title="{{ _('found by its USB identity %(id)s', id=identity_text(m.serial.match)) }}">USB-ID</span>{% endif %}</div>
         {% if st and st.device and st.device != m.serial.port %}<div class="sub mono" title="{{ _('device opened now') }}">→ {{ st.device|softbreak }}</div>{% endif %}
         <div class="sub mono">{{ m.serial.compact() }}{% if m.serial.flowcontrol != 'none' %} · {{ m.serial.flowcontrol }}{% endif %}</div>
       </td>
       <td data-label="{{ _('Network') }}">
         <div class="mono">
           {%- if m.kind == 'serialbridge' -%}{{ m.serial_b.port|softbreak }}
-          {%- elif m.network.mode == 'client' -%}→ {{ m.network.remote_host|softbreak }}:<wbr>{{ m.network.remote_port }}
-          {%- else -%}{{ m.network.bind_ip|softbreak }}:<wbr>{{ m.network.port }}{%- endif -%}
+          {%- elif m.network.mode == 'client' -%}→ {{ shown_host(m.network.remote_host)|softbreak }}:<wbr>{{ m.network.remote_port }}
+          {%- elif m.network.both_families -%}<span title="{{ _('All interfaces (IPv4 + IPv6)') }}">*</span>:<wbr>{{ m.network.port }}
+          {%- else -%}{{ m.network.bind_shown|softbreak }}:<wbr>{{ m.network.port }}{%- endif -%}
         </div>
         <div class="sub">
           {%- if m.kind == 'serialbridge' -%}{{ _("serial↔serial") }}
           {%- else -%}{{ m.network.mode }}/{{ m.network.protocol }}
             {%- if m.network.tls %} <span class="tag">TLS</span>{% endif %}
             {%- if m.network.read_only %} <span class="tag" title="{{ _('read-only') }}">RO</span>{% endif %}
-            {%- if m.accepts_mqtt_writes %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ _('writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them') if open_cmd else _('writable points take MQTT commands (/set or Sparkplug DCMD)') }}">CMD{% if open_cmd %} ⚠{% endif %}</span>{% endif %}
+            {%- if m.accepts_mqtt_writes %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ _('writable points take MQTT commands over a broker connection without TLS or a username: any client the broker lets publish to the command topics can write them') if open_cmd else _('writable points take MQTT commands (/set or Sparkplug DCMD)') }}">CMD{% if open_cmd %} ⚠{% endif %}</span>
+            {%- elif m.accepts_mqtt_tx %}{% set open_cmd = not (m.mqtt.tls and m.mqtt.username) %} <span class="tag{% if open_cmd %} tag-danger{% endif %}" title="{{ _('MQTT messages on &lt;topic&gt;/tx are written to the device over a broker connection without TLS or a username: any client the broker lets publish to that topic can write to it') if open_cmd else _('MQTT messages on &lt;topic&gt;/tx are written to the device') }}">CMD{% if open_cmd %} ⚠{% endif %}</span>{% endif %}
           {%- endif -%}
         </div>
       </td>
       <td data-label="{{ _('State') }}">
         <span class="state state-{{ state }}">{{ state_label(state) }}</span>
-        {% if st and st.last_error and state in ('error','device-missing','reconnecting') %}
+        {%- if link_down %} <span class="tag tag-warn" title="{{ _('the connection to the remote server is down; it is tried again') }}">{{ _("link down") }}</span>
+        {%- elif st and st.link == 'connecting' and state == 'running' %} <span class="tag">{{ _("connecting") }}</span>{% endif %}
+        {% if st and st.last_error and state in ('error','device-missing','reconnecting')
+              and not (link_down and st.last_error == st.link_error) %}
           <div class="err-small" title="{{ st.last_error }}">{{ st.last_error|softbreak }}</div>
+          {% if st.hint and state != 'error' %}<div class="warn-small" title="{{ st.hint }}">{{ st.hint|softbreak }}</div>{% endif %}
+        {% endif %}
+        {% if link_down and st.link_error %}
+          <div class="err-small" title="{{ st.link_error }}">{{ st.link_error|softbreak }}</div>
+        {% endif %}
+        {% if st and st.warnings and state == 'running' %}
+          {% for w in st.warnings %}<div class="warn-small" title="{{ w }}">⚠ {{ w|softbreak }}</div>{% endfor %}
+        {% endif %}
+        {% if st and st.retrying and state == 'error' %}
+          <div class="sub">{{ _("retrying in %(n)s s", n=st.next_retry_s) if st.next_retry_s else _("retrying now") }}</div>
         {% endif %}
       </td>
       <td data-label="{{ _('Clients') }}">

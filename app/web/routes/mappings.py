@@ -46,10 +46,11 @@ def routes(ctx: Ctx) -> list:
             d["name"] = f"{m.name} (copy)"
             d["enabled"] = False  # don't auto-start a duplicate (avoids port clash)
             dup = MappingConfig.from_dict(d)
-            # bump a listening port to the next free one
+            # bump a listening port to the next free one (not the admin UI's, ...)
             if dup.kind == "net" and dup.network.listens:
                 used = {mm.network.port for mm in state.config.mappings if mm.kind == "net"}
-                while dup.network.port in used and dup.network.port < 65535:
+                while ((dup.network.port in used or state.config.own_port_conflict(dup))
+                       and dup.network.port < 65535):
                     dup.network.port += 1
             state.config.mappings.append(dup)
             try:
@@ -86,7 +87,11 @@ def routes(ctx: Ctx) -> list:
             return PlainTextResponse(_("Select one or more mappings."), status_code=400)
         done = []
         for mid in ids:
-            ok, name = await ops.apply_action(state, mid, action)
+            try:
+                ok, name = await ops.apply_action(state, mid, action)
+            except ConfigError as e:  # this one can't be started; the others go on
+                state.log(f"bulk {action}: {e}")
+                continue
             if ok:
                 done.append(name)
                 ctx.audit(request, f"mapping_{action}", name)
@@ -102,7 +107,8 @@ def routes(ctx: Ctx) -> list:
         m = MappingConfig(name="")
         return render(request, "_mapping_form.html",
                       mapping=m, is_new=True, modbus_points_json=_modbus_points_json(m),
-                      ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
+                      ports=portlist.visible(await state.ports.current()),
+                      ips=netinfo.list_ip_candidates(), links={},
                       error=None)
 
     async def mapping_form_edit(request):
@@ -111,9 +117,11 @@ def routes(ctx: Ctx) -> list:
         m = state.config.get_mapping(request.path_params["mid"])
         if not m:
             return PlainTextResponse(_("Mapping not found"), status_code=404)
+        ports = portlist.visible(await state.ports.current())
         return render(request, "_mapping_form.html",
                       mapping=m, is_new=False, modbus_points_json=_modbus_points_json(m),
-                      ports=portlist.visible(state.ports.get()), ips=netinfo.list_ip_candidates(),
+                      ports=ports, ips=netinfo.list_ip_candidates(),
+                      links=portlist.links(ports, (m.serial.port, m.serial_b.port)),
                       error=None)
 
     async def mapping_log(request):
@@ -203,7 +211,10 @@ def routes(ctx: Ctx) -> list:
         action = request.path_params["action"]
         if action not in ("start", "stop", "restart"):
             return PlainTextResponse(_("Unknown action"), status_code=400)
-        ok, name = await ops.apply_action(state, mid, action)
+        try:
+            ok, name = await ops.apply_action(state, mid, action)
+        except ConfigError as e:  # it can't be started (a serial port in use, ...)
+            return PlainTextResponse(str(e), status_code=400)
         if not ok:
             return PlainTextResponse(name, status_code=404)
         state.log(f"mapping {action}: {name}")

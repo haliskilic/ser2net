@@ -419,6 +419,67 @@ def test_form_rfc2217_restore_on_disconnect():
           "shown  OK")
 
 
+def test_form_rfc2217_signature():
+    """The RFC 2217 signature is a text field of the RFC 2217 block (not posted for another
+    protocol, unknown to an older cluster peer's form): absent, the stored one is kept."""
+    base = {"name": "vc", "kind": "net", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "network_mode": "server", "network_protocol": "rfc2217",
+            "network_bind_ip": "0.0.0.0", "network_port": "4001"}
+    existing = MappingConfig.from_dict({"name": "vc", "serial": {"port": "COM7"},
+                                        "network": {"protocol": "rfc2217", "port": 4001},
+                                        "options": {"rfc2217_signature": "Line 3"}})
+    assert MappingConfig().options.rfc2217_signature == "", "blank by default (ser2net)"
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        return m.options.rfc2217_signature
+
+    assert parsed(dict(base, id=existing.id)) == "Line 3", "absent from the form: kept"
+    assert parsed(dict(base, id=existing.id, opt_rfc2217_signature=" COM 7 ")) == "COM 7"
+    assert parsed(dict(base, id=existing.id, opt_rfc2217_signature="")) == ""
+    assert parsed(base) == ""
+    print("form: rfc2217_signature kept when the form leaves it out, set when shown  OK")
+
+
+def test_form_port_lock_options():
+    """'Keep other programs out' (TIOCEXCL) and 'don't open a port another program has
+    locked' (UUCP lock files) are checkboxes (absent when unticked) with a hidden marker per
+    serial side: without it (an older cluster peer's form) the stored values are kept on
+    edit and a new mapping gets the defaults, off; v2.7 / v2.8 / v2.8.1 configs load with
+    them off."""
+    base = {"name": "sb", "kind": "serialbridge", "enabled": "on", "serial_port": "COM7",
+            "serial_baudrate": "9600", "serial_b_port": "COM8", "serial_b_baudrate": "9600",
+            "serial_exclusive": "on", "serial_b_exclusive": "on"}
+    existing = MappingConfig.from_dict({
+        "name": "sb", "kind": "serialbridge",
+        "serial": {"port": "COM7", "advanced": {"tiocexcl": True, "respect_uucp_locks": True}},
+        "serial_b": {"port": "COM8", "advanced": {"tiocexcl": True}}})
+    fresh = MappingConfig()
+    assert (fresh.serial.advanced.tiocexcl, fresh.serial.advanced.respect_uucp_locks) == \
+        (False, False), "off by default"
+    old = MappingConfig.from_dict({"serial": {"port": "COM1", "exclusive": True,
+                                              "advanced": {"rs485_enabled": False}}})
+    assert (old.serial.exclusive, old.serial.advanced.tiocexcl) == (True, False)
+
+    def parsed(form):
+        m = MappingConfig.from_dict(_build_mapping_dict(form, strict=True))
+        _preserve_unmanaged_fields(m, existing if form.get("id") else None, form)
+        a, b = m.serial.advanced, m.serial_b.advanced
+        return (a.tiocexcl, a.respect_uucp_locks, b.tiocexcl, b.respect_uucp_locks)
+
+    marks = {"serial_port_lock_shown": "1", "serial_b_port_lock_shown": "1"}
+    assert parsed(dict(base, id=existing.id)) == (True, True, True, False), "kept"
+    assert parsed(dict(base, id=existing.id, **marks)) == (False,) * 4, "shown, unticked"
+    assert parsed(dict(base, id=existing.id, serial_port_lock_shown="1",
+                       serial_respect_uucp_locks="on")) == (False, True, True, False), \
+        "side A shown, side B kept"
+    assert parsed(base) == (False,) * 4 and parsed(dict(base, **marks)) == (False,) * 4
+    assert parsed(dict(base, serial_b_tiocexcl="on", **marks)) == (False, False, True, False)
+    print("form: the port-lock options kept when the form leaves them out (per side), set "
+          "when shown; off by default and in older configs  OK")
+
+
 def test_form_udp_reply_fields():
     """The reply address and peer timeout are shown (and posted) for UDP only. Without
     them (another mode, an older cluster peer's form) the stored values are kept on edit
@@ -472,6 +533,8 @@ def main():
     test_form_modbus_fields_not_offered()
     test_form_apply_retained_set()
     test_form_rfc2217_restore_on_disconnect()
+    test_form_rfc2217_signature()
+    test_form_port_lock_options()
     test_form_udp_reply_fields()
     test_invalid_admin_bind_ip_rejected()
     test_ldap_validation()

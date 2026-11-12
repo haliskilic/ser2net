@@ -55,11 +55,16 @@ düzenlemeye gerek yok.
 ## ✨ Özellikler
 
 - **Taşıma modları:** TCP **sunucu** (dinleme), TCP **istemci** (dışarı bağlanma),
-  **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**. UDP,
+  **UDP**, ve **serial↔serial** köprüleme. TCP köprüleri için isteğe bağlı **TLS**
+  (istemci sertifikaları, CA dosyası ya da parmak iziyle sunucu denetimi: bkz. Güvenlik). UDP,
   cihazın çıktısını izinli bir IP'den gelen son datagram'ın göndericisine ya da her zaman
   sabit bir **yanıt adresine** (IP + port) gönderir; **karşı uç zaman aşımı** sessiz kalan
-  göndericiyi unutturur. Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler:
-  hattan hızlı gönderen birinin bunu aşan datagram'ları atılır, sayılır ve loglanır.
+  göndericiyi unutturur. **Cihazın çıktısını ayrıca şuraya gönder** çıktıyı her zaman (kimse
+  göndermeden önce de, kim gönderirse göndersin) alan başka hedefleri listeler
+  (`udp_targets`, `IP:port`): bir yerel ağın yayın adresinde UDP 10110'a NMEA 0183 akışı
+  (**Broadcast'e izin ver** ile, `udp_broadcast`), bir multicast grubu, birkaç makine.
+  Datagram'lar seri portu en fazla 64 KiB'lık bir kuyrukta bekler: hattan hızlı gönderen
+  birinin bunu aşan datagram'ları atılır, sayılır ve loglanır.
 - **Protokoller:** `raw`, `telnet` (8-bit temiz), `rfc2217` (uzaktan canlı
   baud/parity/databit/stopbit/akış kontrolü değişimi), `modbus` (RTU↔TCP gateway). Portun
   yerine getiremediği bir RFC 2217 isteği (bozuk ya da ayrılmış bir değer veya seri portun
@@ -69,7 +74,16 @@ düzenlemeye gerek yok.
   ayrılınca port eşlemenin ayarlarına döner (bkz.
   [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md)). 1 KiB'tan uzun bir telnet ya da RFC 2217
   alt müzakeresi (gerçekleri birkaç bayttır) o istemcinin oturumunu sonlandırır; nedeni
-  log'a yazılır.
+  log'a yazılır. **Seri BREAK:** telnet istemcisinin BREAK'i (IAC BRK: PuTTY'de *Special
+  Command → Break*, telnet'te `send brk`) ve RFC 2217 istemcisininki (SET-CONTROL BREAK
+  on/off ya da IAC BRK), kendilerinden önce gönderilen veriden sonra seri hatta ulaşır
+  (telnet BREAK'i 0,25 sn sürer); salt okunur eşleme BREAK göndermez, bir RFC 2217
+  istemcisinin açık bırakıp ayrıldığı BREAK de kapatılır. Raw TCP'de bant içi BREAK yoktur.
+  Komutlar veriyle sıralarını korur: istemcinin bir RFC 2217 ayar değişikliğinden önce
+  gönderdiği veri eski ayarla çıkar. RFC 2217 istemcisi ayrıca SIGNATURE'a (`ser2net` ya da
+  eşlemenin **RFC 2217 imzası**), BREAK / DTR / RTS ve gelen yön akış kontrolü sorgularına
+  ve hat/modem durumu maskelerine yanıt alır; akış kontrolü aynı anda tek moddadır.
+  Desteklenmeyen bir telnet seçeneği her istendiğinde reddedilir.
 - **Modbus ağ geçidi:** Modbus/TCP master'larını seri Modbus/RTU slave'lere köprüler —
   çoklu master, paylaşımlı bus'ta transaction serileştirme + transaction-id koruması,
   RTU yanıtı gelmezse `0x0B` (gateway-timeout) exception. Seri port kaybolursa (USB
@@ -100,30 +114,119 @@ düzenlemeye gerek yok.
   reçeteler (pyserial `rfc2217://`, Linux `socat`, Windows com0com+com2tcp / HW VSP3) —
   bkz. [`docs/VIRTUAL-COM.md`](docs/VIRTUAL-COM.md).
 - **Tam seri yapılandırma:** baud (custom dahil), data bit, parity, stop bit, akış
-  kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, exclusive open ve RS-485
+  kontrolü (none/RTS-CTS/XON-XOFF/DSR-DTR), açılışta RTS/DTR, port kilitleme ve RS-485
   donanım auto-RTS (Linux `TIOCSRS485`: aç + TX öncesi/sonrası gecikme + TX'te RTS seviyesi).
-- **Canlı port listesi:** ayrıcalık gerektirmeyen polling + isteğe bağlı olay-tabanlı
-  hotplug (Linux pyudev / Windows WM_DEVICECHANGE), yoksa polling'e düşer. Linux'ta
-  arkasında donanım olmayan `ttyS` portları gizlenir, `/dev/serial/by-id` kalıcı adları
-  gösterilir ve seçilebilir.
+  `on` / `off` seçilen RTS ya da DTR, port açıldığı andan itibaren o durumdadır (`keep`
+  sürücünün varsayılanını, yani açığı bırakır). Bu yüzden Windows'ta `off` seçilen hat hiç
+  darbe vermez; Linux'ta ise port açılırken DTR ile RTS'yi çekirdeğin kendisi yükseltir,
+  `off` bu darbeyi yalnızca kısaltır ve DTR ile resetlenen bir kartın (Arduino) her açılışta
+  resetlenmesini önleyemez. Portun kabul etmediği bir ayar (çoğu USB adaptörde RS-485, modem
+  hattı olmayan bir portta RTS/DTR) portun açılmasını engellemez: pano bunu eşlemenin
+  durumunun altında gösterir, eşlemenin log'u bir kez yazar; kabul edilmeyen RS-485 modu
+  yeniden kapatılır, böylece portun ayarlarındaki sonraki değişiklikler (bir RFC 2217
+  istemcisinin baud hızı) çalışır.
+- **Port kilitleme (Linux, macOS):** varsayılan olarak açık **Portu kilitle (flock)**, diğer
+  ser2net eşlemelerini ve portu aynı şekilde kilitleyen programları (picocom, tio,
+  miniterm) dışarıda tutar; ama minicom'u, hiç kilit kullanmayan programları (`cat`, `stty`,
+  script'ler), oturum açma istemini ya da ModemManager'ı tutmaz. Varsayılan olarak kapalı
+  iki seçenek, klasik ser2net'in yaptığı gibi daha fazlasını dışarıda tutar: **Port açıkken
+  diğer programları dışarıda tut** (`TIOCEXCL`: başka bir programın açma denemesi root'unki
+  dışında "meşgul" hatasıyla başarısız olur) ve **Başka bir programın UUCP kilit dosyasıyla
+  kilitlediği portu açma** (minicom, cu: `/run/lock` ya da `/var/lock` içindeki `LCK..`
+  dosyaları yalnızca okunur; ser2net kilit dosyası oluşturmaz ve hiçbirini silmez; pano
+  kilitleyen programın adını söyler). Windows'ta bir port her zaman yalnızca tek bir
+  programda açıktır ve bunların etkisi yoktur. Docker'da `--device` ile verilen port
+  container'ın kendi cihaz düğümüdür ve flock düğümü kilitler; bu yüzden host'taki
+  programları dışarıda tutması beklenmez (`-v /dev:/dev` ile düğüm host'unkidir);
+  `TIOCEXCL` ise portun kendisi için geçerlidir.
+- **Canlı port listesi:** ayrıcalık gerektirmez. Her 2 sn'de ucuz bir kontrol bir portun
+  gelip gelmediğine bakar (Linux: sysfs'teki tty cihazları ve `/dev/serial` linkleri;
+  Windows: kayıt defterinin listelediği COM portları); portlar yalnızca o zaman, arayüz ya
+  da API 2 sn'den eski bir liste gösterecekken ve en az dakikada bir yeniden taranır.
+  Linux'ta yalnızca pyserial'ın baktığı adlar değil, çekirdekteki her seri sürücünün portu
+  listelenir (`/proc/tty/drivers`); böylece kartın kendi UART'ları da görünür (i.MX'te
+  `ttymxc*`, `ttyLP*`, Jetson'da `ttyTHS*`, Zynq'te `ttyPS*`, `ttyMSM*`, `ttyMAX*`, 6.5
+  öncesi kernel'lerde Raspberry Pi'nin `ttyS0`'ı ...). Arkasında donanım olmayan `ttyS`
+  portları gizlenir; udev'in adları gösterilir ve seçilebilir: `/dev/serial/by-id` (seri
+  numarasına göre: hangi USB soketinde olursa olsun yeniden takmaya dayanır) ve
+  `/dev/serial/by-path` (USB soketine göre: adaptör aynı sokette kaldıkça doğrudur). by-id
+  adı üretici, model ve seri numarasından oluşur; bu yüzden kendi seri numarası olmayan
+  özdeş adaptörler (CH340, çoğu PL2303, hepsi aynı numarayı taşıyan klonlar) tek bir adı
+  paylaşır, udev onu birine verir ve hangisine verdiği reboot ya da yeniden takmayla
+  değişebilir: Portlar sayfası böyle adaptörleri işaretler (`aynı USB kimliği`,
+  `by-id benzersiz değil`), form da bunu söyler; bunları USB soketine göre bağlayın.
+  Eşleme formunda Cihaz'ın yanındaki ↻ formu kapatmadan portları yeniden listeler, **Başka
+  bir cihaz yolu…** ise listede olmayan bir yolu alır (bir kartın `/dev/ttymxc1` gibi
+  UART'ı, henüz takılmamış bir adaptör, Windows'ta bir `\\.\` adı); `/dev/serial0` gibi
+  ayarlı bir link, gösterdiği cihazla birlikte görünür (`/dev/serial0 → /dev/ttyS0`) ve o
+  portun kullanımda sayılmasını sağlar.
 - **Cihazı USB kimliğiyle bulma:** eşleme formundaki kutu işaretlenince adaptör VID:PID
   (+ seri no) ile bağlanır; çıkarılıp takılınca `ttyUSB0`→`ttyUSB1` ya da COM numarası
-  değişse de eşleme doğru cihazı açar.
-- **IP seçici:** makineye atanmış IP'ler (localhost / LAN / 0.0.0.0) veya custom.
+  değişse de eşleme doğru cihazı açar. Kendi seri numarası olmayan özdeş adaptörler (CH340,
+  çoğu PL2303) ve çok portlu bir çipin kanalları (FT4232H) aynı kimliği taşır: bunlardan
+  ayarlı port aralarındaysa o, değilse başka bir eşlemenin açık tutmadığı ilki açılır ve
+  pano tahmin yapmak zorunda kaldığını söyler. Bağlı adaptör yokken portunu artık başka bir
+  USB adaptörü almışsa o açılmaz: bağlı adaptör geri gelene ya da eşleme yeni adaptöre
+  bağlanana kadar (kutunun işaretini kaldırıp yeniden işaretleyin, kaydedin) eşleme
+  `cihaz yok` gösterir.
+- **IP seçici:** makineye atanmış IP'ler (tüm arayüzler, localhost, iki ailenin LAN
+  adresleri) veya custom.
+- **IPv4 ve IPv6:** `0.0.0.0`'daki bir eşleme yalnızca IPv4, `::`'daki yalnızca IPv6
+  istemcileri alır (TCP'de de UDP'de de, Linux'ta da Windows'ta da); **Tüm arayüzler
+  (IPv4 + IPv6)** ikisini birden alır (`config.json`'da ve REST API'de
+  `"bind_ip": "0.0.0.0", "dual_stack": true`; 2.9'dan eski bir sürüm bunu `0.0.0.0` olarak
+  okur). `0.0.0.0` ve `::` birer aileyi aldığından birindeki bir eşlemeyle ötekindeki bir
+  başkası aynı portu paylaşabilir. `::1` (IPv6 localhost) da `127.0.0.1` gibi bir dinleme
+  IP'sidir. IPv6 adresleri port yanında köşeli parantezle yazılır (`[::1]:4001`). Eski bir
+  sürümden gelen, Linux'ta `::`'da dinleyen bir UDP eşlemesi IPv4 datagramlarını da
+  alıyordu: `dual_stack` açık olarak gelir, yani almaya devam eder (yapılandırma yeniden
+  kaydedilene kadar açılış log'u bunu söyler); `dual_stack` olmadan gönderilen biri de öyle
+  (bir REST API betiği, eski bir küme düğümü).
+- **Eksik ya da meşgul seri cihaz:** cihaz yokken (çıkarılmış, henüz tanınmamış) eşleme
+  `cihaz yok`, açık port az önce kaybolduğunda ya da başka bir nedenle açılamadığında
+  `yeniden bağlanıyor` gösterir; birkaç saniyede bir (en fazla yaklaşık 10 sn arayla), port
+  listesi yeni bir cihaz gördüğünde ise hemen yeniden denenir (yeniden takılan bir adaptör
+  yaklaşık 2 sn içinde kullanılır). USB kimliğine bağlı bir eşleme, her denemede portları
+  taramak yerine cihazını bu listede bulur. Log, her denemede bir satır yazmak yerine ilk
+  hatayı ve hatanın her değişmesini, aynı hatayı ise yalnızca 15 dakikada bir, ne zamandan
+  beri kaç denemenin başarısız olduğuyla birlikte yazar; port yeniden açılınca ne kadar süre
+  kapalı kaldığını söyler (başarısız olmayı sürdüren dışa bağlantılar için de aynısı).
+  `/api/v1/status`, açılamayan denemeleri (`open_failures`) ve açık portun kaybedilmesini
+  (`device_lost`) ayrı sayar; `reconnects` eskisi gibi ikisini birden sayar. Pano,
+  söyleyebildiğinde hatanın altında ne anlama geldiğini de yazar (`/api/v1/status` içinde
+  `hint`; `last_error` pyserial'ın metni olarak kalır): "Permission denied" için cihazın ait
+  olduğu grubu, cihazın kendisinden okuyarak (`dialout`, Arch'ta `uucp`, …), ve neyin eksik
+  olduğunu (kullanıcı o grupta değil, ser2net başladıktan sonra eklendi, container'da o grup
+  yok: `--group-add <gid>`); kullanımdaki bir port için onu hangi eşlemenin açık tuttuğunu
+  ya da başka bir programın ne tür bir kilit tuttuğunu.
+- **Dinleyiciler kendiliğinden açılır:** başlarken adresini kullanamayan bir eşleme
+  (açılışta IP henüz atanmamış ya da port hâlâ dolu) `error` durumunda "N sn sonra yeniden
+  denenecek" gösterir ve çalışana kadar en fazla 30 sn arayla yeniden başlatılır (Durdur
+  bunu bitirir). Seri portu ve MQTT bağlantısı ancak dinleyicisi açıldıktan sonra açılır;
+  denemeler cihaza dokunmaz.
 - **Onlarca eşleme:** tek ekrandan ekle/düzenle/sil/başlat/durdur, canlı durum; arama,
   durum filtresi, sıralama ve seçili eşlemeleri toplu başlat/durdur/yeniden başlat.
   Tablo yalnızca değiştiğinde yenilenir (titreme yok, seçimler korunur).
 - **Erişim kontrolü (eşleme başına):** izinli IP/CIDR listesi, **yüksek-öncelikli**
-  istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at,
-  salt-okunur, banner, open/close string, `closeon` (Modbus gateway banner, open/close
-  string ve `closeon` kullanmaz).
+  istemci IP'leri (doluyken eski istemciyi atar), max bağlantı, eski-kullanıcıyı-at (yeni
+  istemci öncelikli olmayan en eskiyi atar, öncelikli bir istemciyi asla: yalnızca
+  öncelikli istemciler bağlıyken reddedilir), salt-okunur, banner, open/close string,
+  `closeon` (Modbus gateway banner, open/close string ve `closeon` kullanmaz).
 - **Bağlantı yaşam döngüsü (eşleme başına, TCP):** **TCP keepalive ile ölü bağlantı
   tespiti** — FIN/RST göndermeden kaybolan istemci ya da uzak sunucu (elektrik kesintisi,
   kablo çekilmesi, Wi-Fi/VPN/NAT düşmesi) artık sonsuza dek `ESTABLISHED` kalmaz:
   varsayılan ayarlarla (açık · 60 sn boşta · 10 sn aralık · 3 deneme) ~90 sn içinde
   düşürülür ve yuvası boşalır — cihaz veri gönderirken de (Linux `TCP_USER_TIMEOUT`).
   Ayrıca dışa bağlanmada **bağlantı zaman aşımı** (varsayılan 10 sn), **idle timeout**
-  ve **maksimum bağlantı süresi** (ör. 24 sa); her kopuş nedeniyle loglanır.
+  ve **maksimum bağlantı süresi** (ör. 24 sa); her kopuş nedeniyle loglanır. Varsayılan
+  olarak seri cihaz yokken (çıkarılmış, yeniden bağlanıyor) TCP istemcileri bağlı kalır ve
+  yenileri kabul edilir; bu arada gönderdikleri atılır ve sayılır (`bytes_dropped`).
+  **Seri cihaz yokken istemcilerin bağlantısını kes** (`network.disconnect_without_device`,
+  raw / telnet / rfc2217, varsayılan kapalı) açıkken port gidince istemcilerin bağlantısı
+  kesilir ve port geri gelene kadar yeni gelenler (RFC 2217 istemcisinin beklediği kısa
+  sürenin, `options.rfc2217_net_timeout_s`, ardından) reddedilir; böylece bir poller, bir
+  SCADA master'ı ya da sanal COM yönlendiricisi kesintiyi görür. Dışarı bağlanan eşleme de
+  o zaman yalnızca portu açıkken bağlanır.
 - **Gözlemlenebilirlik:** per-mapping trafik trace (hex/timestamp, döner dosyalar,
   arayüzden indirilir), Prometheus `/metrics`, audit log ekranı, canlı log görüntüleyici,
   **tarayıcı-içi seri konsol** (xterm.js, WebSocket — trafiği izle veya cihaza yaz) ve
@@ -134,9 +237,15 @@ düzenlemeye gerek yok.
   sayılır (serial↔serial: A → B / B → A). Ağdan gelip cihaza yazılamayan veri (port açık
   değilken ya da bir UDP datagram'ı kuyruğu dolu bulduğunda) atılmış sayılır
   (`bytes_dropped`, `ser2net_mapping_bytes_dropped_total`), panoda işaretlenir ve loglanır.
-- **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
-  bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
-  Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+- **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, dışa bağlanan
+  bir eşleme uzak sunucusunu kaybettiğinde/yeniden bulduğunda, istemci bağlanıp düştüğünde
+  ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams, Discord, Telegram) ve/veya
+  e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
+- **Dışa bağlanma durumu:** dışa bağlanan bir eşlemenin durumu seri tarafı göstermeye devam
+  eder; uzak sunucuyla bağlantısı yanında gösterilir ("bağlantı yok" ve nedeni, Sorunlu
+  filtresi bunu sayar; "bağlanıyor"), `/api/v1/status`'ta (`link`: `connecting` / `up` /
+  `down`, `link_error`, `link_since`, `connect_failures`) ve filo görünümünde de. Kapanıp
+  hemen yeniden kurulan bir bağlantı (maksimum bağlantı süresi, idle timeout) kesinti sayılmaz.
 - **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
@@ -176,12 +285,35 @@ düzenlemeye gerek yok.
   Linux+Windows × Python 3.10–3.13 **CI** (GitHub Actions).
 - **MQTT yayınlama (opsiyonel):** seri satırlarını eşleme başına bir MQTT broker'ına
   yayınlar (host/port/topic/QoS/TLS/kimlik), retained birth/death durumuyla. `paho-mqtt`
-  gerektirir (opsiyonel; yoksa köprü normal çalışır).
+  gerektirir (opsiyonel; yoksa köprü normal çalışır). Bir satır **LF**'de (varsayılan;
+  önündeki CR satıra dahil edilmez), **CR**'de (kayıtlarını CR ile bitiren terazi, analizör
+  gibi cihazlar; yanındaki LF dahil edilmez) ya da **CR ya da LF**'de biter
+  (`mqtt.line_end`); 64 KiB boyunca satır sonu gelmezse en eski baytlar atılır ve log bunu
+  bir kez söyler. **`<topic>/tx` mesajlarını cihaza yaz** (`mqtt.tx_enabled`, varsayılan
+  kapalı) her mesajı olduğu gibi, TCP istemcilerinin gönderdikleri arasında tek parça halinde
+  seri porta yazar ve `<topic>/tx/result`'a yanıt verir (`ok` / `error: …`: salt okunur, çok
+  uzun, 64 KiB beklerken meşgul, port açık değil); retained mesaj hiçbir zaman yazılmaz. Bir
+  **sorgu dizesi** (`options.poll_string`, `\r \n \t \\ \xHH` ile) port açıkken ve bağlı
+  TCP istemcisi yokken (ya da **Bir TCP istemcisi bağlıyken de** ile her zaman) her **sorgu
+  aralığında** gönderilir; böylece yalnızca sorguya yanıt veren bir cihaz, TCP bağlantısını
+  tutan harici bir poller olmadan MQTT'ye, bir trace'e ya da bir UDP hedefine ulaşır.
 - **Klasik ser2net'ten geçiş:** `ser2net.yaml` (4.x) ve `ser2net.conf` (3.x) dosyaları
   Ayarlar → içe aktarma ile önizlemeli olarak alınır; karşılığı olmayan seçenekler uyarı
-  olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi ya da TLS
-  istemci sertifikası, sertifikası bu makinede olmayan TLS, yalnızca yazılan cihaz) kapalı
-  olarak gelir.
+  olarak gösterilir, burada daha açık hale gelecek bir bağlantı (gtlssh girişi, `CA=`
+  dosyası bu makinede olmayan TLS istemci sertifikası, sertifikası bu makinede olmayan TLS,
+  yalnızca yazılan cihaz) kapalı olarak gelir; CA dosyası burada olan
+  `ssl(clientauth,CA=...)` istemci sertifikalarını denetlemeye devam eder (**İstemci CA
+  sertifika dosyası**). ser2net'in port kilitleri de aktarılır: 4.x `flock` (varsayılan açık)
+  **Portu kilitle** ile **Port açıkken diğer programları dışarıda tut** olur, `uucplock`
+  (varsayılan açık; 3.x'te her zaman) **Başka bir programın kilitlediği portu açma** olur;
+  bir uyarı da hâlâ farklı olanı söyler (eşleme portunu başladığı andan itibaren açık tutar
+  ve kilit dosyası oluşturmaz). Dinleme adresleri ailesini korur (`ipv6,::1` `::1` kalır,
+  adressiz `ipv6`/`ipv6n4` `::` olur). İkisini de belirtmeyen bir accepter (`tcp,2000`)
+  ser2net'te IPv4 ve IPv6 istemcileri alıyordu; burada `0.0.0.0` olarak, yalnızca IPv4 için
+  gelir ve bir uyarı **Tüm arayüzler (IPv4 + IPv6)**'ya geçirilebilecek olanları sayar. Bir
+  RFC 2217 bağlantısının imzası (4.x `signature`, 3.x `SIGNATURE`) **RFC 2217 imzası** olur;
+  `hangup-when-done` ve `nobreak` saklanır ama burada etkisi yoktur (port bağlantılar
+  arasında açık kalır), içe aktarma da bunu söyler.
 - **Türkçe / İngilizce arayüz:** üst menüdeki **TR / EN** ile seçilir (tarayıcıda hatırlanır);
   seçilmemişse tarayıcının dili ya da admin'in **Ayarlar → Web arayüzü erişimi**'nde seçtiği
   varsayılan dil.
@@ -194,14 +326,16 @@ düzenlemeye gerek yok.
 
 - **Python 3.10+** (sistemde kurulu). Başka hiçbir şey gerekmez — bağımlılıklar
   `vendor/wheels/` içinde gelir ve ilk çalıştırmada `./lib`'e kurulur (offline).
-- Linux'ta seri portu **açmak** için kullanıcının `dialout` grubunda olması gerekir
-  (port **listelemek** için ayrıcalık gerekmez):
+- Linux'ta seri portu **açmak** için kullanıcının seri cihazların grubunda olması gerekir
+  (port **listelemek** için ayrıcalık gerekmez). Bu grup Debian, Ubuntu, Raspberry Pi OS,
+  Fedora, RHEL ve openSUSE'de `dialout`, Arch, Manjaro ve EndeavourOS'ta ise `uucp`'dir (bu
+  dağıtımlarda `dialout` grubu yoktur); hangisi olduğunu cihaz söyler:
+  `stat -L -c %G /dev/ttyUSB0`.
   ```bash
-  sudo usermod -aG dialout "$USER"   # ardından oturumu kapatıp aç
+  sudo usermod -aG "$(stat -L -c %G /dev/ttyUSB0)" "$USER"   # ardından oturumu kapatıp aç
   ```
 - Windows'ta COM portları için ek yetki gerekmez.
-- (Opsiyonel) TLS self-signed üretimi için `openssl`; olay-tabanlı hotplug için
-  `pyudev` (Linux) / `pywin32` (Windows) — yoksa polling kullanılır.
+- (Opsiyonel) TLS self-signed üretimi için `openssl`.
 
 ---
 
@@ -240,11 +374,13 @@ Bu, her PR'da ve her sürümde test edilir (`tests/test_standalone.py`):
 - paketin içindekiler işletim sisteminin temel kütüphanelerinden (glibc ≤ 2.28 / Windows
   sistem DLL'leri) başka bir şeye ihtiyaç duymamalı (Linux'ta x86_64 ve arm64);
 - binary boş bir `PATH` ile (Python yok, `openssl` yok) çalışmalı;
-- Linux binary'si temiz AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04,
-  openSUSE Leap 15.6 ve Fedora konteynerlerinde çalışmalı.
+- Linux binary'si temiz AlmaLinux 8/9, Debian 11/12, Ubuntu 20.04/22.04/24.04/26.04,
+  openSUSE Leap 15.6 ve Fedora konteynerlerinde çalışmalı; termios sabiti olmayan bir hızda
+  (250000 baud) bir seri port da açabilmeli.
 
 Linux notları:
-- `chmod +x ser2net-linux-x64`; seri portlar genellikle `dialout` grubunu gerektirir.
+- `chmod +x ser2net-linux-x64`; seri portlar cihazların grubunu gerektirir (`dialout`;
+  Arch'ta `uucp`, bkz. Gereklilikler).
 - Binary açılışta kendini `$TMPDIR`'e (varsayılan `/tmp`) açar. `/tmp` `noexec` ile
   bağlıysa `TMPDIR`'i öyle olmayan bir klasöre yönlendirin. Çalıştığı sürece bu kopyayı
   kilitli tutar ve erişim zamanlarını tazeler; böylece systemd-tmpfiles, tmpreaper gibi
@@ -263,8 +399,9 @@ Kendin derlemek için:
   `docker run --rm -v "$PWD:/src" -w /src almalinux:8 bash tools/build_standalone_linux.sh`
 
 İlk çalıştırmada:
-1. **Konsolda** arayüzün hangi IP'den erişileceği sorulur (makine IP'leri veya custom)
-   ve port (varsayılan 8080). Başsız/servis ortamında güvenli varsayılan **127.0.0.1**.
+1. **Konsolda** arayüzün hangi IP'den erişileceği sorulur (makine IP'leri; IPv4, IPv6 ya
+   da ikisi için tüm arayüzler; veya custom) ve port (varsayılan 8080). Başsız/servis
+   ortamında güvenli varsayılan **127.0.0.1**.
 2. Tarayıcıda açılan adrese gidin; **ilk ekranda admin parolasını belirleyin**. Sayfayı
    makinenin IP adresiyle ya da `localhost` ile açın: başka bir host adıyla (reverse proxy,
    Docker host'unun adı) gelindiğinde kurulum sayfası ayrıca `data/setup-code.txt`
@@ -292,12 +429,13 @@ ardından `pip install --no-index --find-links vendor/wheels -r requirements-opt
 docker compose up -d        # önce docker-compose.yml'deki `devices:` ve `ports:` kısmını düzenleyin
 ```
 Compose olmadan [`docs/DOCKER.md`](docs/DOCKER.md#plain-docker-run) içindeki `docker run`
-komutunu kullanın (hazır imaj, `--restart unless-stopped`, eşleme portları,
+komutunu kullanın (hazır imaj, `--restart unless-stopped`, `--init`, eşleme portları,
 `/dev/serial/by-id` cihaz yolu, log sınırı).
 Hazır imaj (amd64 + arm64, her sürümde): `docker pull ghcr.io/haliskilic/ser2net:latest`
 (ya da `:2.8`, `:2.8.1`); `docker-compose.yml` bunu kullanır.
 Container'da arayüz `0.0.0.0`'a bağlanır (`SER2NET_BIND_IP` / `SER2NET_PORT` env ile
-ayarlanır — başsız ortamda interaktif seçici çalışamaz). Her eşlemenin portunu da yayınlayın
+ayarlanır — başsız ortamda interaktif seçici çalışamaz; `SER2NET_BIND_IP=*` IPv4 ve IPv6
+tüm arayüzler demektir). Her eşlemenin portunu da yayınlayın
 (yeni bir eşleme 4001 alır) ya da host ağını kullanın. Seri cihazın grubu cihazın kendisinden
 alınır; olağan cihaz adlarında `--group-add` gerekmez. Süreç root olarak değil, `ser2net`
 kullanıcısıyla (uid 10001) çalışır; eski (root ile çalışan) imajların yazdığı `/data`
@@ -322,11 +460,39 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
   **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (kimlik doğrulamalı): eşleme başına
-  çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
-  düşürülen yavaş istemciler; süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
+  çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar
+  (bunlardan seri portun açılamadığı denemeler, `ser2net_mapping_open_failures_total`, ve
+  açık portun kaybedilmesi, `ser2net_mapping_device_lost_total`) ve
+  düşürülen yavaş istemciler (dışa bağlanan eşlemede bağlantının açık olup olmadığı,
+  `ser2net_mapping_link_up`, ve başarısız bağlanma denemeleri,
+  `ser2net_mapping_connect_failures_total`); süreç için açık dosya sayısı ve sınırı (`ser2net_open_fds`,
   `ser2net_fd_limit`, POSIX), yönetim arayüzünün bağlantıları, süren ve sıra bekleyen TLS
   el sıkışmaları ve kabulden hemen sonra reddedilen bağlantılar
   (`ser2net_connections_refused_total`, nedene göre).
+
+### Başka programlarla paylaşılan seri portlar (Linux)
+
+Programların hepsi kilit kullanmadıkça hiçbir şey diğer programları bir seri porttan uzak
+tutmaz; çekirdek konsolu, oturum açma istemi (login prompt) ve ModemManager da bir portu
+sormadan kullanır. ser2net bu durumda portun baytlarını onlarla paylaşır (araya karışan
+karakterler, Modbus timeout'ları), oturum açma istemi de her yeniden başladığında portu
+kapatır (hang-up). Portlar sayfası böyle portları işaretler (**çekirdek konsolu**, **oturum
+açma istemi**, **ModemManager**, ser2net'in açamayacağı bir port için de **erişim yok**);
+böyle bir portu açık tutan eşleme de bunu durumunun altında söyler (kapatılıp hemen yeniden
+açılan port da orada sayılır).
+- **Çekirdek konsolu, oturum açma istemi** (Raspberry Pi'nin GPIO UART'ı, bir VM'nin seri
+  konsolu): Raspberry Pi'de `sudo raspi-config` → Interface Options → Serial Port çalıştır,
+  login shell sorusuna *No*, seri donanım sorusuna *Yes* de. Diğer sistemlerde çekirdek
+  komut satırından `console=ttyS0` değerini kaldır ve oturum açma istemini kapat:
+  `sudo systemctl mask --now serial-getty@ttyS0.service`.
+- **ModemManager** (masaüstü Ubuntu / Fedora; Arduino gibi USB CDC `ttyACM*` cihazlar):
+  cihazı rahat bırakmasını bir udev kuralıyla söyle, örneğin
+  `/etc/udev/rules.d/99-ser2net.rules` dosyasına
+  `ATTRS{idVendor}=="2341", ENV{ID_MM_DEVICE_IGNORE}="1"` yazıp
+  `sudo udevadm control --reload && sudo udevadm trigger` çalıştır.
+- **Permission denied:** pano cihazın ait olduğu grubu ve neyin eksik olduğunu söyler (bkz.
+  Gereklilikler); **meşgul port:** portu bu ser2net'in hangi eşlemesinin açık tuttuğunu ya da
+  başka bir programın ne tür bir kilit tuttuğunu söyler.
 
 ---
 
@@ -363,9 +529,32 @@ Arayüz **varsayılan olarak parola korumalı**. Varsayılan bind **127.0.0.1**;
 için açılışta IP seçimi gerekir ve TLS'siz ağ bind'inde uyarı verilir. LAN'a açılan
 kurulumlarda TLS (`admin_ui.tls_*`) ve eşleme bazlı `allowed_client_ips` önerilir.
 Raw TCP düz-metindir — güvensiz ağlarda dikkat. Allowed/priority listesinde tek başına
-`0.0.0.0`/`::` "herkes" demektir. Bir eşlemenin seri portu yalnızca cihaz yolu ya da COM
+`0.0.0.0`/`::` "herkes" demektir, IPv4 ve IPv6 istemciler birlikte; `0.0.0.0/0` tüm IPv4,
+`::/0` tüm IPv6 istemciler demektir. IPv4-mapped bir girdi (`::ffff:192.168.1.0/120`)
+eşlediği IPv4 adreslerine uyar. Bir eşlemenin seri portu yalnızca cihaz yolu ya da COM
 adı olabilir; pyserial URL işleyicileri (`socket://`, `rfc2217://`, `spy://`, `loop://`, ...)
 port olarak kabul edilmez.
+
+**Eşleme başına TLS:** TLS'li bir dinleyici (TCP sunucu, Modbus gateway) kendi sertifikasını
+ve anahtarını sunar; **İstemci CA sertifika dosyası** (`network.tls_client_ca`) verilirse
+yalnızca sertifikası bu dosyadaki bir sertifikaya zincirlenen istemcileri alır (stunnel
+`verify` ya da Modbus/TCP Security istemcilerinin beklediği karşılıklı TLS) ve her istemcinin
+sertifika konusunu loglar; izin listesi yine önce denetlenir. Dışarı bağlanan bir eşleme her
+bağlantıda sunucu sertifikasının SHA-256 parmak izini loglar ve onu bir **CA sertifika
+dosyasıyla** (`network.tls_ca`: sertifika ona zincirlenmeli ve uzak sunucunun adını
+taşımalı) ve/veya bir **sunucu sertifikası parmak iziyle** (`network.tls_fingerprint`;
+sertifika değişmeden önce yenisini de listeye ekleyin) denetler; sertifikası ve anahtarı
+isteğe bağlıdır ve istemci sertifikası isteyen bir sunucuya sunulur. **CA dosyası ya da
+parmak izi olmadan dışarı bağlanan TLS yalnızca şifreler:** ağ yolundaki herkes kendini
+sunucu gibi gösterebilir. CA dosyası PEM (bir ya da daha çok sertifika) ya da DER olabilir
+ve içindeki her sertifikaya güvenilir, kendinden imzalı bir sunucunun kendi sertifikası da.
+Şifreli bir anahtar parolasını ister (**TLS anahtar parolası**, `network.tls_key_password`;
+yönetim arayüzü için Ayarlar → Admin TLS altında `admin_ui.tls_key_password`): ser2net
+konsolda asla parola sormaz; parola yoksa eşleme, yönetim arayüzünün anahtarındaysa açılış,
+bunu söyleyen bir hatayla durur. Form ve REST API bir eşlemenin dosyalarını kaydederken
+yükler, kayıtlı anahtar parolasını hiç göstermez (viewer API token'ı maskeli alır) ve
+yönetim arayüzünün kendi anahtarını reddeder. Sertifika yönetilemeyen yerlerde güvenilmeyen
+ağın önünde bir VPN (WireGuard) ya da stunnel seçenektir.
 
 **Bağlantı sınırları:** TLS'li bir eşlemede `allowed_client_ips` listesinde olmayan bir host,
 TLS el sıkışmasından önce kapatılır; el sıkışma 15 sn içinde bitmelidir ve bir adresten aynı
@@ -378,9 +567,10 @@ istek gövdesi gelmeyi kesen (gövdeye bu süre artı gelen her KiB için bir sa
 da bir yanıttan bu süre boyunca hiçbir şey almayan bağlantıyı kapatır (konsol WebSocket'i
 süreye tabi değildir) ve aynı anda en fazla `admin_ui.max_connections`
 (256), bir adresten en fazla `admin_ui.max_connections_per_ip` (64) bağlantı kabul eder;
-TLS el sıkışması bir eşleminkiyle aynı sınırlara tabidir. Bu anahtarlar yalnızca
-`config.json`'dadır (0 = sınır yok); bir reverse proxy arkasında tüm kullanıcılar proxy'nin
-adresinden gelir, gerekirse adres başına sınırı yükseltin. Süreç açık dosya sınırına
+TLS el sıkışması bir eşleminkiyle aynı sınırlara tabidir. Bu adres başına sınırlarda bir
+IPv6 istemci /64 ağıyla sayılır (bir makine /64'ünün her adresini kullanabilir). Bu
+anahtarlar yalnızca `config.json`'dadır (0 = sınır yok); bir reverse proxy arkasında tüm
+kullanıcılar proxy'nin adresinden gelir, gerekirse adres başına sınırı yükseltin. Süreç açık dosya sınırına
 yaklaşınca yeni bağlantılar (her eşlemeye ve arayüze) log'a bir satır yazılarak reddedilir;
 böylece seri portlar, log'lar ve yapılandırma ihtiyaç duydukları dosyaları açabilir.
 
@@ -401,6 +591,7 @@ kurallarıdır (ACL): komut topic'lerine yalnızca çıkışları anahtarlaması
 yayın yapabilsin, broker'a TLS ve kullanıcı adı/parola ile bağlanın. **Salt okunur** her
 yazmayı reddeder. MQTT'den yazma alan eşlemeler panoda **CMD**, broker bağlantısında TLS ya
 da kullanıcı adı yoksa **CMD ⚠** etiketiyle gösterilir (ayrıca açılışta loga uyarı düşer).
+`<topic>/tx`'i cihaza yazan bir seri eşleme için de aynısı geçerlidir (o da **CMD**).
 Örneğin `plant/line3` ana topic'i için bir Mosquitto `acl_file`:
 ```
 user ser2net
@@ -593,11 +784,16 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
 ## ⚙️ Servis olarak çalıştırma
 
 - **Docker:** resmi `Dockerfile` + `docker-compose.yml` (bkz. yukarısı ve
-  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `/data` volume. Düz
-  `docker run` ile çalıştırıyorsanız `--restart unless-stopped` ekleyin (var olan bir
-  container için: `docker update --restart unless-stopped ser2net`).
+  [`docs/DOCKER.md`](docs/DOCKER.md)) — `restart: unless-stopped`, `init: true` ve
+  `stop_grace_period: 30s` (durdurma isteği ser2net'e ulaşır, ser2net bu süre içinde
+  kapanır), `/data` volume. Düz `docker run` ile çalıştırıyorsanız
+  `--restart unless-stopped --init --stop-timeout 30` ekleyin (var olan bir container için:
+  `docker update --restart unless-stopped ser2net`).
 - **Linux (systemd):** `systemd/ser2net.service` — ayrı, yetkisiz bir kullanıcı,
-  `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri.
+  `SupplementaryGroups=dialout`, `Restart=on-failure`, sertleştirme direktifleri. Arch,
+  Manjaro ve EndeavourOS'ta seri grup `uucp`'dir ve `dialout` grubu yoktur (unit
+  `status=216/GROUP` ile başlamaz): grubu `systemctl edit ser2net` ile ayarla (`[Service]`,
+  `SupplementaryGroups=`, ardından `SupplementaryGroups=uucp`; unit'in yorumunda yazıyor).
   **root ile çalıştırmayın.**
 - **Windows:** ek bir program gerekmez. Yönetici olarak açılmış bir komut isteminde:
   ```bat
@@ -616,6 +812,15 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   Başka hostlardan erişmek için gereken güvenlik duvarı kuralı, adres
   değişimi, yükseltme ve imzasız derlemelerdeki SmartScreen uyarısı için
   **[`docs/WINDOWS.md`](docs/WINDOWS.md)**.
+- **Açılış sırası:** önce yönetim arayüzü hazırlanır. TLS çifti yüklenemezse açılış, hiçbir
+  seri port açılmadan durur (nedeni `all.log`'da); böylece yeniden başlatma politikası
+  DTR'ye duyarlı kartları döngüde resetleyemez. Arayüzün portu eşlemeler başlamadan
+  alınır: arayüzün adres ve portundaki bir eşleme arayüzü engellemek yerine `error` gösterir.
+  Arayüzün kendi adresi kullanılamazsa (portu başka bir program tutuyor ya da IP açılışta
+  henüz atanmamış) eşlemeler yine başlar, arayüz en fazla 30 sn arayla yeniden dener
+  (`all.log` bunu yazar). Arayüzün TCP adres ve portuna bir eşleme, keşif açıkken cluster'ın
+  keşif portuna da bir UDP eşleme kaydedilemez (form, REST API, cluster, içe aktarma; kopyanın
+  portu bunları atlar).
 - **Çok sayıda eşleme:** çalışan bir eşleme yaklaşık üç dosyayı açık tutar (seri portu,
   dinleyicisi ve log'u), bağlı her istemci için bir tane daha. ser2net açılışta yumuşak
   açık dosya sınırını sert sınıra doğru yükseltir (en fazla 65536) ve sonucu log'a yazar
@@ -629,6 +834,13 @@ içeren bir dosyaya (Docker secret) yönlendirin; ad için `SER2NET_ADMIN_USER` 
   değişkeni) böyle bir sınırı olmayan proactor loop'una geçirir; yeni olduğundan,
   güvenmeden önce seri zamanlamayı (ör. Modbus RTU) onunla deneyin. Kullanılan loop açılış
   log'unda yazar.
+- **Windows'ta seri yazmalar** Linux'taki gibi cihazı bekler: port başına sürücüye bir anda en
+  fazla 8 KiB verilir, böylece ağdan hızlı gönderen biri sürücünün kuyruğunu doldurmak yerine
+  seri hattın hızına yavaşlatılır. Bir saniyedir trafiği olmayan bir port 0,5 ms yerine
+  10 ms'de bir yoklanır, veri gelir ya da gider gitmez yeniden 0,5 ms'de bir (bir isteğin
+  yanıtı gecikmez). Bir seri sürücü bununla sorun çıkarırsa
+  `SER2NET_WINDOWS_SERIAL=pyserial` (servis için: sistem ortam değişkeni) pyserial'ın kendi
+  yazma biçimine (hız denetimi olmadan) döner; lütfen adaptörü ve sürücüyü bildirin.
 
 ---
 
@@ -652,7 +864,13 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
 - `traces/<id>-<ad>` — eşlemenin trafik kaydı (trace). Trace dosyaları **yalnızca burada**
   tutulur; boyut sınırına gelince döner (varsayılan 10 MB × 3 eski dosya). v2.7'deki tam
   yollar dosya adına indirgenir ve açılışta log'a yazılır.
-- `tls/` — self-signed üretilirse sertifika/anahtar.
+- `tls/` — self-signed üretilirse sertifika/anahtar. Göreli bir TLS yolu (yönetim arayüzü
+  ya da eşleme: sertifika, anahtar, CA dosyaları) veri klasöründeki bir dosyadır, örneğin
+  `tls/cert.pem`; böylece veri klasörü taşınınca da çalışır. Taşımadan ya da başka bir
+  makinede geri yüklemeden sonra (yerelden Docker `/data`'ya, başka bir `--data-dir`,
+  başka bir host'tan yedek) artık orada olmayan ve bir `tls` klasörünü gösteren mutlak bir
+  yol bu veri klasörünün `tls/` klasöründen alınır (açılışta loglanır, config.json yeni
+  yolla kaydedilir); taşımadan önceki yedekler ve içe aktarmalar da aynı şekilde ele alınır.
 - `setup-code.txt` — ilk kurulumun bir host adıyla yapılması için tek kullanımlık kod; yalnızca
   ilk admin hesabı oluşana kadar durur.
 

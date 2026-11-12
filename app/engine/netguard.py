@@ -20,7 +20,8 @@ listener they reach, before they cost anything more:
     minute) while the process is within ``fd_reserve`` of its open-file limit, so clients
     can't take the files that serial ports, logs and the configuration need;
   - TLS handshakes in progress hold a socket and a 256 KiB buffer each: at most
-    TLS_HANDSHAKES_MAX at a time, TLS_HANDSHAKES_PER_IP from one address, each given
+    TLS_HANDSHAKES_MAX at a time, TLS_HANDSHAKES_PER_IP from one address (an IPv6 one
+    counted by its /64, see address_key, as the admin UI's per-address cap), each given
     TLS_HANDSHAKE_TIMEOUT_S (asyncio's default is 60 s). A connection past those waits
     for a handshake to end (first come, first served; reading paused, so it holds only
     its socket) for up to TLS_HANDSHAKE_TIMEOUT_S, at most TLS_WAITING_PER_IP from one
@@ -32,16 +33,33 @@ listener they reach, before they cost anything more:
 a TLS listener it also applies the mapping's allow-list before the handshake (a refused
 host never gets one) and does the handshake itself (``start_tls``): the mapping sees the
 connection only once it is done, and decides about capacity, kicking and "Busy" then.
+When the listener can't take its address it raises ``BindError``; ``udp_socket`` makes a
+UDP mapping's socket, with the same error. Nor can it take one that overlaps a socket
+``reserve`` holds (the admin UI's): Windows lets a listener on a wildcard address share a
+port with one on a specific address, where Linux refuses the second bind.
+
+Address families: a listener on :: takes IPv6 clients only, on every OS (IPV6_V6ONLY: asyncio
+sets it for TCP, ``udp_socket`` for UDP); one that takes both (network.dual_stack on a
+wildcard) has two TCP sockets, 0.0.0.0 and :: (``listen_hosts``), so its IPv4 clients have
+plain IPv4 addresses, or one UDP socket on :: that takes IPv4 senders too.
 """
 from __future__ import annotations
 
 import asyncio
 import errno
+import ipaddress
 import os
 import selectors
+import socket
 import sys
 import time
-from typing import Any, Callable, Optional
+import weakref
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, Union
+
+from ..config import WILDCARDS, canonical_ip, host_port
+
+if TYPE_CHECKING:
+    from ..config import NetworkSettings
 
 # the soft open-file limit raise_fd_limit aims for: far above what a few hundred
 # mappings need, without handing child processes a huge limit
@@ -67,6 +85,20 @@ TLS_WAITING_PER_IP = 64
 # of them, which stay for listeners, connections out and UDP sockets
 SELECT_LIMIT = 512
 SELECT_HEADROOM = 64
+
+
+class BindError(OSError):
+    """A listener could not take its address and port: another socket holds it, or the
+    address is not on this machine (yet: DHCP, a NIC or a tentative IPv6 address that comes
+    up later). Worth another try later (the supervisor makes them), whatever form the error
+    came in: asyncio on Python 3.11+ reports a missing address as "could not bind on any
+    address", with no errno."""
+
+    @classmethod
+    def of(cls, e: OSError) -> BindError:
+        err = cls(str(e))
+        err.errno = e.errno
+        return err
 
 
 class LogEvery:
@@ -188,31 +220,58 @@ def fd_reserve(limit: int) -> int:
 # ---------------------------------------------------------------------------
 # incoming connections
 # ---------------------------------------------------------------------------
-def peer_ip(transport: Any) -> str:
-    """A connection's source address; an IPv4-mapped IPv6 one as its IPv4 address."""
+def peer_address(transport: Any) -> tuple[str, int]:
+    """A connection's (a stream writer's) source address and port: the address in its
+    canonical form, an IPv4-mapped IPv6 one (an IPv4 client of a socket that takes both
+    families) as its IPv4 address; port 0 when there is none."""
     peer = transport.get_extra_info("peername")
-    ip = str(peer[0]) if isinstance(peer, tuple) and peer else str(peer or "?")
-    if ip.startswith("::ffff:") and "." in ip:
-        ip = ip[len("::ffff:"):]
-    return ip
+    if isinstance(peer, tuple) and peer:
+        port = peer[1] if len(peer) > 1 and isinstance(peer[1], int) else 0
+        return canonical_ip(str(peer[0])), port
+    return str(peer or "?"), 0
+
+
+def peer_ip(transport: Any) -> str:
+    """A connection's source address (see peer_address)."""
+    return peer_address(transport)[0]
+
+
+def client_label(ip: str, port: int) -> str:
+    """ip:port of a client, for the log and the UI ([2001:db8::7]:50123), just the address
+    without a port."""
+    return host_port(ip, port) if port else ip
 
 
 def peer_label(transport: Any) -> str:
     """ip:port of a connection, for the log."""
-    peer = transport.get_extra_info("peername")
-    if isinstance(peer, tuple) and len(peer) > 1:
-        return f"{peer[0]}:{peer[1]}"
-    return peer_ip(transport)
+    return client_label(*peer_address(transport))
+
+
+def address_key(ip: str) -> str:
+    """What the per-address limits count a source under: an IPv6 address by its /64
+    network (a host, or a LAN, gets a whole /64 and can use any address in it, so one
+    client can't get past a limit by moving to the next address), an IPv4 address (also
+    written IPv4-mapped) as it is, anything else unchanged."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network((int(addr) >> 64 << 64, 64)))
+    return str(addr)
 
 
 class Pool:
-    """Connections (their transports) counted in total and per source address, each up to a
-    cap (0: none). A connection whose transport is closing no longer counts."""
+    """Connections (their transports) counted in total and per source address (an IPv6 one
+    by its /64: address_key), each up to a cap (0: none). A connection whose transport is
+    closing no longer counts."""
 
     def __init__(self, total: int = 0, per_ip: int = 0) -> None:
         self.total = total
         self.per_ip = per_ip
-        self._members: dict[Any, str] = {}
+        self._members: dict[Any, str] = {}  # transport -> address_key of its source
 
     def _sweep(self) -> None:
         for t in [t for t in self._members if t.is_closing()]:
@@ -224,18 +283,21 @@ class Pool:
 
     def count(self, ip: str) -> int:
         self._sweep()
-        return sum(1 for member_ip in self._members.values() if member_ip == ip)
+        key = address_key(ip)
+        return sum(1 for member in self._members.values() if member == key)
 
     def full(self, ip: str) -> str:
         """"" when one more from ``ip`` fits, else why not."""
         if self.total and len(self) >= self.total:
             return f"{self.total} at once is the limit"
         if self.per_ip and self.count(ip) >= self.per_ip:
-            return f"{self.per_ip} at once from one address is the limit"
+            key = address_key(ip)
+            source = f"one /64 network ({key})" if key.endswith("/64") else "one address"
+            return f"{self.per_ip} at once from {source} is the limit"
         return ""
 
     def add(self, transport: Any, ip: str) -> None:
-        self._members[transport] = ip
+        self._members[transport] = address_key(ip)
 
     def discard(self, transport: Any) -> None:
         self._members.pop(transport, None)
@@ -560,16 +622,147 @@ class Listener:
         task.add_done_callback(lambda _t: self._handshakes.pop(transport, None))
 
 
-async def start_server(client_connected_cb: Callable, host: str, port: int, *, ssl: Any = None,
+def listen_hosts(net: NetworkSettings) -> list[str]:
+    """The addresses a mapping's TCP listener binds: both wildcards when it takes IPv4 and
+    IPv6 clients (NetworkSettings.both_families; 0.0.0.0 alone where Python has no IPv6),
+    else its bind IP."""
+    if net.both_families:
+        return list(WILDCARDS) if socket.has_ipv6 else ["0.0.0.0"]
+    return [net.bind_ip]
+
+
+def listen_where(net: NetworkSettings, sockets: Sequence[socket.socket]) -> str:
+    """Where a mapping listens, for its log line: its address and port, and which clients
+    that takes when it is a wildcard of one family or both (``sockets``: what it got)."""
+    if net.both_families:
+        families = {sock.family for sock in sockets}
+        if families == {socket.AF_INET6} and _takes_ipv4(sockets[0]):
+            families.add(socket.AF_INET)  # (UDP: one socket for both)
+        if families == {socket.AF_INET, socket.AF_INET6}:
+            return f"{host_port('0.0.0.0', net.port)} and {host_port('::', net.port)}, IPv4 and IPv6"
+        if families == {socket.AF_INET}:
+            return f"{host_port('0.0.0.0', net.port)}, IPv4 only (IPv6 is not available here)"
+    where = host_port(net.bind_ip, net.port)
+    if canonical_ip(net.bind_ip) == "::" and not net.both_families:
+        where += ", IPv6 clients only"
+    return where
+
+
+def _takes_ipv4(sock: socket.socket) -> bool:
+    try:
+        return not sock.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY)
+    except (OSError, AttributeError):
+        return False
+
+
+async def udp_socket(net: NetworkSettings) -> socket.socket:
+    """A UDP mapping's socket, bound to its address and port. IPV6_V6ONLY is set on an IPv6
+    one as the mapping says, not left to the OS (Linux would let a socket on :: take IPv4
+    senders too, Windows not): one that takes both families (NetworkSettings.both_families)
+    is one socket on :: with it off (where this machine has no IPv6, an IPv4 one on
+    0.0.0.0), any other has it on, so :: takes IPv6 senders only, as a TCP listener does.
+    Raises BindError when the address and port can't be taken."""
+    both = net.both_families
+    address: Any
+    try:
+        if both:
+            family, address = socket.AF_INET6, ("::", net.port)
+            try:
+                sock = socket.socket(family, socket.SOCK_DGRAM)
+            except (OSError, AttributeError):  # no IPv6 here
+                family, address = socket.AF_INET, ("0.0.0.0", net.port)
+                sock = socket.socket(family, socket.SOCK_DGRAM)
+        else:
+            infos = await asyncio.get_running_loop().getaddrinfo(
+                net.bind_ip, net.port, type=socket.SOCK_DGRAM,
+                flags=socket.AI_PASSIVE | socket.AI_NUMERICHOST)
+            family, kind, proto, _name, address = infos[0]
+            sock = socket.socket(family, kind, proto)
+    except OSError as e:
+        raise BindError.of(e) from e
+    try:
+        if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0 if both else 1)
+        if net.udp_broadcast is True:  # (udp_targets: a broadcast address)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind(address)
+        sock.setblocking(False)
+    except OSError as e:
+        sock.close()
+        raise BindError.of(e) from e
+    return sock
+
+
+async def start_server(client_connected_cb: Callable, host: Union[str, Sequence[str]], port: int,
+                       *, ssl: Any = None,
                        allowed: Optional[Callable[[str], bool]] = None,
                        log: Optional[Callable[[str], None]] = None,
                        limit: int = 2 ** 16) -> Listener:
-    """asyncio.start_server(client_connected_cb, host, port, ssl=ssl), admitting each
-    connection right after accept: the process's budget, then (TLS) ``allowed`` (the
-    mapping's allow-list) and the handshakes in progress, before the handshake.
+    """asyncio.start_server(client_connected_cb, host, port, ssl=ssl) (``host``: one
+    address, or several: listen_hosts), admitting each connection right after accept: the
+    process's budget, then (TLS) ``allowed`` (the mapping's allow-list) and the handshakes
+    in progress, before the handshake.
     ``client_connected_cb(reader, writer)`` gets TLS connections once their handshake is
-    done. ``log``: where refusals and failed handshakes are reported (the mapping's log)."""
+    done. ``log``: where refusals and failed handshakes are reported (the mapping's log).
+    Raises BindError when the address and port can't be taken."""
     listener = Listener(client_connected_cb, ssl, allowed, log or (lambda _m: None), limit)
-    listener.server = await asyncio.get_running_loop().create_server(
-        lambda: _Gate(listener), host, port)
+    try:
+        server = await asyncio.get_running_loop().create_server(
+            lambda: _Gate(listener), host, port, start_serving=False)
+    except OSError as e:
+        raise BindError.of(e) from e
+    clash = _reserved_clash(server.sockets)
+    if clash:
+        server.close()
+        raise BindError.of(OSError(errno.EADDRINUSE, clash))
+    listener.server = server
+    await server.start_serving()
     return listener
+
+
+# Sockets that later listeners may not share an address and port with (reserve), with what
+# holds them. Windows lets a listener on a wildcard address share a port with one on a
+# specific address of its family (that one keeps its address's connections, the other gets
+# the rest) and, without SO_EXCLUSIVEADDRUSE on the first, the reverse too; Linux refuses
+# the second bind while the first listens. start_server refuses it on every OS, so a mapping
+# on the admin UI's address and port fails (and is retried) instead of running next to it.
+_reserved: weakref.WeakKeyDictionary[socket.socket, str] = weakref.WeakKeyDictionary()
+
+
+def reserve(sockets: Sequence[socket.socket], holder: str) -> None:
+    """Keep the addresses and ports of ``sockets`` (bound) from the listeners start_server
+    makes afterwards while they are open; ``holder`` names them in the error ("the admin
+    UI")."""
+    for sock in sockets:
+        _reserved[sock] = holder
+
+
+def _reserved_clash(sockets: Sequence[Any]) -> str:
+    """Why one of ``sockets`` (bound, not listening yet) can't listen: it shares the port of
+    a reserved socket on an overlapping address (the same one, or a wildcard of its family);
+    "" when none does."""
+    for sock in sockets:
+        try:
+            ip, port = sock.getsockname()[:2]
+        except OSError:
+            continue
+        for held, holder in list(_reserved.items()):
+            if held.fileno() == -1 or held.family != sock.family:
+                continue
+            try:
+                held_ip, held_port = held.getsockname()[:2]
+            except OSError:
+                continue
+            if held_port == port and _overlaps(held_ip, ip):
+                return (f"error while attempting to bind on address {host_port(ip, port)}: "
+                        f"address already in use ({holder} listens on "
+                        f"{host_port(held_ip, held_port)})")
+    return ""
+
+
+def _overlaps(a: str, b: str) -> bool:
+    try:
+        x, y = ipaddress.ip_address(a), ipaddress.ip_address(b)
+    except ValueError:
+        return a == b
+    return x == y or x.is_unspecified or y.is_unspecified

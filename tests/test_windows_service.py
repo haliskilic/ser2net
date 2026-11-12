@@ -5,7 +5,9 @@ Portable part (any OS):
     quotes, trailing backslashes) for a frozen executable and a source checkout;
   * service names are validated; on Linux the options refuse with a hint (no files);
   * runtime.request_shutdown() — what the service's stop request calls, from another
-    thread — stops a running server cleanly.
+    thread — stops a running server cleanly;
+  * while a stop is under way the service reports STOP_PENDING again every few seconds
+    (winservice.StopProgress), until the server has stopped.
 Windows part (SER2NET_SERVICE_TESTS=1, as Administrator; CI runs it): install a
 service on a throwaway data directory, wait until the UI answers, set the admin's
 password with --set-password while it runs (the service applies it; the request folder
@@ -642,6 +644,26 @@ def read_security_text(path):
         f"{winservice.sid_name(sid)} {mask:#x}{'' if allow else ' deny'}" for sid, mask, allow, _f in aces)
 
 
+def test_stop_progress():
+    reports = []
+    progress = winservice.StopProgress(lambda: reports.append(time.monotonic()), every=0.05)
+    progress.finish()
+    progress.start()  # the server stopped on its own: nothing to report
+    time.sleep(0.15)
+    assert not reports, reports
+    progress = winservice.StopProgress(lambda: reports.append(time.monotonic()), every=0.05)
+    progress.start()
+    progress.start()  # a second stop request (stop, then shutdown): one reporter
+    time.sleep(0.4)
+    progress.finish()
+    seen = len(reports)
+    assert 4 <= seen <= 10, seen
+    time.sleep(0.15)
+    assert len(reports) == seen, "reports after finish()"
+    print(f"a stop under way is reported again every 50 ms here ({seen} times), and not "
+          "after the server stopped  OK")
+
+
 def test_real_service():
     if not WINDOWS or os.environ.get("SER2NET_SERVICE_TESTS") != "1":
         print("SKIP real Windows service test (Windows + Administrator + SER2NET_SERVICE_TESTS=1)")
@@ -767,6 +789,7 @@ def main():
     test_cli_leaves_the_choice_to_install()
     test_not_windows()
     test_request_shutdown()
+    test_stop_progress()
     test_real_service()
     print("\nPASS: Windows service mode")
 

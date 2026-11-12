@@ -26,6 +26,19 @@ always to a configured reply address.
 Traffic counters (RunnerStatus) count at the device, once: bytes_in what was read from
 it, bytes_out what was handed to it, bytes_dropped what the network sent for it that
 was not written (the port was not open, or the UDP queue was full).
+
+What a telnet / RFC 2217 client sends is carried out in order (ProtocolSession.
+from_network_parts): its data, a serial BREAK it asks for (IAC BRK) and the commands that
+act on the port (RFC 2217 SET-* / PURGE-DATA), each after the data before it was written
+and, for a BREAK or a setting, has left the port (at most SETTLE_MAX_S). A BREAK holds the
+line in the break condition for BREAK_S without blocking the event loop (pyserial's
+send_break() sleeps in the calling thread); a read-only mapping sends none.
+
+With MQTT, the device's lines are published; with mqtt.tx_enabled each message on
+<base_topic>/tx is written to the port as it is, in one piece between what TCP clients
+send, from a queue of at most MQTT_TX_MAX_BYTES, and answered on <base_topic>/tx/result.
+options.poll_string is sent every poll_interval_s while the port is open (by default not
+while a TCP client is connected).
 """
 from __future__ import annotations
 
@@ -33,6 +46,7 @@ import asyncio
 import contextlib
 import errno
 import ipaddress
+import math
 import os
 import queue
 import socket
@@ -52,13 +66,19 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import TaskGroup
     from exceptiongroup import BaseExceptionGroup
 
-from ..config import MappingConfig, mapping_file, udp_peer_address, udp_peer_timeout
-from . import netguard, serial_io, sockopts
+from .. import i18n
+from ..config import (
+    MQTT_TX_MAX_BYTES, MappingConfig, canonical_ip, host_port, mapping_file, mqtt_topic_problem,
+    poll_bytes, udp_peer_address, udp_peer_timeout, udp_targets,
+)
+from . import netguard, portdiag, serial_io, sockopts, tls
 from .netguard import LogEvery as _LogEvery
 from .access import AccessPolicy, server_ssl
 from .protocols import make_session
-from .protocols.base import ProtocolError, ProtocolSession
-from .serial_link import Backoff, SerialLink, close_stream
+from .protocols.base import BREAK, ProtocolError, ProtocolSession
+from .serial_link import (
+    Backoff, FailureLog, NoteLog, SerialLink, close_stream, explain, fmt_duration, sent_within,
+)
 
 if TYPE_CHECKING:
     from .mqtt_pub import MqttPublisher
@@ -76,6 +96,18 @@ CLIENT_QUEUE_MAX = 2048  # outbound chunks buffered per client before it's dropp
 # event-loop time. 64 KiB is that high-water mark too, about 68 s of line time at 9600
 # baud and 6 s at 115200; the largest datagram fits.
 UDP_BACKLOG_MAX = 64 * 1024
+# a client connection's graceful close (and the flush before a closeon close) gets this
+# long; a peer that keeps the connection up but reads nothing is then cut off, instead of
+# holding one of the mapping's connection slots for as long as TCP takes to give up
+TCP_CLOSE_TIMEOUT_S = 5.0
+# a serial BREAK (telnet IAC BRK, the web console): the line is held in the break condition
+# this long, as pyserial's send_break() and most terminal programs do
+BREAK_S = 0.25
+# before a BREAK or an RFC 2217 setting change, the data the client sent ahead of it gets
+# up to this long to leave the port (its line time, twice, plus 0.2 s): a port that holds
+# its output (flow control, a driver that never reports an empty queue) delays the command
+# no more than this, since an RFC 2217 client waits about 3 s for its answer
+SETTLE_MAX_S = 2.0
 # errno/winerror values for "the peer stopped answering" (keepalive or retransmission
 # timeout): ETIMEDOUT, plus on Windows WSAETIMEDOUT, WSAENETRESET and the overlapped-I/O
 # ERROR_SEM_TIMEOUT.
@@ -84,6 +116,20 @@ _PEER_TIMEOUT_ERRNOS = {errno.ETIMEDOUT, 10060, 10052, 121}
 
 class _Disconnect(ConnectionError):
     """Ends a client session for a known reason (the message is logged)."""
+
+
+async def _close_client(writer: asyncio.StreamWriter) -> None:
+    """Close a client's connection gracefully (what is queued for it goes out first), and
+    abort it if that takes longer than TCP_CLOSE_TIMEOUT_S."""
+    with contextlib.suppress(Exception):
+        writer.close()
+    closed = asyncio.ensure_future(writer.wait_closed())
+    closed.add_done_callback(lambda f: f.cancelled() or f.exception())
+    # asyncio.wait, not wait_for: the timeout must not cancel the stream's close future
+    done, _pending = await asyncio.wait((closed,), timeout=TCP_CLOSE_TIMEOUT_S)
+    if not done:
+        with contextlib.suppress(Exception):
+            writer.transport.abort()
 
 
 def describe_disconnect(exc: BaseException) -> str:
@@ -110,17 +156,6 @@ def _iter_leaf_exceptions(eg: BaseExceptionGroup):
             yield from _iter_leaf_exceptions(exc)
         else:
             yield exc
-
-
-def fmt_duration(secs: float) -> str:
-    secs = max(0, int(secs))
-    h, rem = divmod(secs, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}h {m:02d}m"
-    if m:
-        return f"{m}m {s:02d}s"
-    return f"{s}s"
 
 
 def trace_path(trace_dir: str, mapping: MappingConfig) -> str:
@@ -292,13 +327,39 @@ class RunnerStatus:
     bytes_out: int = 0      # handed to the serial device (from clients, datagrams, the console)
     bytes_dropped: int = 0  # sent for the device but not written: the port was not open,
     #                         or a UDP datagram found UDP_BACKLOG_MAX bytes waiting
-    reconnects: int = 0
+    reconnects: int = 0     # serial port: attempts to open it again (failed opens + losses)
+    open_failures: int = 0  # of which: opens that failed
+    device_lost: int = 0    # times the open port went away
+    hangups: int = 0        # of those: hung up and reopened at once (SerialLink)
     dropped_clients: int = 0   # clients dropped because their output queue overflowed
     queue_overflows: int = 0   # total serial->net chunks lost to queue overflow
     last_error: str = ""
+    # state "error" because the listener could not take its address: the supervisor tries
+    # again at this time.monotonic() (0: no retry pending); as_dict() shows it as
+    # retrying / next_retry_s
+    retry_at: float = 0.0
+    # a connect-out mapping's connection to its remote server ("" for any other mapping,
+    # and while stopped): "connecting" (no attempt has failed since the last one that
+    # worked, or the link was just closed), "up", or "down" (the last attempt failed:
+    # link_error says why). `state` keeps reporting the serial side.
+    link: str = ""
+    link_error: str = ""
+    link_since: float = 0.0   # time.time() of the last change of `link`
+    connect_failures: int = 0  # connect-out attempts that failed
+    # why the serial port can't be opened, when that can be told (portdiag.Note: the group
+    # the device needs, the mapping that has it open, ...); last_error keeps the error itself
+    hint: Optional[portdiag.Note] = None
+    # what to know about the serial port(s) open now (portdiag.Note): a setting a port did
+    # not take at open (RTS / DTR, RS-485 mode); as_dict() has them (and hint) as text
+    warnings: tuple = ()
     # the serial devices open now, for the Ports page's "in use" (both ports of a
     # serial<->serial bridge, whose `device` reads "A <-> B"); not part of as_dict()
     devices: tuple[str, ...] = ()
+
+    def set_link(self, link: str, error: str = "") -> None:
+        if link != self.link:
+            self.link, self.link_since = link, time.time()
+        self.link_error = error
 
     def set_clients(self, clients) -> None:
         """Publish the connected clients (each has peer, connected_at and priority)."""
@@ -325,9 +386,22 @@ class RunnerStatus:
             "bytes_out": self.bytes_out,
             "bytes_dropped": self.bytes_dropped,
             "reconnects": self.reconnects,
+            "open_failures": self.open_failures,
+            "device_lost": self.device_lost,
+            "hangups": self.hangups,
             "dropped_clients": self.dropped_clients,
             "queue_overflows": self.queue_overflows,
             "last_error": self.last_error,
+            "retrying": bool(self.retry_at),
+            "next_retry_s": (max(0, math.ceil(self.retry_at - time.monotonic()))
+                             if self.retry_at else 0),
+            "link": self.link,
+            "link_error": self.link_error,
+            "link_since": int(self.link_since),
+            "connect_failures": self.connect_failures,
+            # in the web UI's language on the dashboard (English for the REST API)
+            "hint": self.hint.text(i18n.gettext) if self.hint else "",
+            "warnings": portdiag.texts(self.warnings, i18n.gettext),
         }
 
 
@@ -352,7 +426,7 @@ class _ClientConn:
         self.writer = writer
         self.peer_ip = peer_ip
         self.peer_port = peer_port
-        self.peer = f"{peer_ip}:{peer_port}" if peer_port else peer_ip
+        self.peer = netguard.client_label(peer_ip, peer_port)
         self.priority = priority
         self.connected_at = time.time()
         self._queue_max = runner.mapping.network.client_queue_max or CLIENT_QUEUE_MAX
@@ -365,6 +439,13 @@ class _ClientConn:
         self._last_activity = time.monotonic()
         self._closing = False
         self.close_reason = ""  # why the session ended (first cause wins; for the log)
+        self._unsettled = 0  # bytes written to the port since its last BREAK / setting change
+
+    @property
+    def closing(self) -> bool:
+        """Kicked, dropped or ending: no longer one of the mapping's connections (it stays
+        in the runner's set until its handler is done)."""
+        return self._closing
 
     def _log_unexpected(self, exc: BaseException) -> None:
         self.runner._log(f"client {self.peer} pump error: {type(exc).__name__}: {exc}")
@@ -416,18 +497,19 @@ class _ClientConn:
         m = self.runner.mapping
         # Create the protocol session. RFC2217 needs the live serial instance.
         ser = self.runner.serial_instance
-        if m.network.protocol == "rfc2217" and ser is None:
-            # it drives the port, so it starts only while the port is open (a connect-out
-            # link can come up just after the port went away)
+        if ((m.network.protocol == "rfc2217" and ser is None)
+                or (self.runner.drops_clients and not self.runner._link.is_open)):
+            # an RFC 2217 session drives the port, so it starts only while the port is open,
+            # as does any session with disconnect_without_device (a connect-out link can
+            # come up just after the port went away)
             self._closing = True
             self.close_reason = "the serial port is not open"
-            with contextlib.suppress(Exception):
-                self.writer.close()
-                await self.writer.wait_closed()
+            await _close_client(self.writer)
             return
         self._session = make_session(m.network.protocol, ser,
                                      poll_interval=m.options.rfc2217_poll_modem_interval_s,
-                                     read_only=m.network.read_only, log=self._protocol_log)
+                                     read_only=m.network.read_only, log=self._protocol_log,
+                                     signature=m.options.rfc2217_signature)
 
         # initial bytes: protocol negotiation, then banner
         init = bytearray(self._session.initial_net_bytes())
@@ -464,12 +546,34 @@ class _ClientConn:
                     raise base_only from None
         finally:
             self._closing = True
-            with contextlib.suppress(Exception):
-                self.writer.close()
-                await self.writer.wait_closed()
+            await _close_client(self.writer)
+            self._release_break()
+
+    def _release_break(self) -> None:
+        """An RFC 2217 client that set BREAK on (SET-CONTROL) and left without turning it
+        off: turn it off, so the line is not held in the break condition for whoever
+        comes next."""
+        left_on = getattr(self._session, "break_left_on", None)
+        ser = self.runner.serial_instance
+        if left_on is None or not left_on() or ser is None:
+            return
+        try:
+            ser.break_condition = False
+        except Exception as e:
+            self.runner._log(f"serial BREAK left on by {self.peer} not turned off: "
+                             f"{type(e).__name__}: {e}")
+            return
+        self.runner._log(f"serial BREAK turned off: {self.peer} left it on")
+
+    def _send_net(self, ctrl: bytes) -> None:
+        """Control bytes for the client (telnet / RFC 2217 replies)."""
+        if ctrl:
+            with contextlib.suppress(asyncio.QueueFull):
+                self._out.put_nowait(ctrl)
 
     async def _pump_net_to_serial(self) -> None:
         m = self.runner.mapping
+        runner = self.runner
         session = self._session
         assert session is not None  # the pumps start after run() created it
         while not self._closing:
@@ -477,14 +581,26 @@ class _ClientConn:
             if not data:
                 break  # client closed
             self._last_activity = time.monotonic()
-            serial_bound = session.from_network(data)
-            ctrl = session.take_net_out()
-            if ctrl:
-                with contextlib.suppress(asyncio.QueueFull):
-                    self._out.put_nowait(ctrl)
+            parts = session.from_network_parts(data)
+            self._send_net(session.take_net_out())
             written = False
-            if serial_bound and not m.network.read_only:
-                written = await self.runner.serial_write(serial_bound)
+            # in order: the data for the port, a BREAK, the commands that act on the port
+            # (each after what came before it; see the module docstring)
+            for part in parts:
+                if isinstance(part, bytes):
+                    if not m.network.read_only and await runner.serial_write(part):
+                        written = True
+                        self._unsettled += len(part)
+                    continue
+                if part is BREAK or part.settle:
+                    if self._unsettled:
+                        await runner.serial_settled(self._unsettled)
+                        self._unsettled = 0
+                if part is BREAK:
+                    await runner.send_break(f"client {self.peer}")
+                else:
+                    part.apply()
+                    self._send_net(session.take_net_out())
             if not written:
                 # Nothing reached the port (read-only, only telnet/RFC 2217 commands, or
                 # the port is not open), so no serial drain() paces this client: let the
@@ -502,7 +618,11 @@ class _ClientConn:
                     d = self._out.get_nowait()
                     if d:
                         self.writer.write(d)
-                await self.writer.drain()
+                try:
+                    await asyncio.wait_for(self.writer.drain(), timeout=TCP_CLOSE_TIMEOUT_S)
+                except asyncio.TimeoutError:  # a peer that reads nothing: cut it off
+                    with contextlib.suppress(Exception):
+                        self.writer.transport.abort()
                 raise _Disconnect("closed by closeon match")
             self.writer.write(data)
             await self.writer.drain()
@@ -567,9 +687,21 @@ class MappingRunner:
         self._stop = asyncio.Event()
         # the serial port shared by server/client/udp (a serial<->serial bridge opens its own)
         self._link = SerialLink(mapping.serial, self.status, self._stop, self._log,
-                                on_change=self._serial_changed)
+                                on_change=self._serial_changed, owner=mapping.name)
+        self._bridge_backoff: Optional[Backoff] = None  # a serial<->serial bridge's retries
         self._access = AccessPolicy(mapping.network)
         self._drop_log = _LogEvery(self._log)  # data for the device that was not written
+        self._break_lock = asyncio.Lock()      # one serial BREAK at a time
+        self._break_log = _LogEvery(self._log)
+        self._refused_log = _LogEvery(self._log, 10.0)  # clients turned away: no port
+        # MQTT writes (<base_topic>/tx) waiting for the serial port, and their bytes
+        self._tx_topic = ""
+        self._tx_queue: list[bytes] = []
+        self._tx_queued = 0
+        self._tx_wake = asyncio.Event()
+        self._tx_log = _LogEvery(self._log)
+        self._tx_task: Optional[asyncio.Task] = None
+        self._poll_task: Optional[asyncio.Task] = None  # options.poll_string
         co = mapping.options.closeon
         self._closeon = co.encode("utf-8", "replace") if co else b""
         self._closeon_tail = b""  # rolling carry-over so matches across reads aren't missed
@@ -578,6 +710,25 @@ class MappingRunner:
     def serial_instance(self):
         """The open pyserial object (None while the port is closed)."""
         return self._link.serial
+
+    @property
+    def needs_port(self) -> bool:
+        """A client session runs only while the serial port is open: RFC 2217 (it drives
+        the port), and any TCP mapping with disconnect_without_device."""
+        return self.mapping.network.protocol == "rfc2217" or self.drops_clients
+
+    @property
+    def drops_clients(self) -> bool:
+        """disconnect_without_device, on a TCP mapping (true itself, not text)."""
+        net = self.mapping.network
+        return net.disconnect_without_device is True and net.mode in ("server", "client")
+
+    def wake_serial(self) -> None:
+        """A serial device was plugged in (PortWatcher): a port waiting to be opened again
+        is tried now instead of after its backoff."""
+        self._link.wake()
+        if self._bridge_backoff is not None:
+            self._bridge_backoff.wake()
 
     def _log(self, msg: str) -> None:
         # The logger (a per-mapping logger from AppState) adds the "[name]" prefix
@@ -609,56 +760,78 @@ class MappingRunner:
     # ---------------- lifecycle ----------------
     async def start(self) -> None:
         self._stop.clear()
-        self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
 
         if self.mapping.kind == "serialbridge":
+            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
             self._main_task = asyncio.create_task(
                 self._serialbridge_supervisor(), name=f"serbridge:{self.mapping.name}")
             self.status.state = "running"
             self._log("serial-to-serial bridge starting")
             return
 
-        # optional MQTT publisher: serial lines -> broker (net mappings)
-        if self.mapping.mqtt.enabled:
-            from .mqtt_pub import MqttPublisher
-            self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log)
-            self._mqtt.connect()
-
         net = self.mapping.network
-        # serial side is shared by server/client/udp
-        self._serial_task = asyncio.create_task(
-            self._link.run(self._serial_session), name=f"serial:{self.mapping.name}")
+        # The listener comes first (its TLS context, then the bind): a start that fails
+        # there has opened nothing yet (no serial port, whose open pulses DTR/RTS, no
+        # broker connection, no trace file), so the supervisor can simply try it again
+        # later when the address can't be taken (BindError). Data for the device that
+        # arrives before the port is open is dropped, as while it reconnects.
+        udp: Optional[_UdpBridge] = None
+        if net.mode == "server":
+            # admission right after accept; a TLS client's allow-list check comes
+            # before its handshake (netguard.start_server)
+            self._server = await netguard.start_server(
+                self._on_client, netguard.listen_hosts(net), net.port, ssl=server_ssl(net),
+                allowed=self._access.allowed, log=self._log)
+            self._log(f"listening on {netguard.listen_where(net, self._server.sockets)} "
+                      f"({net.protocol}{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
+        elif net.mode == "udp":
+            udp = _UdpBridge(self)  # a malformed stored reply address fails the start
+            bound = udp
+            sock = await netguard.udp_socket(net)
+            try:
+                self._udp_transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+                    lambda: bound, sock=sock)
+            except OSError as e:
+                sock.close()
+                raise netguard.BindError.of(e) from e
+            self._log(f"UDP on {netguard.listen_where(net, [sock])}, {udp.describe()}")
 
-        # If the network side fails to come up (address-in-use, bad TLS cert, ...),
-        # tear everything down — otherwise the serial supervisor task is orphaned and
-        # keeps the serial device open forever, so no other mapping can use that port.
+        # If the rest fails to come up, tear everything down (the listener too), so that
+        # nothing is left holding the port or the serial device.
         try:
-            if net.mode == "server":
-                # admission right after accept; a TLS client's allow-list check comes
-                # before its handshake (netguard.start_server)
-                self._server = await netguard.start_server(
-                    self._on_client, net.bind_ip, net.port, ssl=server_ssl(net),
-                    allowed=self._access.allowed, log=self._log)
-                self._log(f"listening on {net.bind_ip}:{net.port} ({net.protocol}"
-                          f"{', TLS' if net.tls else ''}, {sockopts.describe(net)})")
-            elif net.mode == "client":
+            self._tracer = open_tracer(self.mapping, self.trace_dir, self._log)
+            # optional MQTT publisher: serial lines -> broker (net mappings), and with
+            # tx_enabled writes from <base_topic>/tx -> the serial port
+            if self.mapping.mqtt.enabled:
+                from .mqtt_pub import MqttPublisher
+                subs = self._mqtt_subscriptions()
+                self._mqtt = MqttPublisher(self.mapping.mqtt, logger=self._log,
+                                           subscriptions=subs)
+                self._mqtt.connect()
+                if subs:
+                    self._tx_task = asyncio.create_task(
+                        self._mqtt_tx_loop(), name=f"mqtt-tx:{self.mapping.name}")
+            poll = self._poll_settings()
+            if poll is not None:
+                self._poll_task = asyncio.create_task(
+                    self._poll_loop(*poll), name=f"poll:{self.mapping.name}")
+            # up from here; the serial side reports its own state once it has tried the port
+            self.status.state = "running"
+            self.status.last_error = ""
+            # serial side is shared by server/client/udp
+            self._serial_task = asyncio.create_task(
+                self._link.run(self._serial_session), name=f"serial:{self.mapping.name}")
+            if net.mode == "client":
+                self.status.set_link("connecting")
                 self._main_task = asyncio.create_task(
                     self._client_supervisor(), name=f"connectout:{self.mapping.name}")
-                self._log(f"connect-out to {net.remote_host}:{net.remote_port} ({net.protocol}, "
-                          f"{sockopts.describe(net)})")
-            elif net.mode == "udp":
-                udp = _UdpBridge(self)  # a malformed stored reply address fails the start
-                loop = asyncio.get_running_loop()
-                self._udp_transport, _ = await loop.create_datagram_endpoint(
-                    lambda: udp, local_addr=(net.bind_ip, net.port))
+                self._log(f"connect-out to {host_port(net.remote_host, net.remote_port)} "
+                          f"({net.protocol}, {sockopts.describe(net)})")
+            elif udp is not None:
                 self._main_task = asyncio.create_task(udp.run(), name=f"udp:{self.mapping.name}")
-                self._log(f"UDP on {net.bind_ip}:{net.port}, {udp.describe()}")
         except BaseException:
             await self.stop()
             raise
-        # the serial port may already have failed to open while the listener came up
-        if self.status.state == "stopped":  # the serial side has not reported yet
-            self.status.state = "running"
 
     async def stop(self) -> None:
         self._stop.set()
@@ -680,39 +853,134 @@ class MappingRunner:
         self._monitors.clear()
         self._traffic.clear()
         if self._mqtt is not None:
-            self._mqtt.close()
-            self._mqtt = None
+            mqtt, self._mqtt = self._mqtt, None
+            await mqtt.aclose()
         if self._server is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
             self._server = None
-        for task in (self._serial_task, self._main_task):
+        for task in (self._serial_task, self._main_task, self._tx_task, self._poll_task):
             if task:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
-        self._serial_task = self._main_task = None
+        self._serial_task = self._main_task = self._tx_task = self._poll_task = None
+        self._tx_queue.clear()
+        self._tx_queued = 0
         await self._link.close()
         if self._tracer:
             await self._tracer.aclose()
             self._tracer = None
         self.status.state = "stopped"
+        self.status.set_link("")
         self.status.client_count = 0
         self.status.clients = []
         self._log("stopped")
 
+    # ---------------- MQTT writes and the poll string ----------------
+    def _mqtt_subscriptions(self) -> dict:
+        """With mqtt.tx_enabled: {<base_topic>/tx: handler} (nothing with a wildcard in the
+        base topic, which edits refuse: such a subscription would take every topic it
+        matches)."""
+        mq = self.mapping.mqtt
+        if mq.tx_enabled is not True:
+            return {}
+        if mqtt_topic_problem(mq.base_topic):
+            self._log("MQTT writes not taken: the base topic has '+', '#' or a null character")
+            return {}
+        self._tx_topic = str(mq.base_topic).rstrip("/") + "/tx"
+        note = (" (read-only: each is refused)" if self.mapping.network.read_only else "")
+        self._log(f"MQTT: messages on {self._tx_topic} are written to the serial port{note}")
+        missing = [what for what, have in (("TLS", mq.tls), ("a username", mq.username))
+                   if not have]
+        if self.mapping.accepts_mqtt_tx and missing:
+            self._log("warning: MQTT writes to the serial port come over a broker connection "
+                      f"without {' or '.join(missing)}: any client the broker lets publish to "
+                      f"{self._tx_topic} can write to the device; restrict it with the "
+                      "broker's access rules (ACLs)")
+        return {self._tx_topic: self._on_mqtt_tx}
+
+    def _on_mqtt_tx(self, topic: str, payload: bytes) -> None:
+        """A message on <base_topic>/tx (on the event loop; never empty or a retained copy:
+        MqttPublisher). Queued for the serial port, or refused on .../tx/result."""
+        mqtt = self._mqtt
+        if mqtt is None:
+            return
+        why = ""
+        if self.mapping.network.read_only:
+            why = "mapping is read-only"
+        elif len(payload) > MQTT_TX_MAX_BYTES:
+            why = f"message too long ({len(payload)} bytes, at most {MQTT_TX_MAX_BYTES})"
+        elif self._tx_queued + len(payload) > MQTT_TX_MAX_BYTES:
+            why = f"busy ({self._tx_queued} bytes waiting for the serial port)"
+        if why:
+            self._tx_log(f"MQTT write from {topic} refused: {why}")
+            mqtt.publish_raw(topic + "/result", f"error: {why}".encode())
+            return
+        self._tx_queue.append(payload)
+        self._tx_queued += len(payload)
+        self._tx_wake.set()
+
+    async def _mqtt_tx_loop(self) -> None:
+        """Write the MQTT messages to the serial port, oldest first, each in one piece (so
+        never mixed into a TCP client's data), and answer each: "ok" once the port took it,
+        "error: ..." when it was not open."""
+        result = self._tx_topic + "/result"
+        while True:
+            await self._tx_wake.wait()
+            self._tx_wake.clear()
+            while self._tx_queue:
+                payload = self._tx_queue.pop(0)
+                try:
+                    err = None if await self.serial_write(payload) else \
+                        "the serial port is not open"
+                except Exception as e:  # the port went away mid-write: SerialLink reopens it
+                    err = str(e) or type(e).__name__
+                finally:
+                    self._tx_queued -= len(payload)
+                if self._mqtt is not None:
+                    self._mqtt.publish_raw(result, b"ok" if err is None else
+                                           f"error: {err}".encode())
+
+    def _poll_settings(self) -> Optional[tuple[bytes, float]]:
+        """options.poll_string as bytes and poll_interval_s, or None when there is no poll
+        (off, a serial-to-serial bridge; a stored value edits refuse: logged)."""
+        o = self.mapping.options
+        interval = o.poll_interval_s
+        if not isinstance(interval, (int, float)) or isinstance(interval, bool) \
+                or not interval or not o.poll_string:
+            return None
+        try:
+            data = poll_bytes(o.poll_string)
+        except ValueError as e:
+            self._log(f"poll string not sent: {e}")
+            return None
+        if not (0.1 <= interval <= 86400) or not data:
+            self._log(f"poll string not sent: the interval {interval!r} is not between 0.1 "
+                      "and 86400 seconds")
+            return None
+        return data, float(interval)
+
+    async def _poll_loop(self, data: bytes, interval: float) -> None:
+        """Send the poll string every ``interval`` seconds while the port is open, and (unless
+        poll_with_clients) while no TCP client is connected, which does the asking then."""
+        with_clients = self.mapping.options.poll_with_clients is True
+        self._log(f"polling the device every {interval:g} s with {data!r}"
+                  + ("" if with_clients else " while no TCP client is connected"))
+        while True:
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=interval)
+                return
+            if not self._link.is_open:
+                continue
+            if not with_clients and any(isinstance(c, _ClientConn) for c in self._clients):
+                continue
+            with contextlib.suppress(Exception):  # the port went away: SerialLink reopens it
+                await self.serial_write(data)
+
     # ssl context for a connect-out TLS data bridge (a listener's: access.server_ssl)
     def _client_ssl(self):
-        net = self.mapping.network
-        if not net.tls:
-            return None
-        import ssl
-        ctx = ssl.create_default_context()
-        # data-bridge TLS: encrypt the link; peer cert is typically self-signed, so
-        # don't hard-fail verification (this is opportunistic transport encryption).
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
+        return tls.mapping_context(self.mapping.network)
 
     # ---------------- serial side ----------------
     async def serial_write(self, data: bytes) -> bool:
@@ -733,11 +1001,56 @@ class MappingRunner:
         await w.drain()
         return True
 
+    async def serial_settled(self, written: int) -> None:
+        """Wait until the port has sent what it holds (``written``: the bytes a client
+        wrote since its last BREAK / setting change), at most their line time twice plus
+        0.2 s and never more than SETTLE_MAX_S."""
+        w = self._link.writer
+        if w is None or w.is_closing():
+            return
+        baud = getattr(self._link.serial, "baudrate", 0) or self.mapping.serial.baudrate
+        line_time = written * 11 / max(1, int(baud))  # (a start, 8 data, parity, stop bit)
+        await sent_within(w, min(SETTLE_MAX_S, 0.2 + 2 * line_time))
+
+    async def send_break(self, who: str) -> bool:
+        """Send a serial BREAK (a telnet client's IAC BRK, the web console; ``who`` for the
+        log): the line is held in the break condition for BREAK_S, on the event loop's
+        timer. One at a time; False when none was sent (a read-only mapping, the port not
+        open, a port that can't). Logged at most once a minute, with a count."""
+        if self.mapping.network.read_only:
+            self._break_log(f"serial BREAK from {who} not sent: the mapping is read-only")
+            return False
+        async with self._break_lock:
+            ser = self._link.serial
+            if ser is None or self._stop.is_set():
+                self._break_log(f"serial BREAK from {who} not sent: the serial port is not "
+                                "open")
+                return False
+            try:
+                ser.break_condition = True
+            except Exception as e:  # (a stand-in or a port without break control)
+                self._break_log(f"serial BREAK from {who} not sent: {type(e).__name__}: {e}")
+                return False
+            try:
+                await asyncio.sleep(BREAK_S)
+            finally:
+                with contextlib.suppress(Exception):
+                    ser.break_condition = False
+        self._break_log(f"serial BREAK sent ({who})")
+        return True
+
     def _serial_changed(self, serial) -> None:
-        """SerialLink: the port was reopened (``serial``) or closed (None). An RFC 2217
-        session drives the port itself, so the connected client's session follows it: the
-        client stays connected through a reconnect and keeps its settings."""
-        if self.mapping.network.protocol == "rfc2217":
+        """SerialLink: the port was reopened (``serial``) or closed (None). With
+        disconnect_without_device a closed port disconnects every client. Otherwise an RFC
+        2217 session drives the port itself, so the connected client's session follows it:
+        the client stays connected through a reconnect and keeps its settings."""
+        if serial is None and self.drops_clients and not self._stop.is_set():
+            if self._clients:
+                self._log(f"serial port closed: disconnecting {len(self._clients)} "
+                          "client(s) (disconnect_without_device)")
+            for c in list(self._clients):
+                c.kick("the serial port is not open")
+        elif self.mapping.network.protocol == "rfc2217":
             for c in list(self._clients):
                 c.serial_changed(serial)
 
@@ -827,15 +1140,30 @@ class MappingRunner:
         self.status.set_clients(self._clients)
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        peername = writer.get_extra_info("peername") or ("?", 0)
-        if isinstance(peername, tuple):
-            peer_ip, peer_port = str(peername[0]), int(peername[1]) if len(peername) > 1 else 0
-        else:
-            peer_ip, peer_port = str(peername), 0
-        peer_label = f"{peer_ip}:{peer_port}" if peer_port else peer_ip
-        net = self.mapping.network
+        peer_ip, peer_port = netguard.peer_address(writer)
+        peer_label = netguard.client_label(peer_ip, peer_port)
 
-        # allow-list, then max connections (a priority client / kick_old_user makes room)
+        # An RFC2217 session (and any, with disconnect_without_device) needs the open serial
+        # port: wait briefly for it (an allowed client) BEFORE admission, so a client
+        # waiting here holds no slot and nobody is kicked for a newcomer that is then
+        # turned away.
+        ready = self._link.ready
+        if self.needs_port and not ready.is_set() and self._access.allowed(peer_ip):
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(ready.wait(),
+                                       timeout=self.mapping.options.rfc2217_net_timeout_s)
+            if not ready.is_set():
+                if self.drops_clients:  # (a poller retrying all the time: rate-limited)
+                    self._refused_log(f"rejected {peer_label}: the serial port is not open "
+                                      "(disconnect_without_device)")
+                else:
+                    self._log(f"rejected {peer_label}: serial not ready for RFC2217")
+                writer.close()
+                return
+
+        # allow-list, then max connections (a priority client / kick_old_user makes room);
+        # from here until the client is in self._clients nothing awaits, so connections
+        # accepted together are admitted one after the other, each seeing the one before
         admission = self._access.admit(peer_ip, peer_label, self._clients, self._log)
         if not admission.admitted:
             if admission.at_capacity:
@@ -846,22 +1174,11 @@ class MappingRunner:
             return
         is_priority = admission.priority
 
-        # For RFC2217 we need the live serial instance; wait briefly for it.
-        ready = self._link.ready
-        if net.protocol == "rfc2217" and not ready.is_set():
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(ready.wait(),
-                                       timeout=self.mapping.options.rfc2217_net_timeout_s)
-            if not ready.is_set():
-                self._log(f"rejected {peer_label}: serial not ready for RFC2217")
-                writer.close()
-                return
-
         self._enable_keepalive(writer, peer_label)
         client = _ClientConn(self, reader, writer, peer_ip, peer_port, priority=is_priority)
         self._clients.add(client)
         self._refresh_clients()
-        tag = " [priority]" if is_priority else ""
+        tag = (" [priority]" if is_priority else "") + tls.client_certificate(writer)
         self._log(f"client connected: {peer_label}{tag} ({len(self._clients)} total)")
         try:
             await client.run()
@@ -896,7 +1213,11 @@ class MappingRunner:
         worker thread that cancellation can't stop, so timing it out would leave one
         stuck thread behind per retry during a DNS outage and starve the shared
         executor (asyncio.to_thread: password hashing, config saves, log reads).
-        Connecting to the resolved IP literal needs no further lookup."""
+        Connecting to the resolved IP literal needs no further lookup.
+
+        Returns (reader, writer, what the log says about TLS); over TLS the server's
+        certificate is checked first (tls.check_server: a pin that does not match is that
+        address's failure)."""
         net = self.mapping.network
         loop = asyncio.get_running_loop()
         infos = await loop.getaddrinfo(net.remote_host, net.remote_port,
@@ -905,7 +1226,7 @@ class MappingRunner:
         error: BaseException = ConnectionError(f"no address for {net.remote_host}")
         for family, _type, _proto, _name, sockaddr in infos:
             try:
-                return await asyncio.wait_for(
+                reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(
                         str(sockaddr[0]), int(sockaddr[1]), family=family, ssl=ssl_ctx,
                         server_hostname=net.remote_host if ssl_ctx else None),
@@ -915,31 +1236,49 @@ class MappingRunner:
                     error = e  # the OS's own connect timeout, not ours
                     continue
                 error = ConnectionError(f"timed out after {net.connect_timeout_s:g}s")
+                continue
             except OSError as e:
+                error = e
+                continue
+            if ssl_ctx is None:
+                return reader, writer, ""
+            try:  # the server's certificate, before any byte of the link is used
+                return reader, writer, f" ({tls.check_server(net, writer)})"
+            except ConnectionError as e:
+                writer.transport.abort()
                 error = e
         raise error
 
     async def _client_supervisor(self) -> None:
         net = self.mapping.network
-        target = f"{net.remote_host}:{net.remote_port}"
+        target = host_port(net.remote_host, net.remote_port)
         backoff = Backoff()
+        failures = FailureLog(self._log, "connect-out failed")
         while not self._stop.is_set():
-            # an RFC 2217 session drives the serial port: connect out only while it is open
-            if net.protocol == "rfc2217" and not await self._serial_open():
+            # an RFC 2217 session drives the serial port (disconnect_without_device: no
+            # session without it): connect out only while it is open
+            if self.needs_port and not await self._serial_open():
                 break
+            st = self.status
             try:
-                reader, writer = await self._connect_out()
+                reader, writer, tls_note = await self._connect_out()
                 self._enable_keepalive(writer, target)
                 client = _ClientConn(self, reader, writer, net.remote_host, net.remote_port)
                 self._clients.add(client)
                 self._refresh_clients()
-                self._log(f"connected out to {target}")
+                self._log(f"connected out to {target}{tls_note}{failures.recovered()}")
+                if st.link_error and st.last_error == st.link_error:
+                    st.last_error = ""  # (the link's error, not one of the serial side)
+                st.set_link("up")
                 backoff.reset()
                 try:
                     await client.run()
                 finally:
                     self._clients.discard(client)
                     self._refresh_clients()
+                    # closed (by either end, or a timer): "down" only if the next try fails,
+                    # so a max connection time or idle timeout recycle is no outage
+                    st.set_link("connecting")
                     held = fmt_duration(time.time() - client.connected_at)
                     why = f" — {client.close_reason}" if client.close_reason else ""
                     self._log(f"connect-out link to {target} closed after {held}{why}")
@@ -947,8 +1286,10 @@ class MappingRunner:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.status.last_error = str(e)
-                self._log(f"connect-out failed: {e}")
+                st.last_error = str(e)
+                st.connect_failures += 1
+                st.set_link("down", str(e))
+                failures.failed(str(e))
             if self._stop.is_set():
                 break
             if not await backoff.wait(self._stop):
@@ -956,38 +1297,70 @@ class MappingRunner:
 
     # ---------------- serial <-> serial bridge ----------------
     async def _serialbridge_supervisor(self) -> None:
-        # both ports open and close together, so this keeps its own loop (SerialLink
-        # supervises one port)
-        backoff = Backoff()
+        """Both ports open and close together, so this keeps its own loop (SerialLink
+        supervises one port). The side that could not be opened last time is opened first:
+        while one port is missing, the other one is not opened and closed again at every
+        retry (each open pulses its DTR and RTS: a board that resets on DTR would reset
+        every few seconds)."""
+        backoff = self._bridge_backoff = Backoff()
+        notes = NoteLog(self._log)
+        failures = FailureLog(self._log, "serial bridge error")
+        st = self.status
+        sides = (self.mapping.serial, self.mapping.serial_b)
+        first = 0  # the side opened first: 0 = A, 1 = B
         while not self._stop.is_set():
-            wa = wb = None
+            opened: list = [None, None]  # (reader, writer, serial, device) of each side
+            was_open = False
             try:
-                ra, wa, _sa, da = await serial_io.open_serial(self.mapping.serial)
-                rb, wb, _sb, db = await serial_io.open_serial(self.mapping.serial_b)
+                for side in (first, 1 - first):
+                    try:
+                        opened[side] = await serial_io.open_serial(sides[side])
+                    except Exception:
+                        first = side
+                        raise
+                    portdiag.opened(opened[side][2], self.mapping.name, opened[side][3])
+                was_open = True
+                (ra, wa, sa, da), (rb, wb, sb, db) = opened
                 self.status.device = f"{da} <-> {db}"
                 self.status.devices = (da, db)
                 self.status.last_error = ""
+                self.status.hint = None
+                self.status.warnings = tuple(
+                    portdiag.Note("side", (side, note))
+                    for side, ser in (("A", sa), ("B", sb)) for note in serial_io.open_notes(ser))
                 self.status.state = "running"
                 backoff.reset()
-                self._log(f"serial bridge open: {da} <-> {db}")
+                self._log(f"serial bridge open: {da} <-> {db}{failures.recovered()}")
+                notes(self.status.warnings)
                 async with TaskGroup() as tg:
                     tg.create_task(self._pump_serial_pair(ra, wb, "A>B"))
                     tg.create_task(self._pump_serial_pair(rb, wa, "B>A"))
+                if not self._stop.is_set():  # (a pump ends by raising why)
+                    raise ConnectionError("serial EOF / device removed")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                # TaskGroup raises an ExceptionGroup; flatten its messages
-                inner = getattr(e, "exceptions", None)
-                self.status.last_error = ("; ".join(str(x) for x in inner)
-                                          if inner else str(e))
-                self.status.state = "reconnecting" if backoff.attempt else "device-missing"
-                self._log(f"serial bridge error: {self.status.last_error}")
+                if not self._stop.is_set():
+                    # TaskGroup raises an ExceptionGroup; flatten its messages
+                    inner = getattr(e, "exceptions", None)
+                    st.last_error = "; ".join(str(x) for x in inner) if inner else str(e)
+                    if was_open:
+                        st.device_lost += 1
+                        st.state = "reconnecting"
+                    else:
+                        st.open_failures += 1
+                        st.state = "device-missing" if portdiag.missing(e) else "reconnecting"
+                    failures.failed(st.last_error)
+                    hint = None if was_open else await asyncio.to_thread(
+                        explain, e, sides[first])
+                    st.hint = portdiag.Note("side", ("AB"[first], hint)) if hint else None
             finally:
-                await asyncio.gather(*(close_stream(w) for w in (wa, wb) if w is not None))
+                self.status.warnings = ()
+                await asyncio.gather(*(close_stream(port[1], self._log)
+                                       for port in opened if port is not None))
             if self._stop.is_set():
                 break
             self.status.reconnects += 1
-            self.status.state = "reconnecting"
             if not await backoff.wait(self._stop):
                 break
 
@@ -1017,10 +1390,12 @@ class MappingRunner:
 # a bounded queue that _UdpBridge.run() writes to the port. One peer gets the device's
 # output: the reply address when one is set (udp_peer_host / udp_peer_port), otherwise
 # the sender of the last allowed datagram (forgotten after udp_peer_timeout_s without a
-# datagram from it, when that is set).
+# datagram from it, when that is set). The targets (udp_targets, a _UdpTarget each in
+# _clients) get it too, always; a peer that is one of them is not sent it twice.
 # ---------------------------------------------------------------------------
 def _udp_label(addr) -> str:
-    return f"{addr[0]}:{addr[1]}"
+    """ip:port of a datagram's sender (an IPv4 one of a socket for both families as IPv4)."""
+    return netguard.client_label(canonical_ip(str(addr[0])), addr[1])
 
 
 class _UdpPeer:
@@ -1044,6 +1419,13 @@ class _UdpPeer:
         pass
 
 
+class _UdpTarget(_UdpPeer):
+    """A UDP target (udp_targets): always gets the device's output; listed as a client."""
+
+    def feed_from_serial(self, data: bytes) -> None:
+        self.bridge.send_target(self, data)
+
+
 class _UdpBridge(asyncio.DatagramProtocol):
     """A UDP mapping's socket side. Every datagram is checked against the allow-list; an
     allowed one makes its sender the peer (unless there is a reply address) and waits in a
@@ -1054,10 +1436,12 @@ class _UdpBridge(asyncio.DatagramProtocol):
         self.runner = runner
         net = runner.mapping.network
         self.reply_to = udp_peer_address(net)  # ValueError: a malformed stored one
+        self.targets = udp_targets(net)        # (the same)
         # the peer timeout is for a sender that was learned, not for the reply address
         self.timeout = 0.0 if self.reply_to else udp_peer_timeout(net)
         self.transport: Optional[asyncio.DatagramTransport] = None
         self.peer: Optional[_UdpPeer] = None
+        self._target_addrs: set = set()  # where the targets are sent (as the socket needs)
         self._queue: list[bytes] = []
         self._queued = 0  # bytes waiting: queued, or being written by run()
         self._wake = asyncio.Event()
@@ -1068,29 +1452,48 @@ class _UdpBridge(asyncio.DatagramProtocol):
     def describe(self) -> str:
         """Where the device's output goes (for the start-up log line)."""
         if self.reply_to:
-            return f"device output to {_udp_label(self.reply_to)}"
-        if self.timeout:
-            return (f"device output to the last sender (forgotten after "
-                    f"{fmt_duration(self.timeout)} without a datagram from it)")
-        return "device output to the last sender"
+            out = f"device output to {_udp_label(self.reply_to)}"
+        elif self.timeout:
+            out = (f"device output to the last sender (forgotten after "
+                   f"{fmt_duration(self.timeout)} without a datagram from it)")
+        else:
+            out = "device output to the last sender"
+        if self.targets:
+            out += " and to " + ", ".join(_udp_label(t) for t in self.targets)
+        return out
 
     # ---- asyncio.DatagramProtocol ----
     def connection_made(self, transport) -> None:
         self.transport = transport
-        if self.reply_to is not None:
-            host, port = self.reply_to
-            sock = transport.get_extra_info("socket")
-            if (sock is not None and sock.family == socket.AF_INET6
-                    and ipaddress.ip_address(host).version == 4):
+        sock = transport.get_extra_info("socket")
+        v6 = sock is not None and sock.family == socket.AF_INET6
+
+        def sent_to(addr):
+            host, port = addr
+            if v6 and ipaddress.ip_address(host).version == 4:
                 host = f"::ffff:{host}"  # an IPv4 peer of a socket bound to an IPv6 address
-            self._set_peer((host, port), _udp_label(self.reply_to))
+            return host, port
+
+        r = self.runner
+        for target in self.targets:
+            addr = sent_to(target)
+            if addr not in self._target_addrs:
+                self._target_addrs.add(addr)
+                r._clients.add(_UdpTarget(self, addr, _udp_label(target)))
+        r._refresh_clients()
+        if self.reply_to is not None:
+            self._set_peer(sent_to(self.reply_to), _udp_label(self.reply_to))
 
     def connection_lost(self, exc) -> None:
         self.transport = None
 
     def error_received(self, exc: Exception) -> None:
         # e.g. the peer's port is closed (ICMP port unreachable) or there is no route to it
-        self._error_log(f"udp error: {exc}")
+        hint = ""
+        if (getattr(exc, "errno", None) == errno.EACCES
+                and self.runner.mapping.network.udp_broadcast is not True):
+            hint = " (to send to a broadcast address, allow broadcast: udp_broadcast)"
+        self._error_log(f"udp error: {exc}{hint}")
 
     def datagram_received(self, data: bytes, addr) -> None:
         r = self.runner
@@ -1154,11 +1557,24 @@ class _UdpBridge(asyncio.DatagramProtocol):
         return True
 
     def send(self, peer: _UdpPeer, data: bytes) -> None:
-        """The device's output, to the peer (nothing once it has expired)."""
-        if self.transport is None or peer is not self.peer or self._expired():
+        """The device's output, to the peer (nothing once it has expired, or when it is one
+        of the targets, which get it anyway)."""
+        if (self.transport is None or peer is not self.peer or self._expired()
+                or tuple(peer.addr[:2]) in self._target_addrs):
             return
         with contextlib.suppress(Exception):  # a failed send reaches error_received
             self.transport.sendto(data, peer.addr)
+
+    def send_target(self, target: _UdpTarget, data: bytes) -> None:
+        """The device's output, to a target."""
+        if self.transport is None:
+            return
+        try:
+            self.transport.sendto(data, target.addr)
+        except OSError as e:  # (a synchronous refusal, e.g. EACCES: a broadcast address)
+            self.error_received(e)
+        except Exception:
+            pass
 
     # ---- network -> serial ----
     async def run(self) -> None:

@@ -21,14 +21,16 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from ... import __version__
-from ...config import ConfigError, MappingConfig, peer_host, trace_file_name
+from ...config import ConfigError, MappingConfig, host_port, peer_host, trace_file_name
 from ...engine import netinfo, portlist
 from ...engine.cluster import AUTH_HEADER, REFUSALS, peer_addr, peer_port, peer_url
 from ...i18n import _
 from .. import auth
 from . import ops
 from .common import Ctx, csrf_failed
-from .forms import _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields
+from .forms import (
+    _build_mapping_dict, _modbus_points_json, _preserve_unmanaged_fields, tls_password_view,
+)
 
 # The mapping form's own field names (bare ones + these prefixes). cluster_peer_save
 # forwards only these to a peer, so a value the browser adds beyond the form is never
@@ -93,6 +95,14 @@ def _remote(target, peer_id, mapping) -> dict:
             "addr": peer_addr(target["ip"], target["port"]), "id": peer_id}
 
 
+def _peer_links(data) -> dict:
+    """The "links" of a peer's mapping-data (older peers send none), as {name: device}."""
+    raw = (data or {}).get("links")
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
+
+
 def _mapping_kind_label(m) -> str:
     if m.kind == "serialbridge":
         return "serial↔serial"
@@ -103,8 +113,8 @@ def _mapping_endpoint(m) -> str:
     if m.kind == "serialbridge":
         return f"{m.serial.port} ↔ {m.serial_b.port}"
     if m.network.mode == "client":
-        return f"→ {m.network.remote_host}:{m.network.remote_port}"
-    return f"{m.network.bind_ip}:{m.network.port}"
+        return f"→ {host_port(m.network.remote_host, m.network.remote_port)}"
+    return f"{m.network.bind_shown}:{m.network.port}"
 
 
 def _fmt_uptime(seconds) -> str:
@@ -145,6 +155,7 @@ def routes(ctx: Ctx) -> list:
                 "kind": _mapping_kind_label(m), "endpoint": _mapping_endpoint(m),
                 "serial": m.serial.port,
                 "state": st.get("state", "stopped"),
+                "link": st.get("link", ""),  # connect-out: connecting / up / down
                 "client_count": st.get("client_count", 0),
                 "bytes_in": st.get("bytes_in", 0), "bytes_out": st.get("bytes_out", 0),
             })
@@ -258,7 +269,10 @@ def routes(ctx: Ctx) -> list:
         mid, action = form.get("mapping_id", ""), form.get("action", "")
         if action not in ("start", "stop", "restart"):
             return _peer_json(a, {"error": "bad_action"}, 400)
-        ok, name = await ops.apply_action(state, mid, action)
+        try:
+            ok, name = await ops.apply_action(state, mid, action)
+        except ConfigError as e:  # it can't be started (a serial port in use, ...)
+            return _peer_json(a, {"error": str(e)}, 400)
         if not ok:
             return _peer_json(a, {"error": name}, 404)
         ip = client_ip(request)
@@ -293,7 +307,9 @@ def routes(ctx: Ctx) -> list:
     #      token + form action belong to the browser's session) and proxies the save.
     async def cluster_mapping_data(request):
         """Peer-facing: a mapping's full config + this node's serial ports + IP
-        candidates, so the controlling node can render the edit form. Key-guarded."""
+        candidates, so the controlling node can render the edit form, and which listed port
+        the mapping's ports lead to when one is a link elsewhere (/dev/serial0; "links",
+        which only this node can tell). Key-guarded."""
         a, deny = await _peer_auth(request)
         if deny:
             return deny
@@ -301,8 +317,10 @@ def routes(ctx: Ctx) -> list:
         m = cfg.get_mapping(request.query_params.get("mid", ""))
         if not m:
             return _peer_json(a, {"error": "not_found"}, 404)
-        return _peer_json(a, {"mapping": m.to_dict(), "ports": state.ports.get(),
-                              "ips": netinfo.list_ip_candidates()})
+        ports = await state.ports.current()
+        return _peer_json(a, {"mapping": m.to_dict(), "ports": ports,
+                              "ips": netinfo.list_ip_candidates(),
+                              "links": portlist.links(ports, (m.serial.port, m.serial_b.port))})
 
     async def cluster_mapping_save(request):
         """Peer-facing: validate + persist + apply an edited mapping on THIS node, run
@@ -354,6 +372,7 @@ def routes(ctx: Ctx) -> list:
         return render(request, "_mapping_form.html", mapping=mapping, is_new=False,
                       modbus_points_json=_modbus_points_json(mapping),
                       ports=portlist.visible(data.get("ports", [])), ips=data.get("ips", []),
+                      links=_peer_links(data),
                       remote=_remote(target, data["mapping"].get("id"), mapping), error=None)
 
     async def cluster_peer_save(request):
@@ -376,17 +395,22 @@ def routes(ctx: Ctx) -> list:
             state.cluster.get_peer(target, "/api/cluster/local"))
 
         def _reload(msg):
+            stored = ""
             try:
                 mapping = MappingConfig.from_dict(_build_mapping_dict(form, strict=False))
                 if data and data.get("mapping"):
-                    _preserve_unmanaged_fields(mapping, MappingConfig.from_dict(data["mapping"]), form)
+                    peer_mapping = MappingConfig.from_dict(data["mapping"])
+                    stored = peer_mapping.network.tls_key_password
+                    _preserve_unmanaged_fields(mapping, peer_mapping, form)
             except Exception:
                 mapping = MappingConfig(name=form.get("name", ""))
             return render(request, "_mapping_form.html", status_code=400, mapping=mapping,
                           is_new=False, modbus_points_json=_modbus_points_json(mapping),
                           ports=portlist.visible((data or {}).get("ports", [])),
+                          links=_peer_links(data),
                           ips=(data or {}).get("ips", []),
-                          remote=_remote(target, form.get("id", ""), mapping), error=msg)
+                          remote=_remote(target, form.get("id", ""), mapping), error=msg,
+                          **tls_password_view(stored, form))
 
         if not data:
             return _reload(_("The peer rejected the change or was unreachable."))

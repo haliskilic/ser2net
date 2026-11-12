@@ -185,18 +185,21 @@ def make_templates() -> Jinja2Templates:
     # template globals used across pages
     from ..config import (
         COMMON_BAUDRATES, BYTESIZES, PARITIES, PARITY_LABELS, STOPBITS,
-        FLOWCONTROLS, PROTOCOLS, LINE_STATES,
+        FLOWCONTROLS, PROTOCOLS, LINE_STATES, host_port, identity_text, shown_host,
     )
     from .. import __version__
     templates.env.globals.update(
         baudrates=COMMON_BAUDRATES, bytesizes=BYTESIZES, parities=PARITIES,
         parity_labels=PARITY_LABELS, stopbits=STOPBITS, flowcontrols=FLOWCONTROLS,
-        protocols=PROTOCOLS, line_states=LINE_STATES,
+        protocols=PROTOCOLS, line_states=LINE_STATES, identity_text=identity_text,
+        host_port=host_port, shown_host=shown_host,
         # ?v=<version> on the static URLs: browsers fetch the new CSS/JS right after an
         # upgrade instead of reusing a heuristically cached copy with the new templates
         asset_version=__version__,
     )
     templates.env.filters["softbreak"] = softbreak
+    from ..engine.portlist import choice as port_choice
+    templates.env.globals["port_choice"] = port_choice
     # _("...") in every template, translated for the request's language (app/i18n.py);
     # newstyle: _("Hello %(name)s", name=x) formats and escapes x
     templates.env.add_extension("jinja2.ext.i18n")

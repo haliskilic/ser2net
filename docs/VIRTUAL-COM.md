@@ -40,6 +40,21 @@ What the server does with an RFC 2217 client's settings:
   rate, data bits, parity, stop bits and flow control when the client disconnects, so the
   next client, the web console, MQTT and a trace see what the mapping says. RTS/DTR are
   left as they are, because toggling them resets many boards (ESP32/Arduino auto-reset).
+- Commands keep their order with the data: what a client writes before a setting change
+  goes out at the old setting (the change waits until that data has left the port, at most
+  2 s), and data written before a purge is handed to the port before the purge.
+- BREAK: pySerial's `send_break()` and `break_condition` (SET-CONTROL BREAK on/off), and a
+  telnet IAC BRK, reach the serial line after the data written before them. On a read-only
+  mapping they don't, although the SET-CONTROL is acknowledged as asked (pySerial's `open()`
+  fails on any other answer; the queries report the real state). A BREAK a client leaves on
+  is turned off when it disconnects.
+- Queries and other requests are answered: SIGNATURE (`ser2net`, or the mapping's
+  **RFC 2217 signature**), the BREAK / DTR / RTS state, the inbound flow control, and the
+  line/modem state masks. Flow control is one mode at a time (XON/XOFF turns RTS/CTS off and
+  the other way round). A DSR/DTR mapping reports DSR/DTR flow control; "no flow control"
+  leaves it on, since pySerial asks for that at every `open()`. What pySerial's server can't
+  set (inbound-only, DCD, DTR or DSR flow control) is refused with the current setting.
+  FLOWCONTROL-SUSPEND/RESUME are taken but don't hold the client's data back.
 
 ## 2. Linux — a real `/dev/tty*` for legacy apps (free, socat)
 

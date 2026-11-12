@@ -1,7 +1,9 @@
 """Optional per-mapping MQTT publisher (serial -> MQTT northbound).
 
-Publishes newline-delimited serial lines to an MQTT topic so meters, sensors and
-other line-oriented serial devices can feed an IIoT broker / Unified Namespace.
+Publishes serial lines to an MQTT topic so meters, sensors and other line-oriented
+serial devices can feed an IIoT broker / Unified Namespace. A line ends at LF (the
+default), CR, or either (MqttSettings.line_end); past MAX_LINE_BUFFER bytes without one
+the oldest are dropped, and the log says so once.
 A retained ``<base_topic>/status`` birth/death (online/offline, with an MQTT
 Last-Will) lets subscribers see link state.
 
@@ -20,11 +22,15 @@ import contextlib
 import errno
 import math
 import select
+import threading
 from typing import Any, Callable, Optional
 
 from .. import optional
 
-MAX_LINE_BUFFER = 65536  # drop the oldest bytes if a newline never arrives (no unbounded growth)
+MAX_LINE_BUFFER = 65536  # drop the oldest bytes if a line end never arrives (no unbounded growth)
+LINE_ENDS = ("lf", "cr", "any")  # (config.MQTT_LINE_ENDS)
+# aclose(): how long a mapping's stop waits for the broker to take the last messages
+MQTT_CLOSE_TIMEOUT_S = 3.0
 
 
 class MqttPublisher:
@@ -59,6 +65,9 @@ class MqttPublisher:
         self._subs: dict[str, Callable[[str, bytes], None]] = dict(subscriptions or {})
         self._accept_retained = accept_retained
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        end = getattr(settings, "line_end", "lf")
+        self._line_end = end if end in LINE_ENDS else "lf"  # (a stored unknown one: as before)
+        self._cut_logged = False  # the buffer was cut without a line end (logged once)
 
     def connect(self) -> bool:
         owned = self._client is None  # an injected client (tests) is driven externally
@@ -181,35 +190,93 @@ class MqttPublisher:
         self._publish(self._data_topic + "/" + subtopic, payload)
 
     def feed(self, data: bytes) -> None:
-        """Buffer serial bytes and publish each complete (newline-delimited) line."""
+        """Buffer serial bytes and publish each complete line (line_end: LF, CR or either;
+        an empty line is not published)."""
         if not self._connected or self._client is None:
             return
+        mode = self._line_end
+        if mode == "any":
+            data = data.replace(b"\r", b"\n")  # (\r\n: an empty line in between)
         self._buf += data
+        sep = b"\r" if mode == "cr" else b"\n"
         while True:
-            nl = self._buf.find(b"\n")
-            if nl < 0:
+            end = self._buf.find(sep)
+            if end < 0:
                 break
-            line = bytes(self._buf[:nl]).rstrip(b"\r")
-            del self._buf[:nl + 1]
+            line = bytes(self._buf[:end])
+            del self._buf[:end + 1]
+            # LF: a CR before it is not part of the line; CR: an LF next to it
+            line = line.rstrip(b"\r") if mode == "lf" else line.strip(b"\n")
             if line:
                 self._publish(self._data_topic, line)
-        if len(self._buf) > MAX_LINE_BUFFER:  # no newline in sight — don't grow forever
+        if len(self._buf) > MAX_LINE_BUFFER:  # no line end in sight — don't grow forever
             del self._buf[:-4096]
+            if not self._cut_logged:
+                self._cut_logged = True
+                shown_end = {"lf": "LF", "cr": "CR", "any": "CR or LF"}[mode]
+                self._log(f"MQTT: {MAX_LINE_BUFFER // 1024} KiB of serial data without a line "
+                          f"end ({shown_end}): the oldest bytes were dropped, nothing was "
+                          "published; a device that ends its lines otherwise needs another "
+                          "MQTT line end (logged once)")
 
     def close(self, final: Optional[tuple] = None) -> None:
         """Disconnect; ``final`` = (topic, payload, qos, retain) to send first instead of
-        the retained "offline" status (Sparkplug B: an NDEATH)."""
-        if self._client is None:
+        the retained "offline" status (Sparkplug B: an NDEATH). Waits for paho's network
+        thread, which stops only once the broker has taken what is queued or the
+        connection failed: from the event loop, use aclose()."""
+        client = self._last_messages(final)
+        if client is not None:
+            _stop_client(client)
+
+    async def aclose(self, final: Optional[tuple] = None,
+                     timeout: float = MQTT_CLOSE_TIMEOUT_S) -> None:
+        """close() without holding up the event loop: paho's network thread is stopped
+        from a thread of its own (paho waits there until the broker took the last
+        messages, a QoS 1 one acknowledged, or the connection failed, which with a broker
+        that stopped answering lasts until the keepalive gives up), waited for at most
+        ``timeout`` seconds. What the broker has not taken by then is lost; its Last-Will
+        still tells subscribers that the link is gone."""
+        client = self._last_messages(final)
+        if client is None:
             return
+        loop = asyncio.get_running_loop()
+        stopped = loop.create_future()
+
+        def done() -> None:
+            if not stopped.done():
+                stopped.set_result(None)
+
+        def stop() -> None:
+            _stop_client(client)
+            with contextlib.suppress(RuntimeError):  # the loop has closed meanwhile
+                loop.call_soon_threadsafe(done)
+
+        threading.Thread(target=stop, name="mqtt-close", daemon=True).start()
+        try:
+            await asyncio.wait_for(stopped, timeout)
+        except asyncio.TimeoutError:
+            self._log(f"MQTT: the broker did not take the last messages within {timeout:g} s; "
+                      "closing without waiting for it")
+
+    def _last_messages(self, final: Optional[tuple]) -> Any:
+        """Queue the last messages and hand over the client (None: not connected)."""
+        client, self._client = self._client, None
+        if client is None:
+            return None
         self._connected = False
-        if final is not None:
-            self._publish(final[0], final[1], qos=final[2], retain=final[3])
-        elif self._birth:
-            self._publish(self._status_topic, b"offline", retain=True)
-        with contextlib.suppress(Exception):
-            self._client.loop_stop()
-            self._client.disconnect()
-        self._client = None
+        topic, payload, qos, retain = final or (self._status_topic, b"offline", None, True)
+        if final is not None or self._birth:
+            with contextlib.suppress(Exception):
+                client.publish(topic, payload, qos=self._s.qos if qos is None else qos,
+                               retain=retain)
+        return client
+
+
+def _stop_client(client: Any) -> None:
+    """Stop paho's network thread (it first sends what is queued), then disconnect."""
+    with contextlib.suppress(Exception):
+        client.loop_stop()
+        client.disconnect()
 
 
 class PollSelect:

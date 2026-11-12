@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from .config import ConfigError, MappingConfig, _new_id
+from .config import AppConfig, ConfigError, MappingConfig, _new_id, host_port
 from .i18n import _
 from .ser2net_import import looks_yaml, parse_ser2net_config
 
@@ -61,6 +61,11 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
             m.validate_input()
         except (TypeError, ValueError) as e:  # ConfigError is a ValueError
             raise ConfigError(_("Mapping #{0} ({1}): {2}").format(i, item.get('name', '?'), e)) from None
+        if AppConfig(mappings=[m]).find_moved_tls_files():
+            warnings.append(_("Mapping #{0} ({1}): its TLS files are not where the file says; "
+                              "the files of that name in this data directory's tls folder are "
+                              "used.").format(i, m.name))
+        warnings.extend(_tls_warning(i, m))
         if item.get("id") and item["id"] != m.id:
             warnings.append(_("Mapping #{0} ({1}): {2} is not a valid mapping id (1-64 letters, "
                               "digits or _), so it gets a new one.").format(
@@ -82,9 +87,22 @@ def _classic_ser2net(text: str, filename: str) -> ImportPlan:
         raise ConfigError(" ".join(warnings) or _("The file has no ser2net connections to import."))
     source = _("ser2net.yaml (ser2net 4.x)") if looks_yaml(text) else _("ser2net.conf (ser2net 3.x)")
     mappings = [MappingConfig.from_dict(d) for d in dicts]
-    for m in mappings:
+    for i, m in enumerate(mappings, 1):
         m.validate_input()  # the converter skips URL devices already; this backs it up
+        warnings.extend(_tls_warning(i, m))
     return ImportPlan(source=source, mappings=mappings, warnings=warnings)
+
+
+def _tls_warning(i: int, m: MappingConfig) -> list[str]:
+    """A TLS mapping whose certificate and key don't load here (a key that needs its
+    password, files of another machine) is imported all the same, with a warning: it can't
+    start until that is fixed, and never runs without TLS."""
+    try:
+        m.check_tls_files()
+    except ConfigError as e:
+        return [_("Mapping #{0} ({1}): {2} It can't start until that is fixed.").format(
+            i, m.name, e)]
+    return []
 
 
 def _match(existing: list[MappingConfig], m: MappingConfig):
@@ -149,6 +167,6 @@ def _kind(m: MappingConfig) -> str:
     if m.kind == "serialbridge":
         return f"{m.serial.port} ↔ {m.serial_b.port}"
     net = m.network
-    where = (f"→ {net.remote_host}:{net.remote_port}" if net.mode == "client"
-             else f"{net.bind_ip}:{net.port}")
+    where = (f"→ {host_port(net.remote_host, net.remote_port)}" if net.mode == "client"
+             else f"{net.bind_shown}:{net.port}")
     return f"{m.serial.port} · {net.mode}/{net.protocol} {where}"

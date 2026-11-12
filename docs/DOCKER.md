@@ -12,6 +12,10 @@ release tag).
    devices:
      - "/dev/serial/by-id/usb-FTDI_...-if00-port0:/dev/ttyUSB0"
    ```
+   A by-id name is made from vendor, model and serial number: identical adapters without
+   a serial number of their own (CH340, most PL2303) share one, and udev gives it to only
+   one of them (which one can change at a reboot). Pass those by USB socket instead
+   (`/dev/serial/by-path/...:/dev/ttyUSB0`), and keep each adapter in its socket.
 2. Edit `ports:` so it publishes the port of every mapping you are going to create
    (a new mapping gets 4001; [Ports and networking](#ports-and-networking)).
 3. Start it:
@@ -54,7 +58,7 @@ release tag).
 ## Plain docker run
 
 ```bash
-docker run -d --name ser2net --restart unless-stopped \
+docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   -p 8080:8080 -p 4001:4001 \
   --device /dev/serial/by-id/usb-FTDI_...-if00-port0:/dev/ttyUSB0 \
   --log-opt max-size=10m --log-opt max-file=3 \
@@ -65,6 +69,14 @@ docker run -d --name ser2net --restart unless-stopped \
 - `--restart unless-stopped` brings it back after a crash, a Docker restart or a power
   cut. A container started without it stays down until someone starts it by hand; add
   the policy to an existing one with `docker update --restart unless-stopped ser2net`.
+- `--init` (compose: `init: true`) runs a small init as the container's first process,
+  which passes `docker stop` on to ser2net; `--stop-timeout 30` (compose:
+  `stop_grace_period: 30s`) gives the stop 30 s before Docker kills the container.
+  ser2net finishes within that even when a device, an MQTT broker or a client stops
+  answering: an admin UI response under way gets 5 s, the mappings stop side by side in
+  at most 15 s, and output a serial device has not taken 2 s after its port closes is
+  dropped. (Docker's default is 10 s, after which unsent trace data and the last log
+  lines may be lost.)
 - To build the image yourself, run `docker build -t ser2net .` in a checkout and use
   `ser2net` as the image name.
 
@@ -78,7 +90,8 @@ docker run -d --name ser2net --restart unless-stopped \
 - **Host network** (`--network host`, compose `network_mode: host`, no `-p`): every
   mapping port is reachable as soon as it is created, and the LAN cluster's discovery
   works. Two things change: `SER2NET_BIND_IP` is then an address of the host itself
-  (`0.0.0.0` = all its interfaces; set the LAN address to keep the UI off the others),
+  (`0.0.0.0` = all its IPv4 interfaces, `*` = all of them, IPv4 and IPv6; set the LAN
+  address to keep the UI off the others),
   and the unprivileged process can't open ports below 1024 there (Modbus TCP's 502): use
   1024 or above, or the default network with `-p 502:502`, where Docker allows them.
 - **LAN cluster.** Discovery (UDP broadcast, port 41750) doesn't cross Docker's default
@@ -100,7 +113,9 @@ docker run -d --name ser2net --restart unless-stopped \
   `/dev/serial/by-id/*`), so no `--group-add` is needed (a console's `tty` group is never
   added). A device passed under another name inside the container
   (`--device /dev/ttyUSB0:/dev/plc`) still needs `--group-add` with the host's numeric
-  serial GID (`getent group dialout | cut -d: -f3`), and so does the 2.8.0 image. A
+  serial GID, read from the device (`--group-add "$(stat -L -c %g /dev/ttyUSB0)"`: `-L`
+  follows a `/dev/serial/by-id` link, whose own GID is root's; `getent group dialout`
+  finds nothing on Arch, whose serial group is `uucp`), and so does the 2.8.0 image. A
   device the server can't open (mode `0600`, say) is reported at start:
   `[ser2net] warning: uid … can't open /dev/…`.
 - **A device missing at start** (an adapter unplugged at boot) makes Docker refuse to
@@ -108,7 +123,9 @@ docker run -d --name ser2net --restart unless-stopped \
   (`ttyUSB0` → `ttyUSB1`) isn't seen inside either. Both are what hot-plug avoids.
 - **Hot-plug.** Bind the host's `/dev` and allow the device types instead of listing
   devices: `-v /dev:/dev --device-cgroup-rule='c 188:* rmw' --device-cgroup-rule='c 166:* rmw'`
-  (USB-serial `ttyUSB*`, USB CDC `ttyACM*`) plus `--group-add <host serial GID>`, for an
+  (USB-serial `ttyUSB*`, USB CDC `ttyACM*`) plus `--group-add <host serial GID>`
+  (`stat -L -c %g` of a serial device on the host: 20 on Debian/Ubuntu, 18 on Fedora, 14 —
+  `uucp` — on Arch), for an
   adapter plugged in after the start; the compose file has this variant. The port list
   and mappings bound to a USB identity then see a re-plugged adapter too.
 - USB passthrough into containers is only reliable on Linux hosts (not Docker Desktop on
@@ -120,7 +137,9 @@ docker run -d --name ser2net --restart unless-stopped \
   `docker ps` shows `healthy` once the UI answers — also before the first-run setup. The
   probe connects directly, so `HTTP_PROXY` / `HTTPS_PROXY` given to the container (for
   webhooks or SSO) don't affect it. Docker doesn't restart a container because it is
-  unhealthy; only the restart policy brings back one that exited.
+  unhealthy; only the restart policy brings back one that exited. If the UI's port can't
+  be bound at start (with the host network: another program has it), the container stays
+  up and `unhealthy` while the mappings run, and the UI comes up once the port is free.
 - **Logs.** Every log line goes to `/data/all.log` (rotated, 10 MB × 5) and to the
   container's output, which Docker keeps without a limit by default: cap it with
   `--log-opt max-size=10m --log-opt max-file=3` (compose: `logging:`), or for every
@@ -157,7 +176,10 @@ docker run -d --name ser2net --restart unless-stopped \
   saved — a save is refused only for what it changes or adds — so sign in and fix or
   remove that part when you can. An unusable `SER2NET_BIND_IP` / `SER2NET_PORT`, an
   unreadable or broken `config.json` and a missing admin UI certificate still stop the
-  start, with a one-line message.
+  start, with a one-line message. Moving a native install's data directory to `/data`: a
+  certificate generated in its `tls/` folder is found in `/data/tls/` (the log says so and
+  `config.json` is updated); TLS paths written relative (`tls/cert.pem`) are files in
+  `/data`.
 - **TLS.** Put a reverse proxy (or set `admin_ui.tls_*`) in front for LAN/Internet
   exposure; raw data bridges are plaintext unless per-mapping TLS is enabled.
 - **Dependencies** are installed from PyPI into the image, so the container runs with

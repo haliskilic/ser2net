@@ -12,7 +12,14 @@ does not require an open port). Runs on Windows and Linux.
 stop() must also return when the serial device takes no data (CTS low, XOFF, a PTY or
 virtual port nobody reads) while data is still waiting for it: closing the port waited
 for that data to go out, for good. Checked on PTYs (POSIX; skipped on Windows) for a UDP
-mapping and a serial<->serial bridge.
+mapping and a serial<->serial bridge. And with a stand-in port whose OS output queue
+never drains (the transport's buffer empty or not; Windows too): the close drops what is
+left after the grace period, purges the OS queue and closes the port without ever
+waiting for the OS drain (pyserial's flush(), tcdrain on POSIX, which would block for
+good), while a queue that drains in time is not purged.
+
+A client connection whose peer reads nothing is closed (aborted) within the graceful
+close timeout, instead of holding its connection slot.
 
 Run: python3 tests/test_stop_with_clients.py
 """
@@ -20,8 +27,10 @@ import asyncio
 import os
 import socket
 import sys
+import threading
 import time
 from contextlib import suppress
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -157,9 +166,142 @@ async def test_stop_while_the_device_takes_nothing():
           "close timeout (UDP mapping, serial<->serial bridge)  OK")
 
 
+class HeldPort:
+    """A port whose device takes nothing (more): writes are refused, ``out_waiting`` is
+    what the OS still holds for it, and flush() (the OS drain: tcdrain, or pyserial's
+    out_waiting loop on Windows) would wait as long as the line is held."""
+
+    def __init__(self, queued):
+        self.timeout = self.write_timeout = None
+        self.in_waiting = 0
+        self.out_waiting = queued
+        self.resets = 0
+        self.flushed = threading.Event()   # the close waited for the OS drain
+        self.released = threading.Event()  # (lets such a wait end once the test is done)
+        self.closed = threading.Event()
+        self._a, self._b = socket.socketpair()  # a descriptor for the POSIX transport
+
+    def fileno(self):
+        return self._a.fileno()
+
+    def read(self, size=1):
+        return b""
+
+    def write(self, data):
+        raise BlockingIOError(11, "no room")
+
+    def flush(self):
+        self.flushed.set()
+        self.released.wait(10)
+
+    def reset_output_buffer(self):
+        self.resets += 1
+        self.out_waiting = 0
+
+    def close(self):
+        self.closed.set()
+        self._a.close()
+        self._b.close()
+
+
+async def _close_held(port, buffered: bytes = b""):
+    """close_stream() on a stream over ``port``; (seconds it took, log lines)."""
+    from app.engine import serial_compat, serial_link
+
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader(loop=loop)
+    protocol = asyncio.StreamReaderProtocol(reader, loop=loop)
+    transport = serial_compat.Transport(loop, protocol, port)
+    writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+    await asyncio.sleep(0.01)
+    if buffered:
+        writer.write(buffered)  # refused by the port: kept in the transport's buffer
+        assert transport.get_write_buffer_size() == len(buffered)
+    lines = []
+    t0 = time.monotonic()
+    await serial_link.close_stream(writer, lines.append)
+    return time.monotonic() - t0, lines
+
+
+async def test_close_never_waits_for_the_os_drain():
+    from app.engine import serial_link
+
+    with mock.patch.object(serial_link, "SERIAL_CLOSE_TIMEOUT_S", 0.5):
+        for buffered in (b"", b"z" * 100):
+            port = HeldPort(queued=500)
+            try:
+                took, lines = await _close_held(port, buffered)
+                assert took < 1.5, f"close took {took:.1f} s"
+                assert port.closed.wait(2), "the port was not closed"
+                assert not port.flushed.is_set(), "the close waited for the OS drain"
+                assert port.resets == 1, "what the OS held for the device was not purged"
+                assert lines == [f"serial close: dropped {500 + len(buffered)} byte(s) the "
+                                 "device did not take within 0.5 s"], lines
+            finally:
+                port.released.set()
+
+        port = HeldPort(queued=300)  # a device that takes it, just not at once
+
+        def drains():
+            while port.out_waiting:
+                time.sleep(0.05)
+                port.out_waiting = max(0, port.out_waiting - 100)
+
+        threading.Thread(target=drains, daemon=True).start()
+        try:
+            took, lines = await _close_held(port)
+            assert port.closed.wait(2) and not port.flushed.is_set()
+            assert port.resets == 0 and not lines, (port.resets, lines)
+            assert took < 1.0, f"close took {took:.1f} s"
+        finally:
+            port.released.set()
+    print("serial close: output the device has not taken within the grace period is "
+          "dropped (logged) and the OS queue purged; output that drains in time is not; "
+          "the OS drain (tcdrain) is never waited for  OK")
+
+
+async def test_close_of_a_peer_that_reads_nothing():
+    from app.engine import bridge
+
+    got = asyncio.get_running_loop().create_future()
+    server = await asyncio.start_server(lambda r, w: got.set_result(w), "127.0.0.1", 0)
+    peer = socket.socket()
+    peer.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    peer.connect(server.sockets[0].getsockname())
+    peer.setblocking(False)
+    try:
+        writer = await asyncio.wait_for(got, 5)
+        # far more than the peer's and the kernel's buffers hold. (Windows' Proactor loop
+        # hands what is queued to one overlapped send, which the OS may take whole while
+        # its buffer is not full yet: the next round's sends then wait.)
+        for _round in range(5):
+            for _ in range(200):
+                writer.write(b"q" * 65536)
+            await asyncio.sleep(0.2)
+            if writer.transport.get_write_buffer_size() > 0:
+                break
+        assert writer.transport.get_write_buffer_size() > 0, "the OS took it all"
+        with mock.patch.object(bridge, "TCP_CLOSE_TIMEOUT_S", 0.5):
+            t0 = time.monotonic()
+            await bridge._close_client(writer)
+            took = time.monotonic() - t0
+        assert took < 1.5, f"closing took {took:.1f} s"
+        assert writer.transport.is_closing()
+        await asyncio.sleep(0.1)
+        assert writer.transport.get_extra_info("socket") is None or \
+            writer.transport.get_extra_info("socket").fileno() == -1, "still open"
+    finally:
+        peer.close()
+        server.close()
+        await server.wait_closed()
+    print("a client whose peer reads nothing is cut off within the close timeout  OK")
+
+
 async def main():
     await test_stop_with_connected_client()
     await test_stop_while_the_device_takes_nothing()
+    await test_close_never_waits_for_the_os_drain()
+    await test_close_of_a_peer_that_reads_nothing()
     print("\nPASS: stop() client teardown ordering, and with a device that takes nothing")
 
 

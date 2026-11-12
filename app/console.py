@@ -2,29 +2,31 @@
 
 On first run (or with --reconfigure) we ask, on the terminal, which local IP the
 configuration web UI should listen on — chosen from the machine's own addresses
-or a custom one. In a non-interactive context (service/headless) we default to
-0.0.0.0:8080 so the UI is reachable from the network, matching the design intent.
+(every interface for IPv4, IPv6 or both, loopback, each NIC address) or a custom one.
+Every interface of both families is stored as "" (asyncio's every interface). In a
+non-interactive context (service/headless) we keep the address configured, else
+127.0.0.1 (see choose_admin_bind).
 """
 from __future__ import annotations
 
 import sys
 
-from .config import AdminUI
+from .config import AdminUI, host_port
 from .engine import netinfo
 
 
 def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
     candidates = netinfo.list_ip_candidates()
-    default_ip = (current.bind_ip if current and current.bind_ip else None) or "127.0.0.1"
+    # (a configured "" is every interface, IPv4 and IPv6: a choice made here before)
+    default_ip = current.bind_ip if current is not None else "127.0.0.1"
     default_port = (current.port if current else None) or 8080
 
     if not sys.stdin or not sys.stdin.isatty():
         # No terminal to prompt at (service/headless). Default to LOOPBACK so the
         # admin UI is never network-exposed without an explicit choice + password.
-        if not (current and current.bind_ip):
-            default_ip = "127.0.0.1"
+        where = "loopback" if default_ip in ("127.0.0.1", "::1", "localhost") else "as configured"
         print(f"[ser2net] non-interactive console; admin UI bind defaults to "
-              f"{default_ip}:{default_port} (loopback). Run with a terminal or "
+              f"{host_port(default_ip, default_port)} ({where}). Run with a terminal or "
               f"--reconfigure to expose it on the network.", flush=True)
         return default_ip, default_port
 
@@ -43,12 +45,14 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
                 ip = netinfo.validate_ip(custom)
                 break
             except ValueError as e:
-                print(f"  Invalid IP: {e}")
+                print(f"  {e}")
                 continue
         try:
             idx = int(raw)
             if 1 <= idx <= len(candidates):
                 ip = candidates[idx - 1]["value"]
+                if ip == netinfo.BOTH_FAMILIES:
+                    ip = ""  # every interface, IPv4 and IPv6 (as asyncio reads "")
                 break
         except ValueError:
             pass
@@ -64,7 +68,7 @@ def choose_admin_bind(current: AdminUI | None = None) -> tuple[str, int]:
             pass
         print("  Invalid port, try again.")
 
-    print(f"\n[ser2net] Configuration UI will listen on  http://{ip}:{port}")
+    print(f"\n[ser2net] Configuration UI will listen on  http://{host_port(ip, port)}")
     if ip not in ("127.0.0.1", "localhost", "::1"):
         print("[ser2net] NOTE: this is reachable from the network. You will set an "
               "admin password on first access.")
