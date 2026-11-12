@@ -131,7 +131,7 @@ def test_anonymous_is_not_an_account():
         visitor = Browser(srv.base)          # no sign-in: open access as admin
         st, _, page = visitor.get("/settings")
         assert st == 200, st
-        row = page[page.find("<td class=\"mono\">(anonymous)"):][:2500]
+        row = page[page.find('-name">(anonymous)</span>'):][:2500]
         assert row and "you</span>" not in row.split("</tr>")[0], row[:600]
         assert 'name="username" value="(anonymous)"' in row, row[:2000]
         st, _, page = visitor.post("/settings/users/delete", {"username": "(anonymous)"})
@@ -266,9 +266,9 @@ def test_expiry():
         assert 'name="expire_days" min="0" max="3650" value="0"' in page
         assert "Off by default: an account that stops signing in stays until you delete it." in page
         today = time.strftime("%Y-%m-%d")
-        assert f"last sign-in: {today}" in page.split("boss.sso")[0].split("<td class=\"mono\">admin")[1]
+        assert f"last sign-in: {today}" in page.split("boss.sso")[0].split('-name">admin</span>')[1]
         assert f"last sign-in: {record(2, '')['time'][:16]}" in page
-        assert page.split("<td class=\"mono\">boss.sso")[1].find("last sign-in: —") >= 0
+        assert page.split('-name">boss.sso</span>')[1].find("last sign-in: —") >= 0
         assert "whether that person can sign in again is up to the directory" in page
 
         for bad in ("10", "abc", "4000", "-1"):
