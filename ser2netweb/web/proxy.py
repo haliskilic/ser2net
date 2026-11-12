@@ -2,12 +2,12 @@
 
 * Trusted proxies: X-Forwarded-For (the client's address) and X-Forwarded-Proto (whether
   the browser used HTTPS) are believed only on a connection from one of them -
-  admin_ui.trusted_proxies, SER2NET_TRUSTED_PROXIES for one run instead, or uvicorn's
+  admin_ui.trusted_proxies, SER2NETWEB_TRUSTED_PROXIES for one run instead, or uvicorn's
   FORWARDED_ALLOW_IPS when neither is set. None by default: what a client sends must not
   choose the address the sign-in limits, the audit log and all.log see (up to 2.8.1 uvicorn
   believed both from any connection from 127.0.0.1 or ::1). An X-Forwarded-For entry that
   is not an IP address is never taken: the address before it stands.
-* The public URL (admin_ui.public_url, SER2NET_PUBLIC_URL for one run instead): the address
+* The public URL (admin_ui.public_url, SER2NETWEB_PUBLIC_URL for one run instead): the address
   users open. A page of its origin is this UI's own (forms, the console: auth.cross_site),
   a blank SSO redirect URI is made from it, notifications link to it.
 * Its path, when it has one (https://gw.example.com/ser2net): the UI is served under it
@@ -34,14 +34,16 @@ from typing import Mapping, Optional
 
 from starlette.responses import RedirectResponse
 
+from .. import envvars
 from ..config import (
     AdminUI, normalize_public_url, proxy_entry_problem, public_url_problem, split_proxy_entries,
 )
 from ..engine import netguard
 
-TRUSTED_ENV = "SER2NET_TRUSTED_PROXIES"
+# (SER2NET_TRUSTED_PROXIES / SER2NET_PUBLIC_URL, their names up to 2.9.x, too: envvars)
+TRUSTED_ENV = "SER2NETWEB_TRUSTED_PROXIES"
 LEGACY_TRUSTED_ENV = "FORWARDED_ALLOW_IPS"   # uvicorn's; used when nothing else is set
-PUBLIC_URL_ENV = "SER2NET_PUBLIC_URL"
+PUBLIC_URL_ENV = "SER2NETWEB_PUBLIC_URL"
 
 _SCHEMES = {"http": ("http", "ws"), "https": ("https", "wss")}
 
@@ -81,12 +83,13 @@ def _trusted(entries: tuple[str, ...]) -> Trusted:
 
 
 def trusted_entries(admin, env: Optional[Mapping[str, str]] = None) -> tuple[list[str], str]:
-    """(the trusted proxy entries in effect, where they come from): SER2NET_TRUSTED_PROXIES,
-    else admin_ui.trusted_proxies, else FORWARDED_ALLOW_IPS, else none ([], '')."""
+    """(the trusted proxy entries in effect, where they come from): SER2NETWEB_TRUSTED_PROXIES
+    (or SER2NET_TRUSTED_PROXIES: the name as it is set), else admin_ui.trusted_proxies, else
+    FORWARDED_ALLOW_IPS, else none ([], '')."""
     env = _env(env)
-    raw = (env.get(TRUSTED_ENV) or "").strip()
+    raw = envvars.text(TRUSTED_ENV, env)
     if raw:
-        return split_proxy_entries(raw), TRUSTED_ENV
+        return split_proxy_entries(raw), envvars.source(TRUSTED_ENV, env)
     if admin.trusted_proxies:
         return list(admin.trusted_proxies), "admin_ui.trusted_proxies"
     raw = (env.get(LEGACY_TRUSTED_ENV) or "").strip()
@@ -154,12 +157,12 @@ def _usable_url(raw: str) -> str:
 
 
 def public_url_from_env(env: Optional[Mapping[str, str]] = None) -> str:
-    """SER2NET_PUBLIC_URL when it is set and usable, else ''."""
-    return _usable_url((_env(env).get(PUBLIC_URL_ENV) or "").strip())
+    """SER2NETWEB_PUBLIC_URL (or SER2NET_PUBLIC_URL) when it is set and usable, else ''."""
+    return _usable_url(envvars.text(PUBLIC_URL_ENV, env))
 
 
 def public_url(admin, env: Optional[Mapping[str, str]] = None) -> str:
-    """The public URL in effect ('' = none): SER2NET_PUBLIC_URL when it is usable, else
+    """The public URL in effect ('' = none): SER2NETWEB_PUBLIC_URL when it is usable, else
     admin_ui.public_url (both kept as normalize_public_url spells them)."""
     return public_url_from_env(env) or admin.public_url
 
@@ -205,9 +208,9 @@ def start_notes(admin, env: Optional[Mapping[str, str]] = None) -> list[str]:
         if source == LEGACY_TRUSTED_ENV:
             notes.append(f"{LEGACY_TRUSTED_ENV} is read as the list of trusted proxies because "
                          f"neither {TRUSTED_ENV} nor Settings → Reverse proxy sets one")
-    raw = (env.get(PUBLIC_URL_ENV) or "").strip()
+    raw = envvars.text(PUBLIC_URL_ENV, env)
     if raw and (why := public_url_problem(raw)) is not None:
-        notes.append(f"WARNING: {PUBLIC_URL_ENV} {raw!r} is not used: {why}")
+        notes.append(f"WARNING: {envvars.source(PUBLIC_URL_ENV, env)} {raw!r} is not used: {why}")
     return notes
 
 

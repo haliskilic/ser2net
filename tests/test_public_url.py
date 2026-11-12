@@ -1,12 +1,12 @@
 """The address the web UI is published under behind a reverse proxy (admin_ui.public_url /
-SER2NET_PUBLIC_URL), and the path it is then served under too.
+SER2NETWEB_PUBLIC_URL), and the path it is then served under too.
 
 Checks:
   * the value: http:// or https:// with a host name, optional port and a path of plain
     segments, no user name, query or fragment, no path that starts like one of the UI's
     own pages (every top-level route is in config.RESERVED_PATHS); kept in one spelling;
     an unusable one in config.json is left out with a load note (no validate() rule);
-    SER2NET_PUBLIC_URL wins for one run when it is usable, a start-up warning when not;
+    SER2NETWEB_PUBLIC_URL wins for one run when it is usable, a start-up warning when not;
   * Settings -> Reverse proxy -> Public URL: saved (normalised), refused with the reason,
     logged and audited, in the restore preview; read-only while the environment sets it;
     Settings -> Admin interface shows it;
@@ -96,11 +96,11 @@ def test_value() -> None:
     assert AppConfig.from_dict({}).to_dict()["admin_ui"]["public_url"] == ""
     admin = AdminUI(public_url="https://s2n.example.com")
     assert proxy.public_url(admin, {}) == "https://s2n.example.com"
-    assert proxy.public_url(admin, {"SER2NET_PUBLIC_URL": "https://Other.example/"}) == \
+    assert proxy.public_url(admin, {"SER2NETWEB_PUBLIC_URL": "https://Other.example/"}) == \
         "https://other.example"
-    assert proxy.public_url(admin, {"SER2NET_PUBLIC_URL": "nope"}) == "https://s2n.example.com"
-    assert any("WARNING: SER2NET_PUBLIC_URL 'nope' is not used" in n
-               for n in proxy.start_notes(admin, {"SER2NET_PUBLIC_URL": "nope"}))
+    assert proxy.public_url(admin, {"SER2NETWEB_PUBLIC_URL": "nope"}) == "https://s2n.example.com"
+    assert any("WARNING: SER2NETWEB_PUBLIC_URL 'nope' is not used" in n
+               for n in proxy.start_notes(admin, {"SER2NETWEB_PUBLIC_URL": "nope"}))
     assert proxy.origin_of(PUBLIC) == "https://gw.example.com" and proxy.path_of(PUBLIC) == "/ser2net"
     assert proxy.origin_of("") == "" and proxy.path_of("https://s2n.example.com") == ""
     print("public URL: what is accepted, how it is kept, reserved paths, the environment  OK")
@@ -227,18 +227,18 @@ def test_origins_and_sso() -> None:
             oldest = a.state.store.backup_names()[-1]   # (the newest is what config.json holds)
             st, _, page = a.call("GET", f"/settings?restore={oldest}", headers={"Cookie": jar})
             assert "Public URL: https://s2n.example.com → —" in page
-        os.environ["SER2NET_PUBLIC_URL"] = PUBLIC
+        os.environ["SER2NETWEB_PUBLIC_URL"] = PUBLIC
         try:
             with App(dict(_cfg(public_url="https://s2n.example.com"))) as a:
                 _h, jar = _sign_in(a)
                 st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
                 assert f'<input type="url" value="{PUBLIC}" disabled>' in page
-                assert "Set by <span class=\"mono\">SER2NET_PUBLIC_URL</span>" in page
+                assert "Set by <span class=\"mono\">SER2NETWEB_PUBLIC_URL</span>" in page
                 st, _, _ = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},
                                   headers={"Cookie": jar})
                 assert st == 303 and a.state.config.admin_ui.public_url == "https://s2n.example.com"
         finally:
-            del os.environ["SER2NET_PUBLIC_URL"]
+            del os.environ["SER2NETWEB_PUBLIC_URL"]
     finally:
         oidc_auth.build_authorize_url = real
     print("public URL: its pages' forms and WebSockets accepted, the SSO redirect URI, "
@@ -455,7 +455,7 @@ def test_no_root_relative_addresses() -> None:
 
 
 def main() -> None:
-    for name in ("SER2NET_TRUSTED_PROXIES", "FORWARDED_ALLOW_IPS", "SER2NET_PUBLIC_URL"):
+    for name in ("SER2NETWEB_TRUSTED_PROXIES", "FORWARDED_ALLOW_IPS", "SER2NETWEB_PUBLIC_URL"):
         os.environ.pop(name, None)
     test_value()
     test_warning_and_notifications()

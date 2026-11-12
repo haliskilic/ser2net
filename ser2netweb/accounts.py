@@ -6,8 +6,10 @@
     ser2net --sign-out-all        a new session key: every web UI session ends
     ser2net --reload              the running instance reads config.json again
                                   (ser2netweb/reload.py); only while one runs
-    SER2NET_ADMIN_PASSWORD_FILE   (+ SER2NET_ADMIN_USER, default "admin") the first admin
-                                  of an install without accounts, e.g. a Docker secret
+    SER2NETWEB_ADMIN_PASSWORD_FILE  (+ SER2NETWEB_ADMIN_USER, default "admin"; or their
+                                  2.9.x names SER2NET_ADMIN_PASSWORD_FILE / _USER) the
+                                  first admin of an install without accounts, e.g. a
+                                  Docker secret
 
 The commands work whether ser2net is running or not. The data directory's lock
 (ser2netweb/datalock.py, <data>/ser2net.lock) tells which: while an instance of the same data
@@ -40,7 +42,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from . import datalock, healthcheck
+from . import datalock, envvars, healthcheck
 from .config import ConfigStore, User, host_port, new_pwd_version
 from .web import auth
 
@@ -133,45 +135,51 @@ def _set_password(config, username: str, password_hash: str) -> Change:
                   username + (" (two-factor sign-in off)" if old[2] else ""), restore)
 
 
+PASSWORD_FILE_ENV = "SER2NETWEB_ADMIN_PASSWORD_FILE"  # noqa: S105 (a variable name)
+ADMIN_USER_ENV = "SER2NETWEB_ADMIN_USER"
+
+
 def provision_requested(environ) -> bool:
-    """SER2NET_ADMIN_PASSWORD_FILE / SER2NET_ADMIN_USER is set: the first admin comes
-    from the environment, never from the setup page."""
-    return bool((environ.get("SER2NET_ADMIN_PASSWORD_FILE") or "").strip()
-                or (environ.get("SER2NET_ADMIN_USER") or "").strip())
+    """SER2NETWEB_ADMIN_PASSWORD_FILE / SER2NETWEB_ADMIN_USER (or their 2.9.x names) is
+    set: the first admin comes from the environment, never from the setup page."""
+    return bool(envvars.text(PASSWORD_FILE_ENV, environ)
+                or envvars.text(ADMIN_USER_ENV, environ))
 
 
 def provision_from_env(config, environ) -> tuple[Optional[str], Optional[str]]:
-    """SER2NET_ADMIN_PASSWORD_FILE (+ SER2NET_ADMIN_USER): add the first admin to an
-    install that has no account yet. Returns (the name created, a line for the log);
-    (None, None) when nothing was asked for."""
-    path = (environ.get("SER2NET_ADMIN_PASSWORD_FILE") or "").strip()
-    name = (environ.get("SER2NET_ADMIN_USER") or "").strip()
+    """SER2NETWEB_ADMIN_PASSWORD_FILE (+ SER2NETWEB_ADMIN_USER; or their 2.9.x names): add
+    the first admin to an install that has no account yet. Returns (the name created, a
+    line for the log, which names the variables as they are set); (None, None) when nothing
+    was asked for."""
+    path, name = envvars.text(PASSWORD_FILE_ENV, environ), envvars.text(ADMIN_USER_ENV, environ)
+    file_var = envvars.source(PASSWORD_FILE_ENV, environ)
+    user_var = envvars.source(ADMIN_USER_ENV, environ)
     if config.users:
         if path:
-            return None, ("SER2NET_ADMIN_PASSWORD_FILE is ignored: accounts exist already "
+            return None, (f"{file_var} is ignored: accounts exist already "
                           "(ser2net --set-password changes a password)")
         return None, None
     if not path:
         if name:
-            return None, ("ERROR: SER2NET_ADMIN_USER is set but SER2NET_ADMIN_PASSWORD_FILE is "
+            return None, (f"ERROR: {user_var} is set but {file_var} is "
                           "not: no admin account was created")
         return None, None
     from .web.routes.forms import _password_problem, _username_problem
 
     name = name or "admin"
     if problem := _username_problem(name):
-        return None, f"ERROR: SER2NET_ADMIN_USER: {problem}"
+        return None, f"ERROR: {user_var}: {problem}"
     try:
         with open(path, encoding="utf-8") as fh:
             password = fh.read(4096)
     except (OSError, UnicodeDecodeError) as e:
-        return None, f"ERROR: SER2NET_ADMIN_PASSWORD_FILE: cannot read {path}: {e}"
+        return None, f"ERROR: {file_var}: cannot read {path}: {e}"
     password = password.rstrip("\r\n")  # a file written with echo / a secret ends in one
     if problem := _password_problem(password, password):
-        return None, f"ERROR: SER2NET_ADMIN_PASSWORD_FILE: {problem}"
+        return None, f"ERROR: {file_var}: {problem}"
     config.users.append(User(username=name, password_hash=auth.hash_password(password),
                              role="admin", pwd_version=new_pwd_version()))
-    return name, f"admin account '{name}' created from SER2NET_ADMIN_PASSWORD_FILE"
+    return name, f"admin account '{name}' created from {file_var}"
 
 
 # --------------------------------------------------------------------------
@@ -347,7 +355,7 @@ def apply_here(request: dict, config_path: str) -> str:
         admin = config.admin_ui
         return (f"{change.message}; {config_path} was created — the web UI will listen on "
                 f"{host_port(admin.bind_ip, admin.port)} (change it with --reconfigure or "
-                "SER2NET_BIND_IP)")
+                "SER2NETWEB_BIND_IP)")
     return change.message
 
 

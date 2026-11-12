@@ -10,13 +10,13 @@ Checks:
     is never taken (the address after it stands: in the end the proxy's own); ports,
     brackets and IPv4-mapped IPv6 are read; X-Forwarded-Proto gives the scheme (wss for a
     WebSocket); a proxy that isn't listed changes nothing;
-  * where the list comes from: SER2NET_TRUSTED_PROXIES, else admin_ui.trusted_proxies,
+  * where the list comes from: SER2NETWEB_TRUSTED_PROXIES, else admin_ui.trusted_proxies,
     else FORWARDED_ALLOW_IPS (uvicorn's, which up to 2.8.1 was the only way); entries
     that are not addresses are left out with a start-up warning, '*' is warned about;
   * config.json: the key is optional, unusable entries are dropped with a load note (no
     new rule in validate()), a downgrade drops it;
   * Settings -> Reverse proxy -> Trusted proxies: saved, applies at once, a wrong entry
-    is refused with the reason, logged and audited; set by SER2NET_TRUSTED_PROXIES, the
+    is refused with the reason, logged and audited; set by SER2NETWEB_TRUSTED_PROXIES, the
     field is shown read-only and a form without it keeps the stored list.
 
 Calls the web app in this process (no socket).
@@ -78,19 +78,19 @@ def test_sources() -> None:
     te = proxy.trusted_entries
     assert te(blank, {}) == ([], "")
     assert te(listed, {}) == (["172.18.0.0/16"], "admin_ui.trusted_proxies")
-    assert te(listed, {"SER2NET_TRUSTED_PROXIES": "127.0.0.1, ::1 10.0.0.1"}) == \
-        (["127.0.0.1", "::1", "10.0.0.1"], "SER2NET_TRUSTED_PROXIES")
+    assert te(listed, {"SER2NETWEB_TRUSTED_PROXIES": "127.0.0.1, ::1 10.0.0.1"}) == \
+        (["127.0.0.1", "::1", "10.0.0.1"], "SER2NETWEB_TRUSTED_PROXIES")
     assert te(blank, {"FORWARDED_ALLOW_IPS": "10.0.0.5"}) == (["10.0.0.5"], "FORWARDED_ALLOW_IPS")
     assert te(listed, {"FORWARDED_ALLOW_IPS": "10.0.0.5"})[1] == "admin_ui.trusted_proxies"
-    assert te(blank, {"SER2NET_TRUSTED_PROXIES": "  "}) == ([], "")
+    assert te(blank, {"SER2NETWEB_TRUSTED_PROXIES": "  "}) == ([], "")
     assert proxy.start_notes(blank, {}) == []
-    notes = proxy.start_notes(blank, {"SER2NET_TRUSTED_PROXIES": "127.0.0.1 proxy.lan"})
-    assert any("WARNING: SER2NET_TRUSTED_PROXIES: 'proxy.lan' left out" in n for n in notes), notes
-    assert any("trusted proxies (SER2NET_TRUSTED_PROXIES): 127.0.0.1 —" in n for n in notes), notes
+    notes = proxy.start_notes(blank, {"SER2NETWEB_TRUSTED_PROXIES": "127.0.0.1 proxy.lan"})
+    assert any("WARNING: SER2NETWEB_TRUSTED_PROXIES: 'proxy.lan' left out" in n for n in notes), notes
+    assert any("trusted proxies (SER2NETWEB_TRUSTED_PROXIES): 127.0.0.1 —" in n for n in notes), notes
     notes = proxy.start_notes(blank, {"FORWARDED_ALLOW_IPS": "*"})
     assert any(n.startswith("WARNING: FORWARDED_ALLOW_IPS='*'") for n in notes), notes
     assert any("FORWARDED_ALLOW_IPS is read as the list of trusted proxies" in n for n in notes)
-    print("trusted proxies: SER2NET_TRUSTED_PROXIES > Settings > FORWARDED_ALLOW_IPS; start-up "
+    print("trusted proxies: SER2NETWEB_TRUSTED_PROXIES > Settings > FORWARDED_ALLOW_IPS; start-up "
           "lines  OK")
 
 
@@ -145,12 +145,12 @@ def test_middleware() -> None:
     # a proxy that isn't listed
     assert through("192.0.2.1", x_forwarded_for="1.2.3.4", x_forwarded_proto="https") == \
         ("192.0.2.1", "http")
-    os.environ["SER2NET_TRUSTED_PROXIES"] = "192.0.2.1"
+    os.environ["SER2NETWEB_TRUSTED_PROXIES"] = "192.0.2.1"
     try:
         assert through("192.0.2.1", x_forwarded_for="1.2.3.4") == ("1.2.3.4", "http")
         assert through("127.0.0.1", x_forwarded_for="1.2.3.4") == ("127.0.0.1", "http")
     finally:
-        del os.environ["SER2NET_TRUSTED_PROXIES"]
+        del os.environ["SER2NETWEB_TRUSTED_PROXIES"]
     assert len(lines) == 1, lines   # once an hour
     print("ASGI layer: only trusted proxies set the client and the scheme (WebSockets too)  OK")
 
@@ -209,7 +209,7 @@ def test_sign_in_limit() -> None:
 
 
 def test_env_setting() -> None:
-    os.environ["SER2NET_TRUSTED_PROXIES"] = "127.0.0.1"
+    os.environ["SER2NETWEB_TRUSTED_PROXIES"] = "127.0.0.1"
     try:
         with App(_admin_cfg(trusted_proxies=["10.0.0.0/8"])) as a:
             st, h, _ = _sign_in(a, "admin", PW, xff="198.51.100.9")
@@ -217,13 +217,13 @@ def test_env_setting() -> None:
             session = header(h, "set-cookie").split(";")[0]
             st, _, page = a.call("GET", "/settings", headers=_form("; " + session))
             assert st == 200 and '<input type="text" value="127.0.0.1" disabled>' in page
-            assert "Set by <span class=\"mono\">SER2NET_TRUSTED_PROXIES</span>" in page
+            assert "Set by <span class=\"mono\">SER2NETWEB_TRUSTED_PROXIES</span>" in page
             # the form has no such field then: the stored list stays
             st, _, page = a.call("POST", "/settings/proxy", fields={"_csrf": CSRF},
                                  headers=_form("; " + session))
             assert st == 303 and a.state.config.admin_ui.trusted_proxies == ["10.0.0.0/8"]
     finally:
-        del os.environ["SER2NET_TRUSTED_PROXIES"]
+        del os.environ["SER2NETWEB_TRUSTED_PROXIES"]
     os.environ["FORWARDED_ALLOW_IPS"] = "127.0.0.1"
     try:
         with App(_admin_cfg()) as a:
@@ -235,11 +235,11 @@ def test_env_setting() -> None:
             assert 'name="trusted_proxies" value=""' in page
     finally:
         del os.environ["FORWARDED_ALLOW_IPS"]
-    print("SER2NET_TRUSTED_PROXIES wins and is shown read-only; FORWARDED_ALLOW_IPS still works  OK")
+    print("SER2NETWEB_TRUSTED_PROXIES wins and is shown read-only; FORWARDED_ALLOW_IPS still works  OK")
 
 
 def main() -> None:
-    for name in ("SER2NET_TRUSTED_PROXIES", "FORWARDED_ALLOW_IPS", "SER2NET_PUBLIC_URL"):
+    for name in ("SER2NETWEB_TRUSTED_PROXIES", "FORWARDED_ALLOW_IPS", "SER2NETWEB_PUBLIC_URL"):
         os.environ.pop(name, None)
     test_parsing()
     test_sources()

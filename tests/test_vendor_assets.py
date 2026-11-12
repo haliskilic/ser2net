@@ -10,7 +10,7 @@
 * the pages link the assets with ?v=<hash of ser2netweb/web/static>, and a request carrying the
   current one gets an immutable Cache-Control (other requests are revalidated as before).
 
-With SER2NET_SKIP_PIN_CHECKS=1 (CI's test legs) the record is left to the job "offline
+With SER2NETWEB_SKIP_PIN_CHECKS=1 (CI's test legs) the record is left to the job "offline
 wheels match requirements.txt", so a Dependabot bump fails that one job.
 
 Run: python3 tests/test_vendor_assets.py
@@ -29,6 +29,8 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 import refresh_assets as ra
+
+from ser2netweb import envvars
 
 
 def test_record_matches_the_files():
@@ -110,7 +112,7 @@ def test_cache_headers():
 
 
 if __name__ == "__main__":
-    if os.environ.get("SER2NET_SKIP_PIN_CHECKS") == "1":
+    if envvars.get("SER2NETWEB_SKIP_PIN_CHECKS") == "1":
         print("SKIP: the record against the files (CI: job 'offline wheels match requirements.txt')")
     else:
         test_record_matches_the_files()

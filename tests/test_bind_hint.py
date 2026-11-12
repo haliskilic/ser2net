@@ -152,7 +152,7 @@ def test_admin_ui_port_warning():
     users = [{"username": "admin", "password_hash": hash_password(PW), "role": "admin",
               "pwd_version": 1}]
     srv = Server({"users": users})
-    srv.env["SER2NET_PORT"] = "80"
+    srv.env["SER2NETWEB_PORT"] = "80"
     log_path = os.path.join(srv.tmp, "server.log")
     try:
         with open(log_path, "wb") as log:

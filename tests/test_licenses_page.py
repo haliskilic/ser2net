@@ -4,7 +4,7 @@ Checks:
   * every page has a footer with the licence and a link to the source code (AGPL-3.0
     section 13); the sign-in and setup pages leave out the version and the licences
     page, which signed-in pages link;
-  * SER2NET_SOURCE_URL points that link elsewhere (a modified copy's own source), and a
+  * SER2NETWEB_SOURCE_URL points that link elsewhere (a modified copy's own source), and a
     value that is not an http(s) address is not used (start-up warning);
   * /licenses needs a sign-in (any role) and shows the licence texts this copy carries:
     LICENSE, NOTICE, the commercial licence, the third-party notices and the browser
@@ -30,14 +30,14 @@ MIRROR = "https://git.example.com/plant/ser2net-fork"
 
 def test_source_url():
     assert licences.source_url({}) == SOURCE_URL
-    assert licences.source_url({"SER2NET_SOURCE_URL": f" {MIRROR} "}) == MIRROR
+    assert licences.source_url({"SER2NETWEB_SOURCE_URL": f" {MIRROR} "}) == MIRROR
     for bad in ("git.example.com/x", "javascript:alert(1)", 'https://x.example.com/"><b>',
                 "ftp://example.com/src", "https://"):
-        assert licences.source_url({"SER2NET_SOURCE_URL": bad}) == SOURCE_URL, bad
-        assert "SER2NET_SOURCE_URL" in licences.source_url_note({"SER2NET_SOURCE_URL": bad})
+        assert licences.source_url({"SER2NETWEB_SOURCE_URL": bad}) == SOURCE_URL, bad
+        assert "SER2NETWEB_SOURCE_URL" in licences.source_url_note({"SER2NETWEB_SOURCE_URL": bad})
     assert licences.source_url_note({}) == "" and \
-        licences.source_url_note({"SER2NET_SOURCE_URL": MIRROR}) == ""
-    print("SER2NET_SOURCE_URL: an http(s) address is used, anything else warned about  OK")
+        licences.source_url_note({"SER2NETWEB_SOURCE_URL": MIRROR}) == ""
+    print("SER2NETWEB_SOURCE_URL: an http(s) address is used, anything else warned about  OK")
 
 
 def test_texts():
@@ -54,7 +54,7 @@ def test_texts():
 
 
 def test_pages():
-    with Server({"users": USERS}, env={"SER2NET_SOURCE_URL": MIRROR}) as srv:
+    with Server({"users": USERS}, env={"SER2NETWEB_SOURCE_URL": MIRROR}) as srv:
         b = Browser(srv.base)
         st, _h, page = b.get("/login")
         assert st == 200 and 'class="site-footer"' in page and f'href="{MIRROR}"' in page
@@ -68,10 +68,10 @@ def test_pages():
         assert st == 200, st
         assert "GNU AFFERO GENERAL PUBLIC LICENSE" in page and "COMMERCIAL" in page.upper()
         assert f'href="{MIRROR}"' in page and 'id="third-party"' in page
-    with Server({"users": USERS}, env={"SER2NET_SOURCE_URL": "not a url"}) as srv:
+    with Server({"users": USERS}, env={"SER2NETWEB_SOURCE_URL": "not a url"}) as srv:
         st, _h, page = Browser(srv.base).get("/login")
         assert f'href="{SOURCE_URL}"' in page
-        assert "SER2NET_SOURCE_URL is not an http:// or https:// address" in srv.output()
+        assert "SER2NETWEB_SOURCE_URL is not an http:// or https:// address" in srv.output()
     print("the footer on the sign-in page and the dashboard; /licenses for signed-in users  OK")
 
 

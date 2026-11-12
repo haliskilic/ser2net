@@ -217,9 +217,10 @@ def test_mapping_form():
 
 
 def test_env_and_healthcheck():
-    keep = {k: os.environ.pop(k, None) for k in ("SER2NET_BIND_IP", "SER2NET_PORT")}
+    keep = {k: os.environ.pop(k, None) for k in ("SER2NETWEB_BIND_IP", "SER2NETWEB_PORT",
+                                                 "SER2NET_BIND_IP", "SER2NET_PORT")}
     try:
-        os.environ["SER2NET_BIND_IP"] = "*"
+        os.environ["SER2NETWEB_BIND_IP"] = "*"
         admin = AdminUI()
         assert runtime._env_bind_override(admin) is True and admin.bind_ip == ""
         d = tempfile.mkdtemp(prefix="s2n_v6hc_")
@@ -227,9 +228,9 @@ def test_env_and_healthcheck():
         with open(cfg, "w") as fh:
             json.dump({"admin_ui": {"bind_ip": "", "port": 8124}}, fh)
         assert healthcheck.target(cfg) == "http://127.0.0.1:8124/healthz"
-        del os.environ["SER2NET_BIND_IP"]
+        del os.environ["SER2NETWEB_BIND_IP"]
         assert healthcheck.target(cfg) == "http://127.0.0.1:8124/healthz", "'' too"
-        os.environ["SER2NET_BIND_IP"] = "**"
+        os.environ["SER2NETWEB_BIND_IP"] = "**"
         try:
             runtime._env_bind_override(AdminUI())
         except ConfigError as e:
@@ -241,7 +242,7 @@ def test_env_and_healthcheck():
             os.environ.pop(k, None)
             if v is not None:
                 os.environ[k] = v
-    print("SER2NET_BIND_IP=*: every interface, IPv4 and IPv6; the healthcheck probes 127.0.0.1  OK")
+    print("SER2NETWEB_BIND_IP=*: every interface, IPv4 and IPv6; the healthcheck probes 127.0.0.1  OK")
 
 
 def test_admin_ui_every_interface():
@@ -249,7 +250,7 @@ def test_admin_ui_every_interface():
         print("SKIP (part): no IPv6 loopback here: the admin UI on both families not tried")
         return
     srv = Server()
-    srv.env["SER2NET_BIND_IP"] = "*"
+    srv.env["SER2NETWEB_BIND_IP"] = "*"
     with srv:
         for host in ("127.0.0.1", "[::1]"):
             with urllib.request.urlopen(f"http://{host}:{srv.port}/healthz", timeout=10) as r:
@@ -259,7 +260,7 @@ def test_admin_ui_every_interface():
         b = Browser(srv.base)
         _st, _h, page = b.get("/setup")
         assert f"*:{srv.port}" in page, page[-3000:]
-    print("admin UI on every interface (SER2NET_BIND_IP=*): answers on 127.0.0.1 and ::1  OK")
+    print("admin UI on every interface (SER2NETWEB_BIND_IP=*): answers on 127.0.0.1 and ::1  OK")
 
 
 def test_written_canonically():

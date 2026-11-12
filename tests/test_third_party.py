@@ -32,6 +32,8 @@ sys.path.insert(0, ROOT)
 import refresh_locks
 import third_party as tp
 
+from ser2netweb import envvars
+
 
 class FakeDist:
     def __init__(self, name, version, license_expression=None, license=None, classifiers=()):
@@ -216,7 +218,7 @@ def test_frozen_fallback_names_the_notices():
 if __name__ == "__main__":
     test_spdx_detection()
     test_license_order()
-    if os.environ.get("SER2NET_SKIP_PIN_CHECKS") == "1":
+    if envvars.get("SER2NETWEB_SKIP_PIN_CHECKS") == "1":
         print("SKIP: license overrides against the pins (CI: job 'offline wheels match requirements.txt')")
     else:
         test_overrides_match_the_pins()

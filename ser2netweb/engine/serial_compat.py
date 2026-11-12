@@ -41,7 +41,7 @@ sender filled the driver's queue without limit, drain() never waited, and a stop
 for all of it. ``WindowsSerial`` gives each write its own OVERLAPPED and event and keeps
 its data until it has completed, with at most WRITE_WINDOW bytes in flight per port: past
 that a write raises BlockingIOError, the transport keeps the data, and drain() waits for
-the device as on POSIX. SER2NET_WINDOWS_SERIAL=pyserial keeps pyserial's own class.
+the device as on POSIX. SER2NETWEB_WINDOWS_SERIAL=pyserial keeps pyserial's own class.
 
 ``Transport`` is pyserial-asyncio-fast's SerialTransport with:
   - _write_ready() that stops watching for writability once its buffer is empty
@@ -84,6 +84,8 @@ from typing import TYPE_CHECKING, Any
 import serial
 import serial_asyncio_fast as _saf
 
+from .. import envvars
+
 _PIPES = ("pipe_abort_read_r", "pipe_abort_read_w", "pipe_abort_write_r", "pipe_abort_write_w")
 # what pyserial's own read() says when a port reads empty although it was ready
 _DISCONNECTED = ("device reports readiness to read but returned no data "
@@ -97,7 +99,7 @@ WRITE_WINDOW = 8192      # Windows: bytes of a port's writes in flight at most
 CANCEL_WAIT_S = 1.0      # Windows: how long a close waits for cancelled writes to end
 POLL_IDLE_AFTER_S = 1.0  # Windows: a port quiet this long is polled every ...
 POLL_IDLE_WAIT_S = 0.01  # ... this instead of every 0.5 ms
-WINDOWS_SERIAL_ENV = "SER2NET_WINDOWS_SERIAL"
+WINDOWS_SERIAL_ENV = "SER2NETWEB_WINDOWS_SERIAL"  # (or SER2NET_WINDOWS_SERIAL, its 2.9.x name)
 
 
 # (sys.platform too, which mypy --platform reads; os.name alone decides at run time, as
@@ -432,7 +434,7 @@ def serial_class() -> type:
     if os.name == "posix" and sys.platform != "win32":
         return PosixSerial
     if os.name == "nt" and sys.platform == "win32":
-        if (os.environ.get(WINDOWS_SERIAL_ENV) or "").strip().lower() != "pyserial":
+        if envvars.text(WINDOWS_SERIAL_ENV).lower() != "pyserial":
             return WindowsSerial
     return serial.Serial
 

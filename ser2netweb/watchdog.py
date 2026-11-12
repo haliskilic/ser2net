@@ -9,7 +9,7 @@ status and the Sparkplug death certificate are never sent and SCADA sees stale v
 live ones.
 
 A heartbeat task on the loop notes the time every BEAT_S seconds. A daemon thread checks
-it: once the loop has missed its heartbeat for ``limit`` seconds (SER2NET_LOOP_WATCHDOG,
+it: once the loop has missed its heartbeat for ``limit`` seconds (SER2NETWEB_LOOP_WATCHDOG,
 default DEFAULT_LIMIT_S, 0 = off), it writes every thread's stack (faulthandler) to
 <data>/hang.log, which names the call that blocks, and ends the process with EXIT_CODE;
 the service manager (restart policy) starts it again, and the next start reports it.
@@ -41,9 +41,9 @@ import threading
 import time
 from typing import Callable, Mapping, Optional
 
-from . import clock, sdnotify
+from . import clock, envvars, sdnotify
 
-ENV = "SER2NET_LOOP_WATCHDOG"
+ENV = "SER2NETWEB_LOOP_WATCHDOG"  # (or SER2NET_LOOP_WATCHDOG, its 2.9.x name)
 DEFAULT_LIMIT_S = 90.0
 BEAT_S = 1.0         # the heartbeat's interval on the loop
 CHECK_S = 1.0        # how often the thread looks at it
@@ -55,8 +55,8 @@ HANG_LOG = "hang.log"
 
 
 def limit_from_env(env: Optional[Mapping[str, str]] = None) -> tuple[float, str]:
-    """(seconds, a note for the start-up log or ""): SER2NET_LOOP_WATCHDOG, 0 = off."""
-    raw = ((os.environ if env is None else env).get(ENV) or "").strip()
+    """(seconds, a note for the start-up log or ""): SER2NETWEB_LOOP_WATCHDOG, 0 = off."""
+    raw = envvars.text(ENV, env)
     if not raw:
         return DEFAULT_LIMIT_S, ""
     try:
@@ -64,7 +64,8 @@ def limit_from_env(env: Optional[Mapping[str, str]] = None) -> tuple[float, str]
     except ValueError:
         value = -1.0
     if not 0 <= value <= 86400:  # (NaN too)
-        return DEFAULT_LIMIT_S, (f"WARNING: {ENV}={raw!r} is not a number of seconds "
+        return DEFAULT_LIMIT_S, (f"WARNING: {envvars.source(ENV, env)}={raw!r} is not a "
+                                 f"number of seconds "
                                  f"(0 = off, at most 86400) — the event loop watchdog uses "
                                  f"{DEFAULT_LIMIT_S:g} s")
     return value, ""

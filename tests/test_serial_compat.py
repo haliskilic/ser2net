@@ -27,7 +27,7 @@ whole process any more). Checked here, without a serial device:
     polls per second and CPU of 1 / 8 / 32 idle ports measured and printed: on the
     Windows legs that is the selector loop's real rate);
   - Windows only (the windows-latest CI legs): WindowsSerial is the class ports are opened
-    with (SER2NET_WINDOWS_SERIAL=pyserial: pyserial's), and OverlappedWrites works against
+    with (SER2NETWEB_WINDOWS_SERIAL=pyserial: pyserial's), and OverlappedWrites works against
     a real overlapped handle (a named pipe nobody reads, then reads in order; a cancel);
   - a missing upstream member makes it fall back to upstream's transport, and versions
     other than the checked ones are named in a start-up warning;
@@ -455,7 +455,7 @@ def test_windows_serial_class():
         pass
     else:
         raise AssertionError("COM250 should not exist on a CI runner")
-    print("WindowsSerial is the class ports are opened with; SER2NET_WINDOWS_SERIAL=pyserial "
+    print("WindowsSerial is the class ports are opened with; SER2NETWEB_WINDOWS_SERIAL=pyserial "
           "keeps pyserial's  OK")
     _overlapped_writes_on_a_pipe()
 

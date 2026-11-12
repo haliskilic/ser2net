@@ -21,6 +21,7 @@ import shlex
 import socket
 import sys
 
+from . import envvars
 from .config import AdminUI, host_port, shown_host
 from .engine import bindhint, netinfo
 
@@ -65,7 +66,7 @@ def next_free_port(ip: str, port: int) -> int | None:
 def in_use_warning(ip: str, port: int) -> str:
     return (f"WARNING: port {port} on {shown_host(ip)} is in use (another ser2net instance or another "
             "program?) — the web UI can't listen there until it is free. Give this instance "
-            "its own port: --reconfigure, or SER2NET_BIND_IP + SER2NET_PORT")
+            "its own port: --reconfigure, or SER2NETWEB_BIND_IP + SER2NETWEB_PORT")
 
 
 def _quoted(arg: str) -> str:
@@ -76,11 +77,11 @@ def _quoted(arg: str) -> str:
 
 def reconfigure_hint(data_dir: str, service_name: str = "", environ=None) -> tuple[str, str]:
     """How this installation changes the admin UI's address (for the Settings page):
-    ("env", "") when SER2NET_BIND_IP sets it (a container: its environment wins at every
-    start); ("service", command) for the Windows service, whose reinstall with --reconfigure
-    asks for it again; else ("console", command), a start with --reconfigure."""
-    environ = os.environ if environ is None else environ
-    if (environ.get("SER2NET_BIND_IP") or "").strip():
+    ("env", "") when SER2NETWEB_BIND_IP (or SER2NET_BIND_IP) sets it (a container: its
+    environment wins at every start); ("service", command) for the Windows service, whose
+    reinstall with --reconfigure asks for it again; else ("console", command), a start with
+    --reconfigure."""
+    if envvars.text("SER2NETWEB_BIND_IP", environ):
         return "env", ""
     if getattr(sys, "frozen", False):
         prog = _quoted(sys.executable)

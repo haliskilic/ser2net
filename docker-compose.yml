@@ -8,7 +8,7 @@ services:
     # build: .                                 # or build it from this checkout
     container_name: ser2net
     # The container's host name, which notifications and the LAN cluster show while the
-    # instance has no name of its own (SER2NET_NODE_NAME below); without it, the container
+    # instance has no name of its own (SER2NETWEB_NODE_NAME below); without it, the container
     # id, which changes whenever the container is re-created (e.g. an image upgrade).
     # hostname: line-1
     restart: unless-stopped
@@ -33,12 +33,13 @@ services:
     # from starting: see the hot-plug variant below.
     devices:
       - "/dev/ttyUSB0:/dev/ttyUSB0"
+    # (the SER2NET_* names of 2.9.x and older still work; a SER2NETWEB_* one wins)
     environment:
-      SER2NET_BIND_IP: "0.0.0.0"
-      SER2NET_PORT: "8080"
+      SER2NETWEB_BIND_IP: "0.0.0.0"
+      SER2NETWEB_PORT: "8080"
       # This instance's name in notifications, the browser tab and the fleet view (else
       # Settings -> Admin interface, else the host name):
-      # SER2NET_NODE_NAME: "line-1"
+      # SER2NETWEB_NODE_NAME: "line-1"
       # TZ: "Europe/Istanbul"   # the zone of log, audit and trace times (default: UTC)
     # ser2net also writes its log to /data/all.log (rotated); cap Docker's own copy
     logging:
@@ -50,9 +51,9 @@ services:
     # --- Variants ---
     # Host network instead of `ports:` (remove those): every mapping port is reachable
     # without publishing it, and LAN cluster discovery works. The web UI then binds
-    # SER2NET_BIND_IP on the host itself (0.0.0.0 = all its interfaces; set the LAN
+    # SER2NETWEB_BIND_IP on the host itself (0.0.0.0 = all its interfaces; set the LAN
     # address to keep it off the others), and ports below 1024 (e.g. Modbus 502) can't
-    # be opened by the unprivileged process unless SER2NET_LOW_PORTS=1 is set
+    # be opened by the unprivileged process unless SER2NETWEB_LOW_PORTS=1 is set
     # (docs/DOCKER.md, "Ports and networking").
     # network_mode: host
     #

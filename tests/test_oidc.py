@@ -11,7 +11,7 @@ request (SSL_CERT_FILE set after the import: needs cryptography for the test CA)
 full token-exchange + id_token validation flow uses a real RS256-signed token and mocked
 discovery/token/JWKS HTTP, so it runs without a provider; it needs authlib and
 cryptography: without them it is skipped with a SKIP line (tests/run_all.py repeats it),
-and with SER2NET_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_oidc.py
+and with SER2NETWEB_OPTIONAL_TESTS=1 the test fails instead. Run: python3 tests/test_oidc.py
 """
 import base64
 import hashlib

@@ -425,7 +425,7 @@ def make_templates() -> Jinja2Templates:
         # until then (StaticAssets), also across restarts of the one-file executable
         asset_version=asset_version(),
         app_version=__version__,   # what the pages name as this version
-        source_url=licences.source_url(),  # the footer's source link (SER2NET_SOURCE_URL)
+        source_url=licences.source_url(),  # the footer's source link (SER2NETWEB_SOURCE_URL)
         # the server's time zone now ("UTC+03:00"), next to the times it shows
         server_zone=clock.zone,
         # the server's clock when it rendered the page (<body data-server-time>): app.js

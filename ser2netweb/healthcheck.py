@@ -1,9 +1,10 @@
 """`ser2net --healthcheck`: is the web UI of this data directory's instance answering?
 
 Used by the Docker image's HEALTHCHECK, also handy for systemd or monitoring scripts.
-Reads the admin UI address from config.json (SER2NET_BIND_IP / SER2NET_PORT win, as at
-start-up), asks /healthz and exits 0 when it answers "ok", else 1. A wildcard bind
-(0.0.0.0 / ::, or every interface of both families: "" / SER2NET_BIND_IP=*) is probed on
+Reads the admin UI address from config.json (SER2NETWEB_BIND_IP / SER2NETWEB_PORT, or their
+2.9.x names SER2NET_BIND_IP / SER2NET_PORT, win, as at start-up), asks /healthz and exits 0
+when it answers "ok", else 1. A wildcard bind (0.0.0.0 / ::, or every interface of both
+families: "" / SER2NETWEB_BIND_IP=*) is probed on
 loopback; TLS is accepted without a certificate check (the probe only asks whether the
 server is up, and a self-signed certificate is normal). When the scheme config.json
 implies gets no answer, the other one is tried in the time left: config.json may have
@@ -15,11 +16,12 @@ from __future__ import annotations
 
 import http.client
 import json
-import os
 import ssl
 import time
 import urllib.error
 import urllib.request
+
+from . import envvars
 
 
 def target(config_path: str) -> str:
@@ -28,9 +30,9 @@ def target(config_path: str) -> str:
             admin = (json.load(fh) or {}).get("admin_ui") or {}
     except (OSError, ValueError, AttributeError):
         admin = {}
-    ip = (os.environ.get("SER2NET_BIND_IP") or "").strip() or admin.get("bind_ip") or "127.0.0.1"
+    ip = envvars.text("SER2NETWEB_BIND_IP") or admin.get("bind_ip") or "127.0.0.1"
     try:
-        port = int((os.environ.get("SER2NET_PORT") or "").strip())
+        port = int(envvars.text("SER2NETWEB_PORT"))
     except ValueError:  # unset, or not a number (which start-up ignores as well)
         port = admin.get("port") or 8080
     host = {"0.0.0.0": "127.0.0.1", "::": "::1", "*": "127.0.0.1"}.get(ip, ip)

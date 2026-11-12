@@ -16,7 +16,7 @@
     loads the change; an instance that stops before taking the request -> the command
     makes the change itself; another account command busy -> refused, saying so; where
     the lock can't be used, /healthz decides as before;
-  * SER2NET_ADMIN_PASSWORD_FILE (+ SER2NET_ADMIN_USER) creates the first admin at start
+  * SER2NETWEB_ADMIN_PASSWORD_FILE (+ SER2NETWEB_ADMIN_USER) creates the first admin at start
     and is ignored once accounts exist; problems are logged, the password never;
   * as root on a data directory owned by someone else, the command first becomes that
     user (checked with stand-ins for the os calls).
@@ -296,7 +296,7 @@ def test_lock_decides():
 
 
 def test_provision():
-    env = {"SER2NET_ADMIN_PASSWORD_FILE": "", "SER2NET_ADMIN_USER": ""}
+    env = {"SER2NETWEB_ADMIN_PASSWORD_FILE": "", "SER2NETWEB_ADMIN_USER": ""}
     assert accounts.provision_from_env(AppConfig(), env) == (None, None)
     d = tempfile.mkdtemp(prefix="s2n_env_")
     try:
@@ -304,24 +304,24 @@ def test_provision():
         with open(pwfile, "w") as fh:
             fh.write(PW + "\n")
         cfg = AppConfig()
-        name, note = accounts.provision_from_env(cfg, {"SER2NET_ADMIN_PASSWORD_FILE": pwfile})
+        name, note = accounts.provision_from_env(cfg, {"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile})
         assert name == "admin" and "created" in note and PW not in note
         assert verify_password(PW, cfg.get_user("admin").password_hash), "trailing newline is not part of it"
-        assert accounts.provision_from_env(cfg, {"SER2NET_ADMIN_PASSWORD_FILE": pwfile})[0] is None
-        for env, problem in (({"SER2NET_ADMIN_PASSWORD_FILE": pwfile + ".missing"}, "cannot read"),
-                             ({"SER2NET_ADMIN_USER": "boss"}, "SER2NET_ADMIN_PASSWORD_FILE is not"),
-                             ({"SER2NET_ADMIN_PASSWORD_FILE": pwfile, "SER2NET_ADMIN_USER": "a b"},
-                              "SER2NET_ADMIN_USER")):
+        assert accounts.provision_from_env(cfg, {"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile})[0] is None
+        for env, problem in (({"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile + ".missing"}, "cannot read"),
+                             ({"SER2NETWEB_ADMIN_USER": "boss"}, "SER2NETWEB_ADMIN_PASSWORD_FILE is not"),
+                             ({"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile, "SER2NETWEB_ADMIN_USER": "a b"},
+                              "SER2NETWEB_ADMIN_USER")):
             cfg = AppConfig()
             name, note = accounts.provision_from_env(cfg, env)
             assert name is None and not cfg.users and note.startswith("ERROR") and problem in note, note
         with open(pwfile, "w") as fh:
             fh.write("short\n")
-        name, note = accounts.provision_from_env(AppConfig(), {"SER2NET_ADMIN_PASSWORD_FILE": pwfile})
+        name, note = accounts.provision_from_env(AppConfig(), {"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile})
         assert name is None and "at least 8" in note, note
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    print("SER2NET_ADMIN_PASSWORD_FILE: first admin only, newline stripped, problems reported  OK")
+    print("SER2NETWEB_ADMIN_PASSWORD_FILE: first admin only, newline stripped, problems reported  OK")
 
 
 def test_become_owner():
@@ -406,7 +406,7 @@ def test_running():
         assert not [n for n in os.listdir(os.path.join(srv.data, accounts.REQUEST_DIR))
                     if not n.startswith(".")], "request files left behind"
         # its web UI out of the command's reach (another network namespace): still found
-        code, out = cli(srv.data, "--sign-out-all", env={"SER2NET_PORT": "1"})
+        code, out = cli(srv.data, "--sign-out-all", env={"SER2NETWEB_PORT": "1"})
         assert code == 0 and "done by the running ser2net" in out, out
     print("running install: the instance applies it at once (old session refused, new password "
           "works, audited), --sign-out-all too  OK")
@@ -428,25 +428,25 @@ def test_env_admin():
         pwfile = os.path.join(d, "secret")
         with open(pwfile, "w") as fh:
             fh.write(PW + "\n")
-        env = {"SER2NET_ADMIN_PASSWORD_FILE": pwfile, "SER2NET_ADMIN_USER": "ops"}
+        env = {"SER2NETWEB_ADMIN_PASSWORD_FILE": pwfile, "SER2NETWEB_ADMIN_USER": "ops"}
         with Server(None, env=env) as srv:
             Browser(srv.base).login("ops", PW)
             assert Browser(srv.base).get("/setup")[0] == 303
             out = srv.output()
-            assert "admin account 'ops' created from SER2NET_ADMIN_PASSWORD_FILE" in out
+            assert "admin account 'ops' created from SER2NETWEB_ADMIN_PASSWORD_FILE" in out
             assert PW not in out and PW not in read(os.path.join(srv.data, "all.log"))
-            assert "first_run_setup\tSER2NET_ADMIN_PASSWORD_FILE\tops" in read(os.path.join(srv.data, "audit.log"))
+            assert "first_run_setup\tSER2NETWEB_ADMIN_PASSWORD_FILE\tops" in read(os.path.join(srv.data, "audit.log"))
             data = srv.data
             srv.stop()
             with open(pwfile, "w") as fh:
                 fh.write("another-pass-9\n")
             srv.start()  # accounts exist now: the variable is ignored, the password stays
             Browser(srv.base).login("ops", PW)
-            assert "SER2NET_ADMIN_PASSWORD_FILE is ignored" in srv.output()
+            assert "SER2NETWEB_ADMIN_PASSWORD_FILE is ignored" in srv.output()
             assert len(config_of(data)["users"]) == 1
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    print("SER2NET_ADMIN_PASSWORD_FILE: first admin at start (no password in the logs), "
+    print("SER2NETWEB_ADMIN_PASSWORD_FILE: first admin at start (no password in the logs), "
           "ignored once accounts exist  OK")
 
 

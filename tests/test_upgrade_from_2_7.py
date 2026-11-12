@@ -8,7 +8,7 @@ absolute POSIX and Windows paths). This test:
     still there after a save — except the documented trace-path change (only the
     file name is kept; traces go to data/traces) — while the new settings take their
     defaults;
-  * boots the real server on it the Docker/headless way (SER2NET_BIND_IP re-saves the
+  * boots the real server on it the Docker/headless way (SER2NETWEB_BIND_IP re-saves the
     config): the old passwords and API token work, the trace move is logged, and the
     untouched 2.7.1 file is kept in data/backups/;
   * saves every mapping unchanged through the web form (posted as a browser posts it,

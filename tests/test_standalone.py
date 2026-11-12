@@ -11,11 +11,11 @@ refreshed (modification times kept) and, on Linux, the directory is locked, so t
 real systemd-tmpfiles (242+, when installed) skips it even at age 0 while it still
 removes a directory a killed run left behind.
 
-Binary part — opt-in: SER2NET_STANDALONE_BIN=<built ser2net or ser2net.exe> (the
+Binary part — opt-in: SER2NETWEB_STANDALONE_BIN=<built ser2net or ser2net.exe> (the
 CI 'standalone' jobs build the executables and set it):
   1. bundle: every ELF/PE inside needs only libraries that are bundled or part of
      the OS base (glibc; Windows system DLLs) — Linux: no glibc symbol newer than
-     SER2NET_MAX_GLIBC (default 2.28); Windows: VC++ runtime and Python inside;
+     SER2NETWEB_MAX_GLIBC (default 2.28); Windows: VC++ runtime and Python inside;
   2. run with an EMPTY PATH (no python, no openssl, nothing to borrow) and no
      PYTHON* variables: --version; it boots and serves the UI; a raw TCP mapping
      accepts a client; MQTT, LDAP and OIDC libraries are inside and import (no "not
@@ -31,11 +31,11 @@ CI 'standalone' jobs build the executables and set it):
      rate from a binary built for glibc 2.28) opens and relays the device's data;
   3. every shared library the running processes mapped comes from the bundle or
      the OS base (Linux /proc/<pid>/maps, Windows module list);
-  4. SER2NET_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
+  4. SER2NETWEB_STANDALONE_IMAGE=<docker image> runs part 2 inside a clean container
      of that distribution (no Python, no openssl, empty PATH) instead (the host's
      /dev/pts is mounted at /dev/hostpts for the PTY mapping). The test CA
      is mounted over the CA bundle the image has (or, for base images that ship
-     without ca-certificates, at SER2NET_STANDALONE_CA=<the distribution's path>),
+     without ca-certificates, at SER2NETWEB_STANDALONE_CA=<the distribution's path>),
      so the OIDC check also proves the binary found it on its own.
 Test-side needs: cryptography; pyelftools (Linux) or pefile (Windows); docker for 4.
 
@@ -68,14 +68,15 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 sys.path.insert(0, ROOT)
 
-from ser2netweb import __version__, standalone
+from ser2netweb import __version__, envvars, standalone
 from ser2netweb.web.auth import hash_password
 from _server import ui_cookie
 
-BIN = os.path.abspath(os.environ["SER2NET_STANDALONE_BIN"]) if os.environ.get("SER2NET_STANDALONE_BIN") else ""
-IMAGE = os.environ.get("SER2NET_STANDALONE_IMAGE", "")
-IMAGE_CA = os.environ.get("SER2NET_STANDALONE_CA", "")
-MAX_GLIBC = tuple(int(x) for x in os.environ.get("SER2NET_MAX_GLIBC", "2.28").split("."))
+_BIN = envvars.get("SER2NETWEB_STANDALONE_BIN")
+BIN = os.path.abspath(_BIN) if _BIN else ""
+IMAGE = envvars.get("SER2NETWEB_STANDALONE_IMAGE", "")
+IMAGE_CA = envvars.get("SER2NETWEB_STANDALONE_CA", "")
+MAX_GLIBC = tuple(int(x) for x in envvars.get("SER2NETWEB_MAX_GLIBC", "2.28").split("."))
 WINDOWS = os.name == "nt"
 PASSWORD = "standalone-pass-1"
 
@@ -507,13 +508,13 @@ def write_config(data_dir, ui, raw_port, issuer, mqtt_port, pty=None, baud_port=
 def image_ca_path():
     """Where the binary should find the CA bundle in IMAGE: the first of
     standalone.CA_BUNDLES the image has (some carry several — current Fedora has the
-    Debian path too), else SER2NET_STANDALONE_CA for images without ca-certificates."""
+    Debian path too), else SER2NETWEB_STANDALONE_CA for images without ca-certificates."""
     script = ("for f in " + " ".join(standalone.CA_BUNDLES) +
               '; do if [ -f "$f" ]; then echo "$f"; exit 0; fi; done')
     out = subprocess.run(["docker", "run", "--rm", "--entrypoint", "sh", IMAGE, "-c", script],
                          capture_output=True, text=True, timeout=300)
     found = out.stdout.strip()
-    assert found or IMAGE_CA, f"{IMAGE} has no CA bundle and SER2NET_STANDALONE_CA is not set"
+    assert found or IMAGE_CA, f"{IMAGE} has no CA bundle and SER2NETWEB_STANDALONE_CA is not set"
     return found or IMAGE_CA
 
 
@@ -778,7 +779,7 @@ def read(path):
 
 def test_binary():
     if not BIN:
-        print("SKIP standalone executable checks: set SER2NET_STANDALONE_BIN=<built binary> "
+        print("SKIP standalone executable checks: set SER2NETWEB_STANDALONE_BIN=<built binary> "
               "(the CI 'standalone' jobs do)")
         return
     where = f"in a clean {IMAGE} container" if IMAGE else "natively"
@@ -839,10 +840,10 @@ def test_binary():
             assert re.search(r"ldap3\s+2\.\d", about), f"bundled ldap3 not found:\n{about}"
             assert re.search(r"pyasn1\s+0\.\d", about), f"bundled pyasn1 not found:\n{about}"
             assert "not installed" not in about and "failed to import" not in about, about
-            about = run.output(["--about"], {"SER2NET_LIB_OVERRIDE": override})
+            about = run.output(["--about"], {"SER2NETWEB_LIB_OVERRIDE": override})
             assert re.search(r"ldap3\s+0\.0-override-test", about), \
-                f"SER2NET_LIB_OVERRIDE did not replace ldap3:\n{about}"
-            print(f"{where}: SER2NET_LIB_OVERRIDE loads a replacement ldap3 (LGPL)  OK")
+                f"SER2NETWEB_LIB_OVERRIDE did not replace ldap3:\n{about}"
+            print(f"{where}: SER2NETWEB_LIB_OVERRIDE loads a replacement ldap3 (LGPL)  OK")
 
         # the ports picked just before the start: the runs above take a while, and a port
         # freed that long is anyone's

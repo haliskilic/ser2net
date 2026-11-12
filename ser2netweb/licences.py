@@ -2,7 +2,7 @@
 
 ser2net is AGPL-3.0-only or under a commercial licence (NOTICE). AGPL-3.0 section 13 asks
 a modified version that users reach over a network to offer them its source: the footer
-of every page links source_url(), which SER2NET_SOURCE_URL changes for such a copy (an
+of every page links source_url(), which SER2NETWEB_SOURCE_URL changes for such a copy (an
 internal mirror of an air-gapped site, a fork). texts() are the licence texts this copy
 carries — LICENSE, NOTICE, COMMERCIAL_LICENSE.md and the third-party notices from a
 source tree or the Docker image, the generated THIRD-PARTY-LICENSES.txt in a standalone
@@ -16,9 +16,9 @@ import os
 import re
 import sys
 
-from . import SOURCE_URL
+from . import SOURCE_URL, envvars
 
-SOURCE_URL_ENV = "SER2NET_SOURCE_URL"
+SOURCE_URL_ENV = "SER2NETWEB_SOURCE_URL"  # (or SER2NET_SOURCE_URL, its 2.9.x name)
 # an http(s) address without spaces, quotes or angle brackets (it goes into an href)
 _URL = re.compile(r"https?://[^\s\"'<>`]{1,2000}", re.I)
 # the folder that holds ser2netweb/ (a source tree, the Docker image's /app; a standalone
@@ -27,17 +27,18 @@ _ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.pat
 
 
 def source_url(env=None) -> str:
-    """The address of this copy's source code: SER2NET_SOURCE_URL when it is an http:// or
-    https:// address, else ser2net's own."""
-    value = str((os.environ if env is None else env).get(SOURCE_URL_ENV, "")).strip()
+    """The address of this copy's source code: SER2NETWEB_SOURCE_URL when it is an http://
+    or https:// address, else ser2net's own."""
+    value = envvars.text(SOURCE_URL_ENV, env)
     return value if _URL.fullmatch(value) else SOURCE_URL
 
 
 def source_url_note(env=None) -> str:
-    """The start-up warning for a SER2NET_SOURCE_URL that is not used, else ""."""
-    value = str((os.environ if env is None else env).get(SOURCE_URL_ENV, "")).strip()
+    """The start-up warning for a SER2NETWEB_SOURCE_URL that is not used, else ""."""
+    value = envvars.text(SOURCE_URL_ENV, env)
     if value and not _URL.fullmatch(value):
-        return (f"WARNING: {SOURCE_URL_ENV} is not an http:// or https:// address; the web "
+        return (f"WARNING: {envvars.source(SOURCE_URL_ENV, env)} is not an http:// or https:// "
+                f"address; the web "
                 f"UI links {SOURCE_URL} as the source code")
     return ""
 

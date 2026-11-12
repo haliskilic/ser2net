@@ -52,15 +52,15 @@ Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest
 ## First admin and account recovery
 
 - **Headless first admin:** give the container the password in a file (a Docker secret)
-  and point `SER2NET_ADMIN_PASSWORD_FILE` at it; `SER2NET_ADMIN_USER` sets the name
+  and point `SER2NETWEB_ADMIN_PASSWORD_FILE` at it; `SER2NETWEB_ADMIN_USER` sets the name
   (default `admin`). It is used only while there is no account yet, and the password is
   never logged:
   ```yaml
   services:
     ser2net:
       environment:
-        SER2NET_ADMIN_USER: "admin"
-        SER2NET_ADMIN_PASSWORD_FILE: /run/secrets/ser2net_admin
+        SER2NETWEB_ADMIN_USER: "admin"
+        SER2NETWEB_ADMIN_PASSWORD_FILE: /run/secrets/ser2net_admin
       secrets: [ser2net_admin]
   secrets:
     ser2net_admin:
@@ -80,7 +80,7 @@ Build provenance: `gh attestation verify oci://ghcr.io/haliskilic/ser2net:latest
   Settings → *Configuration backups* → *Reload config.json*) has ser2net read it again
   without a restart: mappings whose settings didn't change keep their clients, a file that
   doesn't validate changes nothing (the log says why). The admin UI address comes from
-  `SER2NET_BIND_IP` / `SER2NET_PORT`, which a reload keeps.
+  `SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT`, which a reload keeps.
 
 ## Plain docker run
 
@@ -116,12 +116,12 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   Connect-out (client) mappings need nothing.
 - **Host network** (`--network host`, compose `network_mode: host`, no `-p`): every
   mapping port is reachable as soon as it is created, and the LAN cluster's discovery
-  works. Two things change: `SER2NET_BIND_IP` is then an address of the host itself
+  works. Two things change: `SER2NETWEB_BIND_IP` is then an address of the host itself
   (`0.0.0.0` = all its IPv4 interfaces, `*` = all of them, IPv4 and IPv6; set the LAN
   address to keep the UI off the others),
   and the unprivileged process can't open ports below 1024 there (Modbus TCP's 502): use
   1024 or above, the default network with `-p 502:502`, where Docker allows them, or
-  `-e SER2NET_LOW_PORTS=1` (compose: under `environment:`). That keeps the
+  `-e SER2NETWEB_LOW_PORTS=1` (compose: under `environment:`). That keeps the
   `CAP_NET_BIND_SERVICE` capability for the server, and only it, so whoever may edit
   mappings can then open any free port below 1024 of the host. It needs the capability in
   the container (Docker's default set has it); with `--cap-drop ALL` or
@@ -134,9 +134,15 @@ docker run -d --name ser2net --restart unless-stopped --init --stop-timeout 30 \
   publish the UI with the same port inside and out (`8080:8080`), since that is the port
   a node advertises.
 - **Bind address.** The admin UI binds to `0.0.0.0` *inside* the container (set via
-  `SER2NET_BIND_IP`, with `SER2NET_PORT` for the port). The container network plus the
+  `SER2NETWEB_BIND_IP`, with `SER2NETWEB_PORT` for the port). The container network plus the
   published port are the real perimeter — don't publish `8080` to an untrusted network
   without TLS. These env vars win on every start, so compose stays the source of truth.
+- **Variable names.** Every `SER2NETWEB_…` variable is also read under its name up to
+  2.9.x, `SER2NET_…` (`SER2NET_BIND_IP` and so on), so compose files and `docker run`
+  commands that use the old names keep working; when both are set, the `SER2NETWEB_…` one
+  wins. The image's own defaults (`SER2NET_BIND_IP=0.0.0.0`, `SER2NET_PORT=8080`) keep the
+  old names on purpose: either name of yours replaces them. All of them:
+  [README.en.md, Environment variables](../README.en.md#environment-variables).
 
 ## Behind a reverse proxy
 
@@ -147,11 +153,11 @@ In short:
 
 - the proxy passes the browser's address on as `Host` (or `X-Forwarded-Host`), passes
   WebSocket upgrades through and sends `X-Forwarded-For` / `X-Forwarded-Proto`;
-- `SER2NET_TRUSTED_PROXIES` lists the proxy's address as the container sees it (a proxy
+- `SER2NETWEB_TRUSTED_PROXIES` lists the proxy's address as the container sees it (a proxy
   container in the same network: that network's subnet; a proxy on the host: Docker's
   gateway, such as `172.17.0.1`), or Settings → Reverse proxy does; all.log names the
   address it ignored (`X-Forwarded-For from … is ignored`);
-- `SER2NET_PUBLIC_URL` is the address users open (`https://ser2net.example.com`, or with a
+- `SER2NETWEB_PUBLIC_URL` is the address users open (`https://ser2net.example.com`, or with a
   path the UI is served under: `https://gw.example.com/ser2net`);
 - the UI port stays off the network: publish it to the host only (`127.0.0.1:8080:8080`),
   or not at all when the proxy runs in the same Docker network.
@@ -160,8 +166,8 @@ In short:
 
 One container per instance, each with its own volume, `container_name` and published UI
 port (inside, every one listens on 8080: `-p 8081:8080`; for the LAN cluster use the same
-port inside and out, `SER2NET_PORT=8081` and `-p 8081:8081`, since that is the port a node
-advertises). Give each a name with `SER2NET_NODE_NAME` (or Settings → Admin interface):
+port inside and out, `SER2NETWEB_PORT=8081` and `-p 8081:8081`, since that is the port a node
+advertises). Give each a name with `SER2NETWEB_NODE_NAME` (or Settings → Admin interface):
 notifications, the browser tab, the top bar and the fleet view then tell them apart.
 Without one they show the container's host name, which is its id unless `hostname:` /
 `--hostname` sets one, and a new id comes with every re-creation (an image upgrade).
@@ -212,7 +218,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   up and `unhealthy` while the mappings run, and the UI comes up once the port is free.
   So that a stuck event loop doesn't leave a container that runs but forwards nothing,
   ser2net exits by itself when its loop has not run for 90 s (its threads' stacks in
-  `/data/hang.log`), and the restart policy starts it again; `SER2NET_LOOP_WATCHDOG` sets
+  `/data/hang.log`), and the restart policy starts it again; `SER2NETWEB_LOOP_WATCHDOG` sets
   the limit in seconds (`0` = off). A busy container is not affected: it gets back to its
   loop within about a second, and `docker pause` is not counted.
 - **Logs.** Every log line goes to `/data/all.log` (rotated at 10 MB, 5 old files kept) and to the
@@ -223,7 +229,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   log and backups is set under Settings → *Retention* (off by default; see the README's
   *Retention*); the container's output is kept by Docker's settings alone. The lines name
   clients and the web UI's users by IP address and user name (see
-  [PRIVACY.md](PRIVACY.md)); `-e SER2NET_LOG_STDOUT=off` keeps them in `/data/all.log`
+  [PRIVACY.md](PRIVACY.md)); `-e SER2NETWEB_LOG_STDOUT=off` keeps them in `/data/all.log`
   only (`docker logs` then shows just what isn't a log line, such as a start-up error), and
   Settings → Audit log → *Web UI requests in all.log* can leave out page views or every
   request line.
@@ -241,7 +247,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   as root. The entrypoint starts as root only to choose the account: a `/data` owned by
   root — a volume written by an image before v2.8, which ran as root — is handed to
   `ser2net` once (logged), so **upgrading needs no manual step** — except on the host
-  network with a port below 1024, which root could open: add `SER2NET_LOW_PORTS=1`
+  network with a port below 1024, which root could open: add `SER2NETWEB_LOW_PORTS=1`
   ([Ports and networking](#ports-and-networking)). A bind-mounted folder
   owned by another user is used as that user, so the folder keeps its owner; files in it
   that an image wrote (owned by root, as with the images before v2.8, or by uid 10001)
@@ -267,7 +273,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   `/data` like a password vault. `/data` must be writable: mount the whole
   directory, not `config.json` on its own (it is replaced atomically, which a single-file
   mount doesn't allow). A start rewrites `config.json` only when something changed (the
-  `SER2NET_*` address, an upgrade).
+  `SER2NETWEB_*` address, an upgrade).
 - **Starting over.** `docker compose down -v` removes the container, its log and the
   `ser2net-data` volume — `config.json`, `backups/`, `all.log*`, `audit.log*`, `logs/`,
   `traces/` and `tls/` (plain `docker run`: `docker rm -f ser2net` and `docker volume rm`
@@ -281,7 +287,7 @@ and session key. README, *Several instances on one machine*, has the whole check
   still starts: the log names each one (`WARNING: config.json: mapping '…': …`), the
   mappings that can start run, and the value is kept as it is. Other changes can still be
   saved — a save is refused only for what it changes or adds — so sign in and fix or
-  remove that part when you can. An unusable `SER2NET_BIND_IP` / `SER2NET_PORT`, an
+  remove that part when you can. An unusable `SER2NETWEB_BIND_IP` / `SER2NETWEB_PORT`, an
   unreadable or broken `config.json` and a missing admin UI certificate still stop the
   start, with a one-line message. Moving a native install's data directory to `/data`: a
   certificate generated in its `tls/` folder is found in `/data/tls/` (the log says so and

@@ -7,7 +7,7 @@ language, Sparkplug B, coil / discrete-input points, writable points, trace rota
 account made by 2.8.0. This test:
   * loads it with the current code: it validates, nothing is noted, and every key/value
     2.8.0 wrote is still there after a save (EXPECTED_CHANGES: none);
-  * boots the real server on it the Docker/headless way (SER2NET_BIND_IP re-saves the
+  * boots the real server on it the Docker/headless way (SER2NETWEB_BIND_IP re-saves the
     config), in a data folder laid out as 2.8.0 leaves one (built here: audit.log and
     audit.log.1 with 4-column 2.7 and 5-column 2.8 records, backups named
     config-<UTC>.json and config-<UTC>-2.json, a mapping's log, traces with .1 / .2
@@ -171,7 +171,7 @@ def main():
     root = tempfile.mkdtemp(prefix="s2n_up28_")
     try:
         srv = Server(data_dir=os.path.join(root, "data"))
-        # the address the server is started with (SER2NET_PORT) is saved at start
+        # the address the server is started with (SER2NETWEB_PORT) is saved at start
         boot["admin_ui"]["port"] = srv.port
         make_data_folder(srv.data, boot)
         with srv:

@@ -6,7 +6,7 @@ set; the 513th used to make select() raise inside the loop, which stopped the pr
 every bridge, Modbus poll and MQTT publisher (and as a service, again after each restart).
 Now the loop's selector (CappedSelectSelector) refuses a registration past the limit with
 an OSError for whoever asked, and incoming connections are refused, with a log line, while
-it watches all but SELECT_HEADROOM of them. SER2NET_WINDOWS_LOOP=proactor runs the
+it watches all but SELECT_HEADROOM of them. SER2NETWEB_WINDOWS_LOOP=proactor runs the
 ProactorEventLoop instead (no such limit). A fatal error reaches all.log, not only stderr.
 
 Portable: the decision (event_loop_choice / loop_factory), the capped selector, and the
@@ -39,18 +39,18 @@ PW = "event-loop-pass-1"
 
 def test_choice():
     assert runtime.event_loop_choice("linux", {}) == ("default", "")
-    assert runtime.event_loop_choice("darwin", {"SER2NET_WINDOWS_LOOP": "proactor"})[0] == "default"
+    assert runtime.event_loop_choice("darwin", {"SER2NETWEB_WINDOWS_LOOP": "proactor"})[0] == "default"
     choice, note = runtime.event_loop_choice("win32", {})
     assert choice == "selector" and "at most 512 sockets" in note and "proactor" in note, note
-    assert runtime.event_loop_choice("win32", {"SER2NET_WINDOWS_LOOP": "selector"})[0] == "selector"
-    choice, note = runtime.event_loop_choice("win32", {"SER2NET_WINDOWS_LOOP": " Proactor "})
+    assert runtime.event_loop_choice("win32", {"SER2NETWEB_WINDOWS_LOOP": "selector"})[0] == "selector"
+    choice, note = runtime.event_loop_choice("win32", {"SER2NETWEB_WINDOWS_LOOP": " Proactor "})
     assert choice == "proactor" and "no 512-socket limit" in note, note
-    choice, note = runtime.event_loop_choice("win32", {"SER2NET_WINDOWS_LOOP": "fast"})
-    assert choice == "selector" and note.startswith("SER2NET_WINDOWS_LOOP='fast' is neither")
+    choice, note = runtime.event_loop_choice("win32", {"SER2NETWEB_WINDOWS_LOOP": "fast"})
+    assert choice == "selector" and note.startswith("SER2NETWEB_WINDOWS_LOOP='fast' is neither")
     assert runtime.loop_factory("default") is None
     if sys.platform != "win32":
         assert runtime.loop_factory("proactor") is None
-    print("event_loop_choice: Windows selector unless SER2NET_WINDOWS_LOOP=proactor; "
+    print("event_loop_choice: Windows selector unless SER2NETWEB_WINDOWS_LOOP=proactor; "
           "elsewhere the default loop  OK")
 
 
@@ -207,7 +207,7 @@ def test_fatal_error_reaches_the_log():
         "    raise RuntimeError('selector exploded')\n"
         "runtime._serve = broken\n"
         f"runtime.main({os.path.join(data, 'config.json')!r})\n")
-    env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT="1")
+    env = dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT="1")
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                           env=env, timeout=60)
     assert proc.returncode != 0, "a fatal error must still end the process"
@@ -270,10 +270,10 @@ def test_windows_600_idle_sockets():
 
 
 def test_windows_proactor_boots():
-    with Server(_config(), env={"SER2NET_WINDOWS_LOOP": "proactor"}) as srv:
+    with Server(_config(), env={"SER2NETWEB_WINDOWS_LOOP": "proactor"}) as srv:
         assert _healthz(srv.port)
         assert "event loop: proactor" in srv.output(), srv.output()[-2000:]
-    print("Windows: SER2NET_WINDOWS_LOOP=proactor boots on the proactor loop  OK")
+    print("Windows: SER2NETWEB_WINDOWS_LOOP=proactor boots on the proactor loop  OK")
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@
 {{ r }} ({% if r == 'admin' %}{{ _("everything") }}{% elif r == 'operator' %}{{ _("manage mappings") }}{% else %}{{ _("read-only") }}{% endif %})
 {%- endmacro %}
 {% macro package_problem(p, what) -%}
-<div class="banner warn">{% if p.missing and p.frozen %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is missing from this executable, which should contain it; please report this. Local accounts still work.', what=what, package=p.dist) }}{% elif p.missing %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is not installed, so it won’t work until you install it: <span class="mono">%(command)s</span>. Local accounts still work.', what=what, package=p.dist, command=p.hint) }}{% else %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is installed and failed to import, so it won’t work until that is fixed and ser2net restarted. Local accounts still work. The error: <span class="mono">%(error)s</span>', what=what, package=p.dist, error=p.error) }}{% if p.override %} {{ _('SER2NET_LIB_OVERRIDE loads modules from <span class="mono">%(folder)s</span> first; check the copy there.', folder=p.override) }}{% endif %}{% endif %}</div>
+<div class="banner warn">{% if p.missing and p.frozen %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is missing from this executable, which should contain it; please report this. Local accounts still work.', what=what, package=p.dist) }}{% elif p.missing %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is not installed, so it won’t work until you install it: <span class="mono">%(command)s</span>. Local accounts still work.', what=what, package=p.dist, command=p.hint) }}{% else %}{{ _('%(what)s is on, but <span class="mono">%(package)s</span> is installed and failed to import, so it won’t work until that is fixed and ser2net restarted. Local accounts still work. The error: <span class="mono">%(error)s</span>', what=what, package=p.dist, error=p.error) }}{% if p.override %} {{ _('%(name)s loads modules from <span class="mono">%(folder)s</span> first; check the copy there.', name=p.override_env, folder=p.override) }}{% endif %}{% endif %}</div>
 {%- endmacro %}
 
 <section class="panel panel-narrow" id="account">
@@ -69,7 +69,7 @@
   {% if pending_tls %}<div class="banner warn">{{ _('The admin TLS settings saved are used from the next start.') }}</div>{% endif %}
   {% if public_url %}<p>{{ _('Published as <a class="mono" href="%(url)s">%(url)s</a> (Settings → Reverse proxy)', url=public_url) }}</p>{% endif %}
   {% if address_hint == 'env' %}
-  <p class="muted">{{ _('The address comes from <span class="mono">SER2NET_BIND_IP</span> / <span class="mono">SER2NET_PORT</span> (for a container: its environment), which win over config.json at every start: change them there and start ser2net (the container) again.') }}</p>
+  <p class="muted">{{ _('The address comes from <span class="mono">SER2NETWEB_BIND_IP</span> / <span class="mono">SER2NETWEB_PORT</span> (for a container: its environment), which win over config.json at every start: change them there and start ser2net (the container) again.') }}</p>
   {% elif address_hint == 'service' %}
   <p class="muted">{{ _('To change the address, run <span class="mono">%(command)s</span> from an elevated prompt: it stops the service, asks for the address and starts the service again.', command=address_command) }}</p>
   {% else %}
@@ -577,11 +577,11 @@
     <label>{{ _("Public URL") }} <span class="muted">({{ _("the address users open, such as https://ser2net.example.com, or https://gw.example.com/ser2net to serve the UI under that path too · blank: none") }})</span>
       {% if public_url_env %}<input type="url" value="{{ public_url }}" disabled>
       {% else %}<input type="url" name="public_url" value="{{ admin.public_url }}" placeholder="https://ser2net.example.com" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
-    {% if public_url_env %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name='SER2NET_PUBLIC_URL') }}</p>{% endif %}
+    {% if public_url_env %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name=public_url_env) }}</p>{% endif %}
     <label>{{ _("Trusted proxies") }} <span class="muted">({{ _("IP addresses or networks of the proxies, such as 127.0.0.1 or 172.18.0.0/16 · blank: none") }})</span>
-      {% if trusted[1] == 'SER2NET_TRUSTED_PROXIES' %}<input type="text" value="{{ trusted[0]|join(' ') }}" disabled>
+      {% if trusted_env %}<input type="text" value="{{ trusted[0]|join(' ') }}" disabled>
       {% else %}<input type="text" name="trusted_proxies" value="{{ admin.trusted_proxies|join(' ') }}" autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore>{% endif %}</label>
-    {% if trusted[1] == 'SER2NET_TRUSTED_PROXIES' %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name='SER2NET_TRUSTED_PROXIES') }}</p>
+    {% if trusted_env %}<p class="muted">{{ _('Set by <span class="mono">%(name)s</span> for this run; the field takes effect again once that is removed.', name=trusted_env) }}</p>
     {% elif trusted[1] == 'FORWARDED_ALLOW_IPS' %}<p class="muted">{{ _('<span class="mono">FORWARDED_ALLOW_IPS</span> gives <span class="mono">%(list)s</span> while this is blank.', list=trusted[0]|join(' ')) }}</p>{% endif %}
     <p class="muted">{{ _("Only a connection from one of them may say who the client is (X-Forwarded-For: for the sign-in limits, the audit log and all.log) and that the browser used HTTPS (X-Forwarded-Proto). Without them every client behind a proxy has the proxy’s address.") }}</p>
     <label class="chk"><input type="checkbox" name="proxy_hsts" {% if admin.proxy_hsts %}checked{% endif %}> {{ _("Send HSTS on HTTPS through the proxy") }}</label>

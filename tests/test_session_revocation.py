@@ -215,7 +215,8 @@ def test_key_saved_at_start():
     path = os.path.join(d, "config.json")
     with open(path, "w") as fh:
         json.dump({"users": [user("admin", "admin")]}, fh)  # no secret_key / instance_id
-    env = os.environ.pop("SER2NET_BIND_IP", None)
+    env = {k: os.environ.pop(k) for k in ("SER2NETWEB_BIND_IP", "SER2NET_BIND_IP")
+           if k in os.environ}
     try:
         runtime.prepare_config(path)
         with open(path) as fh:
@@ -224,8 +225,7 @@ def test_key_saved_at_start():
         with open(path) as fh:
             second = json.load(fh)
     finally:
-        if env is not None:
-            os.environ["SER2NET_BIND_IP"] = env
+        os.environ.update(env)
         shutil.rmtree(d, ignore_errors=True)
     assert first["secret_key"] and first["instance_id"], first
     assert (second["secret_key"], second["instance_id"]) == (first["secret_key"], first["instance_id"])

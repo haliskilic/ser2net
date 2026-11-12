@@ -6,7 +6,7 @@
         b.login("admin", "pw")
         status, headers, body = b.post("/settings/access", {...})
 
-The server runs as a subprocess (`ser2netweb.py --no-bootstrap`) with SER2NET_BIND_IP set,
+The server runs as a subprocess (`ser2netweb.py --no-bootstrap`) with SER2NETWEB_BIND_IP set,
 like a Docker / headless boot, and logs to a file (never an unread pipe).
 """
 from __future__ import annotations
@@ -164,7 +164,7 @@ class Server:
         if config is not None:
             with open(self.config_path, "w", encoding="utf-8") as fh:
                 json.dump(config, fh, indent=2)
-        self.env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(self.port),
+        self.env = dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(self.port),
                         **(env or {}))
         self.base = f"http://127.0.0.1:{self.port}"
 

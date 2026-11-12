@@ -15,7 +15,8 @@ import contextlib
 import os
 import sys
 
-from ser2netweb import __version__
+from ser2netweb import __version__, envvars
+from ser2netweb.optional import LIB_OVERRIDE_ENV
 
 # the source tree (the folder that holds ser2netweb/, bootstrap.py and ./lib), or a frozen
 # build's unpacked files
@@ -121,15 +122,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def apply_lib_override() -> None:
-    """SER2NET_LIB_OVERRIDE=<dir>: import Python modules from <dir> before the bundled
-    ones. The standalone executable keeps the LGPL-licensed ldap3 as plain source files
+    """SER2NETWEB_LIB_OVERRIDE=<dir> (or SER2NET_LIB_OVERRIDE, its 2.9.x name): import Python
+    modules from <dir> before the bundled ones. The standalone executable keeps the LGPL-licensed ldap3 as plain source files
     for this, so it can be replaced by another (e.g. modified) version without
     rebuilding ser2net. Only an explicitly set variable is honoured — a directory is
     never picked up just because it exists next to the executable."""
-    d = os.environ.get("SER2NET_LIB_OVERRIDE", "").strip()
+    d = envvars.text(LIB_OVERRIDE_ENV)
     if d:
         if not os.path.isdir(d):
-            raise SystemExit(f"SER2NET_LIB_OVERRIDE: not a directory: {d}")
+            raise SystemExit(f"{envvars.source(LIB_OVERRIDE_ENV)}: not a directory: {d}")
         sys.path.insert(0, os.path.abspath(d))
 
 
@@ -158,15 +159,14 @@ def print_licenses() -> int:
 
 # what --about writes for the folders it shortens (a bug report shows which copy of a
 # package is loaded, not the account name in the path)
-_ROOT_LABELS = {"<override>": "SER2NET_LIB_OVERRIDE", "<bundle>": "the executable's files",
+_ROOT_LABELS = {"<override>": LIB_OVERRIDE_ENV, "<bundle>": "the executable's files",
                 "<ser2net>": "ser2net's folder", "<python>": "the Python installation",
                 "~": "the home folder"}
 
 
 def _known_roots(env=None) -> list[tuple[str, str]]:
     """(label, folder) of the folders --about writes as a short label (_ROOT_LABELS)."""
-    env = os.environ if env is None else env
-    roots = [("<override>", (env.get("SER2NET_LIB_OVERRIDE") or "").strip()),
+    roots = [("<override>", envvars.text(LIB_OVERRIDE_ENV, env)),
              ("<bundle>", getattr(sys, "_MEIPASS", "") or ""),
              ("<ser2net>", ROOT), ("<python>", sys.prefix),
              ("~", os.path.expanduser("~"))]
@@ -233,7 +233,8 @@ def print_about() -> int:
             where = _where(where, roots)
             used.add(where.split(os.sep, 1)[0])
         lines.append(f"  {dist:{width}} {version}  ({where})")
-    legend = [f"{label} = {text}" for label, text in _ROOT_LABELS.items() if label in used]
+    labels = dict(_ROOT_LABELS, **{"<override>": envvars.source(LIB_OVERRIDE_ENV)})
+    legend = [f"{label} = {text}" for label, text in labels.items() if label in used]
     if legend:
         lines.append(f"  ({', '.join(legend)})")
     _write_utf8("\n".join(lines) + "\n")

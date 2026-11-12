@@ -1,7 +1,7 @@
 """How much of the web UI's activity is logged, and where.
 
 Checks:
-  * SER2NET_LOG_STDOUT=off writes the log lines only to all.log (not to stdout, which the
+  * SER2NETWEB_LOG_STDOUT=off writes the log lines only to all.log (not to stdout, which the
     journal or Docker's container log keep a copy of); on / unset as before; another value
     keeps stdout and says so; when all.log can't be opened, stdout stays;
   * admin_ui.request_log: "all" (default) as before, "changes" logs only requests that
@@ -42,7 +42,8 @@ def _close_loggers():
 
 def _handlers(env: dict, data: str):
     with mock.patch.dict(os.environ, env):
-        if "SER2NET_LOG_STDOUT" not in env:
+        if "SER2NETWEB_LOG_STDOUT" not in env:
+            os.environ.pop("SER2NETWEB_LOG_STDOUT", None)
             os.environ.pop("SER2NET_LOG_STDOUT", None)
         state = st.AppState(ConfigStore(os.path.join(data, "config.json")), AppConfig())
     # (the console copy is written by a thread of its own: its handler's target)
@@ -55,36 +56,36 @@ def _handlers(env: dict, data: str):
 def test_stdout_switch():
     assert st.log_stdout({}) == (True, "")
     for value in ("on", "ON", "1", "yes", "true", " on "):
-        assert st.log_stdout({"SER2NET_LOG_STDOUT": value}) == (True, ""), value
+        assert st.log_stdout({"SER2NETWEB_LOG_STDOUT": value}) == (True, ""), value
     for value in ("off", "Off", "0", "no", "false"):
-        assert st.log_stdout({"SER2NET_LOG_STDOUT": value}) == (False, ""), value
-    on, problem = st.log_stdout({"SER2NET_LOG_STDOUT": "warnings"})
+        assert st.log_stdout({"SER2NETWEB_LOG_STDOUT": value}) == (False, ""), value
+    on, problem = st.log_stdout({"SER2NETWEB_LOG_STDOUT": "warnings"})
     assert on and "is not on or off" in problem, problem
     d = tempfile.mkdtemp(prefix="s2n_actlog_")
     try:
         _state, kinds = _handlers({}, d)
         assert kinds == ["file", "stdout"], kinds
         _close_loggers()
-        state, kinds = _handlers({"SER2NET_LOG_STDOUT": "off"}, d)
+        state, kinds = _handlers({"SER2NETWEB_LOG_STDOUT": "off"}, d)
         assert kinds == ["file"], kinds
         state.log("only in all.log")
         _close_loggers()
         with open(os.path.join(d, "all.log"), encoding="utf-8") as fh:
             assert "only in all.log" in fh.read()
-        state, kinds = _handlers({"SER2NET_LOG_STDOUT": "sometimes"}, d)
+        state, kinds = _handlers({"SER2NETWEB_LOG_STDOUT": "sometimes"}, d)
         assert kinds == ["file", "stdout"], kinds
         _close_loggers()
         with open(os.path.join(d, "all.log"), encoding="utf-8") as fh:
-            assert "SER2NET_LOG_STDOUT='sometimes' is not on or off" in fh.read()
+            assert "SER2NETWEB_LOG_STDOUT='sometimes' is not on or off" in fh.read()
         # all.log can't be opened (a folder in its place): stdout stays, or nothing would
         blocked = os.path.join(d, "blocked")
         os.makedirs(os.path.join(blocked, "all.log"))
-        _state, kinds = _handlers({"SER2NET_LOG_STDOUT": "off"}, blocked)
+        _state, kinds = _handlers({"SER2NETWEB_LOG_STDOUT": "off"}, blocked)
         assert kinds == ["stdout"], kinds
     finally:
         _close_loggers()
         shutil.rmtree(d, ignore_errors=True)
-    print("SER2NET_LOG_STDOUT: off = all.log only; on / unset / unknown (with a warning) = "
+    print("SER2NETWEB_LOG_STDOUT: off = all.log only; on / unset / unknown (with a warning) = "
           "stdout too; stdout stays when all.log can't be opened  OK")
 
 
@@ -132,7 +133,7 @@ def test_settings_and_live_server():
               "pwd_version": 1},
              {"username": "op", "password_hash": hash_password(PW), "role": "operator",
               "pwd_version": 1}]
-    with Server({"users": users}, env={"SER2NET_LOG_STDOUT": "off"}) as srv:
+    with Server({"users": users}, env={"SER2NETWEB_LOG_STDOUT": "off"}) as srv:
         b = Browser(srv.base)
         b.login("admin", PW)
         b.get("/settings")
@@ -176,7 +177,7 @@ def test_settings_and_live_server():
             audit = fh.read()
         assert "\trequest_log_set\tchanges\tadmin" in audit and "\trequest_log_set\toff\tadmin" \
             in audit, audit
-    print("live: SER2NET_LOG_STDOUT=off keeps stdout empty of log lines; Settings -> Audit "
+    print("live: SER2NETWEB_LOG_STDOUT=off keeps stdout empty of log lines; Settings -> Audit "
           "log sets the request log (admin only, audited); changes / off log as described  OK")
 
 

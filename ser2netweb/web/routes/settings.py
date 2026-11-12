@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from ... import clock, console, i18n, importer, optional, reload, storage, tlsreload
+from ... import clock, console, envvars, i18n, importer, optional, reload, storage, tlsreload
 from ...config import (
     API_TOKEN_DAYS_MAX, API_TOKEN_NAME, API_TOKEN_ROLES, API_TOKENS_MAX, BACKUPS_MIN_KEPT,
     EXPIRE_DAYS_MAX, EXPIRE_DAYS_MIN, HSTS_MAX_AGE_MAX, LOG_DAYS_MAX, NODE_NAME_ENV,
@@ -168,6 +168,7 @@ def routes(ctx: Ctx) -> list:
         ldap_problem, oidc_problem = await asyncio.to_thread(_package_problems)
         # the redirect URI a sign-in started from this page's address would send
         published = proxy.public_url(state.config.admin_ui)
+        trusted = proxy.trusted_entries(state.config.admin_ui)
         oidc_redirect = oidc_auth.redirect_uri(state.config.oidc, request, published)
         server_clock = await asyncio.to_thread(_clock_and_certificate, admin)
         # a page sent as the answer to a form names the page's own address: the address bar
@@ -200,9 +201,13 @@ def routes(ctx: Ctx) -> list:
                       hostname=socket.gethostname(), node_name_max=NODE_NAME_MAX,
                       request_log_modes=REQUEST_LOG_MODES, login_notice_max=LOGIN_NOTICE_MAX,
                       login_notice_url_max=LOGIN_NOTICE_URL_MAX,
-                      node_name_env=NODE_NAME_ENV if node_name_from_env() else "",
-                      public_url=published, public_url_env=bool(proxy.public_url_from_env()),
-                      trusted=proxy.trusted_entries(state.config.admin_ui),
+                      # the variables that set them for this run, named as they are set
+                      node_name_env=envvars.source(NODE_NAME_ENV) if node_name_from_env() else "",
+                      public_url=published,
+                      public_url_env=(envvars.source(proxy.PUBLIC_URL_ENV)
+                                      if proxy.public_url_from_env() else ""),
+                      trusted=trusted, trusted_env=(trusted[1] if trusted[1] in (
+                          proxy.TRUSTED_ENV, envvars.old_name(proxy.TRUSTED_ENV)) else ""),
                       api_token_set=bool(state.config.api_token_hash),
                       api_token_role=state.config.api_token_role,
                       api_token_last_used=_used(""), api_token_rows=_api_token_rows(),

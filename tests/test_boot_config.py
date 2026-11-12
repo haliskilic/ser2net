@@ -1,6 +1,6 @@
 """Start-up never refuses a config.json that loads, and rewrites it only when it changed.
 
-A start with SER2NET_BIND_IP set (Docker, headless) used to validate and re-save
+A start with SER2NETWEB_BIND_IP set (Docker, headless) used to validate and re-save
 config.json every time: one setting the current rules reject (a mapping's TLS file that
 is not in the container, a hand edit, a stricter rule in a later release) or a file that
 can't be replaced (mounted on its own, read-only, a full disk) ended the start with a
@@ -17,10 +17,10 @@ way a container starts:
   * a write that fails is a warning, not a crash, and so is a file a check looks for
     that goes away while the start saves;
   * what start-up adds for the accounts — the first admin from
-    SER2NET_ADMIN_PASSWORD_FILE, the session key and cluster id of a config.json that
+    SER2NETWEB_ADMIN_PASSWORD_FILE, the session key and cluster id of a config.json that
     had none — is saved once, also while a setting is accepted broken, and the next
     start leaves the file alone;
-  * fatal with one line and no traceback: an unusable SER2NET_BIND_IP / SER2NET_PORT, a
+  * fatal with one line and no traceback: an unusable SER2NETWEB_BIND_IP / SER2NETWEB_PORT, a
     config.json that can't be read or parsed, a first run that can't create it, an admin
     UI certificate that can't be read.
 Cross-platform (the unreadable-file case is POSIX only).
@@ -49,7 +49,7 @@ from ser2netweb.web.auth import hash_password, hash_token
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "config-2.7.1.json")
 # fixed port: the config code reads it; nothing here listens on it (the one service start
 # with it stops at a broken config.json first)
-CONTAINER = {"SER2NET_BIND_IP": "0.0.0.0", "SER2NET_PORT": "8080"}
+CONTAINER = {"SER2NETWEB_BIND_IP": "0.0.0.0", "SER2NETWEB_PORT": "8080"}
 
 
 @contextlib.contextmanager
@@ -138,12 +138,12 @@ def test_left_alone_unless_changed():
             assert backups(data) == kept and warnings(cfg) == [], (backups(data), cfg.load_notes)
         print("same settings on the next start: config.json not rewritten, no new backup  OK")
 
-        with env(SER2NET_BIND_IP="0.0.0.0", SER2NET_PORT="9090"):
+        with env(SER2NETWEB_BIND_IP="0.0.0.0", SER2NETWEB_PORT="9090"):
             runtime.prepare_config(path)
         with open(path, encoding="utf-8") as fh:
             assert json.load(fh)["admin_ui"]["port"] == 9090
         assert len(backups(data)) == 2, backups(data)
-        print("a new SER2NET_PORT: saved, and kept in backups/ next to the previous file  OK")
+        print("a new SER2NETWEB_PORT: saved, and kept in backups/ next to the previous file  OK")
 
         shutil.copy(FIXTURE, path)  # an upgrade: 2.8 adds keys and moves the trace paths
         with env(**CONTAINER):
@@ -408,7 +408,7 @@ def test_accounts_saved_once():
     data = new_dir()
     path = os.path.join(data, "config.json")
     pwfile = os.path.join(data, "admin-password.txt")
-    no_env = {"SER2NET_BIND_IP": None, "SER2NET_PORT": None}  # only the accounts change it
+    no_env = {"SER2NETWEB_BIND_IP": None, "SER2NETWEB_PORT": None}  # only the accounts change it
     try:
         with open(pwfile, "w", encoding="utf-8") as fh:
             fh.write("boot-admin-pass-1\n")
@@ -416,7 +416,7 @@ def test_accounts_saved_once():
         doc["users"] = []
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(doc, fh)
-        with env(SER2NET_ADMIN_PASSWORD_FILE=pwfile, SER2NET_ADMIN_USER="boss", **no_env):
+        with env(SER2NETWEB_ADMIN_PASSWORD_FILE=pwfile, SER2NETWEB_ADMIN_USER="boss", **no_env):
             _store, cfg = runtime.prepare_config(path)
             saved = read_json(path)
             assert [(u["username"], u["role"]) for u in saved["users"]] == [("boss", "admin")]
@@ -425,14 +425,14 @@ def test_accounts_saved_once():
                     saved["mappings"][4]["serial"]["baudrate"]) == (70000, MISSING, 0), \
                 "the broken parts must stay as they were"
             assert len(backups(data)) == 2, backups(data)  # the file it replaced, and the new one
-            assert "admin account 'boss' created from SER2NET_ADMIN_PASSWORD_FILE" in cfg.load_notes
-            assert "first_run_setup\tSER2NET_ADMIN_PASSWORD_FILE\tboss" in \
+            assert "admin account 'boss' created from SER2NETWEB_ADMIN_PASSWORD_FILE" in cfg.load_notes
+            assert "first_run_setup\tSER2NETWEB_ADMIN_PASSWORD_FILE\tboss" in \
                 read_text(os.path.join(data, "audit.log"))
             before, kept = file_state(path), backups(data)
             _store, cfg = runtime.prepare_config(path)
             assert file_state(path) == before and backups(data) == kept, "rewritten on a restart"
-            assert any("SER2NET_ADMIN_PASSWORD_FILE is ignored" in n for n in cfg.load_notes)
-        print("SER2NET_ADMIN_PASSWORD_FILE with a setting accepted broken: the admin, session "
+            assert any("SER2NETWEB_ADMIN_PASSWORD_FILE is ignored" in n for n in cfg.load_notes)
+        print("SER2NETWEB_ADMIN_PASSWORD_FILE with a setting accepted broken: the admin, session "
               "key and cluster id saved once, the next start leaves config.json alone  OK")
 
         doc = read_json(path)
@@ -462,7 +462,7 @@ def test_write_failure_is_a_warning():
         before = file_state(path)
         busy = OSError(errno.EBUSY, "Device or resource busy")
         busy.filename, busy.filename2 = os.path.join(data, ".cfg.x.tmp"), path
-        with env(SER2NET_BIND_IP="0.0.0.0", SER2NET_PORT="9191"), failing_save(busy):
+        with env(SER2NETWEB_BIND_IP="0.0.0.0", SER2NETWEB_PORT="9191"), failing_save(busy):
             _store, cfg = runtime.prepare_config(path)
         assert cfg.admin_ui.port == 9191, "the env address applies to this run"
         assert file_state(path) == before
@@ -497,13 +497,13 @@ def test_file_gone_while_saving():
                 "network": {"mode": "server", "port": 4200, "tls": True, "tls_cert": cert,
                             "tls_key": cert}}]}, fh)
         AppConfig.tolerate_problems = tolerate_then_lose_the_file
-        with env(SER2NET_BIND_IP=None, SER2NET_PORT=None):
+        with env(SER2NETWEB_BIND_IP=None, SER2NETWEB_PORT=None):
             _store, cfg = runtime.prepare_config(path)
         AppConfig.tolerate_problems = real
         saved = read_json(path)
         assert saved["secret_key"] == cfg.secret_key and saved["instance_id"], saved
         assert saved["mappings"][0]["network"]["tls_cert"] == cert
-        with env(SER2NET_BIND_IP=None, SER2NET_PORT=None):
+        with env(SER2NETWEB_BIND_IP=None, SER2NETWEB_PORT=None):
             _store, cfg = runtime.prepare_config(path)
         assert any("TLS file not found" in w for w in warnings(cfg)), cfg.load_notes
         print("a file a check looks for, gone while start-up saves: saved anyway, the next "
@@ -577,23 +577,23 @@ def test_fatal_with_one_line():
     data = new_dir()
     path = os.path.join(data, "config.json")
     try:
-        with env(SER2NET_BIND_IP="eth0", SER2NET_PORT=None):
+        with env(SER2NETWEB_BIND_IP="eth0", SER2NETWEB_PORT=None):
             msg = exits_with(runtime.prepare_config, path)
-            assert "SER2NET_BIND_IP must be an IP address" in msg and "'eth0'" in msg, msg
-        with env(SER2NET_BIND_IP="0.0.0.0", SER2NET_PORT="70000"):
+            assert "SER2NETWEB_BIND_IP must be an IP address" in msg and "'eth0'" in msg, msg
+        with env(SER2NETWEB_BIND_IP="0.0.0.0", SER2NETWEB_PORT="70000"):
             msg = exits_with(runtime.prepare_config, path)
-            assert "SER2NET_PORT must be a port number" in msg, msg
+            assert "SER2NETWEB_PORT must be a port number" in msg, msg
         assert not os.path.exists(path), "nothing may be written before the env is checked"
-        with env(SER2NET_BIND_IP="0.0.0.0", SER2NET_PORT="80a"):
+        with env(SER2NETWEB_BIND_IP="0.0.0.0", SER2NETWEB_PORT="80a"):
             _store, cfg = runtime.prepare_config(path)
             assert cfg.admin_ui.port == 8080
-            assert any("SER2NET_PORT '80a' is not a number" in n for n in cfg.load_notes)
-        print("bad SER2NET_BIND_IP / out-of-range SER2NET_PORT: stop with one line; a "
+            assert any("SER2NETWEB_PORT '80a' is not a number" in n for n in cfg.load_notes)
+        print("bad SER2NETWEB_BIND_IP / out-of-range SER2NETWEB_PORT: stop with one line; a "
               "non-numeric port is ignored with a warning  OK")
 
         with env(**CONTAINER):
             runtime.prepare_config(path)
-            with env(SER2NET_PORT="8081"):
+            with env(SER2NETWEB_PORT="8081"):
                 runtime.prepare_config(path)  # makes a backup of the previous file
             newest = ConfigStore(path).backup_names()[0]
             with open(path, "w", encoding="utf-8") as fh:
@@ -665,9 +665,9 @@ def test_real_process_has_no_traceback():
         missing = os.path.join(data, "no-such-cert.pem")
         with open(os.path.join(data, "config.json"), "w", encoding="utf-8") as fh:
             json.dump({"admin_ui": {"tls_cert": missing, "tls_key": missing}}, fh)
-        for extra, expect in (({"SER2NET_BIND_IP": "not-an-ip"}, "SER2NET_BIND_IP must be"),
+        for extra, expect in (({"SER2NETWEB_BIND_IP": "not-an-ip"}, "SER2NETWEB_BIND_IP must be"),
                               ({}, "cannot read the admin UI TLS certificate")):
-            run_env = dict(os.environ, SER2NET_BIND_IP="127.0.0.1", SER2NET_PORT=str(free_port()))
+            run_env = dict(os.environ, SER2NETWEB_BIND_IP="127.0.0.1", SER2NETWEB_PORT=str(free_port()))
             run_env.update(extra)
             p = subprocess.run([sys.executable, "ser2netweb.py", "--no-bootstrap", "--data-dir", data],
                                cwd=ROOT, env=run_env, stdin=subprocess.DEVNULL,
