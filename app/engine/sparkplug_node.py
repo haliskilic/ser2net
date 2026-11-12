@@ -30,7 +30,7 @@ from typing import Callable
 from . import sparkplug
 from .mqtt_pub import MqttPublisher, shown
 
-UINT64 = sparkplug.DataType.UInt64
+INT64 = sparkplug.DataType.Int64  # the bdSeq metric's datatype (Sparkplug 3.0)
 BOOLEAN = sparkplug.DataType.Boolean
 
 
@@ -75,7 +75,7 @@ class SparkplugNode:
 
     def _ndeath(self) -> tuple:
         payload = sparkplug.Payload(timestamp=_now_ms(), seq=None, metrics=[
-            sparkplug.Metric(name=sparkplug.BDSEQ, datatype=UINT64, value=self.bdseq)])
+            sparkplug.Metric(name=sparkplug.BDSEQ, datatype=INT64, value=self.bdseq)])
         return (self.topic("NDEATH"), sparkplug.encode_payload(payload), 1, False)
 
     def _will(self) -> tuple:
@@ -118,7 +118,7 @@ class SparkplugNode:
         """NBIRTH, then a DBIRTH per device (after each connect, and on a rebirth request)."""
         self.seq = 0
         self._publish(self.topic("NBIRTH"), [
-            sparkplug.Metric(name=sparkplug.BDSEQ, datatype=UINT64, value=self.bdseq),
+            sparkplug.Metric(name=sparkplug.BDSEQ, datatype=INT64, value=self.bdseq),
             sparkplug.Metric(name=sparkplug.REBIRTH, datatype=BOOLEAN, value=False)])
         for dev, names in self.devices.items():
             self.seq = sparkplug.next_seq(self.seq)

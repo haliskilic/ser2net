@@ -6,6 +6,7 @@ _paho_on_disconnect(). Checks:
   * no DDATA before the session's NBIRTH and DBIRTHs (at start and after a reconnect): a
     poll that ends meanwhile only updates the values the births then carry;
   * report by exception: a NaN that stays NaN is not sent again on every poll;
+  * bdSeq is an Int64 metric in NBIRTH and NDEATH (the Will);
 
 Run: python3 tests/test_sparkplug_node.py
 """
@@ -101,6 +102,9 @@ def test_no_data_before_births():
     pub.handle_connect()
     birth = sent(client, "NBIRTH")[-1]
     assert birth.seq == 0 and values(birth)["bdSeq"] == 1
+    bdseq = {m.name: m for m in birth.metrics}["bdSeq"]
+    will = sparkplug.decode_payload(client.wills[-1][1]).metrics[0]
+    assert bdseq.datatype == will.datatype == sparkplug.DataType.Int64, (bdseq, will)
     assert values(sent(client, "DBIRTH", "unit1")[-1])["temp"] == 23.0
     assert values(sent(client, "DBIRTH", "unit2")[-1]) == {"level": 8}
     node.update({"temp": 24.0})
