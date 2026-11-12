@@ -324,13 +324,19 @@ The image has a `HEALTHCHECK` (`ser2net --healthcheck`). Details:
 - **Settings:** change password, **web UI access** (login required / open access with a
   role), admin TLS (provide paths or generate self-signed), generate/revoke the **REST API
   token**, mappings **backup/restore** (JSON), status.
-- **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it runs,
-  its clients, bytes in / out / dropped, reconnects and dropped slow clients; for the
-  process its open files and their limit (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX),
-  the admin UI's connections, TLS handshakes in progress and waiting for one to end, the
-  connections refused right after accept (`ser2net_connections_refused_total`, by
-  reason), the data folder's disk (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`)
-  and what traces and logs take there (`ser2net_traces_bytes`, `ser2net_logs_bytes`).
+- **/metrics:** Prometheus-format metrics (authenticated): per mapping whether it is
+  enabled (`ser2net_mapping_enabled`: 0 for a mapping stopped on purpose, so it is not
+  mistaken for one that failed), whether it runs, its state (`ser2net_mapping_state`, one
+  series per state, 1 for the current one), its clients, bytes in / out / dropped,
+  reconnects and dropped slow clients; for the process the version (`ser2net_build_info`),
+  its start time (`ser2net_start_time_seconds`), its open files and their limit
+  (`ser2net_open_fds`, `ser2net_fd_limit`, POSIX), the admin UI's connections, TLS
+  handshakes in progress and waiting for one to end, the connections refused right after
+  accept (`ser2net_connections_refused_total`, by reason), the data folder's disk
+  (`ser2net_data_free_bytes`, `ser2net_data_size_bytes`) and what traces and logs take
+  there (`ser2net_traces_bytes`, `ser2net_logs_bytes`). Every series has its `# HELP` and
+  `# TYPE` line. Without a session a scraper gets `401` (a browser is sent to the sign-in
+  page), and successful scrapes are not written to `all.log`.
 
 ---
 

@@ -113,6 +113,7 @@ PORTABLE = [
     "test_edit_conflicts.py",
     "test_storage.py",         # disk space and retention (no real disk filled)
     "test_retention.py",       # all.log / audit.log / backups / mapping logs by age
+    "test_metrics.py",         # /metrics: HELP/TYPE, states, 401 for scrapers, quiet scrapes
 ]
 
 # Data-path tests that need socat-backed PTYs (Linux). Best-effort: skipped if the
