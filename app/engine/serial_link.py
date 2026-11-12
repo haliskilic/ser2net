@@ -16,17 +16,24 @@ The link's state, for the runner and anything built on it:
     a port just opened, None when it is closed (what drives the port itself, an RFC 2217
     session, follows it);
   - ``status.state``: ``running`` while it is open, ``device-missing`` / ``reconnecting``
-    while it is not (what the dashboard, /metrics and the notifications report);
+    while it is not (what the dashboard, /metrics and the notifications report):
+    ``device-missing`` when the last open found no such device (portdiag.missing),
+    ``reconnecting`` otherwise (the port went away, or can't be opened for another reason);
+    ``status.open_failures`` / ``status.device_lost`` count failed opens and losses of the
+    open port (``reconnects`` both, as before);
     ``status.warnings``: a setting the open port did not take (serial_io.open_notes),
     logged when it differs from the last open's.
+While the port can't be opened, the log says so once, again only when the error changes or
+every FAILING_SUMMARY_S (FailureLog), and how long it was down once it opens again.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Iterable, Optional
 
-from . import serial_io
+from . import portdiag, serial_io
 
 if TYPE_CHECKING:
     from ..config import SerialSettings
@@ -39,6 +46,68 @@ Session = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]
 # out (then it is dropped), and so does the close itself after that
 SERIAL_CLOSE_TIMEOUT_S = 2.0
 _SENT_POLL_S = 0.05  # how often a close looks whether the port has sent everything
+# while something keeps failing in the same way (a port that can't be opened, a connect-out)
+# the log says so again this often, instead of at every attempt (FailureLog)
+FAILING_SUMMARY_S = 900.0
+
+
+def fmt_duration(secs: float) -> str:
+    secs = max(0, int(secs))
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    if m:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
+
+
+class FailureLog:
+    """The log lines of something tried again and again until it works (a serial port that
+    can't be opened, a connect-out): the first failure and each change of the error, then
+    the same error only every ``every`` seconds, with how many attempts failed since when;
+    recovered() ends it, with how long it lasted for the line that says it works again.
+    (A missing USB adapter used to write the same line at every retry, about 8,500 a day,
+    which pushed what happened first out of the log viewer within hours.)"""
+
+    def __init__(self, log: Callable[[str], None], prefix: str,
+                 every: float = FAILING_SUMMARY_S) -> None:
+        self._log = log
+        self._prefix = prefix
+        self._every = every
+        self.error = ""        # the last failure's error ("" while it works)
+        self.failures = 0      # failures since it last worked
+        self.since = 0.0       # time.time() of the first of them
+        self._next = 0.0       # time.monotonic() of the next summary
+
+    def failed(self, error: str) -> bool:
+        """Count a failure and log it as said above; True when it is the first one, or
+        the error changed."""
+        now = time.monotonic()
+        if not self.failures:
+            self.since = time.time()
+        self.failures += 1
+        new = error != self.error
+        self.error = error
+        if new:
+            self._log(f"{self._prefix}: {error}")
+        elif now >= self._next:
+            since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.since))
+            self._log(f"{self._prefix}: {error} (still failing: {self.failures} attempts "
+                      f"since {since})")
+        else:
+            return False
+        self._next = now + self._every
+        return new
+
+    def recovered(self) -> str:
+        """It works again: what to add to the line that says so (" (back after 5m 12s)"),
+        "" when nothing had failed."""
+        if not self.failures:
+            return ""
+        took = fmt_duration(time.time() - self.since)
+        self.error, self.failures, self.since = "", 0, 0.0
+        return f" (back after {took})"
 
 
 class Backoff:
@@ -86,6 +155,7 @@ class SerialLink:
         self.ready = asyncio.Event()
         self.down = False
         self._notes = NoteLog(log)
+        self._failures = FailureLog(log, "serial error")
 
     @property
     def is_open(self) -> bool:
@@ -97,25 +167,40 @@ class SerialLink:
         backoff = Backoff()
         self.down = False  # the first attempt is under way
         while not self._stop.is_set():
+            was_open = False
             try:
                 reader, writer, ser, device = await serial_io.open_serial(self.settings)
+                was_open = True
                 self.attach(reader, writer, ser, device)
                 backoff.reset()
                 await session(reader, writer)
+                if not self._stop.is_set():  # (a session ends by raising why)
+                    raise ConnectionError("serial EOF / device removed")
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # SerialException, OSError, the port went away
-                self.status.last_error = str(e)
-                self.status.state = "device-missing" if backoff.attempt == 0 else "reconnecting"
-                self._log(f"serial error: {e}")
+                if not self._stop.is_set():
+                    self._failed(e, was_open)
             finally:
                 await self.close()
             if self._stop.is_set():
                 break
             self.status.reconnects += 1
-            self.status.state = "reconnecting"
             if not await backoff.wait(self._stop):
                 break
+
+    def _failed(self, e: Exception, was_open: bool) -> None:
+        """The port could not be opened, or went away (``was_open``): say why in the status
+        and the log (FailureLog)."""
+        st = self.status
+        st.last_error = str(e)
+        if was_open:
+            st.device_lost += 1
+            st.state = "reconnecting"
+        else:
+            st.open_failures += 1
+            st.state = "device-missing" if portdiag.missing(e) else "reconnecting"
+        self._failures.failed(str(e))
 
     def attach(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                serial: Any = None, device: str = "") -> None:
@@ -131,7 +216,8 @@ class SerialLink:
         self.status.state = "running"
         self.down = False
         self.ready.set()
-        self._log(f"serial open: {device} @ {self.settings.compact()}")
+        self._log(f"serial open: {device} @ {self.settings.compact()}"
+                  f"{self._failures.recovered()}")
         self._notes(notes)
         if changed:
             self._changed(serial)
