@@ -30,7 +30,7 @@ class CertError(RuntimeError):
     """Neither cryptography nor a working openssl command is available."""
 
 
-def generate(cert_path: str, key_path: str, common_name: str = "ser2net", days: int = DAYS) -> str:
+def generate(cert_path: str, key_path: str, common_name: str = "ser2netweb", days: int = DAYS) -> str:
     """Write a self-signed RSA-2048 certificate and its unencrypted private key (PEM).
 
     Returns how it was made: "cryptography" or "openssl". Raises CertError when

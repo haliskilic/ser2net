@@ -1,7 +1,7 @@
 """Sparkplug B payload codec for the Modbus edge mode (pure stdlib, no deps).
 
 Eclipse Sparkplug B 3.0 puts protobuf (proto2) ``Payload`` messages on MQTT topics
-``spBv1.0/<group>/<NBIRTH|NDATA|NCMD|...>/<edge node>[/<device>]``. ser2net only
+``spBv1.0/<group>/<NBIRTH|NDATA|NCMD|...>/<edge node>[/<device>]``. ser2netweb only
 needs the scalar part of sparkplug_b.proto -- metrics with a name/alias, timestamp,
 datatype and one plain value -- so instead of shipping the protobuf runtime plus
 generated code in the offline bundle, those few fields are hand-coded here on top

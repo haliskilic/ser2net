@@ -1,7 +1,7 @@
-"""The event loop ser2net runs on, and Windows' 512-socket select() limit (ser2netweb/runtime.py,
+"""The event loop ser2netweb runs on, and Windows' 512-socket select() limit (ser2netweb/runtime.py,
 ser2netweb/engine/netguard.py).
 
-On Windows ser2net runs a SelectorEventLoop, whose select() takes at most 512 sockets in a
+On Windows ser2netweb runs a SelectorEventLoop, whose select() takes at most 512 sockets in a
 set; the 513th used to make select() raise inside the loop, which stopped the process:
 every bridge, Modbus poll and MQTT publisher (and as a service, again after each restart).
 Now the loop's selector (CappedSelectSelector) refuses a registration past the limit with
@@ -211,9 +211,9 @@ def test_fatal_error_reaches_the_log():
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                           env=env, timeout=60)
     assert proc.returncode != 0, "a fatal error must still end the process"
-    assert "fatal error, ser2net stops" in proc.stdout and "selector exploded" in proc.stdout, \
+    assert "fatal error, ser2netweb stops" in proc.stdout and "selector exploded" in proc.stdout, \
         (proc.stdout, proc.stderr)
-    print("a fatal error is written to ser2net's log (all.log) before the process ends  OK")
+    print("a fatal error is written to ser2netweb's log (all.log) before the process ends  OK")
 
 
 def _config(**admin) -> dict:

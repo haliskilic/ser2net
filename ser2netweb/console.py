@@ -64,7 +64,7 @@ def next_free_port(ip: str, port: int) -> int | None:
 
 
 def in_use_warning(ip: str, port: int) -> str:
-    return (f"WARNING: port {port} on {shown_host(ip)} is in use (another ser2net instance or another "
+    return (f"WARNING: port {port} on {shown_host(ip)} is in use (another ser2netweb instance or another "
             "program?) — the web UI can't listen there until it is free. Give this instance "
             "its own port: --reconfigure, or SER2NETWEB_BIND_IP + SER2NETWEB_PORT")
 
@@ -109,17 +109,17 @@ def choose_admin_bind(current: AdminUI | None = None,
         # No terminal to prompt at (service/headless). Default to LOOPBACK so the
         # admin UI is never network-exposed without an explicit choice + password.
         where = "loopback" if default_ip in ("127.0.0.1", "::1", "localhost") else "as configured"
-        print(f"[ser2net] non-interactive console; admin UI bind defaults to "
+        print(f"[ser2netweb] non-interactive console; admin UI bind defaults to "
               f"{host_port(default_ip, default_port)} ({where}). Run with a terminal or "
               f"--reconfigure to expose it on the network.", flush=True)
         if port_in_use(default_ip, default_port):
             warning = in_use_warning(default_ip, default_port)
-            print(f"[ser2net] {warning}", flush=True)
+            print(f"[ser2netweb] {warning}", flush=True)
             if notes is not None:
                 notes.append(warning)
         return default_ip, default_port
 
-    print("\n=== ser2net — configuration interface setup ===")
+    print("\n=== ser2netweb — configuration interface setup ===")
     print("Choose which local IP address the web config UI should listen on:\n")
     for i, c in enumerate(candidates, 1):
         print(f"  {i}) {c['label']}")
@@ -149,7 +149,7 @@ def choose_admin_bind(current: AdminUI | None = None,
 
     if port_in_use(ip, default_port):
         free = next_free_port(ip, default_port)
-        print(f"  Port {default_port} on {shown_host(ip)} is in use (another ser2net instance or another "
+        print(f"  Port {default_port} on {shown_host(ip)} is in use (another ser2netweb instance or another "
               "program?)" + (f"; {free} is free." if free else "."))
         default_port = free or default_port
     while True:
@@ -169,9 +169,9 @@ def choose_admin_bind(current: AdminUI | None = None,
 
     if note := bindhint.admin_port_note(port):
         print(f"  NOTE: {note.removeprefix('WARNING: ')}")
-    print(f"\n[ser2net] Configuration UI will listen on  http://{host_port(ip, port)}")
+    print(f"\n[ser2netweb] Configuration UI will listen on  http://{host_port(ip, port)}")
     if ip not in ("127.0.0.1", "localhost", "::1"):
-        print("[ser2net] NOTE: this is reachable from the network. You will set an "
+        print("[ser2netweb] NOTE: this is reachable from the network. You will set an "
               "admin password on first access.")
     print()
     return ip, port

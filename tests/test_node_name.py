@@ -7,15 +7,15 @@ fleet view and the browser tab had to tell them apart by. Checks:
     long, has control characters / line breaks or isn't text is dropped with a load note
     (no new validate() rule); SER2NETWEB_NODE_NAME wins while it is usable, a start-up warning
     says why not otherwise;
-  * notifications: "ser2net <name>: …" in the title and text, the JSON webhook's "node"
+  * notifications: "ser2netweb <name>: …" in the title and text, the JSON webhook's "node"
     (plus "hostname" and "instance_id" for programs), e-mail From display name
-    ("ser2net <name>", never in the address) and signature; without a name exactly as
+    ("ser2netweb <name>", never in the address) and signature; without a name exactly as
     before; a name doesn't break e-mail (EmailMessage refuses CR/LF in a Subject);
   * the cluster: the beacon's and the node payload's "name" (no new field);
   * the web UI: the signed-in pages' title and top bar (not the sign-in page); Settings
     saves / refuses / logs / audits it, shows the environment's read-only, a form without
     the field keeps it, the restore preview lists it;
-  * a real start logs "ser2net starting as '<name>'".
+  * a real start logs "ser2netweb starting as '<name>'".
 
 Calls the web app in this process; the last part starts one server.
 Run: python3 tests/test_node_name.py
@@ -76,33 +76,33 @@ def test_config() -> None:
 def test_notifications() -> None:
     # without a name: as before
     head, text = notify.message("login_failed", "", "from 10.0.0.9")
-    assert head == f"ser2net {HOST}: failed sign-in" and text == head + "\nfrom 10.0.0.9"
+    assert head == f"ser2netweb {HOST}: failed sign-in" and text == head + "\nfrom 10.0.0.9"
     body = notify.webhook_body("generic", "device_lost", "PLC", "gone")
     assert body["node"] == HOST and body["hostname"] == HOST and "instance_id" not in body
     settings = SimpleNamespace(email_from="")
     assert notify.sender(settings) == f"ser2net@{HOST}"
     # with one
     head, text = notify.message("login_failed", "", "from 10.0.0.9", name="Line 1")
-    assert head == "ser2net Line 1: failed sign-in", head
+    assert head == "ser2netweb Line 1: failed sign-in", head
     body = notify.webhook_body("generic", "device_lost", "PLC", "gone", name="Line 1",
                                instance_id="0123456789abcdef")
     assert body["node"] == "Line 1" and body["hostname"] == HOST, body
-    assert body["instance_id"] == "0123456789abcdef" and body["text"].startswith("ser2net Line 1:")
+    assert body["instance_id"] == "0123456789abcdef" and body["text"].startswith("ser2netweb Line 1:")
     card = notify.webhook_body("teams", "device_lost", "PLC", "gone", name="Line 1")
-    assert card["attachments"][0]["content"]["body"][0]["text"].startswith("ser2net Line 1: PLC")
+    assert card["attachments"][0]["content"]["body"][0]["text"].startswith("ser2netweb Line 1: PLC")
     for fmt in ("slack", "discord", "telegram"):
-        assert "ser2net Line 1: PLC" in json.dumps(notify.webhook_body(fmt, "device_lost", "PLC",
+        assert "ser2netweb Line 1: PLC" in json.dumps(notify.webhook_body(fmt, "device_lost", "PLC",
                                                                        "", name="Line 1"))
-    assert notify.sender(settings, "Line 1") == f"ser2net Line 1 <ser2net@{HOST}>"
+    assert notify.sender(settings, "Line 1") == f"ser2netweb Line 1 <ser2net@{HOST}>"
     assert notify.sender(SimpleNamespace(email_from="alerts@example.com"), "Hat, B") == \
-        '"ser2net Hat, B" <alerts@example.com>'
+        '"ser2netweb Hat, B" <alerts@example.com>'
     assert notify.sender(SimpleNamespace(email_from="Ops <ops@example.com>"), "Hat B") == \
         "Ops <ops@example.com>", "a display name of its own is kept"
     # a non-ASCII name goes into the headers encoded; the message can be sent
     msg = EmailMessage()
     msg["Subject"] = notify.message("test", "", "", name="Hat Ç-2")[0]
     msg["From"] = notify.sender(settings, "Hat Ç-2")
-    assert str(msg["From"]) == f"ser2net Hat Ç-2 <ser2net@{HOST}>", str(msg["From"])
+    assert str(msg["From"]) == f"ser2netweb Hat Ç-2 <ser2net@{HOST}>", str(msg["From"])
     assert f"<ser2net@{HOST}>" in msg.as_string()
     # the e-mail as sent: Subject, From and the signature
     class FakeSMTP:
@@ -130,10 +130,10 @@ def test_notifications() -> None:
     finally:
         notify.smtplib.SMTP = real_smtp   # type: ignore[misc]
     named, plain = FakeSMTP.sent
-    assert named["Subject"] == "ser2net Line 1: test notification", named["Subject"]
-    assert str(named["From"]) == f"ser2net Line 1 <ser2net@{HOST}>"
+    assert named["Subject"] == "ser2netweb Line 1: test notification", named["Subject"]
+    assert str(named["From"]) == f"ser2netweb Line 1 <ser2net@{HOST}>"
     assert f" on Line 1 ({HOST})" in named.get_content(), named.get_content()
-    assert plain["Subject"] == f"ser2net {HOST}: test notification"
+    assert plain["Subject"] == f"ser2netweb {HOST}: test notification"
     assert str(plain["From"]) == f"ser2net@{HOST}" and f" on {HOST}\n" in plain.get_content()
     # what the notifier sends: this instance's name and id
     sent = []
@@ -179,7 +179,7 @@ def test_web() -> None:
     with App({"users": USERS, "cluster": {"enabled": True, "key": "k" * 32}}) as a:
         jar = _sign_in(a)
         st, _, page = a.call("GET", "/", headers={"Cookie": jar})
-        assert st == 200 and "<title>Mappings — ser2net</title>" in page
+        assert st == 200 and "<title>Mappings — ser2netweb</title>" in page
         assert 'class="node-name"' not in page
         st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
         assert 'name="node_name" value=""' in page and f'placeholder="{HOST}"' in page
@@ -193,11 +193,11 @@ def test_web() -> None:
         assert "instance name set to 'Line 1 <b>'" in a.lines
         assert any(r["action"] == "node_name_set" and r["detail"] == "Line 1 <b>"
                    for r in a.state.read_audit())
-        assert "<title>Line 1 &lt;b&gt; · Settings — ser2net</title>" in page, page[:400]
+        assert "<title>Line 1 &lt;b&gt; · Settings — ser2netweb</title>" in page, page[:400]
         assert 'class="node-name" title="the name of this instance">Line 1 &lt;b&gt;</span>' in page
         for path, title in (("/", "Mappings"), ("/settings/audit", "Audit log")):
             st, _, page = a.call("GET", path, headers={"Cookie": jar})
-            assert f"<title>Line 1 &lt;b&gt; · {title} — ser2net</title>" in page, path
+            assert f"<title>Line 1 &lt;b&gt; · {title} — ser2netweb</title>" in page, path
         st, _, page = a.call("GET", "/login")
         assert "Line 1" not in page, "not on the sign-in page"
         # the fleet view's own row
@@ -218,7 +218,7 @@ def test_web() -> None:
             st, _, page = a.call("GET", "/settings", headers={"Cookie": jar})
             assert '<input type="text" value="from-env" disabled>' in page
             assert "Set by <span class=\"mono\">SER2NETWEB_NODE_NAME</span>" in page
-            assert "<title>from-env · Settings — ser2net</title>" in page
+            assert "<title>from-env · Settings — ser2netweb</title>" in page
         finally:
             del os.environ["SER2NETWEB_NODE_NAME"]
         # restore preview: an earlier backup has no name
@@ -239,9 +239,9 @@ def test_start() -> None:
     with Server({"users": USERS, "admin_ui": {"node_name": "Line 1"}},
                 env={"SER2NETWEB_NODE_NAME": "y" * 65}) as srv:
         out = srv.output()
-    assert "ser2net starting as 'Line 1' — admin UI on http://127.0.0.1:" in out, out[:800]
+    assert "ser2netweb starting as 'Line 1' — admin UI on http://127.0.0.1:" in out, out[:800]
     assert "WARNING: SER2NETWEB_NODE_NAME 'yyyy" in out and "at most 64 characters" in out
-    print("start-up: 'ser2net starting as <name>', an unusable SER2NETWEB_NODE_NAME warned  OK")
+    print("start-up: 'ser2netweb starting as <name>', an unusable SER2NETWEB_NODE_NAME warned  OK")
 
 
 def main() -> None:

@@ -10,9 +10,9 @@ against the account (CODE_ATTEMPTS in CODE_WINDOW_S); a code accepted once is no
 accepted again (the replay guard is in memory: after a restart, a code used just before
 it could be used once more within its 90 s window).
 
-Lost authenticator: an admin turns it off in Settings → Users, or `ser2net --set-password
+Lost authenticator: an admin turns it off in Settings → Users, or `ser2netweb --set-password
 NAME` on the server (ser2netweb/accounts.py) sets a new password and turns it off — also for the
-only admin, and with ser2net stopped.
+only admin, and with ser2netweb stopped.
 """
 from __future__ import annotations
 

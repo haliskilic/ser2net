@@ -35,13 +35,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="ser2net.py",
         description="Serial-to-network bridge with a web config UI.",
     )
-    p.add_argument("--version", action="version", version=f"ser2net {__version__}")
+    p.add_argument("--version", action="version", version=f"ser2netweb {__version__}")
     p.add_argument(
         "--data-dir",
         default=None,  # see below: whether it was given matters to --install-service
         help="Directory for config.json, its backups, the logs and traces (default: ./data; "
              "for --install-service: the data directory the service already uses, or for a "
-             "new service from the standalone exe %%ProgramData%%\\ser2net). Give ser2net "
+             "new service from the standalone exe %%ProgramData%%\\ser2net). Give ser2netweb "
              "a folder of its own: it makes it private to the account it runs as.",
     )
     p.add_argument(
@@ -73,11 +73,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--licenses",
         action="store_true",
-        help="Print the licenses of ser2net and every bundled third-party component, then exit.",
+        help="Print the licenses of ser2netweb and every bundled third-party component, then exit.",
     )
     svc = p.add_argument_group("Windows service")
     svc.add_argument("--install-service", action="store_true",
-                     help="Install ser2net as a Windows service (starts at boot, restarts after "
+                     help="Install ser2netweb as a Windows service (starts at boot, restarts after "
                           "a failure) with this --data-dir, and start it. Needs Administrator.")
     svc.add_argument("--uninstall-service", action="store_true",
                      help="Stop and remove the Windows service. Its data directory is kept "
@@ -97,7 +97,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Exit 0 if this data directory's running instance answers on /healthz, else 1 "
              "(Docker HEALTHCHECK, monitoring).",
     )
-    acc = p.add_argument_group("account recovery (works while ser2net runs, too)")
+    acc = p.add_argument_group("account recovery (works while ser2netweb runs, too)")
     one = acc.add_mutually_exclusive_group()
     one.add_argument("--set-password", metavar="USER",
                      help="Set a new password for the local account USER, sign its "
@@ -106,9 +106,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                           "is asked on the terminal, or read from the first line of stdin.")
     one.add_argument("--sign-out-all", action="store_true",
                      help="End every web UI session (new session key), then exit.")
-    run = p.add_argument_group("a running ser2net")
+    run = p.add_argument_group("a running ser2netweb")
     run.add_argument("--reload", action="store_true",
-                     help="Have the ser2net running with this data directory read config.json "
+                     help="Have the ser2netweb running with this data directory read config.json "
                           "again and apply it without a restart (mappings that didn't change "
                           "keep running with their clients), then exit. On Linux/macOS "
                           "SIGHUP does the same (systemctl reload ser2net).")
@@ -125,7 +125,7 @@ def apply_lib_override() -> None:
     """SER2NETWEB_LIB_OVERRIDE=<dir> (or SER2NET_LIB_OVERRIDE, its 2.9.x name): import Python
     modules from <dir> before the bundled ones. The standalone executable keeps the LGPL-licensed ldap3 as plain source files
     for this, so it can be replaced by another (e.g. modified) version without
-    rebuilding ser2net. Only an explicitly set variable is honoured — a directory is
+    rebuilding ser2netweb. Only an explicitly set variable is honoured — a directory is
     never picked up just because it exists next to the executable."""
     d = envvars.text(LIB_OVERRIDE_ENV)
     if d:
@@ -152,7 +152,7 @@ def print_licenses() -> int:
     notices = (f"https://github.com/haliskilic/ser2net/blob/v{__version__}/THIRD-PARTY-NOTICES.md"
                if FROZEN else os.path.join(ROOT, "THIRD-PARTY-NOTICES.md"))
     _write_utf8(
-        f"ser2net {__version__} is licensed under the GNU AGPL-3.0-only (LICENSE) or a "
+        f"ser2netweb {__version__} is licensed under the GNU AGPL-3.0-only (LICENSE) or a "
         f"commercial license (COMMERCIAL_LICENSE.md).\nThird-party components: {notices}\n")
     return 0
 
@@ -160,7 +160,7 @@ def print_licenses() -> int:
 # what --about writes for the folders it shortens (a bug report shows which copy of a
 # package is loaded, not the account name in the path)
 _ROOT_LABELS = {"<override>": LIB_OVERRIDE_ENV, "<bundle>": "the executable's files",
-                "<ser2net>": "ser2net's folder", "<python>": "the Python installation",
+                "<ser2netweb>": "ser2netweb's folder", "<python>": "the Python installation",
                 "~": "the home folder"}
 
 
@@ -168,7 +168,7 @@ def _known_roots(env=None) -> list[tuple[str, str]]:
     """(label, folder) of the folders --about writes as a short label (_ROOT_LABELS)."""
     roots = [("<override>", envvars.text(LIB_OVERRIDE_ENV, env)),
              ("<bundle>", getattr(sys, "_MEIPASS", "") or ""),
-             ("<ser2net>", ROOT), ("<python>", sys.prefix),
+             ("<ser2netweb>", ROOT), ("<python>", sys.prefix),
              ("~", os.path.expanduser("~"))]
     out = []
     for label, folder in roots:
@@ -205,7 +205,7 @@ def print_about() -> int:
     from ser2netweb import optional
 
     roots, used = _known_roots(), set()
-    lines = [f"ser2net {__version__}",
+    lines = [f"ser2netweb {__version__}",
              f"Python {platform.python_version()} ({platform.python_implementation()}), "
              f"{ssl.OPENSSL_VERSION}",
              f"Platform: {platform.platform()} ({platform.machine()})",
@@ -265,7 +265,7 @@ def main(argv: list[str] | None = None, started_as: str = "") -> int:
     config_path = args.config or os.path.join(args.data_dir, "config.json")
     split = split_layout_note(args)
     if split:
-        print(f"ser2net: {split}", file=sys.stderr)
+        print(f"ser2netweb: {split}", file=sys.stderr)
         from ser2netweb import standalone  # (its notes are the lines all.log gets at start-up)
 
         standalone.notes.append(split)
@@ -276,7 +276,7 @@ def main(argv: list[str] | None = None, started_as: str = "") -> int:
     if args.service:
         return _service(args, config_path)
 
-    # 1. dependencies. The one-off commands may run beside a running ser2net, so they
+    # 1. dependencies. The one-off commands may run beside a running ser2netweb, so they
     # leave an out-of-date ./lib as it is (with a warning); a server start refreshes it.
     one_off = (args.about or args.set_password is not None or args.sign_out_all
                or args.reload or args.install_service)
@@ -324,13 +324,13 @@ def main(argv: list[str] | None = None, started_as: str = "") -> int:
 
 def split_layout_note(args: argparse.Namespace) -> str:
     """A warning when both --data-dir and --config are given and the config file is not in
-    that directory: ser2net keeps its state next to the config file, not in --data-dir."""
+    that directory: ser2netweb keeps its state next to the config file, not in --data-dir."""
     if not (args.config and args.data_dir_given):
         return ""
     folder = os.path.dirname(os.path.abspath(args.config))
     if os.path.normcase(os.path.abspath(args.data_dir)) == os.path.normcase(folder):
         return ""
-    return (f"WARNING: --config {args.config} is not in --data-dir {args.data_dir}: ser2net "
+    return (f"WARNING: --config {args.config} is not in --data-dir {args.data_dir}: ser2netweb "
             f"keeps the backups, logs and traces next to the config file, in {folder}")
 
 
@@ -351,7 +351,7 @@ def load_dependencies(args: argparse.Namespace, refresh: bool) -> None:
             sys.path.insert(0, lib)
         try:
             import bootstrap
-        except ImportError:  # a package of ser2net without it: nothing to check
+        except ImportError:  # a package of ser2netweb without it: nothing to check
             return
         bootstrap.warn_if_stale()
     if bootstrap.notes:
@@ -370,9 +370,9 @@ def _import_runtime():
         bootstrap = sys.modules.get("bootstrap")
         if bootstrap is None or not bootstrap.lib_is_stale():
             raise
-        raise SystemExit(f"ser2net: {e} — ./lib holds the dependencies of an older release, "
+        raise SystemExit(f"ser2netweb: {e} — ./lib holds the dependencies of an older release, "
                          "and they could not be updated (see the warning before): run "
-                         f"python3 bootstrap.py in {ROOT} as the account ser2net runs "
+                         f"python3 bootstrap.py in {ROOT} as the account ser2netweb runs "
                          "as") from None
     return runtime
 
@@ -402,7 +402,7 @@ def _service(args: argparse.Namespace, config_path: str) -> int:
                 with contextlib.suppress(OSError), open(log, "a", encoding="utf-8") as fh:
                     fh.write(f"{clock.stamp()} {e.code}\n")
                 winservice.report_event(args.service_name, (
-                    f"The ser2net service '{args.service_name}' stopped: {e.code}\n\n"
+                    f"The ser2netweb service '{args.service_name}' stopped: {e.code}\n\n"
                     f"Details: {log}"))
             raise
         for hook in ready_hooks:  # RUNNING once the server is ready
@@ -449,7 +449,7 @@ def _service_call(fn) -> int:
     try:
         fn(winservice)
     except winservice.ServiceError as e:
-        print(f"ser2net: {e}", file=sys.stderr)
+        print(f"ser2netweb: {e}", file=sys.stderr)
         return 1
     return 0
 

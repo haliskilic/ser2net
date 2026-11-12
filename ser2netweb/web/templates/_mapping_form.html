@@ -29,7 +29,7 @@
     <label>{{ _("Flow control") }}
       <select name="{{ prefix }}flowcontrol">{% for f in flowcontrols %}<option value="{{ f }}" {% if f == s.flowcontrol %}selected{% endif %}>{{ {"none": _("None"), "rtscts": _("RTS/CTS (hardware)"), "xonxoff": _("XON/XOFF (software)"), "dsrdtr": _("DSR/DTR (hardware)")}.get(f, f) }}</option>{% endfor %}</select>
     </label>
-    <label class="chk chk-pad" title="{{ _('Keeps out other ser2net mappings and programs that lock a port the same way (picocom, tio, miniterm); not minicom, a login prompt or ModemManager. Windows: a port is always open in one program only.') }}"><input type="checkbox" name="{{ prefix }}exclusive" {% if s.exclusive %}checked{% endif %}> {{ _("Lock the port (flock)") }}</label>
+    <label class="chk chk-pad" title="{{ _('Keeps out other ser2netweb mappings and programs that lock a port the same way (picocom, tio, miniterm); not minicom, a login prompt or ModemManager. Windows: a port is always open in one program only.') }}"><input type="checkbox" name="{{ prefix }}exclusive" {% if s.exclusive %}checked{% endif %}> {{ _("Lock the port (flock)") }}</label>
   </div>
   <div class="grid2">
     <label>{{ _("RTS on open") }}
@@ -42,10 +42,10 @@
   {% if 'port_lock' not in hide %}
   <details class="port-lock"{% if s.advanced.tiocexcl or s.advanced.respect_uucp_locks %} open{% endif %}>
     <summary>{{ _("Keeping other programs off the port (Linux, macOS)") }}</summary>
-    <p class="muted">{{ _("“Lock the port” (flock) keeps out other ser2net mappings and programs that lock a port the same way (picocom, tio, miniterm), but not minicom, programs that use no lock, a login prompt or ModemManager. On Windows a port is always open in one program only, and these options do nothing.") }}</p>
+    <p class="muted">{{ _("“Lock the port” (flock) keeps out other ser2netweb mappings and programs that lock a port the same way (picocom, tio, miniterm), but not minicom, programs that use no lock, a login prompt or ModemManager. On Windows a port is always open in one program only, and these options do nothing.") }}</p>
     <input type="hidden" name="{{ prefix }}port_lock_shown" value="1">
     <label class="chk"><input type="checkbox" name="{{ prefix }}tiocexcl" {% if s.advanced.tiocexcl %}checked{% endif %}> {{ _("Keep other programs out while the port is open") }} <span class="muted">({{ _('<span class="mono">TIOCEXCL</span>: their open fails as busy; services running as root are not kept out') }})</span></label>
-    <label class="chk"><input type="checkbox" name="{{ prefix }}respect_uucp_locks" {% if s.advanced.respect_uucp_locks %}checked{% endif %}> {{ _("Don't open a port another program has locked with a UUCP lock file") }} <span class="muted">({{ _('minicom, cu: <span class="mono">LCK..</span> files in /run/lock or /var/lock; ser2net makes none') }})</span></label>
+    <label class="chk"><input type="checkbox" name="{{ prefix }}respect_uucp_locks" {% if s.advanced.respect_uucp_locks %}checked{% endif %}> {{ _("Don't open a port another program has locked with a UUCP lock file") }} <span class="muted">({{ _('minicom, cu: <span class="mono">LCK..</span> files in /run/lock or /var/lock; ser2netweb makes none') }})</span></label>
   </details>
   {% endif %}
   <details class="rs485"{% if s.advanced.rs485_enabled %} open{% endif %}>

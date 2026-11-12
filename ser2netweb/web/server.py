@@ -121,7 +121,7 @@ def _monitoring_refusal(request, path: str):
         return None
     return PlainTextResponse("unauthorized: sign in to the web UI, or read /api/v1/metrics "
                              "with a REST API token\n", status_code=401,
-                             headers={"WWW-Authenticate": 'Bearer realm="ser2net"'})
+                             headers={"WWW-Authenticate": 'Bearer realm="ser2netweb"'})
 
 
 async def _answer(request, call_next, state):
@@ -233,7 +233,7 @@ class GuardMiddleware(BaseHTTPMiddleware):
                                              f"{auth.PROXY_HINT}")
                 return PlainTextResponse(i18n.gettext(
                     "Refused: this request was sent by a page of another web site. If you used "
-                    "ser2net’s own page, its address must reach ser2net unchanged (behind a "
+                    "ser2netweb’s own page, its address must reach ser2netweb unchanged (behind a "
                     "reverse proxy: as Host or X-Forwarded-Host)."), status_code=403)
 
         # the CSRF token of this browser: its cookie's (one under the name of 2.8 and older

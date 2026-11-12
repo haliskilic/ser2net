@@ -292,7 +292,7 @@ _UNMANAGED_FIELDS = {
 
 # One-line text inputs that can hold a stored value they can't show: a browser drops
 # its line breaks (CR, LF) and turns a NUL into U+FFFD, so posted back unchanged it
-# differs (close-on strings imported from a ser2net configuration have them).
+# differs (close-on strings imported from a ser2netweb configuration have them).
 #   form field -> (config section, attribute)
 _TEXT_INPUTS = {
     "opt_banner": ("options", "banner"),

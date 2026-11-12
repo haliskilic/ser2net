@@ -1,5 +1,5 @@
 """Signing in to the web UI with LDAP / Active Directory and with OIDC, end to end: a
-ser2net server against a small LDAP server (_ldap_server.py) and a small HTTPS OpenID
+ser2netweb server against a small LDAP server (_ldap_server.py) and a small HTTPS OpenID
 provider in this process. The LDAP part needs ldap3, the OIDC part authlib and
 cryptography; each is skipped without them (a SKIP line, which tests/run_all.py
 repeats), or fails with SER2NETWEB_OPTIONAL_TESTS=1.
@@ -7,7 +7,7 @@ repeats), or fails with SER2NETWEB_OPTIONAL_TESTS=1.
   * a group setting that is only part of a group's name ("admins" for ser2net-admins)
     no longer gives that role: the sign-in is refused with the usual message, all.log
     names the setting and the group and says how to fix it (and how to get back in
-    with `ser2net --set-password`), and Settings shows it until that section is saved;
+    with `ser2netweb --set-password`), and Settings shows it until that section is saved;
   * an existing LDAP/OIDC account whose groups give no role any more is signed out
     everywhere at its next sign-in — once: further refused tries don't save again;
   * an LDAP name in any letter case is one account: earlier versions' accounts for
@@ -194,7 +194,7 @@ def test_ldap():
                     f"'{ADMINS}', which no longer counts as a match: 'jdoe' gets no access "
                     f"instead of admin") in log, log[-2000:]
             assert "set it to 'ser2net-admins' or its full DN" in log, log[-2000:]
-            assert "`ser2net --set-password NAME` with a new NAME creates a local admin" in log
+            assert "`ser2netweb --set-password NAME` with a new NAME creates a local admin" in log
             assert ("LDAP login denied for 'jdoe': no group setting matches their groups: "
                     "'ser2net-admins'") in log, log[-2000:]
             assert "LDAP: 'jdoe' signed out everywhere" in log, log[-2000:]
@@ -313,7 +313,7 @@ def make_pki(d):
         return b.sign(signer, hashes.SHA256())
 
     ca_key = ec.generate_private_key(ec.SECP256R1())
-    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ser2net test CA")])
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ser2netweb test CA")])
     ca = build(ca_name, ca_name, ca_key.public_key(), ca_key, True)
     key = ec.generate_private_key(ec.SECP256R1())
     cert = build(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]), ca_name,
@@ -428,7 +428,7 @@ def oidc_provider_answers(srv, provider):
     requests = provider.token_requests
     for query, status, text in (
             ({"error": "access_denied", "error_description": "User is not assigned to the "
-              "client application.", "state": state}, 403, "didn’t let you sign in to ser2net"),
+              "client application.", "state": state}, 403, "didn’t let you sign in to ser2netweb"),
             ({"error": "temporarily_unavailable"}, 503, "can’t sign you in right now"),
             ({"error": "invalid_scope", "state": state}, 400,
              "refused the sign-in request (invalid_scope)"),
@@ -596,7 +596,7 @@ def test_oidc():
                                                  "groups": ["ser2net-viewers"]})
             assert st == 303 and user_of(srv, "boss")["role"] == "viewer", st
             assert ("WARNING: OIDC gives 'boss' the role viewer, so no admin account can sign "
-                    "in any more. `ser2net --set-password NAME`") in all_log(srv), all_log(srv)[-800:]
+                    "in any more. `ser2netweb --set-password NAME`") in all_log(srv), all_log(srv)[-800:]
             print("OIDC: the provider demoting the only admin is logged as a warning  OK")
     finally:
         provider.shutdown()

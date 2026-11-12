@@ -6,7 +6,7 @@
     to a form names) #}
 {% set here = page_url or (route_path(request) ~ ('?' ~ request.url.query if request.url.query else '')) %}
 <header class="topbar">
-  <div class="brand">⇄ ser2net{% if node_name %} <span class="node-name" title="{{ _('the name of this instance') }}">{{ node_name }}</span>{% endif %}</div>
+  <div class="brand">⇄ ser2netweb{% if node_name %} <span class="node-name" title="{{ _('the name of this instance') }}">{{ node_name }}</span>{% endif %}</div>
   <nav>
     <a href="{{ base }}/">{{ _("Mappings") }}</a>
     <a href="{{ base }}/settings">{{ _("Settings") }}</a>

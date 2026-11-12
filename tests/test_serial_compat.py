@@ -1,6 +1,6 @@
-"""ser2net's own serial transport (ser2netweb/engine/serial_compat.py) and the upstream code it builds on.
+"""ser2netweb's own serial transport (ser2netweb/engine/serial_compat.py) and the upstream code it builds on.
 
-serial_compat.Transport is pyserial-asyncio-fast's SerialTransport with ser2net's fixes, and
+serial_compat.Transport is pyserial-asyncio-fast's SerialTransport with ser2netweb's fixes, and
 open_stream builds it for every port (nothing in pyserial-asyncio-fast is patched for the
 whole process any more). Checked here, without a serial device:
   - a write the port takes only part of (pyserial 3.5 returns partial counts) is finished

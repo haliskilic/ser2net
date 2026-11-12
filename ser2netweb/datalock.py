@@ -1,4 +1,4 @@
-"""One running ser2net per data directory.
+"""One running ser2netweb per data directory.
 
 Two instances on the same data directory — a second start while the Windows service or
 the systemd unit runs, --reconfigure next to the running server — would each save their
@@ -13,8 +13,8 @@ Where the lock can't be taken — a read-only data directory, a network share wi
 lock support — the start goes on without it and the start-up log says so.
 POSIX: flock(); Windows: a byte-range lock (msvcrt.locking).
 
-`ser2net --set-password` / `--sign-out-all` (ser2netweb/accounts.py) hold the lock too, while
-they change config.json of a stopped ser2net: they mark it as brief ("<pid> brief" in
+`ser2netweb --set-password` / `--sign-out-all` (ser2netweb/accounts.py) hold the lock too, while
+they change config.json of a stopped ser2netweb: they mark it as brief ("<pid> brief" in
 the file), and a start that finds it held that way waits for them (BRIEF_WAIT_S)
 instead of refusing.
 """
@@ -44,10 +44,10 @@ class Held(Exception):
         self.data_dir, self.pid, self.brief = data_dir, pid, brief
         process = f" (process {pid})" if pid else ""
         if brief:
-            super().__init__(f"ser2net --set-password / --sign-out-all{process} is changing "
+            super().__init__(f"ser2netweb --set-password / --sign-out-all{process} is changing "
                              f"the data directory {data_dir}")
         else:
-            super().__init__(f"another ser2net{process} is already running with the data "
+            super().__init__(f"another ser2netweb{process} is already running with the data "
                              f"directory {data_dir}")
 
 
@@ -124,13 +124,13 @@ def acquire(data_dir: str, *, brief: bool = False, wait: float = 0.0) -> str | N
             fd, writable = _open(path)
         except OSError as e:
             return (f"WARNING: can't lock the data directory ({path}: {e.strerror or e}) — "
-                    "nothing keeps a second ser2net from using it at the same time")
+                    "nothing keeps a second ser2netweb from using it at the same time")
         try:
             locked = _lock(fd)
         except OSError as e:
             os.close(fd)
             return (f"WARNING: can't lock the data directory ({path}: locking is not "
-                    f"supported there: {e.strerror or e}) — nothing keeps a second ser2net "
+                    f"supported there: {e.strerror or e}) — nothing keeps a second ser2netweb "
                     "from using it at the same time")
         if locked:
             break
@@ -169,7 +169,7 @@ def holder(data_dir: str) -> int | None:
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
-        return None  # no lock file: no ser2net that locks has run here
+        return None  # no lock file: no ser2netweb that locks has run here
     try:
         if _lock(fd):
             _unlock(fd)

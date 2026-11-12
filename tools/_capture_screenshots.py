@@ -4,7 +4,7 @@
     python tools/_capture_screenshots.py [--lang en tr] [--out docs/screenshots]
                                          [--as-version X.Y.Z]
 
-Starts TWO ser2net nodes that share a cluster key, so the dashboard's LAN cluster panel
+Starts TWO ser2netweb nodes that share a cluster key, so the dashboard's LAN cluster panel
 shows a real multi-host view, with demo mappings and accounts only (no real names,
 addresses or devices: one mapping reads a socat PTY fed with made-up NMEA sentences, the
 others are stopped). For each language (the English images in --out, the Turkish ones in

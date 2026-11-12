@@ -119,7 +119,7 @@ def exits_with(fn, *args) -> str:
     try:
         fn(*args)
     except SystemExit as e:
-        assert isinstance(e.code, str) and e.code.startswith("ser2net: "), e.code
+        assert isinstance(e.code, str) and e.code.startswith("ser2netweb: "), e.code
         assert "\n" not in e.code, e.code
         return e.code
     raise AssertionError(f"{fn.__name__} did not stop the start")
@@ -339,7 +339,7 @@ def test_invalid_settings_still_start():
                      "WARNING: config.json: mapping 'acl-typo': Invalid allowed client IP/CIDR",
                      "WARNING: config.json: mapping 'tls-off': TLS file not found",
                      "WARNING: config.json: mapping 'baud-typo': Baud rate must be",
-                     "ser2net starts with the setting(s) above anyway",
+                     "ser2netweb starts with the setting(s) above anyway",
                      "cluster: discovery port 70000 is not a port number",
                      "mapping 'ok': serial.baudrate \"19200\" is read as 19200",
                      "[tls-on] start failed",
@@ -622,10 +622,10 @@ def test_fatal_with_one_line():
                 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
             me = f"{os.getuid()}:{os.getgid()}"
             assert "cannot read the configuration" in msg and path in msg, msg
-            assert f"it belongs to {me} (mode 0000) and ser2net runs as {me}" in msg, msg
+            assert f"it belongs to {me} (mode 0000) and ser2netweb runs as {me}" in msg, msg
             assert f"give the data directory to that account: sudo chown -R {me} {data}" in msg
             print("unreadable config.json: stop with one line naming its owner, mode, the "
-                  "account ser2net runs as and the chown that fixes it  OK")
+                  "account ser2netweb runs as and the chown that fixes it  OK")
 
         fresh = os.path.join(new_dir(), "config.json")
         denied = PermissionError(errno.EACCES, "Permission denied")

@@ -1,7 +1,7 @@
 """Event notifications: tell someone when a serial device disappears or comes back,
 a mapping fails to start, clients come and go, a sign-in fails, the data disk is almost
 full, a device sends nothing, a cluster node goes offline, a Modbus unit that a gateway
-polls stops answering or answers again, or ser2net has started.
+polls stops answering or answers again, or ser2netweb has started.
 
 The Notifier watches the supervisor's status snapshot (every POLL_S seconds) and
 turns state changes into events; the login route reports failed sign-ins itself. Every
@@ -43,7 +43,7 @@ from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
 from typing import Optional
 
-from . import __version__, i18n, storage
+from . import __version__, i18n, storage, user_agent
 from .config import node_name as configured_name
 from .engine.cluster import PEER_TTL, peer_addr
 from .explain import explain
@@ -79,7 +79,7 @@ def title(event: str) -> str:
         "data_back": _("data from the serial device again"),
         "peer_offline": _("cluster node offline"),
         "peer_back": _("cluster node back"),
-        "service_started": _("ser2net started"),
+        "service_started": _("ser2netweb started"),
         "unit_offline": _("Modbus unit not answering"),
         "unit_back": _("Modbus unit answering again"),
         "test": _("test notification"),
@@ -219,7 +219,7 @@ def service_summary(mappings, statuses: dict) -> str:
     """One line on which enabled mappings run, naming (at most 10 of) those that don't."""
     enabled = [m for m in mappings if m.enabled]
     down = [m for m in enabled if (statuses.get(m.id) or {}).get("state") != "running"]
-    text = (f"ser2net {__version__}: {len(enabled) - len(down)} of {len(enabled)} enabled "
+    text = (f"ser2netweb {__version__}: {len(enabled) - len(down)} of {len(enabled)} enabled "
             f"mapping(s) running")
     if down:
         parts = []
@@ -324,7 +324,7 @@ def message(event: str, mapping: str, detail: str, url: str = "",
     title is one line (logtext.one_line): it is the e-mail's Subject, which a line break in
     a mapping name would make invalid."""
     host = name or socket.gethostname()
-    head = one_line(f"ser2net {host}: {mapping + ' — ' if mapping else ''}{title(event)}")
+    head = one_line(f"ser2netweb {host}: {mapping + ' — ' if mapping else ''}{title(event)}")
     return head, head + (f"\n{detail}" if detail else "") + (f"\n{url}" if url else "")
 
 
@@ -393,7 +393,7 @@ def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "",
     is followed, as a GET without the message: some receivers answer a POST they handled
     that way, others moved (http:// to https://, a new path) and never got the message, so
     the 2xx at the end of it doesn't tell whether it arrived. (``url``: the link to this
-    ser2net that the message carries, not the webhook's address.)"""
+    ser2netweb that the message carries, not the webhook's address.)"""
     target = settings.webhook_url.strip()
     # http(s) only, also when a config.json with another URL was tolerated on load
     # (NotificationSettings.validate refuses it when settings are saved)
@@ -404,7 +404,7 @@ def send_webhook(settings, event: str, mapping: str, detail: str, url: str = "",
                                    instance_id)).encode()
     req = urllib.request.Request(  # noqa: S310 (http(s) only)
         ascii_url(target), data=body, method="POST",
-        headers={"Content-Type": "application/json", "User-Agent": f"ser2net/{__version__}"})
+        headers={"Content-Type": "application/json", "User-Agent": user_agent()})
     with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:  # noqa: S310 (http(s) only)
         if r.status >= 300:
             raise OSError(f"webhook answered HTTP {r.status}")
@@ -423,12 +423,12 @@ def _origin(url: str) -> str:
 
 def sender(settings, name: str = "") -> str:
     """The From of a notification e-mail: the address set (ser2net@<host name> without one),
-    with "ser2net <name>" as its display name when the instance has a name and the address
+    with "ser2netweb <name>" as its display name when the instance has a name and the address
     set has none (the name is never put into the address itself)."""
     host = socket.gethostname()
     address = settings.email_from.strip() or f"ser2net@{host}"
     shown, _addr = parseaddr(address)
-    return formataddr((f"ser2net {name}", address)) if name and not shown else address
+    return formataddr((f"ser2netweb {name}", address)) if name and not shown else address
 
 
 def send_email(settings, event: str, mapping: str, detail: str, url: str = "",
@@ -445,7 +445,7 @@ def send_email(settings, event: str, mapping: str, detail: str, url: str = "",
     # quoted-printable keeps the message 7-bit, so Turkish text and non-ASCII mapping names
     # also pass servers without 8BITMIME
     where = f"{name} ({host})" if name and name != host else host
-    msg.set_content(text + "\n\n-- \n" + _("ser2net {0} on {1}").format(__version__, where)
+    msg.set_content(text + "\n\n-- \n" + _("ser2netweb {0} on {1}").format(__version__, where)
                     + "\n", cte="quoted-printable")
     ctx = ssl.create_default_context()
     if settings.smtp_security == "ssl":
@@ -691,7 +691,7 @@ class Notifier:
         token = i18n.set_language(self.state.config.admin_ui.language)
         try:
             if event == "test" and not detail:
-                detail = _("If you can read this, ser2net can reach you.")
+                detail = _("If you can read this, ser2netweb can reach you.")
             return await self._deliver(s, event, mapping, detail,
                                        [] if warnings is None else warnings)
         finally:

@@ -25,7 +25,7 @@ DATED = "## [{v}] — 2026-11-20"
 def _tree(tmp: str, version: str, heading: str = DATED) -> str:
     os.makedirs(os.path.join(tmp, "ser2netweb"), exist_ok=True)
     with open(os.path.join(tmp, "ser2netweb", "__init__.py"), "w", encoding="utf-8") as fh:
-        fh.write(f'"""ser2net."""\n\n# the version\n__version__ = "{version}"\n')
+        fh.write(f'"""ser2netweb."""\n\n# the version\n__version__ = "{version}"\n')
     with open(os.path.join(tmp, "CHANGELOG.md"), "w", encoding="utf-8") as fh:
         fh.write("# Changelog\n\n## [Unreleased]\n\n" + heading.format(v=version)
                  + "\n### Fixed\n- x\n\n## [2.8.1] — 2026-11-12\n### Fixed\n- y\n")

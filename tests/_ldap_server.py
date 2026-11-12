@@ -1,6 +1,6 @@
 """A small LDAP server for the tests: simple bind, search and unbind over plain TCP in
-the real LDAPv3 wire format, so ser2net's ldap3 client code runs unchanged against it
-(in the test process, or in a ser2net server started by the test).
+the real LDAPv3 wire format, so ser2netweb's ldap3 client code runs unchanged against it
+(in the test process, or in a ser2netweb server started by the test).
 
     from _ldap_server import FakeDirectory
     with FakeDirectory(entries, passwords) as d:

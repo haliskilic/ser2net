@@ -1,4 +1,4 @@
-"""What ser2net keeps on disk (ser2netweb/storage.py):
+"""What ser2netweb keeps on disk (ser2netweb/storage.py):
   * the clock retention goes by never runs ahead of the time the process has run, so a
     clock stepped ahead deletes nothing early;
   * the data disk's free space (shutil.disk_usage faked: no disk is filled): going below

@@ -93,7 +93,7 @@ def _env_bind_override(admin, notes: list[str] | None = None) -> bool:
 
 def _os_error(e: OSError, data_dir: str | None = None) -> str:
     """'<file>: <reason>' for an OSError on a data file (one line, no traceback). A
-    permission error on POSIX adds who owns the file, who ser2net runs as and the fix."""
+    permission error on POSIX adds who owns the file, who ser2netweb runs as and the fix."""
     where = e.filename if e.filename is not None else ""
     if e.filename2 is not None:
         where = f"{where} -> {e.filename2}"
@@ -105,7 +105,7 @@ def _os_error(e: OSError, data_dir: str | None = None) -> str:
 
 
 def _access_hint(path: str, data_dir: str | None) -> str:
-    """The usual cause of a permission error on ser2net's files: another account left
+    """The usual cause of a permission error on ser2netweb's files: another account left
     them behind (a run with sudo, or a Docker image before v2.8, which ran as root)."""
     if sys.platform == "win32":  # POSIX owners only (the caller checks os.name)
         return ""
@@ -119,11 +119,11 @@ def _access_hint(path: str, data_dir: str | None) -> str:
         owner = f"{label} belongs to {st.st_uid}:{st.st_gid} (mode {stat.S_IMODE(st.st_mode):04o})"
         break
     if data_dir is None:
-        return f" — {owner} and ser2net runs as {me}: make it readable for that account"
+        return f" — {owner} and ser2netweb runs as {me}: make it readable for that account"
     fix = f"sudo chown -R {me} {data_dir}"
     if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
         fix += " (in a container: on the host folder mounted there)"
-    return (f" — {owner} and ser2net runs as {me}: give the data directory to that "
+    return (f" — {owner} and ser2netweb runs as {me}: give the data directory to that "
             f"account: {fix}")
 
 
@@ -135,7 +135,7 @@ _shutdown_hooks: list = []
 _ready_hooks: list[Callable[[], None]] = []
 
 
-# SIGHUP (POSIX) has ser2net read config.json again (ser2netweb/reload.py). One that comes before
+# SIGHUP (POSIX) has ser2netweb read config.json again (ser2netweb/reload.py). One that comes before
 # the event loop handles it (while config.json is loaded at start-up) is noted here instead
 # of ending the process, its default, and handled once the server runs.
 _hangups: list[float] = []
@@ -189,12 +189,12 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         config = store.load()
     except OSError as e:
         raise SystemExit(
-            f"ser2net: cannot read the configuration: {_os_error(e, data_dir)}") from None
+            f"ser2netweb: cannot read the configuration: {_os_error(e, data_dir)}") from None
     except (ValueError, TypeError, AttributeError) as e:  # not JSON, or not shaped like it
         newest = store.backup_names()[:1]
         restore = (f", or put back its newest backup ({os.path.join(store.backup_dir, newest[0])})"
                    if newest else "")
-        raise SystemExit(f"ser2net: {store.path} is not a valid configuration ({e}) — fix "
+        raise SystemExit(f"ser2netweb: {store.path} is not a valid configuration ({e}) — fix "
                          f"it{restore}") from None
     notes = config.load_notes
     # before anything below writes config.json: its time is one the clock can't be before
@@ -206,7 +206,7 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     try:
         env_set = _env_bind_override(config.admin_ui, notes)
     except ConfigError as e:
-        raise SystemExit(f"ser2net: {e}") from None
+        raise SystemExit(f"ser2netweb: {e}") from None
     if (first_run or reconfigure) and not env_set:
         bind_ip, port = console.choose_admin_bind(config.admin_ui, notes)
         config.admin_ui.bind_ip = bind_ip
@@ -229,10 +229,10 @@ def prepare_config(config_path: str, reconfigure: bool = False):
             store.save(config, validate=False)
         except OSError as e:  # read-only/full data dir, config.json mounted on its own
             if first_run:
-                raise SystemExit(f"ser2net: cannot create the configuration: "
+                raise SystemExit(f"ser2netweb: cannot create the configuration: "
                                  f"{_os_error(e, data_dir)}") from None
             notes.append(f"WARNING: could not update config.json at start-up "
-                         f"({_os_error(e, data_dir)}) — ser2net runs with these settings, "
+                         f"({_os_error(e, data_dir)}) — ser2netweb runs with these settings, "
                          "but can't keep any change until config.json can be written (keep "
                          "the data directory writable, and don't mount config.json on its "
                          "own)")
@@ -242,7 +242,7 @@ def prepare_config(config_path: str, reconfigure: bool = False):
                            envvars.source("SER2NETWEB_ADMIN_PASSWORD_FILE"), admin,
                            max_age_s=config.log_max_age_days * 86400)
     if problems:
-        notes.append("WARNING: ser2net starts with the setting(s) above anyway — what they "
+        notes.append("WARNING: ser2netweb starts with the setting(s) above anyway — what they "
                      "affect may not work. Fix them in the web UI (or in config.json); "
                      "changes that leave them as they are can be saved meanwhile")
     return store, config
@@ -253,7 +253,7 @@ WINDOWS_LOOP_ENV = "SER2NETWEB_WINDOWS_LOOP"
 
 def event_loop_choice(platform: str = sys.platform,
                       env: Optional[Mapping[str, str]] = None) -> tuple[str, str]:
-    """The event loop ser2net runs on ("default", "selector" or "proactor") and the line the
+    """The event loop ser2netweb runs on ("default", "selector" or "proactor") and the line the
     start-up log gets about it ("" when there is nothing to say). Windows: the
     SelectorEventLoop, which serial ports and sockets have run on so far, unless
     SER2NETWEB_WINDOWS_LOOP=proactor; elsewhere the platform's default."""
@@ -293,7 +293,7 @@ def require_admin_tls(admin) -> None:
     for field, what, path in (("tls_cert", "certificate", admin.tls_cert),
                               ("tls_key", "key", admin.tls_key)):
         if not isinstance(path, str):  # a hand edit: open(True) would open (and close) stdout
-            raise SystemExit(f"ser2net: admin_ui.{field} in config.json must be a file name, "
+            raise SystemExit(f"ser2netweb: admin_ui.{field} in config.json must be a file name, "
                              f"not {path!r}")
         try:
             with open(data_path(path), "rb"):
@@ -302,7 +302,7 @@ def require_admin_tls(admin) -> None:
             fix = ("" if isinstance(e, PermissionError)
                    else " — fix admin_ui.tls_cert / tls_key in config.json (Settings → Admin "
                         "TLS generates its certificate in the data directory's tls folder)")
-            raise SystemExit(f"ser2net: cannot read the admin UI TLS {what}: "
+            raise SystemExit(f"ser2netweb: cannot read the admin UI TLS {what}: "
                              f"{_os_error(e)}{fix}") from None
 
 
@@ -322,7 +322,7 @@ def tls_certificate_note(path: str) -> str:
 
 
 def admin_tls_builder(uconfig) -> Callable:
-    """How the admin UI's TLS context is made from its settings (AdminUI) while ser2net
+    """How the admin UI's TLS context is made from its settings (AdminUI) while ser2netweb
     runs (Settings -> Admin TLS, a reload): as at start-up, an encrypted key decrypted
     with tls_key_password (never asked for on a terminal). Raises tls.TlsFileError."""
     def build(admin):
@@ -335,7 +335,7 @@ def admin_tls_builder(uconfig) -> Callable:
 
 def hold_data_dir(config_path: str) -> str | None:
     """Take the data directory's single-instance lock (ser2netweb.datalock) before anything is
-    written there: a second ser2net on the same directory stops here with one line; a
+    written there: a second ser2netweb on the same directory stops here with one line; a
     --set-password / --sign-out-all that is changing config.json is waited for.
     Returns a warning for the start-up log when the lock can't be taken (the start goes
     on without it)."""
@@ -346,8 +346,8 @@ def hold_data_dir(config_path: str) -> str | None:
         return datalock.acquire(data_dir, wait=datalock.BRIEF_WAIT_S)
     except datalock.Held as e:
         if e.brief:
-            raise SystemExit(f"ser2net: {e} — start again once it is done") from None
-        raise SystemExit(f"ser2net: {e} — stop it first (a Windows service: sc stop ser2net; "
+            raise SystemExit(f"ser2netweb: {e} — start again once it is done") from None
+        raise SystemExit(f"ser2netweb: {e} — stop it first (a Windows service: sc stop ser2net; "
                          "systemd: systemctl stop ser2net) or give this one its own "
                          "--data-dir") from None
 
@@ -370,7 +370,7 @@ def main(config_path: str, reconfigure: bool = False) -> int:
             return 0
         except Exception:
             # all.log too, not only stderr (a service has none to read); then exit with it
-            logging.getLogger("ser2net").exception("fatal error, ser2net stops")
+            logging.getLogger("ser2net").exception("fatal error, ser2netweb stops")
             raise
     finally:
         datalock.release(os.path.dirname(os.path.abspath(config_path)))
@@ -405,7 +405,7 @@ def use_worker_threads(loop: asyncio.AbstractEventLoop) -> None:
     have a limit of their own (auth.SlowWork), so more threads don't mean more scrypt
     jobs at once."""
     loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(
-        max_workers=WORKER_THREADS, thread_name_prefix="ser2net"))
+        max_workers=WORKER_THREADS, thread_name_prefix="ser2netweb"))
 
 
 def node_name_notes(env: Optional[Mapping[str, str]] = None) -> list[str]:
@@ -506,7 +506,7 @@ def service_stopped_event(name: str, config_path: str, why: str) -> bool:
     from . import winservice
     data_dir = os.path.dirname(os.path.abspath(config_path))
     return winservice.report_event(name, (
-        f"The ser2net service '{name}' stopped: {why}\n\nDetails: "
+        f"The ser2netweb service '{name}' stopped: {why}\n\nDetails: "
         f"{os.path.join(data_dir, 'all.log')} and {os.path.join(data_dir, winservice.SERVICE_LOG)}"))
 
 
@@ -520,7 +520,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     name = node_name(admin)
     via = (envvars.source(proxy.PUBLIC_URL_ENV) if proxy.public_url_from_env()
            else "admin_ui.public_url")
-    state.log(f"ser2net starting{f' as {name!r}' if name else ''} — admin UI on "
+    state.log(f"ser2netweb starting{f' as {name!r}' if name else ''} — admin UI on "
               f"{scheme}://{host_port(admin.bind_ip, admin.port)}"
               + (f", published as {published} ({via})" if published else ""))
     for note in (standalone.notes + config.load_notes + ([loop_note] if loop_note else [])
@@ -562,7 +562,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     ldap = config.ldap
     if ldap.enabled and ldap.uses_tls and not ldap.tls_verify:
         state.log("WARNING: LDAP: the directory server's certificate is not checked "
-                  "(ldap.tls_verify is false) — anyone on the network between ser2net and the "
+                  "(ldap.tls_verify is false) — anyone on the network between ser2netweb and the "
                   "directory could read the passwords and sign in as anyone. Set the CA "
                   "certificate file instead (Settings → LDAP / Active Directory).")
     elif ldap.enabled and ldap.sends_plaintext:
@@ -591,8 +591,8 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         with contextlib.suppress(NotImplementedError, ValueError, RuntimeError, AttributeError):
             loop.add_signal_handler(sig, _request_shutdown)
 
-    # SIGHUP: read config.json again. A terminal that closes sends it too (to a ser2net
-    # started in it): its stdin is a terminal no more then, and ser2net stops cleanly,
+    # SIGHUP: read config.json again. A terminal that closes sends it too (to a ser2netweb
+    # started in it): its stdin is a terminal no more then, and ser2netweb stops cleanly,
     # as the end of that session asks; `kill -HUP` while the terminal is open reloads.
     # Taken once the mappings were started (_listen_for_hangups); one that comes before
     # is kept (_hangups) and handled then.
@@ -600,7 +600,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
 
     def _hangup() -> None:
         if in_terminal and not _stdin_is_terminal():
-            state.log("SIGHUP: the terminal ser2net was started in was closed — shutting down")
+            state.log("SIGHUP: the terminal ser2netweb was started in was closed — shutting down")
             _request_shutdown()
             return
         task = asyncio.create_task(reload.reload_config(state, "SIGHUP"), name="reload")
@@ -611,7 +611,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         if hasattr(signal, "SIGHUP"):
             with contextlib.suppress(NotImplementedError, ValueError, RuntimeError):
                 loop.add_signal_handler(signal.SIGHUP, _hangup)
-                if _hangups:  # (one that came while ser2net was starting)
+                if _hangups:  # (one that came while ser2netweb was starting)
                     _hangups.clear()
                     _hangup()
 
@@ -659,10 +659,10 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
                                                   admin.tls_key_password)
             except (OSError, ValueError) as e:  # (tls.TlsFileError is a ValueError)
                 state.log(f"admin UI: the TLS certificate could not be loaded: {e} — "
-                          "ser2net stops (no mapping was started); fix admin_ui.tls_cert / "
+                          "ser2netweb stops (no mapping was started); fix admin_ui.tls_cert / "
                           "tls_key (an encrypted key: tls_key_password) in config.json")
                 raise SystemExit(1) from None
-        # how Settings -> Admin TLS and a reload make the context while ser2net runs, and
+        # how Settings -> Admin TLS and a reload make the context while ser2netweb runs, and
         # the address the UI is served on (AppState.admin_serving)
         state.admin_tls = admin_tls_builder(uconfig)
         state.admin_served = (admin.bind_ip, admin.port)
@@ -759,4 +759,4 @@ def _announce_ready(state: AppState, ui_error: str = "") -> None:
         try:
             hook()
         except Exception as e:  # (the server runs on; only the report is lost)
-            state.log(f"WARNING: could not report that ser2net is ready: {e}")
+            state.log(f"WARNING: could not report that ser2netweb is ready: {e}")

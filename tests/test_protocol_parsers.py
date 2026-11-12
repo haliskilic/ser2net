@@ -6,7 +6,7 @@ IAC SE) has a size limit, MAX_SUBNEGOTIATION. Checked here:
   - the output is what the per-byte parsers gave: random streams of data, escaped IACs,
     option negotiation, commands and subnegotiations, cut into chunks at random places
     (an IAC split across two reads included), against pyserial's PortManager.filter
-    (RFC 2217, with the answers ser2net adds to it: SIGNATURE, the SET-CONTROL queries,
+    (RFC 2217, with the answers ser2netweb adds to it: SIGNATURE, the SET-CONTROL queries,
     one flow control mode at a time, mask acknowledgements) and the previous per-byte
     telnet parser: same bytes for the port, same replies to the client, same serial
     settings, same parser state. Serial data is escaped exactly like PortManager.escape;
@@ -210,7 +210,7 @@ def test_pyserial_internals():
 
 
 class ReferencePortManager(pyserial_rfc2217.PortManager):
-    """pyserial's PortManager with what ser2net answers on top of it, written plainly: an
+    """pyserial's PortManager with what ser2netweb answers on top of it, written plainly: an
     empty SIGNATURE gets "ser2net", the SET-CONTROL queries get the port's state, flow
     control is one mode at a time (DSR/DTR reported, and left on by "no flow control"),
     and a mask is acknowledged."""

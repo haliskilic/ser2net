@@ -1,4 +1,4 @@
-"""`ser2net --healthcheck` (the Docker HEALTHCHECK): 0 while the UI answers, 1 when not —
+"""`ser2netweb --healthcheck` (the Docker HEALTHCHECK): 0 while the UI answers, 1 when not —
 also with proxy variables set (for webhooks / SSO): the probe of this host goes direct;
 and while a TLS certificate set in Settings waits for the next start (the instance still
 answers plain http).

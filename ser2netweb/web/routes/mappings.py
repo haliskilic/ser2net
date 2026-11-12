@@ -42,7 +42,7 @@ def _start_failure(error: str, retrying: bool) -> tuple[str, str]:
     again (a listener that could not bind), that it starts once it can listen there."""
     why, raw = reason(error)
     if _port_taken(error):
-        why += " " + _("Another program — another ser2net instance? — listens on that port: "
+        why += " " + _("Another program — another ser2netweb instance? — listens on that port: "
                        "give the mapping a port of its own.")
     if retrying:
         why += " " + _("It is started as soon as it can listen there (its row shows when it "

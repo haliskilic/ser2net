@@ -1,31 +1,31 @@
 """Account recovery and the first admin account, without the web UI.
 
-    ser2net --set-password NAME   a new password for local account NAME, whose sessions
+    ser2netweb --set-password NAME   a new password for local account NAME, whose sessions
                                   end and whose two-factor sign-in is turned off (NAME
                                   is created as an admin if it doesn't exist)
-    ser2net --sign-out-all        a new session key: every web UI session ends
-    ser2net --reload              the running instance reads config.json again
+    ser2netweb --sign-out-all        a new session key: every web UI session ends
+    ser2netweb --reload              the running instance reads config.json again
                                   (ser2netweb/reload.py); only while one runs
     SER2NETWEB_ADMIN_PASSWORD_FILE  (+ SER2NETWEB_ADMIN_USER, default "admin"; or their
                                   2.9.x names SER2NET_ADMIN_PASSWORD_FILE / _USER) the
                                   first admin of an install without accounts, e.g. a
                                   Docker secret
 
-The commands work whether ser2net is running or not. The data directory's lock
+The commands work whether ser2netweb is running or not. The data directory's lock
 (ser2netweb/datalock.py, <data>/ser2net.lock) tells which: while an instance of the same data
 directory holds it, the change is handed to that instance: a request file in
 <data>/admin-requests/ that it applies under its config lock, so its next save can't
 undo the change and sessions end at once (this also reaches an instance in another
 container or network namespace that shares the data directory). Otherwise the command
-takes the lock itself — a ser2net that starts meanwhile waits for it — and changes
+takes the lock itself — a ser2netweb that starts meanwhile waits for it — and changes
 config.json here, through ConfigStore, which keeps the version it replaces in backups/.
 Where the lock can't be used (a read-only data directory, a network share without
-locks), and for a ser2net from before the lock, the web UI's /healthz tells whether one
+locks), and for a ser2netweb from before the lock, the web UI's /healthz tells whether one
 runs. Either way the change is written to audit.log. The password is asked twice on
 the terminal, or read from the first line of stdin when that is not a terminal; only
 its scrypt hash leaves this process, and nothing secret is printed or logged. Run as
 root on a data directory that belongs to another user (docker exec, sudo), the command
-first becomes that user, so the files it writes keep the owner the running ser2net
+first becomes that user, so the files it writes keep the owner the running ser2netweb
 needs.
 """
 from __future__ import annotations
@@ -157,7 +157,7 @@ def provision_from_env(config, environ) -> tuple[Optional[str], Optional[str]]:
     if config.users:
         if path:
             return None, (f"{file_var} is ignored: accounts exist already "
-                          "(ser2net --set-password changes a password)")
+                          "(ser2netweb --set-password changes a password)")
         return None, None
     if not path:
         if name:
@@ -288,7 +288,7 @@ def wait_answer(data_dir: str, request_id: str, take_s: float, answer_s: float =
     while (result := _read_answer(answer_path)) is None and time.monotonic() < end:
         sleep(0.2)
     if result is None:
-        raise AccountError("the running ser2net took the request but did not answer; "
+        raise AccountError("the running ser2netweb took the request but did not answer; "
                            "see its log (all.log)")
     return result
 
@@ -312,14 +312,14 @@ def read_password(stdin) -> str:
 def become_owner(data_dir: str, platform: str = sys.platform, os_=os) -> str:
     """Run as root on a data directory that belongs to another account (docker exec,
     sudo): become that account before touching anything, so whatever is written keeps
-    the owner the running ser2net needs. Returns a note for the output. (`platform`
+    the owner the running ser2netweb needs. Returns a note for the output. (`platform`
     and `os_` are injection points for tests.)"""
     if platform == "win32" or os_.geteuid() != 0:
         return ""
     try:
         st = os_.stat(data_dir)
     except FileNotFoundError:
-        raise AccountError(f"{data_dir} does not exist; run this as the user ser2net runs as, "
+        raise AccountError(f"{data_dir} does not exist; run this as the user ser2netweb runs as, "
                            "so the new data directory belongs to it") from None
     if st.st_uid == 0:
         return ""
@@ -375,7 +375,7 @@ def _done(result: tuple[bool, str]) -> str:
     ok, message = result
     if not ok:
         raise AccountError(message)
-    return f"{message} (done by the running ser2net)"
+    return f"{message} (done by the running ser2netweb)"
 
 
 def _submit(request: dict, config_path: str, data_dir: str) -> str:
@@ -391,7 +391,7 @@ def _submit(request: dict, config_path: str, data_dir: str) -> str:
         break
     if not os.path.isfile(config_path):
         return apply_here(request, config_path)  # nothing can be running on it
-    # The lock is this command's, or can't be used here. A ser2net that runs without it
+    # The lock is this command's, or can't be used here. A ser2netweb that runs without it
     # (one from before the lock, or on a data directory that can't be locked) still
     # answers /healthz; where the lock can't be used, also give one the healthcheck can't
     # reach (another container) a moment to take the request.
@@ -402,7 +402,7 @@ def _submit(request: dict, config_path: str, data_dir: str) -> str:
         if result is not None:
             return _done(result)
         if running:
-            raise AccountError("ser2net is running on this data directory but did not take the "
+            raise AccountError("ser2netweb is running on this data directory but did not take the "
                                "request (an older version?). Stop it, run this command again, "
                                "then start it.")
     return apply_here(request, config_path)
@@ -424,13 +424,13 @@ def _hand_over(request: dict, data_dir: str, pid: Optional[int]) -> Optional[str
     if datalock.holds(data_dir):
         return None
     process = f" (process {pid})" if pid else ""
-    raise AccountError(f"the ser2net running with {data_dir}{process} did not take the request "
+    raise AccountError(f"the ser2netweb running with {data_dir}{process} did not take the request "
                        f"within {WAIT_RUNNING_S:.0f} s. If it is still starting, run this "
                        "command again once its web UI answers; otherwise see its log (all.log)")
 
 
 def reload_running(config_path: str) -> str:
-    """`ser2net --reload`: the instance running with this data directory reads config.json
+    """`ser2netweb --reload`: the instance running with this data directory reads config.json
     again (the same hand-over as the account commands; it also works for the Windows
     service and in a container). Raises AccountError when none runs, or it didn't reload."""
     data_dir = os.path.dirname(os.path.abspath(config_path))
@@ -452,7 +452,7 @@ def reload_running(config_path: str) -> str:
                                      WAIT_RUNNING_S if running else WAIT_STOPPED_S)
                 if result is not None:
                     return _reloaded(_done, result)
-        raise AccountError(f"ser2net is not running with {data_dir}: nothing to reload (it "
+        raise AccountError(f"ser2netweb is not running with {data_dir}: nothing to reload (it "
                            "reads config.json when it starts)")
     finally:
         datalock.release(data_dir)  # if this command took it
@@ -464,19 +464,19 @@ def _reloaded(how, *args):
         return how(*args)
     except AccountError as e:
         if str(e).startswith("unknown request"):
-            raise AccountError("the running ser2net is older than 2.9.0 and can't reload "
+            raise AccountError("the running ser2netweb is older than 2.9.0 and can't reload "
                                "config.json: restart it instead") from None
         raise
 
 
 def main(args, config_path: str, stdin=None) -> int:
-    """`ser2net --set-password NAME` / `ser2net --sign-out-all` / `ser2net --reload`."""
+    """`ser2netweb --set-password NAME` / `ser2netweb --sign-out-all` / `ser2netweb --reload`."""
     stdin = sys.stdin if stdin is None else stdin
     try:
         if getattr(args, "reload", False):
             data_dir = os.path.dirname(os.path.abspath(config_path))
             note = become_owner(data_dir)  # (the request files must be the server's to read)
-            print(f"ser2net: {reload_running(config_path)}{note}")
+            print(f"ser2netweb: {reload_running(config_path)}{note}")
             return 0
         if args.set_password is not None:
             from .web.routes.forms import _username_problem
@@ -491,13 +491,13 @@ def main(args, config_path: str, stdin=None) -> int:
         data_dir = os.path.dirname(os.path.abspath(config_path))
         note = become_owner(data_dir)
         if os.path.isdir(data_dir) and not os.access(data_dir, os.R_OK | os.W_OK | os.X_OK):
-            raise AccountError(f"no access to {data_dir}: run this as the user ser2net runs as "
+            raise AccountError(f"no access to {data_dir}: run this as the user ser2netweb runs as "
                                "(or as root)")
-        print(f"ser2net: {submit(request, config_path)}{note}")
+        print(f"ser2netweb: {submit(request, config_path)}{note}")
     except AccountError as e:
-        print(f"ser2net: {e}", file=sys.stderr)
+        print(f"ser2netweb: {e}", file=sys.stderr)
         return 1
     except OSError as e:
-        print(f"ser2net: {e}", file=sys.stderr)
+        print(f"ser2netweb: {e}", file=sys.stderr)
         return 1
     return 0

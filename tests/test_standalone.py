@@ -367,7 +367,7 @@ def make_test_pki(d):
         return b.sign(signer, hashes.SHA256())
 
     ca_key = ec.generate_private_key(ec.SECP256R1())
-    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ser2net test CA")])
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ser2netweb test CA")])
     ca = build(ca_name, ca_name, ca_key.public_key(), ca_key, True)
     key = ec.generate_private_key(ec.SECP256R1())
     cert = build(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]), ca_name,
@@ -794,7 +794,7 @@ def test_binary():
     run = Launch(work, pki)
     try:
         version = run.version()
-        assert version == f"ser2net {__version__}", f"--version printed {version!r}"
+        assert version == f"ser2netweb {__version__}", f"--version printed {version!r}"
         print(f"{where}: --version -> {version}  OK")
 
         # both platforms now ship a python-build-standalone interpreter with a supported
@@ -816,7 +816,7 @@ def test_binary():
             assert f"LICENSE.{lib} " in licenses, f"--licenses misses {lib}"
         if not WINDOWS:
             assert "LICENSE.mpdecimal " in licenses, "--licenses misses mpdecimal"
-        print(f"{where}: --licenses covers ser2net, CPython/OpenSSL and every bundled package  OK")
+        print(f"{where}: --licenses covers ser2netweb, CPython/OpenSSL and every bundled package  OK")
 
         # the build's SBOM (next to the executable after a build; not in the distro jobs)
         sbom = os.path.join(ROOT, "build", "ser2net.cdx.json")

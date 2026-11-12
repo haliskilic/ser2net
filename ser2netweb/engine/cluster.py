@@ -1,6 +1,6 @@
 """LAN cluster discovery — nodes find each other and share a read-only view.
 
-Each ser2net instance periodically broadcasts a small UDP *beacon* (its node id,
+Each ser2netweb instance periodically broadcasts a small UDP *beacon* (its node id,
 hostname, and the IP:port + scheme of its web UI) signed with HMAC-SHA256 over
 the shared cluster key. Every instance listens on the same UDP port and records
 beacons whose signature verifies with its own key — so only nodes configured with
@@ -58,6 +58,7 @@ import urllib.request
 from typing import Callable
 
 from . import netinfo
+from .. import user_agent
 from ..config import node_label, parse_cluster_peer, peer_host
 
 BEACON_INTERVAL = 5.0   # seconds between outbound beacons
@@ -840,7 +841,7 @@ class ClusterDiscovery:
     async def get_peer(self, target: dict, path: str, query: dict | None = None,
                        timeout: float = 3.0) -> dict | None:
         """GET a key-guarded path of a known peer: its JSON answer, or None (no answer,
-        refused, not a ser2net node)."""
+        refused, not a ser2netweb node)."""
         status, data = await self._request(target, "GET", path, query, None, timeout)
         return data if 200 <= status < 300 else None
 
@@ -1062,7 +1063,7 @@ class ClusterDiscovery:
         """Make one peer request (in a worker thread), authenticated as *how* says (see
         _how): signed - and then its reply checked - or with the raw key of a node running
         2.8.0 or older. Never raises."""
-        headers, nonce = {}, ""
+        headers, nonce = {"User-Agent": user_agent()}, ""
         if how["mode"] == "legacy":
             headers[KEY_HEADER] = key_header(how["key"])
         else:
@@ -1099,7 +1100,7 @@ class ClusterDiscovery:
         if raw is not None:
             ans.data = _json_object(raw)
             if ans.data is None and not problem and 200 <= status < 300:
-                ans.problem = "not a ser2net cluster reply"
+                ans.problem = "not a ser2netweb cluster reply"
             elif ans.data is not None:
                 ans.reason = str(ans.data.get("reason") or "")[:32]
         return ans

@@ -1,13 +1,13 @@
-"""Third-party component inventory of a ser2net build, from the build environment.
+"""Third-party component inventory of a ser2netweb build, from the build environment.
 
     python tools/third_party.py licenses OUT.txt [--extra DIR]... [--strict]
     python tools/third_party.py sbom OUT.cdx.json [--binaries LIST] [--strict]
 
 Run it with the interpreter that builds the standalone executable (PyInstaller). It
 writes every bundled component's license text into one file, which ser2netweb.spec
-packs into the executable (``ser2net --licenses`` prints it) and the release attaches,
+packs into the executable (``ser2netweb --licenses`` prints it) and the release attaches,
 and a CycloneDX SBOM of the same components. Components:
-  * ser2net itself (AGPL-3.0-only, or a commercial license),
+  * ser2netweb itself (AGPL-3.0-only, or a commercial license),
   * CPython and the native libraries in it: OpenSSL, zlib, and — when the executable
     carries their extension modules (``--binaries``: the list ser2netweb.spec writes) —
     expat, mpdecimal and SQLite, each with the version the interpreter reports and a CPE
@@ -278,15 +278,15 @@ def write_licenses(out_path: str, extra_dirs: list[str], strict: bool = False) -
     import ssl
 
     parts = [
-        "Third-party licenses of the ser2net standalone executable\n"
-        f"ser2net {__version__} for {platform.system()} {platform.machine()}, "
+        "Third-party licenses of the ser2netweb standalone executable\n"
+        f"ser2netweb {__version__} for {platform.system()} {platform.machine()}, "
         f"built with Python {platform.python_version()}\n\n"
-        "ser2net itself is licensed under the GNU AGPL-3.0-only (full text below) or a\n"
+        "ser2netweb itself is licensed under the GNU AGPL-3.0-only (full text below) or a\n"
         "separate commercial license (COMMERCIAL_LICENSE.md). The components below keep\n"
         "their own licenses. Source code: https://github.com/haliskilic/ser2net\n\n",
     ]
     with open(os.path.join(ROOT, "LICENSE"), encoding="utf-8") as fh:
-        parts.append(_section(f"ser2net {__version__} — AGPL-3.0-only", fh.read()))
+        parts.append(_section(f"ser2netweb {__version__} — AGPL-3.0-only", fh.read()))
     parts.append(_section(
         f"CPython {platform.python_version()} — PSF-2.0 (bundled interpreter; "
         f"{ssl.OPENSSL_VERSION})", cpython_license()))
@@ -325,7 +325,7 @@ def write_licenses(out_path: str, extra_dirs: list[str], strict: bool = False) -
 
 
 def write_sbom(out_path: str, strict: bool = False, binaries: list[str] | None = None) -> None:
-    """A CycloneDX 1.5 SBOM of the executable: ser2net, the interpreter (CPython) and the
+    """A CycloneDX 1.5 SBOM of the executable: ser2netweb, the interpreter (CPython) and the
     native libraries in it, every bundled Python distribution, the PyInstaller bootloader
     and the browser libraries."""
     import datetime
@@ -383,8 +383,8 @@ def write_sbom(out_path: str, strict: bool = False, binaries: list[str] | None =
         "serialNumber": f"urn:uuid:{uuid.uuid4()}", "version": 1,
         "metadata": {
             "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "tools": {"components": [{"type": "application", "name": "ser2net tools/third_party.py"}]},
-            "component": {"type": "application", "bom-ref": root, "name": "ser2net",
+            "tools": {"components": [{"type": "application", "name": "ser2netweb tools/third_party.py"}]},
+            "component": {"type": "application", "bom-ref": root, "name": "ser2netweb",
                           "version": __version__, "purl": root,
                           "licenses": [{"expression": "AGPL-3.0-only"}],
                           "description": f"standalone executable for {platform.system()} "

@@ -128,7 +128,7 @@ def test_dashboard_and_api():
               "pwd_version": 1}]
     with open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8") as fh:
         tr = json.load(fh)
-    en_text = ("Ports below 1024 need extra rights on Linux: give ser2net the "
+    en_text = ("Ports below 1024 need extra rights on Linux: give ser2netweb the "
                "CAP_NET_BIND_SERVICE capability")
     tr_text = next(v for k, v in tr.items() if k.startswith(en_text))
     with Server({"users": users, "mappings": [_mapping()]}) as srv:

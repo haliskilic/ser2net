@@ -2,7 +2,7 @@
 sockets, no serial hardware).
 
   - telnet: IAC BRK is a serial BREAK at its place in the data (also split across two
-    reads), IAC IAC BRK is data; an option ser2net doesn't support is refused every time
+    reads), IAC IAC BRK is data; an option ser2netweb doesn't support is refused every time
     it is asked for (RFC 1143), a DONT / WONT for one that is off gets no answer;
   - RFC 2217: an empty SIGNATURE is answered with "ser2net" or the mapping's signature
     (an IAC in it escaped), a client's own signature gets no answer; the SET-CONTROL

@@ -11,7 +11,7 @@ match on it):
   - no access (EACCES / EPERM): the group the device belongs to, read from the device
     itself (dialout on Debian and Fedora, uucp on Arch, ...), and what is missing: this
     process is not in it (usermod / SupplementaryGroups / --group-add), its user was added
-    after ser2net started (restart it), or the group may not open it (its mode);
+    after ser2netweb started (restart it), or the group may not open it (its mode);
   - in use (EBUSY, EAGAIN from flock; Windows "Access is denied"): which of this process's
     mappings has the port open (``opened`` / ``holder``, by device number), else the
     program that holds a UUCP lock file on it (``uucp_lock``), else what kind of lock
@@ -348,12 +348,12 @@ _TEXTS: dict[str, Callable[..., str]] = {
     "group": lambda _, device, group, gid, user: _(
         "{0} belongs to group {1} (gid {2}), and user {3} is not in it: add the user to "
         "the group (usermod -aG {1} {3}; the systemd unit: SupplementaryGroups={1}), then "
-        "restart ser2net").format(device, group, gid, user),
+        "restart ser2netweb").format(device, group, gid, user),
     "container_group": lambda _, device, group, gid: _(
         "{0} belongs to group {1} (gid {2}), which this container doesn't have: start it "
         "with --group-add {2} (compose: group_add)").format(device, group, gid),
     "restart": lambda _, user, group: _(
-        "user {0} was added to group {1} after ser2net started: restart ser2net (or sign in "
+        "user {0} was added to group {1} after ser2netweb started: restart ser2netweb (or sign in "
         "again) to use it").format(user, group),
     "mode": lambda _, device, mode, group: _(
         "{0} is {1} (group {2}): this process is in that group, but the device's permissions "
@@ -367,7 +367,7 @@ _TEXTS: dict[str, Callable[..., str]] = {
         "another program has this port open (Windows lets one program at a time open a COM "
         "port)"),
     "flock": lambda _: _(
-        "another program has locked this port (flock): another ser2net, or a terminal "
+        "another program has locked this port (flock): another ser2netweb, or a terminal "
         "program such as picocom, tio or miniterm"),
     "exclusive": lambda _: _(
         "another program keeps other programs out of this port (TIOCEXCL), for example "
@@ -401,10 +401,10 @@ _TEXTS: dict[str, Callable[..., str]] = {
     # a listener's port the system refused, with the mapping's state "error"
     # (engine/bindhint.py: hint() names the case, note() makes the status's Note)
     "privileged_port": lambda _: _(
-        "Ports below 1024 need extra rights on Linux: give ser2net the CAP_NET_BIND_SERVICE "
+        "Ports below 1024 need extra rights on Linux: give ser2netweb the CAP_NET_BIND_SERVICE "
         "capability (README: “Ports below 1024”), or use port 1024 or above."),
     "excluded_port": lambda _: _(
-        "Windows doesn't let ser2net use this port: another program holds it, or Windows "
+        "Windows doesn't let ser2netweb use this port: another program holds it, or Windows "
         "reserves it (netsh interface ipv4 show excludedportrange protocol=tcp). Pick "
         "another port."),
 }

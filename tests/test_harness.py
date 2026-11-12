@@ -150,7 +150,7 @@ def test_no_unread_server_pipes():
 # What makes a test function one that listens: it starts mappings, a server or a process
 # (which may listen) itself.
 _STARTS = re.compile(r"\b(apply_mapping|Server|Popen|create_subprocess_exec|start_server|"
-                     r"create_datagram_endpoint|start_all)\(|\.start\(|ser2net\.py")
+                     r"create_datagram_endpoint|start_all)\(|\.start\(|ser2netweb\.py")
 # where a port number is given: a mapping's network / the admin UI / the cluster's discovery,
 # a function parameter or keyword named like a port, a variable named PORT / UI / ..._PORT
 _PORT_KEYS = {"port", "network_port", "discovery_port", "SER2NETWEB_PORT", "SER2NET_PORT"}

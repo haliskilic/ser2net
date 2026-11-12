@@ -107,7 +107,7 @@ backups_after=$(docker exec s2n-smoke sh -c 'ls -A /data/backups 2>/dev/null || 
     || fail "a restart made a backup ($backups_before -> $backups_after)"
 out=$(printf 'smoke-pass-1\n' | docker exec -i s2n-smoke python /app/ser2netweb.py --no-bootstrap \
     --data-dir /data --set-password admin 2>&1) || fail "docker exec --set-password: $out"
-grep -q "done by the running ser2net" <<<"$out" || fail "not handed to the running server: $out"
+grep -q "done by the running ser2netweb" <<<"$out" || fail "not handed to the running server: $out"
 docker exec s2n-smoke sh -c '[ -z "$(find /data ! -uid 10001 | head -n 1)" ]' || fail "files not owned by 10001"
 [ "$(sign_in admin smoke-pass-1)" = 303 ] || fail "the admin made with docker exec did not sign in"
 docker rm -f s2n-smoke >/dev/null
@@ -305,7 +305,7 @@ wait_healthy
 docker exec s2n-smoke sh -c '[ "$(stat -c %u /data/stray)" = 10001 ]' || fail "the stray file was not taken over"
 [ "$(sudo stat -c %u "$host_dir")" = 0 ] && [ "$(sudo stat -c %u "$host_dir/key.pem")" = 0 ] \
     || fail "the host folder mounted at /data/certs changed owner"
-# ser2net leaves a folder holding other files as it is: the new volume is private already
+# ser2netweb leaves a folder holding other files as it is: the new volume is private already
 [ "$(docker exec s2n-smoke stat -c %a /data)" = 700 ] || fail "/data is not 0700"
 docker logs s2n-smoke 2>&1 | grep -q "WARNING: /data" && fail "a warning about /data"
 docker rm -f s2n-smoke >/dev/null

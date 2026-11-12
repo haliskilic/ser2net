@@ -9,7 +9,7 @@ one of two modes:
   * replace — the file's mappings replace all current ones (the pre-v2.8 behaviour).
 Either way the previous config.json is kept in data/backups/ by ConfigStore.save.
 
-A mapping from a ser2net export or config.json replaces the one it updates. One from a
+A mapping from a ser2netweb export or config.json replaces the one it updates. One from a
 classic ser2net file says only part of what a mapping has here, so a merge takes only
 that part from it and keeps the rest (_overlay): TLS, the bind IP or the allowed clients
 set after the first import, its USB identity, RS-485, MQTT, Modbus points. The preview
@@ -107,7 +107,7 @@ def _in_english(raw: bytes, filename: str) -> ImportPlan:
 
 
 def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
-    """A ser2net mappings export ({"mappings": [...]}), a whole config.json, or a
+    """A ser2netweb mappings export ({"mappings": [...]}), a whole config.json, or a
     classic ser2net configuration (ser2net.yaml of ser2net 4.x / ser2net.conf of 3.x).
     Raises ConfigError with a user-facing message."""
     if len(raw) > MAX_FILE_BYTES:
@@ -130,7 +130,7 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
         raise ConfigError(_("The file is not valid JSON ({0}).").format(
             _("nested too deeply")))
     if not isinstance(doc, dict) or not isinstance(doc.get("mappings"), list):
-        raise ConfigError(_('Expected a ser2net export: a JSON object with a "mappings" list.'))
+        raise ConfigError(_('Expected a ser2netweb export: a JSON object with a "mappings" list.'))
     if len(doc["mappings"]) > MAX_MAPPINGS:
         raise ConfigError(_("The file has {0} mappings; at most {1} can be imported at once.")
                           .format(len(doc["mappings"]), MAX_MAPPINGS))
@@ -173,7 +173,7 @@ def parse_mappings_file(raw: bytes, filename: str = "") -> ImportPlan:
                 i, m.name, ", ".join(names[:8]) + (" …" if len(names) > 8 else "")))
         mappings.append(m)
     whole_config = "users" in doc or "admin_ui" in doc
-    source = _("ser2net config.json") if whole_config else _("ser2net export")
+    source = _("ser2netweb config.json") if whole_config else _("ser2netweb export")
     if whole_config:
         warnings.append(_("Only the mappings are imported from a config.json; users, "
                           "passwords and settings stay as they are."))
@@ -296,9 +296,9 @@ def _overlay(old: MappingConfig, new: MappingConfig) -> MappingConfig:
     that is taken from it, and never so that the mapping gets more open: a disabled
     mapping stays disabled, the bind IP (with the families it takes, dual_stack), the
     allowed clients and read-only are not widened, TLS is not turned off and a TLS client
-    CA is not dropped, a Modbus gateway stays one. What the file leaves at ser2net's
+    CA is not dropped, a Modbus gateway stays one. What the file leaves at ser2netweb's
     default (no banner, no timeout, ...) keeps the mapping's own value, the port locking
-    (flock / uucplock) too; the serial framing is always the file's (ser2net ran with it,
+    (flock / uucplock) too; the serial framing is always the file's (ser2netweb ran with it,
     9600N81 by default)."""
     r = MappingConfig.from_dict(old.to_dict())
     plain = MappingConfig()

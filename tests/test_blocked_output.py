@@ -1,9 +1,9 @@
-"""A device that takes no data (CTS low, XOFF, a PTY nobody reads): ser2net keeps going (POSIX).
+"""A device that takes no data (CTS low, XOFF, a PTY nobody reads): ser2netweb keeps going (POSIX).
 
 pyserial 3.5's write() tries again while the OS refuses a write for now (EAGAIN), and with
 the write_timeout of 0 that pyserial-asyncio-fast sets it never stops: while one device
 took no data, the event loop spun in that write and every other mapping, client and the
-web UI stood still (pyserial issue 280). ser2net's port class writes once and leaves the
+web UI stood still (pyserial issue 280). ser2netweb's port class writes once and leaves the
 rest to the transport, which waits until the port is writable (serial_compat; the port
 level is tested in test_serial_fd_ceiling.py). Checked here end to end, on PTYs
 (os.openpty, no socat):

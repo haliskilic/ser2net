@@ -92,7 +92,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
                 state.config.mappings[state.config.mappings.index(existing)] = mapping
             else:
                 state.config.mappings.append(mapping)
-            # next to the config as it is saved: ser2net's own ports, a serial port another
+            # next to the config as it is saved: ser2netweb's own ports, a serial port another
             # mapping uses, the admin UI's TLS key
             if conflict := edit_conflict(state.config, mapping):
                 raise ConfigError(conflict)
@@ -105,7 +105,7 @@ async def save_mapping_from_form(state, form) -> tuple[bool, str, Saved | None]:
 
 def edit_conflict(config, m: MappingConfig) -> str:
     """Why mapping `m`, created or changed, can't be saved in `config` ("" when it can):
-    it would listen on one of ser2net's own ports (AppConfig.own_port_conflict), share a
+    it would listen on one of ser2netweb's own ports (AppConfig.own_port_conflict), share a
     serial port with another enabled mapping (serial_conflict), use the admin UI's TLS
     key (admin_key_reuse) or share its MQTT client ID, Sparkplug B edge node or a command
     topic with another enabled mapping on its broker (mqtt_conflict). Edit-time checks,
@@ -125,7 +125,7 @@ def copy_of(config, m: MappingConfig) -> MappingConfig:
     """The dashboard's Copy: ``m``'s settings under a new id, disabled, and nothing in it
     that clashes with ``m`` (or another mapping) when it is enabled next to it, once its
     serial port is changed: the name "<name> (copy)" ("(copy 2)", … when taken), the next
-    free listening port for its transport and address that is not one of ser2net's own
+    free listening port for its transport and address that is not one of ser2netweb's own
     (AppConfig.own_port_conflict; searched down from ``m``'s once 65535 is reached), no
     MQTT client ID (a broker keeps one connection per ID), the base
     topic "<topic>-copy" ("-copy-2", …) so a /set is not written by both, and a Sparkplug
@@ -166,7 +166,7 @@ def copy_of(config, m: MappingConfig) -> MappingConfig:
                  and _ip_overlaps(x.network.bind_ip, net.bind_ip, x.network.both_families,
                                   net.both_families)}
 
-        def free(port: int) -> bool:  # (not ser2net's own ports either: own_port_conflict)
+        def free(port: int) -> bool:  # (not ser2netweb's own ports either: own_port_conflict)
             net.port = port
             return port not in taken and not config.own_port_conflict(dup)
 
@@ -209,7 +209,7 @@ async def apply_actions(state, ids, action) -> list[ActionResult]:
     saved (e.g. the mapping shares a serial port with a running one, or config.json can't
     be written) leaves that mapping as it was and gives `error`; the others go on. A stop
     always stops: when config.json can't be written, the mappings stay stopped (in memory
-    too) and `warning` says they start again when ser2net restarts."""
+    too) and `warning` says they start again when ser2netweb restarts."""
     stop = action == "stop"
     ids = list(dict.fromkeys(ids))
     found: dict[str, MappingConfig] = {}
@@ -228,10 +228,10 @@ async def apply_actions(state, ids, action) -> list[ActionResult]:
             return [ActionResult(mid in found, found[mid].name if mid in found else "",
                                  error=e) for mid in ids]
         state.log(f"WARNING: stopped {', '.join(repr(m.name) for m in found.values())}, but "
-                  f"config.json could not be saved ({e}): they start again when ser2net "
+                  f"config.json could not be saved ({e}): they start again when ser2netweb "
                   "restarts, unless a later change is saved")
         warning = _("Stopped, but config.json could not be saved ({0}): it starts again when "
-                    "ser2net restarts.").format(e)
+                    "ser2netweb restarts.").format(e)
     results = []
     for mid in ids:
         m = found.get(mid)
@@ -264,7 +264,7 @@ def _refuse_clashes(config, started: list) -> dict[str, ConfigError]:
     broker tells clients apart by with another enabled one (_start_clash), or that the
     save would refuse: each is switched off again, by id with the reason. One check when
     none is refused; otherwise they are switched on again one by one, in order, so the
-    first of two that share a port starts. (ser2net's own ports and the admin UI's TLS key
+    first of two that share a port starts. (ser2netweb's own ports and the admin UI's TLS key
     are checked when a mapping is created or changed, not at a start: a stored clash must
     not stop one; nor does a clash between mappings enabled already.)"""
     def refusal(m) -> Optional[ConfigError]:
@@ -360,7 +360,7 @@ async def import_mappings(state, plan, mode: str) -> tuple[list[dict], list[Mapp
 
 def import_conflict(config, mappings, result) -> str:
     """The first of ``mappings`` (an import's new and changed ones) that can't listen next
-    to ser2net's own listeners (AppConfig.own_port_conflict) or would share a serial port
+    to ser2netweb's own listeners (AppConfig.own_port_conflict) or would share a serial port
     with another enabled one of ``result`` (the mappings after the import; serial_conflict),
     else the first that would share its MQTT client ID, Sparkplug B edge node or a command
     topic with another enabled one on its broker (importer.mqtt_clash); "" when none."""

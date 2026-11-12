@@ -1,5 +1,5 @@
 # Dependabot: weekly version-update PRs (grouped, one per ecosystem, except the libraries
-# ser2net carries fixes for, below) plus security updates. It updates requirements.txt
+# ser2netweb carries fixes for, below) plus security updates. It updates requirements.txt
 # and the hash locks (requirements-lock.txt, requirements-build.txt) itself; the offline
 # wheels follow through .github/workflows/refresh-pins.yml, which pushes them onto the
 # Dependabot branch and re-runs CI (until then only the job "offline wheels match
@@ -14,7 +14,7 @@ updates:
     groups:
       python:
         patterns: ["*"]
-        # one pull request each: ser2net carries fixes for pyserial / pyserial-asyncio-fast
+        # one pull request each: ser2netweb carries fixes for pyserial / pyserial-asyncio-fast
         # code (ser2netweb/engine/serial_compat.py), and ldap3 / pyasn1 bumps need their own look
         # (CONTRIBUTING.md, "Third-party code")
         exclude-patterns: ["pyserial", "pyserial-asyncio-fast", "ldap3", "pyasn1"]

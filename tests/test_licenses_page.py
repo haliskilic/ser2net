@@ -1,4 +1,4 @@
-"""The web UI says under which licence ser2net runs and where its source code is.
+"""The web UI says under which licence ser2netweb runs and where its source code is.
 
 Checks:
   * every page has a footer with the licence and a link to the source code (AGPL-3.0
@@ -48,7 +48,7 @@ def test_texts():
     assert "GNU AFFERO GENERAL PUBLIC LICENSE" in text
     with tempfile.TemporaryDirectory() as frozen:  # a standalone executable's files
         with open(os.path.join(frozen, "THIRD-PARTY-LICENSES.txt"), "w", encoding="utf-8") as fh:
-            fh.write("Third-party licenses of the ser2net standalone executable\n")
+            fh.write("Third-party licenses of the ser2netweb standalone executable\n")
         assert [a for a, _t, _x in licences.texts(frozen)] == ["bundled"]
     print("the licence texts of a source tree and of a standalone executable  OK")
 

@@ -127,7 +127,7 @@ def keep_unpacked(path: str, every: float = REFRESH_EVERY_S) -> str:
         except OSError as e:
             how += f" (could not lock it: {e})"
     threading.Thread(target=_refresh_forever, args=(path, every), daemon=True,
-                     name="ser2net-keep-unpacked").start()
+                     name="ser2netweb-keep-unpacked").start()
     _kept[path] = f"standalone: unpacked in {path} — {how}, so temp cleaners leave it alone"
     return _kept[path]
 

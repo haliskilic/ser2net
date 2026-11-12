@@ -4,7 +4,7 @@ Kept separate from the bridge so the device-resolution and pyserial-config
 mapping live in one place. ``resolve_device`` re-resolves a stable hardware
 identity (VID/PID/serial) to a current device path so COMx / ttyUSB* renumbering
 doesn't break a mapping across reconnects. The port class, the transport and the stream
-on top of them are serial_compat's (which also holds ser2net's fixes for pyserial and
+on top of them are serial_compat's (which also holds ser2netweb's fixes for pyserial and
 pyserial-asyncio-fast).
 """
 from __future__ import annotations

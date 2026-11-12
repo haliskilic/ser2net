@@ -1,5 +1,5 @@
 #!/bin/sh
-# Docker entrypoint: run ser2net as an unprivileged user, never as root.
+# Docker entrypoint: run ser2netweb as an unprivileged user, never as root.
 #
 # Started as root (the default), it picks the account that owns /data:
 #   * /data owned by root — a volume written by an image before v2.8, which ran
@@ -12,7 +12,7 @@
 #     image can have written there — owned by root (an image before v2.8) or by
 #     ser2net — are handed to that owner first, or the server couldn't read them.
 # Handing files over is best effort: when it fails (a read-only mount, NFS with
-# root_squash), the start goes on and ser2net names the file it can't read. Nothing
+# root_squash), the start goes on and ser2netweb names the file it can't read. Nothing
 # below a mount point inside /data (a volume or host folder mounted there) is touched,
 # and nothing at all when the mount points can't be read from /proc/self/mountinfo.
 # The supplementary groups given with --group-add are kept; root's own group is not.
@@ -30,7 +30,7 @@ DATA=/data
 MOUNTINFO=/proc/self/mountinfo
 SERIAL="/dev/tty[A-Z]* /dev/ttymxc* /dev/rfcomm* /dev/serial/by-id/* /dev/serial/by-path/*"
 run() { exec python /app/ser2netweb.py --no-bootstrap --data-dir "$DATA" "$@"; }
-say() { echo "[ser2net] $*"; }
+say() { echo "[ser2netweb] $*"; }
 # in_data <find expression>: find in $DATA, but not below a mount point inside it
 # ($mounts, read once below; mountinfo writes " " as \040)
 in_data() {

@@ -1,7 +1,7 @@
 """The process's open-file limit: raised at start, counted, reported (ser2netweb/engine/netguard.py).
 
 Every serial port, socket and file holds a descriptor, and a process may have at most its
-soft RLIMIT_NOFILE open (1024 under systemd unless the unit raises it). ser2net raises the
+soft RLIMIT_NOFILE open (1024 under systemd unless the unit raises it). ser2netweb raises the
 soft limit toward the hard one at start (at most 65536, never lowering it) and logs the
 result; warns at start when the configured mappings need close to the limit; and /metrics
 reports ser2net_open_fds and ser2net_fd_limit. On Windows (no such limit for sockets and

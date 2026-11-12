@@ -1,4 +1,4 @@
-"""Admin UI TLS changes apply to new connections while ser2net runs, and what the UI really
+"""Admin UI TLS changes apply to new connections while ser2netweb runs, and what the UI really
 serves decides the cookies' Secure flag, HSTS, the cluster beacon's scheme and the Settings
 page's "Listening on" (a saved change that waits for the next start doesn't).
 

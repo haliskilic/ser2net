@@ -1,8 +1,8 @@
 """systemd's notification protocol (sd_notify), standard library only.
 
 Under a unit with Type=notify (the optional drop-in systemd/ser2net.service.d/notify.conf)
-systemd waits for READY=1 before it counts ser2net as started, and with WatchdogSec= it
-restarts ser2net when the WATCHDOG=1 pings stop (they come from the event loop, so a
+systemd waits for READY=1 before it counts ser2netweb as started, and with WatchdogSec= it
+restarts ser2netweb when the WATCHDOG=1 pings stop (they come from the event loop, so a
 loop that is stuck stops them). Everything here does nothing without $NOTIFY_SOCKET, so
 the default unit (Type=simple), Docker, Windows and a start by hand are not affected.
 """
@@ -43,12 +43,12 @@ def notify(*fields: str, env: Optional[Mapping[str, str]] = None) -> bool:
 
 
 def ready(status: str = "", env: Optional[Mapping[str, str]] = None) -> bool:
-    """ser2net has started: its mappings run and its admin UI listens."""
+    """ser2netweb has started: its mappings run and its admin UI listens."""
     return notify("READY=1", *([f"STATUS={status}"] if status else []), env=env)
 
 
 def reloading(env: Optional[Mapping[str, str]] = None) -> bool:
-    """ser2net reads config.json again (systemctl reload, SIGHUP); ready() follows when it
+    """ser2netweb reads config.json again (systemctl reload, SIGHUP); ready() follows when it
     is done (also what Type=notify-reload waits for)."""
     fields = ["RELOADING=1"]
     if sys.platform != "win32":  # (no CLOCK_MONOTONIC on Windows, which has no systemd)
@@ -74,7 +74,7 @@ def watchdog_interval(env: Optional[Mapping[str, str]] = None) -> Optional[float
     if _address(env) is None:
         return None
     # meant for this process: its pid, or its parent's when that is the standalone
-    # binary's launcher, which runs ser2net in a child process (NotifyAccess=all)
+    # binary's launcher, which runs ser2netweb in a child process (NotifyAccess=all)
     pid = (env.get("WATCHDOG_PID") or "").strip()
     if pid and pid not in (str(os.getpid()), str(os.getppid())):
         return None

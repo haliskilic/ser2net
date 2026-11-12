@@ -1,5 +1,5 @@
 """Importing safely: a classic ser2net file never comes in more open than it was in
-ser2net, and an import file can't tie up the service.
+ser2netweb, and an import file can't tie up the service.
 
 Checks:
   * a classic ser2net.yaml whose connection relies on a gtlssh login (certauth) shows

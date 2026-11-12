@@ -1,4 +1,4 @@
-"""Errors that happen outside ser2net's own log lines still reach all.log.
+"""Errors that happen outside ser2netweb's own log lines still reach all.log.
 
 Checks:
   * other libraries' warnings and errors (uvicorn's: a request it can't parse, a port it
@@ -86,7 +86,7 @@ def test_library_logs():
         assert "RuntimeError: handler broke" in text
         assert "Started server process" not in text
         assert "asyncio" not in text and "Exception in callback X()" in console.getvalue()
-        assert text.count("not twice") == 1, "a ser2net logger's record is written once"
+        assert text.count("not twice") == 1, "a ser2netweb logger's record is written once"
         print("library logs: uvicorn's warnings/errors in all.log with traceback, repeats "
               "counted; asyncio's to the console only  OK")
     finally:
@@ -259,7 +259,7 @@ def main():
     test_reset_during_banner()
     test_rotation_blocked()
     test_malformed_request_on_a_real_server()
-    print("\nPASS: errors outside ser2net's own lines reach all.log")
+    print("\nPASS: errors outside ser2netweb's own lines reach all.log")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """Runs inside the systemd unit's sandbox (tests/systemd_smoke.sh, a oneshot copy of
-systemd/ser2net.service with only ExecStart= and Type= changed) and checks what ser2net
+systemd/ser2net.service with only ExecStart= and Type= changed) and checks what ser2netweb
 needs there:
 - the sandbox is in force: /proc/net is hidden (ProcSubset=pid), no capability;
 - the network interfaces are still listed by name (psutil over netlink, without

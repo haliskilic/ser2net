@@ -1,6 +1,6 @@
 """Account recovery and the first admin without the web UI (ser2netweb/accounts.py).
 
-  * `ser2net --set-password NAME` on a stopped install changes config.json (backed up,
+  * `ser2netweb --set-password NAME` on a stopped install changes config.json (backed up,
     audited): the new password works, the old sessions end; NAME is created as an admin
     when missing — on a fresh data directory, too (headless set-up); LDAP/OIDC accounts,
     bad names and short passwords are refused; nothing secret is printed;
@@ -12,7 +12,7 @@
     old one is not applied;
   * the data directory's lock decides: held by a running instance -> handed to it
     (also when its web UI can't be reached); free -> the command holds it (marked brief)
-    while it changes config.json, so a ser2net that starts meanwhile waits and then
+    while it changes config.json, so a ser2netweb that starts meanwhile waits and then
     loads the change; an instance that stops before taking the request -> the command
     makes the change itself; another account command busy -> refused, saying so; where
     the lock can't be used, /healthz decides as before;
@@ -131,7 +131,7 @@ def test_request_files():
 
 
 # Another process holding the data directory's lock for argv[4] seconds: "serve" takes
-# and answers requests (a running ser2net), "silent" doesn't, "brief" marks the lock as
+# and answers requests (a running ser2netweb), "silent" doesn't, "brief" marks the lock as
 # an account command's.
 _HOLDER = (
     "import sys, time; sys.path.insert(0, sys.argv[2])\n"
@@ -204,7 +204,7 @@ def test_lock_decides():
         accounts.healthcheck.check = healthcheck(False)
         p = holder(d, "serve", 30)
         out = set_password()
-        assert out == "taken by the holder (done by the running ser2net)", out
+        assert out == "taken by the holder (done by the running ser2netweb)", out
         assert pwd_version() == 1 and not probes, "the holder decides, not the healthcheck"
         assert not datalock.holds(d)
         p.kill()
@@ -229,7 +229,7 @@ def test_lock_decides():
         accounts.apply_here = apply_here_while_starting
         t = time.monotonic()
         out = set_password()
-        assert "new password set for 'admin'" in out and "running ser2net" not in out, out
+        assert "new password set for 'admin'" in out and "running ser2netweb" not in out, out
         assert seen["probe"].strip() == f"HELD {os.getpid()} True", seen["probe"]
         loaded = json.loads(seen["start"].communicate(timeout=60)[0])
         assert account(loaded, "admin")["pwd_version"] == 2, "the start loaded config.json too early"
@@ -243,7 +243,7 @@ def test_lock_decides():
         # the holder stops before it takes the request: the command makes the change itself
         p = holder(d, "silent", 1.5)
         out = set_password()
-        assert "new password set for 'admin'" in out and "running ser2net" not in out, out
+        assert "new password set for 'admin'" in out and "running ser2netweb" not in out, out
         assert pwd_version() == 3
         assert os.listdir(os.path.join(d, accounts.REQUEST_DIR)) == [], "the request was withdrawn"
         p.wait(10)
@@ -271,7 +271,7 @@ def test_lock_decides():
         assert pwd_version() == 3
         print("another account command busy, or an instance that doesn't take it: refused  OK")
 
-        # a ser2net from before the lock answers /healthz but holds no lock
+        # a ser2netweb from before the lock answers /healthz but holds no lock
         accounts.healthcheck.check = healthcheck(True)
         try:
             set_password()
@@ -388,7 +388,7 @@ def test_running():
         b = Browser(srv.base)
         b.login("admin", PW)
         code, out = cli(srv.data, "--set-password", "admin", password=NEW)
-        assert code == 0 and "done by the running ser2net" in out, out
+        assert code == 0 and "done by the running ser2netweb" in out, out
         st, h, _ = b.get("/settings")
         assert st == 303 and h.get("Location") == "/login?next=%2Fsettings", \
             "the old session must end at once"
@@ -407,7 +407,7 @@ def test_running():
                     if not n.startswith(".")], "request files left behind"
         # its web UI out of the command's reach (another network namespace): still found
         code, out = cli(srv.data, "--sign-out-all", env={"SER2NETWEB_PORT": "1"})
-        assert code == 0 and "done by the running ser2net" in out, out
+        assert code == 0 and "done by the running ser2netweb" in out, out
     print("running install: the instance applies it at once (old session refused, new password "
           "works, audited), --sign-out-all too  OK")
 

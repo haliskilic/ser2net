@@ -165,7 +165,7 @@ def build_api_routes(state: AppState) -> list[Route]:
         try:
             async with state.edit_config():
                 state.config.mappings.append(mapping)
-                # next to the config as it is saved: ser2net's own ports, a serial port
+                # next to the config as it is saved: ser2netweb's own ports, a serial port
                 # another mapping uses, the admin UI's TLS key
                 if conflict := ops.edit_conflict(state.config, mapping):
                     raise ConfigError(conflict)
@@ -275,7 +275,7 @@ def build_api_routes(state: AppState) -> list[Route]:
                 same = existing.to_dict() == mapping.to_dict()
                 if not same:
                     state.config.mappings[state.config.mappings.index(existing)] = mapping
-                    # next to the config as it is saved: ser2net's own ports, a serial port
+                    # next to the config as it is saved: ser2netweb's own ports, a serial port
                     # another mapping uses, the admin UI's TLS key
                     if conflict := ops.edit_conflict(state.config, mapping):
                         raise ConfigError(conflict)
@@ -583,7 +583,7 @@ def openapi_spec(admin, base: str = "") -> dict:
             "warning": {"type": "string",
                         "description": "a stop that config.json could not keep"}}},
         "Info": {"type": "object", "properties": {
-            "version": {"type": "string", "description": "ser2net's version"},
+            "version": {"type": "string", "description": "ser2netweb's version"},
             "api": {"type": "string", "description": "this API's version (info.version)"},
             "features": {"type": "array", "items": {"type": "string"},
                          "description": "what it offers beyond 1.0.0"}}},
@@ -670,7 +670,7 @@ def openapi_spec(admin, base: str = "") -> dict:
     return {
         "openapi": "3.0.3",
         "info": {
-            "title": "ser2net REST API",
+            "title": "ser2netweb REST API",
             "version": API_VERSION,
             "description": "Manage serial<->network mappings, status and ports. "
                            "Authenticate with `Authorization: Bearer <token>` "
@@ -697,7 +697,7 @@ def openapi_spec(admin, base: str = "") -> dict:
                                               "schema": {"type": "object"}}}}}}},
             "/info": {"get": op("Software and API version, API features",
                                 ("200", "Info", "version, api, features"),
-                                description="`version`: ser2net's version; `api`: this API's "
+                                description="`version`: ser2netweb's version; `api`: this API's "
                                             "version (info.version here); `features`: what it "
                                             "offers beyond 1.0.0 (`warnings` and `changed` in "
                                             "create / update / action answers, `if-match` on "
@@ -787,7 +787,7 @@ def openapi_spec(admin, base: str = "") -> dict:
                                        "save_failed: config.json can't be written). A stop "
                                        "always stops; when config.json can't be written, "
                                        "`warning` says it starts again at the next start of "
-                                       "ser2net."),
+                                       "ser2netweb."),
             },
         },
     }

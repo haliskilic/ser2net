@@ -1,4 +1,4 @@
-"""Offline dependency bootstrapper for ser2net.
+"""Offline dependency bootstrapper for ser2netweb.
 
 On first run this installs the bundled wheels from ``vendor/wheels/`` into a
 local ``lib/`` directory (added to ``sys.path`` by ``ser2netweb.py``), so the app
@@ -6,12 +6,12 @@ runs on any machine that merely has a Python 3.10+ interpreter — no internet,
 no virtualenv, no system-wide installs required.
 
 Each install records what it was made for in ``lib/.ser2net-deps.json``: the pins of
-requirements.txt, the Python version and the platform. A ser2net start (not a one-off
+requirements.txt, the Python version and the platform. A ser2netweb start (not a one-off
 command such as --set-password, which may run beside a running server) refreshes a lib/
 that was installed for anything else — an upgrade that changed a pin, a lib/ from before
 this record existed, a new Python — once, offline, in place: packages added to lib/ by
 hand stay, the old versions' metadata goes, and a refresh that can't be done (no matching
-wheels, lib/ not writable, another running ser2net using it) keeps the old lib/ in use with
+wheels, lib/ not writable, another running ser2netweb using it) keeps the old lib/ in use with
 a warning instead of stopping the start. Otherwise, if every dependency imports, it does
 nothing (a virtualenv or system install without lib/ is never touched).
 
@@ -23,7 +23,7 @@ features — are installed as they are.
 psutil is optional: it is the one pinned package that isn't pure Python, and
 vendor/wheels has it for Linux x86_64 and Windows x64 only. Elsewhere (ARM Linux, 32-bit
 Raspberry Pi OS included, macOS, musl, ARM or 32-bit Windows Python) the set is installed
-without it, and ser2net lists the network interfaces with the standard library instead.
+without it, and ser2netweb lists the network interfaces with the standard library instead.
 
 Usage (normally invoked automatically by ser2netweb.py / start.bat):
     python3 bootstrap.py            # (re)install from vendor/wheels -> ./lib, offline
@@ -76,7 +76,7 @@ REQUIRED = [
 # use the standard library without it.
 OPTIONAL = [("psutil", "psutil")]
 
-# Python 3.10 backports: ser2net uses these as stand-ins for the native 3.11+
+# Python 3.10 backports: ser2netweb uses these as stand-ins for the native 3.11+
 # asyncio.TaskGroup / asyncio.Runner / except* (see ser2netweb/engine/bridge.py and
 # ser2netweb/runtime.py). Include them in the self-check so a broken offline install on
 # 3.10 fails here with a clear message instead of an ImportError at startup.
@@ -269,7 +269,7 @@ def _requirements_without(projects: list[str]) -> str:
             name = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", req)
             if name and re.sub(r"[-_.]+", "-", name.group(0)).lower() not in projects:
                 keep.append(req)
-    fd, path = tempfile.mkstemp(prefix="ser2net-requirements-", suffix=".txt")
+    fd, path = tempfile.mkstemp(prefix="ser2netweb-requirements-", suffix=".txt")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write("\n".join(keep) + "\n")
     return path
@@ -365,7 +365,7 @@ def install(online: bool = False) -> None:
 
 def lib_in_use() -> str:
     """Another running program that has files of lib/ loaded, or "" when none is seen.
-    pip replaces the package folders, which must not happen under a running ser2net:
+    pip replaces the package folders, which must not happen under a running ser2netweb:
     on Windows a loaded extension can't be deleted, so its folder would be left half
     removed; on Linux the running server would import new files into old code.
     Best effort: Windows (an extension module that can't be opened for writing) and
@@ -405,8 +405,8 @@ def refresh(online: bool = False) -> bool:
     the start: when it can't be done the old lib/ stays in use, with a warning (False)."""
     print("[bootstrap] ./lib was installed for other dependency versions (an upgrade?), "
           "another Python or platform: installing the pinned ones into it")
-    keep = ("ser2net keeps using the old ./lib: run python3 bootstrap.py in "
-            f"{ROOT} once it can, as the account ser2net runs as")
+    keep = ("ser2netweb keeps using the old ./lib: run python3 bootstrap.py in "
+            f"{ROOT} once it can, as the account ser2netweb runs as")
     altered = _refuse_altered()
     if altered:
         _warn("not refreshing ./lib: these bundled wheels don't match "
@@ -426,8 +426,8 @@ def refresh(online: bool = False) -> bool:
         return False
     busy = lib_in_use()
     if busy:
-        _warn(f"not refreshing ./lib: {busy} (another ser2net?). Stop it, then start "
-              f"ser2net again or run python3 bootstrap.py in {ROOT}")
+        _warn(f"not refreshing ./lib: {busy} (another ser2netweb?). Stop it, then start "
+              f"ser2netweb again or run python3 bootstrap.py in {ROOT}")
         return False
     if not _pip_install(online):
         _warn(f"refreshing ./lib failed (see above). {keep}")
@@ -445,7 +445,7 @@ def ensure(online: bool = False, refresh_lib: bool = True) -> None:
             kept = not refresh(online)
         else:
             _warn("./lib was installed for other dependency versions (an upgrade?), "
-                  "another Python or platform; the next ser2net start installs the pinned "
+                  "another Python or platform; the next ser2netweb start installs the pinned "
                   f"ones (or run python3 bootstrap.py in {ROOT})")
     if not missing_modules():
         return
@@ -467,16 +467,16 @@ def warn_if_stale() -> None:
     if lib_is_stale():
         _warn("./lib was installed for other dependency versions (an upgrade?), another "
               f"Python or platform, and --no-bootstrap leaves it as it is: run python3 "
-              f"bootstrap.py in {ROOT} (as the account ser2net runs as)")
+              f"bootstrap.py in {ROOT} (as the account ser2netweb runs as)")
 
 
 def main(argv: list[str]) -> int:
     """python3 bootstrap.py: (re)install the pinned set into lib/ now, whatever is there.
-    Refuses while another program uses lib/ (stop ser2net first)."""
+    Refuses while another program uses lib/ (stop ser2netweb first)."""
     online = "--online" in argv
     busy = lib_in_use() if os.path.isdir(LIB_DIR) else ""
     if busy:
-        print(f"[bootstrap] ERROR: ./lib is in use: {busy} (a running ser2net?). Stop it "
+        print(f"[bootstrap] ERROR: ./lib is in use: {busy} (a running ser2netweb?). Stop it "
               "first.", file=sys.stderr)
         return 1
     install(online=online)

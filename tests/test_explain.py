@@ -26,7 +26,7 @@ from ser2netweb.web.server import make_templates
 
 TR = json.load(open(os.path.join(ROOT, "ser2netweb", "locale", "tr.json"), encoding="utf-8"))
 MISSING = "The serial device is not there: unplugged, or it has another name now."
-DIALOUT = ("No permission to open the serial device: on Linux, add the user ser2net runs as "
+DIALOUT = ("No permission to open the serial device: on Linux, add the user ser2netweb runs as "
            "to the dialout group; on Windows, another program may have the port open.")
 IN_USE = "The port is already in use by another program (or another mapping)."
 CASES = [
@@ -106,7 +106,7 @@ def test_shown():
     assert _unreadable(json.JSONDecodeError("Expecting ',' delimiter", '{"a": 1 "b"}', 9)) == \
         "it is not valid JSON (line 1, column 10)"
     assert _unreadable(AttributeError("'list' object has no attribute 'get'")) == \
-        "it is not a ser2net configuration"
+        "it is not a ser2netweb configuration"
     assert _unreadable(FileNotFoundError(2, "No such file")) == "The file or folder does not exist."
     assert _unreadable(ConfigError("No such backup.")) == "No such backup."
     try:

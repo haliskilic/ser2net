@@ -1,4 +1,4 @@
-"""Shared helpers for the end-to-end tests that boot a real ser2net server.
+"""Shared helpers for the end-to-end tests that boot a real ser2netweb server.
 
     from _server import Server, Browser, free_port
     with Server(config_dict) as srv:          # data dir in a temp folder, UI on 127.0.0.1

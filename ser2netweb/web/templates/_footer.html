@@ -3,7 +3,7 @@
     this copy runs, which a page before the sign-in doesn't show). Import it with context. #}
 {% macro site_footer(signed_in) %}
 <footer class="site-footer">
-  <span>ser2net{% if signed_in %} {{ app_version }}{% endif %}</span>
+  <span>ser2netweb{% if signed_in %} {{ app_version }}{% endif %}</span>
   <span>{{ _("AGPL-3.0 or a commercial licence") }}</span>
   <a href="{{ source_url }}" rel="noopener noreferrer">{{ _("Source code") }}</a>
   {%- if signed_in %}

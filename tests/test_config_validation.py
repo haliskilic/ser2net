@@ -666,7 +666,7 @@ def test_form_older_node():
 
 
 def test_form_text_input_unchanged():
-    """A close-on string with line breaks (imported from a ser2net configuration) can't be
+    """A close-on string with line breaks (imported from a ser2netweb configuration) can't be
     shown in a one-line input: posted back as the browser shows it, the stored value
     stays; a changed value is taken."""
     existing = MappingConfig.from_dict({"name": "m", "serial": {"port": "COM7"},

@@ -28,8 +28,8 @@ body:
   - type: textarea
     id: about
     attributes:
-      label: "`ser2net --about` çıktısı / output"
-      description: "Sürüm, işletim sistemi ve bileşenler. Bilinen klasörler kısaltılır (`<python>`, `<ser2net>`, `<bundle>`, `<override>`, `~`); kalan yollarda hesap adınız görünebilir, göndermeden önce bakın. / Version, OS and components. Known folders are shortened (`<python>`, `<ser2net>`, `<bundle>`, `<override>`, `~`); other paths can show your account name, so check before posting."
+      label: "`ser2netweb --about` çıktısı / output"
+      description: "Sürüm, işletim sistemi ve bileşenler. Bilinen klasörler kısaltılır (`<python>`, `<ser2netweb>`, `<bundle>`, `<override>`, `~`); kalan yollarda hesap adınız görünebilir, göndermeden önce bakın. / Version, OS and components. Known folders are shortened (`<python>`, `<ser2net>`, `<bundle>`, `<override>`, `~`); other paths can show your account name, so check before posting."
       render: text
     validations:
       required: true

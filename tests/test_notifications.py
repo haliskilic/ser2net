@@ -381,13 +381,13 @@ async def test_delivery(hook_port, smtp_port):
     errors = await n.deliver("test", "", "")
     text = RECEIVED[-1][1]["text"]
     assert errors == [] and TR["test notification"] in text and \
-        TR["If you can read this, ser2net can reach you."] in text, text
+        TR["If you can read this, ser2netweb can reach you."] in text, text
     st.config.admin_ui.language = "auto"
     # a line break in a mapping name: the e-mail still goes, its subject on one line
     errors = await n.deliver("device_lost", "PLC\r\nBcc: x@example.net\u2028\x85", "gone")
     assert errors == [], errors
     mail = email.message_from_string(MAILS[-1][1], policy=email.policy.default)
-    assert mail["Subject"].startswith("ser2net ") and "PLC  Bcc: x@example.net" in mail["Subject"], \
+    assert mail["Subject"].startswith("ser2netweb ") and "PLC  Bcc: x@example.net" in mail["Subject"], \
         mail["Subject"]
     assert mail["Bcc"] is None and "\n" not in mail["Subject"], mail.items()
     assert RECEIVED[-1][1]["mapping"] == "PLC\r\nBcc: x@example.net\u2028\x85", "JSON keeps it"

@@ -1,4 +1,4 @@
-"""What ser2net tells about a mapping's serial port: why it can't be opened, and settings the
+"""What ser2netweb tells about a mapping's serial port: why it can't be opened, and settings the
 port did not take.
 
   - a hint next to the raw error (status `hint`; `last_error` is kept as it is), when the
@@ -301,11 +301,11 @@ def test_no_access_hints():
     cases = [  # (stat, account, kind, text)
         (_stat(20), {}, "group", "/dev/ttyUSB0 belongs to group dialout (gid 20), and user svc "
          "is not in it: add the user to the group (usermod -aG dialout svc; the systemd unit: "
-         "SupplementaryGroups=dialout), then restart ser2net"),
+         "SupplementaryGroups=dialout), then restart ser2netweb"),
         (_stat(14), {}, "group", "group uucp (gid 14)"),
         (_stat(986), {}, "group", "group 986 (gid 986)"),  # no name for it here
         (_stat(20), {"listed": (20,)}, "restart", "user svc was added to group dialout after "
-         "ser2net started"),
+         "ser2netweb started"),
         (_stat(18), {"container": True, "names": {}}, "container_group",
          "group 18 (gid 18), which this container doesn't have: start it with --group-add 18"),
         (_stat(20, mode=0o20600), {"groups": (20,)}, "mode", "/dev/ttyUSB0 is crw------- "
@@ -561,7 +561,7 @@ def test_ports_page():
     ports[0].pop("access")
     html = tpl.render(ports=ports, show_all=False, hidden=0, in_use=set())
     assert "tag-warn" not in html
-    print("ports page: what else uses a port and a port ser2net may not open are shown as "
+    print("ports page: what else uses a port and a port ser2netweb may not open are shown as "
           "badges (TR too)  OK")
 
 
@@ -781,4 +781,4 @@ if __name__ == "__main__":
     test_hangup_told_from_an_unplug()
     test_tiocexcl()
     test_uucp_locks()
-    print("\nPASS: what ser2net tells about a mapping's serial port")
+    print("\nPASS: what ser2netweb tells about a mapping's serial port")
