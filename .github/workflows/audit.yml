@@ -1,11 +1,12 @@
 name: Dependency audit
 
 # pip-audit over the pinned dependencies: requirements.txt on Python 3.10 (the older pins
-# its markers select there) and 3.12 (the current ones), plus requirements-optional.txt,
-# which the binaries and the image bundle. Called by ci.yml (pull requests, main, and a
-# release tag through release.yml: nothing is published with a known vulnerability in
-# what it ships) and scheduled.yml (daily: an advisory published between pull requests
-# shows up then).
+# its markers select there) and 3.12 (the current ones), on Linux and on Windows (pip-audit
+# resolves for the platform it runs on, so only a Windows leg audits the Windows-only pins),
+# plus requirements-optional.txt, which the binaries and the image bundle. Called by ci.yml
+# (pull requests, main, and a release tag through release.yml: nothing is published with
+# a known vulnerability in what it ships) and scheduled.yml (daily: an advisory published
+# between pull requests shows up then).
 on:
   workflow_call:
 
@@ -14,11 +15,12 @@ permissions:
 
 jobs:
   audit:
-    name: dependency audit py${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    name: dependency audit ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -31,5 +33,5 @@ jobs:
       - name: Known vulnerabilities in the pinned runtime dependencies
         run: pip-audit --strict -r requirements.txt
       - name: Known vulnerabilities in the optional packages the binaries / image bundle (3.12)
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.12' && runner.os == 'Linux'   # no markers: one OS is enough
         run: pip-audit --strict -r requirements-optional.txt

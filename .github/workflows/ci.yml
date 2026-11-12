@@ -85,7 +85,8 @@ jobs:
       - run: pip install zizmor==1.32.0
       - run: zizmor --offline --format=github .
 
-  # pip-audit on Python 3.10 and 3.12 (the same workflow release.yml and scheduled.yml use)
+  # pip-audit on Python 3.10 and 3.12, Linux and Windows (the same workflow release.yml and
+  # scheduled.yml use)
   audit:
     uses: ./.github/workflows/audit.yml
 
