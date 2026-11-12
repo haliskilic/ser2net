@@ -159,7 +159,7 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     except ConfigError as e:
         raise SystemExit(f"ser2net: {e}") from None
     if (first_run or reconfigure) and not env_set:
-        bind_ip, port = console.choose_admin_bind(config.admin_ui)
+        bind_ip, port = console.choose_admin_bind(config.admin_ui, notes)
         config.admin_ui.bind_ip = bind_ip
         config.admin_ui.port = port
     admin, note = accounts.provision_from_env(config, os.environ)
