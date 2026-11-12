@@ -672,11 +672,11 @@ class _ClientConn:
         init = bytearray(self._session.initial_net_bytes())
         if m.options.banner:
             init += _render_banner(m.options.banner, m, self.runner.status.device, self.peer_ip)
-        if init:
-            self.writer.write(bytes(init))
-            await self.writer.drain()
 
         try:
+            if init:  # (a client that resets right after connecting fails this write)
+                self.writer.write(bytes(init))
+                await self.writer.drain()
             async with TaskGroup() as tg:
                 tg.create_task(self._pump_net_to_serial())
                 tg.create_task(self._pump_serial_to_net())
@@ -686,6 +686,9 @@ class _ClientConn:
                     tg.create_task(self._idle_guard(m.options.idle_timeout_s))
                 if m.options.max_connection_time_s > 0:
                     tg.create_task(self._lifetime_guard(m.options.max_connection_time_s))
+        except (ConnectionError, OSError) as e:  # the client left before the pumps started
+            if not self.close_reason:
+                self.close_reason = describe_disconnect(e)
         except BaseExceptionGroup as eg:
             # Mirror the original `except*` split: connection-reset paths are a
             # normal disconnect (swallow them); log every other Exception; let

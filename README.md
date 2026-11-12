@@ -725,7 +725,11 @@ içindeki dosyalar başka kullanıcılarca okunamaz:
   yüklemek için kutu işaretlenmedikçe olduğu gibi kalır (işaretlenirse diğer herkesin
   oturumu da kapanır). *Yalnızca eşlemeleri* içe aktarma önizlemesinden geçer. Geri yükleme
   de geri alınabilir; indirilen yedekte oturum anahtarı yer almaz.
-- `all.log` — global etkinlik (boyutla döner); `audit.log` — girişler, config değişiklikleri,
+- `all.log` — global etkinlik (boyutla döner); web sunucusunun ve diğer kütüphanelerin
+  uyarı ve hataları da (yönetim arayüzünün kullanamadığı bir adres, çözemediği bir istek,
+  başarısız bir isteğin traceback'i; her mesaj dakikada en fazla bir kez). Windows'ta başka
+  bir program onu açık tuttuğu için döndürülemezse yazmaya devam edilir ve sonra döndürülür,
+  eski dosyaları korunur; `audit.log` — girişler, config değişiklikleri,
   konsol / hex görünümü açılışları ve trace indirmeleri: kim/nereden/ne (döner). Ayarlar →
   *Audit log*'da aranabilir, CSV olarak indirilebilir.
 - **Saklama süresi.** Varsayılan olarak log'lar, kayıtlar ne kadar eski olursa olsun yalnızca

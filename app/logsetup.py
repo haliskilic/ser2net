@@ -1,4 +1,4 @@
-"""Where log records go besides all.log: the console, and other libraries' records.
+"""Where log records go besides all.log: the console; and other libraries' records.
 
 The console copy of the ser2net log (stdout) is written by a thread of its own
 (ConsoleQueueHandler): a console that doesn't take output (a click into a Windows console
@@ -18,6 +18,7 @@ import copy
 import logging
 import queue
 import threading
+import time
 from logging.handlers import QueueHandler
 from typing import Optional
 
@@ -161,3 +162,92 @@ def close_console(logger: logging.Logger) -> None:
     for handler in list(logger.handlers):
         if isinstance(handler, ConsoleQueueHandler):
             handler.close()
+
+
+# ---------------------------------------------------------------------------
+# Other libraries' records (uvicorn, asyncio, ...): Python writes a warning or error that
+# no handler takes to stderr (logging.lastResort), on the calling thread — the event loop's
+# — and not to all.log, so a busy or forbidden admin UI port, a TLS error or the
+# traceback of a request that failed never reached it (nor, under the Windows service,
+# anywhere one would look).
+# ---------------------------------------------------------------------------
+LIBRARY_REPEAT_S = 60.0   # the same message of a library at most once per this
+LIBRARY_KEYS_MAX = 64     # messages told apart (past that, they share one limit)
+LIBRARY_LINE_MAX = 2000   # characters of a message kept (as all.log's own lines)
+# asyncio's reports reach all.log through the event loop's exception handler already
+# (runtime._log_loop_errors): only the console gets their full text
+_CONSOLE_ONLY = ("asyncio",)
+
+
+class LibraryLogHandler(logging.Handler):
+    """On the root logger: a WARNING or ERROR of another library goes to the ser2net log
+    (all.log and the console) as "[WARNING: |ERROR: ]<logger>: <message>", a traceback
+    below it, each message at most once per LIBRARY_REPEAT_S (the next one says how many
+    were held back: a port scan makes uvicorn warn once per connection)."""
+
+    def __init__(self, logger: logging.Logger) -> None:
+        super().__init__(logging.WARNING)
+        self.logger = logger
+        self._next: dict[tuple, float] = {}
+        self._held: dict[tuple, int] = {}
+
+    def handle(self, record: logging.LogRecord):
+        if record.name == "ser2net" or record.name.startswith("ser2net."):
+            return False  # (they don't propagate; a test's own logger might)
+        return super().handle(record)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            line = self._line(record)
+            if line is None:
+                return
+            if record.name.split(".", 1)[0] in _CONSOLE_ONLY:
+                console = next((h for h in self.logger.handlers
+                                if isinstance(h, ConsoleQueueHandler)), None)
+                if console is not None:
+                    console.handle(self._copy(record, line))
+                return
+            self.logger.handle(self._copy(record, line))
+        except Exception:
+            self.handleError(record)
+
+    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 (logging API)
+        pass  # (stderr may be the console that blocks; the record is lost, nothing else)
+
+    def _line(self, record: logging.LogRecord) -> Optional[str]:
+        """The record as a line of the ser2net log, or None while its message is held
+        back."""
+        key = (record.name, str(record.msg)[:200])
+        if key not in self._next and len(self._next) >= LIBRARY_KEYS_MAX:
+            key = ("", "")
+        now = time.monotonic()
+        if now < self._next.get(key, 0.0):
+            self._held[key] = self._held.get(key, 0) + 1
+            return None
+        self._next[key] = now + LIBRARY_REPEAT_S
+        held = self._held.pop(key, 0)
+        text = record.getMessage().strip()
+        if len(text) > LIBRARY_LINE_MAX:
+            text = f"{text[:LIBRARY_LINE_MAX]}… ({len(text) - LIBRARY_LINE_MAX} more characters)"
+        level = "" if record.levelno < logging.WARNING else (
+            "WARNING: " if record.levelno < logging.ERROR else "ERROR: ")
+        more = f" ({held} more since the last such line)" if held else ""
+        return f"{level}{record.name}: {text}{more}"
+
+    def _copy(self, record: logging.LogRecord, line: str) -> logging.LogRecord:
+        out = copy.copy(record)
+        out.name, out.msg, out.args = self.logger.name, line, None
+        out.levelno, out.levelname = logging.INFO, "INFO"  # (all.log takes INFO)
+        return out
+
+
+def route_library_logs(logger: logging.Logger) -> LibraryLogHandler:
+    """Send other libraries' warnings and errors to ``logger`` (the ser2net log), in place
+    of a handler a previous call installed."""
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        if isinstance(handler, LibraryLogHandler):
+            root.removeHandler(handler)
+    handler = LibraryLogHandler(logger)
+    root.addHandler(handler)
+    return handler

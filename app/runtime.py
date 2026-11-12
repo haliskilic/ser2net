@@ -31,7 +31,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
-from . import accounts, console, datalock, i18n, standalone
+from . import accounts, console, datalock, i18n, logsetup, standalone
 from .config import ConfigError, ConfigStore
 from .engine import netguard
 from .state import AppState, write_audit_record
@@ -367,6 +367,9 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)
     _log_thread_errors(state.log)
+    # uvicorn's warnings and errors (a port it can't use, a TLS error, the traceback of a
+    # request that failed) and other libraries' go to all.log (logsetup.LibraryLogHandler)
+    logsetup.route_library_logs(logging.getLogger("ser2net"))
     for lang in i18n.missing_catalogs():
         state.log(f"WARNING: the '{lang}' UI translation is missing from {i18n.LOCALE_DIR} "
                   "— the web UI shows English to visitors who pick it")
@@ -405,6 +408,7 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
         loop="asyncio",
         log_level="warning",
         access_log=False,
+        log_config=None,  # (its own would write to stderr only: logsetup takes them)
         http=httpguard.protocol_class(guard),
     )
     if admin.tls_enabled:
