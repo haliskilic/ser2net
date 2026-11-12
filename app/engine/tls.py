@@ -1,10 +1,11 @@
 """TLS contexts made from the files the configuration names: a mapping's listener (the
 bridge and the Modbus gateway) and its connect-out link, and the admin UI's certificate.
-One place, so they all read their files the same way: an encrypted key is decrypted with
-the password the configuration gives, and never makes OpenSSL ask for one on the terminal
-(without a terminal that failed with a bare "[Errno 22] Invalid argument"; with one, the
-whole process waited for someone to type it): without a password, loading it is an error
-that says so. A CA file holds PEM certificates (one or more) or one DER certificate (as
+One place, so they all read their files the same way: a relative path names a file in the
+data directory (config.data_path), so a data directory that is moved or restored
+elsewhere keeps working. An encrypted key is decrypted with the password the configuration
+gives, and never makes OpenSSL ask for one on the terminal (without a terminal that failed
+with a bare "[Errno 22] Invalid argument"; with one, the whole process waited for someone
+to type it): without a password, loading it is an error that says so. A CA file holds PEM certificates (one or more) or one DER certificate (as
 Windows exports it); any certificate in it is trusted as it is: a CA's, an intermediate's,
 or the peer's own (self-signed) one.
 
@@ -20,6 +21,8 @@ from __future__ import annotations
 import hashlib
 import re
 from typing import TYPE_CHECKING, Any, Optional
+
+from ..config import data_path
 
 if TYPE_CHECKING:
     import ssl
@@ -45,7 +48,7 @@ def load_cert_chain(ctx: ssl.SSLContext, cert: Any, key: Any = "", password: Any
     TlsFileError."""
     import ssl
 
-    cert_file, key_file = str(cert or ""), str(key or "")
+    cert_file, key_file = data_path(cert), data_path(key)
     for path in (cert_file, key_file):
         if not path:
             continue
@@ -127,7 +130,7 @@ def tls_context(*, server_side: bool, cert: Any = "", key: Any = "", password: A
     elif not cert:
         raise TlsFileError("no_cert", "a TLS listener needs a certificate and a key")
     if ca:
-        _load_ca(ctx, ca)
+        _load_ca(ctx, data_path(ca))
     if cert:
         load_cert_chain(ctx, cert, key, password)
     return ctx

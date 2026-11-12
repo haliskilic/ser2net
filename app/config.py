@@ -19,7 +19,9 @@ import hashlib
 import ipaddress
 import json
 import math
+import ntpath
 import os
+import posixpath
 import re
 import secrets
 import socket
@@ -212,6 +214,49 @@ def trace_file_name(value: Any) -> str:
     name = re.split(r"[\\/]", raw)[-1]
     name = _TRACE_NAME_BAD.sub("_", name).strip(". ")[:80].rstrip(". ")
     return name or TRACE_DEFAULT_NAME
+
+
+# The data directory (the folder of config.json, set by ConfigStore): where a relative
+# TLS file path in the configuration points. Before 2.9 such a path was looked up from the
+# working directory (/app in Docker, the service's folder, System32 for the Windows
+# service), so a data directory that moved or was restored elsewhere lost its files.
+_data_dir: Optional[str] = None
+
+
+def set_data_dir(path: Optional[str]) -> None:
+    global _data_dir
+    _data_dir = os.path.abspath(path) if path else None
+
+
+def data_path(path: Any, data_dir: Optional[str] = None) -> str:
+    """The file a TLS path from the configuration names: an absolute path as it is, a
+    relative one in the data directory (``data_dir``, else ConfigStore's). A relative path
+    found only from the working directory, where releases before 2.9 looked for it, is
+    still used from there."""
+    path = str(path or "")
+    base = data_dir or _data_dir
+    if not path or os.path.isabs(path) or ntpath.isabs(path) or not base:
+        return path  # (a Windows path is no file in the data directory elsewhere either)
+    inside = os.path.join(base, path)
+    if not os.path.exists(inside) and os.path.exists(path):
+        return path
+    return inside
+
+
+def moved_tls_file(path: Any, data_dir: str) -> str:
+    """Where a TLS file of a data directory that was moved, or restored on another machine,
+    is now: for an absolute ``path`` that is not there and lies in a folder named "tls"
+    (where Settings → Admin TLS generates its certificate: <data dir>/tls/), the file of
+    that name in ``data_dir``'s tls folder, if it is there; else "". A path written on
+    Windows is read on any OS, and one written elsewhere on Windows."""
+    text = str(path or "")
+    if not text or not (posixpath.isabs(text) or ntpath.isabs(text)) or os.path.exists(text):
+        return ""
+    folder, name = ntpath.split(text)  # (ntpath takes "/" and "\\" both)
+    if not name or ntpath.basename(folder).lower() != "tls":
+        return ""
+    found = os.path.join(data_dir, "tls", name)
+    return found if os.path.isfile(found) and found != text else ""
 
 
 def normalize_cidr(value: str) -> str:
@@ -618,7 +663,7 @@ class NetworkSettings:
                 raise ConfigError(_("Connect-out TLS: set both a certificate and a key (for a "
                                     "server that asks for a client certificate), or neither."))
             for p in (self.tls_cert, self.tls_key):
-                if p and not os.path.isfile(p):
+                if p and not os.path.isfile(data_path(p)):
                     raise ConfigError(_("TLS file not found: {0}").format(p))
         for label, lst in ((_("allowed"), self.allowed_client_ips),
                            (_("priority"), self.priority_client_ips)):
@@ -1702,6 +1747,40 @@ class AppConfig:
     def get_mapping(self, mapping_id: str) -> Optional[MappingConfig]:
         return next((m for m in self.mappings if m.id == mapping_id), None)
 
+    def find_moved_tls_files(self, data_dir: Optional[str] = None) -> list[str]:
+        """TLS files that are not where the config says, because the data directory was
+        moved or restored elsewhere (a native install moved to Docker's /data, a Windows
+        service given another --data-dir, a backup restored on another machine), taken from
+        the tls folder of ``data_dir`` (else ConfigStore's; moved_tls_file): the admin UI's
+        certificate and key (the pair Settings → Admin TLS generates is always there), and
+        a mapping's. A pair is taken only when both of its files are found. Changes the
+        config (to absolute paths, which older releases read the same) and returns what it
+        did, one log line each."""
+        base = data_dir or _data_dir
+        notes: list[str] = []
+        if not base:
+            return notes
+
+        def take(owner: Any, label: str, attrs: tuple[str, ...]) -> None:
+            paths = [getattr(owner, a) for a in attrs]
+            if not all(paths):
+                return
+            found = [moved_tls_file(p, base) for p in paths]
+            if not all(found):
+                return
+            for attr, old, new in zip(attrs, paths, found, strict=True):
+                setattr(owner, attr, new)
+                notes.append(f"{label}{attr}: {old!r} is not there; {new!r} of this data "
+                             "directory is used (the data directory was moved or restored)")
+
+        take(self.admin_ui, "admin_ui.", ("tls_cert", "tls_key"))
+        for m in self.mappings:
+            label = f"mapping '{m.name}': "
+            take(m.network, label, ("tls_cert", "tls_key"))
+            for attr in ("tls_ca", "tls_client_ca"):
+                take(m.network, label, (attr,))
+        return notes
+
     def admin_key_reuse(self, m: MappingConfig) -> str:
         """Why mapping ``m`` can't be saved with its TLS key ("" when it can): the key is the
         admin UI's own key file, so the mapping would present the admin UI's certificate on
@@ -1713,7 +1792,7 @@ class AppConfig:
         if not (m.kind == "net" and net.tls and net.tls_key and admin.tls_key):
             return ""
         try:
-            same = os.path.samefile(net.tls_key, admin.tls_key)
+            same = os.path.samefile(data_path(net.tls_key), data_path(admin.tls_key))
         except (OSError, TypeError, ValueError):  # one of them is missing: not the same file
             return ""
         if not same:
@@ -1774,7 +1853,7 @@ class AppConfig:
         if bool(cert) != bool(key):
             raise ConfigError(_("Set both TLS certificate and key, or neither."))
         for path in (p for p in (cert, key) if p):
-            if not os.path.isfile(path):
+            if not os.path.isfile(data_path(path)):
                 raise ConfigError(_("TLS file not found or not readable: {0}").format(path))
 
         # Admin UI bind IP (set via the console / --reconfigure, or a hand-edited
@@ -2016,6 +2095,7 @@ class ConfigStore:
     def __init__(self, path: str):
         self.path = os.path.abspath(path)
         directory = os.path.dirname(self.path)
+        set_data_dir(directory)  # (relative TLS paths: data_path)
         os.makedirs(directory, exist_ok=True)
         # config.json holds the password hash + secret_key; keep the dir private on
         # BOTH platforms (POSIX chmod 0700 / Windows icacls owner-only inheritance).

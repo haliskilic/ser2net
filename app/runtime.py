@@ -31,7 +31,7 @@ else:  # pragma: no cover - exercised only on Python 3.10
     from taskgroup import Runner
 
 from . import accounts, console, datalock, i18n, standalone
-from .config import ConfigError, ConfigStore, host_port
+from .config import ConfigError, ConfigStore, data_path, host_port
 from .engine import netguard
 from .engine.serial_link import Backoff
 from .state import AppState, write_audit_record
@@ -140,7 +140,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     server starts with it, as a start without the env vars always has (a mapping that
     can't start fails on its own), and later saves only refuse what they change or add.
     The file is written back only when this start changes it (first run, --reconfigure,
-    a new env address, an upgrade's normalisation); a failing write is a warning too.
+    a new env address, an upgrade's normalisation, TLS files found in a moved data
+    directory: AppConfig.find_moved_tls_files); a failing write is a warning too.
     Fatal, with one line instead of a traceback: an unusable SER2NET_BIND_IP /
     SER2NET_PORT, a config.json that can't be read or parsed, a first run that can't
     create it."""
@@ -159,6 +160,8 @@ def prepare_config(config_path: str, reconfigure: bool = False):
         raise SystemExit(f"ser2net: {store.path} is not a valid configuration ({e}) — fix "
                          f"it{restore}") from None
     notes = config.load_notes
+    moved = config.find_moved_tls_files(data_dir)
+    notes.extend(moved)
 
     try:
         env_set = _env_bind_override(config.admin_ui, notes)
@@ -178,7 +181,7 @@ def prepare_config(config_path: str, reconfigure: bool = False):
     # instance_id (made by hand, or a downloaded backup put in its place): keep them, or
     # every restart would sign everyone out and give this node a new cluster id
     if ((first_run or reconfigure or env_set) and not store.matches(config)
-            or config.ids_created or admin):
+            or config.ids_created or admin or moved):
         try:
             # not validated: what this config breaks was accepted just above, so a check
             # could only fail on a file it looks for that went away since, and that must
@@ -252,11 +255,12 @@ def require_admin_tls(admin) -> None:
             raise SystemExit(f"ser2net: admin_ui.{field} in config.json must be a file name, "
                              f"not {path!r}")
         try:
-            with open(path, "rb"):
+            with open(data_path(path), "rb"):
                 pass
         except OSError as e:
             fix = ("" if isinstance(e, PermissionError)
-                   else " — fix admin_ui.tls_cert / tls_key in config.json")
+                   else " — fix admin_ui.tls_cert / tls_key in config.json (Settings → Admin "
+                        "TLS generates its certificate in the data directory's tls folder)")
             raise SystemExit(f"ser2net: cannot read the admin UI TLS {what}: "
                              f"{_os_error(e)}{fix}") from None
 

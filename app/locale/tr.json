@@ -933,5 +933,7 @@
   "TLS client certificates (ssl clientauth) are kept: clients need a certificate from the CA file '{0}'": "TLS istemci sertifikaları (ssl clientauth) korundu: istemcilerin '{0}' CA dosyasından gelen bir sertifikası olmalı",
   "TLS client certificates (ssl clientauth) are checked here only against a CA file on this host, and {0}: the mapping is imported disabled rather than open to clients without a certificate; set its client CA file before you enable it": "TLS istemci sertifikaları (ssl clientauth) burada yalnızca bu makinedeki bir CA dosyasına göre denetlenir ve {0}: eşleme sertifikasız istemcilere açık olmak yerine kapalı olarak içe aktarıldı; açmadan önce istemci CA dosyasını belirle",
   "the ssl layer names none (CA=)": "ssl katmanı hiçbirini belirtmiyor (CA=)",
-  "'{0}' is not a file on this host": "'{0}' bu makinede bir dosya değil"
+  "'{0}' is not a file on this host": "'{0}' bu makinede bir dosya değil",
+  "Mapping #{0} ({1}): its TLS files are not where the file says; the files of that name in this data directory's tls folder are used.": "Eşleme #{0} ({1}): TLS dosyaları dosyada yazan yerde değil; bu veri klasörünün tls klasöründeki aynı adlı dosyalar kullanılıyor.",
+  "TLS files the backup names in another data directory are used from this one's tls folder.": "Yedeğin başka bir veri klasöründe gösterdiği TLS dosyaları bu veri klasörünün tls klasöründen kullanılıyor."
 }
