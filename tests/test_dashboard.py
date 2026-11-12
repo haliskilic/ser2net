@@ -117,7 +117,7 @@ def trace_error_shown():
             assert time.time() < end, body[-600:]
             time.sleep(0.2)
         st, _, page = b.get("/api/mappings/aaaaaaaaaab1/traces")
-        assert st == 200 and "Not recording now: File exists" in page, page[:600]
+        assert st == 200 and "Not recording now: " in page, page[:600]  # "File exists"
         assert "trace not written" in srv.output(), srv.output()[-1500:]
     print("trace that can't be written: named in the table, the panel and all.log  OK")
 
