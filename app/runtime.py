@@ -524,9 +524,11 @@ async def _serve(store: ConfigStore, config, loop_note: str = "") -> int:
     for note in (standalone.notes + config.load_notes + ([loop_note] if loop_note else [])
                  + proxy.start_notes(admin) + node_name_notes()):
         state.log(note)
+    from . import licences
     from .engine import serial_compat
     for line in (netguard.raise_fd_limit(), netguard.fd_budget_warning(config),
-                 serial_compat.unverified_note(), bindhint.admin_port_note(admin.port)):
+                 serial_compat.unverified_note(), bindhint.admin_port_note(admin.port),
+                 licences.source_url_note()):
         if line:
             state.log(line)
     _log_loop_errors(asyncio.get_running_loop(), state.log)

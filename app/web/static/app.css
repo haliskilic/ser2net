@@ -318,3 +318,10 @@ legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter
 .point-actions { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 6px 10px;
   align-items: center; justify-content: flex-end; margin-bottom: 8px; min-width: 0; }
 .point-actions .muted { overflow-wrap: anywhere; }
+/* every page's footer: licence and source code (_footer.html) */
+.site-footer { max-width: 1180px; margin: 28px auto 18px; padding: 0 20px; color: var(--muted);
+  font-size: 12px; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
+.site-footer > * { overflow-wrap: anywhere; }
+/* the /licenses page: long licence texts, wrapped to the panel */
+pre.licence-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono);
+  font-size: 12px; margin: 0; max-height: 32rem; overflow: auto; }

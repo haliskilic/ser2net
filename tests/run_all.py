@@ -167,6 +167,7 @@ PORTABLE = [
     "test_backup_erasure.py",  # deleting backups, a deleted account out of every backup
     "test_privacy_doc.py",     # docs/PRIVACY.md's numbers and settings match the code
     "test_docs.py",            # the READMEs name every CLI option and link every guide; links resolve
+    "test_licenses_page.py",   # footer: licence + source link (SER2NET_SOURCE_URL); /licenses
     "test_clock_ages.py",     # ages and client order by the monotonic clock (no wall clock)
     "test_time_stamps.py",    # log/audit times with their UTC offset; old lines still read
     "test_clock_check.py",    # a clock that reads earlier than it can: start-up log, Settings

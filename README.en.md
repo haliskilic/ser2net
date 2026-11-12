@@ -1920,6 +1920,14 @@ the full texts inside an executable: `ser2net --licenses`. The LGPL-licensed lda
 in the executable as plain source files; `SER2NET_LIB_OVERRIDE=<dir>` loads another
 version of it. Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 
+Every page of the web UI ends with the licence and a **Source code** link (signed in: also
+the version and **Licences**, a page with the licence texts this copy carries — LICENSE,
+NOTICE, the commercial licence and the third-party notices, or in an executable its
+`THIRD-PARTY-LICENSES.txt`). A modified version that others use over a network has to offer
+them its source (AGPL-3.0 section 13): point the link at it with `SER2NET_SOURCE_URL`
+(`https://git.example.com/our-ser2net`; a value that is not an http(s) address is not used,
+with a start-up warning).
+
 Contributions are welcome! On your first pull request you'll be asked to sign a one-time [Contributor License Agreement](https://gist.github.com/haliskilic/7a7fdcd355f54d1db6943959d7b76823); you keep the copyright to your work.
 
 Copyright © 2026 Halis KILIÇ.

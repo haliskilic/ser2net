@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import lang_switch %}
+{% from "_footer.html" import site_footer with context %}
 {% block body %}
 {#- this page's address, without the base path (page_url: the one a page sent as the answer
     to a form names) #}
@@ -36,4 +37,5 @@
   <div id="ui-alert" role="alert" aria-atomic="false"></div>
   <div id="ui-status" role="status" aria-atomic="false"></div>
 </div>
+{{ site_footer(true) }}
 {% endblock %}
