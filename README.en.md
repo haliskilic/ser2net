@@ -424,6 +424,17 @@ the session. Behind a reverse proxy, the proxy must pass the address the browser
 address the UI saw). Scripts that send no `Origin` header, the REST API and cluster peers
 are not affected.
 
+**Behind a reverse proxy:** the console and hex-view WebSockets are checked the same way: a
+browser's handshake is accepted when it says it comes from this UI's own page
+(`Sec-Fetch-Site: same-origin`, sent over HTTPS) or when its `Origin` is the address in
+`Host`, `X-Forwarded-Host` or `Forwarded: host=`, port included. So a proxy must pass the
+browser's address on — nginx `proxy_set_header Host $http_host;`, Apache
+`ProxyPreserveHost On`, IIS ARR `preserveHostHeader` (Caddy and Traefik do it by default) —
+and pass WebSocket upgrades through; over plain HTTP browsers send no `Sec-Fetch-Site`, so
+there the address is all that counts. all.log names a refused `Origin` once a minute,
+with the addresses the UI saw. Examples for nginx, Apache, IIS, Caddy and Traefik:
+[docs/DOCKER.md → Behind a reverse proxy](docs/DOCKER.md#behind-a-reverse-proxy).
+
 **Passwords** of local accounts are stored as scrypt hashes (N=2^14, r=8, p=5, OWASP's
 minimum; the hash names its cost, so the cost can be raised later). A hash made by 2.8.1 or
 older keeps working and is renewed with today's cost at that account's next sign-in (its

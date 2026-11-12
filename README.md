@@ -435,6 +435,17 @@ port dahil `Host` ya da `X-Forwarded-Host` olarak iletmelidir (all.log reddedile
 ve arayüzün gördüğü adresi yazar). `Origin` başlığı göndermeyen betikler, REST API ve
 cluster eşleri bundan etkilenmez.
 
+**Ters proxy arkasında:** konsol ve hex görünümü WebSocket'leri de aynı şekilde denetlenir:
+tarayıcının el sıkışması, bu arayüzün kendi sayfasından geldiğini söylüyorsa
+(`Sec-Fetch-Site: same-origin`, HTTPS'te gönderilir) ya da `Origin`'i port dahil `Host`,
+`X-Forwarded-Host` veya `Forwarded: host=` içindeki adresse kabul edilir. Bu yüzden proxy
+tarayıcının adresini iletmeli — nginx'te `proxy_set_header Host $http_host;`, Apache'de
+`ProxyPreserveHost On`, IIS ARR'de `preserveHostHeader` (Caddy ve Traefik bunu zaten yapar) —
+ve WebSocket yükseltmesini geçirmelidir; düz HTTP'de tarayıcılar `Sec-Fetch-Site`
+göndermediği için orada yalnızca adres belirleyicidir. all.log reddedilen `Origin`'i ve
+arayüzün gördüğü adresleri dakikada en fazla bir kez yazar. nginx, Apache, IIS, Caddy ve
+Traefik örnekleri: [docs/DOCKER.md → Behind a reverse proxy](docs/DOCKER.md#behind-a-reverse-proxy).
+
 **Parolalar:** yerel hesapların parolaları scrypt hash'i olarak saklanır (N=2^14, r=8, p=5,
 OWASP'ın en düşük önerisi; hash maliyetini kendisi taşır, böylece maliyet ileride
 artırılabilir). 2.8.1 ya da daha eski bir sürümün yaptığı hash çalışmaya devam eder ve o
