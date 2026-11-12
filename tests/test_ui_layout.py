@@ -35,7 +35,10 @@ longer:
     and an ended session are shown (refreshing panels marked "not up to date") and
     cleared once requests work again; a bulk action acts on the ticked rows shown only
     ("Select all shown" ticks those), asks first with the counts and clears the
-    selection; a filter that matches nothing says so, with a button that clears it.
+    selection; a filter that matches nothing says so, with a button that clears it; a
+    search finds Turkish names in any letter case ('istanbul', 'ıstanbul' find
+    'İSTANBUL'), names sort with numbers as numbers (Hat 2 before Hat 10), and the
+    filter comes back as it was typed.
 
 Opt-in: needs `pip install playwright && python -m playwright install chromium`.
 Skipped when Playwright or its browser is missing, unless SER2NET_UI_TESTS=1 (the
@@ -180,6 +183,11 @@ def demo_mappings(prefix, raw_port):
         {"name": prefix + "short", "enabled": True, "serial": {"port": "/dev/ttyUSB0"},
          "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1",
                      "port": raw_port, "max_connections": 4}},
+        # Turkish names for the search and the sort (feedback_checks)
+        {"name": prefix + "İSTANBUL Hat 10", "enabled": False, "serial": {"port": "/dev/ttyUSB1"},
+         "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1", "port": free_port()}},
+        {"name": prefix + "istanbul hat 2", "enabled": False, "serial": {"port": "/dev/ttyUSB2"},
+         "network": {"mode": "server", "protocol": "raw", "bind_ip": "127.0.0.1", "port": free_port()}},
     ]
 
 
@@ -490,6 +498,25 @@ def feedback_checks(browser, base, problems):
     page.click("#mappings tr.no-match button[data-filter-clear]")
     if page.query_selector("#mappings tr.no-match") or page.input_value("[data-filter-text]"):
         bad("“Show all” did not clear the filter")
+
+    # Turkish names: what is typed is folded as the rows are (İ/I/ı/i one letter, no
+    # accents), names sort in the page's language with numbers as numbers, and the filter
+    # comes back as it was typed
+    shown_names = ("Array.from(document.querySelectorAll('#mappings tr[data-mid]:not([hidden])'))"
+                   ".map(r => r.getAttribute('data-name'))")
+    for typed in ("istanbul HAT", "İSTANBUL", "ıstanbul"):
+        page.fill("[data-filter-text]", typed)
+        if sorted(page.evaluate(shown_names)) != ["istanbul hat 2", "İSTANBUL Hat 10"]:
+            bad(f"the search {typed!r} does not find the İstanbul rows: {page.evaluate(shown_names)}")
+    page.select_option("[data-sort]", "name")
+    if page.evaluate(shown_names) != ["istanbul hat 2", "İSTANBUL Hat 10"]:
+        bad(f"sorted by name, Hat 2 is not before Hat 10: {page.evaluate(shown_names)}")
+    page.reload()
+    page.wait_for_selector("#mappings table")
+    if page.input_value("[data-filter-text]") != "ıstanbul":
+        bad(f"the filter came back as {page.input_value('[data-filter-text]')!r}, not as typed")
+    page.fill("[data-filter-text]", "")
+    page.select_option("[data-sort]", "")
     problems.extend(f"feedback: browser error: {e}" for e in errors)
     ctx.close()
 

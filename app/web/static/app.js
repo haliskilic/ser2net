@@ -522,6 +522,25 @@ document.addEventListener("htmx:beforeSwap", function (e) {
   var selected = new Set();          // mapping ids ticked for a bulk action
   var KEY = "ser2net-dashboard";     // per-browser filter memory
 
+  // What is typed is folded as the rows' data-search is on the server (search_key in
+  // app/textfold.py): accents and compatibility forms left off (NFKD without combining
+  // marks), Turkish İ/I/ı/i as one letter, letter case and runs of spaces ignored — so
+  // "istanbul" finds "İstanbul Depo" and "corlu" "Çorlu". Not toLocaleLowerCase("tr"),
+  // which turns I into ı and so breaks searches typed in English.
+  // (combining marks: \p{M} where the browser knows it — written as a literal, it would
+  // be a SyntaxError for this whole file in a browser that doesn't)
+  var MARKS = /[\u0300-\u036f]/g;
+  try { MARKS = new RegExp("\\p{M}", "gu"); } catch (e) {}
+  function searchKey(s) {
+    return String(s).normalize("NFKD").replace(MARKS, "").replace(/\u0131/g, "i").toLowerCase()
+      .replace(/\u00df/g, "ss").replace(/\u03c2/g, "\u03c3").replace(/\s+/g, " ").trim();
+  }
+  // names sort as people read them, in the page's language: Ç after C, İ with I, Hat 2
+  // before Hat 10
+  var collator = window.Intl && Intl.Collator
+    ? new Intl.Collator(document.documentElement.lang || undefined, { numeric: true, sensitivity: "base" })
+    : { compare: function (a, b) { return a < b ? -1 : a > b ? 1 : 0; } };
+
   function tools() { return document.querySelector("[data-mapping-tools]"); }
   function load() { try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { return {}; } }
   function save(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} }
@@ -537,10 +556,10 @@ document.addEventListener("htmx:beforeSwap", function (e) {
   function apply() {
     var t = tools(); var box = document.getElementById("mappings");
     if (!t || !box) return;
-    var text = t.querySelector("[data-filter-text]").value.trim().toLowerCase();
+    var typed = t.querySelector("[data-filter-text]").value, text = searchKey(typed);
     var st = t.querySelector("[data-filter-state]").value;
     var sort = t.querySelector("[data-sort]").value;
-    save({ text: text, state: st, sort: sort });
+    save({ text: typed.trim(), state: st, sort: sort });   // as typed: shown again as it was
     var body = box.querySelector("table.list tbody"); if (!body) return;
     var rows = Array.prototype.slice.call(body.querySelectorAll("tr[data-mid]"));
     var shown = 0;
@@ -553,13 +572,18 @@ document.addEventListener("htmx:beforeSwap", function (e) {
       var cb = r.querySelector(".row-select");
       if (cb) cb.checked = selected.has(cb.value);
     });
-    var key = {
-      "": function (r) { return +r.getAttribute("data-order"); },
-      name: function (r) { return r.getAttribute("data-name"); },
-      state: function (r) { return r.getAttribute("data-state") + " " + r.getAttribute("data-name"); },
-      port: function (r) { return +r.getAttribute("data-port") || 0; }
-    }[sort] || function (r) { return +r.getAttribute("data-order"); };
-    var sorted = rows.slice().sort(function (a, b) { var x = key(a), y = key(b); return x < y ? -1 : x > y ? 1 : 0; });
+    function attr(r, a) { return r.getAttribute(a) || ""; }
+    function order(a, b) { return +attr(a, "data-order") - +attr(b, "data-order"); }
+    function byName(a, b) { return collator.compare(attr(a, "data-name"), attr(b, "data-name")); }
+    var cmp = {
+      name: byName,
+      state: function (a, b) {
+        var x = attr(a, "data-state"), y = attr(b, "data-state");
+        return x < y ? -1 : x > y ? 1 : byName(a, b);
+      },
+      port: function (a, b) { return (+attr(a, "data-port") || 0) - (+attr(b, "data-port") || 0); }
+    }[sort];
+    var sorted = rows.slice().sort(function (a, b) { return (cmp && cmp(a, b)) || order(a, b); });
     // move rows only when the order changes: moving a row takes the keyboard focus from
     // its buttons (put back below, as htmx put it back after the refresh)
     if (sorted.some(function (r, i) { return r !== rows[i]; })) {

@@ -51,8 +51,8 @@ def test_sysfs_and_by_id():
     links = portlist._by_id_links(os.path.join(d, "by-id"))
     assert links == {os.path.realpath(target): os.path.join(d, "by-id", "usb-Prolific_PL2303-if00-port0")}
     ports = [FTDI, ONBOARD, PHANTOM]
-    assert portlist.visible(ports) == [FTDI, ONBOARD]
-    assert portlist.visible(ports, show_all=True) == ports
+    assert portlist.visible(ports) == [ONBOARD, FTDI], "by name, ttyS0 before ttyUSB3"
+    assert portlist.visible(ports, show_all=True) == [ONBOARD, PHANTOM, FTDI]
     assert portlist.find(ports, FTDI["by_id"]) is FTDI and portlist.find(ports, "/dev/ttyUSB3") is FTDI
     assert portlist.find(ports, "/dev/nope") is None
     print("ports: placeholder ttyS hidden (sysfs type 0), by-id names attached  OK")

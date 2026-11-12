@@ -108,6 +108,9 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
 - **Dozens of mappings:** add/edit/delete/start/stop from one screen, with live status;
   search, state filter, sorting and start/stop/restart of the selected mappings (*Select
   all shown*; a bulk action acts on the ticked rows the filter shows and asks first). The
+  search ignores letter case and accents, Turkish İ/ı included (`istanbul` finds
+  *İSTANBUL DEPO*, `corlu` *Çorlu*), and names sort with numbers as numbers (*Hat 2*
+  before *Hat 10*; detected ports COM2 before COM10). The
   table is redrawn only when what it shows changed: new byte counts update just their
   cells, connection times count on in the browser, and a background tab doesn't refresh
   it — so no flicker, and a selection, a tooltip or a click stays. The rendering runs
@@ -650,7 +653,8 @@ inside aren't readable by other users:
   leaves out the session key.
 - `all.log` — global activity (size-rotated); `audit.log` — sign-ins, config changes,
   console / hex view opens and trace downloads: who/from where/what (rotated). Searchable
-  under Settings → *Audit log*, CSV export.
+  under Settings → *Audit log* (letter case and accents ignored, as on the dashboard),
+  CSV export.
 - `logs/<id>.log` — per-mapping history (hourly maintenance: trimmed >15 days / >100 MB).
 - `traces/<id>-<name>` — a mapping's traffic trace. Traces are kept **only here** and
   rotate at their size limit (default 10 MB × 3 old files). Full paths from v2.7 configs

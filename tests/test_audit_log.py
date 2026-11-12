@@ -6,14 +6,19 @@ Checks:
   * control characters in a field (a mapping name with a newline) can't create an
     extra, forged record;
   * Settings -> Audit log (admin only): search, action/user filters, paging, CSV
-    export with formula-looking cells neutralised.
+    export with formula-looking cells neutralised;
+  * the search finds Turkish names whatever their letter case or accents ('istanbul'
+    finds 'İSTANBUL', 'dairesi' 'DAİRESİ'), and the dashboard rows carry the same folded
+    text for the browser's filter.
 
 Run: python3 tests/test_audit_log.py
 """
 import csv
 import io
 import os
+import re
 import tempfile
+import urllib.parse
 
 from _server import Browser, Server, free_port
 
@@ -22,6 +27,13 @@ from app.state import AppState
 from app.web.auth import hash_password
 
 PW = "audit-pass-1"
+
+
+def records(page: str) -> int:
+    """The record count the audit page states."""
+    m = re.search(r"(\d+) record", page)
+    assert m, page[:300]
+    return int(m.group(1))
 
 
 def test_records_and_injection():
@@ -57,6 +69,11 @@ def main():
             "network_protocol": "raw", "network_bind_ip": "127.0.0.1",
             "network_port": str(free_port()), "serial_port": "/dev/ser2net-audit-test"}, htmx=True)
         assert st == 200, st
+        st, _, _ = op.post("/api/mappings/save", {
+            "name": "KAZAN DAİRESİ İSTANBUL", "kind": "net", "network_mode": "server",
+            "network_protocol": "raw", "network_bind_ip": "127.0.0.1",
+            "network_port": str(free_port()), "serial_port": "/dev/ser2net-audit-ışık"}, htmx=True)
+        assert st == 200, st
         assert op.get("/settings/audit")[0] == 403 and op.get("/settings/audit.csv")[0] == 403
 
         admin = Browser(srv.base)
@@ -66,9 +83,19 @@ def main():
         st, _, page = admin.get("/settings/audit")
         assert st == 200 and "login_failed" in page and "mapping_save" in page, page[:400]
         st, _, page = admin.get("/settings/audit?user=op1&action=mapping_save")
-        assert "1 record(s)" in page and "HYPERLINK" in page, page[page.find("record(s)") - 40:][:200]
+        assert records(page) == 2 and "HYPERLINK" in page, page[page.find("record") - 40:][:200]
+        for q in ("istanbul", "dairesi", "kazan daİresİ", "İstanbul"):
+            st, _, page = admin.get("/settings/audit?action=mapping_save&q=" + urllib.parse.quote(q))
+            assert records(page) == 1 and "KAZAN DAİRESİ İSTANBUL" in page, (q, records(page))
+        assert records(admin.get("/settings/audit?q=istasyon")[2]) == 0
+        st, _, body = admin.get("/api/status")
+        row = re.search(r'<tr data-mid="[^"]*" data-name="KAZAN DAİRESİ İSTANBUL"[^>]*>', body)
+        assert row and 'data-search="kazan dairesi istanbul /dev/ser2net-audit-isik ' in row.group(0), \
+            (row and row.group(0))
+        print("search: Turkish names found in any letter case and without accents, "
+              "the dashboard rows carry the folded text  OK")
         st, _, page = admin.get("/settings/audit?q=nothing-matches-this")
-        assert "0 record(s)" in page and "match the filter" in page
+        assert records(page) == 0 and "match the filter" in page
         st, h, body = admin.get("/settings/audit.csv?user=op1")
         assert st == 200 and "text/csv" in h.get("Content-Type", "")
         rows = list(csv.reader(io.StringIO(body)))

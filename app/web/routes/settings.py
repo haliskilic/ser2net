@@ -26,6 +26,7 @@ from ...config import (
 )
 from ...engine.cluster import KEY_OVERLAP_S, key_bytes
 from ...i18n import _
+from ...textfold import search_key
 from .. import auth, ldap_auth, selfsigned
 from .common import Ctx, csrf_failed
 from .forms import (
@@ -987,17 +988,25 @@ def routes(ctx: Ctx) -> list:
         q = (params.get("q") or "").strip()
         action = (params.get("action") or "").strip()
         user = (params.get("user") or "").strip()
-        records = await asyncio.to_thread(state.read_audit)
+        records, actions, users = await asyncio.to_thread(_audit_matching, q, action, user)
+        return records, {"q": q, "action": action, "user": user}, actions, users
+
+    def _audit_matching(q: str, action: str, user: str):
+        """(the audit records that match, every action, every user), in a worker thread:
+        the search folds the text of each record (search_key: 'istanbul' finds
+        'İstanbul', 'dairesi' 'DAİRESİ'). The fields are joined with NUL, which the fold
+        keeps, so a search doesn't match across two of them."""
+        records = state.read_audit()
         actions = sorted({r["action"] for r in records})
         users = sorted({r["user"] for r in records if r["user"]})
         if action:
             records = [r for r in records if r["action"] == action]
         if user:
             records = [r for r in records if r["user"] == user]
-        if q:
-            needle = q.lower()
-            records = [r for r in records if needle in "\t".join(r.values()).lower()]
-        return records, {"q": q, "action": action, "user": user}, actions, users
+        needle = search_key(q.replace("\0", ""))
+        if needle:
+            records = [r for r in records if needle in search_key("\0".join(r.values()))]
+        return records, actions, users
 
     async def audit_page(request):
         if deny := require_role(request, "admin"):
