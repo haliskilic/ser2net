@@ -176,10 +176,21 @@ def test_sd_notify():
         assert sdnotify.watchdog_interval({**env, "WATCHDOG_USEC": "x"}) is None
         assert sdnotify.notify("READY=1", env={"NOTIFY_SOCKET": path + ".gone"}) is False
         # nobody reads the socket: its queue fills, and a send must not wait for room (it
-        # runs on the event loop)
+        # runs on the event loop). How many datagrams fit depends on the machine: Linux
+        # counts them (net.unix.max_dgram_qlen: 10 in a new network namespace, 512 where
+        # systemd sets it, as on CI runners), BSD and macOS count the receiver's buffer
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        bound = 5000
+        try:
+            with open("/proc/sys/net/unix/max_dgram_qlen") as fh:
+                bound = int(fh.read()) + 100
+        except (OSError, ValueError):
+            pass
         t0 = time.monotonic()
-        sent = [sdnotify.notify("STATUS=x" * 100, env=env) for _ in range(300)]
-        assert time.monotonic() - t0 < 5 and sent[0] and not sent[-1], sent.count(True)
+        sent = [sdnotify.notify("STATUS=x" * 100, env=env)]
+        while sent[-1] and len(sent) < bound:  # until one is refused
+            sent.append(sdnotify.notify("STATUS=x" * 100, env=env))
+        assert time.monotonic() - t0 < 5 and sent[0] and not sent[-1], (len(sent), bound)
         while True:  # (what queued)
             try:
                 s.recv(4096)
