@@ -734,6 +734,40 @@ def routes(ctx: Ctx) -> list:
         return await settings_get(request, ok=_("New password set for '{0}'; they were signed out "
                                                 "everywhere.").format(username))
 
+    async def settings_users_totp_reset(request):
+        """An admin turns off another local account's two-factor sign-in (its authenticator
+        was lost): it is signed out everywhere, and its password alone signs it in until
+        it sets two-factor sign-in up again."""
+        if deny := require_role(request, "admin"):
+            return deny
+        form = await request.form()
+        if not auth.csrf_token_matches(request, form.get("_csrf")):
+            return csrf_failed()
+        username = str(form.get("username") or "")
+        async with state.config_lock:  # checked under the lock: two admins at once
+            target = state.config.get_user(username)
+            if target is None:
+                return await settings_get(request, error=_("User not found."))
+            if _is_me(request, username):
+                return await settings_get(request, error=_(
+                    "To turn off your own two-factor sign-in, use “Two-factor sign-in” at the "
+                    "top (it asks for a code)."))
+            if not target.totp_on:
+                return await settings_get(request, error=_(
+                    "'{0}' doesn’t use two-factor sign-in.").format(username))
+            old = (target.totp_secret, target.pwd_version)
+            target.totp_secret, target.pwd_version = "", target.pwd_version + 1
+            try:
+                await state.asave()
+            except ConfigError as e:
+                target.totp_secret, target.pwd_version = old
+                return await settings_get(request, error=str(e))
+        state.log(f"two-factor sign-in of {username} turned off by an admin; their sessions "
+                  "were signed out")
+        ctx.audit(request, "user_totp_reset", username)
+        return await settings_get(request, ok=_("Two-factor sign-in is off for '{0}'; they were "
+                                                "signed out everywhere.").format(username))
+
     # ---------------- config export / import ----------------
     async def config_export(request):
         # mappings only — never export password_hash / secret_key. Mappings can carry
@@ -1195,6 +1229,7 @@ def routes(ctx: Ctx) -> list:
         Route("/settings/users/delete", settings_users_delete, methods=["POST"]),
         Route("/settings/users/signout", settings_users_signout, methods=["POST"]),
         Route("/settings/users/expiry", settings_users_expiry, methods=["POST"]),
+        Route("/settings/users/totp-reset", settings_users_totp_reset, methods=["POST"]),
         # the user name in the URL: older pages and scripts (only names without /)
         Route("/settings/users/{username}/role", settings_users_role, methods=["POST"]),
         Route("/settings/users/{username}/delete", settings_users_delete, methods=["POST"]),
@@ -1287,6 +1322,9 @@ def _account_changes(old, new) -> list[str]:
                    (after[n].password_hash, after[n].role, after[n].source)
                    != (before[n].password_hash, before[n].role, before[n].source)]:
         out.append(_("Accounts with another password or role: {0}").format(", ".join(changed)))
+    if two_factor := [n for n in after if n in before
+                      and after[n].totp_secret != before[n].totp_secret]:
+        out.append(_("Accounts whose two-factor sign-in changes: {0}").format(", ".join(two_factor)))
     if (old.api_token_hash, old.api_token_role) != (new.api_token_hash, new.api_token_role):
         out.append(_("The REST API token as it was then (the current one stops working)"))
     if ({(t.sha256, t.role, t.expires) for t in old.api_tokens}

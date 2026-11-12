@@ -39,6 +39,11 @@
     <p class="muted mb-sm">{{ _("Ends your sign-ins in other browsers and on other devices; this one stays signed in.") }}</p>
     <button class="btn" type="submit">{{ _("Sign out my other sessions") }}</button>
   </form>
+  {% if me and me.source == 'local' %}
+  <h3 class="mt-sm">{{ _("Two-factor sign-in") }}</h3>
+  <p class="mb-sm">{% if me.totp_on %}<span class="tag">{{ _("enabled") }}</span> {{ _("Signing in takes your password and a code from your authenticator app.") }}{% else %}<span class="tag">{{ _("disabled") }}</span> <span class="muted">{{ _("Your password alone signs you in. Add a code from an authenticator app on your phone or computer, so a password alone is not enough.") }}</span>{% endif %}</p>
+  <a class="btn" href="/settings/totp">{{ _("Turn off…") if me.totp_on else _("Set up…") }}</a>
+  {% endif %}
   {% endif %}
 </section>
 
@@ -96,7 +101,7 @@
     <tbody>
     {% for u in users %}
       <tr>
-        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
+        <td class="mono">{{ u.username }}{% if u.username == my_name %} <span class="tag">{{ _("you") }}</span>{% endif %}{% if u.source != 'local' %} <span class="tag">{{ u.source|upper }}</span>{% endif %}{% if u.totp_on %} <span class="tag" title="{{ _('two-factor sign-in') }}">2FA</span>{% endif %}<br><span class="muted">{{ _("last sign-in: %(time)s", time=last_sign_in[u.username]) }}</span></td>
         <td>
           {% if u.source != 'local' %}
             <span class="mono">{{ u.role }}</span> <span class="muted">({{ _("from %(source)s", source=u.source|upper) }})</span>
@@ -119,6 +124,14 @@
               <input type="hidden" name="username" value="{{ u.username }}">
               <button class="btn sm" type="submit">{{ _("Sign out") }}</button>
             </form>
+            {% if u.totp_on %}
+            <form method="post" action="/settings/users/totp-reset" class="inline"
+                  data-confirm="{{ _('Turn off two-factor sign-in for %(user)s? They are signed out, and their password alone signs them in until they set it up again.', user=u.username) }}">
+              <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
+              <input type="hidden" name="username" value="{{ u.username }}">
+              <button class="btn sm" type="submit">{{ _("Turn off 2FA") }}</button>
+            </form>
+            {% endif %}
             <form method="post" action="/settings/users/delete" class="inline">
               <input type="hidden" name="_csrf" value="{{ request.state.csrf_token }}">
               <input type="hidden" name="username" value="{{ u.username }}">

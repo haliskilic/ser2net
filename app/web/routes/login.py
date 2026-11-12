@@ -16,6 +16,7 @@ from ...config import (
 from ...engine import netinfo
 from ...i18n import _
 from .. import auth, ldap_auth, oidc_auth
+from . import totp
 from .common import Ctx, csrf_failed
 from .forms import _password_problem, _username_problem
 
@@ -347,6 +348,8 @@ def routes(ctx: Ctx) -> list:
                     refused.discard(_person("ldap", username))
                 else:
                     await _end_refused_sessions("ldap", username)
+        if authed is not None and authed.totp_on:  # the password alone is not enough
+            return totp.challenge(ctx, request, authed)
         if authed is not None:   # under its account's name (LDAP: in any letter case)
             state.rate_limiter.reset(ip)
             state.log(f"login: {authed.username} ({authed.role}, {authed.source}) from {ip}")

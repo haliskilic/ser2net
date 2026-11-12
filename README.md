@@ -137,7 +137,8 @@ düzenlemeye gerek yok.
 - **Bildirimler:** cihaz koptuğunda/geri geldiğinde, eşleme başlamadığında, istemci
   bağlanıp düştüğünde ya da hatalı girişte webhook (JSON, Slack, Microsoft Teams,
   Discord, Telegram) ve/veya e-posta (SMTP); tekrarlar bastırılır, test mesajı gönderilir.
-- **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), CSRF, imzalı-çerez oturum,
+- **Güvenlik:** parola (ilk erişimde belirlenir, scrypt), yerel hesap başına isteğe bağlı
+  iki adımlı giriş (doğrulama uygulamasından TOTP kodu), CSRF, imzalı-çerez oturum,
   login oran sınırı, sıkı güvenlik başlıkları; oturumlar çıkışta, parola değişince, kullanıcı
   bazında ya da herkes için (Ayarlar) kapanır, unutulan parola `ser2net --set-password` ile
   sıfırlanır (bkz. Güvenlik).
@@ -318,9 +319,9 @@ olarak yazdığı dosyalar klasörün sahibine verilir; yükseltmede elle bir ş
   cihaza yazabilir. Hex görünümü iki yönü gösterir; viewer'lar yalnızca cihazın
   gönderdiklerini görür.
 - **Trace** (operator): eşlemenin trace dosyaları; listelenir ve indirilir.
-- **Ayarlar:** parola değiştir, **web arayüzü erişimi** (giriş zorunlu / parolasız rol),
-  admin TLS (yol ver veya self-signed üret), **REST API token'ı** üret/iptal et, mapping
-  **yedek al/yükle** (JSON), durum.
+- **Ayarlar:** parola değiştir, **iki adımlı giriş**, **web arayüzü erişimi** (giriş zorunlu /
+  parolasız rol), admin TLS (yol ver veya self-signed üret), **REST API token'ları** üret/iptal
+  et, mapping **yedek al/yükle** (JSON), durum.
 - **/metrics:** Prometheus formatında metrikler (web arayüzü oturumuyla; REST API
   token'ıyla: `/api/v1/metrics`, bkz. REST API): eşleme başına
   çalışıp çalışmadığı, istemcileri, gelen / giden / atılan baytlar, yeniden bağlanmalar ve
@@ -582,10 +583,29 @@ yükseltince**, sertifikaya güvenilmiyorsa LDAP girişi durur: CA sertifika dos
 (yerel hesaplar çalışmaya devam eder; yerel admin yoksa `ser2net --set-password AD` ile bir
 tane oluşturun).
 
+**İki adımlı giriş (TOTP):** bir hesap açmadıkça kapalıdır. Yerel bir hesap onu **Ayarlar →
+İki adımlı giriş**'ten kurar: orada gösterilen anahtarı bir doğrulama uygulamasına (Google ya
+da Microsoft Authenticator, Aegis, FreeOTP, KeePassXC, … — elle yazarak ya da `otpauth://`
+bağlantısını yapıştırarak veya herhangi bir QR oluşturucuyla QR koda çevirerek; ser2net bunun
+için bağımlılık eklemez) ekler ve bir kod ile parolasıyla onaylar. Bundan sonra giriş için
+parola ve uygulamanın 6 haneli kodu gerekir; hesabın diğer oturumları o anda kapanır. Bir kod
+kendi 30 saniyelik adımında ve bir adım öncesi/sonrasında (biraz kaymış bir saat için) ve
+yalnızca bir kez kabul edilir; yanlış kodlar yanlış parolalarla birlikte adres başına sayılır,
+bir hesap için 5 dakikada beş yanlış kod onu bir süre kilitler. Kodlar saate göre değişir:
+sunucunun saatini doğru tutun (NTP). Kapatmak için parola ve bir kod gerekir. **Doğrulama
+uygulaması kayboldu:** bir admin **Ayarlar → Kullanıcılar**'dan o hesap için kapatır (*2FA'yı
+kapat*, hesabın oturumlarını da kapatır); tek admin için sunucuda `ser2net --set-password AD`
+yeni bir parola verir ve onu kapatır (aşağıya bakın). LDAP ve OIDC hesapları ikinci adımı
+dizinden ya da kimlik sağlayıcıdan alır: MFA bugün de onu zorunlu kılan bir IdP (Keycloak,
+Entra ID, Google, …) ile OIDC üzerinden ya da arayüzün önünde kimlik doğrulayan bir reverse
+proxy ile mümkündür. REST API token'ları, cluster anahtarı ve parolasız erişim bundan
+etkilenmez. Gizli anahtar `config.json`'da tutulur (`users[].totp_secret`, yalnızca açıkken);
+2.8 ve öncesi onu atar, hesap o zaman yalnızca parolasıyla giriş yapar.
+
 **Parola unutuldu, giriş yapılamıyor, tarayıcı yok (hesap kurtarma):**
 `ser2net --set-password AD`, yerel `AD` hesabına yeni parola verir (terminalde iki kez
-sorulur; pipe ile verilirse stdin'in ilk satırı okunur) ve o hesabın tüm oturumlarını
-kapatır. Henüz olmayan bir ad **admin** olarak oluşturulur; tek admin bir LDAP/OIDC hesabıysa
+sorulur; pipe ile verilirse stdin'in ilk satırı okunur), iki adımlı girişini kapatır
+(kaybolan doğrulama uygulaması için) ve o hesabın tüm oturumlarını kapatır. Henüz olmayan bir ad **admin** olarak oluşturulur; tek admin bir LDAP/OIDC hesabıysa
 ve dizine ulaşılamıyorsa geri dönüş yolu budur. `ser2net --sign-out-all` web arayüzündeki
 tüm oturumları kapatır. İkisi de ser2net dururken de çalışırken de çalışır: çalışan örnek
 değişikliği hemen uygular, yeniden başlatmak gerekmez. Yapılandırmada başka hiçbir şey

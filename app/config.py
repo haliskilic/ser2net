@@ -1142,12 +1142,28 @@ class User:
     on that user's password/role change to revoke only their existing sessions (a new
     account starts at a random value, see new_pwd_version).
     `source` is 'local' (password in password_hash) or 'ldap' (a shadow account whose
-    role is derived from LDAP groups on each login; no local password)."""
+    role is derived from LDAP groups on each login; no local password).
+    `totp_secret` (base32, app/web/totp.py): a local account that set up two-factor
+    sign-in also gives a code from its authenticator app; "" = off (the default). Written
+    to config.json only when set."""
     username: str = ""
     password_hash: str = ""
     role: str = "admin"
     pwd_version: int = 0
     source: str = "local"
+    totp_secret: str = ""
+
+    @property
+    def totp_on(self) -> bool:
+        """Does signing in to this account take a code too? (Local accounts only: LDAP
+        and OIDC sign-ins get a second factor from the directory or identity provider.)"""
+        return self.source == "local" and bool(self.totp_secret)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        if not d["totp_secret"]:  # a config.json without two-factor sign-in stays as it was
+            del d["totp_secret"]
+        return d
 
     @property
     def kind(self) -> str:
@@ -1163,6 +1179,10 @@ class User:
             u.role = "viewer"
         if u.source not in ("local", "ldap", "oidc"):
             u.source = "local"
+        if not isinstance(u.totp_secret, str):  # hand-edited: null is off, anything else
+            u.totp_secret = str(u.totp_secret or "")  # stays on (and matches no code)
+        # as an app may show it: in groups, lower case, padded
+        u.totp_secret = re.sub(r"[\s=]", "", u.totp_secret).upper()
         return u
 
 
@@ -1330,6 +1350,14 @@ class AppConfig:
         for u in cfg.users:
             if u.source == "ldap":
                 spellings.setdefault(fold(u.username), []).append(u.username)
+        from .web import totp  # stdlib only; the web package imports this module
+        for u in cfg.users:
+            if u.totp_on and not totp.is_secret(u.totp_secret):
+                cfg.load_notes.append(
+                    f"user {u.username!r}: totp_secret is not a base32 secret of at least 16 "
+                    "characters, so no two-factor code matches it and the account can't sign "
+                    f"in. `ser2net --set-password {u.username}` sets a new password and turns "
+                    "two-factor sign-in off")
         for names in (n for n in spellings.values() if len(n) > 1):
             cfg.load_notes.append(
                 f"LDAP accounts {', '.join(map(repr, names))} are one directory user, in "
@@ -1379,7 +1407,7 @@ class AppConfig:
             **({"api_tokens": [asdict(t) for t in self.api_tokens]} if self.api_tokens else {}),
             "session_timeout_s": self.session_timeout_s,
             "external_users_expire_days": self.external_users_expire_days,
-            "users": [asdict(u) for u in self.users],
+            "users": [u.to_dict() for u in self.users],
             "ldap": asdict(self.ldap),
             "oidc": asdict(self.oidc),
             "cluster": asdict(self.cluster),

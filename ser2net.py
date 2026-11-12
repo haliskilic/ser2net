@@ -99,10 +99,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     acc = p.add_argument_group("account recovery (works while ser2net runs, too)")
     one = acc.add_mutually_exclusive_group()
     one.add_argument("--set-password", metavar="USER",
-                     help="Set a new password for the local account USER and sign its "
-                          "sessions out (USER is created as an admin if it doesn't exist), "
-                          "then exit. The password is asked on the terminal, or read from "
-                          "the first line of stdin.")
+                     help="Set a new password for the local account USER, sign its "
+                          "sessions out and turn its two-factor sign-in off (USER is "
+                          "created as an admin if it doesn't exist), then exit. The password "
+                          "is asked on the terminal, or read from the first line of stdin.")
     one.add_argument("--sign-out-all", action="store_true",
                      help="End every web UI session (new session key), then exit.")
     args = p.parse_args(argv)

@@ -68,6 +68,12 @@ ROUTES = {
     ("GET", "/auth/oidc/callback"): (PUBLIC, NONE),
     ("GET", "/setup"): (SETUP, NONE),
     ("POST", "/setup"): (SETUP, FORM),
+    # ---- routes/totp.py (the code step: a signed cookie from /login, not a session) ----
+    ("GET", "/auth/totp"): (PUBLIC, NONE),
+    ("POST", "/auth/totp"): (PUBLIC, FORM),
+    ("GET", "/settings/totp"): (ACCOUNT, NONE),
+    ("POST", "/settings/totp/enable"): (ACCOUNT, FORM),
+    ("POST", "/settings/totp/disable"): (ACCOUNT, FORM),
     # ---- routes/settings.py ----
     ("GET", "/settings"): (VIEWER, NONE),  # the admin sections only for admins
     ("POST", "/settings/password"): (ACCOUNT, FORM),
@@ -86,6 +92,7 @@ ROUTES = {
     ("POST", "/settings/users/delete"): (ADMIN, FORM),
     ("POST", "/settings/users/signout"): (ADMIN, FORM),
     ("POST", "/settings/users/expiry"): (ADMIN, FORM),
+    ("POST", "/settings/users/totp-reset"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/role"): (ADMIN, FORM),  # the same, by path
     ("POST", "/settings/users/{username}/delete"): (ADMIN, FORM),
     ("POST", "/settings/users/{username}/signout"): (ADMIN, FORM),
@@ -156,6 +163,9 @@ ROUTES = {
 ACCOUNT_REFUSALS = {
     "/settings/password": "Sign in to change your password.",
     "/settings/sessions/signout-others": "Sign in to manage your sessions.",
+    "/settings/totp": "Sign in to set up two-factor sign-in.",
+    "/settings/totp/enable": "Sign in to set up two-factor sign-in.",
+    "/settings/totp/disable": "Sign in to set up two-factor sign-in.",
 }
 
 # the session gate's public paths, pinned: widening them opens routes without a session
