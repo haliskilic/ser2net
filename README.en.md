@@ -459,6 +459,7 @@ everything from a **password-protected web UI** — no CLI or hand-edited config
   can't be used; an
   import takes such a mapping with a warning, and a mapping whose files are gone keeps
   loading and runs without MQTT (logged, shown on the dashboard) — never in clear text.
+  A relative path names a file in the data folder, as for a mapping's TLS files.
   In Docker put the files under `/data` (for example `/data/certs/`); the Windows service
   must be able to read them. While the
   broker is away, QoS 0 messages are lost (counted as dropped); at QoS 1/2 up to 10 000

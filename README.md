@@ -473,7 +473,8 @@ düzenlemeye gerek yok.
   parolayı sil* siler).
   Eşleme formu ve REST API kullanılamayan dosyaları reddeder; içe aktarma böyle bir eşlemeyi
   uyarıyla alır, dosyaları kaybolan bir eşleme ise yüklenmeye devam eder ve MQTT'siz çalışır
-  (loglanır, panoda görünür) — asla düz metinle bağlanmaz. Docker'da dosyaları `/data`
+  (loglanır, panoda görünür) — asla düz metinle bağlanmaz. Göreli bir yol, bir eşlemenin TLS
+  dosyalarında olduğu gibi veri klasöründeki bir dosyayı gösterir. Docker'da dosyaları `/data`
   altına koy (ör. `/data/certs/`); Windows servisi bunları okuyabilmeli. Broker'a
   ulaşılamadığı sürece QoS 0 mesajlar kaybolur (teslim edilemeyen olarak sayılır); QoS
   1/2'de eşleme başına en çok 10 000 mesaj bekler ve yeniden bağlanınca gönderilir — bunun

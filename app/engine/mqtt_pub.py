@@ -521,52 +521,27 @@ def tls_context(settings) -> Any:
     client_cert, that certificate is presented to a broker that asks for one (mutual TLS);
     its key is in client_key or in the same file, decrypted with client_key_password (an
     encrypted key with a wrong or no password is an error: OpenSSL never asks on a
-    terminal). Raises TlsFileError."""
-    import ssl
+    terminal). Built by the shared helper (engine/tls.tls_context), so the files are read
+    as a mapping's TLS files are: a relative path in the data directory. Raises
+    TlsFileError."""
+    from . import tls
 
-    ca = str(settings.ca_file or "").strip()
-    if ca:
-        try:
-            with open(ca, "rb") as fh:
-                data = fh.read()
-        except OSError as e:
-            raise TlsFileError("ca_unreadable", f"the CA file {ca!r} can't be read: "
-                               f"{e.strerror or e}", ca, str(e.strerror or e)) from None
-        ctx: Optional[ssl.SSLContext] = None
-        try:  # PEM through OpenSSL's reader (several certificates, comments), else DER
-            if b"-----BEGIN" in data:
-                ctx = ssl.create_default_context(cafile=ca)
-            elif data.strip():  # (empty cadata would mean the system's CAs)
-                ctx = ssl.create_default_context(cadata=data)
-        except (ssl.SSLError, ValueError, OSError):
-            ctx = None
-        if ctx is None or not ctx.cert_store_stats()["x509"]:
-            raise TlsFileError("ca_empty", f"the CA file {ca!r} holds no certificate (PEM or "
-                               "DER)", ca)
-    else:
-        ctx = ssl.create_default_context()
-    if not settings.tls_check_hostname:
-        ctx.check_hostname = False  # the chain is still checked
     cert = str(settings.client_cert or "").strip()
     key = str(settings.client_key or "").strip()
     if key and not cert:
         raise TlsFileError("key_without_cert", "a client key needs its client certificate",
                            key)
-    if cert:
-        secret = str(settings.client_key_password or "").encode()
-        try:
-            ctx.load_cert_chain(cert, key or None, password=lambda: secret)
-        except ssl.SSLError as e:  # (an OSError, so first)
-            why = str(e)
-            raise TlsFileError("cert_unusable", f"the client certificate {cert!r} can't be "
-                               f"used with its key: {why} (a wrong key password, or a key "
-                               "that is not the certificate's?)", cert, why) from None
-        except OSError as e:
-            why = str(e.strerror or e)
-            raise TlsFileError("cert_unreadable", f"the client certificate or key ({cert!r}"
-                               f"{', ' + repr(key) if key else ''}) can't be read: {why}",
-                               cert, why) from None
-    return ctx
+    try:
+        return tls.tls_context(server_side=False, cert=cert, key=key,
+                               password=settings.client_key_password,
+                               ca=str(settings.ca_file or "").strip(), verify=True,
+                               check_hostname=settings.tls_check_hostname is not False)
+    except tls.TlsFileError as e:
+        # (the shared kinds as the MQTT messages name them: a key that needs a password,
+        # a wrong one or another certificate's key is one "can't be used with its key")
+        kind = {"ca_unreadable": "ca_unreadable", "ca_empty": "ca_empty",
+                "unreadable": "cert_unreadable"}.get(e.kind, "cert_unusable")
+        raise TlsFileError(kind, str(e), e.path, e.detail) from None
 
 
 class PollSelect:
