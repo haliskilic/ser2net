@@ -313,6 +313,7 @@ class RunnerStatus:
         now = time.time()
         clients = [
             {"peer": c["peer"], "duration": fmt_duration(now - c["connected_at"]),
+             "connected_s": max(0, int(now - c["connected_at"])),  # the same, as a number
              "priority": c.get("priority", False)}
             for c in self.clients
         ]
