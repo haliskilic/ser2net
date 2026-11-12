@@ -735,7 +735,7 @@ Without compose, use the `docker run` command in
 limits).
 Published image (every release; amd64, arm64, and arm/v7 for 32-bit ARM such as 32-bit
 Raspberry Pi OS): `docker pull ghcr.io/haliskilic/ser2net:latest`
-(or `:2.8`, `:2.8.1`); `docker-compose.yml` uses it. Between releases `:latest` and `:X.Y`
+(or `:2.9`, `:2.9.0`); `docker-compose.yml` uses it. Between releases `:latest` and `:X.Y`
 are rebuilt on a newer Debian/Python base when it changes (weekly check; `:X.Y.Z` stays as
 released) — see [`docs/DOCKER.md`](docs/DOCKER.md).
 Inside the container the UI binds to `0.0.0.0` (set via `SER2NET_BIND_IP` /

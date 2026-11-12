@@ -6,6 +6,396 @@ versions follow [Semantic Versioning](https://semver.org/). Detailed notes for e
 
 ## [Unreleased]
 
+## [2.9.0] — 2026-11-12
+The fixes for 2.8.0 that 2.8.1 left for this release, with the features they brought:
+two-factor sign-in, named API tokens, reloading `config.json` without a restart, settings for
+reverse proxies and for several instances on one machine, retention, more Modbus data types,
+MQTT client certificates, listeners for IPv4 and IPv6. **Upgrading from 2.8.x:** `config.json`
+and `data/` are used as they are; the start-up log notes each stored value this version reads
+differently. Several fixes change behaviour on purpose. Check what applies to you (from 2.8.0
+or older, read the 2.8.1 notes too):
+- **Reverse proxy on the same machine:** list it as `127.0.0.1` under **Settings → Reverse
+  proxy → Trusted proxies** (or `SER2NET_TRUSTED_PROXIES`; `FORWARDED_ALLOW_IPS` still works).
+  `X-Forwarded-For` / `-Proto` are no longer believed from any local connection, so otherwise
+  every user shows as 127.0.0.1 and all share one sign-in limit. A plain-HTTP proxy that
+  rewrites `Host` must pass `X-Forwarded-Host`, or forms get 403 (`docs/REVERSE-PROXY.md`).
+- **Stricter checks when a mapping is saved** (form, REST API, import, cluster edit, and a
+  reload for the mappings it changes): two enabled mappings on one broker can't share MQTT
+  command topics (`/set`, `/tx`), a client ID or a Sparkplug B edge node, and a disabled
+  mapping that would clash can't be started; one serial port can't be used under two spellings
+  (`COM3`, `com3`); a plain MQTT base topic or point name can't hold `+`, `#` or a null
+  character (stored, it keeps MQTT off), and no point may be named `status` or `<point>/set`;
+  no mapping may use the admin UI's address and port; TLS and MQTT TLS files must load, a
+  disabled mapping's too; Modbus point values must have the right type; protective and
+  only-true switches (below) take JSON booleans, not text. A stored mapping that breaks a rule
+  still loads, with a note at start-up, but its next edit (a REST GET → PUT too) must fix it.
+- **Text in `config.json` is read as its setting's type:** numeric text (`"9600"`) is
+  converted, `"enabled": "false"` leaves the mapping stopped and `"writable": "false"` makes
+  the point read-only. A switch that turns something on only when it is JSON `true`
+  (`dual_stack`, `udp_broadcast`, `disconnect_without_device`, `poll_with_clients`, MQTT
+  `tx_enabled`, `proxy_hsts`, `email_separately`) reads text as off; a protective switch
+  (`read_only`, `tls`, `require_login`, `tls_verify`, `start_tls`, `mask_personal_data`, MQTT
+  `tls_check_hostname`) reads text as on unless it is empty. A number that can't be read, a
+  Modbus point's unit, address or scale included, takes its default. The start-up log notes
+  each case. An `allowed_client_ips` list with no usable entry admits nobody instead of
+  everyone.
+- **Modbus gateway:** a reply that doesn't answer its request (function code, byte count, the
+  exact echo of a write) gives the master exception 0x0B, so a slave that miscounts, doesn't
+  echo FC5/FC6 exactly or answers reads of unit 0 stops working through it. A broadcast write
+  (unit 0) is answered with its echo after 200 ms, a read of unit 0 gets 0x0B at once, and poll
+  points on unit 0 aren't polled; a Modbus/TCP frame without a function code closes the
+  master's connection.
+- **Start no longer restarts a running mapping** (nor does an unchanged `PUT`): scripts that
+  used `start` to resend the open string or reload a certificate must use `restart`.
+- **A telnet BREAK now reaches the device** (PuTTY's *Special Command → Break*; it was
+  dropped): a 0.25 s serial BREAK on telnet and RFC 2217 mappings that aren't read-only.
+- **USB identity binding:** while its adapter is unplugged, a bound mapping shows
+  `device missing` instead of opening another adapter that took its port name.
+- **TLS mappings:** connect-out TLS now presents the configured certificate and key, which a
+  server that rejects untrusted client certificates may refuse (clear them; they are optional
+  for connect-out now). An encrypted key no longer asks for its pass phrase at the console: set
+  the key password (`network.tls_key_password`; Settings → Admin TLS for the web UI), or it
+  fails with the reason in all.log.
+- **`kick_old_user` no longer evicts priority clients:** a newcomer replaces the oldest
+  non-priority client and is refused while only priority clients are connected.
+- **SIGHUP reloads `config.json`** instead of stopping ser2net: stop it with SIGTERM. A hand
+  edit made while ser2net runs is noticed: apply it with *Reload config.json* in Settings,
+  `ser2net --reload` or `systemctl reload ser2net` (a save before that keeps it in `backups/`).
+  A reload is checked like an edit: a file that can't be read, or a change in it that an edit
+  would refuse, changes nothing (all.log says why).
+- **Imports:** a classic `ser2net.yaml` / `ser2net.conf` goes through the preview only (a
+  one-step POST gets 400); merging one again keeps what was set up here since; `ipv6n4`
+  accepters come in on IPv4 and IPv6; `flock` / `uucplock` come along, so an imported mapping
+  refuses a port another program has locked. A JSON merge keeps the current value of a setting
+  the file doesn't have (it was reset to its default).
+- **Sign-in:** 10 failures in 15 minutes, from any address, give that user name HTTP 429 until
+  they expire. Password hashes get a higher scrypt cost (a sign-in takes about 5 times the
+  CPU), each renewed at its account's next sign-in: **if you go back to 2.8.1 or older**, those
+  accounts need a new password there (`ser2net --set-password NAME` on 2.8.1; on 2.8.0 and
+  older a `config.json` from `backups/` made before the upgrade).
+- **The event loop watchdog is on by default:** when the event loop hasn't run for 90 s,
+  ser2net writes every thread's stack to `data/hang.log` and exits with code 70 for systemd,
+  the Windows service or Docker's restart policy to start it again. A machine that slept or a
+  paused container doesn't count. `SER2NET_LOOP_WATCHDOG` sets the limit (0 = off).
+- **Traces pause below 256 MB free** on the data disk (5% of a larger disk, at most 1 GB) and
+  go on by themselves. The first start deletes the trace files of mappings that no longer
+  exist, also another configuration's in a shared data directory, and logs how many.
+- **New files are owner-only** on Linux and macOS (umask 077: logs, the audit log, traces): in
+  a data directory that isn't private, another account (a log shipper) can no longer read them.
+  Docker's `/data` is 0700 from the start. A `--config` file's folder that holds other files
+  keeps its permissions (it was made 0700).
+- **IPv6:** `::` takes IPv6 clients only, on every OS (a UDP mapping on `::` stored by an older
+  release keeps doing what it did); the new *All interfaces (IPv4 + IPv6)* takes both. A bare
+  `0.0.0.0` or `::` in a client list matches both families. Per-address limits count an IPv6
+  /64 as one address: raise `admin_ui.max_connections_per_ip` for a large IPv6 LAN.
+- **Admin UI:** a UI that can't listen (port taken, address not up yet) no longer ends ser2net
+  with exit code 3: the mappings run and the UI retries. It listens before the mappings start,
+  so check `/healthz`, not a bare TCP connect.
+- **systemd:** copy the new `systemd/ser2net.service` to `/etc/systemd/system/` and run
+  `systemctl daemon-reload`: it starts on a fresh install, allows netlink, turns a denied
+  system call into an error and has `ExecReload`, which would end a ser2net before 2.9.0.
+  `systemctl reload` works with all three units, the new `ser2net@.service` (several instances)
+  and `ser2net-standalone.service` (the Linux binaries, installed by `ser2net-install.sh`)
+  included. Optional: the drop-in `ser2net.service.d/notify.conf` (`Type=notify`; remove it
+  before going back).
+- **Docker:** add `init: true` and `stop_grace_period: 30s` to your compose file
+  (`docker run --init --stop-timeout 30`). `:2.9` and `:latest` are rebuilt weekly when the
+  base image changes (an auto-updater then restarts the container); pin `:2.9.0` to avoid that.
+- **Scripts that use the web UI:** Settings forms answer `303` to `/settings#<section>` (`400`
+  when refused; both were 200; a save that switches admin TLS on or off answers `200` with the
+  page itself, as the scheme changed), and a new API token or cluster key is on the page that
+  follows: follow redirects with the cookie jar (`curl -L -b jar -c jar`). Without a session a
+  page redirects to `/login?next=<page>`, and `/metrics` answers 401 to clients that aren't
+  browsers. A dashboard bulk action that can't change a mapping answers `400` with the reasons,
+  after doing the others. The CSRF token changes at each sign-in and sign-out; on ports other
+  than 8080 and over HTTPS the cookies have new names (nobody is signed out, but going back to
+  2.8.1 costs one sign-in there). Console WebSockets close with a code (4001–4004, 1013). The
+  UI's own endpoints (`/api/status`, …) changed: use `/api/v1`.
+- **REST API:** a refused change answers `400 {"error": "validation"}` (start and restart gave
+  500), a `config.json` that can't be written `500 {"error": "save_failed"}`, other errors
+  `500 {"error": "internal"}`; answers carry `"changed"` and may carry `warnings`.
+- **Logs:** times carry their UTC offset (`2026-11-06 12:00:00+03:00`), IPv6 peers read
+  `[addr]:port`, control characters become spaces, and a repeated error is logged once and then
+  summed up. all.log gains a line per REST API request (except the polls), one per refused
+  `/metrics` scrape (once a minute per address and status), an `import warning:` line per
+  import warning and the library warnings that went to stderr. Check log shipper patterns and
+  scripts that count lines.
+- **Notifications:** failed SSO sign-ins send *Failed sign-in*; a second connection from one
+  host within the repeat interval isn't notified; the test message is wholly in the
+  notification language (English with *auto*).
+- **MQTT and Sparkplug B consumers:** `.../set/result` comes at QoS 1, in JSON for a JSON
+  `/set`, and reads `error: no reply from unit N within T s` instead of
+  `error: modbus exception 0x0b`. Sparkplug B sends a DDEATH for a unit that stops answering,
+  stamps metrics with their read time, sends `bdSeq` as Int64, continued across restarts, and
+  follows each DCMD with a DDATA.
+- **LAN cluster:** mixed versions work (the fleet view tags older peers and offers them only
+  the actions and settings their version has), but an edit between two nodes before 2.9.0 still
+  loses settings such as the MQTT client ID: upgrade every node (README → *Upgrading a
+  cluster*).
+- **Windows:** serial writes are paced to the line (8 KiB per port at the driver); if a virtual
+  COM driver (com0com, say) misbehaves, `SER2NET_WINDOWS_SERIAL=pyserial` restores the old
+  write path. `--install-service` exits 1 when the service fails to start.
+- **Source installs:** the first start after an upgrade refreshes `lib/` offline, so 2.8.1's
+  manual `pip install --target lib` step isn't needed, and refuses a bundled wheel whose
+  checksum differs; pip and Python 3.10 or newer are required. Under `ser2net@.service` the
+  instances share one `lib/` and don't refresh it: run
+  `sudo -u ser2net python3 /opt/ser2net/bootstrap.py` after each upgrade.
+- **Going back to 2.8.x:** copy `data/` first. Older versions drop named API tokens, two-factor
+  sign-in, `dual_stack`, the per-mapping TLS checks, MQTT TLS files, retention and the new
+  Modbus point keys at their next save, and can't poll the new Modbus types (README → *Going
+  back to an older version*). Put back that version's systemd unit (2.9's `ExecReload` would
+  end it) and remove `notify.conf`.
+
+### Security
+- **Changes another site's page makes the browser send are refused:** a POST, PUT, PATCH or
+  DELETE gets 403 when `Sec-Fetch-Site`, or an `Origin` that isn't the UI's address (port
+  included), says so, before the CSRF token is checked: a page on another port of the same host
+  could plant one. The token is renewed at every sign-in and sign-out; htmx runs without
+  `eval`; the CSP adds `base-uri 'none'`, `form-action 'self'`, `object-src 'none'` (#60).
+- **Secrets stay out of the browser:** pages are sent with `Cache-Control: no-store` (Back
+  after a sign-out showed a new API token again), stored passwords (MQTT broker, MQTT client
+  key, TLS key) are no longer written into the mapping form (blank keeps them), and password
+  managers no longer fill the sign-in into the MQTT, LDAP, OIDC, SMTP, webhook and cluster key
+  fields (#60).
+- **`X-Forwarded-For` is believed only from trusted proxies:** any connection from 127.0.0.1 or
+  ::1 (a local user, an SSH tunnel) could choose the address the sign-in limit and the logs
+  see. Cookies are Secure whenever the browser used HTTPS, through a TLS proxy too (#79).
+- **Sign-in limits hold:** concurrent wrong sign-ins from one address got past the 8 password
+  checks per 5 minutes; an attempt is now counted before its check. Failures are also limited
+  per user name, a wrong current password in *Change your password* counts, a name without an
+  account takes as long as a wrong password, and hashes use scrypt N=2^14, r=8, p=5 (#59).
+- **An allow-list with no usable entry refuses every client.** An `allowed_client_ips` of only
+  host names or ranges (a hand edit) admitted everyone, Modbus writes included (#53).
+- **Source installs no longer keep an earlier release's packages:** `lib/`, which `git pull`
+  doesn't touch, kept 2.7's starlette and anyio with their advisories; the first start after an
+  upgrade refreshes it and keeps packages you added (#51).
+- **Per-mapping TLS can check the other side:** connect-out TLS checks the server against a CA
+  file (`network.tls_ca`) or pinned SHA-256 fingerprints (`network.tls_fingerprint`), else it
+  only encrypts; a TCP-server or Modbus-gateway listener with `network.tls_client_ca` admits
+  only clients with a certificate from that CA (#65).
+- **Log lines can't be forged:** line breaks, terminal escapes and other control characters in
+  mapping names, directory user names or device text are written as spaces in all.log, stdout
+  and the mapping logs (#69).
+- **Consoles and hex views are limited:** any signed-in user (open access: any visitor) could
+  open any number and slow every bridge. Now 4 per account (open access: per address) and
+  mapping, 16 per mapping, 64 in all; one taking nothing for 30 s is closed (#74).
+- **Builds and releases:** GitHub Actions are pinned to commit SHAs, files are attested and
+  attached in separate jobs, builds install hash-locked dependencies,
+  `vendor/wheels/SHA256SUMS` records the offline wheels; the self-signed certificate fallback
+  runs `openssl` by its full path, and webhooks go only to `http(s)` URLs (#81, #82, #83).
+
+### Fixed
+- **Serial ports at baud rates without a standard constant (250000, 74880, …) open again** on
+  Ubuntu 26.04, Fedora 43 and later with the Linux executables (glibc 2.42) (#48).
+- **Stopping never waits for a device that takes no data**, and shutting down has time limits
+  (15 s for the mappings, 3 s for an MQTT broker); a stop during start-up is no longer lost; a
+  client that reads nothing is cut off 5 s after its session ends (#48).
+- **Windows: serial writes wait for the device** as on Linux instead of filling the driver's
+  queue without limit, and idle ports cost less CPU (#48).
+- **Serial ports say what is wrong:** refused settings, RS-485 or RTS/DTR settings a port
+  doesn't take, `device missing` while the device is gone; the same error is logged once, not
+  at every retry. A re-plugged adapter opens at once, RTS/DTR `off` no longer pulses at open on
+  Windows, and a serial↔serial bridge no longer resets the other board at each retry (#48,
+  #63).
+- **USB identity binding opens the configured adapter among identical ones** (CH340, PL2303,
+  FT4232H channels), never another that took its port; an unknown `match` key no longer matches
+  every port; `com3`, `COM3` and `\\.\COM3` are one port (#62).
+- **A listener retries** an address not up yet or a port in use (at most 30 s apart, without
+  pulsing DTR/RTS); the admin UI starts first, so a mapping on its port no longer restart-loops
+  it; connection limits and `kick_old_user` hold for clients that arrive together. A mapping
+  now listens before it opens its device, so a taken port fails without touching the device;
+  what a client sends in the moment before the device is open is dropped (#61).
+- **IPv6:** a mapping can listen on `::1`, a bare `0.0.0.0` or `::` in a client list matches
+  every client as documented, addresses next to a port are in brackets, and classic `ipv6n4`
+  accepters import for both families (#64).
+- **TLS files:** an encrypted key no longer stalls ser2net at a console prompt; saving a TLS
+  mapping, a disabled one too, checks that its files load; connect-out presents its certificate
+  when the server asks; a moved or restored data directory finds its `tls/` files (#65).
+- **Telnet and RFC 2217:** setting changes wait for the data before them, flow control is one
+  mode at a time, ignored requests are answered, a BREAK left on ends with its client (#89).
+- **Modbus RTU replies are no longer cut short** by USB adapters (FTDI's 16 ms latency timer)
+  or the Windows executable's clock: a reply ends at the length its header gives, stale bytes
+  are skipped (`ser>drop` in the trace), a late reply never goes to the next request, the
+  timeout starts once the request has left, and a request on the bus when the port goes away
+  gets 0x0A (#50).
+- **Sparkplug B: a Modbus unit that stops answering gets a DDEATH** after 3 polls and a DBIRTH
+  when it is back, and is polled one point per cycle; no DDATA before the NBIRTH; metrics carry
+  their read time; `bdSeq` survives restarts (`data/sparkplug-bdseq.json`) (#55).
+- **MQTT: `<topic>/status` reads `online` after every connect** (Home Assistant showed working
+  bridges offline); connection problems are logged; a stop no longer freezes ser2net while the
+  broker doesn't answer; QoS 1/2 backlogs stop at 10,000 messages per mapping (#56).
+- **MQTT writes are made one at a time, in order and bounded** (32 waiting, 10 s at most); a
+  stop answers every write; oversized commands and values nested too deeply are refused (on
+  Python 3.14 such a value stopped the gateway's writes); a write is no longer followed by the
+  value read before it (#57).
+- **Two mappings can no longer share MQTT command topics, a client ID or a Sparkplug B edge
+  node** (one command could switch equipment on two lines), and a **Copy** gets its own name,
+  base topic and edge node ID, no client ID and a free port (#58).
+- **Modbus points JSON:** invalid JSON is reported with its line and column and keeps what was
+  typed; a misspelt key or a value of the wrong type is refused naming the point
+  (`"writable": "false"` opened a write path); Turkish names are shown as written (#73).
+- **Operations on one mapping take turns** (two at once could leave a runner holding the port
+  until a restart), and **changes are all or nothing**; starts and stops no longer push out the
+  50 configuration backups; a backup saved with the clock behind is kept (#52).
+- **Configuration values are read as their setting's type**, and one that can't be read is
+  refused with its path instead of a 500 that left the change in memory; an import file nested
+  deeper than 64 levels is refused with a clear message (#53).
+- **Editing a mapping keeps what the form doesn't show:** the MQTT client ID (now a field), the
+  USB identity after a refused form, the settings of hidden blocks, banners with line breaks,
+  RS-485 delays; also for fleet-view edits from older nodes (#54).
+- **Traces:** downloading one that is being written no longer breaks off; one that can't be
+  written pauses, says why (`trace_error`) and retries; the log files of mappings an import or
+  a restore removed are closed at once (#59, #67).
+- **The hourly log trim no longer reads each log into memory** (1 GB for a 100 MB log) nor
+  drops recent lines after a clock jump; refused connections are logged once a minute (#68).
+- **A console window no longer stops forwarding** (a click into a Windows console held every
+  mapping); the web server's errors and library warnings reach all.log; the Windows service
+  keeps its errors in `service.log` and the event log (#66).
+- **A step of the system clock no longer changes uptime, connection times, the peer list or
+  which client is kicked**; self-signed certificates are backdated by a day (#71).
+- **Re-importing a classic ser2net file no longer undoes what was set up since** and never
+  widens a bind IP or an allow-list; open and close strings with a byte of 0x80 or more come in
+  disabled; framing words, class defaults, `\o` and `\\` are read as ser2net reads them (#72).
+- E-mail for a mapping whose name holds a line break is sent again (#69). The READMEs' full
+  reset leaves nothing behind, and `--uninstall-service` names what it keeps (#70).
+- **The dashboard shows failed actions** (a saved mapping that doesn't start too) **and ended
+  sessions**, asks before unsaved form changes are lost, scrolls panels into view, keeps the
+  keyboard focus and ignores double clicks; a page left open while you signed in again
+  elsewhere still saves (it gets the new CSRF token in an `X-CSRF-Token` header) (#49, #60).
+- **The dashboard no longer redraws its table every 2 s** (on the event loop every bridge uses,
+  losing selections and clicks); **bulk actions act only on the ticked rows shown**; the light
+  theme's colours are readable (#75).
+- **Settings forms no longer post again on a reload** (which made another API token), TR / EN
+  works after a save, and a refused form keeps what was typed (#76).
+- **Searches find Turkish names in any letter case** ('istanbul' finds 'İstanbul'), names sort
+  naturally (COM2 before COM10), SMTP credentials and webhook URLs may hold Turkish letters,
+  and a mistyped number is refused naming the field (#77).
+- **Consoles work behind a reverse proxy that rewrites `Host`** (#78), reconnect after their
+  mapping restarts and say why they ended; a Modbus gateway's opens read-only (#74).
+- **Instances under one host name no longer sign each other out:** cookies on ports other than
+  8080 carry a tag of the port, `__Host-` over HTTPS (#80).
+- **Hand edits of `config.json` are no longer overwritten without a word** (a save keeps them
+  in `backups/`); SIGHUP no longer ends ser2net; a pending TLS change no longer breaks cookies
+  or the Docker health check; a restore restarts only what it changes (#75, #90).
+- Passwords with decomposed accents or no-break spaces match (NFKC), and a client that keeps
+  reconnecting no longer uses up the notification budget (#59). A form with a file part gets
+  400, not 500 (#81). A blank SSO redirect URI works behind chained proxies (#79).
+- **The systemd unit starts on a fresh install** (it stopped with status 226/NAMESPACE), lists
+  the LAN addresses again, IPv6 too, and fails a denied system call instead of being killed;
+  the dashboard says why the system refused a listener's port (#51).
+- **Offline source installs work on ARM Linux, macOS, Alpine and ARM Windows**; missing pip or
+  old Python is explained; **ser2net only makes its own data directory private** (#85).
+- The SBOMs give SPDX license ids and list the native libraries; a build with
+  `pyinstaller ser2net.spec` alone has the `--licenses` text again (#83).
+
+### Added
+- **Two-factor sign-in (TOTP) for local accounts** with any authenticator app;
+  `ser2net --set-password NAME` turns it off. **Named REST API tokens**, each viewer or
+  operator with an optional expiry, next to the existing token (#88).
+- **REST API:** `PATCH /api/v1/mappings/{id}` (JSON merge patch), `POST /api/v1/import`
+  (atomic, merge or replace, `dry_run=true`), `GET /api/v1/metrics` with a token,
+  `GET /api/v1/info`; `ETag` / `If-Match` (412) on mappings, `Location` on create,
+  `connected_s` and `connected_at` per client, settings that do nothing in `warnings`; API
+  version 1.1.0, OpenAPI for every route and field (#52, #53, #54, #75, #88).
+- **Reload `config.json` without a restart:** `systemctl reload` (all three systemd units),
+  `kill -HUP`, `ser2net --reload` (Windows service and containers too) or Settings; unchanged
+  mappings keep their clients. **Admin TLS without a restart:** a certificate saved or
+  generated in Settings, an encrypted key with its key password too, applies to new connections
+  at once, and a reload reads renewed ones (certbot `--deploy-hook "systemctl reload ser2net"`)
+  (#90).
+- **Modbus:** `word_order`, `int64` / `uint64` / `float64`, `string` and register bits; opt-in
+  block reads; a gateway unit map (`255=1, 0=1`); `min`, `max`, `allowed` and write-only
+  points; a field editor and **Read these points now**; the response timeout in the form; each
+  unit's state in the status, `/metrics`, the dashboard and notifications (#50, #55, #57, #73).
+- **MQTT:** a CA file (each certificate in it trusted), a client certificate (mutual TLS) and a
+  host name check per mapping, relative paths in the data directory; the connection state in
+  the status, the dashboard and `/metrics`; *Retain the data*; JSON values with read time and
+  quality; JSON `/set` requests with an id; a unit status topic; a Sparkplug B **primary host
+  ID**; a DDATA after each DCMD (#55, #56, #57).
+- **Device server:** telnet BREAK, and *Send BREAK* in the console; *Disconnect clients while
+  the serial device is unavailable*; UDP targets for the device's output; MQTT for serial
+  mappings (line end, writes on `<topic>/tx`, a poll string); the RFC 2217 signature (#89).
+- **IPv4 and IPv6 on one listener** (*All interfaces (IPv4 + IPv6)*, `"dual_stack": true`), for
+  the admin UI too (`SER2NET_BIND_IP=*`) (#64).
+- **Connect-out link status** on the dashboard, in `/api/v1/status`, `/metrics` and the fleet
+  view, with `link_lost` / `link_back` notifications (#61).
+- **Serial ports:** a typed device path, every port of a Linux kernel serial driver (i.MX,
+  Jetson, Zynq, …) and `/dev/serial/by-path` names; why a port can't be opened (the device's
+  group, who has it), also as an English sentence in the `hint` of `/api/v1/status`, which says
+  too why the system refused a listener's port; ports of the kernel console, a login prompt or
+  ModemManager are marked; opt-in `TIOCEXCL` and UUCP lock checks (#51, #62, #63).
+- **Monitoring:** a no-data alarm per mapping; notifications for a cluster node offline or
+  back, ser2net started and the data disk almost full; `/metrics` with HELP / TYPE, mapping
+  state, build info, disk, trace and log sizes and the event loop's lag; an optional systemd
+  `Type=notify` drop-in (#66, #68).
+- **Retention:** Settings → Retention can delete traces, logs, the audit log and backups older
+  than a number of days (off by default); the Trace panel deletes trace files (#67, #68).
+- **Privacy:** `docs/PRIVACY.md`; deleting backups and a deleted account from them; a sign-in
+  notice; *Leave out personal data* and one e-mail per recipient for notifications;
+  `SER2NET_LOG_STDOUT=off`; a choice of which web UI requests all.log records (#70).
+- **Audit log:** console sessions that wrote to a device, failed SSO sign-ins, exports, refused
+  REST API tokens; a **CSV for Excel** export (#69, #77).
+- **Reverse proxy:** Settings → Reverse proxy with *Public URL* (`SER2NET_PUBLIC_URL`, also for
+  serving under a path), *Trusted proxies* and HSTS through the proxy; Admin TLS → HSTS
+  max-age; the SSO redirect URI to register is shown; `docs/REVERSE-PROXY.md` (#78, #79).
+- **Several instances on one machine:** *Name of this instance* (`SER2NET_NODE_NAME`) in
+  notifications, the fleet view and the browser tab; `systemd/ser2net@.service` (#80).
+- **Fleet view and edits:** nodes report their version and capabilities; a peer gets only the
+  actions it supports, and a 2.7.1 or 2.8.x node's form only the settings it keeps; a mapping
+  form opened before the mapping changed is refused and shown again with your values (#54).
+- **Clock:** a start-up warning when the clock reads earlier than the newest backup; the server
+  time and the admin certificate's validity in Settings (#71).
+- **Dashboard and Settings:** *Select all shown*; confirmations before bulk actions, stops with
+  clients connected and other destructive buttons; a result for each action; screen reader
+  regions; *Change the role only* for the API token; Copy buttons (#49, #75).
+- A console text encoding per mapping (ISO-8859-9, Windows-1254, CP857, …) (#74); an import
+  preview that shows each mapping as it will be (#72) and says that a classic `openstr` goes
+  out once per port open and which listening ports below 1024 ser2net can't use (#87);
+  `written_by` in `config.json` (#53); classic `ssl(clientauth,CA=…)` imports with its CA file
+  (#65).
+- **Installing:** `ser2net-install.sh` and `ser2net-standalone.service` with every release; a
+  Docker image for `linux/arm/v7`; `SER2NET_LOW_PORTS=1` for ports below 1024 in Docker;
+  `SER2NET_WINDOWS_SERIAL=pyserial` (#48, #51, #85).
+- **Every page names the licence and links the source code**; signed-in pages add the version
+  and a *Licences* page with the licence texts this copy carries; `SER2NET_SOURCE_URL` points
+  the link at a modified copy's source (AGPL-3.0 section 13) (#86).
+- **New guides:** `docs/MODBUS-MQTT.md` (MQTT topics, Modbus points, Sparkplug B),
+  `docs/MIGRATING-FROM-SER2NET.md`, `docs/SSO.md` (LDAP / Active Directory and OIDC) and
+  `docs/LINUX-SERIAL.md`, linked from the READMEs, the mapping form, Settings and the OpenAPI
+  document (#87).
+
+### Changed
+- **A release publishes only what passed:** its tag must match `app/__init__.py`, have a dated
+  CHANGELOG section and be on `main`; the whole CI runs on it, the image is tagged only after
+  its digest passed the smoke test, and a pre-release never becomes `latest`. Between releases
+  the image is rebuilt weekly on an updated base (#82, #83).
+- CI: one `ci-ok` gate, Python 3.14, a coverage floor, ruff's security rules, zizmor, the
+  systemd units on systemd, paho-mqtt 1.6, upgrades from 2.8.0, serial stress and soak tests,
+  offline first starts on ARM and macOS, a daily dependency audit (#51, #57, #81, #84, #85).
+- `@xterm/xterm` 5.5.0, `@xterm/addon-fit` 0.10.0, htmx 2.0.11; static files are cached until
+  they change; the image is based on `python:3.12-slim-trixie` (#83).
+- ser2net's pyserial fixes live in its own classes instead of patching the library (#48);
+  `bootstrap.py` always reinstalls (#51).
+- A bulk action is one change: a mapping it can't change is named (`400` with the reasons) and
+  the others are done. Every save keeps a backup of what it wrote, so the newest backup is
+  `config.json` itself, and a save that changes nothing writes nothing (#52, #53).
+- Password checks run at most 2 at a time (LDAP 4), and the thread pool has 32 threads (#59).
+- The serial port list is refreshed when a port comes or goes (at least every minute) instead
+  of every 2 s, without pyudev / pywin32; *Exclusive open* reads **Lock the port (flock)**
+  (#62, #63).
+- all.log names the REST API token of a request; fleet-view actions are audited as
+  `cluster-peer:NODE/USER`; Discord no longer pings for mentions in names; `--about` hides
+  account names in paths (#69, #70).
+- Mappings exports are UTF-8 (#73); console traffic goes in 16 ms batches (#74); In / Out read
+  B / KB / MB (#75); web UI errors are explained in the page's language (#77).
+- Docs: both READMEs are checked against this release and gain an install table, a table of
+  every command-line option and new screenshots in English and Turkish; with `docs/DOCKER.md`,
+  `docs/WINDOWS.md` and `SECURITY.md` they cover upgrading a cluster, downgrading, several
+  instances, time synchronisation, ports shared with the console or ModemManager, and
+  reloading; `docs/VIRTUAL-COM.md` covers BREAK and has working Linux and Windows recipes
+  (ttynvt, hub4com) (#51, #53, #54, #63, #71, #80, #86, #89, #90).
+- The sign-in and first-run setup pages no longer show the version (#86).
+
 ## [2.8.1] — 2026-11-12
 A security release. **Upgrading from 2.8.0 or 2.7.x:** `config.json` and `data/` are used as
 they are, but several fixes change behaviour. Check what applies to you:
@@ -427,7 +817,8 @@ Hardening and operations.
 ## [1.0] — 2026-06-06
 First release: serial↔TCP (raw, telnet, RFC 2217), web UI, access control, logs.
 
-[Unreleased]: https://github.com/haliskilic/ser2net/compare/v2.8.1...HEAD
+[Unreleased]: https://github.com/haliskilic/ser2net/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.9.0
 [2.8.1]: https://github.com/haliskilic/ser2net/releases/tag/v2.8.1
 [2.8.0]: https://github.com/haliskilic/ser2net/releases/tag/v2.8.0
 [2.7.1]: https://github.com/haliskilic/ser2net/releases/tag/v2.7.1
