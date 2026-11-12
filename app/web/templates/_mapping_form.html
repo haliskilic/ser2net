@@ -302,7 +302,7 @@
       'fn4': _('4 input registers'),
     } | tojson | forceescape }}">
       <button type="button" class="btn sm" data-points-mode>{{ _("Edit the points as fields") }}</button>
-      <div class="banner warn" data-points-msg hidden></div>
+      <div class="points-msg" data-points-msg hidden></div>
       <div class="points-rows" data-points-rows hidden></div>
     </div>
     {% if not is_new and not remote %}
